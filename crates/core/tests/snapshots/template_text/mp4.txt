@@ -1,0 +1,1573 @@
+template mp4
+
+root repeat(until end) Box
+
+type Box (named by type, contents body) {
+  size: u32be
+  type: text[4] utf8
+  body: switch size {
+    0 => sized(remaining) switch type {
+      'moov' => repeat(until end) Box
+      'trak' => repeat(until end) Box
+      'mdia' => repeat(until end) Box
+      'minf' => repeat(until end) Box
+      'stbl' => repeat(until end) Box
+      'edts' => repeat(until end) Box
+      'dinf' => repeat(until end) Box
+      'udta' => repeat(until end) Box
+      'mvex' => repeat(until end) Box
+      'moof' => repeat(until end) Box
+      'traf' => repeat(until end) Box
+      'mfra' => repeat(until end) Box
+      'ftyp' => FileType {
+        major_brand: text[4] utf8
+        minor_version: u32be
+        compatible_brands: text[4] utf8[(remaining - 8) / 4]
+      }
+      'mvhd' => MovieHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => MovieTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            timescale: u32be
+            duration: u64be
+          }
+          _ => MovieTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            timescale: u32be
+            duration: u32be
+          }
+        }
+        rate: ufixed 16.16be
+        volume: ufixed 8.8be
+        reserved: bytes[10]
+        matrix: bytes[36]
+        pre_defined: bytes[24]
+        next_track_id: u32be
+      }
+      'tkhd' => TrackHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => TrackTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            track_id: u32be
+            reserved: u32be
+            duration: u64be
+          }
+          _ => TrackTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            track_id: u32be
+            reserved: u32be
+            duration: u32be
+          }
+        }
+        reserved2: bytes[8]
+        layer: i16be
+        alternate_group: i16be
+        volume: ufixed 8.8be
+        reserved3: u16be
+        matrix: bytes[36]
+        width: ufixed 16.16be
+        height: ufixed 16.16be
+      }
+      'mdhd' => MediaHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => MediaTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            timescale: u32be
+            duration: u64be
+          }
+          _ => MediaTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            timescale: u32be
+            duration: u32be
+          }
+        }
+        pad: u1be
+        language: u5be[3]
+        pre_defined: u16be
+      }
+      'hdlr' => Handler {
+        version: u8be
+        flags: bytes[3]
+        pre_defined: u32be
+        handler_type: text[4] utf8
+        reserved: bytes[12]
+        name: text[remaining - 24] padded with 0x00 utf8
+      }
+      'stsd' => SampleDescription {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: SampleEntry {
+          size: u32be
+          format: text[4] utf8
+          reserved: bytes[6]
+          data_ref_index: u16be
+          body: sized(size - 16) switch format {
+            'avc1' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'hvc1' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brlt' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brxq' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brst' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvm' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brhq' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvl' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvn' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvo' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            _ => bytes[size - 16]
+          }
+        }[entry_count]
+      }
+      'stts' => TimeToSample {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: TimeToSampleEntry {
+          sample_count: u32be
+          sample_delta: u32be
+        }[entry_count]
+      }
+      'ctts' => CompositionOffsets {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: CompositionOffsetEntry {
+          sample_count: u32be
+          sample_offset: switch version {1 => i32be, _ => u32be}
+        }[entry_count]
+      }
+      'stsc' => SampleToChunk {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: SampleToChunkEntry {
+          first_chunk: u32be
+          samples_per_chunk: u32be
+          sample_description_index: u32be
+        }[entry_count]
+      }
+      'stsz' => SampleSizes {
+        version: u8be
+        flags: bytes[3]
+        sample_size: u32be
+        sample_count: u32be
+        entry_sizes: switch sample_size {0 => u32be[sample_count], _ => bytes[0]}
+      }
+      'stco' => ChunkOffsets32 {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u32be[entry_count]
+      }
+      'co64' => ChunkOffsets64 {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u64be[entry_count]
+      }
+      'stss' => SyncSamples {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u32be[entry_count]
+      }
+      'meta' => Metadata {
+        version: u8be
+        flags: bytes[3]
+        boxes: repeat(until end) Box
+      }
+      'keys' => MetadataKeys {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: MetadataKey {
+          size: u32be
+          namespace: text[4] utf8
+          name: text[size - 8] utf8
+        }[entry_count]
+      }
+      'ilst' => repeat(until end) MetadataItem {
+        size: u32be
+        key_index: u32be
+        value: sized(size - 8) MetadataData {
+          size: u32be
+          magic: magic "data"
+          type: u32be enum MetadataType {
+            1 = UTF-8, 23 = float32, 24 = float64, 65 = signed int8, 66 = signed int16,
+            67 = signed int32, 70 = point/size (2 × float32), 71 = dimensions (2 × float32),
+            74 = signed int64, 75 = unsigned int8, 76 = unsigned int16, 77 = unsigned int32,
+            78 = unsigned int64
+          }
+          locale: u32be
+          value: sized(size - 16) switch type {
+            1 => text[remaining] utf8
+            23 => f32be
+            24 => f64be
+            65 => i8be
+            66 => i16be
+            67 => i32be
+            70 => f32be[2]
+            71 => f32be[2]
+            74 => i64be
+            75 => u8be
+            76 => u16be
+            77 => u32be
+            78 => u64be
+            _ => bytes[remaining]
+          }
+        }
+      }
+      'mogy' => Gyroscope {
+        x: f32le
+        y: f32le
+        z: f32le
+      }
+      'moac' => Accelerometer {
+        x: f32le
+        y: f32le
+        z: f32le
+      }
+      'mdat' => switch remaining < 8 or else peek(u32be at 32 bits) {
+        'bmdf' => BrawMediaData {
+          metadata_size: u32be
+          metadata_magic: magic "bmdf"
+          frame_metadata: sized(metadata_size - 8) repeat(until end) BrawFrameMetadata {
+            size: u32be
+            type: text[4] utf8
+            value: sized(size - 8) switch type {
+              'srte' => SensorRate {
+                numerator: u32be
+                denominator: u32be
+              }
+              'innd' => f32be
+              'agpf' => f32be
+              'expo' => f32be
+              'isoe' => u32be
+              'wkel' => u32be
+              'wtin' => u16be
+              'asct' => u32be
+              'asti' => u16be
+              'shtv' => text[size - 8] padded with 0x00 utf8
+              'aptr' => text[size - 8] padded with 0x00 utf8
+              'dsnc' => text[size - 8] padded with 0x00 utf8
+              'fcln' => text[size - 8] padded with 0x00 utf8
+              _ => bytes[size - 8]
+            }
+          }
+          picture_magic: magic "braw"
+          picture_size: u32be
+          picture: sized(picture_size - 8) BrawPicture {
+            sample_header: bytes[12]
+            width: u16be
+            height: u16be
+            slice_height: u16be
+            compressed_essence: bytes[remaining]
+          }
+          remaining_samples: bytes[remaining - metadata_size - picture_size]
+        }
+        'mogy' => repeat(until end) BlackmagicMotionSample {
+          size: u32be
+          type: text[4] utf8
+          value: sized(size - 8) switch type {
+            'mogy' => Gyroscope {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            'moac' => Accelerometer {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            _ => bytes[size - 8]
+          }
+        }
+        'moac' => repeat(until end) BlackmagicMotionSample {
+          size: u32be
+          type: text[4] utf8
+          value: sized(size - 8) switch type {
+            'mogy' => Gyroscope {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            'moac' => Accelerometer {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            _ => bytes[size - 8]
+          }
+        }
+        _ => bytes[remaining]
+      }
+      'avcC' => AVCConfig {
+        configuration_version: u8be
+        profile: u8be enum H264Profile {
+          66 = baseline, 77 = main, 88 = extended, 100 = high, 110 = high 10, 122 = high 4:2:2,
+          244 = high 4:4:4
+        }
+        profile_compatibility: u8be
+        level: u8be
+        reserved: u6be
+        length_size_minus_one: u2be
+        reserved2: u3be
+        sps_count: u5be
+        sps: ParameterSet {
+          length: u16be
+          nal: sized(length) NalUnit {
+            forbidden_zero: u1be
+            ref_idc: u2be
+            unit_type: u5be enum NalType {
+              1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+              5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+              10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+              19 = auxiliary slice
+            }
+            rbsp: bytes[length - 1]
+          }
+        }[sps_count]
+        pps_count: u8be
+        pps: ParameterSet {
+          length: u16be
+          nal: sized(length) NalUnit {
+            forbidden_zero: u1be
+            ref_idc: u2be
+            unit_type: u5be enum NalType {
+              1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+              5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+              10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+              19 = auxiliary slice
+            }
+            rbsp: bytes[length - 1]
+          }
+        }[pps_count]
+      }
+      _ => bytes[remaining]
+    }
+    1 => LargeBox {
+      largesize: u64be
+      payload: sized(largesize - 16) switch type {
+        'moov' => repeat(until end) Box
+        'trak' => repeat(until end) Box
+        'mdia' => repeat(until end) Box
+        'minf' => repeat(until end) Box
+        'stbl' => repeat(until end) Box
+        'edts' => repeat(until end) Box
+        'dinf' => repeat(until end) Box
+        'udta' => repeat(until end) Box
+        'mvex' => repeat(until end) Box
+        'moof' => repeat(until end) Box
+        'traf' => repeat(until end) Box
+        'mfra' => repeat(until end) Box
+        'ftyp' => FileType {
+          major_brand: text[4] utf8
+          minor_version: u32be
+          compatible_brands: text[4] utf8[(largesize - 16 - 8) / 4]
+        }
+        'mvhd' => MovieHeader {
+          version: u8be
+          flags: bytes[3]
+          times: switch version {
+            1 => MovieTimes64 {
+              creation_time: u64be  time mac utc unset 0
+              modification_time: u64be  time mac utc unset 0
+              timescale: u32be
+              duration: u64be
+            }
+            _ => MovieTimes32 {
+              creation_time: u32be  time mac utc unset 0
+              modification_time: u32be  time mac utc unset 0
+              timescale: u32be
+              duration: u32be
+            }
+          }
+          rate: ufixed 16.16be
+          volume: ufixed 8.8be
+          reserved: bytes[10]
+          matrix: bytes[36]
+          pre_defined: bytes[24]
+          next_track_id: u32be
+        }
+        'tkhd' => TrackHeader {
+          version: u8be
+          flags: bytes[3]
+          times: switch version {
+            1 => TrackTimes64 {
+              creation_time: u64be  time mac utc unset 0
+              modification_time: u64be  time mac utc unset 0
+              track_id: u32be
+              reserved: u32be
+              duration: u64be
+            }
+            _ => TrackTimes32 {
+              creation_time: u32be  time mac utc unset 0
+              modification_time: u32be  time mac utc unset 0
+              track_id: u32be
+              reserved: u32be
+              duration: u32be
+            }
+          }
+          reserved2: bytes[8]
+          layer: i16be
+          alternate_group: i16be
+          volume: ufixed 8.8be
+          reserved3: u16be
+          matrix: bytes[36]
+          width: ufixed 16.16be
+          height: ufixed 16.16be
+        }
+        'mdhd' => MediaHeader {
+          version: u8be
+          flags: bytes[3]
+          times: switch version {
+            1 => MediaTimes64 {
+              creation_time: u64be  time mac utc unset 0
+              modification_time: u64be  time mac utc unset 0
+              timescale: u32be
+              duration: u64be
+            }
+            _ => MediaTimes32 {
+              creation_time: u32be  time mac utc unset 0
+              modification_time: u32be  time mac utc unset 0
+              timescale: u32be
+              duration: u32be
+            }
+          }
+          pad: u1be
+          language: u5be[3]
+          pre_defined: u16be
+        }
+        'hdlr' => Handler {
+          version: u8be
+          flags: bytes[3]
+          pre_defined: u32be
+          handler_type: text[4] utf8
+          reserved: bytes[12]
+          name: text[largesize - 16 - 24] padded with 0x00 utf8
+        }
+        'stsd' => SampleDescription {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: SampleEntry {
+            size: u32be
+            format: text[4] utf8
+            reserved: bytes[6]
+            data_ref_index: u16be
+            body: sized(size - 16) switch format {
+              'avc1' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'hvc1' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brlt' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brxq' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brst' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brvm' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brhq' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brvl' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brvn' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              'brvo' => VisualSampleEntry {
+                pre_defined: u16be
+                reserved: u16be
+                pre_defined2: bytes[12]
+                width: u16be
+                height: u16be
+                horiz_resolution: ufixed 16.16be
+                vert_resolution: ufixed 16.16be
+                reserved2: u32be
+                frame_count: u16be
+                compressor_name: CompressorName {
+                  length: u8be
+                  text: text[31] padded with 0x00 utf8
+                }
+                depth: u16be
+                pre_defined3: i16be
+                boxes: repeat(until end) Box
+              }
+              _ => bytes[size - 16]
+            }
+          }[entry_count]
+        }
+        'stts' => TimeToSample {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: TimeToSampleEntry {
+            sample_count: u32be
+            sample_delta: u32be
+          }[entry_count]
+        }
+        'ctts' => CompositionOffsets {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: CompositionOffsetEntry {
+            sample_count: u32be
+            sample_offset: switch version {1 => i32be, _ => u32be}
+          }[entry_count]
+        }
+        'stsc' => SampleToChunk {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: SampleToChunkEntry {
+            first_chunk: u32be
+            samples_per_chunk: u32be
+            sample_description_index: u32be
+          }[entry_count]
+        }
+        'stsz' => SampleSizes {
+          version: u8be
+          flags: bytes[3]
+          sample_size: u32be
+          sample_count: u32be
+          entry_sizes: switch sample_size {0 => u32be[sample_count], _ => bytes[0]}
+        }
+        'stco' => ChunkOffsets32 {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: u32be[entry_count]
+        }
+        'co64' => ChunkOffsets64 {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: u64be[entry_count]
+        }
+        'stss' => SyncSamples {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: u32be[entry_count]
+        }
+        'meta' => Metadata {
+          version: u8be
+          flags: bytes[3]
+          boxes: repeat(until end) Box
+        }
+        'keys' => MetadataKeys {
+          version: u8be
+          flags: bytes[3]
+          entry_count: u32be
+          entries: MetadataKey {
+            size: u32be
+            namespace: text[4] utf8
+            name: text[size - 8] utf8
+          }[entry_count]
+        }
+        'ilst' => repeat(until end) MetadataItem {
+          size: u32be
+          key_index: u32be
+          value: sized(size - 8) MetadataData {
+            size: u32be
+            magic: magic "data"
+            type: u32be enum MetadataType {
+              1 = UTF-8, 23 = float32, 24 = float64, 65 = signed int8, 66 = signed int16,
+              67 = signed int32, 70 = point/size (2 × float32), 71 = dimensions (2 × float32),
+              74 = signed int64, 75 = unsigned int8, 76 = unsigned int16, 77 = unsigned int32,
+              78 = unsigned int64
+            }
+            locale: u32be
+            value: sized(size - 16) switch type {
+              1 => text[remaining] utf8
+              23 => f32be
+              24 => f64be
+              65 => i8be
+              66 => i16be
+              67 => i32be
+              70 => f32be[2]
+              71 => f32be[2]
+              74 => i64be
+              75 => u8be
+              76 => u16be
+              77 => u32be
+              78 => u64be
+              _ => bytes[remaining]
+            }
+          }
+        }
+        'mogy' => Gyroscope {
+          x: f32le
+          y: f32le
+          z: f32le
+        }
+        'moac' => Accelerometer {
+          x: f32le
+          y: f32le
+          z: f32le
+        }
+        'mdat' => switch largesize - 16 < 8 or else peek(u32be at 32 bits) {
+          'bmdf' => BrawMediaData {
+            metadata_size: u32be
+            metadata_magic: magic "bmdf"
+            frame_metadata: sized(metadata_size - 8) repeat(until end) BrawFrameMetadata {
+              size: u32be
+              type: text[4] utf8
+              value: sized(size - 8) switch type {
+                'srte' => SensorRate {
+                  numerator: u32be
+                  denominator: u32be
+                }
+                'innd' => f32be
+                'agpf' => f32be
+                'expo' => f32be
+                'isoe' => u32be
+                'wkel' => u32be
+                'wtin' => u16be
+                'asct' => u32be
+                'asti' => u16be
+                'shtv' => text[size - 8] padded with 0x00 utf8
+                'aptr' => text[size - 8] padded with 0x00 utf8
+                'dsnc' => text[size - 8] padded with 0x00 utf8
+                'fcln' => text[size - 8] padded with 0x00 utf8
+                _ => bytes[size - 8]
+              }
+            }
+            picture_magic: magic "braw"
+            picture_size: u32be
+            picture: sized(picture_size - 8) BrawPicture {
+              sample_header: bytes[12]
+              width: u16be
+              height: u16be
+              slice_height: u16be
+              compressed_essence: bytes[remaining]
+            }
+            remaining_samples: bytes[largesize - 16 - metadata_size - picture_size]
+          }
+          'mogy' => repeat(until end) BlackmagicMotionSample {
+            size: u32be
+            type: text[4] utf8
+            value: sized(size - 8) switch type {
+              'mogy' => Gyroscope {
+                x: f32le
+                y: f32le
+                z: f32le
+              }
+              'moac' => Accelerometer {
+                x: f32le
+                y: f32le
+                z: f32le
+              }
+              _ => bytes[size - 8]
+            }
+          }
+          'moac' => repeat(until end) BlackmagicMotionSample {
+            size: u32be
+            type: text[4] utf8
+            value: sized(size - 8) switch type {
+              'mogy' => Gyroscope {
+                x: f32le
+                y: f32le
+                z: f32le
+              }
+              'moac' => Accelerometer {
+                x: f32le
+                y: f32le
+                z: f32le
+              }
+              _ => bytes[size - 8]
+            }
+          }
+          _ => bytes[largesize - 16]
+        }
+        'avcC' => AVCConfig {
+          configuration_version: u8be
+          profile: u8be enum H264Profile {
+            66 = baseline, 77 = main, 88 = extended, 100 = high, 110 = high 10,
+            122 = high 4:2:2, 244 = high 4:4:4
+          }
+          profile_compatibility: u8be
+          level: u8be
+          reserved: u6be
+          length_size_minus_one: u2be
+          reserved2: u3be
+          sps_count: u5be
+          sps: ParameterSet {
+            length: u16be
+            nal: sized(length) NalUnit {
+              forbidden_zero: u1be
+              ref_idc: u2be
+              unit_type: u5be enum NalType {
+                1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+                5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+                10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+                19 = auxiliary slice
+              }
+              rbsp: bytes[length - 1]
+            }
+          }[sps_count]
+          pps_count: u8be
+          pps: ParameterSet {
+            length: u16be
+            nal: sized(length) NalUnit {
+              forbidden_zero: u1be
+              ref_idc: u2be
+              unit_type: u5be enum NalType {
+                1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+                5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+                10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+                19 = auxiliary slice
+              }
+              rbsp: bytes[length - 1]
+            }
+          }[pps_count]
+        }
+        _ => bytes[largesize - 16]
+      }
+    }
+    _ => sized(size - 8) switch type {
+      'moov' => repeat(until end) Box
+      'trak' => repeat(until end) Box
+      'mdia' => repeat(until end) Box
+      'minf' => repeat(until end) Box
+      'stbl' => repeat(until end) Box
+      'edts' => repeat(until end) Box
+      'dinf' => repeat(until end) Box
+      'udta' => repeat(until end) Box
+      'mvex' => repeat(until end) Box
+      'moof' => repeat(until end) Box
+      'traf' => repeat(until end) Box
+      'mfra' => repeat(until end) Box
+      'ftyp' => FileType {
+        major_brand: text[4] utf8
+        minor_version: u32be
+        compatible_brands: text[4] utf8[(size - 8 - 8) / 4]
+      }
+      'mvhd' => MovieHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => MovieTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            timescale: u32be
+            duration: u64be
+          }
+          _ => MovieTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            timescale: u32be
+            duration: u32be
+          }
+        }
+        rate: ufixed 16.16be
+        volume: ufixed 8.8be
+        reserved: bytes[10]
+        matrix: bytes[36]
+        pre_defined: bytes[24]
+        next_track_id: u32be
+      }
+      'tkhd' => TrackHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => TrackTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            track_id: u32be
+            reserved: u32be
+            duration: u64be
+          }
+          _ => TrackTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            track_id: u32be
+            reserved: u32be
+            duration: u32be
+          }
+        }
+        reserved2: bytes[8]
+        layer: i16be
+        alternate_group: i16be
+        volume: ufixed 8.8be
+        reserved3: u16be
+        matrix: bytes[36]
+        width: ufixed 16.16be
+        height: ufixed 16.16be
+      }
+      'mdhd' => MediaHeader {
+        version: u8be
+        flags: bytes[3]
+        times: switch version {
+          1 => MediaTimes64 {
+            creation_time: u64be  time mac utc unset 0
+            modification_time: u64be  time mac utc unset 0
+            timescale: u32be
+            duration: u64be
+          }
+          _ => MediaTimes32 {
+            creation_time: u32be  time mac utc unset 0
+            modification_time: u32be  time mac utc unset 0
+            timescale: u32be
+            duration: u32be
+          }
+        }
+        pad: u1be
+        language: u5be[3]
+        pre_defined: u16be
+      }
+      'hdlr' => Handler {
+        version: u8be
+        flags: bytes[3]
+        pre_defined: u32be
+        handler_type: text[4] utf8
+        reserved: bytes[12]
+        name: text[size - 8 - 24] padded with 0x00 utf8
+      }
+      'stsd' => SampleDescription {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: SampleEntry {
+          size: u32be
+          format: text[4] utf8
+          reserved: bytes[6]
+          data_ref_index: u16be
+          body: sized(size - 16) switch format {
+            'avc1' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'hvc1' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brlt' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brxq' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brst' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvm' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brhq' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvl' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvn' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            'brvo' => VisualSampleEntry {
+              pre_defined: u16be
+              reserved: u16be
+              pre_defined2: bytes[12]
+              width: u16be
+              height: u16be
+              horiz_resolution: ufixed 16.16be
+              vert_resolution: ufixed 16.16be
+              reserved2: u32be
+              frame_count: u16be
+              compressor_name: CompressorName {
+                length: u8be
+                text: text[31] padded with 0x00 utf8
+              }
+              depth: u16be
+              pre_defined3: i16be
+              boxes: repeat(until end) Box
+            }
+            _ => bytes[size - 16]
+          }
+        }[entry_count]
+      }
+      'stts' => TimeToSample {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: TimeToSampleEntry {
+          sample_count: u32be
+          sample_delta: u32be
+        }[entry_count]
+      }
+      'ctts' => CompositionOffsets {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: CompositionOffsetEntry {
+          sample_count: u32be
+          sample_offset: switch version {1 => i32be, _ => u32be}
+        }[entry_count]
+      }
+      'stsc' => SampleToChunk {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: SampleToChunkEntry {
+          first_chunk: u32be
+          samples_per_chunk: u32be
+          sample_description_index: u32be
+        }[entry_count]
+      }
+      'stsz' => SampleSizes {
+        version: u8be
+        flags: bytes[3]
+        sample_size: u32be
+        sample_count: u32be
+        entry_sizes: switch sample_size {0 => u32be[sample_count], _ => bytes[0]}
+      }
+      'stco' => ChunkOffsets32 {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u32be[entry_count]
+      }
+      'co64' => ChunkOffsets64 {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u64be[entry_count]
+      }
+      'stss' => SyncSamples {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: u32be[entry_count]
+      }
+      'meta' => Metadata {
+        version: u8be
+        flags: bytes[3]
+        boxes: repeat(until end) Box
+      }
+      'keys' => MetadataKeys {
+        version: u8be
+        flags: bytes[3]
+        entry_count: u32be
+        entries: MetadataKey {
+          size: u32be
+          namespace: text[4] utf8
+          name: text[size - 8] utf8
+        }[entry_count]
+      }
+      'ilst' => repeat(until end) MetadataItem {
+        size: u32be
+        key_index: u32be
+        value: sized(size - 8) MetadataData {
+          size: u32be
+          magic: magic "data"
+          type: u32be enum MetadataType {
+            1 = UTF-8, 23 = float32, 24 = float64, 65 = signed int8, 66 = signed int16,
+            67 = signed int32, 70 = point/size (2 × float32), 71 = dimensions (2 × float32),
+            74 = signed int64, 75 = unsigned int8, 76 = unsigned int16, 77 = unsigned int32,
+            78 = unsigned int64
+          }
+          locale: u32be
+          value: sized(size - 16) switch type {
+            1 => text[remaining] utf8
+            23 => f32be
+            24 => f64be
+            65 => i8be
+            66 => i16be
+            67 => i32be
+            70 => f32be[2]
+            71 => f32be[2]
+            74 => i64be
+            75 => u8be
+            76 => u16be
+            77 => u32be
+            78 => u64be
+            _ => bytes[remaining]
+          }
+        }
+      }
+      'mogy' => Gyroscope {
+        x: f32le
+        y: f32le
+        z: f32le
+      }
+      'moac' => Accelerometer {
+        x: f32le
+        y: f32le
+        z: f32le
+      }
+      'mdat' => switch size - 8 < 8 or else peek(u32be at 32 bits) {
+        'bmdf' => BrawMediaData {
+          metadata_size: u32be
+          metadata_magic: magic "bmdf"
+          frame_metadata: sized(metadata_size - 8) repeat(until end) BrawFrameMetadata {
+            size: u32be
+            type: text[4] utf8
+            value: sized(size - 8) switch type {
+              'srte' => SensorRate {
+                numerator: u32be
+                denominator: u32be
+              }
+              'innd' => f32be
+              'agpf' => f32be
+              'expo' => f32be
+              'isoe' => u32be
+              'wkel' => u32be
+              'wtin' => u16be
+              'asct' => u32be
+              'asti' => u16be
+              'shtv' => text[size - 8] padded with 0x00 utf8
+              'aptr' => text[size - 8] padded with 0x00 utf8
+              'dsnc' => text[size - 8] padded with 0x00 utf8
+              'fcln' => text[size - 8] padded with 0x00 utf8
+              _ => bytes[size - 8]
+            }
+          }
+          picture_magic: magic "braw"
+          picture_size: u32be
+          picture: sized(picture_size - 8) BrawPicture {
+            sample_header: bytes[12]
+            width: u16be
+            height: u16be
+            slice_height: u16be
+            compressed_essence: bytes[remaining]
+          }
+          remaining_samples: bytes[size - 8 - metadata_size - picture_size]
+        }
+        'mogy' => repeat(until end) BlackmagicMotionSample {
+          size: u32be
+          type: text[4] utf8
+          value: sized(size - 8) switch type {
+            'mogy' => Gyroscope {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            'moac' => Accelerometer {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            _ => bytes[size - 8]
+          }
+        }
+        'moac' => repeat(until end) BlackmagicMotionSample {
+          size: u32be
+          type: text[4] utf8
+          value: sized(size - 8) switch type {
+            'mogy' => Gyroscope {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            'moac' => Accelerometer {
+              x: f32le
+              y: f32le
+              z: f32le
+            }
+            _ => bytes[size - 8]
+          }
+        }
+        _ => bytes[size - 8]
+      }
+      'avcC' => AVCConfig {
+        configuration_version: u8be
+        profile: u8be enum H264Profile {
+          66 = baseline, 77 = main, 88 = extended, 100 = high, 110 = high 10, 122 = high 4:2:2,
+          244 = high 4:4:4
+        }
+        profile_compatibility: u8be
+        level: u8be
+        reserved: u6be
+        length_size_minus_one: u2be
+        reserved2: u3be
+        sps_count: u5be
+        sps: ParameterSet {
+          length: u16be
+          nal: sized(length) NalUnit {
+            forbidden_zero: u1be
+            ref_idc: u2be
+            unit_type: u5be enum NalType {
+              1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+              5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+              10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+              19 = auxiliary slice
+            }
+            rbsp: bytes[length - 1]
+          }
+        }[sps_count]
+        pps_count: u8be
+        pps: ParameterSet {
+          length: u16be
+          nal: sized(length) NalUnit {
+            forbidden_zero: u1be
+            ref_idc: u2be
+            unit_type: u5be enum NalType {
+              1 = non-IDR slice, 2 = partition A, 3 = partition B, 4 = partition C,
+              5 = IDR slice, 6 = SEI, 7 = SPS, 8 = PPS, 9 = access unit delimiter,
+              10 = end of sequence, 11 = end of stream, 12 = filler, 13 = SPS extension,
+              19 = auxiliary slice
+            }
+            rbsp: bytes[length - 1]
+          }
+        }[pps_count]
+      }
+      _ => bytes[size - 8]
+    }
+  }
+}

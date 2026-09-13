@@ -1,0 +1,915 @@
+template elf
+
+root ELF {
+  magic: magic 7F 45 4C 46
+  class: u8be enum Class {1 = 32-bit, 2 = 64-bit}
+  data: u8be enum Data {1 = little-endian, 2 = big-endian}
+  ident_version: u8be
+  osabi: u8be enum OSABI {
+    0 = System V, 1 = HP-UX, 2 = NetBSD, 3 = Linux, 6 = Solaris, 7 = AIX, 8 = IRIX,
+    9 = FreeBSD, 12 = OpenBSD, 13 = OpenVMS, 64 = ARM EABI, 97 = ARM, 255 = standalone
+  }
+  abi_version: u8be
+  padding: bytes[7]
+  header: switch class {
+    1 => switch data {
+      1 => ELFHeader {
+        type: u16le enum ObjectType {
+          0 = none, 1 = relocatable, 2 = executable, 3 = shared object, 4 = core dump
+        }
+        machine: u16le enum Machine {
+          0 = none, 2 = SPARC, 3 = i386, 4 = 68000, 8 = MIPS, 18 = SPARC32PLUS, 20 = PowerPC,
+          21 = PowerPC 64, 22 = S/390, 40 = ARM, 42 = SuperH, 43 = SPARC v9, 50 = Itanium,
+          62 = x86-64, 83 = AVR, 94 = Xtensa, 183 = AArch64, 186 = STM8, 220 = Z80,
+          243 = RISC-V, 247 = BPF, 252 = CSKY, 258 = LoongArch
+        }
+        version: u32le
+        entry: u32le
+        program_header_offset: u32le
+        section_header_offset: u32le
+        flags: u32le
+        header_size: u16le
+        program_header_entry_size: u16le
+        program_header_count: u16le
+        section_header_entry_size: u16le
+        section_header_count: u16le
+        section_name_table: u16le
+        section_name_base:
+            at(section_header_offset + section_name_table * section_header_entry_size + 16 from
+            file) u32le
+            aside
+        program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
+          type: u32le enum SegmentType {
+            0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
+            7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
+            1685382483 = gnu_property
+          }
+          offset: u32le
+          virtual_address: u32le
+          physical_address: u32le
+          file_size: u32le
+          memory_size: u32le
+          flags: u32le flags SegmentFlags {bit 0 = execute, bit 1 = write, bit 2 = read}
+          align: u32le
+        }[program_header_count]
+        section_headers: at(section_header_offset from file) SectionHeader
+            (named by name, unit section) {
+          name_offset: u32le
+          name: switch section_name_base {
+            0 => bytes[0]
+            _ => at(section_name_base + name_offset from file) text until 0x00 utf8
+          }  aside
+          type: u32le enum SectionType {
+            0 = null, 1 = progbits, 2 = symtab, 3 = strtab, 4 = rela, 5 = hash, 6 = dynamic,
+            7 = note, 8 = nobits, 9 = rel, 10 = shlib, 11 = dynsym, 14 = init_array,
+            15 = fini_array, 16 = preinit_array, 17 = group, 18 = symtab_shndx,
+            1879048181 = gnu_attributes, 1879048182 = gnu_hash, 1879048189 = gnu_verdef,
+            1879048190 = gnu_verneed, 1879048191 = gnu_versym
+          }
+          flags: u32le flags SectionFlags {
+            bit 0 = write, bit 1 = alloc, bit 2 = execute, bit 4 = merge, bit 5 = strings,
+            bit 6 = info link, bit 7 = link order, bit 8 = OS nonconforming, bit 9 = group,
+            bit 10 = TLS, bit 11 = compressed
+          }
+          address: u32le
+          offset: u32le
+          size: u32le
+          link: u32le
+          info: u32le
+          align: u32le
+          entry_size: u32le
+        }[section_header_count]
+        sections: pointers(at section_headers[].offset from file, skip missing, skip zero)
+            switch section_headers[index].type {
+          1 => switch bit(section_headers[index].flags, 2) {
+            1 => switch machine {
+              247 => sized(section_headers[index].size) repeat(until end) BpfInsn
+                  (unit instruction, inline) {
+                opcode: u8be enum BpfOpcode {
+                  0x00 = (additional immediate value), 0x04 = dst = (u32)((u32)dst + (u32)imm),
+                  0x05 = goto +offset, 0x06 = goto +imm, 0x07 = dst += imm,
+                  0x0c = dst = (u32)((u32)dst + (u32)src), 0x0f = dst += src,
+                  0x14 = dst = (u32)((u32)dst - (u32)imm), 0x15 = if dst == imm goto +offset,
+                  0x16 = if (u32)dst == imm goto +offset, 0x17 = dst -= imm,
+                  0x18 = dst = 64-bit immediate, 0x1c = dst = (u32)((u32)dst - (u32)src),
+                  0x1d = if dst == src goto +offset,
+                  0x1e = if (u32)dst == (u32)src goto +offset, 0x1f = dst -= src,
+                  0x20 = (deprecated, implementation-specific), 0x24 = dst = (u32)(dst * imm),
+                  0x25 = if dst > imm goto +offset, 0x26 = if (u32)dst > imm goto +offset,
+                  0x27 = dst *= imm, 0x28 = (deprecated, implementation-specific),
+                  0x2c = dst = (u32)(dst * src), 0x2d = if dst > src goto +offset,
+                  0x2e = if (u32)dst > (u32)src goto +offset, 0x2f = dst *= src,
+                  0x30 = (deprecated, implementation-specific), 0x34 = dst = (u32)(dst / imm),
+                  0x35 = if dst >= imm goto +offset, 0x36 = if (u32)dst >= imm goto +offset,
+                  0x37 = dst = dst / imm, 0x3c = dst = (u32)(dst / src),
+                  0x3d = if dst >= src goto +offset,
+                  0x3e = if (u32)dst >= (u32)src goto +offset, 0x3f = dst = dst / src,
+                  0x40 = (deprecated, implementation-specific), 0x44 = dst = (u32)(dst | imm),
+                  0x45 = if dst & imm goto +offset, 0x46 = if (u32)dst & imm goto +offset,
+                  0x47 = dst |= imm, 0x48 = (deprecated, implementation-specific),
+                  0x4c = dst = (u32)(dst | src), 0x4d = if dst & src goto +offset,
+                  0x4e = if (u32)dst & (u32)src goto +offset, 0x4f = dst |= src,
+                  0x50 = (deprecated, implementation-specific), 0x54 = dst = (u32)(dst & imm),
+                  0x55 = if dst != imm goto +offset, 0x56 = if (u32)dst != imm goto +offset,
+                  0x57 = dst &= imm, 0x5c = dst = (u32)(dst & src),
+                  0x5d = if dst != src goto +offset,
+                  0x5e = if (u32)dst != (u32)src goto +offset, 0x5f = dst &= src,
+                  0x61 = dst = *(u32 *)(src + offset), 0x62 = *(u32 *)(dst + offset) = imm,
+                  0x63 = *(u32 *)(dst + offset) = src, 0x64 = dst = (u32)(dst << imm),
+                  0x65 = if dst s> imm goto +offset,
+                  0x66 = if (s32)dst s> (s32)imm goto +offset, 0x67 = dst <<= imm,
+                  0x69 = dst = *(u16 *)(src + offset), 0x6a = *(u16 *)(dst + offset) = imm,
+                  0x6b = *(u16 *)(dst + offset) = src, 0x6c = dst = (u32)(dst << src),
+                  0x6d = if dst s> src goto +offset,
+                  0x6e = if (s32)dst s> (s32)src goto +offset, 0x6f = dst <<= src,
+                  0x71 = dst = *(u8 *)(src + offset), 0x72 = *(u8 *)(dst + offset) = imm,
+                  0x73 = *(u8 *)(dst + offset) = src, 0x74 = dst = (u32)(dst >> imm),
+                  0x75 = if dst s>= imm goto +offset,
+                  0x76 = if (s32)dst s>= (s32)imm goto +offset, 0x77 = dst >>= imm,
+                  0x79 = dst = *(u64 *)(src + offset), 0x7a = *(u64 *)(dst + offset) = imm,
+                  0x7b = *(u64 *)(dst + offset) = src, 0x7c = dst = (u32)(dst >> src),
+                  0x7d = if dst s>= src goto +offset,
+                  0x7e = if (s32)dst s>= (s32)src goto +offset, 0x7f = dst >>= src,
+                  0x84 = dst = (u32)-dst, 0x85 = call, 0x87 = dst = -dst,
+                  0x94 = dst = (u32)(dst % imm), 0x95 = return, 0x97 = dst = dst % imm,
+                  0x9c = dst = (u32)(dst % src), 0x9f = dst = dst % src,
+                  0xa4 = dst = (u32)(dst ^ imm), 0xa5 = if dst < imm goto +offset,
+                  0xa6 = if (u32)dst < imm goto +offset, 0xa7 = dst ^= imm,
+                  0xac = dst = (u32)(dst ^ src), 0xad = if dst < src goto +offset,
+                  0xae = if (u32)dst < (u32)src goto +offset, 0xaf = dst ^= src,
+                  0xb4 = dst = (u32) imm, 0xb5 = if dst <= imm goto +offset,
+                  0xb6 = if (u32)dst <= imm goto +offset, 0xb7 = dst = imm,
+                  0xbc = dst = (u32) src, 0xbd = if dst <= src goto +offset,
+                  0xbe = if (u32)dst <= (u32)src goto +offset, 0xbf = dst = src,
+                  0xc3 = atomic 32-bit at (dst + offset), 0xc4 = dst = (u32)(dst s>> imm),
+                  0xc5 = if dst s< imm goto +offset,
+                  0xc6 = if (s32)dst s< (s32)imm goto +offset, 0xc7 = dst s>>= imm,
+                  0xcc = dst = (u32)(dst s>> src), 0xcd = if dst s< src goto +offset,
+                  0xce = if (s32)dst s< (s32)src goto +offset, 0xcf = dst s>>= src,
+                  0xd4 = dst = htole(dst), 0xd5 = if dst s<= imm goto +offset,
+                  0xd6 = if (s32)dst s<= (s32)imm goto +offset, 0xd7 = dst = bswap(dst),
+                  0xdb = atomic 64-bit at (dst + offset), 0xdc = dst = htobe(dst),
+                  0xdd = if dst s<= src goto +offset,
+                  0xde = if (s32)dst s<= (s32)src goto +offset
+                }
+                src: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                dst: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                offset: i16le
+                imm: i32le
+                wide: switch opcode {
+                  24 => ImmediateHigh {
+                    reserved: bytes[4]
+                    imm_high: i32le
+                  }
+                  _ => bytes[0]
+                }
+              }
+              3 => sized(section_headers[index].size) repeat(until end) instruction x86
+              62 => sized(section_headers[index].size) repeat(until end) instruction x86-64
+              183 => sized(section_headers[index].size) repeat(until end) instruction arm64
+              243 => sized(section_headers[index].size) repeat(until end) instruction riscv32
+              40 => switch bit(entry, 0) {
+                1 => sized(section_headers[index].size) repeat(until end) instruction thumb
+                _ => sized(section_headers[index].size) repeat(until end) instruction arm
+              }
+              _ => bytes[section_headers[index].size]
+            }
+            _ => bytes[section_headers[index].size]
+          }
+          2 => Symbol (unit symbol) {
+            name_offset: u32le
+            value: u32le
+            size: u32le
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16le
+          }[section_headers[index].size / 16]
+          3 => sized(section_headers[index].size) repeat(until end) text until 0x00 utf8
+          4 => RelocationAddend (unit relocation) {
+            offset: u32le
+            info: u32le
+            addend: u32le
+          }[section_headers[index].size / 12]
+          8 => bytes[0]
+          9 => Relocation (unit relocation) {
+            offset: u32le
+            info: u32le
+          }[section_headers[index].size / 8]
+          11 => Symbol (unit symbol) {
+            name_offset: u32le
+            value: u32le
+            size: u32le
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16le
+          }[section_headers[index].size / 16]
+          _ => bytes[section_headers[index].size]
+        }
+      }
+      2 => ELFHeader {
+        type: u16be enum ObjectType {
+          0 = none, 1 = relocatable, 2 = executable, 3 = shared object, 4 = core dump
+        }
+        machine: u16be enum Machine {
+          0 = none, 2 = SPARC, 3 = i386, 4 = 68000, 8 = MIPS, 18 = SPARC32PLUS, 20 = PowerPC,
+          21 = PowerPC 64, 22 = S/390, 40 = ARM, 42 = SuperH, 43 = SPARC v9, 50 = Itanium,
+          62 = x86-64, 83 = AVR, 94 = Xtensa, 183 = AArch64, 186 = STM8, 220 = Z80,
+          243 = RISC-V, 247 = BPF, 252 = CSKY, 258 = LoongArch
+        }
+        version: u32be
+        entry: u32be
+        program_header_offset: u32be
+        section_header_offset: u32be
+        flags: u32be
+        header_size: u16be
+        program_header_entry_size: u16be
+        program_header_count: u16be
+        section_header_entry_size: u16be
+        section_header_count: u16be
+        section_name_table: u16be
+        section_name_base:
+            at(section_header_offset + section_name_table * section_header_entry_size + 16 from
+            file) u32be
+            aside
+        program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
+          type: u32be enum SegmentType {
+            0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
+            7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
+            1685382483 = gnu_property
+          }
+          offset: u32be
+          virtual_address: u32be
+          physical_address: u32be
+          file_size: u32be
+          memory_size: u32be
+          flags: u32be flags SegmentFlags {bit 0 = execute, bit 1 = write, bit 2 = read}
+          align: u32be
+        }[program_header_count]
+        section_headers: at(section_header_offset from file) SectionHeader
+            (named by name, unit section) {
+          name_offset: u32be
+          name: switch section_name_base {
+            0 => bytes[0]
+            _ => at(section_name_base + name_offset from file) text until 0x00 utf8
+          }  aside
+          type: u32be enum SectionType {
+            0 = null, 1 = progbits, 2 = symtab, 3 = strtab, 4 = rela, 5 = hash, 6 = dynamic,
+            7 = note, 8 = nobits, 9 = rel, 10 = shlib, 11 = dynsym, 14 = init_array,
+            15 = fini_array, 16 = preinit_array, 17 = group, 18 = symtab_shndx,
+            1879048181 = gnu_attributes, 1879048182 = gnu_hash, 1879048189 = gnu_verdef,
+            1879048190 = gnu_verneed, 1879048191 = gnu_versym
+          }
+          flags: u32be flags SectionFlags {
+            bit 0 = write, bit 1 = alloc, bit 2 = execute, bit 4 = merge, bit 5 = strings,
+            bit 6 = info link, bit 7 = link order, bit 8 = OS nonconforming, bit 9 = group,
+            bit 10 = TLS, bit 11 = compressed
+          }
+          address: u32be
+          offset: u32be
+          size: u32be
+          link: u32be
+          info: u32be
+          align: u32be
+          entry_size: u32be
+        }[section_header_count]
+        sections: pointers(at section_headers[].offset from file, skip missing, skip zero)
+            switch section_headers[index].type {
+          1 => switch bit(section_headers[index].flags, 2) {
+            1 => switch machine {
+              247 => sized(section_headers[index].size) repeat(until end) BpfInsn
+                  (unit instruction, inline) {
+                opcode: u8be enum BpfOpcode {
+                  0x00 = (additional immediate value), 0x04 = dst = (u32)((u32)dst + (u32)imm),
+                  0x05 = goto +offset, 0x06 = goto +imm, 0x07 = dst += imm,
+                  0x0c = dst = (u32)((u32)dst + (u32)src), 0x0f = dst += src,
+                  0x14 = dst = (u32)((u32)dst - (u32)imm), 0x15 = if dst == imm goto +offset,
+                  0x16 = if (u32)dst == imm goto +offset, 0x17 = dst -= imm,
+                  0x18 = dst = 64-bit immediate, 0x1c = dst = (u32)((u32)dst - (u32)src),
+                  0x1d = if dst == src goto +offset,
+                  0x1e = if (u32)dst == (u32)src goto +offset, 0x1f = dst -= src,
+                  0x20 = (deprecated, implementation-specific), 0x24 = dst = (u32)(dst * imm),
+                  0x25 = if dst > imm goto +offset, 0x26 = if (u32)dst > imm goto +offset,
+                  0x27 = dst *= imm, 0x28 = (deprecated, implementation-specific),
+                  0x2c = dst = (u32)(dst * src), 0x2d = if dst > src goto +offset,
+                  0x2e = if (u32)dst > (u32)src goto +offset, 0x2f = dst *= src,
+                  0x30 = (deprecated, implementation-specific), 0x34 = dst = (u32)(dst / imm),
+                  0x35 = if dst >= imm goto +offset, 0x36 = if (u32)dst >= imm goto +offset,
+                  0x37 = dst = dst / imm, 0x3c = dst = (u32)(dst / src),
+                  0x3d = if dst >= src goto +offset,
+                  0x3e = if (u32)dst >= (u32)src goto +offset, 0x3f = dst = dst / src,
+                  0x40 = (deprecated, implementation-specific), 0x44 = dst = (u32)(dst | imm),
+                  0x45 = if dst & imm goto +offset, 0x46 = if (u32)dst & imm goto +offset,
+                  0x47 = dst |= imm, 0x48 = (deprecated, implementation-specific),
+                  0x4c = dst = (u32)(dst | src), 0x4d = if dst & src goto +offset,
+                  0x4e = if (u32)dst & (u32)src goto +offset, 0x4f = dst |= src,
+                  0x50 = (deprecated, implementation-specific), 0x54 = dst = (u32)(dst & imm),
+                  0x55 = if dst != imm goto +offset, 0x56 = if (u32)dst != imm goto +offset,
+                  0x57 = dst &= imm, 0x5c = dst = (u32)(dst & src),
+                  0x5d = if dst != src goto +offset,
+                  0x5e = if (u32)dst != (u32)src goto +offset, 0x5f = dst &= src,
+                  0x61 = dst = *(u32 *)(src + offset), 0x62 = *(u32 *)(dst + offset) = imm,
+                  0x63 = *(u32 *)(dst + offset) = src, 0x64 = dst = (u32)(dst << imm),
+                  0x65 = if dst s> imm goto +offset,
+                  0x66 = if (s32)dst s> (s32)imm goto +offset, 0x67 = dst <<= imm,
+                  0x69 = dst = *(u16 *)(src + offset), 0x6a = *(u16 *)(dst + offset) = imm,
+                  0x6b = *(u16 *)(dst + offset) = src, 0x6c = dst = (u32)(dst << src),
+                  0x6d = if dst s> src goto +offset,
+                  0x6e = if (s32)dst s> (s32)src goto +offset, 0x6f = dst <<= src,
+                  0x71 = dst = *(u8 *)(src + offset), 0x72 = *(u8 *)(dst + offset) = imm,
+                  0x73 = *(u8 *)(dst + offset) = src, 0x74 = dst = (u32)(dst >> imm),
+                  0x75 = if dst s>= imm goto +offset,
+                  0x76 = if (s32)dst s>= (s32)imm goto +offset, 0x77 = dst >>= imm,
+                  0x79 = dst = *(u64 *)(src + offset), 0x7a = *(u64 *)(dst + offset) = imm,
+                  0x7b = *(u64 *)(dst + offset) = src, 0x7c = dst = (u32)(dst >> src),
+                  0x7d = if dst s>= src goto +offset,
+                  0x7e = if (s32)dst s>= (s32)src goto +offset, 0x7f = dst >>= src,
+                  0x84 = dst = (u32)-dst, 0x85 = call, 0x87 = dst = -dst,
+                  0x94 = dst = (u32)(dst % imm), 0x95 = return, 0x97 = dst = dst % imm,
+                  0x9c = dst = (u32)(dst % src), 0x9f = dst = dst % src,
+                  0xa4 = dst = (u32)(dst ^ imm), 0xa5 = if dst < imm goto +offset,
+                  0xa6 = if (u32)dst < imm goto +offset, 0xa7 = dst ^= imm,
+                  0xac = dst = (u32)(dst ^ src), 0xad = if dst < src goto +offset,
+                  0xae = if (u32)dst < (u32)src goto +offset, 0xaf = dst ^= src,
+                  0xb4 = dst = (u32) imm, 0xb5 = if dst <= imm goto +offset,
+                  0xb6 = if (u32)dst <= imm goto +offset, 0xb7 = dst = imm,
+                  0xbc = dst = (u32) src, 0xbd = if dst <= src goto +offset,
+                  0xbe = if (u32)dst <= (u32)src goto +offset, 0xbf = dst = src,
+                  0xc3 = atomic 32-bit at (dst + offset), 0xc4 = dst = (u32)(dst s>> imm),
+                  0xc5 = if dst s< imm goto +offset,
+                  0xc6 = if (s32)dst s< (s32)imm goto +offset, 0xc7 = dst s>>= imm,
+                  0xcc = dst = (u32)(dst s>> src), 0xcd = if dst s< src goto +offset,
+                  0xce = if (s32)dst s< (s32)src goto +offset, 0xcf = dst s>>= src,
+                  0xd4 = dst = htole(dst), 0xd5 = if dst s<= imm goto +offset,
+                  0xd6 = if (s32)dst s<= (s32)imm goto +offset, 0xd7 = dst = bswap(dst),
+                  0xdb = atomic 64-bit at (dst + offset), 0xdc = dst = htobe(dst),
+                  0xdd = if dst s<= src goto +offset,
+                  0xde = if (s32)dst s<= (s32)src goto +offset
+                }
+                dst: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                src: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                offset: i16be
+                imm: i32be
+                wide: switch opcode {
+                  24 => ImmediateHigh {
+                    reserved: bytes[4]
+                    imm_high: i32be
+                  }
+                  _ => bytes[0]
+                }
+              }
+              3 => sized(section_headers[index].size) repeat(until end) instruction x86
+              62 => sized(section_headers[index].size) repeat(until end) instruction x86-64
+              183 => sized(section_headers[index].size) repeat(until end) instruction arm64
+              243 => sized(section_headers[index].size) repeat(until end) instruction riscv32
+              40 => switch bit(entry, 0) {
+                1 => sized(section_headers[index].size) repeat(until end) instruction thumb
+                _ => sized(section_headers[index].size) repeat(until end) instruction arm
+              }
+              _ => bytes[section_headers[index].size]
+            }
+            _ => bytes[section_headers[index].size]
+          }
+          2 => Symbol (unit symbol) {
+            name_offset: u32be
+            value: u32be
+            size: u32be
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16be
+          }[section_headers[index].size / 16]
+          3 => sized(section_headers[index].size) repeat(until end) text until 0x00 utf8
+          4 => RelocationAddend (unit relocation) {
+            offset: u32be
+            info: u32be
+            addend: u32be
+          }[section_headers[index].size / 12]
+          8 => bytes[0]
+          9 => Relocation (unit relocation) {
+            offset: u32be
+            info: u32be
+          }[section_headers[index].size / 8]
+          11 => Symbol (unit symbol) {
+            name_offset: u32be
+            value: u32be
+            size: u32be
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16be
+          }[section_headers[index].size / 16]
+          _ => bytes[section_headers[index].size]
+        }
+      }
+      _ => bytes[0]
+    }
+    2 => switch data {
+      1 => ELFHeader {
+        type: u16le enum ObjectType {
+          0 = none, 1 = relocatable, 2 = executable, 3 = shared object, 4 = core dump
+        }
+        machine: u16le enum Machine {
+          0 = none, 2 = SPARC, 3 = i386, 4 = 68000, 8 = MIPS, 18 = SPARC32PLUS, 20 = PowerPC,
+          21 = PowerPC 64, 22 = S/390, 40 = ARM, 42 = SuperH, 43 = SPARC v9, 50 = Itanium,
+          62 = x86-64, 83 = AVR, 94 = Xtensa, 183 = AArch64, 186 = STM8, 220 = Z80,
+          243 = RISC-V, 247 = BPF, 252 = CSKY, 258 = LoongArch
+        }
+        version: u32le
+        entry: u64le
+        program_header_offset: u64le
+        section_header_offset: u64le
+        flags: u32le
+        header_size: u16le
+        program_header_entry_size: u16le
+        program_header_count: u16le
+        section_header_entry_size: u16le
+        section_header_count: u16le
+        section_name_table: u16le
+        section_name_base:
+            at(section_header_offset + section_name_table * section_header_entry_size + 24 from
+            file) u64le
+            aside
+        program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
+          type: u32le enum SegmentType {
+            0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
+            7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
+            1685382483 = gnu_property
+          }
+          flags: u32le flags SegmentFlags {bit 0 = execute, bit 1 = write, bit 2 = read}
+          offset: u64le
+          virtual_address: u64le
+          physical_address: u64le
+          file_size: u64le
+          memory_size: u64le
+          align: u64le
+        }[program_header_count]
+        section_headers: at(section_header_offset from file) SectionHeader
+            (named by name, unit section) {
+          name_offset: u32le
+          name: switch section_name_base {
+            0 => bytes[0]
+            _ => at(section_name_base + name_offset from file) text until 0x00 utf8
+          }  aside
+          type: u32le enum SectionType {
+            0 = null, 1 = progbits, 2 = symtab, 3 = strtab, 4 = rela, 5 = hash, 6 = dynamic,
+            7 = note, 8 = nobits, 9 = rel, 10 = shlib, 11 = dynsym, 14 = init_array,
+            15 = fini_array, 16 = preinit_array, 17 = group, 18 = symtab_shndx,
+            1879048181 = gnu_attributes, 1879048182 = gnu_hash, 1879048189 = gnu_verdef,
+            1879048190 = gnu_verneed, 1879048191 = gnu_versym
+          }
+          flags: u64le flags SectionFlags {
+            bit 0 = write, bit 1 = alloc, bit 2 = execute, bit 4 = merge, bit 5 = strings,
+            bit 6 = info link, bit 7 = link order, bit 8 = OS nonconforming, bit 9 = group,
+            bit 10 = TLS, bit 11 = compressed
+          }
+          address: u64le
+          offset: u64le
+          size: u64le
+          link: u32le
+          info: u32le
+          align: u64le
+          entry_size: u64le
+        }[section_header_count]
+        sections: pointers(at section_headers[].offset from file, skip missing, skip zero)
+            switch section_headers[index].type {
+          1 => switch bit(section_headers[index].flags, 2) {
+            1 => switch machine {
+              247 => sized(section_headers[index].size) repeat(until end) BpfInsn
+                  (unit instruction, inline) {
+                opcode: u8be enum BpfOpcode {
+                  0x00 = (additional immediate value), 0x04 = dst = (u32)((u32)dst + (u32)imm),
+                  0x05 = goto +offset, 0x06 = goto +imm, 0x07 = dst += imm,
+                  0x0c = dst = (u32)((u32)dst + (u32)src), 0x0f = dst += src,
+                  0x14 = dst = (u32)((u32)dst - (u32)imm), 0x15 = if dst == imm goto +offset,
+                  0x16 = if (u32)dst == imm goto +offset, 0x17 = dst -= imm,
+                  0x18 = dst = 64-bit immediate, 0x1c = dst = (u32)((u32)dst - (u32)src),
+                  0x1d = if dst == src goto +offset,
+                  0x1e = if (u32)dst == (u32)src goto +offset, 0x1f = dst -= src,
+                  0x20 = (deprecated, implementation-specific), 0x24 = dst = (u32)(dst * imm),
+                  0x25 = if dst > imm goto +offset, 0x26 = if (u32)dst > imm goto +offset,
+                  0x27 = dst *= imm, 0x28 = (deprecated, implementation-specific),
+                  0x2c = dst = (u32)(dst * src), 0x2d = if dst > src goto +offset,
+                  0x2e = if (u32)dst > (u32)src goto +offset, 0x2f = dst *= src,
+                  0x30 = (deprecated, implementation-specific), 0x34 = dst = (u32)(dst / imm),
+                  0x35 = if dst >= imm goto +offset, 0x36 = if (u32)dst >= imm goto +offset,
+                  0x37 = dst = dst / imm, 0x3c = dst = (u32)(dst / src),
+                  0x3d = if dst >= src goto +offset,
+                  0x3e = if (u32)dst >= (u32)src goto +offset, 0x3f = dst = dst / src,
+                  0x40 = (deprecated, implementation-specific), 0x44 = dst = (u32)(dst | imm),
+                  0x45 = if dst & imm goto +offset, 0x46 = if (u32)dst & imm goto +offset,
+                  0x47 = dst |= imm, 0x48 = (deprecated, implementation-specific),
+                  0x4c = dst = (u32)(dst | src), 0x4d = if dst & src goto +offset,
+                  0x4e = if (u32)dst & (u32)src goto +offset, 0x4f = dst |= src,
+                  0x50 = (deprecated, implementation-specific), 0x54 = dst = (u32)(dst & imm),
+                  0x55 = if dst != imm goto +offset, 0x56 = if (u32)dst != imm goto +offset,
+                  0x57 = dst &= imm, 0x5c = dst = (u32)(dst & src),
+                  0x5d = if dst != src goto +offset,
+                  0x5e = if (u32)dst != (u32)src goto +offset, 0x5f = dst &= src,
+                  0x61 = dst = *(u32 *)(src + offset), 0x62 = *(u32 *)(dst + offset) = imm,
+                  0x63 = *(u32 *)(dst + offset) = src, 0x64 = dst = (u32)(dst << imm),
+                  0x65 = if dst s> imm goto +offset,
+                  0x66 = if (s32)dst s> (s32)imm goto +offset, 0x67 = dst <<= imm,
+                  0x69 = dst = *(u16 *)(src + offset), 0x6a = *(u16 *)(dst + offset) = imm,
+                  0x6b = *(u16 *)(dst + offset) = src, 0x6c = dst = (u32)(dst << src),
+                  0x6d = if dst s> src goto +offset,
+                  0x6e = if (s32)dst s> (s32)src goto +offset, 0x6f = dst <<= src,
+                  0x71 = dst = *(u8 *)(src + offset), 0x72 = *(u8 *)(dst + offset) = imm,
+                  0x73 = *(u8 *)(dst + offset) = src, 0x74 = dst = (u32)(dst >> imm),
+                  0x75 = if dst s>= imm goto +offset,
+                  0x76 = if (s32)dst s>= (s32)imm goto +offset, 0x77 = dst >>= imm,
+                  0x79 = dst = *(u64 *)(src + offset), 0x7a = *(u64 *)(dst + offset) = imm,
+                  0x7b = *(u64 *)(dst + offset) = src, 0x7c = dst = (u32)(dst >> src),
+                  0x7d = if dst s>= src goto +offset,
+                  0x7e = if (s32)dst s>= (s32)src goto +offset, 0x7f = dst >>= src,
+                  0x84 = dst = (u32)-dst, 0x85 = call, 0x87 = dst = -dst,
+                  0x94 = dst = (u32)(dst % imm), 0x95 = return, 0x97 = dst = dst % imm,
+                  0x9c = dst = (u32)(dst % src), 0x9f = dst = dst % src,
+                  0xa4 = dst = (u32)(dst ^ imm), 0xa5 = if dst < imm goto +offset,
+                  0xa6 = if (u32)dst < imm goto +offset, 0xa7 = dst ^= imm,
+                  0xac = dst = (u32)(dst ^ src), 0xad = if dst < src goto +offset,
+                  0xae = if (u32)dst < (u32)src goto +offset, 0xaf = dst ^= src,
+                  0xb4 = dst = (u32) imm, 0xb5 = if dst <= imm goto +offset,
+                  0xb6 = if (u32)dst <= imm goto +offset, 0xb7 = dst = imm,
+                  0xbc = dst = (u32) src, 0xbd = if dst <= src goto +offset,
+                  0xbe = if (u32)dst <= (u32)src goto +offset, 0xbf = dst = src,
+                  0xc3 = atomic 32-bit at (dst + offset), 0xc4 = dst = (u32)(dst s>> imm),
+                  0xc5 = if dst s< imm goto +offset,
+                  0xc6 = if (s32)dst s< (s32)imm goto +offset, 0xc7 = dst s>>= imm,
+                  0xcc = dst = (u32)(dst s>> src), 0xcd = if dst s< src goto +offset,
+                  0xce = if (s32)dst s< (s32)src goto +offset, 0xcf = dst s>>= src,
+                  0xd4 = dst = htole(dst), 0xd5 = if dst s<= imm goto +offset,
+                  0xd6 = if (s32)dst s<= (s32)imm goto +offset, 0xd7 = dst = bswap(dst),
+                  0xdb = atomic 64-bit at (dst + offset), 0xdc = dst = htobe(dst),
+                  0xdd = if dst s<= src goto +offset,
+                  0xde = if (s32)dst s<= (s32)src goto +offset
+                }
+                src: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                dst: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                offset: i16le
+                imm: i32le
+                wide: switch opcode {
+                  24 => ImmediateHigh {
+                    reserved: bytes[4]
+                    imm_high: i32le
+                  }
+                  _ => bytes[0]
+                }
+              }
+              3 => sized(section_headers[index].size) repeat(until end) instruction x86
+              62 => sized(section_headers[index].size) repeat(until end) instruction x86-64
+              183 => sized(section_headers[index].size) repeat(until end) instruction arm64
+              243 => sized(section_headers[index].size) repeat(until end) instruction riscv64
+              40 => switch bit(entry, 0) {
+                1 => sized(section_headers[index].size) repeat(until end) instruction thumb
+                _ => sized(section_headers[index].size) repeat(until end) instruction arm
+              }
+              _ => bytes[section_headers[index].size]
+            }
+            _ => bytes[section_headers[index].size]
+          }
+          2 => Symbol (unit symbol) {
+            name_offset: u32le
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16le
+            value: u64le
+            size: u64le
+          }[section_headers[index].size / 24]
+          3 => sized(section_headers[index].size) repeat(until end) text until 0x00 utf8
+          4 => RelocationAddend (unit relocation) {
+            offset: u64le
+            type: u32le enum RelocationType {
+              0 = R_BPF_NONE, 1 = R_BPF_64_64, 2 = R_BPF_64_ABS64, 3 = R_BPF_64_ABS32,
+              4 = R_BPF_64_NODYLD32, 10 = R_BPF_64_32
+            }
+            symbol: u32le
+            addend: u64le
+          }[section_headers[index].size / 24]
+          8 => bytes[0]
+          9 => Relocation (unit relocation) {
+            offset: u64le
+            type: u32le enum RelocationType {
+              0 = R_BPF_NONE, 1 = R_BPF_64_64, 2 = R_BPF_64_ABS64, 3 = R_BPF_64_ABS32,
+              4 = R_BPF_64_NODYLD32, 10 = R_BPF_64_32
+            }
+            symbol: u32le
+          }[section_headers[index].size / 16]
+          11 => Symbol (unit symbol) {
+            name_offset: u32le
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16le
+            value: u64le
+            size: u64le
+          }[section_headers[index].size / 24]
+          _ => bytes[section_headers[index].size]
+        }
+      }
+      2 => ELFHeader {
+        type: u16be enum ObjectType {
+          0 = none, 1 = relocatable, 2 = executable, 3 = shared object, 4 = core dump
+        }
+        machine: u16be enum Machine {
+          0 = none, 2 = SPARC, 3 = i386, 4 = 68000, 8 = MIPS, 18 = SPARC32PLUS, 20 = PowerPC,
+          21 = PowerPC 64, 22 = S/390, 40 = ARM, 42 = SuperH, 43 = SPARC v9, 50 = Itanium,
+          62 = x86-64, 83 = AVR, 94 = Xtensa, 183 = AArch64, 186 = STM8, 220 = Z80,
+          243 = RISC-V, 247 = BPF, 252 = CSKY, 258 = LoongArch
+        }
+        version: u32be
+        entry: u64be
+        program_header_offset: u64be
+        section_header_offset: u64be
+        flags: u32be
+        header_size: u16be
+        program_header_entry_size: u16be
+        program_header_count: u16be
+        section_header_entry_size: u16be
+        section_header_count: u16be
+        section_name_table: u16be
+        section_name_base:
+            at(section_header_offset + section_name_table * section_header_entry_size + 24 from
+            file) u64be
+            aside
+        program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
+          type: u32be enum SegmentType {
+            0 = null, 1 = load, 2 = dynamic, 3 = interp, 4 = note, 5 = shlib, 6 = phdr,
+            7 = TLS, 1685382480 = gnu_eh_frame, 1685382481 = gnu_stack, 1685382482 = gnu_relro,
+            1685382483 = gnu_property
+          }
+          flags: u32be flags SegmentFlags {bit 0 = execute, bit 1 = write, bit 2 = read}
+          offset: u64be
+          virtual_address: u64be
+          physical_address: u64be
+          file_size: u64be
+          memory_size: u64be
+          align: u64be
+        }[program_header_count]
+        section_headers: at(section_header_offset from file) SectionHeader
+            (named by name, unit section) {
+          name_offset: u32be
+          name: switch section_name_base {
+            0 => bytes[0]
+            _ => at(section_name_base + name_offset from file) text until 0x00 utf8
+          }  aside
+          type: u32be enum SectionType {
+            0 = null, 1 = progbits, 2 = symtab, 3 = strtab, 4 = rela, 5 = hash, 6 = dynamic,
+            7 = note, 8 = nobits, 9 = rel, 10 = shlib, 11 = dynsym, 14 = init_array,
+            15 = fini_array, 16 = preinit_array, 17 = group, 18 = symtab_shndx,
+            1879048181 = gnu_attributes, 1879048182 = gnu_hash, 1879048189 = gnu_verdef,
+            1879048190 = gnu_verneed, 1879048191 = gnu_versym
+          }
+          flags: u64be flags SectionFlags {
+            bit 0 = write, bit 1 = alloc, bit 2 = execute, bit 4 = merge, bit 5 = strings,
+            bit 6 = info link, bit 7 = link order, bit 8 = OS nonconforming, bit 9 = group,
+            bit 10 = TLS, bit 11 = compressed
+          }
+          address: u64be
+          offset: u64be
+          size: u64be
+          link: u32be
+          info: u32be
+          align: u64be
+          entry_size: u64be
+        }[section_header_count]
+        sections: pointers(at section_headers[].offset from file, skip missing, skip zero)
+            switch section_headers[index].type {
+          1 => switch bit(section_headers[index].flags, 2) {
+            1 => switch machine {
+              247 => sized(section_headers[index].size) repeat(until end) BpfInsn
+                  (unit instruction, inline) {
+                opcode: u8be enum BpfOpcode {
+                  0x00 = (additional immediate value), 0x04 = dst = (u32)((u32)dst + (u32)imm),
+                  0x05 = goto +offset, 0x06 = goto +imm, 0x07 = dst += imm,
+                  0x0c = dst = (u32)((u32)dst + (u32)src), 0x0f = dst += src,
+                  0x14 = dst = (u32)((u32)dst - (u32)imm), 0x15 = if dst == imm goto +offset,
+                  0x16 = if (u32)dst == imm goto +offset, 0x17 = dst -= imm,
+                  0x18 = dst = 64-bit immediate, 0x1c = dst = (u32)((u32)dst - (u32)src),
+                  0x1d = if dst == src goto +offset,
+                  0x1e = if (u32)dst == (u32)src goto +offset, 0x1f = dst -= src,
+                  0x20 = (deprecated, implementation-specific), 0x24 = dst = (u32)(dst * imm),
+                  0x25 = if dst > imm goto +offset, 0x26 = if (u32)dst > imm goto +offset,
+                  0x27 = dst *= imm, 0x28 = (deprecated, implementation-specific),
+                  0x2c = dst = (u32)(dst * src), 0x2d = if dst > src goto +offset,
+                  0x2e = if (u32)dst > (u32)src goto +offset, 0x2f = dst *= src,
+                  0x30 = (deprecated, implementation-specific), 0x34 = dst = (u32)(dst / imm),
+                  0x35 = if dst >= imm goto +offset, 0x36 = if (u32)dst >= imm goto +offset,
+                  0x37 = dst = dst / imm, 0x3c = dst = (u32)(dst / src),
+                  0x3d = if dst >= src goto +offset,
+                  0x3e = if (u32)dst >= (u32)src goto +offset, 0x3f = dst = dst / src,
+                  0x40 = (deprecated, implementation-specific), 0x44 = dst = (u32)(dst | imm),
+                  0x45 = if dst & imm goto +offset, 0x46 = if (u32)dst & imm goto +offset,
+                  0x47 = dst |= imm, 0x48 = (deprecated, implementation-specific),
+                  0x4c = dst = (u32)(dst | src), 0x4d = if dst & src goto +offset,
+                  0x4e = if (u32)dst & (u32)src goto +offset, 0x4f = dst |= src,
+                  0x50 = (deprecated, implementation-specific), 0x54 = dst = (u32)(dst & imm),
+                  0x55 = if dst != imm goto +offset, 0x56 = if (u32)dst != imm goto +offset,
+                  0x57 = dst &= imm, 0x5c = dst = (u32)(dst & src),
+                  0x5d = if dst != src goto +offset,
+                  0x5e = if (u32)dst != (u32)src goto +offset, 0x5f = dst &= src,
+                  0x61 = dst = *(u32 *)(src + offset), 0x62 = *(u32 *)(dst + offset) = imm,
+                  0x63 = *(u32 *)(dst + offset) = src, 0x64 = dst = (u32)(dst << imm),
+                  0x65 = if dst s> imm goto +offset,
+                  0x66 = if (s32)dst s> (s32)imm goto +offset, 0x67 = dst <<= imm,
+                  0x69 = dst = *(u16 *)(src + offset), 0x6a = *(u16 *)(dst + offset) = imm,
+                  0x6b = *(u16 *)(dst + offset) = src, 0x6c = dst = (u32)(dst << src),
+                  0x6d = if dst s> src goto +offset,
+                  0x6e = if (s32)dst s> (s32)src goto +offset, 0x6f = dst <<= src,
+                  0x71 = dst = *(u8 *)(src + offset), 0x72 = *(u8 *)(dst + offset) = imm,
+                  0x73 = *(u8 *)(dst + offset) = src, 0x74 = dst = (u32)(dst >> imm),
+                  0x75 = if dst s>= imm goto +offset,
+                  0x76 = if (s32)dst s>= (s32)imm goto +offset, 0x77 = dst >>= imm,
+                  0x79 = dst = *(u64 *)(src + offset), 0x7a = *(u64 *)(dst + offset) = imm,
+                  0x7b = *(u64 *)(dst + offset) = src, 0x7c = dst = (u32)(dst >> src),
+                  0x7d = if dst s>= src goto +offset,
+                  0x7e = if (s32)dst s>= (s32)src goto +offset, 0x7f = dst >>= src,
+                  0x84 = dst = (u32)-dst, 0x85 = call, 0x87 = dst = -dst,
+                  0x94 = dst = (u32)(dst % imm), 0x95 = return, 0x97 = dst = dst % imm,
+                  0x9c = dst = (u32)(dst % src), 0x9f = dst = dst % src,
+                  0xa4 = dst = (u32)(dst ^ imm), 0xa5 = if dst < imm goto +offset,
+                  0xa6 = if (u32)dst < imm goto +offset, 0xa7 = dst ^= imm,
+                  0xac = dst = (u32)(dst ^ src), 0xad = if dst < src goto +offset,
+                  0xae = if (u32)dst < (u32)src goto +offset, 0xaf = dst ^= src,
+                  0xb4 = dst = (u32) imm, 0xb5 = if dst <= imm goto +offset,
+                  0xb6 = if (u32)dst <= imm goto +offset, 0xb7 = dst = imm,
+                  0xbc = dst = (u32) src, 0xbd = if dst <= src goto +offset,
+                  0xbe = if (u32)dst <= (u32)src goto +offset, 0xbf = dst = src,
+                  0xc3 = atomic 32-bit at (dst + offset), 0xc4 = dst = (u32)(dst s>> imm),
+                  0xc5 = if dst s< imm goto +offset,
+                  0xc6 = if (s32)dst s< (s32)imm goto +offset, 0xc7 = dst s>>= imm,
+                  0xcc = dst = (u32)(dst s>> src), 0xcd = if dst s< src goto +offset,
+                  0xce = if (s32)dst s< (s32)src goto +offset, 0xcf = dst s>>= src,
+                  0xd4 = dst = htole(dst), 0xd5 = if dst s<= imm goto +offset,
+                  0xd6 = if (s32)dst s<= (s32)imm goto +offset, 0xd7 = dst = bswap(dst),
+                  0xdb = atomic 64-bit at (dst + offset), 0xdc = dst = htobe(dst),
+                  0xdd = if dst s<= src goto +offset,
+                  0xde = if (s32)dst s<= (s32)src goto +offset
+                }
+                dst: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                src: u4be enum Register {
+                  0 = r0, 1 = r1, 2 = r2, 3 = r3, 4 = r4, 5 = r5, 6 = r6, 7 = r7, 8 = r8,
+                  9 = r9, 10 = r10 (frame)
+                }
+                offset: i16be
+                imm: i32be
+                wide: switch opcode {
+                  24 => ImmediateHigh {
+                    reserved: bytes[4]
+                    imm_high: i32be
+                  }
+                  _ => bytes[0]
+                }
+              }
+              3 => sized(section_headers[index].size) repeat(until end) instruction x86
+              62 => sized(section_headers[index].size) repeat(until end) instruction x86-64
+              183 => sized(section_headers[index].size) repeat(until end) instruction arm64
+              243 => sized(section_headers[index].size) repeat(until end) instruction riscv64
+              40 => switch bit(entry, 0) {
+                1 => sized(section_headers[index].size) repeat(until end) instruction thumb
+                _ => sized(section_headers[index].size) repeat(until end) instruction arm
+              }
+              _ => bytes[section_headers[index].size]
+            }
+            _ => bytes[section_headers[index].size]
+          }
+          2 => Symbol (unit symbol) {
+            name_offset: u32be
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16be
+            value: u64be
+            size: u64be
+          }[section_headers[index].size / 24]
+          3 => sized(section_headers[index].size) repeat(until end) text until 0x00 utf8
+          4 => RelocationAddend (unit relocation) {
+            offset: u64be
+            symbol: u32be
+            type: u32be enum RelocationType {
+              0 = R_BPF_NONE, 1 = R_BPF_64_64, 2 = R_BPF_64_ABS64, 3 = R_BPF_64_ABS32,
+              4 = R_BPF_64_NODYLD32, 10 = R_BPF_64_32
+            }
+            addend: u64be
+          }[section_headers[index].size / 24]
+          8 => bytes[0]
+          9 => Relocation (unit relocation) {
+            offset: u64be
+            symbol: u32be
+            type: u32be enum RelocationType {
+              0 = R_BPF_NONE, 1 = R_BPF_64_64, 2 = R_BPF_64_ABS64, 3 = R_BPF_64_ABS32,
+              4 = R_BPF_64_NODYLD32, 10 = R_BPF_64_32
+            }
+          }[section_headers[index].size / 16]
+          11 => Symbol (unit symbol) {
+            name_offset: u32be
+            info: SymbolInfo (inline) {
+              binding: u4be enum SymbolBinding {
+                0 = local, 1 = global, 2 = weak, 10 = GNU unique
+              }
+              type: u4be enum SymbolType {
+                0 = notype, 1 = object, 2 = function, 3 = section, 4 = file, 5 = common,
+                6 = TLS, 10 = GNU ifunc
+              }
+            }
+            visibility: u8be enum SymbolVisibility {
+              0 = default, 1 = internal, 2 = hidden, 3 = protected
+            }
+            section_index: u16be
+            value: u64be
+            size: u64be
+          }[section_headers[index].size / 24]
+          _ => bytes[section_headers[index].size]
+        }
+      }
+      _ => bytes[0]
+    }
+    _ => bytes[0]
+  }
+}
