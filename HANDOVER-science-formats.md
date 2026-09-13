@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| CDF time values as moments: float counts (CDF_EPOCH, EPOCH16 seconds), `Epoch::Atomic` with a leap-second table for TT2000 (IERS from 1972, the CDF library's drifting offsets 1960 to 1971), fill and pad values as no time, and `23:59:60` shown inside a leap second. 2,489 sample sites and a 34,640-count sweep match cdflib, bar two cdflib faults. | c9cfdb5, f70cf0c, 97b3565 |
 | Arrow IPC files and streams: a new template and a FlatBuffers reader in the IR (`flatbuf.rs`), the footer read from the back, batches placed from their blocks, buffers typed by schema field to three levels, ZSTD bodies decoded. Matches pyarrow on six samples. | 92aa7cc, 24ca3b6, 5c596ad |
 | Decoder panels: one `Unpacker` table picks the side reader for the cursor (near or any ancestor), `ExplainDto` is a tagged enum mirrored as a TypeScript union, GWF vectors have their own panel, and GRIB values reach a panel that says which value the cursor is on and how it decodes. | 63806d1, d803c1e, f2ac9b4, 0685d12 |
 | BGZF, BAM, BAI and CSI: new templates. BGZF sniffs apart from gzip (which fixed false CRC mismatches on every `.bam`), the first block's header and records as fields, later records through a side reader, indexes with split virtual offsets. Matches bamnostic. | 1830e4a, 3b48b16, 8f47af1 |
@@ -303,10 +304,15 @@ the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
   rather than from `product(dim_sizes)`, because a dimension the variable does
   not vary along is not stored; the shape is in the descriptor for a reader
   to fold in.
-- CDF_EPOCH (float64 ms since 0 AD) and CDF_TIME_TT2000 (int64 ns since J2000
-  on TAI) are not declared as moments. `Counted.zero` is whole seconds,
-  `moment_number` takes only integers, and TT2000 counts TAI so a linear count
-  is up to 5.8 s out after 2017. A `time.rs` item, not a template one.
+- CDF_EPOCH16's picoseconds stay on their own row: a moment is nanoseconds.
+  A declaration pairing a seconds field with a fraction field would fold them
+  in, and would suit GWF's `GTimeS`/`GTimeN` too (`Time::gps_seconds()` exists
+  and is tested; `gwf.rs` does not use it yet).
+- The file's `leap_second_last_updated` is read and not compared with the
+  table, so a file written with a stale table is not flagged.
+- Moments before 1960 still end in "UTC", a scale that did not exist then.
+- The leap-second table (`eval/time/leap_seconds.rs`) expires 2027-06-28 and
+  needs refreshing from IERS Bulletin C before then.
 - The template needed `Ty::Chain` to take an `adjust` and to take its room
   from its anchor rather than the file, so a chain inside an unpacked run does
   not end where the compressed file does. `T::chain` defaults `adjust` to 0.
