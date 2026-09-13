@@ -122,6 +122,10 @@ export class KsyPanel {
   load(text: string, name: string | null): void {
     this.source.value = text;
     this.fileName.textContent = name ?? "";
+    // At the top of the file it just opened, not wherever the last one was
+    // left.
+    this.source.setSelectionRange(0, 0);
+    this.source.scrollTop = 0;
     this.convert();
   }
 
@@ -227,9 +231,16 @@ export class KsyPanel {
    *  it. Open when there is news in it; the field list is folded away because
    *  it says something about every field there is. */
   private group(heading: string, title: string | null, lines: readonly KsyLine[], className: string, open: boolean): HTMLElement {
+    // A heading with nothing under it is not something to open, so it is not
+    // offered as one. Its count is still the news: nothing was left behind.
+    if (lines.length === 0) {
+      const empty = el("p", { className: `kp-group kp-group-heading is-empty ${className}`, textContent: heading });
+      if (title !== null) empty.title = title;
+      return empty;
+    }
     const summary = el("summary", { className: "kp-group-heading" }, heading);
     if (title !== null) summary.title = title;
-    const group = el("details", { className: `kp-group ${className}`, open: open && lines.length > 0 });
+    const group = el("details", { className: `kp-group ${className}`, open });
     group.append(summary);
     for (const line of lines) group.append(this.line(line));
     return group;
@@ -283,13 +294,15 @@ export class KsyPanel {
  *  `path: message`, which is the order they are read in. */
 function errorLine(message: string): HTMLElement {
   const cut = message.indexOf(": ");
-  if (cut < 1) return el("p", { className: "kp-error" }, el("span", { className: "kp-line-message", textContent: message }));
-  return el(
-    "p",
-    { className: "kp-error" },
-    el("span", { className: "kp-line-path", textContent: message.slice(0, cut) }),
-    el("span", { className: "kp-line-message", textContent: message.slice(cut + 2) }),
-  );
+  const path = cut < 1 ? "" : message.slice(0, cut);
+  const rest = cut < 1 ? message : message.slice(cut + 2);
+  const line = el("p", { className: "kp-error" });
+  // `/` is the whole file rather than a place in it, and a line holding one
+  // slash reads as a stray character. What the message says about where it is
+  // stands on its own.
+  if (path !== "" && path !== "/") line.append(el("span", { className: "kp-line-path", textContent: path }));
+  line.append(el("span", { className: "kp-line-message", textContent: rest }));
+  return line;
 }
 
 /** A line of the `.ksy`, as far as the scan cares: what it is indented to, and

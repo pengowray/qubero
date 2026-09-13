@@ -5321,7 +5321,7 @@ table.rec tr.is-on td {
   flex: 1 1 40%;
 }
 .kp-col-report {
-  flex: 0 0 24rem;
+  flex: 0 0 20rem;
   max-width: 45vw;
 }
 .kp-col-out {
@@ -5397,17 +5397,24 @@ table.rec tr.is-on td {
   padding: 4px 0 8px;
 }
 .kp-group-heading {
+  margin: 0;
   padding: 4px 8px;
   font: 600 12px var(--sans);
   color: var(--fg);
   cursor: pointer;
   list-style-position: inside;
 }
-.kp-group-heading:hover {
+summary.kp-group-heading:hover {
   background: var(--panel);
 }
+/* A heading over nothing: no triangle, since there is nothing to open. */
+.kp-group-heading.is-empty {
+  cursor: default;
+  color: var(--muted);
+}
 /* The count of what could not be expressed is the one number in the panel a
-   reader is looking for, so it is the one thing coloured. */
+   reader is looking for, so it is the one thing coloured. Not when it is zero:
+   nothing was left behind, which is the opposite of something to look at. */
 .kp-gaps > .kp-group-heading {
   color: var(--warn);
 }
