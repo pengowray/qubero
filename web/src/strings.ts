@@ -727,12 +727,23 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
-/** Heads the second half of the Template menu: the formats described by a
- *  `.ksy` from the Kaitai Struct format library rather than written here.
+/** The Template menu's half that is not built in: formats described by a
+ *  `.ksy` from the Kaitai Struct format library. The converter panel's own
+ *  strings are `KSY` further down; these are the chooser's.
+ *
  *  Named after where the description came from, because that is the one thing
- *  a reader needs to know about them: they were not written for Qubero, and
- *  some of them read less of a file than a built-in would. */
-export const TEMPLATE_GROUP_KAITAI = "From Kaitai Struct";
+ *  a reader needs to know about them: they were not written for Qubero, and a
+ *  few of them say more than the template can carry. Once a format is picked
+ *  the menu shows only its own name, so `note` is the only place that says
+ *  where it came from, and it is also where a shortfall is said out loud
+ *  rather than left for the reader to notice in a wrong-looking field. */
+export const KAITAI_TEMPLATE = {
+  group: "From Kaitai Struct",
+  note: (gaps: number): string =>
+    gaps === 0
+      ? "Format description from Kaitai Struct."
+      : `Format description from Kaitai Struct. This template leaves out ${gaps === 1 ? "one part" : `${gaps} parts`} of it.`,
+};
 
 /** The Logical tab for an ELF, when the parsed header has no field of a name
  *  the tab reads it by. Shown after `LOGICAL_FAILED`'s "Couldn't read the
