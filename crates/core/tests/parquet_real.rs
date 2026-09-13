@@ -437,3 +437,94 @@ fn every_page(ev: &mut Evaluator, doc: &Document<MemSource>) -> Vec<Vec<usize>> 
     pages.sort();
     pages
 }
+
+/// The schema walk: how deep each column sits, as the side reader worked it
+/// out, against pyarrow's own answer.
+///
+/// A wrong maximum level does not stop a page reading. It reads the levels at
+/// the wrong width, the values start at the wrong byte, and what comes out is
+/// plausible nonsense with no problem attached, so nothing else here would
+/// notice. The expectations are `pq.ParquetFile(path).schema.column(i)`'s
+/// `max_definition_level`, `max_repetition_level` and `length`, read on
+/// 2026-09-14.
+#[test]
+fn the_schema_walk_finds_each_columns_levels() {
+    use qubero_core::eval::Explain;
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // file, and for each column chunk in order: max definition level, max
+    // repetition level.
+    let cases: &[(&str, &[(u32, u32)])] = &[
+        ("nested_lists.snappy.parquet", &[(7, 3), (0, 0)]),
+        ("repeated_no_annotation.parquet", &[(0, 0), (2, 1), (3, 1)]),
+        ("datapage_v2.snappy.parquet", &[(1, 0), (0, 0), (0, 0), (0, 0), (2, 1)]),
+        ("rle_boolean_encoding.parquet", &[(1, 0)]),
+        ("fixed_length_byte_array.parquet", &[(1, 0)]),
+        ("int32_with_null_pages.parquet", &[(1, 0)]),
+    ];
+    let mut checked = 0;
+    for (name, want) in cases {
+        let path = root.join(name);
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        for at in every_page(&mut ev, &doc) {
+            let column = column_of(&mut ev, &doc, &at);
+            // A dictionary page has no levels at all, whatever its column's
+            // depth; its second field is its type, and DICTIONARY_PAGE is 2.
+            let mut kind = at.clone();
+            kind.push(1);
+            if ev.node(&doc, &kind).unwrap().value.as_int() == Some(2) {
+                continue;
+            }
+            let Explain::ParquetPage { steps, .. } = ev.explain(&doc, &at, None).unwrap() else {
+                panic!("{name}: {at:?} did not read as a page");
+            };
+            let (definition, repetition) = want[column];
+            // A level list names its maximum in its note; one that is not
+            // there at all was left out because its maximum is zero, which is
+            // the only reason a v1 page leaves one out.
+            for (list, max) in [("definition levels", definition), ("repetition levels", repetition)] {
+                match steps.iter().find(|s| s.what == list) {
+                    Some(step) => {
+                        let said = step.note.split("max level ").nth(1).and_then(|t| t.split(',').next());
+                        assert_eq!(said, Some(max.to_string().as_str()), "{name} column {column}: {}", step.note);
+                        checked += 1;
+                    }
+                    None => {
+                        assert!(max == 0, "{name} column {column}: no {list} step, but pyarrow says {max}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(checked > 10, "only {checked} level steps checked");
+
+    // The width of a fixed-length value is the other thing only the schema
+    // knows. pyarrow: `flba_field` is 4 bytes, and `x` is a float16 in 2.
+    for (name, word) in [("fixed_length_byte_array.parquet", "4-byte array"), ("float16_nonzeros_and_nans.parquet", "2-byte array")] {
+        let path = root.join(name);
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        let pages = every_page(&mut ev, &doc);
+        let Explain::ParquetPage { element_type, problem, .. } = ev.explain(&doc, &pages[0], None).unwrap() else {
+            panic!("{name}: the first page did not read as a page");
+        };
+        assert_eq!(problem, None, "{name}");
+        assert_eq!(element_type, word, "{name}");
+    }
+}
+
+/// Which column chunk a page belongs to, counting from zero in the order the
+/// row group lists them.
+fn column_of(ev: &mut Evaluator, doc: &Document<MemSource>, page: &[usize]) -> usize {
+    let mut at = page.to_vec();
+    while !at.is_empty() {
+        if ev.node(doc, &at).unwrap().type_name == "ColumnChunk" {
+            return *at.last().unwrap();
+        }
+        at.pop();
+    }
+    panic!("{page:?} is not under a column chunk");
+}
