@@ -88,7 +88,7 @@ fn a_big_endian_volume_reads_as_nibabel_reads_it() {
     assert_eq!(node(&mut ev, &d, &["header", "xyzt_units", "space"]).value.as_int(), Some(2));
     // A slope of 1 and an intercept of 0 is no scaling, so nothing is worked
     // out and the voxels are the integers.
-    assert_eq!(node(&mut ev, &d, &["header", "scale"]).size_bits, 0);
+    assert_eq!(node(&mut ev, &d, &["header", "scaled"]).value.as_int(), Some(0));
     // (33, 41, 25): 25 slices of 41 rows of 33, ending with the file.
     let voxels = node(&mut ev, &d, &["voxels"]);
     assert_eq!((voxels.type_name.as_str(), voxels.child_count), ("i16 be[][][]", 25));
@@ -99,35 +99,57 @@ fn a_big_endian_volume_reads_as_nibabel_reads_it() {
     }
 }
 
+/// SPM's 4-D series, scaled by a slope and an intercept with fractions in
+/// them. Each voxel is the integer on disk, the one `dataobj.get_unscaled()`
+/// gives, and what it is worth, the one `get_fdata()` gives.
 #[test]
-fn a_4d_series_with_fractional_scaling_reads_as_the_integers_stored() {
+fn functional_voxels_are_worth_what_scl_slope_says() {
     let Some((d, sniffed, mut ev)) = read("functional.nii") else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
     };
     assert_eq!(sniffed, "nifti");
     assert_eq!(node(&mut ev, &d, &["header", "sizeof_hdr"]).type_name, "i32 le");
-    // nibabel scales these by 0.0754 and adds 3100.76; the integers cannot
-    // say that, so the header's `scale` holds nothing and the voxels are the
-    // stored numbers, the ones `dataobj.get_unscaled()` gives.
-    assert_eq!(node(&mut ev, &d, &["header", "scale"]).size_bits, 0);
-    let Value::Float(slope) = node(&mut ev, &d, &["header", "scl_slope"]).value else { panic!("slope is a float") };
-    assert!((slope - 0.0754).abs() < 1e-4, "{slope}");
+    assert_eq!(node(&mut ev, &d, &["header", "scaled"]).value.as_int(), Some(1));
+    // As the rows show them: the shortest decimals that read back as the
+    // file's four bytes, which nibabel reads as 0.07540696859359741 and
+    // 3100.76171875.
+    assert_eq!(node(&mut ev, &d, &["header", "scl_slope"]).value, Value::Float(0.07540697));
+    assert_eq!(node(&mut ev, &d, &["header", "scl_inter"]).value, Value::Float(3100.7617));
     // (17, 21, 3, 20): 20 volumes of 3 slices of 21 rows of 17.
     let voxels = node(&mut ev, &d, &["voxels"]);
-    assert_eq!((voxels.type_name.as_str(), voxels.child_count), ("i16 le[][][][]", 20));
+    assert_eq!((voxels.type_name.as_str(), voxels.child_count), ("Scaled[][][][]", 20));
     assert_eq!(voxels.offset_bits + voxels.size_bits, d.len_bits());
-    for (index, want) in [
-        ([0, 0, 0, 0], 11980),
-        ([1, 0, 0, 0], 13831),
-        ([0, 1, 0, 0], 14493),
-        ([0, 0, 1, 0], 7910),
-        ([0, 0, 0, 1], 12452),
-        ([16, 20, 2, 19], 379),
-        ([8, 10, 1, 10], 11093),
+    let at = |ev: &mut Evaluator, index: &[usize], part: usize| {
+        let mut p = path(ev, &d, &["voxels"]);
+        p.extend(index.iter().rev());
+        p.push(part);
+        ev.node(&d, &p).unwrap()
+    };
+    // nibabel 5.4's `get_fdata()`, which works in doubles from the exact bits
+    // of the two floats. This works from the floats as their rows read, so
+    // the two agree to within a few hundred-thousandths and not to the bit.
+    for (index, stored, fdata) in [
+        ([0, 0, 0, 0], 11980, 4004.137202501297),
+        ([1, 0, 0, 0], 13831, 4143.715501368046),
+        ([0, 1, 0, 0], 14493, 4193.634914577007),
+        ([0, 0, 1, 0], 7910, 3697.2308403253555),
+        ([0, 0, 0, 1], 12452, 4039.729291677475),
+        ([16, 20, 2, 19], 379, 3129.3409598469734),
+        ([8, 10, 1, 10], 11093, 3937.251221358776),
     ] {
-        assert_eq!(voxel(&mut ev, &d, &index).as_int(), Some(want), "data{index:?}");
+        assert_eq!(at(&mut ev, &index, 0).value.as_int(), Some(stored), "data{index:?}");
+        let worth = at(&mut ev, &index, 1);
+        assert_eq!(worth.type_name, "computed real");
+        let Value::Float(got) = worth.value else { panic!("data{index:?} is worth {:?}", worth.value) };
+        assert!((got - fdata).abs() < 1e-4, "data{index:?}: {got} against nibabel's {fdata}");
     }
+    // And the formula a reader is shown for the first voxel.
+    let mut first = path(&mut ev, &d, &["voxels"]);
+    first.extend([0, 0, 0, 0, 1]);
+    let rel = ev.relations(&d, &first).unwrap();
+    assert_eq!(rel[0].written, "stored * header.scl_slope + header.scl_inter");
+    assert_eq!(rel[0].substituted, "11980 * 0.07540697 + 3100.7617");
 }
 
 /// A `.nii.gz` is a gzip file, and its stream is recognised as NIfTI-2 by the
