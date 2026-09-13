@@ -564,6 +564,22 @@ impl Expr {
             field: field.iter().map(|s| s.to_string()).collect(),
         }))
     }
+    /// The same, for a label this record works out rather than one the format
+    /// fixed, over a list reached by an expression rather than by a name.
+    ///
+    /// What an HDF5 variable-length element needs. The note it leaves behind
+    /// says which global heap collection holds its bytes and which object of
+    /// that collection they are, and both are numbers in the note: the list to
+    /// search is reached through the address, and the label to look for is the
+    /// index written beside it. Neither is a name the template could fix.
+    pub fn tagged_in_by(array: Expr, key: &[&str], tag: Expr, field: &[&str]) -> Expr {
+        Expr::Tagged(Arc::new(TaggedRef {
+            array: Some(array),
+            key: key.iter().map(|s| s.to_string()).collect(),
+            tag: Tag::Computed(Arc::new(tag)),
+            field: field.iter().map(|s| s.to_string()).collect(),
+        }))
+    }
     /// The same, for a list whose elements are labelled in text: `field` of the
     /// first element of `array` whose `key` holds exactly these bytes.
     pub fn tagged_bytes(array: &str, key: &[&str], tag: &[u8], field: &[&str]) -> Expr {

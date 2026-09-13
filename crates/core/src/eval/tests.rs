@@ -3563,3 +3563,70 @@ fn a_composite_contributes_only_what_its_children_leave_over() {
     assert_eq!(out.unmapped_bits, 32);
     assert_eq!(out.covered_bits + out.unmapped_bits, d.len_bits());
 }
+
+/// A tagged search reaches a list that lives behind an address, and finds the
+/// element whose label the record asking works out for itself.
+///
+/// Both halves matter and neither was proven before. The list is named by a
+/// path down into a field whose contents are somewhere else, so the path has
+/// to step through the `At` the way every other path does. The label is not a
+/// number the template fixed but one written in the record asking, which is
+/// how a variable-length element says which object of a heap collection holds
+/// its bytes.
+#[test]
+fn a_tagged_search_reaches_a_list_through_an_at() {
+    let element = || {
+        T::structure(
+            "Element",
+            vec![("index", T::u8()), ("size", T::u8()), ("payload", T::bytes(E::field("size")))],
+        )
+    };
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("collection_address", T::u8()),
+                ("want", T::u8()),
+                (
+                    "collection",
+                    T::at(
+                        E::field("collection_address"),
+                        T::structure("Collection", vec![("elements", T::repeat(element(), Until::End))]),
+                    ),
+                ),
+                (
+                    "found",
+                    T::computed(E::tagged_in_by(
+                        E::within(&["collection", "elements"]),
+                        &["index"],
+                        E::field("want"),
+                        &["size"],
+                    )),
+                ),
+            ],
+        ),
+    );
+    // At byte 4: element 7 of one byte, element 3 of two, element 5 of three.
+    let d = doc(&[4, 3, 0, 0, 7, 1, b'a', 3, 2, b'b', b'c', 5, 3, b'd', b'e', b'f']);
+    let mut ev = Evaluator::new(t);
+    let found = ev.node(&d, &[3]).unwrap();
+    assert_eq!(found.value.as_int(), Some(2), "the search should land on the element labelled 3");
+
+    // And the path it lands on is the one inside the collection, so a reader
+    // asking where the answer came from is sent to those bytes.
+    let here = ev.memo.get(&vec![3usize]).map(|r| (r.offset, r.limit));
+    let search = match &ev.template.root {
+        Ty::Struct(s) => match &s.fields[3].ty {
+            Ty::Computed(Expr::Tagged(t)) => t.clone(),
+            other => panic!("not a tagged search: {other:?}"),
+        },
+        other => panic!("not a structure: {other:?}"),
+    };
+    let (path, label) =
+        ev.tagged_path(&d, &[3], &search, here).unwrap().expect("the search should find an element");
+    // Root, then the collection field, then the one child of its `At`, then
+    // the list, then the second element, then the field read from it.
+    assert_eq!(path, vec![2, 0, 0, 1, 1]);
+    assert_eq!(label, "collection.elements[1].size");
+}

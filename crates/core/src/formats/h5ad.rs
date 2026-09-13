@@ -472,7 +472,7 @@ fn vlen_string<S: Source>(ev: &mut Evaluator, doc: &Document<S>, at: &[usize]) -
         if ev.node(doc, &index)?.value.as_int() != Some(want) {
             continue;
         }
-        let Some(data) = ev.child_named(doc, &object, "data")? else { return Ok(None) };
+        let Some(data) = ev.child_named(doc, &object, "payload")? else { return Ok(None) };
         let info = ev.node(doc, &data)?;
         let bytes = read_bytes(doc, info.offset_bits, length.min(4096) as u64)?;
         return Ok(Some(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string()));

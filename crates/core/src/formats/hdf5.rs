@@ -1455,13 +1455,18 @@ fn heap_object() -> T {
     T::structure_named(
         "HeapObject",
         "object_index",
-        "data",
+        "payload",
         vec![
             ("object_index", T::u16(Little)),
             ("reference_count", T::u16(Little)),
             ("reserved", T::u32(Little)),
             ("size", length().counted_as("bytes")),
-            // Rounded up to eight bytes, and the padding belongs to nobody.
+            // The object's own bytes, and then the padding that rounds the
+            // collection on to the next multiple of eight. They were one field
+            // covering both, which reads the same and says less: what a
+            // variable-length element points at is the object, and a field
+            // that runs on past its end cannot be that. The padding belongs to
+            // nobody and is written down as its own row for the same reason.
             //
             // Object zero is the free space rather than an object, and its
             // size counts the sixteen bytes of header this one has already
@@ -1469,8 +1474,16 @@ fn heap_object() -> T {
             // that is what free space is, and it saves subtracting a header
             // from a length that may be shorter than one.
             (
-                "data",
-                T::switch(E::field("object_index"), vec![(0, T::bytes(E::Remaining))], T::bytes(pad8(E::field("size")))),
+                "payload",
+                T::switch(E::field("object_index"), vec![(0, T::bytes(E::Remaining))], T::bytes(E::field("size"))),
+            ),
+            (
+                "padding",
+                T::switch(
+                    E::field("object_index"),
+                    vec![(0, T::bytes(E::lit(0)))],
+                    T::bytes(pad8(E::field("size")).sub(E::field("size"))),
+                ),
             ),
         ],
     )
