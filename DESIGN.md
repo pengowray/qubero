@@ -434,6 +434,15 @@ table of contents rather than a listing. The rules, with their constants in
   the file and arrive open; a hundred thousand tensors are a list, and each
   arrives as one row that opens on a click. Long lists are still paged at
   `PAGE` elements.
+- Past `OPEN_BUDGET` (50,000) items, a structure arrives closed. A tree is
+  short lists nested deep, and no list length catches it: an HDF5 chunk index
+  is nodes of thirty-six entries each pointing at the next node down, and
+  opened whole it is 350,000 rows read from all over a 480 MiB file. That
+  outgrew the 32 MiB chunk cache, so the walk never finished: every chunk that
+  landed evicted one the walk needed, and the listing re-walked for as long as
+  the file was open. The budget counts from the top of the list, so while a
+  file is still loading, a fold far down it can arrive open on one walk and
+  closed on the next as the rows above it fill in.
 - Bytes nothing describes arrive as bytes. A gap longer than `DUMP_MIN_BYTES`
   (16) arrives with a scrolling dump under it: sixteen bytes a line, only the
   lines on screen read, so a four-hundred-megabyte payload costs the same as a
@@ -455,7 +464,10 @@ the item says, and the report reads the item.
 
 Do not undo this by defaulting things closed again when something gets slow.
 The cost of arriving open is one `children` read per open composite per walk,
-and the walk runs on change, not on scroll; the lever is `LIST_OPEN_MAX`.
+and the walk runs on change, not on scroll; the levers are `LIST_OPEN_MAX`
+for a long list and `OPEN_BUDGET` for a deep one. Past the budget, opening or
+shutting a fold walks the whole tree rather than the one fold, since what
+arrives open below it depends on how many items are above.
 
 The hierarchy has two heading sizes and then rows. A top-level part gets the
 most space above it, a title a size larger than anything under it, its swatch,
