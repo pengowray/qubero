@@ -365,7 +365,7 @@ export const TIME = {
      * say` is joined.
      */
     before_leap_seconds: "UTC before 1972 per NASA's CDF library, other tools may differ",
-  },
+  } satisfies Record<NonNullable<FieldTime["note"]>, string | ((until: string) => string)>,
 } as const;
 
 /**

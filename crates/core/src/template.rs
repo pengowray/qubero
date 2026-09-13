@@ -1586,7 +1586,8 @@ pub struct Counted {
 ///
 /// GWF frames are the other format here that could say this: a frame's
 /// `GTimeS` counts GPS seconds, and the frame writes its own `ULeapS` beside
-/// it. `Time::gps_seconds` is that declaration, not yet made.
+/// it. `Time::gps_seconds` is the declaration it would take, not yet written
+/// into `gwf.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Atomic {
     /// Where the count's zero is, as nanoseconds from 1970-01-01T00:00:00 on
