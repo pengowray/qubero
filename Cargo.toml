@@ -7,6 +7,11 @@ edition = "2024"
 version = "0.1.0"
 license = "MIT"
 
+# A copy of the crate with one fix in src/parser.rs (search for "Qubero:").
+# Take the fix out once it is upstream.
+[patch.crates-io]
+pure-magic = { path = "crates/vendor/pure-magic" }
+
 [profile.release]
 opt-level = 3
 lto = true
