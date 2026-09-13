@@ -95,6 +95,8 @@
 //!   the first of the three cells shared by a class.
 //! - A table of a version before 4. Only version 4 has been seen, and an
 //!   older table keeps every cell after the second as a plain value.
+//! - The second, empty subsystem file MATLAB often writes after the first,
+//!   which reads as the `uint8` array it is written as rather than as a file.
 //! - The subsystem of a level 7.3 file, which is HDF5 and read as that.
 //! - Level 4 on a VAX or a Cray, whose floating point is neither of the two
 //!   IEEE layouts. The machine digit is read and named, and the integers are
