@@ -1202,6 +1202,11 @@ fn block() -> T {
 /// reading that covers exactly the bytes a block covers would be the one it
 /// found, since the first placement over a stretch is the one kept, and the
 /// descriptors would never be reached from their own bytes.
+///
+/// The table is placed at its own start rather than from an origin, because
+/// the index places each entry where `start_of` says its descriptor is, and
+/// `start_of` counts from the nearest origin: inside one, every entry would
+/// land that many bytes early.
 fn index_block() -> T {
     let table = T::structure(
         "Hdf4IndexTable",
