@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| ROOT RNTuple: header and footer envelopes as frames (fields named, columns typed), each cluster group followed to its page list, every page placed with its checksum, and page values by column type where the header is stored. Matches uproot 5.7.6 on both samples. A tree walk names 25,113 of 25,318 bytes of `staff`, up from 1,296 (the hex view does not show it; see ROOT below). | 48f2d4b, a3fadfe, 3801d23 |
 | miniSEED samples: a side reader (`mseed_steim.rs`) undoes Steim1/Steim2 differences, decodes the fixed-width encodings, CDSN and SRO, checks the reverse integration constant, and shows a samples panel. Exact match with obspy on all 22 records of 2.4 files; miniSEED 3 matches obspy's reading of libmseed's 2.x twins. | 54dca11, caef124 |
 | MAT subsystem data: placed from the header offset, read as its own small MAT file, the `FileWrapper__` table's classes, objects and properties labelled by name, and each `MCOS` variable's object reference. Sparse arrays read as columns with a computed `row` per entry. A VAX level 4 file is recognised (it was not). Two BSD-3 samples from foreverallama/matio. | 007fbe9, 19c5cc1, 845c824 |
 | Parquet page payloads: open by the chunk's codec (snappy and brotli new, plus gzip, zstd, LZ4_RAW, stored); dictionary pages and `DATA_PAGE_V2` values as fields; every page in the 16 samples read to its values by a side reader with a step panel, bar two brotli pages claiming 2 GB. Pinned against pyarrow. | c7cfeab, e54ecd9, d73b009 |
@@ -231,9 +232,20 @@ as a gap while the Logical tab lists them.
   proven: no tree in the corpus uses one. Worth a sample.
 - Not read: variable-length entries, multi-leaf branches, strings, 2-byte
   floats, 3-byte integers, `CS` compressed blocks.
-- RNTuple: the anchor and both envelopes are placed; the schema, page lists
-  and pages are bytes. The spec needs no streamers, so this is template work,
-  and `Anchor::File` from inside the unpacked envelope already works.
+- RNTuple reads from the anchor to every page (see Closed). Left:
+  - **The hex view shows none of it.** `spans` knows a placed field only
+    once its forward walk has resolved the field pointing at it, and the key
+    list leading to the anchor sits after all the RNTuple data, so envelopes
+    and pages show as one gap (the envelopes did before too). A `spans`
+    change, not a template one. The same shape probably affects any format
+    whose directory is at the end.
+  - Page values read only when the header envelope is stored uncompressed: a
+    page needs its column type from the header, and an expression cannot
+    reach into a decoded run. ROOT nearly always compresses the header
+    (`staff` does). A reader beside the template, like `root_tree.rs`, would
+    also do split, zigzag and delta decoding with no IR change.
+  - Large locators, payloads over one 16 MiB block, and payloads split over
+    several keys are not placed. No xxhash-3, so no checksum is verified.
 - The panel's classes group row says `StreamerInfo` where an `@0x…` would do,
   and an unsplit `TBranchElement` could name its class.
 
