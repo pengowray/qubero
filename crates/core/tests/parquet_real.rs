@@ -101,3 +101,81 @@ fn pages_and_indexes_are_separate_in_real_files() {
     }
     assert!(checked > 0);
 }
+
+/// Which codec every page payload opened with, and what came out of it.
+///
+/// The codec names and the first bytes are pyarrow's answers, read on
+/// 2026-09-13 with `pq.ParquetFile(path).metadata.row_group(0).column(i)` and
+/// `pq.read_table(path)`. A page that opens says the codec's word where it
+/// used to say `bytes[]`, and the bytes behind it are the ones the values are
+/// encoded in.
+#[test]
+fn page_payloads_open_with_the_codec_the_footer_names() {
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // file, the word every payload's node carries, and how many pages opened.
+    let expected: &[(&str, &str, bool)] = &[
+        ("alltypes_plain.parquet", "stored", true),
+        ("alltypes_dictionary.parquet", "stored", true),
+        ("delta_binary_packed.parquet", "stored", true),
+        ("datapage_v2.snappy.parquet", "snappy", true),
+        ("nested_lists.snappy.parquet", "snappy", true),
+        ("nan_in_stats.parquet", "snappy", true),
+        ("data_index_bloom_encoding_stats.parquet", "gzip", true),
+        ("byte_stream_split.zstd.parquet", "zstd", true),
+        ("lz4_raw_compressed.parquet", "lz4", true),
+        // Every page but two opens. The two are the point of the file: its
+        // first column claims 2,147,483,749 uncompressed bytes from three
+        // kilobytes of input, which is past what this will hold in memory.
+        ("large_string_map.brotli.parquet", "brotli", false),
+    ];
+    for (name, codec, every) in expected {
+        let path = root.join(name);
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        let mut seen = 0;
+        let mut opened = 0;
+        let mut stack = vec![Vec::new()];
+        while let Some(at) = stack.pop() {
+            let node = ev.node(&doc, &at).unwrap();
+            for i in (0..node.child_count as usize).rev() {
+                let mut next = at.clone();
+                next.push(i);
+                stack.push(next);
+            }
+            // The payload of a page, or the values of a v2 one: both are the
+            // run the codec was run over and both carry its word.
+            if node.type_name != *codec {
+                continue;
+            }
+            seen += 1;
+            if node.child_count > 0 {
+                opened += 1;
+            }
+        }
+        assert!(seen > 0, "{name}: no payload said {codec}");
+        if *every {
+            assert_eq!(seen, opened, "{name}: {} of {seen} payloads did not open", seen - opened);
+        } else {
+            assert!(opened > 0 && opened < seen, "{name}: {opened} of {seen} opened");
+        }
+        eprintln!("{name}: {opened} of {seen} {codec} payloads opened");
+    }
+}
+
+/// The codecs nothing here reads keep their bytes and say why by staying
+/// bytes: LZO, which has no pure-Rust decoder, and the framed LZ4 of codec 5,
+/// which no sample holds. Neither reaches a `Decoded`, so neither can be
+/// mistaken for a run that opened.
+#[test]
+fn the_unread_codecs_are_not_in_the_switch() {
+    let t = formats::builtin("parquet").unwrap();
+    let printed = format!("{t:?}");
+    assert!(printed.contains("Snappy"), "snappy should be declared");
+    assert!(printed.contains("Brotli"), "brotli should be declared");
+    // Nothing names an LZO or a Hadoop-framed LZ4 codec at all, here or in
+    // `codec`: there is no decoder to name.
+    assert!(!printed.contains("Lzo"));
+}

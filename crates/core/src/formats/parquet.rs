@@ -26,9 +26,20 @@
 //! tree, and there is no node for the region between the magic and the footer
 //! as a whole.
 //!
-//! A payload keeps its bytes. Undoing its codec (snappy, zstd, brotli, lz4,
-//! gzip) and then its encoding (plain, dictionary, the RLE and bit-packed
-//! hybrid, delta) is what is left before a page reads as its values.
+//! A payload opens. The column chunk's `codec` says what was run over it, and
+//! the payload is declared as a run packed that way, so what is inside a page
+//! is a space of its own with the levels and the values laid over it. Snappy,
+//! gzip, zstd, brotli and the raw LZ4 of `LZ4_RAW` all open; UNCOMPRESSED
+//! opens too, as a stored space, so that one reading applies to every page
+//! whether or not anything was packed. Two do not: LZO has no decoder here,
+//! and `LZ4`, codec 5, is the Hadoop-framed one rather than a raw block and no
+//! file to hand holds one, so naming it and keeping the bytes is the honest
+//! answer rather than a guess at a framing.
+//!
+//! A `DATA_PAGE_V2` payload is not one run. Its repetition and definition
+//! levels are written in front of the packed part and are never packed
+//! themselves, sized by two lengths in the header, so that a reader can decide
+//! whether it wants the page at all without unpacking anything.
 //!
 //! A sequential walk of that region would be wrong, which is why it is not
 //! here: a writer may put a column index, an offset index and a bloom filter
@@ -50,6 +61,7 @@
 //! the encrypted footer and names the algorithm and the key. The four bytes
 //! at the end count that structure and the footer together.
 
+use crate::codec::Codec;
 use crate::formats::thrift::{self, Field, Struct, What::{Enum, Plain, Struct as Sub, Text}};
 use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T, Until};
 use std::sync::Arc;
@@ -500,12 +512,97 @@ fn header_field(id: i128) -> E {
     E::tagged_in(E::within(&["header", "fields"]), &["id"], id, &["value"])
 }
 
+/// A numbered field of the `DataPageHeaderV2` nested inside this page's
+/// header, which is field 8 of the header and has numbered fields of its own.
+///
+/// A field nothing wrote reads as zero, and a boolean reads as 1 for true and
+/// 2 for false, which is how the compact protocol writes one: the value is in
+/// the type nibble and there is no body. So a switch on a boolean has three
+/// cases to tell apart and not two, and absent is not the same as false.
+fn v2_field(id: i128) -> E {
+    let header = E::tagged_in(E::within(&["header", "fields"]), &["id"], 8, &["value", "fields"]);
+    E::tagged_in(header, &["id"], id, &["value"])
+}
+
+/// What the column chunk said packed its pages, read from four levels up: a
+/// page sits inside a `ColumnPages` inside the `At` that placed it, and the
+/// codec is a field of the `ColumnMetaData` that same chunk carries.
+fn codec_field() -> E {
+    metadata_field(4)
+}
+
 fn page() -> T {
     T::structure_named("Page", "type", "payload", vec![
         ("header", T::Named("parquet.PageHeader".into())),
         ("type", T::enumeration("PageType", T::computed(header_field(1)), PAGE_TYPE)),
-        ("payload", T::bytes(header_field(3))),
+        ("payload", payload()),
     ])
+}
+
+/// What a page's payload holds, which is not the same shape for every kind of
+/// page.
+///
+/// A v1 data page and a dictionary page are one compressed run from the first
+/// byte to the last. A `DATA_PAGE_V2` is not: its repetition and definition
+/// levels are written in front of the compressed part and are never packed, so
+/// that a reader deciding whether it wants a page at all can read its levels
+/// without unpacking anything. The two lengths are in the header, which is the
+/// other half of the same idea, and what is left after them is the run the
+/// codec was run over.
+fn payload() -> T {
+    T::switch(header_field(1), vec![(3, payload_v2())], packed(header_field(3)))
+}
+
+/// A `DATA_PAGE_V2` payload: levels in the clear, then the values.
+///
+/// `is_compressed` is the writer's one way of saying that the codec was not
+/// run over this page after all, which parquet-mr does when packing made the
+/// page larger. It defaults to true, so a page that says nothing is packed.
+fn payload_v2() -> T {
+    let rep = v2_field(6);
+    let def = v2_field(5);
+    let values = header_field(3).sub(rep.clone()).sub(def.clone()).at_least(E::lit(0));
+    T::structure("DataPageV2Payload", vec![
+        ("repetition_levels", T::bytes(rep)),
+        ("definition_levels", T::bytes(def)),
+        ("values", T::switch(v2_field(7), vec![(2, stored(values.clone()))], packed(values))),
+    ])
+}
+
+/// A compressed run of `len` bytes, opened by whatever the column chunk's
+/// codec names.
+///
+/// Which codecs open and which do not is the part of this worth writing down.
+/// UNCOMPRESSED opens as a stored space rather than staying plain bytes so
+/// that one reader applies to every page: what is inside a page is the same
+/// arrangement of levels and values whether or not anything was run over it,
+/// and a space is where that arrangement is declared.
+///
+/// LZO and the older framed LZ4 are named and keep their bytes. LZO has no
+/// decoder here, and its licence is most of why little else has one either.
+/// LZ4 as codec 5 is not a raw LZ4 block: Hadoop wrapped each block in a pair
+/// of big-endian lengths, writers disagreed for years about how a page with
+/// more than one block in it was written, and no file in the sample collection
+/// holds one, so what would go here would be a reading nothing has checked.
+/// LZ4_RAW, codec 7, is the raw block and does open; it is what every writer
+/// since 2020 produces and what the sample named for it holds.
+fn packed(len: E) -> T {
+    let pack = |codec| T::decoded(len.clone(), codec, T::bytes(E::Remaining));
+    T::switch(codec_field(), vec![
+        (0, stored(len.clone())),
+        (1, pack(Codec::Snappy)),
+        (2, pack(Codec::Gzip)),
+        (4, pack(Codec::Brotli)),
+        (6, pack(Codec::Zstd)),
+        (7, pack(Codec::Lz4Block)),
+    ], T::bytes(len))
+}
+
+/// A run nothing was run over, opened as a space all the same. See
+/// [`Codec::Stored`](crate::codec::Codec::Stored) for why that is a codec here
+/// rather than a flag.
+fn stored(len: E) -> T {
+    T::decoded(len, Codec::Stored, T::bytes(E::Remaining))
 }
 
 /// A pointer with a declared length. Never let its window include the footer.
