@@ -1050,11 +1050,13 @@ first value the rule would have filled in from the file, with an ellipsis when
 something was cut.
 
 That rule about standing alone was written when there was one list, and the
-second one has shown its edge: where both lists know a format and pin the same
-bytes, the two rows tie and neither names the file. Parquet, RAR 5 and HDF5
-went unnamed for exactly that reason, and forty of the 396 sample files did.
-Whether two lists agreeing should name a file, and under whose label, is still
-to decide.
+second one showed its edge: where both lists know a format and pin the same
+bytes, the two rows tied and neither named the file; Parquet, RAR 5 and HDF5
+went unnamed that way, forty of the 396 sample files. So a tie between one
+`file(1)` rule and Wikidata items on the same bytes is not a tie between
+formats, and goes to the rule's label, which is what the `file(1)` module
+would have written. A tie within one list is two formats that cannot be told
+apart, and still names nothing.
 
 A signature is stored once however many formats claim it, and the file holds
 one array a column rather than one object a format. The two together fit both
