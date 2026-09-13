@@ -3,6 +3,7 @@ import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
 import type { GraphView } from "./graphview.ts";
+import type { DiagramView } from "./diagramview.ts";
 import { Inspector } from "./inspector.ts";
 import { saveDoc } from "./save.ts";
 import { parseSize, syntheticFile } from "./synthetic.ts";
@@ -17,7 +18,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
   CODEPAGES_A,
@@ -41,7 +42,7 @@ const formatSize = formatBytes;
 
 /** The main views: one reading of the file at a time, in the same area. The
  *  graph is behind `?graph` and is not offered until it has been unlocked. */
-type View = "hex" | "listing" | "text" | "strings" | "graph";
+type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -1015,7 +1016,8 @@ function build(tab: Tab): Page {
   // Behind ?graph, and built only when it has been unlocked: an experiment
   // with a button in the main switch would read as a finished view.
   const graphBtn = el("button", { type: "button", textContent: GRAPH.button, className: "tb-view" });
-  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn);
+  const diagramBtn = el("button", { type: "button", textContent: DIAGRAM.button, className: "tb-view" });
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn, diagramBtn);
   if (graphUnlocked) views.append(graphBtn);
   // The graph and everything it needs is a third of a megabyte of layout
   // engine. Fetched when the view is first asked for, so a reader who never
@@ -1028,6 +1030,10 @@ function build(tab: Tab): Page {
   let graphCap = 2000;
   /** True while the graph is waiting on bytes it asked for. See `showGraph`. */
   let graphWaiting = false;
+  /** The diagram and its layout engine, fetched when the view is first opened.
+   *  The same lazy chunk the graph uses, for the same reason: nobody pays for a
+   *  view they never open. */
+  let diagram: DiagramView | null = null;
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -1116,11 +1122,46 @@ function build(tab: Tab): Page {
     graph.setPath(linkPath);
   };
 
+  /**
+   * Build the diagram, fetching the layout engine the first time it is asked
+   * for.
+   *
+   * Not rebuilt as the cursor moves: the picture is of the format, and the
+   * cursor is in the file. It is rebuilt when the template changes, which is
+   * the one thing that changes what it shows.
+   */
+  const showDiagram = async (): Promise<void> => {
+    if (diagram === null) {
+      const { DiagramView } = await import("./diagramview.ts");
+      diagram = new DiagramView();
+      diagram.onPick = (box, row) => {
+        // The format's first type is the root of the open file, so a field of
+        // it is a path of one. Every other box is a type the file may hold any
+        // number of, in places only a walk would find.
+        //
+        // TODO: a core query for "the first path whose type is X" would let a
+        // click on any box reach the file. Until then a click on one of those
+        // is a click on the format, and the cursor stays where it was.
+        if (box !== 0) return;
+        setView("hex");
+        goToField([row]);
+      };
+      diagram.el.hidden = false;
+      workspaceLeft.append(diagram.el);
+    }
+    const reply = doc.templateDiagram();
+    // No template is an answer, not a failure: the view says so rather than
+    // showing the last format's picture over an unrecognised file.
+    diagram.show(reply.status === "ok" ? reply.node : null, templateLabel(doc.template ?? ""));
+    diagram.relayout();
+  };
+
   const setView = (which: View): void => {
     const listingOn = which === "listing";
     const textOn = which === "text";
     const stringsOn = which === "strings";
     const graphOn = which === "graph";
+    const diagramOn = which === "diagram";
     listingShowing = listingOn;
     view.el.hidden = which !== "hex";
     structure.el.hidden = !listingOn;
@@ -1128,6 +1169,7 @@ function build(tab: Tab): Page {
     text.el.hidden = !textOn;
     strings.el.hidden = !stringsOn;
     if (graph !== null) graph.el.hidden = !graphOn;
+    if (diagram !== null) diagram.el.hidden = !diagramOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
     syncGlyphsShown();
     for (const c of textOnly) c.hidden = !textOn;
@@ -1138,6 +1180,7 @@ function build(tab: Tab): Page {
       [textBtn, textOn],
       [stringsBtn, stringsOn],
       [graphBtn, graphOn],
+      [diagramBtn, diagramOn],
     ] as const) {
       btn.setAttribute("aria-pressed", String(on));
       btn.classList.toggle("is-on", on);
@@ -1157,6 +1200,8 @@ function build(tab: Tab): Page {
       strings.setByte(Math.floor(view.cursorState.bitOffset / 8));
     } else if (graphOn) {
       void showGraph();
+    } else if (diagramOn) {
+      void showDiagram();
     } else view.relayout();
     (listingOn
       ? structure.el
@@ -1166,7 +1211,9 @@ function build(tab: Tab): Page {
           ? strings.el
           : graphOn && graph !== null
             ? graph.el
-            : view.el
+            : diagramOn && diagram !== null
+              ? diagram.el
+              : view.el
     ).focus();
     refresh();
   };
@@ -1195,6 +1242,7 @@ function build(tab: Tab): Page {
     view.selectRange(at * 8, (at + len) * 8, at * 8);
   };
   graphBtn.addEventListener("click", () => setView("graph"));
+  diagramBtn.addEventListener("click", () => setView("diagram"));
   // Picking a character in the text is the same as putting the cursor on its
   // first byte, which is what every other view is looking at.
   text.onPick = (at) => {
@@ -1315,6 +1363,10 @@ function build(tab: Tab): Page {
     if (doc.template !== hadTemplate) {
       hadTemplate = doc.template;
       syncColumn();
+      // The diagram is a picture of the template and of nothing else, so a new
+      // template is the one thing that changes it. Only while it is showing:
+      // laying it out behind a hidden view costs a layout nobody is looking at.
+      if (diagram !== null && !diagram.el.hidden) void showDiagram();
     }
     refresh();
     if (followWhenLoaded !== null) {
@@ -1433,7 +1485,11 @@ function build(tab: Tab): Page {
       // A saved "graph" from a browser where it was once unlocked is not a
       // reason to open a view that is no longer on offer.
       const start: View =
-        startView === "listing" || startView === "text" || startView === "strings" || (startView === "graph" && graphUnlocked)
+        startView === "listing" ||
+        startView === "text" ||
+        startView === "strings" ||
+        startView === "diagram" ||
+        (startView === "graph" && graphUnlocked)
           ? startView
           : "hex";
       setView(start);
@@ -1448,7 +1504,20 @@ function build(tab: Tab): Page {
   };
   if (import.meta.env.DEV) {
     Object.assign(window, {
-      __qubero: { doc, view, inspector, overview, structure, listPane, text, strings, setView, tabs, graph: () => graph },
+      __qubero: {
+        doc,
+        view,
+        inspector,
+        overview,
+        structure,
+        listPane,
+        text,
+        strings,
+        setView,
+        tabs,
+        graph: () => graph,
+        diagram: () => diagram,
+      },
     });
   }
   return { el: page, shown };
