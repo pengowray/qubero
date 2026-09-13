@@ -374,6 +374,21 @@ fn record_at(k: E, inner: T) -> T {
     T::at(look(k.clone(), &["offset"]), T::sized(look(k, &["length"]), inner))
 }
 
+/// The same, where the key came out of another record and so could not be
+/// tested before the field was declared.
+///
+/// A number type record is named by a reference number written inside the
+/// dimension record, and whether the block holds it cannot be asked until the
+/// dimension record has been read. So this reads nothing at all rather than
+/// failing when it is not there: no room, no record. Whatever the record was
+/// wanted for still has to ask [`found`] before it reads a value through it.
+fn record_at_or_nothing(k: E, inner: T) -> T {
+    T::at(
+        look(k.clone(), &["offset"]).at_least(E::size_of("magic")),
+        T::sized(look(k, &["length"]), T::if_room(inner)),
+    )
+}
+
 /// The reference number of the descriptor whose bytes these are, asked from
 /// inside whatever they were read as. Everything an HDF4 object is made of
 /// carries the same reference number, so this is how a raster image finds its
@@ -492,29 +507,24 @@ fn sd_scales() -> T {
 /// are: inside the run of values `Idx` is which value this is.
 fn one_scale() -> T {
     let which = || E::field("dimension");
+    let nt = || key(106, E::elem_within(&["dimensions", "scales"], which(), &["ref"]));
+    let run = T::array(
+        of_the_number_type(),
+        E::elem_within(&["dimensions", "dims"], which(), &[]).at_least(E::lit(0)),
+    );
+    // A dimension with no scale has no bytes here. One whose number type is in
+    // another block stops the reading where it stands: how wide its values are
+    // is what says where the next dimension's scale begins, so everything
+    // after it is unplaceable and the rest of the record is left as bytes.
+    let values = T::switch(found(nt()), vec![(1, run)], T::bytes(E::Remaining));
     T::structure_named(
         "Hdf4SdScale",
         "",
         "values",
         vec![
             ("dimension", T::computed(E::idx())),
-            (
-                "number_type",
-                record_at(
-                    key(106, E::elem_within(&["dimensions", "scales"], which(), &["ref"])),
-                    number_type(),
-                ),
-            ),
-            (
-                "values",
-                T::present_if(
-                    E::elem("has_scale", which()),
-                    T::array(
-                        of_the_number_type(),
-                        E::elem_within(&["dimensions", "dims"], which(), &[]).at_least(E::lit(0)),
-                    ),
-                ),
-            ),
+            ("number_type", record_at_or_nothing(nt(), number_type())),
+            ("values", T::switch(E::elem("has_scale", which()), vec![(1, values)], T::bytes(E::lit(0)))),
         ],
     )
     .machinery(&["dimension", "number_type"])
@@ -729,15 +739,17 @@ fn raster_image() -> T {
         ],
         T::structure("Hdf4RasterPixels", vec![("rows", T::array(T::array(T::array(s(), n()), x), y))]),
     );
+    let nt = || key(106, E::within(&["dimensions", "number_type_ref"]));
     let body = T::structure(
         "Hdf4RasterImage",
         vec![
             ("dimensions", record_at(key(300, own_ref()), image_dimensions())),
-            (
-                "number_type",
-                record_at(key(106, E::within(&["dimensions", "number_type_ref"])), number_type()),
-            ),
-            ("samples", samples),
+            ("number_type", record_at_or_nothing(nt(), number_type())),
+            // Which number type it is, is written in the dimension record, so
+            // whether the block holds it cannot be asked until that record has
+            // been read: the question belongs here rather than around the
+            // whole image.
+            ("samples", T::switch(found(nt()), vec![(1, samples)], T::bytes(E::Remaining))),
         ],
     )
     .machinery(&["dimensions", "number_type"])
@@ -865,13 +877,11 @@ fn vdata_value() -> T {
 /// expression can say how deep to go.
 fn scientific_data_group() -> T {
     let member = |t: i128| key(t, E::tagged("members", &["tag"], t, &["ref"]));
-    // The number type, where a file written by the SD interface lists it among
-    // the members and an older one does not: there it carries the group's own
-    // reference number, the way everything else about a dataset written by the
-    // old interface does. The dimension record names it too, but reading that
-    // means reading the dimension record, and this has to be answered before
-    // anything is read at all.
-    let nt = || key(106, E::tagged("members", &["tag"], 106, &["ref"]).or(own_ref()));
+    // The number type is named by the dimension record rather than by the
+    // group: a file written by the old interface lists it among the members
+    // and one written by the SD interface gives it a reference number of its
+    // own, and the dimension record is right either way.
+    let nt = || key(106, E::within(&["dimensions", "number_type_ref"]));
     let dim = |i: i128| E::elem_within(&["dimensions", "dims"], E::lit(i), &[]).at_least(E::lit(0));
     // The last dimension is wrapped first, so it ends up innermost and the
     // first dimension outermost, which is the order the values are written
@@ -889,12 +899,19 @@ fn scientific_data_group() -> T {
         "Hdf4ScientificDataset",
         vec![
             ("dimensions", record_at(member(701), sd_dimensions())),
-            ("number_type", record_at(nt(), number_type())),
+            ("number_type", record_at_or_nothing(nt(), number_type())),
             (
                 "values",
-                record_at(
-                    member(702),
-                    T::switch(E::within(&["dimensions", "rank"]), cases, T::bytes(E::Remaining)),
+                T::switch(
+                    found(nt()),
+                    vec![(
+                        1,
+                        record_at(
+                            member(702),
+                            T::switch(E::within(&["dimensions", "rank"]), cases, T::bytes(E::Remaining)),
+                        ),
+                    )],
+                    T::bytes(E::lit(0)),
                 ),
             ),
         ],
@@ -913,7 +930,7 @@ fn scientific_data_group() -> T {
             (
                 "dataset",
                 T::switch(
-                    found(member(701)).mul(found(nt())).mul(found(member(702))),
+                    found(member(701)).mul(found(member(702))),
                     vec![(1, dataset)],
                     T::bytes(E::lit(0)),
                 ),
@@ -1201,12 +1218,13 @@ mod tests {
         vec![1, kind, width, class]
     }
 
-    /// An image dimension record for a three by two image of single bytes.
-    fn id() -> Vec<u8> {
+    /// An image dimension record for a three by two image of single bytes,
+    /// whose number type record is the one with reference number `nt`.
+    fn id(nt: i16) -> Vec<u8> {
         let mut v = be32(3); // xdim
         v.extend(be32(2)); // ydim
         v.extend(be16(106)); // number type tag
-        v.extend(be16(7)); // and ref
+        v.extend(be16(nt)); // and ref
         v.extend(be16(1)); // one sample a pixel
         v.extend(be16(0)); // by pixel
         v.extend(be16(0)); // no compression
@@ -1251,14 +1269,15 @@ mod tests {
     /// rows and then the header that describes them, and a vgroup; the second
     /// holds an image before the dimension record that says how wide it is,
     /// and a scientific dataset with the group that names its parts; the third
-    /// holds a second group whose members are all a block away, which is what
-    /// a block's own index cannot reach. Both orders are on purpose: an HDF4
-    /// writer puts a thing before the thing that describes it as often as
-    /// after.
+    /// holds a second group whose members are all a block away, and an image
+    /// whose dimension record is here but whose number type record is not.
+    /// Both orders are on purpose: an HDF4 writer puts a thing before the
+    /// thing that describes it as often as after.
     fn file() -> Vec<u8> {
         let (v, h, r, g) = (ver(), vh(), vs(), vg());
-        let (image, ntype, dims) = (vec![10u8, 11, 12, 13, 14, 15], nt(21, 8, 1), id());
+        let (image, ntype, dims) = (vec![10u8, 11, 12, 13, 14, 15], nt(21, 8, 1), id(7));
         let (values, shape, kind, grp) = (sd(), sdd(), nt(22, 16, 4), ndg());
+        let far = id(60);
         let none = Vec::new();
         let first: [(u16, u16, &Vec<u8>); 4] = [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g)];
         let second: [(u16, u16, &Vec<u8>); 7] = [
@@ -1270,7 +1289,8 @@ mod tests {
             (106, 8, &kind),
             (720, 9, &grp),
         ];
-        let third: [(u16, u16, &Vec<u8>); 2] = [(720, 11, &grp), (1, 0, &none)];
+        let third: [(u16, u16, &Vec<u8>); 4] =
+            [(720, 11, &grp), (302, 50, &image), (300, 50, &far), (1, 0, &none)];
         let block_at = |n: usize, from: usize| from + 6 + 12 * n;
         let b1 = block_at(first.len(), 4);
         let b2 = block_at(second.len(), b1);
@@ -1317,7 +1337,7 @@ mod tests {
         // The last block, found by following the chain, with its own slots. It
         // has no next of its own, so the walk stops rather than pointing back
         // at the signature.
-        assert_eq!(e.node(&d, &[1, 2, 3]).unwrap().child_count, 2);
+        assert_eq!(e.node(&d, &[1, 2, 3]).unwrap().child_count, 4);
     }
 
     #[test]
@@ -1326,7 +1346,7 @@ mod tests {
         assert_eq!(vgroup.name, "[3] vgroup");
         assert_eq!(read(&[1, 0, 3, 3, 4, 0]).size_bits, vg().len() as u64 * 8);
         // The null slot points at nothing rather than at the signature.
-        assert_eq!(read(&[1, 2, 3, 1, 4]).child_count, 0);
+        assert_eq!(read(&[1, 2, 3, 3, 4]).child_count, 0);
     }
 
     #[test]
@@ -1405,6 +1425,20 @@ mod tests {
         assert_eq!(read(&[1, 2, 3, 0, 4, 0, 0]).child_count, 3);
         assert_eq!(read(&[1, 2, 3, 0, 4, 0, 0, 0, 2]).value, Value::Int(0));
         assert_eq!(read(&[1, 2, 3, 0, 4, 0, 1]).size_bits, 0);
+    }
+
+    /// Which number type an image has is written in its dimension record, so
+    /// an image can find how wide its rows are and still not find how wide a
+    /// sample is. That is a reading that stops rather than one that fails: the
+    /// bytes stay bytes, all of them.
+    #[test]
+    fn an_image_whose_number_type_is_a_block_away_keeps_its_bytes() {
+        let image = read(&[1, 2, 3, 1, 4, 0]);
+        assert_eq!(image.type_name, "Hdf4RasterImage");
+        assert_eq!(read(&[1, 2, 3, 1, 4, 0, 0, 0, 0]).value, Value::Int(3), "the dimensions still read");
+        let samples = read(&[1, 2, 3, 1, 4, 0, 2]);
+        assert_eq!(samples.child_count, 0);
+        assert_eq!(samples.size_bits, 6 * 8, "every byte of it is still named");
     }
 
     /// A vgroup says where each of its members is. The second names an image
