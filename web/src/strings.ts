@@ -727,6 +727,13 @@ export const NO_TEMPLATE_HINT = `${NO_TEMPLATE}. Pick one from the Template menu
  *  selected" there would suggest an answer exists and the user missed it. */
 export const NO_TEMPLATE_MATCH = "No template matched this file. Pick one from the Template menu if you know the format.";
 
+/** Heads the second half of the Template menu: the formats described by a
+ *  `.ksy` from the Kaitai Struct format library rather than written here.
+ *  Named after where the description came from, because that is the one thing
+ *  a reader needs to know about them: they were not written for Qubero, and
+ *  some of them read less of a file than a built-in would. */
+export const TEMPLATE_GROUP_KAITAI = "From Kaitai Struct";
+
 /** The Logical tab for an ELF, when the parsed header has no field of a name
  *  the tab reads it by. Shown after `LOGICAL_FAILED`'s "Couldn't read the
  *  objects:", so it is the clause after that colon and starts with a capital

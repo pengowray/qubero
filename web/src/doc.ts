@@ -156,6 +156,16 @@ export type KsyReport = {
   readonly notes: readonly KsyLine[];
 };
 
+/** One entry in the Template menu. `name` is what `setTemplate` takes; a
+ *  bundled Kaitai format's name starts `ksy:`. `title` is that format's own
+ *  `meta/title`, empty for the third of them that carry none and for every
+ *  built-in, which are shown by the names `templateLabel` spells out. */
+export type TemplateChoice = {
+  readonly name: string;
+  readonly title: string;
+  readonly source: "builtin" | "kaitai";
+};
+
 /** A field picked in one of the structure views: which node, and the bits
  *  it covers. Every view that lists fields hands one out and the rest of
  *  the app follows it, so it belongs beside the tree the views read rather
@@ -1855,8 +1865,14 @@ export class Doc {
     }
   }
 
-  get templateNames(): string[] {
-    return this.editor.template_names();
+  /** Every template that can be picked: the built-ins, then the bundled
+   *  Kaitai Struct formats. Read once, when the toolbar is built. */
+  get templateChoices(): TemplateChoice[] {
+    try {
+      return JSON.parse(this.editor.template_names()) as TemplateChoice[];
+    } catch {
+      return [];
+    }
   }
 
   /**

@@ -9,7 +9,7 @@
 // screen depends on which answer came last.
 
 import { el } from "./dom.ts";
-import type { Doc, Identification, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
+import type { Doc, Identification, TemplateChoice, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
 import { wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
 import { decide, nameAndVersion, type Answers, type Candidate, type Source, type TemplateAnswer } from "./identity.ts";
@@ -172,8 +172,21 @@ const TEMPLATE_LABEL: Record<string, string> = {
   compactpro: "Compact Pro archive",
 };
 
-/** A built-in's human-facing name; internal names remain stable API values. */
-export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? name;
+/** The titles of the bundled Kaitai formats, keyed by the `ksy:` name, filled
+ *  in once from the template list. A title is the format's own `meta/title`,
+ *  which a third of them do not carry; those are shown by their id. */
+const KAITAI_TITLE = new Map<string, string>();
+
+/** Remember what each bundled Kaitai format calls itself, so that a name
+ *  reaching a label anywhere in the app reads as a format and not as an
+ *  internal identifier. Called once, when the toolbar reads the list. */
+export const rememberKaitaiTitles = (choices: readonly TemplateChoice[]): void => {
+  for (const choice of choices) if (choice.source === "kaitai" && choice.title !== "") KAITAI_TITLE.set(choice.name, choice.title);
+};
+
+/** A template's human-facing name; internal names remain stable API values. */
+export const templateLabel = (name: string): string =>
+  TEMPLATE_LABEL[name] ?? KAITAI_TITLE.get(name) ?? (name.startsWith("ksy:") ? name.slice("ksy:".length) : name);
 
 /** A useful identity when the full template recognises a format the rule
  * database does not. A label that is already plural is what the file is:

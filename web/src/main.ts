@@ -17,8 +17,8 @@ import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEMPLATE_GROUP_KAITAI, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
   CODEPAGES_A,
@@ -620,7 +620,22 @@ function build(tab: Tab): Page {
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
-  for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${templateLabel(n)}` }));
+  // The built-ins first, then the bundled Kaitai Struct formats under a
+  // heading of their own: a reader picking one should know the description
+  // came from elsewhere, and a hundred more names run into the built-ins
+  // without a break between them.
+  const choices = doc.templateChoices;
+  rememberKaitaiTitles(choices);
+  for (const c of choices.filter((c) => c.source === "builtin")) {
+    tmpl.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
+  }
+  const kaitai = choices.filter((c) => c.source === "kaitai");
+  if (kaitai.length > 0) {
+    const group = el("optgroup");
+    group.label = TEMPLATE_GROUP_KAITAI;
+    for (const c of kaitai) group.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
+    tmpl.append(group);
+  }
   // The generated template is not one of the built-ins, so switching back to it
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
