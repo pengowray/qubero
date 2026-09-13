@@ -119,6 +119,9 @@ impl Evaluator {
             }
             Ty::Array { count, .. } => self.relation(doc, path, &count.clone(), Role::Count, None, &mut out),
             Ty::Computed(e) | Ty::ComputedText(e) => self.relation(doc, path, &e.clone(), Role::Value, None, &mut out),
+            // The same relationship, and what it comes to is the real it
+            // works out rather than a whole number it would fail to be.
+            Ty::ComputedReal(e) => self.relation_as(doc, path, &e.clone(), Role::Value, None, true, &mut out),
             _ => {}
         }
         Ok(out)
@@ -156,6 +159,25 @@ impl Evaluator {
         here: Option<(u64, u64)>,
         out: &mut Vec<Relation>,
     ) {
+        self.relation_as(doc, at, e, role, here, false, out)
+    }
+
+    /// The same, saying whether the expression is worked out as reals, which
+    /// is the field's to say and not the expression's: see
+    /// [`Ty::ComputedReal`]. Only what it comes to depends on it. The leaves
+    /// are written in as each reads, a float as the float it is and a count
+    /// as the count, whichever way the whole is worked out.
+    #[allow(clippy::too_many_arguments)]
+    fn relation_as<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        role: Role,
+        here: Option<(u64, u64)>,
+        real: bool,
+        out: &mut Vec<Relation>,
+    ) {
         let Some(written) = write_expr(e) else { return };
         let mut named = false;
         let here = here.or_else(|| self.memo.get(at).map(|r| (r.offset, r.limit)));
@@ -163,8 +185,16 @@ impl Evaluator {
         if !named || substituted == written {
             return;
         }
-        let Ok(result) = self.eval_expr_at(doc, at, e, here) else { return };
-        let result = result.to_string();
+        let result = match real {
+            true => match self.eval_real_at(doc, at, e, here) {
+                Ok(v) => real_text(v),
+                Err(_) => return,
+            },
+            false => match self.eval_expr_at(doc, at, e, here) {
+                Ok(v) => v.to_string(),
+                Err(_) => return,
+            },
+        };
         // A substitution that already is the answer says the same thing twice.
         if substituted == result {
             return;
@@ -248,8 +278,54 @@ impl Evaluator {
             return Ok(None);
         }
         *named = true;
-        Ok(Some(self.eval_expr_at(doc, at, e, here)?.to_string()))
+        // The number a card's text spells, rather than the text or the search
+        // that found the card: `2.5 or else 1.0` is the working, and the
+        // search is written out in the form above it.
+        if let Expr::RealText(_) = e {
+            return Ok(Some(real_text(self.eval_real_at(doc, at, e, here)?)));
+        }
+        // A field that holds a float is written in as the float, which is what
+        // its own row shows. Looked at before it is asked as a whole number,
+        // since three of the leaves that name a field do not fail on a float
+        // there: a walk back and a search pass over one and answer nought,
+        // which would write a GRIB reference value into its formula as 0.
+        if matches!(
+            e,
+            Expr::Ref(_) | Expr::Within(_) | Expr::Elem { .. } | Expr::ElemWithin { .. } | Expr::Placer(_) | Expr::Sibling(_) | Expr::Prev(_)
+        ) {
+            match self.field_value(doc, at, e, here) {
+                Ok(super::expr::Leaf::Value(v, _)) if v.as_int().is_none() => {
+                    if let Some(f) = super::expr::real_reading(&v) {
+                        return Ok(Some(real_text(f)));
+                    }
+                }
+                Err(err) if err.interrupted() => return Err(err),
+                // Nothing found, a whole number, or a question asked of a
+                // descriptor that is arithmetic rather than a field: the
+                // reading below says each of those as it always has.
+                _ => {}
+            }
+        }
+        // Everything else as a whole number, so a count keeps every digit an
+        // i128 has and a double would round. What will not read as one is
+        // tried as a real before it is given up on.
+        match self.eval_expr_at(doc, at, e, here) {
+            Ok(v) => Ok(Some(v.to_string())),
+            Err(err) if err.interrupted() => Err(err),
+            Err(err) => match self.eval_real_at(doc, at, e, here) {
+                Ok(v) => Ok(Some(real_text(v))),
+                Err(_) => Err(err),
+            },
+        }
     }
+}
+
+/// A real as the relations panel writes one in: the shortest digits that read
+/// back as the same double, and no point on a whole one, the way a float row
+/// reads. The IR text keeps its point on a literal, because there the point is
+/// what says a real was written; here every number is a value the file gave.
+fn real_text(v: f64) -> String {
+    v.to_string()
 }
 
 /// The expression as the template writes it. None for the expressions with no

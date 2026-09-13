@@ -292,7 +292,7 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
         Ty::F8 { .. } => Some(8),
         Ty::Magic(b) => Some(b.len() as u64 * 8),
         // Worked out rather than read, so it covers nothing at all.
-        Ty::Computed(_) | Ty::ComputedText(_) => Some(0),
+        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => Some(0),
         // The field itself is nothing; its contents are somewhere else.
         Ty::At { .. } => Some(0),
         // Through `try_from` rather than `as`: a negative literal is not a
@@ -456,7 +456,7 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
         Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. }
         | Ty::TextInt { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. } => add(e, Role::Length, out),
         Ty::UIntExpr { bits, .. } => add(bits, Role::Width, out),
-        Ty::Computed(e) | Ty::ComputedText(e) => add(e, Role::Value, out),
+        Ty::Computed(e) | Ty::ComputedText(e) | Ty::ComputedReal(e) => add(e, Role::Value, out),
         Ty::Array { count, elem } => {
             add(count, Role::Count, out);
             sources(elem, out, depth + 1);
@@ -549,7 +549,11 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         | Expr::Bit(inner, _)
         | Expr::PadTo { n: inner, .. }
         | Expr::Not(inner)
-        | Expr::StartOf(inner) => names_in(inner, out),
+        | Expr::StartOf(inner)
+        | Expr::RealText(inner)
+        | Expr::Pow2(inner)
+        | Expr::Pow10(inner)
+        | Expr::Trunc(inner) => names_in(inner, out),
         Expr::PeekAt { skip, .. } => names_in(skip, out),
         Expr::Cond { when, then, otherwise } => {
             names_in(when, out);

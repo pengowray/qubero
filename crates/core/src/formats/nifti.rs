@@ -30,11 +30,12 @@
 //! as every NIfTI reader does. The magic cannot say it, since it is text.
 //!
 //! `vox_offset` says where the voxels start, and in NIfTI-1 it is a float,
-//! because Analyze had a float there before it. An expression here is an
-//! integer, so the zero-bit field in front of it, `data_offset`, reads the
-//! float's bits as the whole number of bytes they hold, and that is what
-//! places the extensions and the voxels. A fraction is dropped, which is what
-//! nibabel does with one.
+//! because Analyze had a float there before it. The zero-bit field after it,
+//! `data_offset`, is `trunc(vox_offset)`, the whole number of bytes it holds,
+//! and that is what places the extensions and the voxels. A fraction is
+//! dropped, which is what nibabel does with one. A `vox_offset` that is not a
+//! number or is infinite has no whole part, and the voxels say so rather than
+//! being placed at an offset nobody wrote.
 //!
 //! After the header come four bytes whose first byte says whether any
 //! extensions follow. Each one is `esize`, `ecode`, and `esize - 8` bytes of
@@ -55,11 +56,20 @@
 //!
 //! `scl_slope` and `scl_inter` say what a stored number is worth: `scl_slope *
 //! stored + scl_inter`, where a slope of 0 says the numbers are worth what
-//! they say. When both are whole numbers and the voxels are integers, that sum
-//! is worked out and each voxel reads as the integer on disk with what it is
-//! worth beside it, the arrangement the FITS template has for `TSCALn`. The
-//! two whole numbers are `scale` and `zero`, zero-bit fields in front of the
-//! floats they read, and both hold nothing when there is nothing to work out.
+//! they say. When the header scales its voxels, each one reads as the number
+//! on disk with what it is worth beside it, worked out as a real, the
+//! arrangement the FITS template has for `TSCALn`. SPM's `functional.nii`
+//! among nibabel's samples is a slope of 0.0754 and an intercept of 3100.76,
+//! and a stored 11980 reads as worth 4004.137. Whether the header scales at
+//! all is `scaled`, a zero-bit field in front of the two floats that reads
+//! their bits: a slope that is a number and not 0, an intercept that is a
+//! number, and not the pair 1 and 0, which changes nothing.
+//!
+//! The worth is worked out from the floats as their rows show them, the
+//! shortest decimal that reads back as the same bits, and not from the bits
+//! exactly. nibabel works from the bits, so the two agree to about eight
+//! significant figures and not to the last digit: the slope above is
+//! 0.07540696859359741 in the file's four bytes.
 //!
 //! `dim_info` and `xyzt_units` each pack small numbers into one byte, and are
 //! read as the bits they are. `dim_info` says which axis the frequency
@@ -71,12 +81,9 @@
 //!
 //! What is not read here:
 //!
-//! - A slope or an intercept with a fraction in it, as SPM's `functional.nii`
-//!   among nibabel's samples has: an expression here is an integer, so the
-//!   sum cannot be made, and the voxels read as stored with the two floats in
-//!   the header for the reader to apply. Float voxels are never scaled, for
-//!   the same reason. What it would take is an expression that answers a
-//!   float, which the FITS template is waiting on as well.
+//! - A valid slope with an intercept that is not a number, which nibabel
+//!   refuses to read at all: the voxels read as stored.
+//! - Scaling of complex voxels and of colours, which read as stored.
 //! - 128-bit floats and the complex numbers made of them, which have no type
 //!   here and keep their bytes, 16 and 32 to a voxel.
 //! - `DT_BINARY`, a bit a voxel, which `nifti1.h` defines and never says the
@@ -129,34 +136,13 @@ struct Float {
 const SINGLE: Float = Float { fraction: 23, exponent: 8 };
 const DOUBLE: Float = Float { fraction: 52, exponent: 11 };
 
-/// A float read here as a whole number is one under two to the forty, and
-/// anything bigger is not read as one. No offset or scale factor in a real
-/// file comes near it, and it keeps a stored 64-bit voxel multiplied by a
-/// scale well inside the 128 bits an expression holds.
-const WIDEST: i128 = 40;
-
 impl Float {
     fn bias(self) -> i128 {
         (1 << (self.exponent - 1)) - 1
     }
 
-    /// The exponent at which every bit of the fraction is above the point, so
-    /// that the significand is the whole number with no shifting.
-    fn top(self) -> i128 {
-        self.bias() + self.fraction as i128
-    }
-
     fn exp(self, bits: &E) -> E {
         bits.clone().shr(E::lit(self.fraction)).and(E::lit((1i128 << self.exponent) - 1))
-    }
-
-    /// The fraction with the one in front of it that the format leaves out.
-    fn significand(self, bits: &E) -> E {
-        bits.clone().and(E::lit((1i128 << self.fraction) - 1)).add(E::lit(1i128 << self.fraction))
-    }
-
-    fn negative(self, bits: &E) -> E {
-        bits.clone().shr(E::lit(self.fraction + self.exponent))
     }
 
     /// Nought, of either sign: every bit below the sign clear.
@@ -164,61 +150,29 @@ impl Float {
         bits.clone().and(E::lit((1i128 << (self.fraction + self.exponent)) - 1)).equal_to(E::lit(0))
     }
 
-    /// One or more, and under two to the [`WIDEST`].
-    fn in_range(self, bits: &E) -> E {
-        let exp = self.exp(bits);
-        exp.clone().greater_or_equal(E::lit(self.bias())).both(exp.less_than(E::lit(self.bias() + WIDEST)))
+    /// A number at all: not an infinity and not a NaN, which are the floats
+    /// whose exponent is all ones.
+    fn finite(self, bits: &E) -> E {
+        self.exp(bits).not_equal(E::lit((1i128 << self.exponent) - 1))
     }
 
-    /// How big the number is, with any fraction dropped. Only asked in range.
-    fn magnitude(self, bits: &E) -> E {
-        let (exp, top) = (self.exp(bits), E::lit(self.top()));
-        E::cond(
-            exp.clone().less_or_equal(top.clone()),
-            self.significand(bits).shr(top.clone().sub(exp.clone())),
-            self.significand(bits).shl(exp.sub(top)),
-        )
-    }
-
-    /// One when the float holds a whole number this reads, and zero for a
-    /// fraction, a number too big, an infinity or a NaN.
-    fn whole(self, bits: &E) -> E {
-        let (exp, top) = (self.exp(bits), E::lit(self.top()));
-        let below_point = E::lit(1).shl(top.clone().sub(exp.clone())).sub(E::lit(1));
-        let no_fraction = exp.greater_or_equal(top).either(self.significand(bits).and(below_point).equal_to(E::lit(0)));
-        self.is_zero(bits).either(self.in_range(bits).both(no_fraction))
-    }
-
-    /// The whole number, signed. Nought for anything out of range, which is
-    /// only asked after [`Float::whole`] has said it is not.
-    fn value(self, bits: &E) -> E {
-        let magnitude = self.magnitude(bits);
-        let signed = E::cond(self.negative(bits), E::lit(0).sub(magnitude.clone()), magnitude);
-        E::cond(self.in_range(bits), signed, E::lit(0))
-    }
-
-    /// A byte offset: the whole part of a positive number, and nought for
-    /// anything that cannot be one.
-    fn offset(self, bits: &E) -> E {
-        E::cond(self.in_range(bits).both(self.negative(bits).negate()), self.magnitude(bits), E::lit(0))
+    /// Exactly one: a clear sign, the exponent of one, and no fraction.
+    fn is_one(self, bits: &E) -> E {
+        bits.clone().equal_to(E::lit(self.bias() << self.fraction))
     }
 }
 
-/// Whether the voxels are scaled here: both floats whole, a slope that is not
-/// 0, and not the pair 1 and 0, which changes nothing. `slope` and `inter`
-/// are the floats' bits.
+/// Whether the voxels are scaled here, read from the floats' bits: a slope
+/// that is a number and not 0, an intercept that is a number, and not the
+/// pair 1 and 0, which changes nothing. `slope` and `inter` are the bits.
+///
+/// Asked of the bits rather than of the floats, because the answer picks a
+/// case of a switch and a switch asks a whole-number question. It is the same
+/// test nibabel makes: a slope of 0 or one that is not finite means the
+/// numbers are worth what they say.
 fn scaled(f: Float, slope: &E, inter: &E) -> E {
-    let identity = f.value(slope).equal_to(E::lit(1)).both(f.value(inter).equal_to(E::lit(0)));
-    f.whole(slope).both(f.is_zero(slope).negate()).both(f.whole(inter)).both(identity.negate())
-}
-
-/// `scale` or `zero`: the whole number a scaling float holds, when the voxels
-/// are scaled here, and a field of nothing when they are not. Nothing rather
-/// than 0, since 0 beside a voxel's worth would read as a slope nobody wrote;
-/// the floats themselves are still in the rows after it. An expression that
-/// reads a field of no bytes reads 0, which is how the voxels ask.
-fn scaling(when: E, value: E) -> T {
-    T::switch(when, vec![(1, T::computed(value))], T::bytes(E::lit(0)))
+    let identity = f.is_one(slope).both(f.is_zero(inter));
+    f.finite(slope).both(f.is_zero(slope).negate()).both(f.finite(inter)).both(identity.negate())
 }
 
 /// What `datatype` names, by the number `nifti1.h` gives it. Analyze 7.5 used
@@ -562,14 +516,15 @@ fn header_1(e: Endian) -> T {
             ("bitpix", i16_()),
             ("slice_start", i16_()),
             ("pixdim", floats(8)),
-            // The float after this, read as the whole number of bytes it
-            // holds. It covers no bits: `vox_offset` is still the field.
-            ("data_offset", T::computed(SINGLE.offset(&here))),
             ("vox_offset", T::F32(e)),
-            // The two floats after these, read as the whole numbers they
-            // hold when the voxels are scaled here. See [`scaling`].
-            ("scale", scaling(is_scaled.clone(), SINGLE.value(&here))),
-            ("zero", scaling(is_scaled, SINGLE.value(&next))),
+            // The float before this, as the whole number of bytes it holds,
+            // which is what places the extensions and the voxels. Towards
+            // nought, as nibabel takes it, and never before the file starts.
+            // It covers no bits: `vox_offset` is still the field.
+            ("data_offset", T::computed(E::trunc(E::field("vox_offset")).at_least(E::lit(0)))),
+            // Whether the two floats after this scale the voxels. See
+            // [`scaled`].
+            ("scaled", T::computed(is_scaled)),
             ("scl_slope", T::F32(e)),
             ("scl_inter", T::F32(e)),
             ("slice_end", i16_()),
@@ -598,7 +553,7 @@ fn header_1(e: Endian) -> T {
             ("magic", text(4)),
         ],
     )
-    .machinery(&["data_offset", "scale", "zero", "data_type", "db_name", "extents", "session_error", "regular", "glmax", "glmin"])
+    .machinery(&["data_offset", "scaled", "data_type", "db_name", "extents", "session_error", "regular", "glmax", "glmin"])
     .payload(&["dim", "datatype", "pixdim"])
 }
 
@@ -632,8 +587,7 @@ fn header_2(e: Endian) -> T {
             ("intent_p3", T::F64(e)),
             ("pixdim", doubles(8)),
             ("vox_offset", i64_()),
-            ("scale", scaling(is_scaled.clone(), DOUBLE.value(&here))),
-            ("zero", scaling(is_scaled, DOUBLE.value(&next))),
+            ("scaled", T::computed(is_scaled)),
             ("scl_slope", T::F64(e)),
             ("scl_inter", T::F64(e)),
             ("cal_max", T::F64(e)),
@@ -663,7 +617,7 @@ fn header_2(e: Endian) -> T {
             ("unused_str", text(15)),
         ],
     )
-    .machinery(&["scale", "zero", "eol_check", "unused_str"])
+    .machinery(&["scaled", "eol_check", "unused_str"])
     .payload(&["dim", "datatype", "pixdim", "vox_offset"])
 }
 
@@ -731,8 +685,9 @@ fn dim(k: i128) -> E {
     E::elem_within(&["header", "dim"], E::lit(k), &[])
 }
 
-/// The voxels, as the type `datatype` names, grouped by `dim`. Integers are
-/// scaled when the header says to; see [`scalable`].
+/// The voxels, as the type `datatype` names, grouped by `dim`. Numbers are
+/// scaled when the header says to, floats as well as integers, as nibabel
+/// scales both; see [`scalable`].
 fn voxels(e: Endian) -> T {
     let int = |bits: u32| T::Int { bits, endian: e };
     let uint = |bits: u32| T::UInt { bits, endian: e };
@@ -747,9 +702,9 @@ fn voxels(e: Endian) -> T {
             (2, scalable(uint(8), 1)),
             (4, scalable(int(16), 2)),
             (8, scalable(int(32), 4)),
-            (16, shaped(T::F32(e), 4)),
+            (16, scalable(T::F32(e), 4)),
             (32, shaped(pair(T::F32(e)), 8)),
-            (64, shaped(T::F64(e), 8)),
+            (64, scalable(T::F64(e), 8)),
             (128, shaped(colour(&["r", "g", "b"]), 3)),
             (256, scalable(int(8), 1)),
             (512, scalable(uint(16), 2)),
@@ -766,12 +721,19 @@ fn voxels(e: Endian) -> T {
     )
 }
 
-/// Integer voxels, read as stored or, when the header's `scale` is not 0, as
-/// the integer on disk and what `scale` and `zero` say it is worth.
+/// Voxels read as stored or, when the header says they are scaled, as the
+/// number on disk and what `scl_slope` and `scl_inter` say it is worth:
+/// `stored * scl_slope + scl_inter`, worked out as a real.
+///
+/// The number on disk is what an edit writes, and the worth takes no bits, so
+/// a run of these is as wide as a run of the numbers and is still placed by
+/// arithmetic. What the slope and the intercept are is read from the header's
+/// own rows, so the relations panel writes a voxel's worth out with the two
+/// floats in it.
 fn scalable(stored: T, width: i128) -> T {
-    let worth = E::field("stored").mul(E::within(&["header", "scale"])).add(E::within(&["header", "zero"]));
-    let with = T::inline_structure("Scaled", vec![("stored", stored.clone()), ("worth", T::computed(worth))]).payload(&["stored"]);
-    T::switch(E::within(&["header", "scale"]), vec![(0, shaped(stored, width))], shaped(with, width))
+    let worth = E::field("stored").mul(E::within(&["header", "scl_slope"])).add(E::within(&["header", "scl_inter"]));
+    let with = T::inline_structure("Scaled", vec![("stored", stored.clone()), ("worth", T::computed_real(worth))]).payload(&["stored"]);
+    T::switch(E::within(&["header", "scaled"]), vec![(1, shaped(with, width))], shaped(stored, width))
 }
 
 /// The most dimensions `dim` can say, and so the deepest the voxels nest.
@@ -960,12 +922,12 @@ mod tests {
     }
 
     /// `vox_offset` is a float, and what places the voxels is the whole number
-    /// it holds.
+    /// it holds, with a fraction dropped as nibabel drops one.
     #[test]
     fn the_voxels_start_where_the_float_says() {
-        for big in [false, true] {
+        for (big, offset) in [(false, 368.0), (true, 368.0), (false, 368.75)] {
             let mut h = Header::new(big);
-            h.vox_offset = 368.0;
+            h.vox_offset = offset;
             let mut v = h.bytes();
             v.extend_from_slice(&[0; 20]);
             v.extend_from_slice(&[0xab; 48]);
@@ -1000,82 +962,55 @@ mod tests {
         }
     }
 
-    /// Whole-number scaling is worked out on each voxel, beside the integer on
-    /// disk.
+    /// Each voxel reads as the number on disk and what the slope and the
+    /// intercept say it is worth, a fraction included.
     #[test]
-    fn a_whole_slope_and_intercept_are_worked_out() {
+    fn a_slope_and_intercept_say_what_a_voxel_is_worth() {
         for big in [false, true] {
-            let mut h = Header::new(big);
-            h.slope = 2.0;
-            h.inter = -3.0;
-            let (d, mut ev) = eval(with_voxels(&h, 24));
-            assert_eq!(value(&mut ev, &d, &["header", "scale"]).as_int(), Some(2), "big={big}");
-            assert_eq!(value(&mut ev, &d, &["header", "zero"]).as_int(), Some(-3));
-            let voxels = at(&mut ev, &d, &["voxels"]);
-            let voxel = [voxels.clone(), vec![1, 2, 1]].concat();
-            assert_eq!(ev.node(&d, &voxel).unwrap().type_name, "Scaled");
-            assert_eq!(ev.node(&d, &[voxel.clone(), vec![0]].concat()).unwrap().value.as_int(), Some(21));
-            assert_eq!(ev.node(&d, &[voxel.clone(), vec![1]].concat()).unwrap().value.as_int(), Some(39));
-            // The worth takes no bits, so the voxels still end with the file.
-            let top = ev.node(&d, &voxels).unwrap();
-            assert_eq!(top.offset_bits + top.size_bits, d.len_bits());
+            for (slope, inter, want) in [(2.0f32, -3.0f32, 39.0), (0.5, 0.25, 10.75), (0.0754, 3100.76, 21.0 * 0.0754 + 3100.76)] {
+                let mut h = Header::new(big);
+                (h.slope, h.inter) = (slope, inter);
+                let (d, mut ev) = eval(with_voxels(&h, 24));
+                assert_eq!(value(&mut ev, &d, &["header", "scaled"]).as_int(), Some(1), "big={big}");
+                let voxels = at(&mut ev, &d, &["voxels"]);
+                let voxel = [voxels.clone(), vec![1, 2, 1]].concat();
+                assert_eq!(ev.node(&d, &voxel).unwrap().type_name, "Scaled");
+                assert_eq!(ev.node(&d, &[voxel.clone(), vec![0]].concat()).unwrap().value.as_int(), Some(21));
+                let worth = ev.node(&d, &[voxel.clone(), vec![1]].concat()).unwrap();
+                assert_eq!((worth.type_name.as_str(), worth.value), ("computed real", Value::Float(want)), "{slope} {inter}");
+                // Written out with the header's floats in it.
+                let rel = ev.relations(&d, &[voxel.clone(), vec![1]].concat()).unwrap();
+                assert_eq!(rel[0].written, "stored * header.scl_slope + header.scl_inter");
+                assert_eq!(rel[0].substituted, format!("21 * {slope} + {inter}"));
+                // The worth takes no bits, so the voxels still end with the file.
+                let top = ev.node(&d, &voxels).unwrap();
+                assert_eq!(top.offset_bits + top.size_bits, d.len_bits());
+            }
         }
     }
 
-    /// A slope that is 0, NaN, a fraction, or 1 with an intercept of 0 leaves
-    /// the voxels as stored, and so does a fraction in the intercept.
+    /// A slope that is 0 of either sign, not a number or infinite, an
+    /// intercept that is not a number, or the pair 1 and 0, leaves the voxels
+    /// as stored. Anything else scales them, however large or small.
     #[test]
-    fn scaling_that_cannot_be_worked_out_or_changes_nothing_is_left_alone() {
-        for (slope, inter) in [(0.0, 5.0), (f32::NAN, 0.0), (0.5, 0.0), (1.0, 0.0), (2.0, 0.25), (1e30, 0.0), (2.0, f32::INFINITY)] {
+    fn scaling_that_changes_nothing_or_is_not_a_number_is_left_alone() {
+        let plain = [(0.0, 5.0), (-0.0, 5.0), (f32::NAN, 0.0), (f32::INFINITY, 0.0), (1.0, 0.0), (1.0, -0.0), (2.0, f32::INFINITY), (2.0, f32::NAN)];
+        for (slope, inter) in plain {
             let mut h = Header::new(false);
             (h.slope, h.inter) = (slope, inter);
             let (d, mut ev) = eval(with_voxels(&h, 24));
-            for name in ["scale", "zero"] {
-                let n = named(&mut ev, &d, &["header", name]);
-                assert_eq!((n.type_name.as_str(), n.size_bits), ("bytes[]", 0), "{name} for {slope} {inter}");
-            }
+            assert_eq!(value(&mut ev, &d, &["header", "scaled"]).as_int(), Some(0), "{slope} {inter}");
             let row = at(&mut ev, &d, &["voxels"]);
             assert_eq!(ev.node(&d, &[row, vec![0, 0]].concat()).unwrap().type_name, "i16 le[]");
         }
-        // An intercept on its own, with a slope of 1, is scaling.
-        let mut h = Header::new(true);
-        (h.slope, h.inter) = (1.0, 32768.0);
-        let (d, mut ev) = eval(with_voxels(&h, 24));
-        let voxels = at(&mut ev, &d, &["voxels"]);
-        assert_eq!(ev.node(&d, &[voxels, vec![0, 0, 3, 1]].concat()).unwrap().value.as_int(), Some(32771));
-    }
-
-    /// Floats are decoded from their bits across the range that matters: small
-    /// whole numbers, a large one, one just under the limit, and the fractions
-    /// either side of a whole one.
-    #[test]
-    fn floats_read_as_whole_numbers_from_their_bits() {
-        for (x, whole, want) in [
-            (0.0f32, 1, 0i128),
-            (-0.0, 1, 0),
-            (1.0, 1, 1),
-            (-7.0, 1, -7),
-            (352.0, 1, 352),
-            (65536.0, 1, 65536),
-            (16777216.0, 1, 16777216),
-            (1099511562240.0, 1, 1099511562240),
-            (0.75, 0, 0),
-            (352.5, 0, 0),
-            (f32::NAN, 0, 0),
-            (f32::INFINITY, 0, 0),
-            (2e12, 0, 0),
-        ] {
-            let mut v = x.to_le_bytes().to_vec();
-            v.extend_from_slice(&[0; 4]);
-            let bits = E::peek(32, Little);
-            let t = T::structure(
-                "Probe",
-                vec![("whole", T::computed(SINGLE.whole(&bits))), ("value", T::computed(E::cond(SINGLE.whole(&bits), SINGLE.value(&bits), E::lit(0))))],
-            );
-            let d = Document::new(MemSource(v));
-            let mut ev = Evaluator::new(Template::new("probe", t));
-            assert_eq!(ev.node(&d, &[0]).unwrap().value.as_int(), Some(whole), "{x}");
-            assert_eq!(ev.node(&d, &[1]).unwrap().value.as_int(), Some(want), "{x}");
+        for (slope, inter) in [(0.5, 0.0), (1e30, 0.0), (-1.0, 0.0), (1.0, 32768.0), (1.5e-40, 0.0)] {
+            let mut h = Header::new(true);
+            (h.slope, h.inter) = (slope, inter);
+            let (d, mut ev) = eval(with_voxels(&h, 24));
+            assert_eq!(value(&mut ev, &d, &["header", "scaled"]).as_int(), Some(1), "{slope} {inter}");
+            let voxels = at(&mut ev, &d, &["voxels"]);
+            let worth = ev.node(&d, &[voxels, vec![0, 0, 3, 1]].concat()).unwrap().value;
+            assert_eq!(worth, Value::Float(3.0 * crate::decode::narrow_f32(slope) + crate::decode::narrow_f32(inter)));
         }
     }
 
@@ -1230,15 +1165,19 @@ mod tests {
     fn a_nifti_2_file_scales_by_its_doubles() {
         for big in [false, true] {
             let (d, mut ev) = eval(nifti2(big, 3.0, 1000.0));
-            assert_eq!(value(&mut ev, &d, &["header", "scale"]).as_int(), Some(3), "big={big}");
-            assert_eq!(value(&mut ev, &d, &["header", "zero"]).as_int(), Some(1000));
+            assert_eq!(value(&mut ev, &d, &["header", "scaled"]).as_int(), Some(1), "big={big}");
             let voxels = at(&mut ev, &d, &["voxels"]);
-            assert_eq!(ev.node(&d, &[voxels, vec![1, 2, 3, 1]].concat()).unwrap().value.as_int(), Some(1069));
+            assert_eq!(ev.node(&d, &[voxels, vec![1, 2, 3, 1]].concat()).unwrap().value, Value::Float(1069.0));
         }
+        // A double is read as the double it is, so a tenth is the tenth the
+        // file wrote.
         let (d, mut ev) = eval(nifti2(false, 0.1, 0.0));
-        assert_eq!(named(&mut ev, &d, &["header", "scale"]).size_bits, 0);
         let voxels = at(&mut ev, &d, &["voxels"]);
-        assert_eq!(ev.node(&d, &[voxels, vec![0, 0]].concat()).unwrap().type_name, "u16 le[]");
+        assert_eq!(ev.node(&d, &[voxels, vec![1, 2, 3, 1]].concat()).unwrap().value, Value::Float(23.0 * 0.1));
+        let (d, mut ev) = eval(nifti2(true, 1.0, 0.0));
+        assert_eq!(named(&mut ev, &d, &["header", "scaled"]).value.as_int(), Some(0));
+        let voxels = at(&mut ev, &d, &["voxels"]);
+        assert_eq!(ev.node(&d, &[voxels, vec![0, 0]].concat()).unwrap().type_name, "u16 be[]");
     }
 
     /// An Analyze header: the NIfTI-1 test header with its magic taken away,

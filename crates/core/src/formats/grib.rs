@@ -31,10 +31,12 @@
 //! values are and how many it holds; the run under one group is then that
 //! group's width a value. See [`complex_packed_data`].
 //!
-//! What a packed value is worth is a second question and not a field: the
-//! arithmetic is a float times a power of two over a power of ten, and 5.3
-//! adds a running sum on top of that. See [`data`] for the formula and
-//! [`grib_values`](super::grib_values) for the reading that carries it out.
+//! What a packed value is worth is a float plus the packed number times a
+//! power of two, over a power of ten. For simple packing that is a field of
+//! its own beside each value, worked out as a real. For complex packing it is
+//! a second question and not a field, since 5.3 adds a running sum on top of
+//! it. See [`data`] for the formula and [`grib_values`](super::grib_values)
+//! for the reading that carries it out for both.
 //!
 //! The image packings hold a whole codestream of another format. A PNG one
 //! (5.41) opens as a PNG, since that is a format this crate reads; a JPEG 2000
@@ -768,10 +770,11 @@ fn bitmap() -> T {
 /// ```
 ///
 /// where X is the packed number, R is `reference_value`, E is
-/// `binary_scale_factor` and D is `decimal_scale_factor`. That is not written
-/// as a computed field, and cannot be: R is a float, E and D are negative as
-/// often as not, and the IR's arithmetic is over integers with no power of
-/// ten in it.
+/// `binary_scale_factor` and D is `decimal_scale_factor`. For simple packing
+/// that is written as a real beside each value, so a value reads as the packed
+/// integer and what it is worth; see [`simple_packed_data`]. R is a float and
+/// E and D are negative as often as not, which is what a real and its powers
+/// are for.
 ///
 /// Complex packing reads as its values too, by way of the three tables the
 /// groups are described by; see [`complex_packed_data`]. What one of those
@@ -816,16 +819,36 @@ fn data() -> T {
     )
 }
 
+/// Section 7 for simple packing: each value the packed integer, and beside it
+/// what section 5 says it is worth.
+///
+/// What goes into the worth is copied in from section 5 first, the reference
+/// value as the real it is and the two scale factors as whole numbers, for the
+/// reason the width is: a value asking section 5 itself would walk back
+/// through every value before it to get there, and a grid is a million of
+/// them. The worth then names fields beside the run, and a run of values is
+/// still placed by arithmetic, since the worth takes no bits.
 fn simple_packed_data() -> T {
+    let worth = E::field("reference_value")
+        .add(E::field("stored").mul(E::pow2(E::field("binary_scale_factor"))))
+        .div(E::pow10(E::field("decimal_scale_factor")));
+    let value = T::inline_structure(
+        "Packed",
+        vec![("stored", T::uint_expr(E::field("bits_per_value"), Big)), ("worth", T::computed_real(worth))],
+    )
+    .payload(&["stored"]);
     T::structure(
         "PackedData",
         vec![
             ("bits_per_value", T::computed(E::sibling(&["body", "template", "bits_per_value"]))),
             ("count", T::computed(E::sibling(&["body", "number_of_values"]))),
-            ("values", T::array(T::uint_expr(E::field("bits_per_value"), Big), E::field("count"))),
+            ("reference_value", T::computed_real(E::sibling(&["body", "template", "reference_value"]))),
+            from_packing("binary_scale_factor"),
+            from_packing("decimal_scale_factor"),
+            ("values", T::array(value, E::field("count"))),
         ],
     )
-    .machinery(&["bits_per_value", "count"])
+    .machinery(&["bits_per_value", "count", "reference_value", "binary_scale_factor", "decimal_scale_factor"])
     .packed_as(super::grib_values::PACKING)
     .payload(&["values"])
 }
@@ -1505,10 +1528,43 @@ mod tests {
         let d = Document::new(MemSource(message_bytes()));
         let mut ev = Evaluator::new(grib());
         // Six values of eight bits each, from a section 5 two sections back.
-        let values = ev.node(&d, &[0, 1, 4, 5, 2, 2]).unwrap();
-        assert_eq!((values.child_count, values.size_bits), (6, 6 * 8));
-        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, 2, 0]).unwrap().value, Value::UInt(1));
-        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, 2, 5]).unwrap().value, Value::UInt(6));
+        let values = ev.node(&d, &[0, 1, 4, 5, 2, 5]).unwrap();
+        assert_eq!((values.type_name.as_str(), values.child_count, values.size_bits), ("Packed[]", 6, 6 * 8));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, 5, 0, 0]).unwrap().value, Value::UInt(1));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, 5, 5, 0]).unwrap().value, Value::UInt(6));
+    }
+
+    /// Each value is the packed integer and what section 5 says it is worth:
+    /// `(R + X * 2^E) / 10^D`, with a reference of 270 and a binary scale of
+    /// -1, so a packed 1 is worth 270.5.
+    #[test]
+    fn a_simply_packed_value_is_worth_what_section_5_says() {
+        let d = Document::new(MemSource(message_bytes()));
+        let mut ev = Evaluator::new(grib());
+        let first = ev.node(&d, &[0, 1, 4, 5, 2, 5, 0]).unwrap();
+        assert_eq!(first.type_name, "Packed");
+        let worth = ev.node(&d, &[0, 1, 4, 5, 2, 5, 0, 1]).unwrap();
+        assert_eq!((worth.type_name.as_str(), worth.size_bits, worth.value), ("computed real", 0, Value::Float(270.5)));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, 5, 5, 1]).unwrap().value, Value::Float(273.0));
+        let rel = ev.relations(&d, &[0, 1, 4, 5, 2, 5, 5, 1]).unwrap();
+        assert_eq!(rel[0].written, "(reference_value + stored * pow2(binary_scale_factor)) / pow10(decimal_scale_factor)");
+        assert_eq!(rel[0].substituted, "(270 + 6 * pow2(-1)) / pow10(0)");
+        assert_eq!(rel[0].result, "273");
+
+        // A decimal scale of 2 and twelve bits a value, over a grid long
+        // enough that walking it would show: the last value is still found
+        // by arithmetic.
+        let mut packing = packing_bytes();
+        let n = packing.len();
+        packing[n - 2] = 12;
+        packing[0..4].copy_from_slice(&200_000u32.to_be_bytes());
+        packing[12..14].copy_from_slice(&2u16.to_be_bytes());
+        let data = vec![0xff; 300_000];
+        let d = Document::new(MemSource(one_message(&[(5, packing), (7, data)])));
+        let mut ev = Evaluator::new(grib());
+        let last = ev.node(&d, &[0, 1, 4, 1, 2, 5, 199_999, 1]).unwrap();
+        assert_eq!(last.value, Value::Float((270.0 + 4095.0 * 0.5) / 100.0));
+        assert!(ev.memo_len() < 1000, "the grid was walked: {} nodes", ev.memo_len());
     }
 
     #[test]
@@ -1522,11 +1578,12 @@ mod tests {
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc];
         let d = Document::new(MemSource(one_message(&[(5, packing), (7, data)])));
         let mut ev = Evaluator::new(grib());
-        let values = ev.node(&d, &[0, 1, 4, 1, 2, 2]).unwrap();
+        let values = ev.node(&d, &[0, 1, 4, 1, 2, 5]).unwrap();
         assert_eq!((values.child_count, values.size_bits), (4, 48));
-        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 2, 0]).unwrap().value, Value::UInt(0x123));
-        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 2, 1]).unwrap().value, Value::UInt(0x456));
-        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 2, 3]).unwrap().value, Value::UInt(0xabc));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5, 0, 0]).unwrap().value, Value::UInt(0x123));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5, 1, 0]).unwrap().value, Value::UInt(0x456));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5, 1, 0]).unwrap().offset_bits % 8, 4);
+        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5, 3, 0]).unwrap().value, Value::UInt(0xabc));
     }
 
     #[test]

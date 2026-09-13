@@ -11,7 +11,7 @@
 import { formatAddress, formatBytes, formatOffset } from "./doc.ts";
 import type { Doc, TemplateNode } from "./doc.ts";
 import { address } from "./dom.ts";
-import { DUMP_MIN_BYTES, pathKey, PAGE } from "./flatten.ts";
+import { DUMP_MIN_BYTES, isComputed, pathKey, PAGE } from "./flatten.ts";
 import type { Item } from "./flatten.ts";
 import { fieldClass, sectionColor } from "./fieldstyle.ts";
 import { COLOUR_TYPE, swatch } from "./colour.ts";
@@ -214,7 +214,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // A computed value is not written anywhere, so it has no address, and its
   // length says so in words: "@0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
-  const written = n.type !== "computed";
+  const written = !isComputed(n);
   const at = el("span", "rp-at");
   // The leading plus says the address is counted inside a stream, and carries
   // what it counts from on the mark itself rather than on the whole address:

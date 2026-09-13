@@ -270,7 +270,7 @@ impl Evaluator {
         // the node out: a deflate block's `hlit` is written as a computation
         // and is five bits of the compressed stream, because the trace says
         // where it starts and ends.
-        if matches!(r.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Computed(_) | Ty::ComputedText(_)) {
+        if matches!(r.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_)) {
             return if size == 0 { Sizing::Nothing } else { Sizing::Trace };
         }
         // A gather is a place and no bytes too, unless a window round it made
@@ -381,7 +381,7 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         (ra || rb, na || nb)
     };
     match e {
-        Expr::Lit(_) => (false, false),
+        Expr::Lit(_) | Expr::Real(_) => (false, false),
         Expr::Remaining => (true, false),
         Expr::Add(a, b)
         | Expr::Sub(a, b)
@@ -414,6 +414,9 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         Expr::PadTo { n, .. } => expr_reads(n),
         Expr::Log2(a) | Expr::Not(a) => expr_reads(a),
         Expr::Bit(a, _) => expr_reads(a),
+        // A power and a whole part are written down when what they take apart
+        // is. `real(...)` reads a field, and so falls to the arm below.
+        Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) => expr_reads(a),
         // Everything left reads something: a field, an element of a list, a
         // peek at bytes ahead, a number the decoder deduced.
         _ => (false, true),
