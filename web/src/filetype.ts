@@ -1,10 +1,19 @@
-// What the open file is: the sentence the identification rules produce, the
-// signature database's answer about what made it, and the dialog behind both.
-// The toolbar shows one line; everything the rules said is a click away.
+// What the open file is: the name the sources agree on, or the one with the
+// best evidence when they do not, in the toolbar; every source's answer, with
+// its evidence and its disagreements, in the dialog behind it.
+//
+// Four sources answer at different times: the template as soon as the first
+// bytes are read, the file(1) rules once their module has loaded, the tool
+// signatures and the format signatures after their fetches. Each one lands
+// in `answers` and everything on screen is redrawn from that, so nothing on
+// screen depends on which answer came last.
 
 import { el } from "./dom.ts";
-import type { Doc, Identification, TemplateNode, ToolMatch } from "./doc.ts";
+import type { Doc, Identification, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
+import { wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
+import { decide, nameAndVersion, type Answers, type Candidate, type Source, type TemplateAnswer } from "./identity.ts";
+
 
 const IDENTIFYING_MSG = "Identifying file type...";
 const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
@@ -105,6 +114,62 @@ const TEMPLATE_LABEL: Record<string, string> = {
   hdf4: "HDF4",
   parquet: "Parquet",
   mat: "MATLAB MAT",
+  // The rest were only ever seen in the template menu until every answer
+  // started being listed in the dialog, where "pe file" reads as a typo.
+  png: "PNG image",
+  gif: "GIF image",
+  jpeg: "JPEG image",
+  tiff: "TIFF image",
+  bmp: "Windows bitmap",
+  pcx: "PCX image",
+  tga: "Targa image",
+  qoi: "QOI image",
+  pi1: "Degas PI1 image",
+  ilbm: "IFF ILBM image",
+  swf: "Flash SWF",
+  zip: "ZIP archive",
+  gzip: "gzip stream",
+  lha: "LHA archive",
+  wasm: "WebAssembly module",
+  mp4: "MP4 container",
+  mkv: "Matroska container",
+  ogg: "Ogg container",
+  dv: "DV video",
+  wav: "WAVE audio",
+  w4v: "W4V audio",
+  aiff: "AIFF audio",
+  au: "Sun AU audio",
+  midi: "MIDI",
+  id3: "ID3 tag",
+  sqlite: "SQLite database",
+  pe: "Windows PE executable",
+  coff: "COFF object",
+  omf: "OMF object",
+  gguf: "GGUF model",
+  safetensors: "safetensors model",
+  whisper: "Whisper database",
+  json: "JSON",
+  cbor: "CBOR",
+  pdf: "PDF",
+  hdf5: "HDF5",
+  draco: "Draco mesh",
+  uf2: "UF2 firmware image",
+  nes: "NES ROM",
+  wad: "Doom WAD",
+  pak: "Quake PAK",
+  vpk: "Valve VPK",
+  mca: "Minecraft Anvil region",
+  tap: "ZX Spectrum TAP",
+  bencode: "Bencoded data (torrent)",
+  pickle: "Python pickle",
+  gitindex: "Git index",
+  gitpackidx: "Git pack index",
+  appledouble: "AppleDouble",
+  applesingle: "AppleSingle",
+  macbinary: "MacBinary",
+  binhex: "BinHex",
+  stuffit: "StuffIt archive",
+  compactpro: "Compact Pro archive",
 };
 
 /** A built-in's human-facing name; internal names remain stable API values. */
@@ -119,8 +184,18 @@ export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? n
 export const templateTypeName = (name: string): string => {
   if (name === "bardstale") return "The Bard's Tale I MS-DOS save game";
   const label = templateLabel(name);
-  return label.endsWith("s") && label.includes(" ") ? label : `${label} file`;
+  if (label.endsWith("s") && label.includes(" ")) return label;
+  // A label whose last word already says what kind of thing it is needs no
+  // "file" after it: "ZIP archive file" and "PNG image file" read as typos.
+  const last = label.split(/[\s/]+/).pop()?.toLowerCase() ?? "";
+  return NOUNS.has(last) ? label : `${label} file`;
 };
+const NOUNS: ReadonlySet<string> = new Set([
+  "archive", "image", "audio", "video", "database", "executable", "container", "module", "stream", "model", "tag", "mesh",
+  "index", "region", "package", "object", "firmware", "cartridge", "program", "resource", "frame", "map", "shortcut", "blob",
+  "block", "table", "record", "log", "list", "sheet", "cabinet", "journal", "rom", "metadata", "packets", "profile", "wad",
+  "pak", "vpk", "tap", "midi", "json", "cbor", "pdf", "hdf5", "hdf4", "fits", "elf", "mach-o", "symbols)", "db",
+]);
 
 /**
  * What the file is, in a sentence, read from the fields the template found.
@@ -135,10 +210,6 @@ export const templateTypeName = (name: string): string => {
  */
 export const templateSentence = (doc: Doc, name: string): string | null =>
   name === "claudetheme" ? themeSentence(doc) : null;
-
-/** The plain label, or the fuller sentence where the template has one. */
-export const templateIdentity = (doc: Doc, name: string): string =>
-  templateSentence(doc, name) ?? templateTypeName(name);
 
 /** `Claude Code theme "Ember", based on dark, 10 colours changed`. */
 const themeSentence = (doc: Doc): string | null => {
@@ -162,6 +233,41 @@ export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin
 export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
+const SOURCE_KEY = "Source";
+/** Where the name came from, said in the dialog under it. */
+const SOURCE_TEXT: Record<Source, (detail: string) => string> = {
+  template: (label) => `Qubero's ${label} template, which read the file`,
+  file: () => `The rules of the Unix "file" command`,
+  tools: () => "The Detect It Easy signature rules",
+  signature: (which) => which,
+};
+const SIGNATURE_SOURCE: Record<SigMatch["format"]["source"], string> = {
+  wikidata: "A format signature listed on Wikidata",
+  file: `A signature from the rules of the Unix "file" command`,
+};
+const SIGNATURE_WORD: Record<SigMatch["format"]["source"], string> = { wikidata: "Wikidata", file: "file rules" };
+const OTHERS_HEADING = "Other answers:";
+const DISAGREES = "names a different format";
+const SIGNATURES_INTRO = "Formats whose signature this file matches:";
+const WIKIPEDIA_LINK = "Wikipedia";
+const SIGNATURES_CREDIT = (fetched: string): string => `Signature sources: ${fetched}.`;
+/** The toolbar, for a file only a signature could name. */
+const SIGNATURE_NAMED: Record<SigMatch["format"]["source"], (label: string) => string> = {
+  wikidata: (label) => `${label} (signature listed on Wikidata)`,
+  file: (label) => `${label} (file(1) rule)`,
+};
+/** How many rows the dialog shows before folding the rest away. */
+const SIGNATURES_SHOWN = 5;
+/** A signature so many formats share that listing them says nothing. */
+const SIGNATURES_CROWD = 4;
+const SIGNATURES_MORE = (n: number): string => `${n} more formats`;
+const SIGNATURES_SHARED = (n: number, where: string, hex: string): string => `${n} formats sharing ${where} (${hex})`;
+const SIGNATURES_SHARED_EXT = (n: number, where: string, hex: string, ext: string): string =>
+  `${n} formats sharing ${where} (${hex}), all with extension .${ext}`;
+const bytesAt = (m: SigMatch): string => {
+  const n = m.fixed === 1 ? "1 byte" : `${m.fixed} bytes`;
+  return m.fromEnd ? `${n} within the last ${m.offset.toLocaleString("en")} bytes` : `${n} at offset ${m.offset}`;
+};
 
 /**
  * The database writes its categories as slugs. Two of them are not words, and
@@ -213,9 +319,6 @@ const WRAPPER: Record<string, (m: ToolMatch) => string> = {
 
 const categoryLabel = (slug: string): string => CATEGORY[slug] ?? slug;
 
-/** `UPX v3.96`. The v matters: names in this database end in digits. */
-const nameAndVersion = (m: ToolMatch): string => (m.version === null ? m.name : `${m.name} v${m.version}`);
-
 /** `Packer: UPX v3.96 (1985)`, with the author's own words in the brackets. */
 const toolLine = (m: ToolMatch): string => {
   const head = `${categoryLabel(m.category)}: ${nameAndVersion(m)}`;
@@ -243,145 +346,275 @@ export type FileType = {
   /** The button that opens the details. */
   readonly info: HTMLElement;
   readonly dialog: HTMLElement;
+  /** Told the name whenever it changes, so the overview can show the same one. */
+  onIdentity: (name: string) => void;
   /** The rules are still being asked, and the wait is long enough to say so. */
   identifying(): void;
-  /** They could not be asked at all. */
+  /** The rules could not be asked at all. */
   failed(): void;
-  /** They were asked, and had nothing to say. */
-  unknown(): void;
-  /** The rule's own sentence. */
-  named(message: string): void;
-  /** Fill the dialog for one outcome, and show the button that opens it. */
-  details(id: Identification | null, template: TemplateNote): void;
-  /** Ask the signature database as well, and fold in what it makes of the file. */
-  addTools(doc: Doc, id: Identification | null, template: string | null): Promise<void>;
+  /** Which template is reading the file, and what it can say about it. */
+  setTemplate(answer: TemplateAnswer | null): void;
+  /** Which template the Fields table is being read with, for the dialog. */
+  setNote(note: TemplateNote): void;
+  /** What the file(1) rules said: null when they had nothing. */
+  setFile(id: Identification | null): void;
+  /** Ask the tool signatures and the format signatures, and fold in what they make of the file. */
+  addMatches(doc: Doc): Promise<void>;
 };
 
 export function fileType(): FileType {
-// What the file is, for a file no template covers. Its own element rather
-// than the message slot: a save message is an event and passes, this is a
-// fact about the file and stays.
-const kindLabel = el("span", { className: "tb-kind" });
-// The details behind the readout. A button and a dialog rather than a
-// tooltip: the rule's sentence is long, worth copying, and worth reading at
-// leisure, none of which a title attribute allows.
-const kindInfo = el("button", { type: "button", className: "tb-info", textContent: "i" });
-kindInfo.setAttribute("aria-label", INFO_LABEL);
-kindInfo.hidden = true;
-const dlgBody = el("div", { className: "dlg-body" });
-const dialog = el(
-  "dialog",
-  { className: "dlg" },
-  el("h2", { textContent: DIALOG_TITLE }),
-  dlgBody,
-  el("form", { method: "dialog", className: "dlg-close" }, el("button", { type: "submit", textContent: DIALOG_CLOSE })),
-);
-kindInfo.addEventListener("click", () => dialog.showModal());
-// The dialog element covers only the middle of the screen, so a click that
-// lands on it rather than on its contents is a click on the backdrop.
-dialog.addEventListener("click", (e) => {
-  if (e.target === dialog) dialog.close();
-});
+  // What the file is, for a file no template covers. Its own element rather
+  // than the message slot: a save message is an event and passes, this is a
+  // fact about the file and stays.
+  const kindLabel = el("span", { className: "tb-kind" });
+  // The details behind the readout. A button and a dialog rather than a
+  // tooltip: the rule's sentence is long, worth copying, and worth reading at
+  // leisure, none of which a title attribute allows.
+  const kindInfo = el("button", { type: "button", className: "tb-info", textContent: "i" });
+  kindInfo.setAttribute("aria-label", INFO_LABEL);
+  kindInfo.hidden = true;
+  const dlgBody = el("div", { className: "dlg-body" });
+  const dialog = el(
+    "dialog",
+    { className: "dlg" },
+    el("h2", { textContent: DIALOG_TITLE }),
+    dlgBody,
+    el("form", { method: "dialog", className: "dlg-close" }, el("button", { type: "submit", textContent: DIALOG_CLOSE })),
+  );
+  kindInfo.addEventListener("click", () => dialog.showModal());
+  // The dialog element covers only the middle of the screen, so a click that
+  // lands on it rather than on its contents is a click on the backdrop.
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) dialog.close();
+  });
 
-/** Fill the dialog for one outcome, and show the button that opens it. */
-// Filled in once the signature rules have answered, so reopening the
-// dialog shows them without asking again.
-let tools: ToolMatch[] | null = null;
-const showDetails = (id: Identification | null, template: TemplateNote): void => {
-  const rows: HTMLElement[] = [];
-  const row = (label: string, value: Node | string): void => {
-    rows.push(el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value));
+  // Everything that has answered. `file` undefined means the rules have not
+  // answered yet; `tools` and `signatures` likewise.
+  let answers: Answers = { template: null };
+  let note: TemplateNote = null;
+  let sigs: SigVerdict | null = null;
+  let failed = false;
+  let identifying = false;
+
+  const api: FileType = {
+    label: kindLabel,
+    info: kindInfo,
+    dialog,
+    onIdentity: () => {},
+    identifying: () => {
+      identifying = true;
+      render();
+    },
+    failed: () => {
+      failed = true;
+      render();
+    },
+    setTemplate: (answer) => {
+      answers = { ...answers, template: answer };
+      render();
+    },
+    setNote: (n) => {
+      note = n;
+      render();
+    },
+    setFile: (id) => {
+      identifying = false;
+      answers = { ...answers, file: id };
+      render();
+    },
+    addMatches: async (doc) => {
+      let found: ToolMatch[];
+      try {
+        found = await doc.detectTools(answers.file !== null && answers.file !== undefined);
+      } catch (e) {
+        console.error("detectTools", e);
+        found = [];
+      }
+      answers = { ...answers, tools: sortTools(found) };
+      render();
+      try {
+        sigs = await doc.signatureMatches();
+      } catch (e) {
+        console.error("signatureMatches", e);
+        return;
+      }
+      answers = { ...answers, signatures: sigs?.matches ?? [] };
+      render();
+    },
   };
-  if (id === null) {
-    rows.push(el("p", { textContent: NO_MATCH_BODY }));
-  } else {
-    rows.push(el("p", { className: "dlg-sentence", textContent: id.message }));
-    if (id.mime !== "") row("Media type", id.mime);
-    if (id.ext.length > 0) row("Extensions", id.ext.join(", "));
-    if (id.source !== "") row("Rule file", id.source);
-  }
-  // Which template the Fields table is reading with, next to what the file is
-  // rather than under the credits: it is an answer about this file too.
-  if (template !== null) {
-    const value =
-      template.kind === "builtin" ? templateLabel(template.name) : el("em", { textContent: SIGNATURE_ONLY });
-    row(TEMPLATE_KEY, value);
-  }
-  // What made the file, when anything knows. Its own block after the file
-  // type's, so each muted credit line sits under the answers it covers.
-  // Nothing to add when the signature database found nothing: a line saying
-  // so is a line about the check rather than about the file.
-  if (tools !== null && tools.length > 0) {
-    for (const m of sortTools(tools)) {
-      rows.push(el("p", { className: "dlg-tool", textContent: toolLine(m) }));
+
+  /** Redraw the toolbar, tell the overview, and refill the dialog. */
+  const render = (): void => {
+    const id = decide(answers);
+    const tools = answers.tools ?? [];
+    let line: string;
+    if (id.name !== null) {
+      const named = id.source === "signature" ? (answers.signatures ?? []).find((s) => s.format.label === id.name) : undefined;
+      line = named === undefined ? id.name : SIGNATURE_NAMED[named.format.source](id.name);
+      // A packed program is showing compressed output rather than the
+      // program, which is worth saying in the toolbar line whatever named it.
+      if (id.source !== "tools") line += wrapperSuffix(tools);
+    } else if (failed) line = IDENTIFY_FAILED_MSG;
+    else if (identifying) line = IDENTIFYING_MSG;
+    // Unknown as soon as the rules say so; a signature that lands later
+    // replaces it, and a blank line in the meantime would say nothing.
+    else if (answers.file === null) line = UNKNOWN_TYPE_MSG;
+    else line = "";
+    kindLabel.textContent = line;
+    // The toolbar copy is cut short, so the whole sentence stays reachable
+    // on hover as well as in the dialog.
+    kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : line;
+    // The overview hears the name once there is one, or once the rules have
+    // said there is none: an empty name before that reads as "no answer"
+    // when the answer is still on its way.
+    if (id.name !== null || answers.file !== undefined) api.onIdentity(id.name ?? "");
+    // Nothing to open until something has answered or the rules have given
+    // up: an empty dialog is worse than no button.
+    if (answers.file === undefined && answers.template === null) return;
+    dlgBody.replaceChildren(...details(id));
+    kindInfo.hidden = false;
+  };
+
+  const row = (label: string, value: Node | string): HTMLElement =>
+    el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value);
+
+  /** Where the chosen name came from, in a sentence. */
+  const sourceText = (id: ReturnType<typeof decide>): string => {
+    switch (id.source) {
+      case "template":
+        return SOURCE_TEXT.template(answers.template === null ? "" : templateLabel(answers.template.name));
+      case "signature": {
+        const m = (answers.signatures ?? []).find((s) => s.format.label === id.name);
+        return SOURCE_TEXT.signature(SIGNATURE_SOURCE[m?.format.source ?? "wikidata"]);
+      }
+      case "file":
+        return SOURCE_TEXT.file("");
+      case "tools":
+        return SOURCE_TEXT.tools("");
+      case null:
+        return "";
+    }
+  };
+
+  /** The dialog's contents for what has answered so far. */
+  const details = (id: ReturnType<typeof decide>): HTMLElement[] => {
+    const rows: HTMLElement[] = [];
+    const file = answers.file ?? null;
+    if (id.name === null) {
+      rows.push(el("p", { textContent: NO_MATCH_BODY }));
+    } else {
+      rows.push(el("p", { className: "dlg-sentence", textContent: id.name }));
+      rows.push(row(SOURCE_KEY, sourceText(id)));
+    }
+    // What the rules know about the format, whichever answer was chosen: a
+    // media type and extensions are facts about the file either way.
+    if (file !== null) {
+      if (file.mime !== "") rows.push(row("Media type", file.mime));
+      if (file.ext.length > 0) rows.push(row("Extensions", file.ext.join(", ")));
+      if (file.source !== "") rows.push(row("Rule file", file.source));
+    }
+    // Which template the Fields table is reading with, next to what the file
+    // is rather than under the credits: it is an answer about this file too.
+    if (note !== null) {
+      const value = note.kind === "builtin" ? templateLabel(note.name) : el("em", { textContent: SIGNATURE_ONLY });
+      rows.push(row(TEMPLATE_KEY, value));
+    }
+    // Every other answer, with what it rests on. The signatures come last and
+    // grouped, since most files match a crowd of them.
+    const others = id.candidates.slice(1).filter((c) => c.source !== "signature");
+    const tools = answers.tools ?? [];
+    if (others.length > 0) {
+      rows.push(el("p", { className: "dlg-muted", textContent: OTHERS_HEADING }), el("ul", { className: "dlg-others" }, ...others.map(candidateRow)));
     }
     // Each credit covers only the answers it found. An answer the editor
     // read out of the file itself is not the database's to be credited
     // with, and the database's rules are not this editor's.
-    if (tools.some((m) => m.source !== OWN_SOURCE)) {
-      rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
+    if (tools.some((m) => m.source !== OWN_SOURCE)) rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
+    if (tools.some((m) => m.source === OWN_SOURCE)) rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
+    if (sigs !== null && sigs.matches.length > 0) {
+      rows.push(el("p", { textContent: SIGNATURES_INTRO }), ...signatureRows(sigs.matches, sigs.extension));
+      rows.push(el("p", { className: "dlg-muted", textContent: SIGNATURES_CREDIT(sigs.fetched) }));
     }
-    if (tools.some((m) => m.source === OWN_SOURCE)) {
-      rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
-    }
-  }
-  dlgBody.replaceChildren(...rows);
-  kindInfo.hidden = false;
-};
-
-/**
- * Ask the signature rules what made this file, and fold the answer into what
- * is already on screen. A file nothing else could name is named by this if it
- * can be, since for a .COM there is nothing else to go on.
- */
-const addToolMatches = async (doc: Doc, id: Identification | null, template: string | null): Promise<void> => {
-  let found: ToolMatch[];
-  try {
-    found = await doc.detectTools(id !== null);
-  } catch (e) {
-    console.error("detectTools", e);
-    return;
-  }
-  tools = found;
-  const note = template === null ? null : builtinTemplate(template);
-  showDetails(id, id === null && found.length > 0 ? null : note);
-  if (found.length === 0) return;
-  if (id === null) {
-    // Nothing else knew anything, so this is the answer rather than a note
-    // beside one.
-    const m = sortTools(found)[0];
-    if (m !== undefined) {
-      const line = `Signature match: ${nameAndVersion(m)} (${m.category})`;
-      kindLabel.textContent = line;
-      kindLabel.title = line;
-    }
-    return;
-  }
-  const suffix = wrapperSuffix(found);
-  if (suffix !== "") kindLabel.textContent = `${id.message}${suffix}`;
-};
-
-  return {
-    label: kindLabel,
-    info: kindInfo,
-    dialog,
-    identifying: () => {
-      kindLabel.textContent = IDENTIFYING_MSG;
-    },
-    failed: () => {
-      kindLabel.textContent = IDENTIFY_FAILED_MSG;
-      kindLabel.title = IDENTIFY_FAILED_TITLE;
-    },
-    unknown: () => {
-      kindLabel.textContent = UNKNOWN_TYPE_MSG;
-    },
-    named: (message: string) => {
-      kindLabel.textContent = message;
-      // The toolbar copy is cut short, so the whole sentence stays reachable
-      // on hover as well as in the dialog.
-      kindLabel.title = message;
-    },
-    details: showDetails,
-    addTools: addToolMatches,
+    return rows;
   };
+
+  /** One answer that was not chosen: its name, then how it knows. */
+  const candidateRow = (c: Candidate): HTMLElement => {
+    const parts: (Node | string)[] = [];
+    if (c.source === "tools") {
+      const m = (answers.tools ?? []).find((t) => `${nameAndVersion(t)} (${t.category})` === c.name);
+      parts.push(el("span", { className: "dlg-tool", textContent: m === undefined ? c.name : toolLine(m) }));
+    } else parts.push(el("span", { textContent: c.name }));
+    parts.push(el("span", { className: "dlg-muted", textContent: c.evidence }));
+    if (c.disagrees) parts.push(el("span", { className: "dlg-disagrees", textContent: DISAGREES }));
+    return el("li", {}, ...parts);
+  };
+
+  /** One format a signature names: its name, linked, what matched, and where to read more. */
+  const signatureRow = (m: SigMatch): HTMLElement => {
+    const f = m.format;
+    const parts: (Node | string)[] = [];
+    if (f.source === "wikidata") {
+      parts.push(el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: f.label }));
+    } else parts.push(el("span", { textContent: f.unfinished === true ? `${f.label}\u2026` : f.label }));
+    parts.push(el("span", { className: "dlg-muted", textContent: SIGNATURE_WORD[f.source] }));
+    const exts = [...(f.ext ?? []), ...(f.wpExt ?? [])];
+    if (exts.length > 0) {
+      parts.push(el("span", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") }));
+    }
+    parts.push(el("span", { className: "dlg-muted", textContent: bytesAt(m) }));
+    // An article about the format itself, or failing that about the format it
+    // is a version or part of, named so the link says where it goes.
+    const wp = f.wp !== undefined ? { title: f.wp, text: WIKIPEDIA_LINK } : f.parent !== undefined ? { title: f.parent.wp, text: `${WIKIPEDIA_LINK}: ${f.parent.label}` } : null;
+    if (wp !== null) parts.push(el("a", { href: wikipediaUrl(wp.title), target: "_blank", rel: "noopener", textContent: wp.text }));
+    const li = el("li", { title: m.pattern }, ...parts);
+    if (m.extensionAgrees) li.classList.add("dlg-wiki-ext-agrees");
+    return li;
+  };
+
+  /**
+   * The matches as rows: the best few in the open, the rest folded away, and
+   * a crowd that all matched the same bytes folded into one line, since a
+   * hundred formats that are all ZIP inside say only that the file is a ZIP.
+   * A crowd whose members all list the file's extension is a crowd of its own,
+   * ahead of the rest, and says so.
+   */
+  const signatureRows = (matches: readonly SigMatch[], extension: string): HTMLElement[] => {
+    type Group = { readonly key: string; readonly members: SigMatch[] };
+    const groups: Group[] = [];
+    const byKey = new Map<string, Group>();
+    for (const m of matches) {
+      const key = `${m.pattern} ${m.offset} ${m.fromEnd} ${m.extensionAgrees}`;
+      let g = byKey.get(key);
+      if (g === undefined) {
+        g = { key, members: [] };
+        byKey.set(key, g);
+        groups.push(g);
+      }
+      g.members.push(m);
+    }
+    const render = (g: Group): HTMLElement => {
+      const first = g.members[0];
+      if (first === undefined) throw new Error("empty group");
+      if (g.members.length < SIGNATURES_CROWD) return el("ul", { className: "dlg-wiki" }, ...g.members.map(signatureRow));
+      const hex = first.pattern.replace(/(..)(?=.)/g, "$1 ");
+      return el(
+        "details",
+        { className: "dlg-more" },
+        el("summary", {
+          textContent: first.extensionAgrees
+            ? SIGNATURES_SHARED_EXT(g.members.length, bytesAt(first), hex, extension)
+            : SIGNATURES_SHARED(g.members.length, bytesAt(first), hex),
+        }),
+        el("ul", { className: "dlg-wiki" }, ...g.members.map(signatureRow)),
+      );
+    };
+    const shown = groups.slice(0, SIGNATURES_SHOWN).map(render);
+    const rest = groups.slice(SIGNATURES_SHOWN);
+    if (rest.length === 0) return shown;
+    const count = rest.reduce((n, g) => n + g.members.length, 0);
+    return [...shown, el("details", { className: "dlg-more" }, el("summary", { textContent: SIGNATURES_MORE(count) }), ...rest.map(render))];
+  };
+
+  return api;
 }
