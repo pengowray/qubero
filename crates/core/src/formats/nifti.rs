@@ -1209,6 +1209,23 @@ mod tests {
         }
     }
 
+    /// The header half of a NIfTI-2 pair: `ni2`, no voxels, and the four
+    /// extension bytes running to the end of the file.
+    #[test]
+    fn a_nifti_2_pair_header_has_no_voxels() {
+        for big in [false, true] {
+            let mut v = nifti2(big, 0.0, 0.0);
+            v[4..8].copy_from_slice(b"ni2\0");
+            v.truncate(544);
+            assert!(is_nifti(&v, 544), "big={big}");
+            let (d, mut ev) = eval(v);
+            assert_eq!(ev.node(&d, &[]).unwrap().type_name, "NIfTI-2 header", "big={big}");
+            assert_eq!(ev.child_named(&d, &[], "voxels").unwrap(), None);
+            assert_eq!(value(&mut ev, &d, &["header", "magic"]), Value::Str("ni2".into()));
+            assert_eq!((named(&mut ev, &d, &["extender"]).size_bits, named(&mut ev, &d, &["extensions"]).size_bits), (32, 0));
+        }
+    }
+
     #[test]
     fn a_nifti_2_file_scales_by_its_doubles() {
         for big in [false, true] {
