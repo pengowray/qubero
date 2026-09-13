@@ -35,6 +35,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"070701", "cpio"),
     (b"070702", "cpio"),
     (b"LPKSHHRH", "journal"),
+    // A miniSEED 3 record, which unlike the 2.4 one it replaced does announce
+    // itself: `MS` and the format version. No relation to the `mseed` probe
+    // further down, which has no signature to go on and reads a date instead.
+    (b"MS\x03", "mseed3"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
@@ -92,9 +96,11 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"\x34\x12\xaa\x55", "vpk"),
     (b"NES\x1a", "nes"),
     // NASA's Common Data Format, which shares three letters with the NetCDF
-    // classic file below and nothing else. Version 2.x opens with the word
-    // that means "not compressed", twice over.
+    // classic file below and nothing else. Version 2.6 signs itself; anything
+    // older opens with the word that means "not compressed", twice over, and
+    // says nothing about what it is until the record behind that.
     (cdf::MAGIC, "cdf"),
+    (cdf::MAGIC_V26, "cdf"),
     (cdf::MAGIC_V2, "cdf"),
     // The three versions of a classic NetCDF file. A `.nc` written by a
     // modern library is an HDF5 file instead, and matches that signature.

@@ -2258,6 +2258,35 @@ fn a_chain_stops_rather_than_going_round_for_ever() {
     assert_eq!(count(&[0, 0, 0, 0, 0], E::field("head")), 0);
 }
 
+/// A chain whose offsets count from somewhere the bytes do not begin.
+///
+/// This is what a run of records unpacked out of the middle of a file needs:
+/// every offset in a compressed CDF counts from the front of the file it was
+/// before it was squeezed, and what comes out of the stream starts eight bytes
+/// into that. The adjustment moves where each element is read and leaves the
+/// tests that end the walk alone, so a nought still ends it.
+#[test]
+fn a_chain_reads_its_offsets_with_an_adjustment() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("head", T::u16(Big)),
+            ("recs", T::chain_adjusted(E::field("head"), &["next"], Anchor::File, E::lit(-4), linked())),
+        ],
+    );
+    // The offsets are written four too large: the head says 12 for the record
+    // at 8, and that record says 6 for the one at 2.
+    let d = doc(&[0, 12, /* @2 */ 0, 0, 0xaa, /* @5 */ 0, 0, 0, /* @8 */ 0, 6, 0xcc]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2);
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().offset_bits, 8 * 8);
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().offset_bits, 2 * 8);
+    assert_eq!(ev.node(&d, &[1, 1, 1]).unwrap().value, Value::UInt(0xaa));
+    // A nought is still the end of the walk, and not the record four bytes
+    // before the file: what the tests are made on is the offset as written.
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2);
+}
+
 /// A record that places one gathered element: where it is, and how long.
 fn placing() -> T {
     T::structure("Rec", vec![("off", T::u8()), ("len", T::u8())])

@@ -108,6 +108,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   netcdf: "NetCDF classic",
   grib: "GRIB weather data",
   mseed: "miniSEED seismic records",
+  mseed3: "miniSEED 3 seismic records",
   sac: "SAC seismogram",
   cdf: "NASA CDF",
   hdf4: "HDF4",

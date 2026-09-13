@@ -33,6 +33,10 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| CDF values: VXR chain, VVR and CVVR values typed by the variable, attribute and pad values, byte order from the encoding, gzip and run-length (new `Codec::CdfRle`) unpacked for blocks and whole files, versions 2.5 to 2.7. `psp_fld_...cdf` names 70,002 of 70,003 bytes, up from 48,749. | 6f39711, 78faa34 |
+| ROOT: a reader beside the template (`root_streamer.rs`, `root_tree.rs`) decodes `StreamerInfo` and every `TTree`: classes, branches, leaves, every basket's offset and entry range, and simple leaves' values, listed in the Logical tab as `ROOT contents`. Checked against uproot on all eight samples. The template still cannot place the baskets (see S4's correction). | 8ab3571 |
+| NetCDF classic: a file with exactly one record variable writes its records unpadded, and the template stepped by the padded `vsize`. `recsize` is now the unpadded width in that case. Also fixed on the way: a record variable narrower than four bytes read values that belonged to later records. Four generated samples pin both cases. | 82c8c9d |
+| miniSEED 3: a new template (`mseed3.rs`) recognised by `MS\x03`, records sized from their three lengths, extra headers as JSON, Steim frames shared with `mseed.rs`. Three libmseed samples. | 14e413d |
 | S6, NPZ half: members already open as NPY through the ZIP entry's decoded space being sniffed; a test pins it and the stale doc is gone. Zarr ZipStore chunks remain (a reader, not an IR change). | d6b864a |
 | S1. `Ty::Gather` and `Expr::Placer`: children placed at offsets read from records the template walks to, and a child asking its record again. | `2153c96` |
 | FITS heap: every `P`/`Q` descriptor's array placed in the heap, sized by its count and typed by its letter. `comp.fits` names all 86,400 bytes, up from a heap of one gap. | `b5c4fd2` |
@@ -131,9 +135,25 @@ HDF5 files.
 
 ### Further shared gaps, not started
 
-- **S4. Offsets into the file from inside unpacked data.** Compressed RNTuple
-  envelopes (ROOT's page lists), 7z's compressed header. Already written up in
-  `formats/sevenzip.rs` and memory `check-ir-structural-gaps`.
+- **S4. Offsets into the file from inside unpacked data.** 7z's compressed
+  header, written up in `formats/sevenzip.rs`.
+
+  **Correction (2026-09-13, from building the ROOT reader).** For ROOT this
+  is not the blocker. `Ty::At { anchor: Anchor::File }` already resolves into
+  space 0 whatever space the field naming it was read in (`place_child` in
+  `eval/mod.rs`), and `rntuple_record` relies on it to place both RNTuple
+  envelopes from inside a compressed record; `tests/root_real.rs`'s `anchor`
+  test asserts `placed.space == 0`. What blocks the TTree baskets is a level
+  up: `fBasketSeek` is a member of a streamed `TBranch`, and a streamed
+  object's layout is not a fact about the format but a schema written into
+  another record of the same file (`StreamerInfo`), itself compressed and
+  streamed. No `Ty` takes its shape from bytes. The IR need is a type whose
+  inner shape is looked up at evaluation time from a table the file supplies,
+  keyed by a class name and a version read from the prelude, with the
+  class-tag back-reference map as evaluator state. Given that, a `Gather`
+  with `Anchor::File` and `placer(fBasketBytes)` over
+  `fBranches[*].fBasketSeek[*]` places the baskets with nothing else new.
+  Whether 7z's case is the same shape or the original S4 is still to check.
 - **S5. The Nth element of a list whose elements vary in size.** HDF5
   variable-length strings and every other global-heap object. `h5ad.rs` does
   the walk as a reader because a field cannot.
@@ -196,18 +216,26 @@ HDF5 files.
 
 ### ROOT
 
-Nearly the whole file is unplaced. In `uproot-Zmumu-lz4.root` (213 KB) about
-208 KB lies after the top directory record in bytes nothing reads: the TTree's
-baskets, which are TKey records that the directory's key list does not list.
-Their offsets are in `fBasketSeek` inside each streamed TBranch. RNTuple: the
-anchor and both envelopes are placed; the schema, page lists and the pages
-themselves are bytes.
+A reader beside the template (see Closed) now decodes the `StreamerInfo`
+record and every `TTree` at every directory depth: class descriptions,
+branches, leaves, every basket with its offset, size and entry range, and the
+values of simple leaves. It shows in the Logical tab as `ROOT contents`. In
+`uproot-Zmumu-lz4.root` the baskets it lists are 206,455 of 212,813 bytes.
 
-- TTree: needs a StreamerInfo reader beside the template, as `h5ad.rs` is
-  beside HDF5.
-- RNTuple: the spec needs no streamers, so this is template work, except that a
-  compressed envelope's page list names offsets in the file (S4).
-  `rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root` avoids that.
+What the *template* names is unchanged (about 2% of that file), because the
+baskets can only be placed by the template once it can read a streamed
+object, which is the corrected S4 above. Until then the hex view shows them
+as a gap while the Logical tab lists them.
+
+- Split `TBranchElement` branches (C++ objects) are reasoned about, not
+  proven: no tree in the corpus uses one. Worth a sample.
+- Not read: variable-length entries, multi-leaf branches, strings, 2-byte
+  floats, 3-byte integers, `CS` compressed blocks.
+- RNTuple: the anchor and both envelopes are placed; the schema, page lists
+  and pages are bytes. The spec needs no streamers, so this is template work,
+  and `Anchor::File` from inside the unpacked envelope already works.
+- The panel's classes group row says `StreamerInfo` where an `@0x…` would do,
+  and an unsplit `TBranchElement` could name its class.
 
 ### Parquet
 
@@ -220,15 +248,29 @@ list, Parquet is the least unread.
 
 ### NASA CDF
 
-Descriptor chains read; values do not. Checked against a tree, not only the
-module doc: variable index records (VXR), value records (VVR), compressed value
-records (CVVR) and sparseness records all fall to the `T::bytes(E::Remaining)`
-default in `cdf.rs`, as do attribute entry values and pad values. Needs a
-switch on the encoding field in the descriptor record, the way GWF and ELF
-switch on byte order. Whole-file compression is not unpacked. Version 2.x stops
-after the global descriptor. The 66 unused-space records in
-`psp_fld_l2_mag_rtn_1min_20200104_v02.cdf` are placed and really are free
-space, so its bytes-named figure undercounts nothing there.
+Values read now (see Closed): the VXR chain, each block's VVR or CVVR typed by
+the variable's data type, attribute and pad values, byte order switched on
+the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
+2.7 read at half width. Five samples, all cross-checked with cdflib. Left:
+
+- Huffman and adaptive Huffman compression (`d103a2x.cdf` in NASA's
+  distribution) identify their codec and keep their bytes; a run-length
+  compressed *block* has no signature to peek at and stays bytes.
+- Sparse-record reconstruction, and multi-file variables (`example1.cdf`'s
+  `.v0` to `.v3` sit in other files).
+- VAX and VMS Alpha/Itanium encodings read at the right width as IEEE and are
+  wrong, as `mat.rs` does for level 4 on a VAX; the doc says so.
+- Records are sized from the block's room (`remaining / records / width`)
+  rather than from `product(dim_sizes)`, because a dimension the variable does
+  not vary along is not stored; the shape is in the descriptor for a reader
+  to fold in.
+- CDF_EPOCH (float64 ms since 0 AD) and CDF_TIME_TT2000 (int64 ns since J2000
+  on TAI) are not declared as moments. `Counted.zero` is whole seconds,
+  `moment_number` takes only integers, and TT2000 counts TAI so a linear count
+  is up to 5.8 s out after 2017. A `time.rs` item, not a template one.
+- The template needed `Ty::Chain` to take an `adjust` and to take its room
+  from its anchor rather than the file, so a chain inside an unpacked run does
+  not end where the compressed file does. `T::chain` defaults `adjust` to 0.
 
 ### HDF4
 
@@ -302,8 +344,11 @@ only; anything else is bytes.
 
 ### miniSEED
 
-- Steim1/2 read as differences; undoing them into samples is not done.
-- miniSEED 3 (FDSN, 2023) is not recognised.
+- Steim1/2 read as differences; undoing them into samples is not done (a
+  decoder-tier side reader, the `hdf5_chunk.rs` pattern).
+- miniSEED 3 reads (see Closed). Its CRC-32C is placed and not verified, and
+  obspy cannot read the format, so the sample facts were checked by a
+  `struct.unpack` walk rather than a second reader.
 - Steim3 and HGLP encodings are bytes.
 
 ### GWF
@@ -315,9 +360,12 @@ only; anything else is bytes.
 
 ### NetCDF classic
 
-Reads correctly. A file with exactly one record variable writes its records
-unpadded and this places them slightly wrong for an odd record width. Corpus:
-3 tiny files of the same data.
+Reads correctly, the one-record-variable case included (see Closed). Corpus:
+seven small generated files. The three `sst-cdf*.nc` files were regenerated
+on 2026-09-13: the generator's `surface()` had done its arithmetic on a `">f4"`
+array, which drops the byte order, so the floats were little-endian and read
+back near 1e-38; they now read as 270 K upwards in scipy and netCDF4 both.
+NetCDF-4 is HDF5 and reads as `hdf5`.
 
 ### Zarr
 

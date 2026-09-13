@@ -29,12 +29,28 @@
 //! past that, where `recsize` is the `vsize` of every record variable added
 //! up. Nothing in the file writes `recsize` down; it is worked out here.
 //!
-//! Two things about records are not handled. A file whose record count is all
-//! ones was left open by a writer that never came back to say, and only the
-//! first hundred thousand records of one are placed. And the classic format
-//! has a special case this ignores: when a file has exactly one record
-//! variable, its records are written with no padding between them, so a record
-//! of an odd width is placed a little further on each time than this says.
+//! Except when there is exactly one record variable in the file, which is the
+//! one place the format drops its own alignment rule. A `vsize` is always
+//! rounded up to a multiple of four, so a record of three bytes is written
+//! down as four; with several record variables that rounding is real padding,
+//! and the next record does start on a four-byte boundary. With one, the
+//! specification says the padding is not written, and the reader is to ignore
+//! `vsize` and step by the unpadded width instead: three bytes a record, and
+//! records after the first landing wherever they land. Only `byte`, `char`
+//! and `short` can be affected, since every wider type comes to a multiple of
+//! four on its own. So the stride here is the unpadded width when one variable
+//! is written a record at a time, and the sum of the padded `vsize`s when
+//! several are.
+//!
+//! That unpadded width is not in the file either. It is the variable's
+//! dimensions multiplied together, leaving out the unlimited one, times the
+//! width of its type, and so is `dim_sizes` and `elems` below: how many
+//! numbers one record holds, which is also what says where a slab stops and
+//! its padding starts.
+//!
+//! One thing about records is still not handled: a file whose record count is
+//! all ones was left open by a writer that never came back to say, and only
+//! the first hundred thousand records of one are placed.
 //!
 //! A `.nc` written by a modern library is often NetCDF-4, which is an HDF5 file
 //! and starts with the HDF5 signature. That one is `hdf5`, not this.
@@ -171,13 +187,20 @@ fn attribute_list() -> T {
 /// the whole variable for a plain one and one record's worth for a record
 /// variable, padded to four bytes either way.
 ///
-/// The last two fields are worked out rather than read, and take up no bytes.
-/// They are the two things the shape of the data depends on and that no field
-/// says outright: how long a row is, and whether this variable is written a
-/// record at a time. Both are questions about the dimension list, reached
-/// through `dimids`, and they are asked here because this is where `dimids`
-/// is: the data is placed by a list declared after every variable, and from
-/// there one variable's dimensions are two lists away.
+/// The last five fields are worked out rather than read, and take up no bytes.
+/// They are what the shape of the data depends on and that no field says
+/// outright: how long a row is, whether this variable is written a record at
+/// a time, and how many numbers one slab of it holds. All of them are
+/// questions about the dimension list, reached through `dimids`, and they are
+/// asked here because this is where `dimids` is: the data is placed by a list
+/// declared after every variable, and from there one variable's dimensions
+/// are two lists away.
+///
+/// `elems` is the count `vsize` rounds up and so cannot be recovered from:
+/// every dimension of the variable multiplied together, with the unlimited
+/// one counted as one rather than as the zero it is written as, which leaves
+/// the size of one record. `unpadded` is that in bytes, and is the stride
+/// between records when this is the only record variable in the file.
 fn var() -> T {
     // dims[dimids[i]].size, for the first and the last of this variable's
     // dimensions. Only reached when there is one to reach: a negative index
@@ -208,9 +231,22 @@ fn var() -> T {
             ("begin", begin()),
             ("row_length", T::computed(row)),
             ("is_record", T::computed(is_record)),
+            // One number per dimension, the unlimited one counted as one. A
+            // dimension's written length is only zero for the unlimited one,
+            // so raising the floor to one leaves every other length alone and
+            // turns the record dimension into the "one record" this measures.
+            (
+                "dim_sizes",
+                T::array(T::computed(dim_size(E::idx()).at_least(E::lit(1))), E::field("ndims")),
+            ),
+            // What one slab holds. A variable of no dimensions holds a single
+            // number, which is what the empty product comes to.
+            ("elems", T::computed(E::product_of("dim_sizes"))),
+            ("width", width()),
+            ("unpadded", T::computed(E::field("elems").mul(E::field("width")))),
         ],
     )
-    .machinery(&["row_length", "is_record"])
+    .machinery(&["row_length", "is_record", "dim_sizes", "elems", "width", "unpadded"])
 }
 
 /// How many bytes one value of each type takes. A type this reader does not
@@ -290,17 +326,29 @@ fn slab() -> T {
 ///
 /// The last few bytes of a slab may belong to no value: `vsize` is rounded up
 /// to a multiple of four, so a variable of three-byte rows has a byte of
-/// padding at the end of each record. That reads as what it is.
+/// padding at the end of each record. That reads as what it is, unless this
+/// is the only record variable in the file, where those bytes are not padding
+/// at all: they are the first bytes of the next record, and claiming them
+/// twice would put two things in the same place.
+///
+/// How many values a slab holds comes from the dimensions rather than from
+/// `vsize`, because `vsize` has that rounding in it. A record variable of one
+/// `byte` per record writes a `vsize` of four, and reading four numbers out of
+/// it would be three numbers that belong to later records.
 fn var_data() -> T {
     let mine = |field: &str| T::computed(E::elem_field("vars", E::idx(), &[field]));
-    let values = || E::field("vsize").div(E::field("width"));
-    let rows = values().div(E::field("row_length").at_least(E::lit(1)));
+    let rows = E::field("elems").div(E::field("row_length").at_least(E::lit(1)));
     // One record for a plain variable, and however many were written for a
     // record one. Clamped: a file left open by a writer that never came back
     // says its record count is all ones, and that is not a number of records
     // to place.
     let records = E::lit(1).sub(E::field("is_record")).or(E::field("numrecs").at_most(E::lit(RECORD_LIMIT)));
-    let used = E::field("rows").mul(E::field("row_length")).mul(E::field("width"));
+    let used = || E::field("rows").mul(E::field("row_length")).mul(E::field("width"));
+    // What `vsize` reserved and no value sits in. A record variable that is
+    // the only one in the file has none: the rounding was never written, so
+    // `1 - is_record` takes the padding away from it and leaves every plain
+    // variable in the same file with the padding it does have.
+    let spare = |keep: E| E::field("vsize").sub(used()).mul(keep).at_least(E::lit(0));
     T::structure(
         "VarData",
         vec![
@@ -309,11 +357,19 @@ fn var_data() -> T {
             ("begin", mine("begin")),
             ("row_length", mine("row_length")),
             ("is_record", mine("is_record")),
+            ("elems", mine("elems")),
             ("width", width()),
             ("rows", T::computed(rows)),
             ("records", T::computed(records)),
             ("values", slab()),
-            ("padding", T::bytes(E::field("vsize").sub(used).at_least(E::lit(0)))),
+            (
+                "padding",
+                T::switch(
+                    E::field("record_vars"),
+                    vec![(1, T::bytes(spare(E::lit(1).sub(E::field("is_record")))))],
+                    T::bytes(spare(E::lit(1))),
+                ),
+            ),
             (
                 "later_records",
                 T::array(
@@ -323,7 +379,7 @@ fn var_data() -> T {
             ),
         ],
     )
-    .machinery(&["nc_type", "vsize", "begin", "row_length", "is_record", "width", "rows", "records"])
+    .machinery(&["nc_type", "vsize", "begin", "row_length", "is_record", "elems", "width", "rows", "records"])
     .payload(&["values"])
 }
 
@@ -379,21 +435,42 @@ fn var_list() -> T {
     // contribution is copied into a number of its own first, and those are
     // what is added up: a variable that is not a record variable contributes
     // nothing.
-    fields.push((
-        "record_bytes",
+    let per_var = |field: &str| {
         T::array(
             T::computed(
-                E::elem_field("vars", E::idx(), &["vsize"]).mul(E::elem_field("vars", E::idx(), &["is_record"])),
+                E::elem_field("vars", E::idx(), &[field]).mul(E::elem_field("vars", E::idx(), &["is_record"])),
             ),
             E::field("nelems"),
+        )
+    };
+    fields.push(("record_bytes", per_var("vsize")));
+    // The same again without the rounding up to four that `vsize` carries,
+    // for the one case where the format leaves that rounding unwritten.
+    fields.push(("unpadded_bytes", per_var("unpadded")));
+    // How many variables are written a record at a time. One is the special
+    // case; anything else, including none, takes the padded answer.
+    fields.push((
+        "record_flags",
+        T::array(T::computed(E::elem_field("vars", E::idx(), &["is_record"])), E::field("nelems")),
+    ));
+    fields.push(("record_vars", T::computed(E::sum_of("record_flags"))));
+    // With one record variable the records follow each other with nothing
+    // between them, so the stride is that variable's unpadded width; with
+    // several it is every one's `vsize`, rounding and all.
+    fields.push((
+        "recsize",
+        T::switch(
+            E::field("record_vars"),
+            vec![(1, T::computed(E::sum_of("unpadded_bytes")))],
+            T::computed(E::sum_of("record_bytes")),
         ),
     ));
-    fields.push(("recsize", T::computed(E::sum_of("record_bytes"))));
     fields.push((
         "data",
         T::pointer_list_sized("vars", &["begin"], Anchor::File, E::lit(0), T::Named("VarData".into())),
     ));
-    T::structure("VariableList", fields).machinery(&["record_bytes", "recsize"])
+    T::structure("VariableList", fields)
+        .machinery(&["record_bytes", "unpadded_bytes", "record_flags", "record_vars", "recsize"])
 }
 
 #[cfg(test)]
@@ -486,6 +563,69 @@ mod tests {
         }
         for v in [10.0f64, 20.0] {
             b.extend_from_slice(&v.to_be_bytes());
+        }
+        b
+    }
+
+    /// A file whose record variable has a width four does not divide:
+    /// `pulse(time, cell)` of three shorts, which is six bytes a record and a
+    /// `vsize` of eight, written the way a writer writes it. Three records.
+    ///
+    /// With `extra`, a second record variable `mark(time)` of one byte a
+    /// record beside it. That is what tells the two cases apart: with one
+    /// record variable the six bytes follow each other, and with two every
+    /// slab is padded out to four and a record is twelve bytes.
+    fn odd_file(version: u8, extra: bool) -> Vec<u8> {
+        let size = |v: u64| count(version, v);
+        let offset = |v: u64| if version == 1 { (v as u32).to_be_bytes().to_vec() } else { v.to_be_bytes().to_vec() };
+        let records = 3u64;
+        let build = |begins: [u64; 2]| {
+            let mut b = b"CDF".to_vec();
+            b.push(version);
+            b.extend_from_slice(&size(records));
+            // time is unlimited, cell is three wide.
+            b.extend_from_slice(&be32(0x0A));
+            b.extend_from_slice(&size(2));
+            b.extend_from_slice(&nm(version, "time"));
+            b.extend_from_slice(&size(0));
+            b.extend_from_slice(&nm(version, "cell"));
+            b.extend_from_slice(&size(3));
+            b.extend_from_slice(&be32(0)); // no global attributes
+            b.extend_from_slice(&size(0));
+            b.extend_from_slice(&be32(0x0B));
+            b.extend_from_slice(&size(1 + extra as u64));
+            b.extend_from_slice(&nm(version, "pulse"));
+            b.extend_from_slice(&size(2));
+            b.extend_from_slice(&size(0)); // the unlimited dimension first
+            b.extend_from_slice(&size(1));
+            b.extend_from_slice(&be32(0)); // no attributes
+            b.extend_from_slice(&size(0));
+            b.extend_from_slice(&be32(3)); // short
+            b.extend_from_slice(&size(8)); // six bytes, rounded up as the spec says to write it
+            b.extend_from_slice(&offset(begins[0]));
+            if extra {
+                b.extend_from_slice(&nm(version, "mark"));
+                b.extend_from_slice(&size(1));
+                b.extend_from_slice(&size(0));
+                b.extend_from_slice(&be32(0));
+                b.extend_from_slice(&size(0));
+                b.extend_from_slice(&be32(1)); // byte
+                b.extend_from_slice(&size(4)); // one byte, rounded up to four
+                b.extend_from_slice(&offset(begins[1]));
+            }
+            b
+        };
+        let header = build([0, 0]).len() as u64;
+        let mut b = build([header, header + 8]);
+        for k in 0..records {
+            for i in 0..3u64 {
+                b.extend_from_slice(&((k * 10 + i + 1) as i16).to_be_bytes());
+            }
+            if extra {
+                b.extend_from_slice(&[0, 0]); // what `vsize` reserved and nothing uses
+                b.push(100 + k as u8);
+                b.extend_from_slice(&[0, 0, 0]);
+            }
         }
         b
     }
@@ -596,25 +736,25 @@ mod tests {
         // And `depth`, whose first dimension is the unlimited one.
         assert_eq!(ev.node(&d, &[7, 2, 1, 8]).unwrap().value, Value::Int(1));
         // One record variable of eight bytes, so a record is eight bytes.
-        assert_eq!(ev.node(&d, &[7, 4]).unwrap().value, Value::Int(8));
+        assert_eq!(ev.node(&d, &[7, 7]).unwrap().value, Value::Int(8));
     }
 
     #[test]
     fn each_variables_numbers_are_placed_where_its_record_says() {
         let d = Document::new(MemSource(file(1)));
         let mut ev = Evaluator::new(netcdf());
-        let data = ev.node(&d, &[7, 5]).unwrap();
+        let data = ev.node(&d, &[7, 8]).unwrap();
         assert_eq!(data.child_count, 2);
         // Three floats: the type is float, vsize is twelve bytes, and its one
         // dimension makes them a single row.
-        let first = ev.node(&d, &[7, 5, 0, 8]).unwrap();
+        let first = ev.node(&d, &[7, 8, 0, 9]).unwrap();
         assert_eq!((first.type_name.as_str(), first.child_count), ("f32 be[]", 3));
-        assert_eq!(ev.node(&d, &[7, 5, 0, 8, 2]).unwrap().value, Value::Float(3.5));
-        assert_eq!(ev.node(&d, &[7, 5, 0]).unwrap().name, "[0] sea_temp");
+        assert_eq!(ev.node(&d, &[7, 8, 0, 9, 2]).unwrap().value, Value::Float(3.5));
+        assert_eq!(ev.node(&d, &[7, 8, 0]).unwrap().name, "[0] sea_temp");
         // And the record variable's first record, which is one double.
-        let second = ev.node(&d, &[7, 5, 1, 8]).unwrap();
+        let second = ev.node(&d, &[7, 8, 1, 9]).unwrap();
         assert_eq!((second.child_count, second.size_bits), (1, 64));
-        assert_eq!(ev.node(&d, &[7, 5, 1, 8, 0]).unwrap().value, Value::Float(10.0));
+        assert_eq!(ev.node(&d, &[7, 8, 1, 9, 0]).unwrap().value, Value::Float(10.0));
     }
 
     #[test]
@@ -623,17 +763,66 @@ mod tests {
         // points at and one more, a whole record further on.
         let d = Document::new(MemSource(file(1)));
         let mut ev = Evaluator::new(netcdf());
-        let later = ev.node(&d, &[7, 5, 1, 10]).unwrap();
+        let later = ev.node(&d, &[7, 8, 1, 11]).unwrap();
         assert_eq!(later.child_count, 1);
         // The slab is the one child of a field that takes up no room where it
         // is declared, and stands where the offset put it.
-        let second = ev.node(&d, &[7, 5, 1, 10, 0, 0]).unwrap();
-        assert_eq!(ev.node(&d, &[7, 5, 1, 10, 0, 0, 0]).unwrap().value, Value::Float(20.0));
+        let second = ev.node(&d, &[7, 8, 1, 11, 0, 0]).unwrap();
+        assert_eq!(ev.node(&d, &[7, 8, 1, 11, 0, 0, 0]).unwrap().value, Value::Float(20.0));
         // Placed a record on from the first, and not by reading in order.
-        let first = ev.node(&d, &[7, 5, 1, 8]).unwrap();
+        let first = ev.node(&d, &[7, 8, 1, 9]).unwrap();
         assert_eq!(second.offset_bits, first.offset_bits + 8 * 8);
         // A plain variable has no records after its first.
-        assert_eq!(ev.node(&d, &[7, 5, 0, 10]).unwrap().child_count, 0);
+        assert_eq!(ev.node(&d, &[7, 8, 0, 11]).unwrap().child_count, 0);
+    }
+
+    #[test]
+    fn one_record_variable_of_an_odd_width_steps_by_the_width_and_not_by_vsize() {
+        // `pulse` is three shorts a record. Six bytes, written down as eight,
+        // and stepped by six because it is the only record variable there is.
+        for version in [1u8, 2, 5] {
+            let d = Document::new(MemSource(odd_file(version, false)));
+            let mut ev = Evaluator::new(netcdf());
+            assert_eq!(ev.node(&d, &[7, 2, 0, 5]).unwrap().value, Value::UInt(8), "v{version} vsize");
+            assert_eq!(ev.node(&d, &[7, 7]).unwrap().value, Value::Int(6), "v{version} recsize");
+            // Three values a record, and nothing left over to call padding:
+            // the two bytes `vsize` rounded up to are the next record's.
+            let first = ev.node(&d, &[7, 8, 0, 9]).unwrap();
+            assert_eq!((first.child_count, first.size_bits), (3, 48), "v{version}");
+            assert_eq!(ev.node(&d, &[7, 8, 0, 10]).unwrap().size_bits, 0, "v{version} padding");
+            let later = ev.node(&d, &[7, 8, 0, 11]).unwrap();
+            assert_eq!(later.child_count, 2, "v{version}");
+            for k in 1..3u64 {
+                let at = [7, 8, 0, 11, k as usize - 1, 0];
+                let slab = ev.node(&d, &at).unwrap();
+                assert_eq!(slab.offset_bits, first.offset_bits + k * 6 * 8, "v{version} record {k}");
+                let mut value = at.to_vec();
+                value.push(0);
+                let want = Value::Int(k as i128 * 10 + 1);
+                assert_eq!(ev.node(&d, &value).unwrap().value, want, "v{version} record {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_record_variable_puts_the_padding_back() {
+        // The same file with `mark` beside `pulse`. Two record variables, so
+        // every slab is padded to four again and a record is what the two
+        // `vsize`s add up to.
+        let d = Document::new(MemSource(odd_file(1, true)));
+        let mut ev = Evaluator::new(netcdf());
+        assert_eq!(ev.node(&d, &[7, 7]).unwrap().value, Value::Int(12));
+        assert_eq!(ev.node(&d, &[7, 8, 0, 10]).unwrap().size_bits, 2 * 8);
+        // `mark` is one byte a record and three of padding. Its `vsize` of
+        // four is four bytes of room and not four values: how many values a
+        // record holds is the dimensions, which say one.
+        let mark = ev.node(&d, &[7, 8, 1, 9]).unwrap();
+        assert_eq!((mark.child_count, mark.size_bits), (1, 8));
+        assert_eq!(ev.node(&d, &[7, 8, 1, 10]).unwrap().size_bits, 3 * 8);
+        // And its last record is two whole records on from its first.
+        let last = ev.node(&d, &[7, 8, 1, 11, 1, 0]).unwrap();
+        assert_eq!(last.offset_bits, mark.offset_bits + 2 * 12 * 8);
+        assert_eq!(ev.node(&d, &[7, 8, 1, 11, 1, 0, 0]).unwrap().value, Value::Int(102));
     }
 
     #[test]
@@ -642,11 +831,11 @@ mod tests {
         // and each record is one row rather than a run of six.
         let d = Document::new(MemSource(file_2d()));
         let mut ev = Evaluator::new(netcdf());
-        let values = ev.node(&d, &[7, 5, 0, 8]).unwrap();
+        let values = ev.node(&d, &[7, 8, 0, 9]).unwrap();
         assert_eq!((values.child_count, values.size_bits), (2, 2 * 3 * 32));
-        let row = ev.node(&d, &[7, 5, 0, 8, 1]).unwrap();
+        let row = ev.node(&d, &[7, 8, 0, 9, 1]).unwrap();
         assert_eq!((row.type_name.as_str(), row.child_count), ("f32 be[]", 3));
-        assert_eq!(ev.node(&d, &[7, 5, 0, 8, 1, 2]).unwrap().value, Value::Float(6.5));
+        assert_eq!(ev.node(&d, &[7, 8, 0, 9, 1, 2]).unwrap().value, Value::Float(6.5));
     }
 
     #[test]
@@ -654,7 +843,7 @@ mod tests {
         use crate::eval::Role;
         let d = Document::new(MemSource(file(2)));
         let mut ev = Evaluator::new(netcdf());
-        let o = ev.origins(&d, &[7, 5, 0]).unwrap();
+        let o = ev.origins(&d, &[7, 8, 0]).unwrap();
         let roles: Vec<_> = o.iter().map(|x| (x.role, x.label.as_str())).collect();
         assert!(roles.iter().any(|(r, l)| *r == Role::Position && *l == "vars[0].begin"), "{roles:?}");
     }
@@ -673,6 +862,6 @@ mod tests {
         assert_eq!(tag.value, Value::Enum { raw: 0, name: Some("absent".into()), hex: false });
         assert_eq!(ev.node(&d, &[7, 2]).unwrap().child_count, 0);
         // And nothing is a record variable, so a record is nothing.
-        assert_eq!(ev.node(&d, &[7, 4]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[7, 7]).unwrap().value, Value::Int(0));
     }
 }

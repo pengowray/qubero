@@ -1229,6 +1229,101 @@ struct ElfContentsDto {
     symbol_total: f64,
 }
 
+/// What a ROOT file holds, read beside the template.
+#[derive(Serialize)]
+struct RootContentsDto {
+    classes: Vec<RootClassDto>,
+    /// Where the `StreamerInfo` record is in the template.
+    schema_path: Vec<usize>,
+    trees: Vec<RootTreeDto>,
+    tree_total: f64,
+    /// What stopped the walk, empty where nothing did.
+    trouble: String,
+}
+
+#[derive(Serialize)]
+struct RootClassDto {
+    name: String,
+    version: f64,
+    checksum: f64,
+    members: Vec<RootMemberDto>,
+}
+
+#[derive(Serialize)]
+struct RootMemberDto {
+    name: String,
+    /// The C++ type as the file spells it.
+    type_name: String,
+    /// ROOT's own type code, which says how the member is written.
+    code: f64,
+    size: f64,
+    /// The dimensions of a fixed array, empty for a single value.
+    dims: Vec<f64>,
+    /// True where this is a base class rather than a member of its own.
+    base: bool,
+    comment: String,
+}
+
+#[derive(Serialize)]
+struct RootTreeDto {
+    /// Where the tree's key is in the template, so picking a row moves the
+    /// cursor.
+    path: Vec<usize>,
+    name: String,
+    title: String,
+    entries: f64,
+    address: f64,
+    branches: Vec<RootBranchDto>,
+    branch_total: f64,
+    trouble: String,
+}
+
+#[derive(Serialize)]
+struct RootBranchDto {
+    name: String,
+    title: String,
+    /// `TBranch` for numbers, `TBranchElement` for a member of a split C++
+    /// class.
+    class: String,
+    depth: f64,
+    entries: f64,
+    total_bytes: f64,
+    zip_bytes: f64,
+    basket_total: f64,
+    /// One value's width in bytes and how many of them an entry holds, or zero
+    /// for a branch whose values are not read.
+    width: f64,
+    per_entry: f64,
+    floating: bool,
+    unsigned: bool,
+    /// Why the values are not read, empty where they are.
+    unread: String,
+    leaves: Vec<RootLeafDto>,
+    baskets: Vec<RootBasketDto>,
+}
+
+#[derive(Serialize)]
+struct RootLeafDto {
+    name: String,
+    class: String,
+    len: f64,
+    width: f64,
+    unsigned: bool,
+    /// The leaf that counts this one, empty where the count is fixed.
+    counted_by: String,
+}
+
+/// One basket: a record of the file that no key list lists and no field
+/// places, so the host takes a row to its bytes and cannot open it in the
+/// Listing.
+#[derive(Serialize)]
+struct RootBasketDto {
+    address: f64,
+    bytes: f64,
+    first_entry: f64,
+    entries: f64,
+}
+
 #[derive(Serialize)]
 struct ElfSectionDto {
     path: Vec<usize>,
@@ -2660,6 +2755,129 @@ impl Editor {
             sections,
             symbols,
             symbol_total: program.symbol_total as f64,
+        }))
+    }
+
+    /// What a CERN ROOT file holds, read beside the template: the class
+    /// descriptions out of its `StreamerInfo` record, and every tree with its
+    /// branches, leaves and baskets.
+    ///
+    /// A channel of its own rather than a second use of `contents`, which is
+    /// HDF5's: what crosses for an HDF5 object is a dataspace and a storage
+    /// layout, and what crosses for a ROOT tree is a class description and a
+    /// list of offsets nothing in the template placed. The two have no shape in
+    /// common but the idea.
+    pub fn root_contents(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        if sh.template != "root" {
+            return reply::<RootContentsDto>(Err(EvalError::Failed("not a ROOT template".into())));
+        }
+        let Some(e) = &mut sh.eval else {
+            return reply::<RootContentsDto>(Err(EvalError::Failed("no template".into())));
+        };
+        // The walk reads whole records and decodes them; charging it the
+        // listing's slice would stop it part way through a tree with nothing
+        // to resume from. It is bounded instead by the limits in `root_tree`.
+        e.set_slice(None);
+        let found = qubero_core::formats::root_tree::contents(e, &sh.doc);
+        e.set_slice(Some(WORK_SLICE));
+        let found = match found {
+            Ok(c) => c,
+            Err(err) => return reply::<RootContentsDto>(Err(err)),
+        };
+        reply(Ok(RootContentsDto {
+            schema_path: found.schema_path,
+            trouble: found.trouble.unwrap_or_default(),
+            tree_total: found.tree_total as f64,
+            classes: found
+                .classes
+                .into_iter()
+                .map(|c| RootClassDto {
+                    name: c.name,
+                    version: c.version as f64,
+                    checksum: c.checksum as f64,
+                    members: c
+                        .members
+                        .into_iter()
+                        .map(|m| RootMemberDto {
+                            name: m.name,
+                            type_name: m.type_name,
+                            code: m.code as f64,
+                            size: m.size as f64,
+                            dims: m.dims.into_iter().map(|d| d as f64).collect(),
+                            base: m.base,
+                            comment: m.comment,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            trees: found
+                .trees
+                .into_iter()
+                .map(|t| RootTreeDto {
+                    path: t.path,
+                    name: t.name,
+                    title: t.title,
+                    entries: t.entries as f64,
+                    address: t.at as f64,
+                    branch_total: t.branch_total as f64,
+                    trouble: t.trouble.unwrap_or_default(),
+                    branches: t
+                        .branches
+                        .into_iter()
+                        .map(|b| {
+                            use qubero_core::formats::root_tree::Reading;
+                            // The words a reader sees are the host's business.
+                            // What crosses is the shape of one value and, where
+                            // there is no such shape, the sentence saying why.
+                            let (width, per_entry, floating, unsigned, unread) = match b.reading {
+                                Reading::Fixed { width, per_entry, floating, unsigned } => {
+                                    (width as f64, per_entry as f64, floating, unsigned, String::new())
+                                }
+                                Reading::Not(why) => (0.0, 0.0, false, false, why),
+                            };
+                            RootBranchDto {
+                                name: b.name,
+                                title: b.title,
+                                class: b.class,
+                                depth: b.depth as f64,
+                                entries: b.entries as f64,
+                                total_bytes: b.total_bytes as f64,
+                                zip_bytes: b.zip_bytes as f64,
+                                basket_total: b.basket_total as f64,
+                                width,
+                                per_entry,
+                                floating,
+                                unsigned,
+                                unread,
+                                leaves: b
+                                    .leaves
+                                    .into_iter()
+                                    .map(|l| RootLeafDto {
+                                        name: l.name,
+                                        class: l.class,
+                                        len: l.len as f64,
+                                        width: l.width as f64,
+                                        unsigned: l.unsigned,
+                                        counted_by: l.counted_by,
+                                    })
+                                    .collect(),
+                                baskets: b
+                                    .baskets
+                                    .into_iter()
+                                    .map(|k| RootBasketDto {
+                                        address: k.at as f64,
+                                        bytes: k.bytes as f64,
+                                        first_entry: k.first_entry as f64,
+                                        entries: k.entries as f64,
+                                    })
+                                    .collect(),
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
         }))
     }
 

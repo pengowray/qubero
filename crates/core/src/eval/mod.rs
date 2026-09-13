@@ -1159,8 +1159,11 @@ impl Evaluator {
             let Some(&at) = self.list(parent).chain_starts.get(idx) else {
                 return fail("past the end of the chain");
             };
-            if anchor == Anchor::File {
-                escapes = Some(doc.len_bits());
+            // As for an `At`: an element named by a file address reaches the
+            // whole file, and one named from an origin reaches the whole of
+            // that copy of the format, whatever window the pointer was in.
+            if matches!(anchor, Anchor::File | Anchor::Origin) {
+                escapes = Some(self.chain_room(doc, parent, anchor));
             }
             at
         } else if let Ty::Gather { anchor, .. } = &pr.ty {
@@ -1333,6 +1336,26 @@ impl Evaluator {
         }
     }
 
+    /// How far a chain's elements may run, which is what its anchor reaches
+    /// and not what the file happens to be: a file address reaches the whole
+    /// file, an origin reaches the whole of that copy of the format, and a
+    /// window reaches the end of the window the chain was declared in.
+    ///
+    /// The same question [`gather_room`](Self::gather_room) answers for a
+    /// gathered child, and it matters for the same reason twice over. A chain
+    /// followed inside an unpacked run is in a space of its own, and measuring
+    /// it against the length of the file the run came out of would end it
+    /// wherever the packing left off. A compressed CDF is the case: sixty-six
+    /// kilobytes of file holding a hundred and twenty, with the variables past
+    /// the point where the file stops.
+    fn chain_room<S: Source>(&self, doc: &Document<S>, list: &[usize], anchor: Anchor) -> u64 {
+        match anchor {
+            Anchor::File => doc.len_bits(),
+            Anchor::Origin => self.origin_of(list).map_or(doc.len_bits(), |(_, limit)| limit),
+            Anchor::Window | Anchor::SelfAligned(_) => self.memo.get(list).map_or(doc.len_bits(), |r| r.limit),
+        }
+    }
+
     /// Where this copy of the format begins and how far it runs, for the
     /// nearest [`Ty::Origin`] around `path`. Nothing when there is none, which
     /// is the ordinary case of a format read on its own.
@@ -1416,8 +1439,8 @@ impl Evaluator {
             }
             let n = state.chain_starts.len();
             let lr = self.memo[list].clone();
-            let Ty::Chain { first, next, anchor, .. } = &lr.ty else { return fail("not a chain") };
-            let (first, next, anchor) = (first.clone(), next.clone(), *anchor);
+            let Ty::Chain { first, next, anchor, adjust, .. } = &lr.ty else { return fail("not a chain") };
+            let (first, next, anchor, adjust) = (first.clone(), next.clone(), *anchor, adjust.clone());
             let base = self.anchor_base(list, lr.offset, anchor);
             // Where the first element is, or where the one before this said
             // the next one is. An element with no such field ends the chain
@@ -1446,10 +1469,18 @@ impl Evaluator {
                 }
                 v
             };
-            let bits = base as i128 + at * 8;
+            // The adjustment moves where the element is read; it does not move
+            // the tests above, which are about what the file wrote. And the
+            // room is the anchor's, not the file's: a chain followed inside an
+            // unpacked run runs to the end of that run, and measuring it
+            // against the length of the file it came out of would cut it off
+            // wherever the packing happened to leave it.
+            let adj = self.eval_expr(doc, list, &adjust)?;
+            let bits = base as i128 + (at + adj) * 8;
+            let room = self.chain_room(doc, list, anchor);
             let ends = at <= 0
                 || bits < 0
-                || bits as u64 >= doc.len_bits()
+                || bits as u64 >= room
                 || n >= crate::template::CHAIN_CAP
                 || self.list(list).chain_starts.contains(&(bits as u64));
             if ends {
