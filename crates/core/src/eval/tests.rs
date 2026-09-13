@@ -2874,11 +2874,10 @@ fn a_condition_names_the_branch_it_took_and_not_the_other() {
     assert_eq!(rel[0].result, "4");
 }
 
-/// Where a field starts is counted from the window around it, not from the
-/// file, and in bits: a field packed partway through a byte starts somewhere
-/// a count of bytes cannot say.
+/// Where a field starts is counted from the window around it rather than from
+/// the file, in bytes, as everything else here that measures a distance is.
 #[test]
-fn a_position_is_counted_in_bits_from_the_window_it_sits_in() {
+fn a_position_is_counted_in_bytes_from_the_window_it_sits_in() {
     let inner = T::structure(
         "Inner",
         vec![("a", T::u16(Big)), ("here", T::computed(E::Pos)), ("room", T::computed(E::WindowSize))],
@@ -2894,15 +2893,31 @@ fn a_position_is_counted_in_bits_from_the_window_it_sits_in() {
     );
     let d = doc(&[9, 0, 1, 0, 0, 0, 0, 0]);
     let mut ev = Evaluator::new(Template::new("t", t));
-    // Two bytes into a window that starts one byte into the file.
-    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value.as_int(), Some(16));
-    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(48));
+    // Two bytes into a window that starts one byte into the file, and the
+    // window is six bytes: neither number counts the byte in front of it.
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value.as_int(), Some(2));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(6));
     // Outside any window the file is the window, so the position is the
     // field's own offset and the size is the file's.
-    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(7 * 8));
-    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(8 * 8));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(7));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(8));
     assert_eq!(write_expr(&E::Pos).as_deref(), Some("pos"));
     assert_eq!(write_expr(&E::WindowSize).as_deref(), Some("size of window"));
+
+    // A field partway through a byte is in that byte, so the answer rounds
+    // down: four bits in is still byte nought. `BitsOf` is what counts bits.
+    let packed = T::structure(
+        "Root",
+        vec![
+            ("nibble", T::UInt { bits: 4, endian: Big }),
+            ("here", T::computed(E::Pos)),
+            ("rest", T::UInt { bits: 12, endian: Big }),
+            ("later", T::computed(E::Pos)),
+        ],
+    );
+    let mut ev = Evaluator::new(Template::new("t", packed));
+    assert_eq!(ev.node(&doc(&[0xab, 0xcd]), &[1]).unwrap().value.as_int(), Some(0));
+    assert_eq!(ev.node(&doc(&[0xab, 0xcd]), &[3]).unwrap().value.as_int(), Some(2));
 }
 
 /// How many elements a list holds is a different number from how many bytes

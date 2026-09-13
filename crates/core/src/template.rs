@@ -134,7 +134,7 @@ pub enum Expr {
     StartOf(Box<Expr>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
-    /// How far into its window this field starts, in bits.
+    /// How many bytes into its window this field starts.
     ///
     /// The window is the nearest [`Ty::Sized`] (or [`Ty::SizedBits`]) around
     /// the field, and where there is none it is the whole space the field is
@@ -142,16 +142,16 @@ pub enum Expr {
     /// to for anything inside one. That is the same stretch a Kaitai `_io`
     /// names, so `_io.pos` is this.
     ///
-    /// **In bits**, unlike [`Expr::Remaining`] and [`Expr::SizeOf`], which are
-    /// bytes. The same choice [`Expr::BitsOf`] made and for the same reason: a
-    /// field partway through a byte starts somewhere no count of bytes can
-    /// say, and rounding the answer off before it is asked loses exactly the
-    /// case worth asking about. A template converting from a format that
-    /// counts bytes divides by eight.
+    /// In bytes, as [`Expr::Remaining`] and [`Expr::SizeOf`] are, and rounded
+    /// down: a field that starts partway through a byte is in that byte, and
+    /// this says which byte. [`Expr::BitsOf`] is the one that counts in bits,
+    /// for a field whose width no count of bytes can say; there is no
+    /// bit-counting form of this and none of the formats asking wants one.
     Pos,
-    /// How big that window is, in bits: the size the nearest [`Ty::Sized`]
+    /// How many bytes the window holds: the size the nearest [`Ty::Sized`]
     /// set, or the length of the whole space where there is none. A Kaitai
-    /// `_io.size` is this. In bits, for the reason [`Expr::Pos`] is.
+    /// `_io.size` is this. In bytes and rounded down, for the reason
+    /// [`Expr::Pos`] is.
     WindowSize,
     /// How many elements the earlier list field `name` holds.
     ///

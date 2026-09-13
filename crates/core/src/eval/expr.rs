@@ -50,12 +50,12 @@ impl Evaluator {
             // whose type comes from a list read earlier needs.
             Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
             // How far into the window this field starts, and how big that
-            // window is. Both in bits: see `Expr::Pos`.
+            // window is. Both in bytes, rounded down: see `Expr::Pos`.
             Expr::Pos => {
                 let Some((offset, _)) = here else { return fail("nothing to measure from") };
                 let (start, _) = self.window_of(doc, at);
                 match offset.checked_sub(start) {
-                    Some(n) => n as i128,
+                    Some(n) => (n / 8) as i128,
                     // A field placed outside the window it was declared in,
                     // which an `At` counted from the file can be. There is no
                     // honest distance to answer with.
@@ -64,7 +64,7 @@ impl Evaluator {
             }
             Expr::WindowSize => {
                 let (start, end) = self.window_of(doc, at);
-                end.saturating_sub(start) as i128
+                (end.saturating_sub(start) / 8) as i128
             }
             // How many elements a list holds, which is not how many bytes it
             // took: see `Expr::LenOf`.
@@ -416,7 +416,8 @@ impl Evaluator {
     }
 
     /// Where the window around the field at `at` starts and ends, in bits of
-    /// whatever space that field is read in.
+    /// whatever space that field is read in. Bits because every offset here is
+    /// one; the two expressions built on this answer in bytes.
     ///
     /// The window is the nearest [`Ty::Sized`] above the field, which is the
     /// node the evaluator recorded a `declared_size` on. Above rather than
