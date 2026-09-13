@@ -106,8 +106,14 @@ fn a_grid_this_reads_and_one_it_does_not_both_keep_their_extent() {
     if let Some((d, mut ev)) = read("reduced_gg_sfc_jpeg.grib2") {
         assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5]).unwrap().type_name, "GaussianGrid");
         assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "Jpeg2000Packing");
+        // Section 7 says which codestream it holds and stops there: there is
+        // no JPEG 2000 template here to open it with.
+        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2]).unwrap().type_name, "Jpeg2000PackedData");
         let data = ev.node(&d, &[0, 1, 4, 5, 2, 0]).unwrap();
-        assert_eq!(data.type_name, "bytes[]");
+        assert_eq!((data.name.as_str(), data.type_name.as_str()), ("codestream", "bytes[]"));
+        // And it covers the whole of the section after the header.
+        let section = ev.node(&d, &[0, 1, 4, 5]).unwrap();
+        assert_eq!(data.offset_bits + data.size_bits, section.offset_bits + section.size_bits);
     }
 }
 
