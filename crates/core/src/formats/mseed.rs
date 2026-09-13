@@ -679,7 +679,11 @@ fn b100_body(e: Endian) -> T {
 
 /// Samples of a fixed width, as many as the header said and no more than the
 /// record holds.
-fn samples(elem: T, width: i128) -> T {
+///
+/// Shared with `mseed3`, which numbers its encodings the same way and names
+/// its sample count the same: what changes between the two formats is where
+/// the count is written, not what a run of samples is.
+pub(super) fn samples(elem: T, width: i128) -> T {
     let count = E::field("sample_count").at_most(E::Remaining.div(E::lit(width)));
     T::structure("MiniSEEDSamples", vec![("samples", T::array(elem, count)), ("padding", T::bytes(E::Remaining))])
 }
@@ -692,7 +696,11 @@ fn samples(elem: T, width: i128) -> T {
 /// word in the record is a difference from its neighbour. A reader that has
 /// those two and the differences has the samples; a reader that has only the
 /// differences has nothing it can place.
-fn steim(e: Endian, two: bool) -> T {
+///
+/// Shared with `mseed3`, which always calls it with `Big`: a Steim frame was
+/// defined big-endian in 1991 and the FDSN left it that way, so a miniSEED 3
+/// record whose header is little-endian throughout has a big-endian payload.
+pub(super) fn steim(e: Endian, two: bool) -> T {
     let frames = T::array(frame(e, two, false), E::Remaining.div(E::lit(64)));
     T::structure(
         "SteimData",
