@@ -1194,6 +1194,7 @@ export type TypeInfo =
   | ObjStmInfo
   | SqliteRowInfo
   | ChunkInfo
+  | VectorInfo
   | PageInfo
   | SamplesInfo
   | TileInfo
@@ -1335,6 +1336,36 @@ export type ChunkInfo = {
   readonly values: readonly string[];
   readonly total: number;
   readonly problem: string;
+};
+
+export type VectorInfo = {
+  readonly kind: "vector";
+  /** A GWF vector's `compress` field as written: the scheme in the low byte,
+   *  and 256 added where a little-endian machine packed the words, which
+   *  `little_endian` says again. */
+  readonly compress: number;
+  readonly little_endian: boolean;
+  /** How many values `nData` says the vector holds. */
+  readonly declared: number;
+  /** How many bytes the packed run is in the file, and how many the values
+   *  came to once unpacked. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** Each step, in the order it was done: `gzip`, `zero suppression`,
+   *  `differencing`, `interleave`. */
+  readonly steps: readonly VectorStep[];
+  /** What one value is called, the first few, and how many came out. */
+  readonly element_type: string;
+  readonly values: readonly string[];
+  readonly total: number;
+  readonly problem: string;
+};
+
+/** One step of unpacking a GWF vector. */
+export type VectorStep = {
+  readonly what: string;
+  readonly in_bytes: number;
+  readonly out_bytes: number;
 };
 
 export type PageInfo = {

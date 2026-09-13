@@ -1,8 +1,10 @@
 // The parts the unpacking panels share: a list of the steps something was
 // taken back through, a line saying why it stopped, and a row of the first
-// values that came out. The HDF5 chunk, Parquet page and FITS tile panels are
-// each the same three things around a line of their own, and were two copies
-// of them before the tile panel made a third.
+// values that came out. The HDF5 chunk, Parquet page, FITS tile, GWF vector
+// and GRIB section 7 panels are each the same three things around lines of
+// their own, and were two copies of them before the tile panel made a third.
+
+import { countText } from "./strings.ts";
 
 export function span(cls: string, text: string): HTMLElement {
   const e = document.createElement("span");
@@ -61,6 +63,16 @@ export function problemLine(problem: string): DocumentFragment {
  * when that is not all of them. `noun` is plural: `elements`, `pixels`.
  */
 export function firstValues(subhead: string, values: readonly string[], total: number, noun: string): DocumentFragment {
+  const frag = valuesRow(subhead, values);
+  if (values.length > 0 && values.length < total) {
+    frag.append(span("insp-qcount", `Showing the first ${values.length.toLocaleString()} of ${total.toLocaleString()} ${noun}.`));
+  }
+  return frag;
+}
+
+/** The values under a subhead and nothing under them, for a panel whose line
+ *  beneath has more to say than how many of how many. */
+export function valuesRow(subhead: string, values: readonly string[]): DocumentFragment {
   const frag = document.createDocumentFragment();
   if (values.length === 0) return frag;
   frag.append(span("insp-qsubhead", subhead));
@@ -70,8 +82,18 @@ export function firstValues(subhead: string, values: readonly string[], total: n
   row.className = "insp-orow is-values";
   row.append(span("insp-orow-text", values.join("  ")));
   frag.append(row);
-  if (values.length < total) {
-    frag.append(span("insp-qcount", `Showing the first ${values.length.toLocaleString()} of ${total.toLocaleString()} ${noun}.`));
-  }
   return frag;
+}
+
+/**
+ * How many of the values a row shows, where it does not show all that came
+ * out. `declared` is how many the file says there are, which is more than came
+ * out when unpacking stopped early, and then the line counts what came out.
+ * `noun` is singular. Null when the row shows every value that came out.
+ */
+export function showingLine(shown: number, total: number, declared: number, noun: string): string | null {
+  if (shown >= total) return null;
+  const first = `Showing the first ${shown.toLocaleString()} of`;
+  if (total < declared) return `${first} the ${countText(total, noun)} unpacked.`;
+  return `${first} ${countText(Math.max(total, declared), noun)}.`;
 }

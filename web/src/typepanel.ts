@@ -9,6 +9,7 @@ import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.t
 import { quantBody, type GoTo } from "./quantpanel.ts";
 import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
+import { vectorBody, vectorNote } from "./vectorpanel.ts";
 import { pageBody, pageNote } from "./pagepanel.ts";
 import { tileBody, tileNote } from "./tilepanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
@@ -55,6 +56,8 @@ function headingFor(info: Shown): string {
       return "Columns in this row";
     case "chunk":
       return "Inside this chunk";
+    case "vector":
+      return "Inside this vector";
     case "samples":
       return "Samples in this record";
     case "page":
@@ -81,6 +84,8 @@ function headingNote(info: Shown): string {
       return rowNote(info);
     case "chunk":
       return chunkNote(info);
+    case "vector":
+      return vectorNote(info);
     case "samples":
       return samplesNote(info);
     case "page":
@@ -483,6 +488,8 @@ function body(
       return rowBody(info);
     case "chunk":
       return chunkBody(info);
+    case "vector":
+      return vectorBody(info);
     case "samples":
       return samplesBody(info);
     case "page":

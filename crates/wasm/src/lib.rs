@@ -422,6 +422,15 @@ struct ChunkStepDto {
     skipped: bool,
 }
 
+/// One step of unpacking a GWF vector: gzip, zero suppression, differencing,
+/// or putting complex parts back in pairs.
+#[derive(Serialize)]
+struct VectorStepDto {
+    what: String,
+    in_bytes: f64,
+    out_bytes: f64,
+}
+
 /// One Steim frame of a miniSEED record: how many differences its codes named,
 /// and how many of them became samples.
 #[derive(Serialize)]
@@ -559,6 +568,25 @@ enum ExplainDto {
         steps: Vec<ChunkStepDto>,
         /// What one element is called, the first few elements, and how many
         /// there are altogether.
+        element_type: String,
+        values: Vec<String>,
+        total: f64,
+        problem: String,
+    },
+    Vector {
+        /// The GWF vector's `compress` field as written, and whether its words
+        /// were packed little-endian.
+        compress: f64,
+        little_endian: bool,
+        /// How many numbers `nData` says the vector holds.
+        declared: f64,
+        /// How many bytes the packed run is in the file, and how many the
+        /// numbers came to once unpacked.
+        packed: f64,
+        decoded: f64,
+        /// Each step, in the order it was done.
+        steps: Vec<VectorStepDto>,
+        /// What one number is called, the first few, and how many came out.
         element_type: String,
         values: Vec<String>,
         total: f64,
@@ -1242,6 +1270,32 @@ fn explain_dto(e: Explain) -> ExplainDto {
             values,
             problem: problem.unwrap_or_default(),
             steps: chunk_steps(steps),
+        },
+        Explain::GwfVector {
+            compress,
+            little,
+            declared,
+            packed_bytes,
+            decoded_bytes,
+            steps,
+            values,
+            total,
+            element_type,
+            problem,
+        } => ExplainDto::Vector {
+            compress: f64::from(compress),
+            little_endian: little,
+            declared: declared as f64,
+            packed: packed_bytes as f64,
+            decoded: decoded_bytes as f64,
+            total: total as f64,
+            element_type,
+            values,
+            problem: problem.unwrap_or_default(),
+            steps: steps
+                .into_iter()
+                .map(|s| VectorStepDto { what: s.filter, in_bytes: s.in_bytes as f64, out_bytes: s.out_bytes as f64 })
+                .collect(),
         },
         Explain::MseedSamples {
             encoding,

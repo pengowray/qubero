@@ -94,29 +94,42 @@ fn element(vect_type: u16) -> Option<(usize, bool, bool, &'static str)> {
     })
 }
 
+/// The answer for a packed run of `packed_bytes` that is over
+/// [`PACKED_LIMIT`], without the bytes: a run that large is not read at all.
+pub fn refused(packed_bytes: usize, compress: u16) -> Unpacked {
+    let mb = PACKED_LIMIT / (1 << 20);
+    Unpacked {
+        packed_bytes,
+        steps: Vec::new(),
+        bytes: Vec::new(),
+        little: compress & 0x100 != 0,
+        problem: Some(format!("Not unpacked: the vector is over this viewer's {mb} MB limit.")),
+    }
+}
+
 /// Undo the packing. `data` is the whole of the vector's `data` field,
 /// `compress` and `vect_type` its two fields of those names, and `n_data` how
 /// many numbers it says it holds.
 pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpacked {
+    if data.len() > PACKED_LIMIT {
+        return refused(data.len(), compress);
+    }
     let little = compress & 0x100 != 0;
     let mut out = Unpacked { packed_bytes: data.len(), steps: Vec::new(), bytes: Vec::new(), little, problem: None };
-    if data.len() > PACKED_LIMIT {
-        let mb = PACKED_LIMIT / (1 << 20);
-        out.problem = Some(format!("Not unpacked: the vector is over this viewer's {mb} MB limit."));
-        return out;
-    }
     let Some((width, complex, integer, name)) = element(vect_type) else {
         // The name the tree shows in the vector's `type` field, where it has one.
         let shown = if vect_type == 8 { "STRING".to_string() } else { vect_type.to_string() };
-        out.problem = Some(format!("Not unpacked: type {shown} is not a numeric type this viewer reads."));
+        out.problem = Some(format!("Not unpacked: type = {shown} is not a numeric type this viewer reads."));
         return out;
     };
     // A complex vector is two runs of its part's width, one of real parts and
     // one of imaginary parts.
     let (word, words) = if complex { (width / 2, n_data.saturating_mul(2)) } else { (width, n_data) };
     if words.saturating_mul(word as u64) > DECODED_LIMIT as u64 {
-        let mb = DECODED_LIMIT / (1 << 20);
-        out.problem = Some(format!("Not unpacked: {n_data} numbers would be over this viewer's {mb} MB limit."));
+        let (mb, limit) = (words.saturating_mul(word as u64) >> 20, DECODED_LIMIT >> 20);
+        let n = crate::encode::commas(n_data);
+        out.problem =
+            Some(format!("Not unpacked: {n} values as {name} would unpack to {mb} MB, over this viewer's {limit} MB limit."));
         return out;
     }
     let words = words as usize;
@@ -148,12 +161,14 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
             // The whole field in the message, 261 rather than 5, since that
             // is the number the tree shows beside it.
             if packs != word {
+                let holds =
+                    if complex { format!("{name} values have {word}-byte parts") } else { format!("values are {word}-byte {name}") };
                 out.problem = Some(format!(
-                    "Not unpacked: compression {compress} packs {packs}-byte words, and this vector holds {name}."
+                    "Not unpacked: compress = {compress} is zero suppression of {packs}-byte words, and this vector's {holds}."
                 ));
                 return out;
             }
-            match unsuppress(data, word, little, words) {
+            match unsuppress(data, word, little, words, complex) {
                 Ok(bytes) => {
                     out.steps.push(step("zero suppression", data.len(), bytes.len()));
                     out.bytes = bytes;
@@ -168,12 +183,12 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
             out.steps.push(step("differencing", out.bytes.len(), out.bytes.len()));
             if complex {
                 out.bytes = interleave(&out.bytes, word);
-                out.steps.push(step("real parts, then imaginary parts", out.bytes.len(), out.bytes.len()));
+                out.steps.push(step("interleave", out.bytes.len(), out.bytes.len()));
             }
         }
         0 => out.bytes = data.to_vec(),
         _ => {
-            out.problem = Some(format!("Not unpacked: compression {compress} is not a scheme this viewer undoes."));
+            out.problem = Some(format!("Not unpacked: compress = {compress} is not a scheme this viewer undoes."));
             return out;
         }
     }
@@ -209,16 +224,17 @@ fn write(b: &mut [u8], v: u64, little: bool) {
     }
 }
 
-/// Unpack `count` zero-suppressed differences of `word` bytes each. On a run
+/// Unpack `count` zero-suppressed differences of `word` bytes each, which for a
+/// complex vector are real and imaginary parts rather than values. On a run
 /// that ends before `count` of them, the ones that were read come back with
 /// the reason.
-fn unsuppress(data: &[u8], word: usize, little: bool, count: usize) -> Result<Vec<u8>, (Vec<u8>, String)> {
+fn unsuppress(data: &[u8], word: usize, little: bool, count: usize, parts: bool) -> Result<Vec<u8>, (Vec<u8>, String)> {
     let mut out = vec![0u8; count * word];
     if count == 0 {
         return Ok(out);
     }
     if data.len() < 2 {
-        return Err((Vec::new(), "Stopped at zero suppression: the data is under 2 bytes, too short to hold a block size.".into()));
+        return Err((Vec::new(), "Stopped at zero suppression: the data is under 2 bytes, too short for the block size that starts it.".into()));
     }
     let block = read(&data[..2], little) as usize;
     if block == 0 {
@@ -257,7 +273,9 @@ fn unsuppress(data: &[u8], word: usize, little: bool, count: usize) -> Result<Ve
     }
     if done < count {
         out.truncate(done * word);
-        let why = format!("Stopped at zero suppression after {done} of {count} numbers: the packed bits ran out.");
+        let (done, of) = (crate::encode::commas(done as u64), crate::encode::commas(count as u64));
+        let noun = if parts { "real and imaginary parts" } else { "values" };
+        let why = format!("Stopped at zero suppression after {done} of {of} {noun}: the packed bits ran out.");
         return Err((out, why));
     }
     Ok(out)
@@ -438,7 +456,7 @@ mod tests {
         assert_eq!(v.problem, None);
         let want: Vec<u8> = pairs.iter().flat_map(|p| [p.0.to_le_bytes(), p.1.to_le_bytes()].concat()).collect();
         assert_eq!(v.bytes, want);
-        assert_eq!(v.steps.last().unwrap().filter, "real parts, then imaginary parts");
+        assert_eq!(v.steps.last().unwrap().filter, "interleave");
         let (name, shown, total) = values(&v.bytes, 6, true);
         assert_eq!((name.as_str(), total), ("complex f32", 3));
         assert_eq!(shown[0], "1.5-2i");
@@ -465,14 +483,14 @@ mod tests {
         let packed = suppress(&numbers, 2, true, 8);
         let v = decode(&packed, 261, 1, 400);
         let problem = v.problem.expect("a problem");
-        assert!(problem.contains("of 400 numbers"), "{problem}");
+        assert!(problem.contains("of 400 values"), "{problem}");
         assert!(v.bytes.len() >= 80);
     }
 
     #[test]
     fn a_scheme_for_one_width_on_a_vector_of_another_is_not_unpacked() {
         let v = decode(&[3, 0, 0, 0], 261, 2, 1);
-        assert!(v.problem.expect("a problem").contains("compression 261 packs 2-byte words"));
+        assert!(v.problem.expect("a problem").contains("compress = 261 is zero suppression of 2-byte words, and this vector's values are 8-byte f64"));
         assert!(v.steps.is_empty());
     }
 }

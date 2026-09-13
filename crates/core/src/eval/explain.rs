@@ -159,6 +159,36 @@ pub enum Explain {
         /// Why the walk stopped early, where it did.
         problem: Option<String>,
     },
+    /// A frame vector's numbers, unpacked by [`gwf_vect`]. Shown for the
+    /// cursor anywhere in the packed run, because what is under the cursor is
+    /// zero-suppressed bits or the differences a gzip stream came to, and the
+    /// numbers are not in the file as they stand.
+    ///
+    /// The steps are the same kind of walk an HDF5 chunk's filters are, and
+    /// are carried in the same shape, but the answer is its own: a vector is
+    /// not a chunk, and its steps are not filters.
+    GwfVector {
+        /// The vector's `compress` field as written, the scheme in its low
+        /// byte, and whether its high byte says a little-endian machine packed
+        /// the words.
+        compress: u16,
+        little: bool,
+        /// How many numbers the vector's `nData` says it holds.
+        declared: u64,
+        /// How many bytes the packed run is in the file, and how many the
+        /// numbers came to once every step that could be done was.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Each step, in the order it was done, with what went in and what
+        /// came out.
+        steps: Vec<hdf5_chunk::Step>,
+        /// The first numbers, how many came out, and what one is called.
+        values: Vec<String>,
+        total: u64,
+        element_type: String,
+        /// Why the unpacking stopped early, where it did.
+        problem: Option<String>,
+    },
     /// A miniSEED record's samples, worked out of its data by
     /// [`mseed_steim`]. Shown for the cursor anywhere in the data, because a
     /// Steim sample is not at any one place in the file: it is every
@@ -1013,9 +1043,8 @@ impl Evaluator {
     /// Everything needed is in the vector itself, in the fields before its
     /// data: `compress` for the scheme and the byte order, `type` for the
     /// width, `nData` for how many numbers, which zero suppression needs
-    /// because its last word is padded. The answer is shaped as an HDF5
-    /// chunk's is, steps then values, since the two are the same kind of walk
-    /// and the panel for one reads the other.
+    /// because its last word is padded. The steps are shaped as an HDF5
+    /// chunk's are, since the two are the same kind of walk.
     fn explain_gwf_vect<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
         let packed_bits = self.size_of(doc, at)?;
         let packed_bytes = packed_bits / 8;
@@ -1023,30 +1052,26 @@ impl Evaluator {
             self.find_field(at, name).and_then(|p| self.node(doc, &p).ok()).and_then(|n| n.value.as_int()).unwrap_or(-1)
         };
         let (compress, vect_type, n_data) = (field("compress"), field("type"), field("nData"));
-        if packed_bytes as usize > gwf_vect::PACKED_LIMIT {
-            let mb = gwf_vect::PACKED_LIMIT / (1 << 20);
-            return Ok(Explain::Hdf5Chunk {
-                packed_bytes,
-                decoded_bytes: 0,
-                steps: Vec::new(),
-                values: Vec::new(),
-                total: 0,
-                element_type: String::new(),
-                problem: Some(format!("Not unpacked: the vector is over this viewer's {mb} MB limit.")),
-            });
-        }
-        let bytes = self.read(doc, r, r.offset, packed_bits)?;
         let clamp = |v: i128| v.clamp(0, i128::from(u16::MAX)) as u16;
-        let v = gwf_vect::decode(&bytes, clamp(compress), clamp(vect_type), n_data.max(0) as u64);
-        let (element_type, values, total) = gwf_vect::values(&v.bytes, clamp(vect_type), v.little);
-        Ok(Explain::Hdf5Chunk {
+        let (compress, vect_type, declared) = (clamp(compress), clamp(vect_type), n_data.max(0) as u64);
+        let unpacked = if packed_bytes as usize > gwf_vect::PACKED_LIMIT {
+            // Over the limit, the bytes are not read at all.
+            gwf_vect::refused(packed_bytes as usize, compress)
+        } else {
+            gwf_vect::decode(&self.read(doc, r, r.offset, packed_bits)?, compress, vect_type, declared)
+        };
+        let (element_type, values, total) = gwf_vect::values(&unpacked.bytes, vect_type, unpacked.little);
+        Ok(Explain::GwfVector {
+            compress,
+            little: unpacked.little,
+            declared,
             packed_bytes,
-            decoded_bytes: v.bytes.len() as u64,
-            steps: v.steps,
+            decoded_bytes: unpacked.bytes.len() as u64,
+            steps: unpacked.steps,
             values,
             total,
             element_type,
-            problem: v.problem,
+            problem: unpacked.problem,
         })
     }
 

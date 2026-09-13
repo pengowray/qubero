@@ -1473,7 +1473,7 @@ mod tests {
         assert_eq!(data.type_name, "ZeroSuppressed");
         assert_eq!(ev.node(&d, &at(&[6, 5, 5, 0])).unwrap().value, Value::UInt(3));
         match ev.explain(&d, &at(&[6, 5, 5, 1]), None).unwrap() {
-            crate::eval::Explain::Hdf5Chunk { values, total, element_type, problem, .. } => {
+            crate::eval::Explain::GwfVector { values, total, element_type, problem, .. } => {
                 assert_eq!(problem, None);
                 assert_eq!((element_type.as_str(), total), ("i16", 8));
                 assert_eq!(values, ["82", "85", "85", "81", "80", "82", "84", "85"]);
