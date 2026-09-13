@@ -1225,4 +1225,133 @@ mod tests {
         assert_eq!(value.type_name, "bytes[]");
         assert_eq!(value.offset_bits / 8 + value.size_bits / 8, 28 + len as u64);
     }
+
+    /// The flags a segment's table of contents is built from.
+    const META: u32 = 1 << 1;
+    const NEW_LIST: u32 = 1 << 2;
+    const RAW: u32 = 1 << 3;
+    const INTERLEAVED_FLAG: u32 = 1 << 5;
+
+    fn doubles(values: &[f64]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// A file of `segments`, each already packed.
+    fn file(segments: &[Vec<u8>]) -> (Document<MemSource>, Evaluator) {
+        (Document::new(MemSource(segments.concat())), Evaluator::new(tdms()))
+    }
+
+    /// Segment `k`'s raw data layout, by name.
+    fn layout(ev: &mut Evaluator, d: &Document<MemSource>, k: usize) -> String {
+        match ev.node(d, &[k, 2, 4, 0]).unwrap().value {
+            Value::Enum { name: Some(name), .. } => name,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Segment `k`'s data, whatever it was read as.
+    fn data(ev: &mut Evaluator, d: &Document<MemSource>, k: usize) -> crate::eval::NodeInfo {
+        ev.node(d, &[k, 2, 4, 1]).unwrap()
+    }
+
+    /// A channel said to be laid out as before takes the index the segment
+    /// before wrote for its path. One said to be laid out as before a second
+    /// time is not followed back again, and its segment is bytes.
+    #[test]
+    fn same_as_before_is_followed_one_segment_back() {
+        let p = P(false);
+        let a = "/'g'/'a'";
+        let (d, mut ev) = file(&[
+            segment(META | NEW_LIST | RAW, false, &p.metadata(&[p.object(a, &p.index(10, 2, None), &[])]), &doubles(&[1.0, 2.0]), None),
+            segment(META | NEW_LIST | RAW, false, &p.metadata(&[p.object(a, &p.u32(0), &[])]), &doubles(&[3.0, 4.0, 5.0, 6.0]), None),
+            segment(META | NEW_LIST | RAW, false, &p.metadata(&[p.object(a, &p.u32(0), &[])]), &doubles(&[7.0, 8.0]), None),
+        ]);
+        assert_eq!(layout(&mut ev, &d, 1), "contiguous");
+        // Two chunks of the two doubles the first segment's index said.
+        let second = data(&mut ev, &d, 1);
+        assert_eq!(ev.node(&d, &[&second.path[..], &[3]].concat()).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[1, 2, 4, 1, 3, 1, 0, 0, 1]).unwrap().value, Value::Float(6.0));
+        // The object says what it read its layout from, and the third one
+        // reads nothing.
+        assert_eq!(ev.node(&d, &[1, 2, 3, 1, 0, 7]).unwrap().value.as_int(), Some(10));
+        let third = [2, 2, 3, 1, 0, 7];
+        assert_eq!(ev.node(&d, &third).unwrap().value, Value::Enum { raw: NOT_KNOWN, name: Some("not known".into()), hex: true });
+        assert_eq!(layout(&mut ev, &d, 2), "not known");
+        assert_eq!((data(&mut ev, &d, 2).type_name.as_str(), data(&mut ev, &d, 2).size_bits), ("bytes[]", 16 * 8));
+    }
+
+    /// A segment with no metadata reads the list of the nearest one that has
+    /// some, however many segments back.
+    #[test]
+    fn a_segment_without_metadata_reads_the_nearest_list_before_it() {
+        let p = P(false);
+        let (a, b) = ("/'g'/'a'", "/'g'/'b'");
+        let meta = p.metadata(&[p.object(a, &p.index(10, 1, None), &[]), p.object(b, &p.index(3, 2, None), &[])]);
+        let chunk = [doubles(&[1.5]), 7i32.to_le_bytes().to_vec(), 8i32.to_le_bytes().to_vec()].concat();
+        let (d, mut ev) = file(&[
+            segment(META | NEW_LIST | RAW, false, &meta, &chunk, None),
+            segment(RAW, false, &[], &chunk, None),
+            segment(RAW, false, &[], &[chunk.clone(), chunk.clone()].concat(), None),
+        ]);
+        assert_eq!(layout(&mut ev, &d, 2), "contiguous, laid out by an earlier segment");
+        let chunks = [2, 2, 4, 1, 4];
+        assert_eq!(ev.node(&d, &chunks).unwrap().child_count, 2);
+        let b1 = ev.node(&d, &[&chunks[..], &[1, 0, 1]].concat()).unwrap();
+        assert_eq!((b1.name.as_str(), b1.type_name.as_str()), ("[1] /'g'/'b'", "i32 le[]"));
+        assert_eq!(ev.node(&d, &[&chunks[..], &[1, 0, 1, 1]].concat()).unwrap().value, Value::Int(8));
+    }
+
+    /// A segment that changes the list rather than starting one keeps the
+    /// channels it does not mention, gives the one it mentions its new layout
+    /// in place, and adds a new one at the end.
+    #[test]
+    fn a_changed_list_keeps_its_order_and_adds_at_the_end() {
+        let p = P(false);
+        let (a, b, c) = ("/'g'/'a'", "/'g'/'b'", "/'g'/'c'");
+        let first = p.metadata(&[p.object(a, &p.index(10, 1, None), &[]), p.object(b, &p.index(10, 1, None), &[])]);
+        // b now holds two values, and c is new.
+        let second = p.metadata(&[p.object(c, &p.index(5, 3, None), &[]), p.object(b, &p.index(10, 2, None), &[])]);
+        let (d, mut ev) = file(&[
+            segment(META | NEW_LIST | RAW, false, &first, &doubles(&[1.0, 2.0]), None),
+            segment(META | RAW, false, &second, &[doubles(&[3.0, 4.0, 5.0]), vec![6, 7, 8]].concat(), None),
+        ]);
+        assert_eq!(layout(&mut ev, &d, 1), "contiguous");
+        let channels = [1, 2, 3, 7];
+        let names: Vec<String> = (0..3).map(|i| ev.node(&d, &[&channels[..], &[i]].concat()).unwrap().name).collect();
+        assert_eq!(names, ["[0] /'g'/'a'", "[1] /'g'/'b'", "[2] /'g'/'c'"]);
+        assert_eq!(ev.node(&d, &[1, 2, 4, 1, 3, 0, 0, 1, 1]).unwrap().value, Value::Float(5.0));
+        assert_eq!(ev.node(&d, &[1, 2, 4, 1, 3, 0, 0, 2, 2]).unwrap().value, Value::UInt(8));
+        // Where each entry's layout was written: a in the first segment, b and
+        // c in this one.
+        let at = |ev: &mut Evaluator, i: usize| ev.node(&d, &[&channels[..], &[i, 6]].concat()).unwrap().value.as_int().unwrap();
+        assert!(at(&mut ev, 0) < 60 && at(&mut ev, 1) > 60 && at(&mut ev, 2) > 60);
+    }
+
+    /// Taking a channel out of a list changed rather than started moves every
+    /// channel after it, which a list worked out by position cannot follow.
+    #[test]
+    fn a_channel_taken_out_of_a_changed_list_leaves_the_data_as_bytes() {
+        let p = P(false);
+        let (a, b) = ("/'g'/'a'", "/'g'/'b'");
+        let first = p.metadata(&[p.object(a, &p.index(10, 1, None), &[]), p.object(b, &p.index(10, 1, None), &[])]);
+        let second = p.metadata(&[p.object(a, &p.u32(0xFFFF_FFFF), &[])]);
+        let (d, mut ev) = file(&[
+            segment(META | NEW_LIST | RAW, false, &first, &doubles(&[1.0, 2.0]), None),
+            segment(META | RAW, false, &second, &doubles(&[3.0]), None),
+        ]);
+        assert_eq!(ev.node(&d, &[1, 2, 3, 6]).unwrap().child_count, 1);
+        assert_eq!(layout(&mut ev, &d, 1), "not known");
+    }
+
+    /// Interleaved data is a sample of one value per channel, which a string
+    /// channel has no width to be part of.
+    #[test]
+    fn interleaved_data_with_a_string_channel_is_not_placed() {
+        let p = P(false);
+        let meta = p.metadata(&[p.object("/'g'/'n'", &p.index(3, 1, None), &[]), p.object("/'g'/'s'", &p.index(0x20, 1, Some(5)), &[])]);
+        let raw = [7i32.to_le_bytes().to_vec(), p.u32(1), b"x".to_vec()].concat();
+        let (d, mut ev) = file(&[segment(META | NEW_LIST | RAW | INTERLEAVED_FLAG, false, &meta, &raw, None)]);
+        assert_eq!(layout(&mut ev, &d, 0), "not known");
+        assert_eq!(data(&mut ev, &d, 0).type_name, "bytes[]");
+    }
 }
