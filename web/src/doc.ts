@@ -871,6 +871,20 @@ export type ChunkStep = {
   readonly skipped: boolean;
 };
 
+/** One step of reading a Parquet page: the codec, a list of levels, or the
+ *  encoding its values are in. */
+export type PageStep = {
+  readonly what: string;
+  readonly in_bytes: number;
+  /** Zero for a step that produced values rather than bytes; its note says
+   *  how many. */
+  readonly out_bytes: number;
+  readonly note: string;
+  /** True when the page never went through this step: a DATA_PAGE_V2 whose
+   *  is_compressed is false still names its column's codec. */
+  readonly skipped: boolean;
+};
+
 /** One object of an HDF5 file, as the contents list reads it. */
 export type ContentObject = {
   readonly path: readonly number[];
@@ -1045,7 +1059,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1143,6 +1157,17 @@ export type TypeInfo = {
   readonly chunk_element_type: string;
   readonly chunk_values: readonly string[];
   readonly chunk_total: number;
+  /** Page: how many bytes its payload is in the file, and how many its values
+   *  came to once the codec was undone. */
+  readonly page_packed: number;
+  readonly page_decoded: number;
+  /** Page: every step, in the order it was done. */
+  readonly page_steps: readonly PageStep[];
+  /** Page: what one value is called, the first few of them, and how many
+   *  there are altogether. */
+  readonly page_element_type: string;
+  readonly page_values: readonly string[];
+  readonly page_total: number;
 };
 
 /** One run of weights inside a block that share a scale of their own. */
