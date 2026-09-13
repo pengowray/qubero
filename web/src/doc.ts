@@ -824,6 +824,10 @@ export type DiagramBox = {
   /** Where the walk first reached it (`png.chunks.data.'IHDR'`). A type read in
    *  nine places has one box and this is the first of the nine ways to it. */
   readonly path: string;
+  /** What tells this type from every other. `diagramCensus` counts the open
+   *  file's nodes by the same key, so a count found there belongs to this box
+   *  and to no other. */
+  readonly key: string;
   readonly kind: DiagramBoxKind;
   /** The type this one was written inside, for a box the template gave no name
    *  of its own (`Header.entry`). Absent for a named type. */
@@ -861,6 +865,45 @@ export type TemplateDiagram = {
    *  from the root refers to, the ones that are not structures, and the ones
    *  past the core's box cap. */
   readonly omitted: number;
+};
+
+/** How many of one diagram box the open file holds, and where the first is. */
+export type BoxCount = {
+  /** Matches `DiagramBox.key`. */
+  readonly key: string;
+  readonly count: number;
+  /** Child indices from the root of the reading `space` names. */
+  readonly first_path: number[];
+  /** 0 is the file; anything else is an unpacked stream, whose offsets are not
+   *  the file's. */
+  readonly space: number;
+};
+
+/** The same for one row of one box: one field, over every node of that type. */
+export type RowCount = {
+  readonly key: string;
+  readonly row: number;
+  readonly count: number;
+  readonly first_path: number[];
+  readonly space: number;
+};
+
+/**
+ * What the open file holds, against what the format can hold.
+ *
+ * `templateDiagram` draws the format, which is the same picture for every file
+ * it opens. This says which of those boxes this particular file has and how
+ * many, so a box the file has none of can be drawn quietly and one it has
+ * twelve of can say so.
+ */
+export type DiagramCensus = {
+  readonly boxes: BoxCount[];
+  readonly rows: RowCount[];
+  /** How many nodes the walk looked at. */
+  readonly walked: number;
+  /** True when the cap stopped it, so every count is a floor rather than a
+   *  total, and a view showing one has to say so. */
+  readonly truncated: boolean;
 };
 
 /** One node of an HDF5 B-tree, of either version. */
@@ -2441,6 +2484,19 @@ export class Doc {
    */
   templateDiagram(): TemplateReply<TemplateDiagram> {
     return this.handleReply<TemplateDiagram>(this.editor.template_diagram(this.space));
+  }
+
+  /**
+   * The open file's nodes counted against the diagram's boxes.
+   *
+   * Unlike `templateDiagram` this does read the file, so it answers pending
+   * while bytes are on their way and the caller asks again once the document
+   * says something changed.
+   *
+   * `limit` caps the nodes walked; the answer says whether it stopped short.
+   */
+  diagramCensus(limit: number): TemplateReply<DiagramCensus> {
+    return this.handleReply<DiagramCensus>(this.editor.diagram_census(this.space, limit));
   }
 
   /**

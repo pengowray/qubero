@@ -2669,6 +2669,33 @@ export const DIAGRAM = {
   /** On a box's title. The core names a type by what the format calls it, which
    *  two types in one format may share; this says which one this is. */
   boxPath: (path: string): string => `Path: ${path}`,
+  /**
+   * What the open file has, laid over the picture of what the format can have.
+   *
+   * The counts are of this file; everything else in the view is of the format,
+   * so each of these says "this file" out loud rather than leaving the reader
+   * to work out which of the two they are reading.
+   */
+  count: (n: number): string => `×${n.toLocaleString()}`,
+  countTitle: (n: number, what: string): string =>
+    n === 1 ? `This file has 1 ${what}` : `This file has ${n.toLocaleString()} of these: ${what}`,
+  /** On a box or row the file has none of. */
+  unusedTitle: "This file has none of these",
+  /** The toolbar toggle. Not "used" or "present": what the reader is asking for
+   *  is the part of the picture their own file is an example of. */
+  onlyUsed: "Only what this file has",
+  onlyUsedTitle: "Leave out the types this file has none of, and lay the rest out again",
+  /** Under the toolbar when the walk stopped short, so no count reads as a
+   *  total. The number is what was looked at, which is the honest thing to
+   *  report: how much is left is not known without finishing. */
+  partial: (walked: number): string =>
+    `Counts are of the first ${walked.toLocaleString()} fields read, so each is a floor rather than a total.`,
+  /** What a double click does. Said on every row that has one, since a single
+   *  click already does something else. */
+  goTitle: "Double-click to go to the first one in this file",
+  /** A field the file has, but inside an unpacked stream, whose offsets are not
+   *  the file's, so the hex cursor cannot be put on it. */
+  inStream: "This one is inside an unpacked stream, which the hex view cannot go to",
   fit: "Fit",
   fitTitle: "Fit the whole diagram in the window",
   /** What a click on a field row does. Only the format's first type can be

@@ -102,6 +102,11 @@ pub struct TypeBox {
     /// to get to it, which is a different question and belongs on a second
     /// line. A type read in nine places has one of these, the first.
     pub path: String,
+    /// What tells this type from every other: the structural key the walk
+    /// shares boxes by. A caller that has counted the open file's nodes by the
+    /// same key can say how many of each box the file holds; see
+    /// [`crate::eval::census`].
+    pub key: String,
     pub kind: BoxKind,
     /// The type this one was declared inside, for a box that has no name of its
     /// own in the template. None for a named type, which may be used from
@@ -150,7 +155,6 @@ pub fn diagram(t: &Template) -> Diagram {
         boxes: Vec::new(),
         defs: Vec::new(),
         by_text: HashMap::new(),
-        by_switch: HashMap::new(),
         by_path: HashMap::new(),
         edges: Vec::new(),
         named_drawn: 0,
@@ -168,7 +172,8 @@ pub fn diagram(t: &Template) -> Diagram {
         None => match as_switch(t, &t.root) {
             Some(sw) => {
                 let sw = sw.clone();
-                w.switch_box(t.name.clone(), None, &sw);
+                let key = switch_key(&sw);
+                w.switch_box(t.name.clone(), None, &sw, key);
             }
             None => {
                 if let Some(sd) = as_struct(t, &t.root) {
@@ -420,17 +425,54 @@ fn at_text(ty: &Ty) -> Option<String> {
 /// different names, and a box is labelled by its name: sharing them would put
 /// one name on bytes the format calls something else.
 fn struct_key(sd: &Arc<StructDef>) -> String {
-    format!("{}\u{0}{}", sd.name, crate::template_text::ty_text(&Ty::Struct(sd.clone())))
+    format!("struct\u{0}{}\u{0}{}", sd.name, crate::template_text::ty_text(&Ty::Struct(sd.clone())))
 }
 
 /// The same question for a switch, which the IR does not put behind an `Arc`:
 /// what it reads and what each case picks.
-///
-/// Scoped to the box it was found in by the caller, since two switches in two
-/// different types are two choices even when they read alike; what this is for
-/// is the thirteen copies of one choice inside thirteen copies of one type.
 fn switch_key(sw: &Ty) -> String {
-    crate::template_text::ty_text(sw)
+    format!("switch\u{0}{}", crate::template_text::ty_text(sw))
+}
+
+/// Which box a type is drawn as, named the way the walk names it, or nothing
+/// for a type that is drawn as a row rather than a box.
+///
+/// The one place the question is answered, because two callers ask it and a
+/// second answer would be a second opinion: the walk uses it to decide whether
+/// a type it has reached is one it has already drawn, and
+/// [`crate::eval::census`] uses it to say which box a node of the open file
+/// belongs to. A census keyed even slightly differently would count real
+/// fields against boxes that are not there.
+///
+/// A switch first, for the reason `box_for` takes one first: a switch whose
+/// cases are structures is both, and the choice is what the reader has to see.
+/// Whether a type is a run of something rather than one of it.
+///
+/// [`box_key`] answers for a field's *contents*, so a list of chunks answers
+/// with the chunk's box: that is the box the field's arrow points at, which is
+/// what the drawing wants. A census counting nodes wants the other reading. The
+/// list node itself is not a chunk; its elements are, and counting it as one
+/// would make every run one longer than the file.
+pub(crate) fn is_run(t: &Template, ty: &Ty) -> bool {
+    match ty {
+        Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => true,
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::At { inner, .. }
+        | Ty::Nullable { inner, .. }
+        | Ty::Decoded { inner, .. }
+        | Ty::When { inner, .. } => is_run(t, inner),
+        Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| is_run(t, inner)),
+        _ => false,
+    }
+}
+
+pub(crate) fn box_key(t: &Template, ty: &Ty) -> Option<String> {
+    if let Some(sw) = as_switch(t, ty) {
+        return Some(switch_key(sw));
+    }
+    as_struct(t, ty).map(struct_key)
 }
 
 /// One expression a row holds, and what it decides about the row.
@@ -642,9 +684,6 @@ struct Walk<'a> {
     /// Filled in before the box's own fields are walked, so a type holding
     /// itself stops.
     by_text: HashMap<String, usize>,
-    /// Box index by the choice a switch makes, within the type that makes it.
-    /// See [`switch_key`].
-    by_switch: HashMap<String, usize>,
     /// Box index by the path it was first reached down, for the boxes neither
     /// key reaches.
     by_path: HashMap<String, usize>,
@@ -690,7 +729,12 @@ impl<'a> Walk<'a> {
             }
             self.named_drawn += 1;
             let sw = sw.clone();
-            return Some(self.switch_box(name.to_string(), None, &sw));
+            let key = switch_key(&sw);
+            if let Some(&at) = self.by_text.get(&key) {
+                self.by_path.insert(name.to_string(), at);
+                return Some(at);
+            }
+            return Some(self.switch_box(name.to_string(), None, &sw, key));
         }
         None
     }
@@ -703,13 +747,15 @@ impl<'a> Walk<'a> {
     /// the reader who wants to know how they would get there.
     fn struct_box(&mut self, path: String, parent: Option<String>, sd: &Arc<StructDef>) -> usize {
         let here = self.boxes.len();
-        self.by_text.insert(struct_key(sd), here);
+        let key = struct_key(sd);
+        self.by_text.insert(key.clone(), here);
         self.by_path.insert(path.clone(), here);
         let name = if sd.name.is_empty() { path.clone() } else { sd.name.clone() };
         let sd = (**sd).clone();
         self.boxes.push(TypeBox {
             name,
             path: path.clone(),
+            key,
             kind: BoxKind::Seq,
             parent,
             rows: Vec::new(),
@@ -779,24 +825,19 @@ impl<'a> Walk<'a> {
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
                 _ => String::new(),
             };
-            // One choice, one box, however many of this type's fields make it.
-            // Scoped to the type it was found in: the same words read in two
-            // different structures are two choices, and what this collapses is
-            // the one choice a type makes, reached once per field that makes
-            // it.
-            let key = format!("{owner}\u{0}{}", switch_key(&sw));
-            if let Some(&at) = self.by_switch.get(&key) {
-                return Some((at, on));
-            }
-            if let Some(&at) = self.by_path.get(&name) {
+            // One choice, one box, however many fields make it. Not scoped to
+            // the type it was found in: two fields that read the same value and
+            // pick between the same shapes are making one choice, and the box
+            // says what that choice is rather than who is making it.
+            let key = switch_key(&sw);
+            if let Some(&at) = self.by_text.get(&key) {
                 return Some((at, on));
             }
             if self.boxes.len() >= BOX_CAP {
                 self.capped += 1;
                 return None;
             }
-            let to = self.switch_box(name, Some(owner.to_string()), &sw);
-            self.by_switch.insert(key, to);
+            let to = self.switch_box(name, Some(owner.to_string()), &sw, key);
             return Some((to, on));
         }
         if let Some(target) = named_target(ty) {
@@ -821,8 +862,9 @@ impl<'a> Walk<'a> {
 
     /// One switch as a box: a row per case, and an edge from each case to the
     /// type it picks.
-    fn switch_box(&mut self, name: String, parent: Option<String>, sw: &Ty) -> usize {
+    fn switch_box(&mut self, name: String, parent: Option<String>, sw: &Ty, key: String) -> usize {
         let here = self.boxes.len();
+        self.by_text.insert(key.clone(), here);
         self.by_path.insert(name.clone(), here);
         // A switch has no name of its own in the IR, so it is called what it
         // reads. Not the last step of the path: a switch reached from a case of
@@ -833,6 +875,7 @@ impl<'a> Walk<'a> {
         self.boxes.push(TypeBox {
             name: title.unwrap_or_else(|| name.rsplit_once('.').map_or(name.clone(), |(_, l)| l.to_string())),
             path: name.clone(),
+            key,
             kind: BoxKind::Switch,
             parent,
             rows: Vec::new(),

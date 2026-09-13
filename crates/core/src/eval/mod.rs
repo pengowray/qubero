@@ -17,6 +17,7 @@ use crate::template::{Anchor, Encoding, Expr, Packing, StrLen, Tag, TaggedRef, T
 use crate::text::{self, Settled};
 
 mod cells;
+mod census;
 mod check;
 mod deduced;
 mod diagram;
@@ -42,6 +43,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+pub use census::{BoxCount, Census, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
