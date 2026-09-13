@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{fits_tile, gwf_vect, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{fits_tile, grib_values, gwf_vect, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -159,6 +159,71 @@ pub enum Explain {
         /// Why the walk stopped early, where it did.
         problem: Option<String>,
     },
+    /// A frame vector's numbers, unpacked by [`gwf_vect`]. Shown for the
+    /// cursor anywhere in the packed run, because what is under the cursor is
+    /// zero-suppressed bits or the differences a gzip stream came to, and the
+    /// numbers are not in the file as they stand.
+    ///
+    /// The steps are the same kind of walk an HDF5 chunk's filters are, and
+    /// are carried in the same shape, but the answer is its own: a vector is
+    /// not a chunk, and its steps are not filters.
+    GwfVector {
+        /// The vector's `compress` field as written, the scheme in its low
+        /// byte, and whether its high byte says a little-endian machine packed
+        /// the words.
+        compress: u16,
+        little: bool,
+        /// How many numbers the vector's `nData` says it holds.
+        declared: u64,
+        /// How many bytes the packed run is in the file, and how many the
+        /// numbers came to once every step that could be done was.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Each step, in the order it was done, with what went in and what
+        /// came out.
+        steps: Vec<hdf5_chunk::Step>,
+        /// The first numbers, how many came out, and what one is called.
+        values: Vec<String>,
+        total: u64,
+        element_type: String,
+        /// Why the unpacking stopped early, where it did.
+        problem: Option<String>,
+    },
+    /// A GRIB2 message's packed values, worked out by [`grib_values`]: what
+    /// each packed number in section 7 is worth, which takes section 5's
+    /// reference value and scale factors and, for complex packing, the groups
+    /// and the differencing undone. Shown for the cursor anywhere in the
+    /// section's data, a value or the tables in front of them, because a
+    /// value's worth is nowhere in the file and, under spatial differencing,
+    /// depends on every value before it.
+    GribValues {
+        /// The data representation template that packed them: 0 for simple
+        /// packing, 2 for complex, 3 for complex with spatial differencing,
+        /// and for 3, whether the differences are first or second order.
+        template: u16,
+        spatial_order: u32,
+        /// R, E and D, the reference value as [`grib_values::Packing::reference_text`]
+        /// writes it, so a panel can show the formula a value came out of.
+        reference: String,
+        binary_scale: i32,
+        decimal_scale: i32,
+        /// The overall minimum of the differences, under spatial differencing.
+        minimum: Option<i64>,
+        /// How many values section 5 says section 7 holds.
+        declared: u64,
+        /// How many bytes section 7's data is in the file.
+        packed_bytes: u64,
+        /// Every step, in the order it was done.
+        steps: Vec<grib_values::Step>,
+        /// The first values, as text, and how many came out.
+        values: Vec<String>,
+        total: u64,
+        /// The value the cursor is on, where it is on one packed value rather
+        /// than on the tables, the padding or the minimum.
+        at: Option<GribValue>,
+        /// What stopped it, or what it could not say.
+        problem: Option<String>,
+    },
     /// A miniSEED record's samples, worked out of its data by
     /// [`mseed_steim`]. Shown for the cursor anywhere in the data, because a
     /// Steim sample is not at any one place in the file: it is every
@@ -298,6 +363,126 @@ pub const HDF5_VALUES_SHOWN: usize = 32;
 /// with millions of objects; nothing real reaches it.
 const XREF_PACKED_LIMIT: u64 = 4 << 20;
 
+/// Which side reader a packed structure is taken apart by: the module that
+/// knows what a template can only say is bytes.
+///
+/// Each is found from the name the template marked the structure with, and
+/// each says how far above the cursor that structure may be. Adding a reader
+/// is a case here, a line in [`Unpacker::of`] and [`Unpacker::reach`], and
+/// the function that builds its answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unpacker {
+    Xref,
+    ObjStm,
+    Hdf5Chunk,
+    GwfVect,
+    SqliteRow,
+    ParquetPage,
+    FitsTile,
+    GribValues,
+    /// The encoding and byte order are in the packing name, since the template
+    /// has already settled both by the time it marks the data.
+    Mseed { encoding: u8, big: bool },
+    /// A ggml block, by the layout name. Not every layout ggml has can be
+    /// taken apart here, which is only found out by asking.
+    Quant,
+}
+
+/// How far above the cursor a reader's packed structure is looked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// The field the cursor is on, or its parent. As deep as the fields of
+    /// most packed structures go, and as far as they have been checked: a
+    /// filtered HDF5 chunk is one run of bytes under the structure that marks
+    /// it.
+    Near,
+    /// Any structure the cursor is inside, however far down. A Steim
+    /// difference is four levels under a miniSEED record's data, the frame,
+    /// the word, the word's shape and the difference; a FITS tile's
+    /// descriptors are four levels into a row, and its compressed bytes are a
+    /// byte of an array in the heap; a GRIB value under complex packing is
+    /// four levels under section 7's data, the groups, the group, its values
+    /// and the value.
+    Anywhere,
+}
+
+impl Unpacker {
+    /// The reader a packing name belongs to, if any here does.
+    fn of(packing: &str) -> Option<Unpacker> {
+        Some(match packing {
+            pdf_xref::PACKING => Unpacker::Xref,
+            pdf_objstm::PACKING => Unpacker::ObjStm,
+            hdf5_chunk::PACKING => Unpacker::Hdf5Chunk,
+            gwf_vect::PACKING => Unpacker::GwfVect,
+            sqlite_overflow::PACKING => Unpacker::SqliteRow,
+            parquet_page::PACKING => Unpacker::ParquetPage,
+            fits_tile::PACKING => Unpacker::FitsTile,
+            grib_values::PACKING => Unpacker::GribValues,
+            _ => {
+                if let Some((encoding, big)) = mseed_steim::parse_packing(packing) {
+                    return Some(Unpacker::Mseed { encoding, big });
+                }
+                ggml_quant::by_name(packing)?;
+                Unpacker::Quant
+            }
+        })
+    }
+
+    fn reach(self) -> Reach {
+        match self {
+            Unpacker::FitsTile | Unpacker::Mseed { .. } | Unpacker::GribValues => Reach::Anywhere,
+            Unpacker::Xref
+            | Unpacker::ObjStm
+            | Unpacker::Hdf5Chunk
+            | Unpacker::GwfVect
+            | Unpacker::SqliteRow
+            | Unpacker::ParquetPage
+            | Unpacker::Quant => Reach::Near,
+        }
+    }
+}
+
+/// Where a packed structure was found: the cursor's path, the structure's
+/// own path and what it resolved to, and the cursor's bit, which only a ggml
+/// block uses to say which weight is under it.
+struct Packed<'a> {
+    path: &'a [usize],
+    at: &'a [usize],
+    r: &'a Resolved,
+    at_bits: Option<u64>,
+}
+
+/// One GRIB value, the one under the cursor: where it is in the message's run
+/// of values and in the tree, what it is worth, and the whole packed number it
+/// was worked out from.
+///
+/// `packed` is not always the number the tree shows on the field. Complex
+/// packing writes how far a value is above its group's reference, and spatial
+/// differencing writes a difference on top of that; `packed` is what those
+/// come to once undone, the X in `(R + X * 2^E) / 10^D`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GribValue {
+    /// Where the value is in the message's run of values, from 0.
+    pub index: u64,
+    pub place: GribPlace,
+    /// What it is worth, as [`grib_values::Packing::text`] writes it.
+    pub value: String,
+    pub packed: i64,
+}
+
+/// Which field of section 7 a GRIB value is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GribPlace {
+    /// `values[index]` of simply packed data, which holds X as it is.
+    Values,
+    /// `groups[group].values[position]` of complex packing, and the number
+    /// that field holds, which is only part of X.
+    Group { group: u64, position: u64, written: i64 },
+    /// `first_values[index]` under spatial differencing: one of the values
+    /// written whole, which holds X as it is.
+    First,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagBit {
     pub bit: u32,
@@ -366,68 +551,59 @@ impl Evaluator {
         })
     }
 
-    /// A packed block, from the cursor being on it or on one of its fields.
+    /// What a side reader makes of the packed structure the cursor is in, or
+    /// on one of the fields of.
     ///
-    /// Both are asked because the fields are where a reader lands: the cursor
-    /// is almost always inside `qs`, and a panel that only answered for the
-    /// block itself would be blank exactly when it is wanted.
+    /// The fields are asked about as well as the structure because the fields
+    /// are where a reader lands: the cursor is almost always inside `qs`, and
+    /// a panel that only answered for the block itself would be blank exactly
+    /// when it is wanted. How far up is looked is each reader's own, and is in
+    /// [`Unpacker::reach`].
+    ///
+    /// The nearest packed structure answers first. A reader that turns out to
+    /// have nothing to say about the bytes, which only a ggml block of a
+    /// layout nobody here unpacks does, lets the walk carry on outward.
     fn explain_packed<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at_bits: Option<u64>) -> R<Explain> {
-        for len in [path.len(), path.len().wrapping_sub(1)] {
-            if len > path.len() {
-                break;
-            }
+        for len in (0..=path.len()).rev() {
             let at = &path[..len];
             self.resolve(doc, at)?;
             let r = self.memo.get(at).expect("resolved").clone();
             let Ty::Struct(def) = &r.ty else { continue };
-            let Some(packing) = def.packed.clone() else { continue };
-            if &*packing == pdf_xref::PACKING {
-                return self.explain_xref(doc, at, &r);
+            let Some(packing) = def.packed.as_deref() else { continue };
+            let Some(unpacker) = Unpacker::of(packing) else { continue };
+            if unpacker.reach() == Reach::Near && path.len() - len > 1 {
+                continue;
             }
-            if &*packing == pdf_objstm::PACKING {
-                return self.explain_objstm(doc, at, &r);
+            let found = Packed { path, at, r: &r, at_bits };
+            if let Some(explain) = self.side_reader(doc, unpacker, found)? {
+                return Ok(explain);
             }
-            if &*packing == hdf5_chunk::PACKING {
-                return self.explain_hdf5_chunk(doc, at, &r);
-            }
-            if &*packing == gwf_vect::PACKING {
-                return self.explain_gwf_vect(doc, at, &r);
-            }
-            if &*packing == sqlite_overflow::PACKING {
-                return self.explain_sqlite_row(doc, at);
-            }
-            if &*packing == parquet_page::PACKING {
-                return self.explain_parquet_page(doc, at);
-            }
-            if &*packing == fits_tile::PACKING {
-                return self.explain_fits_tile(doc, path);
-            }
-            if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
-                return self.explain_mseed(doc, at, &r, encoding, big);
-            }
-            let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { continue };
-            return Ok(quant_of(kind, block, at_block, at_bits));
-        }
-        // A miniSEED record's data is asked about from further down than the
-        // field or its parent. The cursor on a Steim difference is four levels
-        // under the data: the frame, the word, the word's shape and the
-        // difference. So every ancestor is looked at for that packing, and for
-        // a FITS compressed image, whose compressed bytes are a byte of an
-        // array in the heap and whose descriptors are four levels into a row.
-        // The other packings keep to the two levels above, which is as deep as
-        // their fields go and as far as they have been checked.
-        for len in (0..path.len().saturating_sub(1)).rev() {
-            let at = &path[..len];
-            self.resolve(doc, at)?;
-            let r = self.memo.get(at).expect("resolved").clone();
-            let Ty::Struct(def) = &r.ty else { continue };
-            if def.packed.as_deref() == Some(fits_tile::PACKING) {
-                return self.explain_fits_tile(doc, path);
-            }
-            let Some((encoding, big)) = def.packed.as_deref().and_then(mseed_steim::parse_packing) else { continue };
-            return self.explain_mseed(doc, at, &r, encoding, big);
         }
         Ok(Explain::Plain)
+    }
+
+    /// The answer one side reader gives for the packed structure `found.at`.
+    /// `None` only where the reader has nothing to say about these bytes and
+    /// the structures further out should be asked instead.
+    fn side_reader<S: Source>(&mut self, doc: &Document<S>, unpacker: Unpacker, found: Packed) -> R<Option<Explain>> {
+        let Packed { path, at, r, at_bits } = found;
+        Ok(Some(match unpacker {
+            Unpacker::Xref => self.explain_xref(doc, at, r)?,
+            Unpacker::ObjStm => self.explain_objstm(doc, at, r)?,
+            Unpacker::Hdf5Chunk => self.explain_hdf5_chunk(doc, at, r)?,
+            Unpacker::GwfVect => self.explain_gwf_vect(doc, at, r)?,
+            Unpacker::SqliteRow => self.explain_sqlite_row(doc, at)?,
+            Unpacker::ParquetPage => self.explain_parquet_page(doc, at)?,
+            // The tile is found again from the cursor's own path, because
+            // which tile it is depends on how far into the image the path goes.
+            Unpacker::FitsTile => self.explain_fits_tile(doc, path)?,
+            Unpacker::Mseed { encoding, big } => self.explain_mseed(doc, at, r, encoding, big)?,
+            Unpacker::GribValues => self.explain_grib_values(doc, path, at, r)?,
+            Unpacker::Quant => {
+                let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { return Ok(None) };
+                quant_of(kind, block, at_block, at_bits)
+            }
+        }))
     }
 
     /// A miniSEED record's data, decoded into samples.
@@ -971,9 +1147,8 @@ impl Evaluator {
     /// Everything needed is in the vector itself, in the fields before its
     /// data: `compress` for the scheme and the byte order, `type` for the
     /// width, `nData` for how many numbers, which zero suppression needs
-    /// because its last word is padded. The answer is shaped as an HDF5
-    /// chunk's is, steps then values, since the two are the same kind of walk
-    /// and the panel for one reads the other.
+    /// because its last word is padded. The steps are shaped as an HDF5
+    /// chunk's are, since the two are the same kind of walk.
     fn explain_gwf_vect<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
         let packed_bits = self.size_of(doc, at)?;
         let packed_bytes = packed_bits / 8;
@@ -981,30 +1156,155 @@ impl Evaluator {
             self.find_field(at, name).and_then(|p| self.node(doc, &p).ok()).and_then(|n| n.value.as_int()).unwrap_or(-1)
         };
         let (compress, vect_type, n_data) = (field("compress"), field("type"), field("nData"));
-        if packed_bytes as usize > gwf_vect::PACKED_LIMIT {
-            let mb = gwf_vect::PACKED_LIMIT / (1 << 20);
-            return Ok(Explain::Hdf5Chunk {
-                packed_bytes,
-                decoded_bytes: 0,
-                steps: Vec::new(),
-                values: Vec::new(),
-                total: 0,
-                element_type: String::new(),
-                problem: Some(format!("Not unpacked: the vector is over this viewer's {mb} MB limit.")),
-            });
-        }
-        let bytes = self.read(doc, r, r.offset, packed_bits)?;
         let clamp = |v: i128| v.clamp(0, i128::from(u16::MAX)) as u16;
-        let v = gwf_vect::decode(&bytes, clamp(compress), clamp(vect_type), n_data.max(0) as u64);
-        let (element_type, values, total) = gwf_vect::values(&v.bytes, clamp(vect_type), v.little);
-        Ok(Explain::Hdf5Chunk {
+        let (compress, vect_type, declared) = (clamp(compress), clamp(vect_type), n_data.max(0) as u64);
+        let unpacked = if packed_bytes as usize > gwf_vect::PACKED_LIMIT {
+            // Over the limit, the bytes are not read at all.
+            gwf_vect::refused(packed_bytes as usize, compress)
+        } else {
+            gwf_vect::decode(&self.read(doc, r, r.offset, packed_bits)?, compress, vect_type, declared)
+        };
+        let (element_type, values, total) = gwf_vect::values(&unpacked.bytes, vect_type, unpacked.little);
+        Ok(Explain::GwfVector {
+            compress,
+            little: unpacked.little,
+            declared,
             packed_bytes,
-            decoded_bytes: v.bytes.len() as u64,
-            steps: v.steps,
+            decoded_bytes: unpacked.bytes.len() as u64,
+            steps: unpacked.steps,
             values,
             total,
             element_type,
-            problem: v.problem,
+            problem: unpacked.problem,
+        })
+    }
+
+    /// A GRIB2 message's section 7 data, worked out into the values it stands
+    /// for. See [`grib_values`].
+    ///
+    /// Section 7 has already copied in the numbers it needs to place its own
+    /// runs, the group counts and the three tables' widths, so those are read
+    /// from its fields. What a value is worth also takes section 5's reference
+    /// value and its two scale factors, which nothing in section 7 depends on
+    /// and nothing copies, so they are found the way the template finds the
+    /// others: back through the sections to the nearest one with a packing
+    /// template in it.
+    ///
+    /// `path` is the cursor, which says which value it is on, if any. The
+    /// template is told apart by the fields the structure has: simple packing
+    /// has a run of `values`, complex packing has `groups`, and spatial
+    /// differencing puts `first_values` in front of them.
+    fn explain_grib_values<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        at: &[usize],
+        r: &Resolved,
+    ) -> R<Explain> {
+        let Ty::Struct(def) = &r.ty else { return Ok(Explain::Plain) };
+        let index_of = |name: &str| def.fields.iter().position(|f| &*f.name == name);
+        let (groups, first_values, simple_values) = (index_of("groups"), index_of("first_values"), index_of("values"));
+        let template: u16 = match (groups, first_values) {
+            (None, _) => 0,
+            (Some(_), None) => 2,
+            (Some(_), Some(_)) => 3,
+        };
+
+        let earlier = |ev: &mut Self, field: &[&str]| -> R<Option<Value>> {
+            let field: Vec<String> = field.iter().map(|s| s.to_string()).collect();
+            let Some(p) = ev.sibling_field_path(doc, at, &field)? else { return Ok(None) };
+            Ok(Some(ev.node(doc, &p)?.value))
+        };
+        let int = |v: Option<Value>| v.and_then(|v| v.as_int()).unwrap_or(0);
+        let reference = match earlier(self, &["body", "template", "reference_value"])? {
+            Some(Value::Float(f)) => f as f32,
+            _ => 0.0,
+        };
+        let binary_scale = int(earlier(self, &["body", "template", "binary_scale_factor"])?) as i32;
+        let decimal_scale = int(earlier(self, &["body", "template", "decimal_scale_factor"])?) as i32;
+        let missing_value_management =
+            int(earlier(self, &["body", "template", "missing_value_management"])?).clamp(0, 255) as u32;
+        let declared = int(earlier(self, &["body", "number_of_values"])?).max(0) as u64;
+        let mut own = |name: &str| -> R<u32> {
+            Ok(self.field_under(doc, at, name)?.unwrap_or(0).clamp(0, i128::from(u32::MAX)) as u32)
+        };
+        let packing = grib_values::Packing {
+            reference,
+            binary_scale,
+            decimal_scale,
+            missing_value_management,
+            bits_per_value: own("bits_per_value")?,
+            n_groups: own("n_groups")?,
+            group_widths_reference: own("group_widths_reference")?,
+            group_widths_bits: own("group_widths_bits")?,
+            group_lengths_reference: own("group_lengths_reference")?,
+            group_length_increment: own("group_length_increment")?,
+            last_group_length: own("last_group_length")?,
+            group_lengths_bits: own("group_lengths_bits")?,
+            spatial_order: own("spatial_differencing_order")?,
+            extra_bytes: own("extra_bytes")?,
+        };
+        let count = own("count")? as usize;
+        let minimum = self.field_under(doc, at, "overall_minimum")?.map(|v| v as i64);
+
+        let packed_bits = self.size_of(doc, at)?;
+        let packed_bytes = packed_bits / 8;
+        let reading = if packed_bytes > grib_values::PACKED_LIMIT as u64 {
+            // Over the limit, the bytes are not read at all.
+            grib_values::refused()
+        } else {
+            let bytes = self.read(doc, r, r.offset, packed_bits)?;
+            if template == 0 { grib_values::simple(&packing, &bytes, count) } else { grib_values::complex(&packing, &bytes) }
+        };
+
+        // Which value the cursor is on, counted through the whole message:
+        // simple packing's run is one list, the first values of spatial
+        // differencing are the first of it, and a complex group's values
+        // start where the groups before it left off.
+        let rel = &path[at.len()..];
+        let place = match rel {
+            [v, i, ..] if simple_values == Some(*v) => Some((*i as u64, GribPlace::Values)),
+            [f, k, ..] if first_values == Some(*f) => Some((*k as u64, GribPlace::First)),
+            [g, n, v, i, ..] if groups == Some(*g) => {
+                let mut group = at.to_vec();
+                group.extend([*g, *n]);
+                if self.child_index(doc, &group, "values")? == Some(*v) {
+                    group.extend([*v, *i]);
+                    let written = self.node(doc, &group)?.value.as_int().unwrap_or(0) as i64;
+                    let mut before = 0u64;
+                    for k in 0..*n {
+                        let mut earlier_group = at.to_vec();
+                        earlier_group.extend([*g, k]);
+                        before += self.field_under(doc, &earlier_group, "count")?.unwrap_or(0).max(0) as u64;
+                    }
+                    let place = GribPlace::Group { group: *n as u64, position: *i as u64, written };
+                    Some((before + *i as u64, place))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let at_value = place.and_then(|(index, place)| {
+            let k = usize::try_from(index).ok()?;
+            let value = packing.text(*reading.values.get(k)?);
+            Some(GribValue { index, place, value, packed: *reading.packed.get(k)? })
+        });
+
+        Ok(Explain::GribValues {
+            template,
+            spatial_order: packing.spatial_order,
+            reference: packing.reference_text(),
+            binary_scale,
+            decimal_scale,
+            minimum,
+            declared,
+            packed_bytes,
+            total: reading.values.len() as u64,
+            values: reading.values.iter().take(grib_values::SHOWN).map(|v| packing.text(*v)).collect(),
+            at: at_value,
+            steps: reading.steps,
+            problem: reading.problem,
         })
     }
 

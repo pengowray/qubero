@@ -1181,170 +1181,322 @@ export type XrefRow = {
   readonly third: number;
 };
 
-export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "plain";
-  /** The type's own name, for an enum or a flags field. */
+/** What a type knows beyond its value, one shape per panel. `kind` says which,
+ *  and each shape carries only its own panel's fields, so a panel that is
+ *  handed a `ChunkInfo` cannot read a tile's. */
+export type TypeInfo =
+  | MagicInfo
+  | EnumInfo
+  | FlagsInfo
+  | FloatInfo
+  | QuantInfo
+  | XrefInfo
+  | ObjStmInfo
+  | SqliteRowInfo
+  | ChunkInfo
+  | VectorInfo
+  | GribInfo
+  | PageInfo
+  | SamplesInfo
+  | TileInfo
+  | { readonly kind: "plain" };
+
+/** What the format requires, and what is there. */
+export type MagicInfo = {
+  readonly kind: "magic";
+  readonly expected: readonly number[];
+  readonly actual: readonly number[];
+};
+
+export type EnumInfo = {
+  readonly kind: "enum";
+  /** The type's own name. */
   readonly name: string;
-  /** Magic: what the format requires, and what is there. */
-  readonly expected: number[];
-  readonly actual: number[];
-  /** Enum: every value it names, and the one in the file. */
+  /** Every value it names, and the one in the file. */
   readonly cases: readonly { readonly value: number; readonly name: string }[];
   readonly current: number;
-  /** Enum: what the value in the file is called, where the name comes from a
+  /** What the value in the file is called, where the name comes from a
    *  counted run of values rather than from `cases`. Empty when it has none. */
   readonly named: string;
   readonly hex: boolean;
-  /** Flags: one entry per bit of the field, from bit 0 up. */
+};
+
+export type FlagsInfo = {
+  readonly kind: "flags";
+  readonly name: string;
+  readonly current: number;
+  /** One entry per bit of the field, from bit 0 up. */
   readonly bits: readonly { readonly bit: number; readonly name: string | null; readonly set: boolean }[];
-  /** Float: which layout it is, how wide, and its bits in value order in hex. */
+};
+
+/** Which layout a float is, how wide, and its bits in value order in hex. */
+export type FloatInfo = {
+  readonly kind: "float";
   readonly format: string;
-  /** Float: how many bits wide. Quant: how many bits one weight is worth. */
   readonly width: number;
   readonly pattern: string;
-  /** Quant: the block's shared scale, and what it pairs with it, named as the
-   *  file names it. `second_name` is empty where the layout has no second. */
+};
+
+export type QuantInfo = {
+  readonly kind: "quant";
+  /** The block layout, and how many bits one weight is worth. */
+  readonly name: string;
+  readonly width: number;
+  /** The block's shared scale, and what it pairs with it, named as the file
+   *  names it. `second_name` is empty where the layout has no second. */
   readonly scale: number;
   readonly second_name: string;
   readonly second: number;
-  /** Quant: whether that second number is taken away rather than added, and
-   *  whether it is multiplied by the group's own minimum first. */
+  /** Whether that second number is taken away rather than added, and whether
+   *  it is multiplied by the group's own minimum first. */
   readonly second_subtract: boolean;
   readonly second_per_group: boolean;
-  /** Quant: where the block starts, so a weight's bits can be found from the
-   *  offset it carries. */
+  /** Where the block starts, so a weight's bits can be found from the offset
+   *  it carries. */
   readonly block_bits: number;
-  /** Quant: the scale the block keeps for each run of weights, where it keeps
-   *  them, and how many weights one run covers. Empty for a block with one
-   *  scale for all of them. */
+  /** The scale the block keeps for each run of weights, where it keeps them,
+   *  and how many weights one run covers. Empty for a block with one scale
+   *  for all of them. */
   readonly groups: readonly QuantGroup[];
   readonly group_weights: number;
-  /** Quant: taken off the packed value to get the stored one, and whether that
-   *  value is read signed instead of biased. */
+  /** Taken off the packed value to get the stored one, and whether that value
+   *  is read signed instead of biased. */
   readonly bias: number;
   readonly signed: boolean;
-  /** Quant: every weight the block stands for, in the order the tensor reads
-   *  them, and which one the cursor is inside (-1 for none). */
+  /** Every weight the block stands for, in the order the tensor reads them,
+   *  and which one the cursor is inside (-1 for none). */
   readonly weights: readonly QuantWeight[];
   readonly at: number;
-  /** Xref: the widths from `/W`, and the PNG predictor where there was one
-   *  (-1 where there was not). */
-  readonly xref_widths: readonly number[];
-  readonly xref_predictor: number;
-  /** Xref: how many bytes the rows are in the file, and how many once
-   *  decompressed. */
-  readonly xref_packed: number;
-  readonly xref_decoded: number;
-  /** Xref: how many rows of each kind, over the whole table rather than over
-   *  the ones listed. */
-  readonly xref_free: number;
-  readonly xref_in_file: number;
-  readonly xref_in_stream: number;
-  readonly xref_unknown: number;
-  /** Xref: the rows, and how many there are altogether. */
-  readonly xref_rows: readonly XrefRow[];
-  readonly xref_total: number;
-  /** Xref: why there are no rows, where there are none. An object stream that
-   *  would not open says why here too. Empty otherwise. */
+};
+
+export type XrefInfo = {
+  readonly kind: "xref";
+  /** The widths from `/W`, and the PNG predictor where there was one (-1
+   *  where there was not). */
+  readonly widths: readonly number[];
+  readonly predictor: number;
+  /** How many bytes the rows are in the file, and how many once decompressed. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** How many rows of each kind, over the whole table rather than over the
+   *  ones listed. */
+  readonly free: number;
+  readonly in_file: number;
+  readonly in_stream: number;
+  readonly unknown: number;
+  /** The rows, and how many there are altogether. */
+  readonly rows: readonly XrefRow[];
+  readonly total: number;
+  /** Why there are no rows, where there are none. Empty otherwise. */
   readonly problem: string;
-  /** ObjStm: how many bytes the objects are in the file, and how many once
+};
+
+export type ObjStmInfo = {
+  readonly kind: "objstm";
+  /** How many bytes the objects are in the file, and how many once
    *  decompressed. */
-  readonly objstm_packed: number;
-  readonly objstm_decoded: number;
-  /** ObjStm: the object stream this one continues, or -1 where it continues
-   *  none. */
-  readonly objstm_extends: number;
-  /** ObjStm: the objects, and how many there are altogether. */
-  readonly objstm_objects: readonly ObjStmObject[];
-  readonly objstm_total: number;
-  /** Row: how many bytes the row claims, how many were found, and how many of
-   *  them stayed on the row's own page. A whole row has the first two equal. */
-  readonly row_declared: number;
-  readonly row_found: number;
-  readonly row_on_page: number;
-  /** Row: the pages the rest of it is on, in chain order, and how many there
-   *  are when that is more than the few listed. */
-  readonly row_pages: readonly number[];
-  readonly row_chain: number;
-  /** Row: the columns, and how many there are altogether. */
-  readonly row_columns: readonly SqliteColumn[];
-  readonly row_total_columns: number;
-  /** Chunk: how many bytes it is in the file, and how many its elements came
-   *  to once the filters were undone. */
-  readonly chunk_packed: number;
-  readonly chunk_decoded: number;
-  /** Chunk: each filter, in the order it was undone. */
-  readonly chunk_steps: readonly ChunkStep[];
-  /** Chunk: what one element is called, the first few of them, and how many
-   *  there are altogether. */
-  readonly chunk_element_type: string;
-  readonly chunk_values: readonly string[];
-  readonly chunk_total: number;
-  /** Page: how many bytes its payload is in the file, and how many its values
-   *  came to once the codec was undone. */
-  readonly page_packed: number;
-  readonly page_decoded: number;
-  /** Page: every step, in the order it was done. */
-  readonly page_steps: readonly PageStep[];
-  /** Page: what one value is called, the first few of them, and how many
-   *  there are altogether. */
-  readonly page_element_type: string;
-  readonly page_values: readonly string[];
-  readonly page_total: number;
-  /** Samples: a miniSEED record's encoding by name and number, and whether its
-   *  data was laid out big-endian. */
-  readonly mseed_encoding: string;
-  readonly mseed_encoding_number: number;
-  readonly mseed_big_endian: boolean;
-  /** Samples: how many the header gives, and the bytes of data they come from. */
-  readonly mseed_declared: number;
-  readonly mseed_bytes: number;
-  /** Samples: whether the record is Steim, and the steps if it is. The
-   *  constants are null otherwise; the first difference is null for a record
-   *  with no samples. */
-  readonly mseed_steim: boolean;
-  readonly mseed_x0: number | null;
-  readonly mseed_xn: number | null;
-  readonly mseed_first_difference: number | null;
-  /** Samples: what each frame held and gave (the first few hundred frames),
-   *  how many frames were walked, and how many the data has room for. */
-  readonly mseed_frames: readonly MseedFrame[];
-  readonly mseed_frames_walked: number;
-  readonly mseed_frames_in_record: number;
-  /** Samples: the rule a gain-ranged encoding is decoded by, or empty. */
-  readonly mseed_rule: string;
-  /** Samples: the first few, the last, and how many were decoded. */
-  readonly mseed_values: readonly string[];
-  readonly mseed_last: string;
-  readonly mseed_total: number;
-  /** Samples: whether the last sample equals the reverse integration constant,
-   *  or null where there is no check to make. */
-  readonly mseed_check: boolean | null;
-  /** Tile: which tile of a FITS compressed image, counted from 0 as its row
-   *  is, and how many the image has. Zero tiles is an image whose header
-   *  would not read. */
-  readonly tile_index: number;
-  readonly tile_count: number;
-  /** Tile: where it starts, from 0 along each axis with axis 1 first; how
-   *  many pixels along each; and the image's shape. */
-  readonly tile_start: readonly number[];
-  readonly tile_shape: readonly number[];
-  readonly tile_image_shape: readonly number[];
-  /** Tile: ZCMPTYPE, and the column its bytes came from: COMPRESSED_DATA,
+  readonly packed: number;
+  readonly decoded: number;
+  /** The object stream this one continues, or -1 where it continues none. */
+  readonly extends: number;
+  /** The objects, and how many there are altogether. */
+  readonly objects: readonly ObjStmObject[];
+  readonly total: number;
+  /** Why the stream would not open. Empty otherwise. */
+  readonly problem: string;
+};
+
+export type SqliteRowInfo = {
+  readonly kind: "sqliterow";
+  /** How many bytes the row claims, how many were found, and how many of them
+   *  stayed on the row's own page. A whole row has the first two equal. */
+  readonly declared: number;
+  readonly found: number;
+  readonly on_page: number;
+  /** The pages the rest of it is on, in chain order, and how many there are
+   *  when that is more than the few listed. */
+  readonly pages: readonly number[];
+  readonly chain: number;
+  /** The columns, and how many there are altogether. */
+  readonly columns: readonly SqliteColumn[];
+  readonly total_columns: number;
+  readonly problem: string;
+};
+
+export type ChunkInfo = {
+  readonly kind: "chunk";
+  /** How many bytes it is in the file, and how many its elements came to once
+   *  the filters were undone. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** Each filter, in the order it was undone. */
+  readonly steps: readonly ChunkStep[];
+  /** What one element is called, the first few of them, and how many there
+   *  are altogether. */
+  readonly element_type: string;
+  readonly values: readonly string[];
+  readonly total: number;
+  readonly problem: string;
+};
+
+export type VectorInfo = {
+  readonly kind: "vector";
+  /** A GWF vector's `compress` field as written: the scheme in the low byte,
+   *  and 256 added where a little-endian machine packed the words, which
+   *  `little_endian` says again. */
+  readonly compress: number;
+  readonly little_endian: boolean;
+  /** How many values `nData` says the vector holds. */
+  readonly declared: number;
+  /** How many bytes the packed run is in the file, and how many the values
+   *  came to once unpacked. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** Each step, in the order it was done: `gzip`, `zero suppression`,
+   *  `differencing`, `interleave`. */
+  readonly steps: readonly VectorStep[];
+  /** What one value is called, the first few, and how many came out. */
+  readonly element_type: string;
+  readonly values: readonly string[];
+  readonly total: number;
+  readonly problem: string;
+};
+
+export type GribInfo = {
+  readonly kind: "grib";
+  /** The data representation template, 0, 2 or 3, and for 3 whether the
+   *  spatial differencing is first or second order. */
+  readonly template: number;
+  readonly spatial_order: number;
+  /** R as the core writes it, and E and D: a value is (R + X × 2^E) / 10^D. */
+  readonly reference: string;
+  readonly binary_scale: number;
+  readonly decimal_scale: number;
+  /** The overall minimum of the differences, null without differencing. */
+  readonly minimum: number | null;
+  /** How many values section 5 says there are, and the bytes of section 7's
+   *  data in the file. */
+  readonly declared: number;
+  readonly packed: number;
+  /** Every step, in the order it was done. */
+  readonly steps: readonly GribStep[];
+  /** The first values, as the core writes them, and how many came out. */
+  readonly values: readonly string[];
+  readonly total: number;
+  /** The value the cursor is on, null where it is not on one. */
+  readonly at: GribValue | null;
+  readonly problem: string;
+};
+
+/** One step of working out a GRIB message's values. `count` is how many
+ *  numbers it was done to, which `what` already says. */
+export type GribStep = {
+  readonly label: string;
+  readonly what: string;
+  readonly count: number;
+};
+
+/** The GRIB value under the cursor. */
+export type GribValue = {
+  /** Where it is in the message's run of values, from 0. */
+  readonly index: number;
+  /** Which field it is: `values[index]`, `groups[group].values[position]`,
+   *  or `first_values[index]`. */
+  readonly place: "values" | "group" | "first";
+  readonly group: number;
+  readonly position: number;
+  /** The number the field holds, for a group's value: only part of `packed`. */
+  readonly written: number;
+  /** What it is worth, and the whole packed integer X it came from. */
+  readonly value: string;
+  readonly packed: number;
+};
+
+/** One step of unpacking a GWF vector. */
+export type VectorStep = {
+  readonly what: string;
+  readonly in_bytes: number;
+  readonly out_bytes: number;
+};
+
+export type PageInfo = {
+  readonly kind: "page";
+  /** How many bytes its payload is in the file, and how many its values came
+   *  to once the codec was undone. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** Every step, in the order it was done. */
+  readonly steps: readonly PageStep[];
+  /** What one value is called, the first few of them, and how many there are
+   *  altogether. */
+  readonly element_type: string;
+  readonly values: readonly string[];
+  readonly total: number;
+  readonly problem: string;
+};
+
+export type SamplesInfo = {
+  readonly kind: "samples";
+  /** A miniSEED record's encoding by name and number, and whether its data
+   *  was laid out big-endian. */
+  readonly encoding: string;
+  readonly encoding_number: number;
+  readonly big_endian: boolean;
+  /** How many the header gives, and the bytes of data they come from. */
+  readonly declared: number;
+  readonly bytes: number;
+  /** Whether the record is Steim, and the steps if it is. The constants are
+   *  null otherwise; the first difference is null for a record with no
+   *  samples. */
+  readonly steim: boolean;
+  readonly x0: number | null;
+  readonly xn: number | null;
+  readonly first_difference: number | null;
+  /** What each frame held and gave (the first few hundred frames), how many
+   *  frames were walked, and how many the data has room for. */
+  readonly frames: readonly MseedFrame[];
+  readonly frames_walked: number;
+  readonly frames_in_record: number;
+  /** The rule a gain-ranged encoding is decoded by, or empty. */
+  readonly rule: string;
+  /** The first few, the last, and how many were decoded. */
+  readonly values: readonly string[];
+  readonly last: string;
+  readonly total: number;
+  /** Whether the last sample equals the reverse integration constant, or null
+   *  where there is no check to make. */
+  readonly check: boolean | null;
+  readonly problem: string;
+};
+
+export type TileInfo = {
+  readonly kind: "tile";
+  /** Which tile of a FITS compressed image, counted from 0 as its row is, and
+   *  how many the image has. Zero tiles is an image whose header would not
+   *  read. */
+  readonly index: number;
+  readonly count: number;
+  /** Where it starts, from 0 along each axis with axis 1 first; how many
+   *  pixels along each; and the image's shape. */
+  readonly start: readonly number[];
+  readonly shape: readonly number[];
+  readonly image_shape: readonly number[];
+  /** ZCMPTYPE, and the column its bytes came from: COMPRESSED_DATA,
    *  GZIP_COMPRESSED_DATA, UNCOMPRESSED_DATA, or empty. */
-  readonly tile_algorithm: string;
-  readonly tile_column: string;
-  /** Tile: bytes in the heap, and bytes once decompressed. */
-  readonly tile_packed: number;
-  readonly tile_decoded: number;
-  /** Tile: every step, in the order it was done. */
-  readonly tile_steps: readonly PageStep[];
-  /** Tile: the first pixels, how many were decoded, how many the tile has,
-   *  and what one pixel is. */
-  readonly tile_values: readonly string[];
-  readonly tile_total: number;
-  readonly tile_pixels: number;
-  readonly tile_element_type: string;
+  readonly algorithm: string;
+  readonly column: string;
+  /** Bytes in the heap, and bytes once decompressed. */
+  readonly packed: number;
+  readonly decoded: number;
+  /** Every step, in the order it was done. */
+  readonly steps: readonly PageStep[];
+  /** The first pixels, how many were decoded, how many the tile has, and what
+   *  one pixel is. */
+  readonly values: readonly string[];
+  readonly total: number;
+  readonly pixels: number;
+  readonly element_type: string;
+  readonly problem: string;
 };
 
 /** One Steim frame: the differences its codes name, and how many samples they

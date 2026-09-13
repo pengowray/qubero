@@ -6,7 +6,7 @@
 
 import { extraction } from "./bitextract.ts";
 import type { BitRange } from "./hexview.ts";
-import type { QuantPart, QuantWeight, TypeInfo } from "./doc.ts";
+import type { QuantPart, QuantWeight, QuantInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 /** Asked for when a weight is clicked, so the views go to its bits and mark
@@ -45,7 +45,7 @@ function num(x: number): string {
 }
 
 /** `d 0.003876` and whatever the layout pairs with it. */
-function scaleRow(info: TypeInfo): HTMLElement {
+function scaleRow(info: QuantInfo): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-qscales";
   row.append(span("insp-qscale-name", "d"), span("insp-qscale-value", num(info.scale)));
@@ -74,7 +74,7 @@ function cursorRow(w: QuantWeight, index: number): HTMLElement {
  * own `d` is what they are measured in: a weight is `d * scale * stored`, less
  * `dmin * min` where the type has one.
  */
-function groupRow(info: TypeInfo): DocumentFragment {
+function groupRow(info: QuantInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   if (info.groups.length === 0) return frag;
   const per = info.group_weights;
@@ -106,7 +106,7 @@ function groupRow(info: TypeInfo): DocumentFragment {
 
 /** Every run of bits the weight is made of, low part first, as places in the
  *  file rather than in the block. */
-function runs(info: TypeInfo, w: QuantWeight): BitRange[] {
+function runs(info: QuantInfo, w: QuantWeight): BitRange[] {
   const parts = w.high === null ? [w.bits] : [w.bits, w.high];
   return parts.map((p) => ({ startBit: info.block_bits + p.bit, endBit: info.block_bits + p.bit + p.width }));
 }
@@ -127,7 +127,7 @@ function term(x: number): string {
  * the group's. Nothing else on the panel says how the numbers above it are
  * connected.
  */
-function recipe(info: TypeInfo, w: QuantWeight, index: number): DocumentFragment {
+function recipe(info: QuantInfo, w: QuantWeight, index: number): DocumentFragment {
   const frag = document.createDocumentFragment();
   const group = info.groups.length > 0 ? info.groups[Math.floor(index / info.group_weights)] : undefined;
   if (info.groups.length > 0 && group === undefined) return frag;
@@ -164,7 +164,7 @@ function recipe(info: TypeInfo, w: QuantWeight, index: number): DocumentFragment
  * run is named by the field it is in, so the two lines can be matched to the
  * fields listed above.
  */
-function sources(info: TypeInfo, w: QuantWeight): DocumentFragment {
+function sources(info: QuantInfo, w: QuantWeight): DocumentFragment {
   const frag = document.createDocumentFragment();
   const parts = w.high === null ? [w.bits] : [w.bits, w.high];
   // One run needs no naming: the field is the one the cursor is already in.
@@ -180,7 +180,7 @@ function sources(info: TypeInfo, w: QuantWeight): DocumentFragment {
  * stored one. Only shown where there is something to say: a single unbiased run
  * is its own answer.
  */
-function packing(info: TypeInfo, w: QuantWeight): HTMLElement | null {
+function packing(info: QuantInfo, w: QuantWeight): HTMLElement | null {
   if (w.high === null && info.bias === 0 && !info.signed) return null;
   let text = w.bits.field;
   if (w.high !== null) text = `${w.high.field} << ${w.high.shift} | ${text}`;
@@ -223,7 +223,7 @@ function toggle(onPick: () => void): HTMLElement {
  * of its first byte and weight 16 in the high half of the same byte. Clicking
  * one goes to the bits it came from.
  */
-function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
+function grid(info: QuantInfo, goTo: GoTo): HTMLElement {
   // A grid that started at the top on every rebuild would take the weight just
   // clicked off the screen. Another block starts at the top, since nothing has
   // been read there yet.
@@ -270,7 +270,7 @@ function grid(info: TypeInfo, goTo: GoTo): HTMLElement {
  * `redraw` is asked for when the reader switches how the grid reads, since the
  * panel is rebuilt rather than updated in place.
  */
-export function quantBody(info: TypeInfo, goTo: GoTo, redraw: () => void): DocumentFragment {
+export function quantBody(info: QuantInfo, goTo: GoTo, redraw: () => void): DocumentFragment {
   const frag = document.createDocumentFragment();
   const here = info.at >= 0 ? info.weights[info.at] : undefined;
   if (here !== undefined) {

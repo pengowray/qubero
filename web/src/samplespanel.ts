@@ -9,7 +9,7 @@
 // them, without digit grouping, so a constant can be compared with the sample
 // it should equal by eye. Counts are grouped.
 
-import type { TypeInfo } from "./doc.ts";
+import type { SamplesInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 function span(cls: string, text: string): HTMLElement {
@@ -28,36 +28,36 @@ function line(cls: string, text: string): HTMLElement {
 
 /** How many samples, for the note beside the heading. A record that decoded
  *  fewer than its header gives says both, since the shortfall is the news. */
-export function samplesNote(info: TypeInfo): string {
-  if (info.mseed_total === info.mseed_declared) return countText(info.mseed_declared, "sample");
-  return `${info.mseed_total.toLocaleString()} of ${countText(info.mseed_declared, "sample")}`;
+export function samplesNote(info: SamplesInfo): string {
+  if (info.total === info.declared) return countText(info.declared, "sample");
+  return `${info.total.toLocaleString()} of ${countText(info.declared, "sample")}`;
 }
 
 /** The encoding, the byte order and the size of the data, on one line. */
-export function encodingLine(info: TypeInfo): string {
-  const order = info.mseed_big_endian ? "big-endian" : "little-endian";
-  return `${info.mseed_encoding}, ${order}, ${info.mseed_bytes.toLocaleString()} bytes of data`;
+export function encodingLine(info: SamplesInfo): string {
+  const order = info.big_endian ? "big-endian" : "little-endian";
+  return `${info.encoding}, ${order}, ${info.bytes.toLocaleString()} bytes of data`;
 }
 
 /** The reverse integration constant check, or null where there is none. */
-export function checkLine(info: TypeInfo): { readonly ok: boolean; readonly text: string } | null {
-  if (info.mseed_check === null || info.mseed_xn === null) return null;
-  const last = info.mseed_last;
-  return info.mseed_check
+export function checkLine(info: SamplesInfo): { readonly ok: boolean; readonly text: string } | null {
+  if (info.check === null || info.xn === null) return null;
+  const last = info.last;
+  return info.check
     ? { ok: true, text: `Check passed: last sample ${last} equals the reverse integration constant.` }
-    : { ok: false, text: `Check failed: last sample ${last} does not equal the reverse integration constant ${info.mseed_xn}.` };
+    : { ok: false, text: `Check failed: last sample ${last} does not equal the reverse integration constant ${info.xn}.` };
 }
 
 /** What sits under the row of samples: how many are shown of how many, and the
  *  last one, which is only the record's last sample when every sample was
  *  decoded. Null when the row already shows them all. */
-export function showingLine(info: TypeInfo): string | null {
-  const shown = info.mseed_values.length;
-  if (shown >= info.mseed_total) return null;
-  if (info.mseed_total === info.mseed_declared) {
-    return `Showing the first ${shown.toLocaleString()} of ${countText(info.mseed_declared, "sample")}. Last sample: ${info.mseed_last}`;
+export function showingLine(info: SamplesInfo): string | null {
+  const shown = info.values.length;
+  if (shown >= info.total) return null;
+  if (info.total === info.declared) {
+    return `Showing the first ${shown.toLocaleString()} of ${countText(info.declared, "sample")}. Last sample: ${info.last}`;
   }
-  return `Showing the first ${shown.toLocaleString()} of the ${countText(info.mseed_total, "sample")} decoded.`;
+  return `Showing the first ${shown.toLocaleString()} of the ${countText(info.total, "sample")} decoded.`;
 }
 
 /** One step of the walk: a short label, what it says, and a note to the right. */
@@ -70,9 +70,9 @@ export const FRAME_COLUMNS: StepRow = { label: "frame", text: "differences", not
  *  held (and how many were used, where not all were), and the samples they
  *  made. Frame 0's count includes the skipped first difference, which is where
  *  sample 0 stands, so adding the counts up gives sample numbers. */
-export function frameRows(info: TypeInfo): StepRow[] {
+export function frameRows(info: SamplesInfo): StepRow[] {
   let next = 0;
-  return info.mseed_frames.map((frame, f) => {
+  return info.frames.map((frame, f) => {
     const from = next;
     next += frame.used;
     const text =
@@ -99,7 +99,7 @@ function stepLine(row: StepRow, cls = "insp-orow is-step"): HTMLElement {
  * outside the scrolling list of frames, so sixty frames cannot push the reverse
  * constant out of sight.
  */
-export function samplesBody(info: TypeInfo): DocumentFragment {
+export function samplesBody(info: SamplesInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   frag.append(line("insp-qcount", encodingLine(info)));
 
@@ -107,30 +107,30 @@ export function samplesBody(info: TypeInfo): DocumentFragment {
   if (check !== null) frag.append(line(`insp-check-result ${check.ok ? "ok" : "bad"}`, check.text));
   if (info.problem !== "") frag.append(line("insp-xproblem", info.problem));
 
-  if (info.mseed_values.length > 0) {
-    const all = info.mseed_values.length >= info.mseed_total;
+  if (info.values.length > 0) {
+    const all = info.values.length >= info.total;
     frag.append(span("insp-qsubhead", all ? "Samples" : "First samples"));
     const values = document.createElement("div");
     values.className = "insp-orow is-values";
-    values.append(span("insp-orow-text", info.mseed_values.join("  ")));
+    values.append(span("insp-orow-text", info.values.join("  ")));
     frag.append(values);
     const showing = showingLine(info);
     if (showing !== null) frag.append(line("insp-qcount", showing));
   }
 
-  if (info.mseed_steim || info.mseed_rule !== "") {
+  if (info.steim || info.rule !== "") {
     frag.append(span("insp-qsubhead", "How the samples were decoded"));
   }
-  if (info.mseed_rule !== "") {
-    frag.append(stepLine({ label: "rule", text: info.mseed_rule, note: "SEED 2.4" }));
+  if (info.rule !== "") {
+    frag.append(stepLine({ label: "rule", text: info.rule, note: "SEED 2.4" }));
   }
-  if (info.mseed_steim && info.mseed_x0 !== null && info.mseed_xn !== null) {
-    frag.append(stepLine({ label: "sample 0", text: `${info.mseed_x0}, the forward integration constant`, note: "" }));
-    if (info.mseed_first_difference !== null) {
-      const text = `first difference ${info.mseed_first_difference}, measured from the previous record's last sample`;
+  if (info.steim && info.x0 !== null && info.xn !== null) {
+    frag.append(stepLine({ label: "sample 0", text: `${info.x0}, the forward integration constant`, note: "" }));
+    if (info.first_difference !== null) {
+      const text = `first difference ${info.first_difference}, measured from the previous record's last sample`;
       frag.append(stepLine({ label: "skipped", text, note: "" }));
     }
-    if (info.mseed_frames.length > 0) {
+    if (info.frames.length > 0) {
       // A table rather than a sentence a frame: sixty rows of the same words
       // hide the one number that changes.
       const list = document.createElement("div");
@@ -139,16 +139,16 @@ export function samplesBody(info: TypeInfo): DocumentFragment {
       for (const row of frameRows(info)) list.append(stepLine(row));
       frag.append(list);
     }
-    const reverse = `${info.mseed_xn}, the reverse integration constant; the last sample should equal it`;
+    const reverse = `${info.xn}, the reverse integration constant; the last sample should equal it`;
     frag.append(stepLine({ label: "check", text: reverse, note: "" }));
-    if (info.mseed_frames.length < info.mseed_frames_walked) {
+    if (info.frames.length < info.frames_walked) {
       frag.append(
-        line("insp-qcount", `Showing the first ${info.mseed_frames.length.toLocaleString()} of ${countText(info.mseed_frames_walked, "frame")}.`),
+        line("insp-qcount", `Showing the first ${info.frames.length.toLocaleString()} of ${countText(info.frames_walked, "frame")}.`),
       );
     }
-    if (info.mseed_frames_walked < info.mseed_frames_in_record) {
+    if (info.frames_walked < info.frames_in_record) {
       frag.append(
-        line("insp-qcount", `${info.mseed_frames_walked.toLocaleString()} of ${countText(info.mseed_frames_in_record, "frame")} used.`),
+        line("insp-qcount", `${info.frames_walked.toLocaleString()} of ${countText(info.frames_in_record, "frame")} used.`),
       );
     }
   }

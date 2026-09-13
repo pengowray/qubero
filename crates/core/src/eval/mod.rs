@@ -43,7 +43,7 @@ mod walk;
 mod tests;
 
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
-pub use explain::{Explain, FlagBit};
+pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;

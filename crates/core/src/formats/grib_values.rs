@@ -49,6 +49,11 @@
 //! is is said in [`Reading::problem`] rather than left for a reader to notice
 //! in a measurement of 4 billion.
 
+/// What [`StructDef::packed`](crate::template::StructDef::packed) calls section
+/// 7's data, so the template can mark it and the panel can find its way back
+/// here.
+pub const PACKING: &str = "grib_values";
+
 /// The largest section 7 this will unpack. Section 7 of a global model at
 /// half a degree is about a megabyte; a claim far past that is a reason to
 /// stop rather than a reason to allocate.
@@ -58,6 +63,9 @@ pub const PACKED_LIMIT: usize = 64 << 20;
 /// million points; ten times that is past any grid anyone writes and is where
 /// a header that has gone wrong ends up.
 pub const VALUE_LIMIT: usize = 10_000_000;
+
+/// How many values a panel shows, the same as for an HDF5 chunk.
+pub const SHOWN: usize = 32;
 
 /// What section 5 says, as the numbers the arithmetic needs. Every field here
 /// is one the template already reads; this is them gathered up so the reading
@@ -100,6 +108,45 @@ impl Packing {
         let scaled = f64::from(self.reference) + packed as f64 * 2f64.powi(self.binary_scale);
         scaled / 10f64.powi(self.decimal_scale)
     }
+
+    /// The reference value as a panel writes it: the shortest decimal that
+    /// reads back as the same `f32`. What the writer meant, as near as the
+    /// four bytes can say; `947324.3` rather than the `947324.3125` those
+    /// bytes hold exactly.
+    pub fn reference_text(&self) -> String {
+        self.reference.to_string()
+    }
+
+    /// A value as a panel writes it: to as many decimal places as the packing
+    /// can tell apart, and no more.
+    ///
+    /// Those are the reference value's own places, as [`reference_text`]
+    /// writes it, or the step `2^E` makes when E is negative, whichever is
+    /// finer, shifted by D. Printing the `f64` whole would show digits that
+    /// are only the reference being an `f32`: `272.98875427246094` for a
+    /// reference of 253.02 and a step of a thirty-second, where the packing
+    /// says 272.98875. A value under a ten-thousandth is written with an
+    /// exponent, since a run of zeros is hard to count.
+    ///
+    /// [`reference_text`]: Packing::reference_text
+    pub fn text(&self, value: f64) -> String {
+        if !value.is_finite() {
+            return value.to_string();
+        }
+        let reference = self.reference_text();
+        let own = reference.split_once('.').map_or(0, |(_, places)| places.len() as i64);
+        let places = (own.max(-i64::from(self.binary_scale)).max(0) + i64::from(self.decimal_scale)).clamp(0, 40) as usize;
+        let fixed = format!("{value:.places$}");
+        let trimmed = if fixed.contains('.') { fixed.trim_end_matches('0').trim_end_matches('.') } else { fixed.as_str() };
+        let rounded: f64 = trimmed.parse().unwrap_or(value);
+        if rounded == 0.0 {
+            "0".to_string()
+        } else if rounded.abs() < 1e-4 {
+            format!("{rounded:e}")
+        } else {
+            trimmed.to_string()
+        }
+    }
 }
 
 /// One thing that was done to get from the bytes to the numbers, in the order
@@ -107,10 +154,16 @@ impl Packing {
 /// went wrong at.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
-    /// What was done, as a sentence: `read 2,048 group widths, 0 to 13 bits`.
+    /// Which step, in a few words a problem can name it by: `group widths`.
+    pub label: String,
+    /// What it came to: `2,048 group widths, 0 to 13 bits per value`.
     pub what: String,
     /// How many numbers it was done to.
     pub count: u64,
+}
+
+fn step(label: &str, what: String, count: u64) -> Step {
+    Step { label: label.to_string(), what, count }
 }
 
 /// What came out of section 7.
@@ -129,12 +182,20 @@ pub struct Reading {
     pub problem: Option<String>,
 }
 
+/// The reading of a section 7 over [`PACKED_LIMIT`], which is none: a section
+/// that large is not read at all.
+pub fn refused() -> Reading {
+    let mb = PACKED_LIMIT / (1 << 20);
+    Reading { problem: Some(format!("Not unpacked: section 7 is over this viewer's {mb} MB limit.")), ..Reading::default() }
+}
+
 /// Simply packed data (5.0): every number is `bits_per_value` wide and worth
 /// what the formula says, with no groups and no differencing.
 pub fn simple(p: &Packing, section7: &[u8], count: usize) -> Reading {
     let mut out = Reading::default();
     if count > VALUE_LIMIT {
-        out.problem = Some(format!("{count} values is past this reader's limit of {VALUE_LIMIT}"));
+        let (count, limit) = (commas(count as u64), commas(VALUE_LIMIT as u64));
+        out.problem = Some(format!("Not unpacked: section 5 declares {count} values, over this viewer's limit of {limit}."));
         return out;
     }
     // A width of zero is not a mistake: a field whose values are all the same
@@ -144,12 +205,14 @@ pub fn simple(p: &Packing, section7: &[u8], count: usize) -> Reading {
         match bits.take(p.bits_per_value) {
             Some(x) => out.packed.push(x as i64),
             None => {
-                out.problem = Some(format!("section 7 ran out after {} of {count} values", out.packed.len()));
+                let (read, of) = (commas(out.packed.len() as u64), commas(count as u64));
+                out.problem = Some(format!("Stopped at packed values after {read} of {of} values: section 7 ran out."));
                 break;
             }
         }
     }
-    out.steps.push(Step { what: format!("read {} values, {} bits each", out.packed.len(), p.bits_per_value), count: out.packed.len() as u64 });
+    let n = out.packed.len() as u64;
+    out.steps.push(step("packed values", format!("{} values, {} bits each", commas(n), p.bits_per_value), n));
     scale(p, &mut out);
     out
 }
@@ -162,12 +225,10 @@ pub fn simple(p: &Packing, section7: &[u8], count: usize) -> Reading {
 /// the message says and not necessarily how many points the grid has: a
 /// message with a bitmap writes fewer.
 pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
-    let mut out = Reading::default();
     if section7.len() > PACKED_LIMIT {
-        let mb = PACKED_LIMIT / (1 << 20);
-        out.problem = Some(format!("section 7 is over this reader's {mb} MB limit"));
-        return out;
+        return refused();
     }
+    let mut out = Reading::default();
     let mut bits = Bits::new(section7);
     let n = p.n_groups as usize;
 
@@ -178,51 +239,73 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
     let mut first = Vec::new();
     let mut minimum = 0i64;
     if p.spatial_order > 0 {
-        let wide = p.extra_bytes * 8;
+        let octets = p.extra_bytes;
+        let wide = octets * 8;
         if wide == 0 || wide > 32 {
-            out.problem = Some(format!("{} octets of extra descriptors is not a width this can read", p.extra_bytes));
+            out.problem = Some(format!(
+                "Not unpacked: the extra descriptors (first values and overall minimum) are {octets} octets wide, and this viewer reads 1 to 4 octets."
+            ));
             return out;
         }
         for _ in 0..p.spatial_order {
             let Some(v) = bits.take(wide) else {
-                out.problem = Some("section 7 ended inside the first values".into());
+                let before = match p.spatial_order {
+                    1 => "before the first value was read".to_string(),
+                    order => format!("before the first {order} values were read"),
+                };
+                out.problem = Some(format!("Stopped at first values: section 7 ended {before}."));
                 return out;
             };
             first.push(v as i64);
         }
+        out.steps.push(step(
+            "first values",
+            match first.len() {
+                1 => format!("the first value, written as a value rather than a difference, {octets} octets"),
+                k => format!("the first {k} values, written as values rather than differences, {octets} octets each"),
+            },
+            first.len() as u64,
+        ));
         let Some(v) = bits.take(wide) else {
-            out.problem = Some("section 7 ended before the overall minimum".into());
+            out.problem =
+                Some("Stopped at minimum difference: section 7 ended before the overall minimum of the differences.".into());
             return out;
         };
         let top = 1u64 << (wide - 1);
         minimum = if v & top != 0 { -((v & (top - 1)) as i64) } else { v as i64 };
-        let whole = match first.len() {
-            1 => "read the first value, written whole".to_string(),
-            n => format!("read the first {n} values, written whole"),
-        };
-        out.steps.push(Step { what: format!("{whole}, and a smallest difference of {minimum}"), count: first.len() as u64 + 1 });
+        out.steps.push(step(
+            "minimum difference",
+            format!("{minimum}, the overall minimum of the differences, {octets} octets"),
+            1,
+        ));
     }
 
     // The three tables. Each is `n_groups` numbers at a width section 5 gave,
     // and each is padded out with zero bits so that it ends on a byte before
     // the next one starts, which data template 7.2 requires of all three.
+    let groups = commas(n as u64);
+    let ended = |what: &str| format!("Stopped at {what}: section 7 ended inside the {groups} {what}.");
     let Some(references) = table(&mut bits, n, p.bits_per_value) else {
-        out.problem = Some("section 7 ended inside the group references".into());
+        out.problem = Some(ended("group references"));
         return out;
     };
-    out.steps.push(Step { what: format!("read {n} group references, {} bits each", p.bits_per_value), count: n as u64 });
+    out.steps.push(step(
+        "group references",
+        format!("{groups} group references, {} bits each", p.bits_per_value),
+        n as u64,
+    ));
     let Some(widths) = table(&mut bits, n, p.group_widths_bits) else {
-        out.problem = Some("section 7 ended inside the group widths".into());
+        out.problem = Some(ended("group widths"));
         return out;
     };
     let widths: Vec<u32> = widths.iter().map(|w| p.group_widths_reference + *w as u32).collect();
-    let span = |v: &[u32]| match (v.iter().min(), v.iter().max()) {
-        (Some(lo), Some(hi)) => format!("{lo} to {hi}"),
-        _ => "no".into(),
+    let what = match (widths.iter().min(), widths.iter().max()) {
+        (Some(lo), Some(hi)) => format!("{groups} group widths, {lo} to {hi} bits per value"),
+        _ => format!("{groups} group widths"),
     };
-    out.steps.push(Step { what: format!("read {n} group widths, {} bits a value", span(&widths)), count: n as u64 });
+    out.steps.push(step("group widths", what, n as u64));
     let Some(lengths) = table(&mut bits, n, p.group_lengths_bits) else {
-        out.problem = Some("section 7 ended inside the group lengths".into());
+        out.problem = Some(ended("group lengths"));
         return out;
     };
     // The last group's length is not in the table: what the table holds is a
@@ -234,10 +317,12 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
     }
     let total: u64 = lengths.iter().sum();
     if total as usize > VALUE_LIMIT {
-        out.problem = Some(format!("{total} values is past this reader's limit of {VALUE_LIMIT}"));
+        let (total, limit) = (commas(total), commas(VALUE_LIMIT as u64));
+        out.problem =
+            Some(format!("Stopped at group lengths: they add up to {total} values, over this viewer's limit of {limit}."));
         return out;
     }
-    out.steps.push(Step { what: format!("read {n} group lengths, {total} values in all"), count: n as u64 });
+    out.steps.push(step("group lengths", format!("{groups} group lengths, {} values in all", commas(total)), n as u64));
 
     // Then the values, group by group, each group's run at that group's width.
     out.packed.reserve(total as usize);
@@ -258,7 +343,9 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
                 match bits.take(width) {
                     Some(v) => v,
                     None => {
-                        out.problem = Some(format!("section 7 ran out in group {g} of {n}"));
+                        let place = ordinal(g as u64 + 1);
+                        out.problem =
+                            Some(format!("Stopped at group values: section 7 ran out in group [{g}], the {place} of {groups}."));
                         return finish(p, out, first, minimum);
                     }
                 }
@@ -266,9 +353,16 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
             out.packed.push((reference + written) as i64);
         }
     }
-    out.steps.push(Step { what: format!("added each group's reference to its {total} values"), count: total });
+    out.steps.push(step(
+        "group values",
+        format!("{} values, each read at its group's width and added to its group's reference", commas(total)),
+        total,
+    ));
     if missing > 0 {
-        out.problem = Some(format!("{missing} values are in groups section 5 marked as having no value, and are handed back as the numbers they hold"));
+        out.problem = Some(format!(
+            "{} values are in groups whose reference marks them as missing; they are shown as the numbers they unpack to, not as missing.",
+            commas(missing)
+        ));
     }
     finish(p, out, first, minimum)
 }
@@ -282,7 +376,7 @@ fn finish(p: &Packing, mut out: Reading, first: Vec<i64>, minimum: i64) -> Readi
         for v in &mut out.packed {
             *v += minimum;
         }
-        out.steps.push(Step { what: format!("added the smallest difference {minimum} back to every value"), count: out.packed.len() as u64 });
+        out.steps.push(step("minimum added back", format!("{minimum} added back to every difference"), out.packed.len() as u64));
         // The first one or two are not differences at all: they were written
         // whole, and the run of sums starts from them.
         for (k, v) in first.iter().enumerate() {
@@ -302,10 +396,9 @@ fn finish(p: &Packing, mut out: Reading, first: Vec<i64>, minimum: i64) -> Readi
                 _ => out.packed[k] + 2 * out.packed[k - 1] - out.packed[k - 2],
             };
         }
-        out.steps.push(Step {
-            what: format!("undid {} spatial differencing as a running sum", if order == 1 { "first-order" } else { "second-order" }),
-            count: out.packed.len() as u64,
-        });
+        let n = out.packed.len() as u64;
+        let which = if order == 1 { "first" } else { "second" };
+        out.steps.push(step("spatial differencing", format!("{which}-order spatial differencing undone, {} values", commas(n)), n));
     }
     scale(p, &mut out);
     out
@@ -315,10 +408,25 @@ fn finish(p: &Packing, mut out: Reading, first: Vec<i64>, minimum: i64) -> Readi
 /// measurements.
 fn scale(p: &Packing, out: &mut Reading) {
     out.values = out.packed.iter().map(|x| p.worth(*x)).collect();
-    out.steps.push(Step {
-        what: format!("scaled by 2^{} over 10^{} from a reference of {}", p.binary_scale, p.decimal_scale, p.reference),
-        count: out.values.len() as u64,
-    });
+    let n = out.values.len() as u64;
+    let formula = format!("({} + X × 2^{}) / 10^{}", p.reference_text(), p.binary_scale, p.decimal_scale);
+    out.steps.push(step("scaling", format!("{formula} for each packed integer X, giving {} values", commas(n)), n));
+}
+
+fn commas(n: u64) -> String {
+    crate::encode::commas(n)
+}
+
+/// A count from 1 as a place in a run: `1st`, `12th`, `2,001st`.
+fn ordinal(n: u64) -> String {
+    let suffix = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{}{suffix}", commas(n))
 }
 
 /// One of the three tables: `n` numbers `bits` wide, and then the bits between
@@ -434,16 +542,55 @@ mod tests {
     fn every_step_is_reported_in_the_order_it_was_done() {
         let (p, bytes) = two_groups(true);
         let r = complex(&p, &bytes);
+        let labels: Vec<&str> = r.steps.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "first values",
+                "minimum difference",
+                "group references",
+                "group widths",
+                "group lengths",
+                "group values",
+                "minimum added back",
+                "spatial differencing",
+                "scaling"
+            ]
+        );
         let steps: Vec<&str> = r.steps.iter().map(|s| s.what.as_str()).collect();
-        assert_eq!(steps.len(), 8, "{steps:?}");
-        assert!(steps[0].contains("smallest difference of -3"), "{:?}", steps[0]);
-        assert!(steps[1].contains("2 group references"), "{:?}", steps[1]);
-        assert!(steps[2].contains("1 to 4 bits a value"), "{:?}", steps[2]);
-        assert!(steps[3].contains("7 values in all"), "{:?}", steps[3]);
-        assert!(steps[4].contains("group's reference"), "{:?}", steps[4]);
-        assert!(steps[5].contains("added the smallest difference"), "{:?}", steps[5]);
-        assert!(steps[6].contains("first-order"), "{:?}", steps[6]);
-        assert!(steps[7].contains("2^0 over 10^0"), "{:?}", steps[7]);
+        assert_eq!(steps[0], "the first value, written as a value rather than a difference, 2 octets");
+        assert_eq!(steps[1], "-3, the overall minimum of the differences, 2 octets");
+        assert_eq!(steps[2], "2 group references, 6 bits each");
+        assert_eq!(steps[3], "2 group widths, 1 to 4 bits per value");
+        assert_eq!(steps[4], "2 group lengths, 7 values in all");
+        assert!(steps[5].contains("group's reference"), "{:?}", steps[5]);
+        assert_eq!(steps[6], "-3 added back to every difference");
+        assert_eq!(steps[7], "first-order spatial differencing undone, 7 values");
+        assert_eq!(steps[8], "(10 + X × 2^0) / 10^0 for each packed integer X, giving 7 values");
+    }
+
+    /// A value is written to the places the packing can tell apart: the
+    /// reference's own, or the step a negative binary scale makes, shifted by
+    /// the decimal scale. Not the digits an `f32` reference trails behind it.
+    #[test]
+    fn a_value_is_written_to_the_places_its_packing_can_tell_apart() {
+        let (p, _) = two_groups(false);
+        // A reference of 253.02 is 253.0200042724609375 as an f32, and a
+        // step of a thirty-second takes five places.
+        let p = Packing { reference: 253.02, binary_scale: -5, decimal_scale: 0, ..p };
+        assert_eq!(p.text(p.worth(639)), "272.98875");
+        // What the four bytes hold exactly is 947324.3125; the reference is
+        // written 947324.3, and a tenth of it takes two places.
+        let p = Packing { reference: 947324.3125, binary_scale: 1, decimal_scale: 1, ..p };
+        assert_eq!(p.reference_text(), "947324.3");
+        assert_eq!(p.text(p.worth(0)), "94732.43");
+        assert_eq!(p.text(p.worth(3)), "94733.03");
+        // A billionth scale writes the value with an exponent, and nothing
+        // is written as a negative zero.
+        let p = Packing { reference: 0.0, binary_scale: 2, decimal_scale: 9, ..p };
+        assert_eq!(p.text(p.worth(213)), "8.52e-7");
+        assert_eq!(p.text(-0.0), "0");
+        assert_eq!(p.text(p.worth(0)), "0");
     }
 
     #[test]
