@@ -5206,8 +5206,12 @@ table.rec tr.is-on td {
   border-collapse: collapse;
 }
 .dv-row {
-  cursor: pointer;
   border-left: 3px solid var(--field-color);
+}
+/* Only a row a click can actually reach in the open file. See
+   `DiagramView.canPick`. */
+.dv-row.is-pickable {
+  cursor: pointer;
 }
 .dv-row:hover {
   background: color-mix(in srgb, var(--field-color) 12%, transparent);

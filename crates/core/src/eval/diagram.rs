@@ -257,18 +257,22 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
         Ty::Computed(_) | Ty::ComputedText(_) => Some(0),
         // The field itself is nothing; its contents are somewhere else.
         Ty::At { .. } => Some(0),
-        Ty::Bytes(Expr::Lit(n)) => Some(*n as u64 * 8),
+        // Through `try_from` rather than `as`: a negative literal is not a
+        // length, and taken as one it is eighteen million terabytes and a
+        // multiplication that panics. No builtin writes one; a converted format
+        // may.
+        Ty::Bytes(Expr::Lit(n)) => u64::try_from(*n).ok()?.checked_mul(8),
         Ty::Str { len: StrLen::Fixed(Expr::Lit(n)) | StrLen::Padded { size: Expr::Lit(n), .. }, .. }
         | Ty::TextInt { len: StrLen::Fixed(Expr::Lit(n)) | StrLen::Padded { size: Expr::Lit(n), .. }, .. } => {
-            Some(*n as u64 * 8)
+            u64::try_from(*n).ok()?.checked_mul(8)
         }
-        Ty::Sized { size: Expr::Lit(n), .. } => Some(*n as u64 * 8),
-        Ty::SizedBits { bits: Expr::Lit(n), .. } => Some(*n as u64),
+        Ty::Sized { size: Expr::Lit(n), .. } => u64::try_from(*n).ok()?.checked_mul(8),
+        Ty::SizedBits { bits: Expr::Lit(n), .. } => u64::try_from(*n).ok(),
         Ty::Nullable { inner, .. } | Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Origin { inner } => {
             static_bits(t, inner, depth + 1)
         }
         Ty::Array { elem, count: Expr::Lit(n) } => {
-            static_bits(t, elem, depth + 1).and_then(|b| b.checked_mul(*n as u64))
+            static_bits(t, elem, depth + 1).and_then(|b| b.checked_mul(u64::try_from(*n).ok()?))
         }
         Ty::Struct(sd) => {
             let mut total = 0u64;

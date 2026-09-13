@@ -2617,10 +2617,15 @@ export const DIAGRAM = {
    *  they look for their file in it. */
   about: (format: string): string => `The ${format} format, as the template describes it. Not this file.`,
   noTemplate: "No format is chosen, so there is nothing to draw.",
-  /** Types the picture leaves out. Named rather than counted alone would not
-   *  fit, so the number is the whole of it. */
-  omitted: (n: number): string =>
-    n === 1 ? "1 type is not drawn: nothing in the format reaches it." : `${n.toLocaleString()} types are not drawn: nothing in the format reaches them.`,
+  /**
+   * Types the picture leaves out.
+   *
+   * The count and nothing else, because the reasons differ per type and the
+   * line cannot carry them: one is unreachable from the root, another is a
+   * named number rather than a structure, a third is past the core's cap. A
+   * sentence naming one of those would be wrong about the other two.
+   */
+  omitted: (n: number): string => (n === 1 ? "1 type is not drawn." : `${n.toLocaleString()} types are not drawn.`),
   /** The row that stands for the fields a long type's box does not show.
    *  Clicking it shows them. */
   more: (n: number): string => `… ${n.toLocaleString()} more fields`,

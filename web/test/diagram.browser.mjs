@@ -22,7 +22,7 @@ await mkdir(outDir, { recursive: true });
 // exercise different shapes: PNG is a chunk switch with a case per type, ELF is
 // a header pointing at two tables.
 const cases = [
-  { file: join(samples, "pico8/p8png-test.p8.png"), shot: "diagram.png", fitShot: "diagram-fit.png", darkShot: "diagram-dark.png" },
+  { file: join(samples, "pico8/p8png-test.p8.png"), shot: "diagram.png", fitShot: "diagram-fit.png", darkShot: "diagram-dark.png", pick: true },
   { file: join(samples, "elf/busybox-x86_64"), shot: "diagram-elf.png", fitShot: "diagram-elf-fit.png" },
 ];
 
@@ -61,6 +61,7 @@ try {
         // screenshot cannot be trusted to show.
         badPaths: edges.filter((p) => /NaN|undefined/.test(p.getAttribute("d") || "")).length,
         labels: labels.length,
+        pickable: document.querySelectorAll(".dv-row.is-pickable").length,
         note: document.querySelector(".dv-note")?.textContent ?? "",
         stage: stage === null ? null : [stage.style.width, stage.style.height],
         overlaps: overlapping(boxes),
@@ -98,6 +99,14 @@ try {
       await page.emulateMedia({ colorScheme: "dark" });
       await page.screenshot({ path: join(outDir, c.darkShot) });
       await page.emulateMedia({ colorScheme: "light" });
+    }
+    // A click on a field of the root type takes the reader to it in the hex
+    // view. Only rows a click can reach say so, so this also checks that the
+    // ones that cannot are not offering.
+    if (c.pick === true) {
+      assert(found.pickable > 0, "no row offered to take the reader to the file");
+      await page.locator(".dv-row.is-pickable").first().click();
+      await page.waitForSelector('.tb-view.is-on:text-is("Hex")', { timeout: 5000 });
     }
     console.log(basename(c.file), JSON.stringify(found));
     assert.deepEqual(errors, [], `page errors for ${c.file}`);

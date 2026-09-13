@@ -1,4 +1,4 @@
-import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, prefetchMagic, type MapStep } from "./doc.ts";
+import { Doc, EditorMissing, bytesSource, formatBytes, formatOffset, glyphColumn, prefetchMagic, type DiagramBox, type MapStep } from "./doc.ts";
 import * as nav from "./navhistory.ts";
 import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexview.ts";
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
@@ -1034,6 +1034,13 @@ function build(tab: Tab): Page {
    *  The same lazy chunk the graph uses, for the same reason: nobody pays for a
    *  view they never open. */
   let diagram: DiagramView | null = null;
+  /** The boxes the diagram is showing, so a click on a row can be checked
+   *  against the file before it moves the cursor. */
+  let diagramTypes: readonly DiagramBox[] = [];
+  /** Which template the diagram on screen was drawn for, so reopening the view
+   *  does not throw away where the reader had panned to. Null until the first
+   *  drawing. */
+  let diagramFor: string | null = null;
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -1130,30 +1137,56 @@ function build(tab: Tab): Page {
    * cursor is in the file. It is rebuilt when the template changes, which is
    * the one thing that changes what it shows.
    */
+  /**
+   * Where a row of the diagram's first box is in the open file, if it is there.
+   *
+   * The format's first type is what the root of the file is read as, so its
+   * field `i` is the path `[i]` — but only when the root is that type outright.
+   * A format whose root is a list of its type has an element at `[i]`, not a
+   * field, so the field's name is checked against what the file's node is
+   * called and a mismatch is no path at all.
+   *
+   * TODO: a core query for "the first path whose type is X" would let a click
+   * on any box reach the file. Until then a click on any other box is a click
+   * on the format, and the cursor stays where it was.
+   */
+  const diagramFieldPath = (box: number, row: number): readonly number[] | null => {
+    if (box !== 0) return null;
+    const name = diagramTypes[0]?.rows[row]?.name;
+    if (name === undefined) return null;
+    const n = doc.templateNode([row]);
+    if (n.status !== "ok" || n.node.name !== name) return null;
+    return [row];
+  };
+
   const showDiagram = async (): Promise<void> => {
     if (diagram === null) {
       const { DiagramView } = await import("./diagramview.ts");
       diagram = new DiagramView();
+      diagram.canPick = (box, row) => diagramFieldPath(box, row) !== null;
       diagram.onPick = (box, row) => {
-        // The format's first type is the root of the open file, so a field of
-        // it is a path of one. Every other box is a type the file may hold any
-        // number of, in places only a walk would find.
-        //
-        // TODO: a core query for "the first path whose type is X" would let a
-        // click on any box reach the file. Until then a click on one of those
-        // is a click on the format, and the cursor stays where it was.
-        if (box !== 0) return;
+        const path = diagramFieldPath(box, row);
+        if (path === null) return;
         setView("hex");
-        goToField([row]);
+        goToField(path);
       };
       diagram.el.hidden = false;
       workspaceLeft.append(diagram.el);
     }
+    // Coming back to a picture that has not changed is coming back to the same
+    // picture: the boxes the reader opened are still open and the view is
+    // still where they panned it. Only a new template is a new drawing.
+    const format = doc.template ?? "";
+    if (diagramFor === format) {
+      diagram.relayout();
+      return;
+    }
+    diagramFor = format;
     const reply = doc.templateDiagram();
     // No template is an answer, not a failure: the view says so rather than
     // showing the last format's picture over an unrecognised file.
-    diagram.show(reply.status === "ok" ? reply.node : null, templateLabel(doc.template ?? ""));
-    diagram.relayout();
+    diagramTypes = reply.status === "ok" ? reply.node.types : [];
+    diagram.show(reply.status === "ok" ? reply.node : null, templateLabel(format));
   };
 
   const setView = (which: View): void => {

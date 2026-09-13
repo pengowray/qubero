@@ -51,6 +51,10 @@ const RANK_SEP = 90;
 /** How far under the boxes a backwards arrow runs before it turns back. */
 const BACK_LANE = 22;
 
+/** How far the pointer may travel and still count as a click rather than a pan,
+ *  in CSS pixels of total movement. */
+const PAN_SLOP = 4;
+
 type Placed = { box: DiagramBox; el: HTMLElement; rows: HTMLElement[]; x: number; y: number; w: number; h: number };
 
 /** One drawn arrow: the path, and where its role word goes. `end` puts the word
@@ -101,12 +105,27 @@ export class DiagramView {
   private scale = 1;
   private tx = 0;
   private ty = 0;
+  /** True once the pointer has moved far enough for the gesture to be a pan
+   *  rather than a click. A drag that starts and ends inside one row still
+   *  fires a click, and a reader who dragged the picture did not ask to be
+   *  taken to a field. */
+  private dragged = false;
   /** The whole drawing's extent in stage units, for `fit`. */
   private extent = { w: 0, h: 0 };
 
   /** The reader clicked a field. `main.ts` puts the cursor on it where the open
    *  file has one. */
   onPick: (box: number, row: number) => void = () => {};
+
+  /**
+   * Whether a click on this row would reach the open file.
+   *
+   * Asked of every row as the box is built, because a row that does nothing
+   * must not say it does: a pointer and a tooltip promising to move the cursor,
+   * on seventy of a format's seventy-two types, is seventy-one lies. Only
+   * `main.ts` knows, since only it has the file.
+   */
+  canPick: (box: number, row: number) => boolean = () => false;
 
   constructor() {
     this.el = document.createElement("section");
@@ -245,8 +264,14 @@ export class DiagramView {
         if (text !== "") td.title = `${label}: ${text}`;
         tr.append(td);
       }
-      tr.title = DIAGRAM.pickTitle;
-      tr.addEventListener("click", () => this.onPick(index, i));
+      if (box.kind !== "switch" && this.canPick(index, i)) {
+        tr.classList.add("is-pickable");
+        tr.title = DIAGRAM.pickTitle;
+        tr.addEventListener("click", () => {
+          if (this.dragged) return;
+          this.onPick(index, i);
+        });
+      }
       body.append(tr);
       rows.push(tr);
     }
@@ -261,6 +286,7 @@ export class DiagramView {
       td.title = open ? DIAGRAM.less : DIAGRAM.moreTitle;
       tr.append(td);
       tr.addEventListener("click", () => {
+        if (this.dragged) return;
         if (open) this.opened.delete(index);
         else this.opened.add(index);
         this.build();
@@ -504,12 +530,15 @@ export class DiagramView {
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
+    let moved = 0;
     this.board.addEventListener("pointerdown", (ev) => {
       // A click on a row picks a field; a drag anywhere moves the drawing. The
-      // two are told apart by whether the pointer moved, which is what the
-      // browser's own click already does: a pointermove of a few pixels still
-      // fires a click, so the pan starts only once it is worth starting.
+      // two are the same gesture until the pointer has gone a few pixels, so
+      // that is where the line is drawn: past `PAN_SLOP` it is a pan, and the
+      // click that follows it is not a pick.
       dragging = true;
+      this.dragged = false;
+      moved = 0;
       lastX = ev.clientX;
       lastY = ev.clientY;
     });
@@ -520,17 +549,25 @@ export class DiagramView {
       if (dx === 0 && dy === 0) return;
       lastX = ev.clientX;
       lastY = ev.clientY;
+      moved += Math.abs(dx) + Math.abs(dy);
+      if (moved > PAN_SLOP && !this.dragged) {
+        this.dragged = true;
+        // Taken only once the gesture is a pan, never on the press. Capturing
+        // on `pointerdown` would retarget the click that a plain press ends
+        // with to the board, and no row would ever be picked again.
+        this.board.setPointerCapture(ev.pointerId);
+      }
       this.tx += dx;
       this.ty += dy;
       this.board.classList.add("is-panning");
       this.apply();
     });
-    const stop = (): void => {
+    const stop = (ev: PointerEvent): void => {
       dragging = false;
+      if (this.board.hasPointerCapture(ev.pointerId)) this.board.releasePointerCapture(ev.pointerId);
       this.board.classList.remove("is-panning");
     };
     this.board.addEventListener("pointerup", stop);
-    this.board.addEventListener("pointerleave", stop);
     this.board.addEventListener("pointercancel", stop);
     this.board.addEventListener(
       "wheel",
