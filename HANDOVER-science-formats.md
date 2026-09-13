@@ -33,6 +33,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| NIfTI-1, NIfTI-2 and Analyze 7.5: a new template, headers in either byte order, extensions, voxels shaped by `dim` with `dim[1]` innermost, whole-number scaling. Matches nibabel. `.nii.gz` opens through gzip. | 44d98c4, 12cf556, 8f63c5b |
+| SEG-Y: a new template, EBCDIC 037 text, binary header, trace headers and samples for rev 0 to 2.1 in either byte order, and a new `ibm32` float type. Matches segyio on 13 files. | 1cadde4, 7254613, 11c297b |
 | FITS tile-compressed images: the table named as a compressed image, and a side reader (`fits_tile.rs`) decoding RICE_1 (1, 2, 4 bytes), GZIP_1, GZIP_2, NOCOMPRESS and the fallback columns, un-quantizing with the standard's dither sequence. Every pixel of 8 images in 4 samples matches astropy. The chunk and page panels now share `steplist.ts`. | 89614b1, ffac1dd |
 | HDF5 compound datatypes read by member name (versions 1 to 5, nested compounds), variable-length sequences read as their base type, and the version 2 B-tree walk counting from the HDF5 file's start so MATLAB 7.3 trees walk. Checked against h5py. | 84bb213, 35657aa, 6137b28 |
 | GWF: every class checked against three files' own dictionaries, class names taken from the file, version 6 frames (14-byte structure header, fixed from a wrong 10), gzip vectors as spaces, differenced and zero-suppressed vectors in a side reader. GWOSC strain equals its HDF5 twin. | e69bdbd, 37adb5b, aeb0362 |
@@ -515,4 +517,44 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-DICOM, NIfTI, SEG-Y, BUFR, Arrow IPC / Feather, BAM / BGZF, ADIOS2 BP, TDMS.
+BUFR, ADIOS2 BP, TDMS. Arrow IPC / Feather and BAM / BGZF / BAI were being
+built on 2026-09-14. DICOM is read by the bundled Kaitai description
+(`dicom.ksy`) rather than a native template.
+
+### NIfTI and Analyze 7.5 (built 2026-09-14)
+
+NIfTI-1, NIfTI-2 and Analyze 7.5 headers in either byte order, extensions,
+and voxels shaped by `dim` (see Closed). Six nibabel samples. Left:
+
+- Voxel scaling applies only when `scl_slope` and `scl_inter` are whole
+  numbers, because expressions are integers; `functional.nii` (slope 0.0754)
+  shows stored integers. A float-valued computed expression in the IR would
+  fix it, and would also let FITS scale by a fractional `TSCALn`.
+- `nifti.rs` decodes `vox_offset`'s IEEE float bits to a whole number with
+  integer expressions; nothing in it is NIfTI's, so it belongs beside
+  `template.rs` if another format stores an offset as a float.
+- `NiftiTimeUnit` keeps the 3-bit field's own values 1 to 6 rather than
+  `nifti1.h`'s masked constants 8 to 48.
+- Two `NiftiEcode` descriptions (`WORKFLOW_FWDS`, `JIMDIMINFO`) came from
+  memory rather than a source; check them.
+- The `.img` halves of pairs are not in the collection: nothing in an `.img`
+  identifies it.
+
+### SEG-Y (built 2026-09-14)
+
+Textual (EBCDIC 037 or ASCII), binary and extended textual headers, every
+trace header and samples in formats 1 to 16 bar 4, rev 0 to 2.1, either byte
+order (see Closed). IBM floats are a new editable type, `ibm32`. Six segyio
+samples, zero mismatches against segyio on 13 files. Left:
+
+- Coordinate, elevation and time scalars are not applied as display values.
+- A trace's own extension count in Extension 1 is not followed.
+- Seismic Unix (SU) files are not read: nothing identifies them.
+- `source_type`, `source_measurement_unit` and `last_trace_flag` are plain
+  numbers; their labels need drafting.
+- `segy.rs` uses `°` and `²` in labels where `sac.rs` writes `nm/s2`.
+- `segy.rs` is about 1,150 lines; a `segy/` folder with the enum tables and
+  tests apart would help.
+- The SEG rev 2.0 PDF could not be fetched (403); the work used the rev 1
+  draft, rev 2.1 text and segyio's `segy.h`, which put the first-trace offset
+  at 3521, not the 3301 an earlier brief said.
