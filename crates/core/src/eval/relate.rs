@@ -287,6 +287,14 @@ impl Evaluator {
                 let Some(inner) = self.substitute(doc, at, a, 0, here, named)? else { return Ok(None) };
                 Some(format!("bit({inner}, {i})"))
             }
+            // Where a field is, so the field has to stay visible: a number on
+            // its own would say an address and not which of a heap's objects
+            // the address belongs to, which is the half of it this record
+            // decided.
+            Expr::StartOf(inner) => {
+                let Some(s) = self.substitute(doc, at, inner, 0, here, named)? else { return Ok(None) };
+                Some(format!("start of {s}"))
+            }
             // A search over a list, where the value alone would hide the half
             // of it this record contributed. `earlier[class_num = 9].name`
             // says what was looked for and where; `"trce"` says only what came
@@ -438,6 +446,7 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Max(a, b) => format!("max({}, {})", write_at(a, 0)?, write_at(b, 0)?),
         Expr::DivCeil(a, b) => format!("ceil({} / {})", write_at(a, 10)?, write_at(b, 11)?),
         Expr::Log2(a) => format!("log2({})", write_at(a, 0)?),
+        Expr::StartOf(a) => format!("start of {}", write_at(a, 0)?),
         Expr::PadTo { n, align } => format!("align({}, {align})", write_at(n, 0)?),
         Expr::Bit(a, i) => format!("bit({}, {i})", write_at(a, 0)?),
         _ => return None,

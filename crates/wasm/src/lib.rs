@@ -392,6 +392,22 @@ struct SqliteColumnDto {
     len: f64,
 }
 
+/// One step of reading a Parquet page: the codec, a list of levels, or the
+/// encoding the values are in.
+#[derive(Serialize)]
+struct PageStepDto {
+    /// The codec's name, the encoding's name, or which list of levels.
+    what: String,
+    in_bytes: f64,
+    /// Zero for a step that produced values rather than bytes, which says how
+    /// many of them in `note` instead.
+    out_bytes: f64,
+    note: String,
+    /// Set when the step was not done at all: a v2 page that says
+    /// `is_compressed` is false names its column's codec and never ran it.
+    skipped: bool,
+}
+
 /// One filter undone on the way back to a chunk's elements.
 #[derive(Serialize)]
 struct ChunkStepDto {
@@ -497,6 +513,17 @@ struct ExplainDto {
     chunk_element_type: String,
     chunk_values: Vec<String>,
     chunk_total: f64,
+    /// Page: how many bytes the payload is in the file, and how many its
+    /// values came to once the codec was undone.
+    page_packed: f64,
+    page_decoded: f64,
+    /// Page: every step, in the order it was done.
+    page_steps: Vec<PageStepDto>,
+    /// Page: what one value is called, the first few of them, and how many
+    /// there are altogether.
+    page_element_type: String,
+    page_values: Vec<String>,
+    page_total: f64,
     /// Quant: the scale the block keeps for each run of weights, where it keeps
     /// them, and how many weights one run covers. Empty for a block with one
     /// scale for all of them.
@@ -885,6 +912,12 @@ fn explain_dto(e: Explain) -> ExplainDto {
         chunk_element_type: String::new(),
         chunk_values: Vec::new(),
         chunk_total: 0.0,
+        page_packed: 0.0,
+        page_decoded: 0.0,
+        page_steps: Vec::new(),
+        page_element_type: String::new(),
+        page_values: Vec::new(),
+        page_total: 0.0,
         problem: String::new(),
         groups: Vec::new(),
         group_weights: 0.0,
@@ -1015,6 +1048,25 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .map(|c| {
                     let (value_kind, value, _, _) = shown(&c.value);
                     SqliteColumnDto { type_name: c.type_name, value, value_kind, at: c.at as f64, len: c.len as f64 }
+                })
+                .collect();
+        }
+        Explain::ParquetPage { packed_bytes, decoded_bytes, steps, values, total, element_type, problem } => {
+            dto.kind = "page";
+            dto.page_packed = packed_bytes as f64;
+            dto.page_decoded = decoded_bytes as f64;
+            dto.page_total = total as f64;
+            dto.page_element_type = element_type;
+            dto.page_values = values;
+            dto.problem = problem.unwrap_or_default();
+            dto.page_steps = steps
+                .into_iter()
+                .map(|s| PageStepDto {
+                    what: s.what,
+                    in_bytes: s.in_bytes as f64,
+                    out_bytes: s.out_bytes as f64,
+                    note: s.note,
+                    skipped: s.skipped,
                 })
                 .collect();
         }

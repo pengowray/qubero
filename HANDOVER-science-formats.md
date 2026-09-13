@@ -33,6 +33,9 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| Parquet page payloads: open by the chunk's codec (snappy and brotli new, plus gzip, zstd, LZ4_RAW, stored); dictionary pages and `DATA_PAGE_V2` values as fields; every page in the 16 samples read to its values by a side reader with a step panel, bar two brotli pages claiming 2 GB. Pinned against pyarrow. | c7cfeab, e54ecd9, d73b009 |
+| GRIB complex packing (5.2, 5.3) as fields: the three group tables with their byte padding, and each group's run at `uint_expr(width)`. A side reader (`grib_values.rs`) undoes the differencing and matches ecCodes on all 195,480 GFS values. PNG-packed sections open as PNG. Two ecCodes-repacked samples. | 33f0f20, 7d3556b |
+| S5. `Expr::StartOf`, `E::tagged_in_by`, and a tag index shared by every referrer to one list: an HDF5 variable-length string reads as its text, over its own bytes. Two generated samples, one behind a 512-byte user block. | 240ca28, fea1214 |
 | FITS `TSCALn`/`TZEROn` and `BSCALE`/`BZERO`: the stored integer keeps its bytes and a zero-bit `worth = zero + scale * stored` hangs off it. Not read as the unsigned type: the convention is a bias, and `scaled.fits` shows physical 0 on disk as signed -32768. | ef3e54f |
 | FITS columns past 32: a row is a list of cells, each working out its own `TFORMn` from `Idx`, so the cap is the standard's 999. Labels are `[2] flux` now, were `col3 flux`. Axes past 9 read; `NAXISn = 0` reads as no data. | cdb051f |
 | FITS `CONTINUE` cards read as the pieces they hold; a bare `TFORM1 = 'I'` reads as one binary value (it went down the ASCII path and failed, which broke three of four astropy-written samples). | c2dcf36, ecd6b31 |
@@ -162,42 +165,33 @@ HDF5 files.
   variable-length strings and every other global-heap object. `h5ad.rs` does
   the walk as a reader because a field cannot.
 
-  **Design (Fable, 2026-09-13), not built.** Mostly there already:
-  `Expr::Tagged` with `array: Some(within(["collection","objects"]))` and
-  `Tag::Computed(field("object_index"))` finds the object today, since
-  `descend` steps through an `At`. What is missing is (a) a child that
-  *covers* the found object's bytes rather than a number read out of it, and
-  (b) a cost fix: every referrer's `collection` is a distinct path to the
-  same bytes, nothing dedups the search, so a column of N strings is O(N^2).
+  **Built 2026-09-13** (`3b35878`..`f17a881`), as designed, with these
+  differences found by building it:
 
-  Recommended: one `Expr::StartOf(expr)`, the byte offset at which the field
-  the expression names begins (counted from the nearest `Origin`, so it pairs
-  with `at_origin` like every HDF5 address), then in `vlen_reference` an
-  `object` field: `T::at_origin(E::start_of(find(["data","payload"])),
-  T::sized(find(["size"]), text of `length` bytes or bytes))` marked
-  `field_aside` (required: without it `kinds_real` counts every string
-  twice, as ELF's `name` shows) and `named_by("object")`. Split
-  `heap_object.data` into `payload: bytes(size)` and `padding`. Add a
-  builder `E::tagged_in_by(array: Expr, key, tag: Expr, field)`. Plus a key
-  index in `tagged_path` for `array: Some(..)` searches: a map key -> element
-  index per list keyed by the list node's `(space, offset, limit)`, dropped by
-  range in `forget_after`, bounded; excludes `array: None` (GWF's
-  nearest-earlier semantics). That index also closes the FITS "every cell
-  asks the header for its `TFORMn` card again" note.
+  - `within` did not step through an `At` chosen by a `Switch`
+    (`at_address` wraps one for the undefined address), so the lookup failed
+    on every real file. `within_path` now steps through an `At` the file
+    turned out to have, the same rule `descend` applies further down.
+  - A map of tag to element index would not have paid: placing element *i*
+    of a `Repeat` still walks 0..i-1 in each referrer's own copy of the list.
+    The index keeps the list *path* that did the walking and resumes there,
+    so every referrer to one stretch of bytes shares one walk (310 extra memo
+    nodes for a second referrer without it, under 12 with). The origins panel
+    for element 1999 therefore points at a node under element 0's
+    `collection`: same bytes, different path.
+  - A repeated label keeps its first element (`or_insert`); FITS repeats
+    `COMMENT` and `HISTORY`.
+  - h5py always appends within a collection, so indices ascend; the sample
+    has gaps and a high start instead, and real out-of-order is a unit test.
 
-  Build order: (1) template-only `payload`/`padding` split and
-  `tagged_in_by`, `h5ad::attribute` reads the field and `h5ad::vlen_string`
-  goes; (2) the key index, with a test that two referrers walk one
-  collection once; (3) `StartOf` (arms in `expr.rs` eval and `text_path`,
-  `relate.rs`, `origin.rs`, `machinery.rs`, builder; `uniform()` false) and
-  the `object` field; (4) a generated `vlen-strings.h5` (h5py: thousands of
-  strings over two collections, VL attributes, a 512-byte user block
-  variant, indices out of order) checked in `hdf5_real.rs`; (5) DESIGN.md
-  lines on the global heap rewritten. Rejected: a `Ty::Pick` type (every
-  `At`/`Chain` arm would need a twin; only HDF5 wants the bytes). Risks: the
-  `StartOf` base convention is silent on plain files and off by 512 on
-  MATLAB 7.3 if wrong; the placed index walks one stretch per string; a VL
-  string inside a VL sequence must not read as a ring.
+  A VL string now reads as its text on an `object` row, the cursor on its
+  bytes lands there, and `h5ad::vlen_string` is a three-line accessor. The
+  index also speeds FITS (full walk of `comp.fits` 310 to 219 ms,
+  `manyrows.fits` 172 to 125 ms). **Cost to watch:** every note now places
+  its heap object and names itself from it, so a listing of a million-string
+  column costs a million placements; if a real `.h5ad` is slow in the
+  browser, have the listing not ask for a `named_by` field that is an `At`
+  until the row is opened.
 
 - **S6. A ZIP entry takes a template by its name.** NPZ members as NPY, the
   chunks of a Zarr ZipStore.
@@ -245,10 +239,28 @@ as a gap while the Logical tab lists them.
 
 Pages, offset indexes, column indexes and bloom filters are placed from the
 footer, each under the column chunk that points at it (see the correction in
-S1). Page payloads keep their bytes: codecs (snappy, zstd, brotli, lz4, gzip)
-and then encodings (RLE/bit-packed hybrid, dictionary, delta) are what is left.
-No node covers the row-group region as a whole. Of the four at the top of this
-list, Parquet is the least unread.
+S1). Page payloads open by codec and read to their values (see Closed).
+Left:
+
+- LZO has no decoder, and the Hadoop-framed LZ4 (codec 5) has no sample, so
+  both keep their bytes.
+- v1 data pages, the three DELTA encodings, BYTE_STREAM_SPLIT, BOOLEAN PLAIN
+  and FIXED_LEN_BYTE_ARRAY read only in the side reader
+  (`parquet_page.rs`), because a v1 page's levels depend on a schema walk
+  and delta widths change every miniblock. A bit-packed hybrid group keeps its
+  bytes in the template: Parquet packs from the low bit up and bits here are
+  addressed from the high bit, so a field per value would name the wrong bits.
+- No node covers the row-group region as a whole (branch
+  `wip-parquet-gather-region`).
+- `alloc-stdlib` 0.3.0 (via `brotli-decompressor`) declares BSD-3-Clause in
+  its `Cargo.toml` but ships no licence file, so `THIRD-PARTY-NOTICES.md`
+  names the licence without its text. Its sibling `alloc-no-stdlib`, same
+  authors, does ship one; that text belongs in `tools/notices-extra.md` for
+  it.
+- `eval/explain.rs` now holds HDF5, SQLite, PDF and Parquet readers;
+  `thrift_field` and `parquet_levels` would sit better in
+  `formats/parquet_schema.rs`, and the chunk and page panels are near copies
+  that could share one step-list component.
 
 ### NASA CDF
 
@@ -306,7 +318,8 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- Variable-length strings (S5).
+- Variable-length sequences (not strings) stay bytes until the base type in
+  the datatype's properties is read.
 - Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
 - Huge and tiny fractal-heap objects, free-space managers.
@@ -356,10 +369,24 @@ Seven samples. Left:
 
 ### GRIB
 
-Values only for simple packing (5.0). Complex packing (5.2, 5.3; what GFS
-output uses) and JPEG 2000 / PNG sections (5.40, 5.41) keep their bytes.
-Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
-only; anything else is bytes.
+Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
+(see Closed). Left:
+
+- **What a value is worth is computed and not shown.** `grib_values.rs`
+  undoes group references, the smallest difference and spatial
+  differencing, and matches ecCodes on every GFS value, but nothing reaches
+  a panel: it needs an `Explain` variant and wasm and web wiring, the way
+  Parquet's page reader was wired. `explain_packed` also looks only one
+  level up from the cursor. Its step strings need a `ui-text` pass when they
+  are wired.
+- JPEG 2000 (5.40) names its codestream and stays bytes; there is no JPEG
+  2000 template.
+- Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
+  only; anything else is bytes.
+- `grib.rs` is about 1,900 lines; edition 1 (about 300) would split out as
+  `grib1.rs`.
+- ecCodes has no wheel for Python 3.14; the cross-check used a uv Python 3.11
+  environment.
 
 ### NPY / NPZ
 

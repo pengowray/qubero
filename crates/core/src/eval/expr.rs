@@ -6,7 +6,22 @@
 //! starts with. That is what lets an edit keep everything the bytes before it
 //! settled, and what makes a file readable from the front.
 
+use std::sync::Arc;
+
+use super::memo::TagKey;
 use super::*;
+
+/// A label as a map can hold it, for the index a search over a named list
+/// keeps. None for a label that has still to be worked out, which is not a
+/// label yet. Text is trimmed at the end because that is how it is compared.
+fn tag_key(tag: &Tag) -> Option<TagKey> {
+    match tag {
+        Tag::Int(v) => Some(TagKey::Int(*v)),
+        Tag::Text(s) => Some(TagKey::Text(s.trim_end().to_string())),
+        Tag::Bytes(b) => Some(TagKey::Bytes(b.clone())),
+        Tag::Computed(_) | Tag::ComputedText(_) => None,
+    }
+}
 
 impl Evaluator {
 
@@ -120,6 +135,31 @@ impl Evaluator {
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
             Expr::BitsOf(name) => self.lookup_bits(doc, at, name)?.1,
+            // Where a field is rather than what it says, as an address of this
+            // format: counted from the nearest origin, so that handing it to
+            // an `At` anchored the same way lands on those bytes again. See
+            // `Expr::StartOf`.
+            Expr::StartOf(inner) => {
+                let inner = inner.clone();
+                let Some(p) = self.text_path(doc, at, &inner, here)? else {
+                    return fail("nothing there to be the start of");
+                };
+                self.resolve(doc, &p)?;
+                let found = &self.memo[&p];
+                // Offsets of two address spaces are two different numbers.
+                // Answering across them would give the start of a field in an
+                // unpacked stream as if it were a place in the file.
+                let space = self.memo.get(at).map_or(0, |r| r.space);
+                if found.space != space {
+                    return fail("that field is read in another space");
+                }
+                let offset = found.offset;
+                let base = self.origin_of(at).map_or(0, |(offset, _)| offset);
+                if offset < base {
+                    return fail("that field starts before this copy of the format does");
+                }
+                ((offset - base) / 8) as i128
+            }
             // Read where this field starts without taking the bits: what a
             // field that exists only when the byte says so has to ask.
             Expr::Peek { bits, endian } => {
@@ -738,39 +778,133 @@ impl Evaluator {
         here: Option<(u64, u64)>,
     ) -> R<Option<(Vec<usize>, String)>> {
         let tag = self.tag_now(doc, at, &t.tag, here)?;
-        let mut tried: Vec<(Vec<usize>, usize)> = Vec::new();
-        match &t.array {
-            Some(array) => {
-                let Some(list) = self.text_path(doc, at, array, here)? else { return Ok(None) };
-                let n = self.child_count(doc, &list)?;
-                tried.extend((0..n as usize).map(|i| (list.clone(), i)));
-            }
-            None => {
-                for (list, mine) in self.enclosing_lists(at) {
-                    tried.extend((0..mine).rev().map(|i| (list.clone(), i)));
+        let Some(array) = t.array.clone() else {
+            for (list, mine) in self.enclosing_lists(at) {
+                for i in (0..mine).rev() {
+                    let mut p = list.clone();
+                    p.push(i);
+                    if self.tag_matches(doc, &p, &t.key, &tag)? {
+                        return self.tagged_landing(doc, &list, i, t, None);
+                    }
                 }
             }
+            return Ok(None);
+        };
+        let Some(list) = self.text_path(doc, at, &array, here)? else { return Ok(None) };
+        let Some((found, i)) = self.tag_search(doc, &list, &t.key, &tag)? else { return Ok(None) };
+        self.tagged_landing(doc, &found, i, t, Some(&array))
+    }
+
+    /// Where a search that has found its element ends up: the field it names
+    /// inside that element, and the reading a person would give the whole
+    /// journey.
+    fn tagged_landing<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        i: usize,
+        t: &TaggedRef,
+        array: Option<&Expr>,
+    ) -> R<Option<(Vec<usize>, String)>> {
+        let mut p = list.to_vec();
+        p.push(i);
+        // Named for the list it was found in, which for the enclosing list is
+        // whatever that list is called where it was declared.
+        let name = match array {
+            Some(array) => write_expr(array).unwrap_or_else(|| "collection".into()),
+            None => self.memo.get(list).map_or_else(String::new, |r| r.name.text()),
+        };
+        let mut label = format!("{name}[{i}]");
+        if !self.descend(doc, &mut p, &t.field)? {
+            return Ok(None);
         }
-        for (list, i) in tried {
-            let mut p = list.clone();
+        for f in t.field.iter() {
+            label = format!("{label}.{f}");
+        }
+        Ok(Some((p, label)))
+    }
+
+    /// Which element of a named list carries this label, and which walk of
+    /// that list answered.
+    ///
+    /// The answer is not always a path inside the list that was asked for. A
+    /// list is bytes, and several fields can be readings of one stretch of
+    /// them: an HDF5 global heap collection is reached through the address
+    /// each variable-length element carries, so a column of two thousand
+    /// strings holds two thousand paths to one collection. Answering each of
+    /// them from its own walk is quadratic in the length of the column, and
+    /// there is nothing to be gained by it, since every walk reads the same
+    /// bytes and finds the same thing.
+    ///
+    /// So what was learned is kept by the stretch rather than by the path, and
+    /// the path that comes back is whichever one walked it. See
+    /// [`super::memo::TagIndex`].
+    fn tag_search<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        key: &Arc<[String]>,
+        tag: &Tag,
+    ) -> R<Option<(Vec<usize>, usize)>> {
+        let Some(want) = tag_key(tag) else { return self.tag_scan(doc, list, key, tag) };
+        self.resolve(doc, list)?;
+        let r = &self.memo[list];
+        let slot = (r.space, r.offset, r.limit, key.clone());
+        // A label the index has seen, checked against the element it names
+        // before it is believed. The index is keyed by where the bytes are and
+        // not by what read them, which is the whole saving; this is what makes
+        // that safe where two readings of one stretch disagree.
+        let hit = self.memo.tag_index(&slot).and_then(|ix| ix.found.get(&want).map(|i| (ix.list.clone(), *i)));
+        if let Some((found, i)) = hit {
+            let mut p = found.clone();
             p.push(i);
-            if !self.tag_matches(doc, &p, &t.key, &tag)? {
-                continue;
+            if self.tag_matches(doc, &p, key, tag)? {
+                return Ok(Some((found, i)));
             }
-            // Named for the list it was found in, which for the enclosing list
-            // is whatever that list is called where it was declared.
-            let name = match &t.array {
-                Some(array) => write_expr(array).unwrap_or_else(|| "collection".into()),
-                None => self.memo.get(&list).map_or_else(String::new, |r| r.name.text()),
-            };
-            let mut label = format!("{name}[{i}]");
-            if !self.descend(doc, &mut p, &t.field)? {
-                return Ok(None);
+            self.memo.forget_tags(&slot);
+        }
+        let (walking, from, full) = {
+            let ix = self.memo.tag_index_mut(slot.clone(), list);
+            (ix.list.clone(), ix.scanned, ix.full)
+        };
+        // An index that stopped growing can say nothing about the elements
+        // past where it stopped, so a search that misses goes back to reading
+        // the list it was handed.
+        if full {
+            return self.tag_scan(doc, list, key, tag);
+        }
+        let n = self.child_count(doc, &walking)? as usize;
+        for i in from..n {
+            let mut p = walking.clone();
+            p.push(i);
+            let Some(k) = self.tag_key_of(doc, &p, key, tag)? else { continue };
+            self.memo.remember_tag(&slot, k.clone(), i);
+            if k == want {
+                self.memo.tag_scanned(&slot, i + 1);
+                return Ok(Some((walking, i)));
             }
-            for f in t.field.iter() {
-                label = format!("{label}.{f}");
+        }
+        self.memo.tag_scanned(&slot, n);
+        Ok(None)
+    }
+
+    /// The same question asked of one list from the front, with nothing
+    /// remembered. What a label that cannot be written down as a key gets, and
+    /// what a list too large to index falls back to.
+    fn tag_scan<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        list: &[usize],
+        key: &[String],
+        tag: &Tag,
+    ) -> R<Option<(Vec<usize>, usize)>> {
+        let n = self.child_count(doc, list)? as usize;
+        for i in 0..n {
+            let mut p = list.to_vec();
+            p.push(i);
+            if self.tag_matches(doc, &p, key, tag)? {
+                return Ok(Some((list.to_vec(), i)));
             }
-            return Ok(Some((p, label)));
         }
         Ok(None)
     }
@@ -833,6 +967,15 @@ impl Evaluator {
         let Some(mut p) = self.find_field(at, first) else {
             return fail(format!("unknown field {first}"));
         };
+        // A field whose contents are somewhere else in the file is its
+        // contents, here as in `descend`. `find_field` steps through an `At`
+        // the declaration shows it; a switch that chose one shows nothing
+        // until the field has been read, and an HDF5 address is written that
+        // way because the format spells "nowhere" as an address of its own.
+        self.resolve(doc, &p)?;
+        if matches!(self.memo[&p].ty, Ty::At { .. }) {
+            p.push(0);
+        }
         if !self.descend(doc, &mut p, rest)? {
             return fail(format!("{first} has no field named {}", rest.join(".")));
         }
@@ -849,47 +992,65 @@ impl Evaluator {
     /// not a match, which is how the search passes over the records of a list
     /// that are something else.
     pub(super) fn tag_matches<S: Source>(&mut self, doc: &Document<S>, elem: &[usize], key: &[String], tag: &Tag) -> R<bool> {
+        // A computed label was worked out before the search began, so what
+        // arrives here is always written down. See `tag_now`.
+        let Some(want) = tag_key(tag) else {
+            return fail("a computed label must be worked out before the search");
+        };
+        Ok(self.tag_key_of(doc, elem, key, tag)? == Some(want))
+    }
+
+    /// What this element is labelled, read the way the label being looked for
+    /// is written: a number against a number, text against text, bytes against
+    /// bytes. None where the element has no such field or it cannot be read,
+    /// which is how a search passes over the records of a list that are
+    /// something else.
+    ///
+    /// The one place an element's label is read, so that what a search
+    /// compares and what an index remembers cannot drift apart.
+    fn tag_key_of<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        elem: &[usize],
+        key: &[String],
+        tag: &Tag,
+    ) -> R<Option<TagKey>> {
         match tag {
-            // A computed label was worked out before the search began, so what
-            // arrives here is always a number. See `tag_now`.
             Tag::Computed(_) | Tag::ComputedText(_) => {
                 fail("a computed label must be worked out before the search")
             }
-            Tag::Int(want) => Ok(self.field_in(doc, &mut elem.to_vec(), key)? == Some(*want)),
+            Tag::Int(_) => Ok(self.field_in(doc, &mut elem.to_vec(), key)?.map(TagKey::Int)),
             // Text against text, both sides read the same way. `Bytes`
             // compares what is written and so has the padding of a fixed-width
             // key in it; this compares what the two fields read as, which is
             // the only comparison a label worked out somewhere else can win.
-            // An element with no such field, or one that cannot be read as
-            // text, is not a match rather than an error, the same as for the
-            // other two: a list holds records that are something else.
-            Tag::Text(want) => {
+            Tag::Text(_) => {
                 let mut p = elem.to_vec();
                 match self.descend(doc, &mut p, key) {
                     Ok(true) => {}
-                    Ok(false) => return Ok(false),
+                    Ok(false) => return Ok(None),
                     Err(e) if e.interrupted() => return Err(e),
-                    Err(_) => return Ok(false),
+                    Err(_) => return Ok(None),
                 }
                 match self.text_of(doc, &p) {
-                    Ok(got) => Ok(got.trim_end() == want.trim_end()),
+                    Ok(got) => Ok(Some(TagKey::Text(got.trim_end().to_string()))),
                     Err(e) if e.interrupted() => Err(e),
-                    Err(_) => Ok(false),
+                    Err(_) => Ok(None),
                 }
             }
-            Tag::Bytes(want) => {
+            Tag::Bytes(_) => {
                 let mut p = elem.to_vec();
-                let Some((last, above)) = key.split_last() else { return Ok(false) };
+                let Some((last, above)) = key.split_last() else { return Ok(None) };
                 match self.descend(doc, &mut p, above) {
                     Ok(true) => {}
-                    Ok(false) => return Ok(false),
+                    Ok(false) => return Ok(None),
                     Err(e) if e.interrupted() => return Err(e),
-                    Err(_) => return Ok(false),
+                    Err(_) => return Ok(None),
                 }
                 match self.child_raw_bytes(doc, &p, last) {
-                    Ok(got) => Ok(got == *want),
+                    Ok(got) => Ok(Some(TagKey::Bytes(got))),
                     Err(e) if e.interrupted() => Err(e),
-                    Err(_) => Ok(false),
+                    Err(_) => Ok(None),
                 }
             }
         }

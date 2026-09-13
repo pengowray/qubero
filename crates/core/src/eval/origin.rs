@@ -607,6 +607,10 @@ impl Evaluator {
                 self.from_expr(doc, at, &taken.clone(), role, out)?;
             }
             Expr::Log2(a) | Expr::Not(a) => self.from_expr(doc, at, a, role, out)?,
+            // The field whose start this is. It decided where something else
+            // went, so the row a reader wants is the one naming it, not a
+            // number with nowhere to go.
+            Expr::StartOf(a) => self.from_expr(doc, at, a, role, out)?,
             // The fields of the record that placed this element, read from
             // where that record's offset was: a heap array's length is the
             // `count` of its own descriptor, which is a field a reader can go

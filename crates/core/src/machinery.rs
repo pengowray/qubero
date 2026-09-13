@@ -262,6 +262,10 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(otherwise, out);
         }
         Expr::Log2(a) | Expr::Not(a) => expr_refs(a, out),
+        // Where a field is rather than what it says, but the field is named
+        // the same way, and a field something is placed from is plumbing the
+        // same as one something is sized from.
+        Expr::StartOf(a) => expr_refs(a, out),
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
         Expr::Bit(a, _) => expr_refs(a, out),

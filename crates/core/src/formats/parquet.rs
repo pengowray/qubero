@@ -26,9 +26,55 @@
 //! tree, and there is no node for the region between the magic and the footer
 //! as a whole.
 //!
-//! A payload keeps its bytes. Undoing its codec (snappy, zstd, brotli, lz4,
-//! gzip) and then its encoding (plain, dictionary, the RLE and bit-packed
-//! hybrid, delta) is what is left before a page reads as its values.
+//! A payload opens. The column chunk's `codec` says what was run over it, and
+//! the payload is declared as a run packed that way, so what is inside a page
+//! is a space of its own with the levels and the values laid over it. Snappy,
+//! gzip, zstd, brotli and the raw LZ4 of `LZ4_RAW` all open; UNCOMPRESSED
+//! opens too, as a stored space, so that one reading applies to every page
+//! whether or not anything was packed. Two do not: LZO has no decoder here,
+//! and `LZ4`, codec 5, is the Hadoop-framed one rather than a raw block and no
+//! file to hand holds one, so naming it and keeping the bytes is the honest
+//! answer rather than a guess at a framing.
+//!
+//! A `DATA_PAGE_V2` payload is not one run. Its repetition and definition
+//! levels are written in front of the packed part and are never packed
+//! themselves, sized by two lengths in the header, so that a reader can decide
+//! whether it wants the page at all without unpacking anything.
+//!
+//! Inside the unpacked bytes are the values. A dictionary page holds nothing
+//! else, so it reads as the column's physical type outright: four-byte
+//! integers, doubles, byte arrays each behind their own length. A
+//! `DATA_PAGE_V2` says in its header which encoding its values are in, and
+//! PLAIN, the two dictionary encodings and RLE booleans all read. RLE
+//! booleans are behind a four-byte length, which is the one place in a page
+//! the hybrid carries one. The
+//! dictionary encodings and RLE are the same thing underneath, the RLE and
+//! bit-packed hybrid, and it reads as its runs: a varint header whose low bit
+//! says which kind, then either one value repeated or a group of eight packed
+//! at the width. A bit-packed group keeps its bytes, because Parquet packs
+//! from the low bit of a byte upwards and bits are addressed here from the
+//! high bit down, so a field per value would name the right byte and the wrong
+//! bits inside it.
+//!
+//! A v1 data page keeps its bytes, and the reason is worth stating rather than
+//! leaving to be discovered. Its levels are written only where the column's
+//! maximum level is above zero, and that maximum is the count of OPTIONAL and
+//! REPEATED elements along the column's path through the schema. Nothing in
+//! the page says it and nothing an expression here can reach says it either:
+//! the schema is a flat depth-first list in the footer, and which of its
+//! elements this column is, is a walk rather than a lookup. So the first four
+//! bytes of a v1 page are a level run's length or they are the first value,
+//! and only something that can walk the schema can tell which. The delta
+//! encodings and BYTE_STREAM_SPLIT keep their bytes for a plainer reason: a
+//! delta block's values are packed at a width that changes every miniblock,
+//! which is a decoder rather than a declaration.
+//!
+//! What the template leaves as bytes, [`parquet_page`](super::parquet_page)
+//! reads. Every `Page` is marked as packed, so the inspector asks that reader
+//! for the page under the cursor, and it walks the schema for the column's
+//! levels, undoes the codec, and reports each step and then the values. Every
+//! page of every sample in the collection reads that way, bar two brotli pages
+//! that claim two gigabytes.
 //!
 //! A sequential walk of that region would be wrong, which is why it is not
 //! here: a writer may put a column index, an offset index and a bloom filter
@@ -50,6 +96,7 @@
 //! the encrypted footer and names the algorithm and the key. The four bytes
 //! at the end count that structure and the footer together.
 
+use crate::codec::Codec;
 use crate::formats::thrift::{self, Field, Struct, What::{Enum, Plain, Struct as Sub, Text}};
 use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T, Until};
 use std::sync::Arc;
@@ -130,6 +177,11 @@ const CODEC: &[(i128, &str)] = &[
     (6, "ZSTD"),
     (7, "LZ4_RAW"),
 ];
+
+/// Which of the two kinds a hybrid run is, from the low bit of its header.
+/// The format's own two words, so a reader with the encodings page open finds
+/// the same ones there.
+const HYBRID_RUN: &[(i128, &str)] = &[(0, "RLE"), (1, "BIT_PACKED")];
 
 const PAGE_TYPE: &[(i128, &str)] =
     &[(0, "DATA_PAGE"), (1, "INDEX_PAGE"), (2, "DICTIONARY_PAGE"), (3, "DATA_PAGE_V2")];
@@ -500,11 +552,235 @@ fn header_field(id: i128) -> E {
     E::tagged_in(E::within(&["header", "fields"]), &["id"], id, &["value"])
 }
 
+/// A numbered field of the `DataPageHeaderV2` nested inside this page's
+/// header, which is field 8 of the header and has numbered fields of its own.
+///
+/// A field nothing wrote reads as zero, and a boolean reads as 1 for true and
+/// 2 for false, which is how the compact protocol writes one: the value is in
+/// the type nibble and there is no body. So a switch on a boolean has three
+/// cases to tell apart and not two, and absent is not the same as false.
+fn v2_field(id: i128) -> E {
+    let header = E::tagged_in(E::within(&["header", "fields"]), &["id"], 8, &["value", "fields"]);
+    E::tagged_in(header, &["id"], id, &["value"])
+}
+
+/// What the column chunk said packed its pages, read from four levels up: a
+/// page sits inside a `ColumnPages` inside the `At` that placed it, and the
+/// codec is a field of the `ColumnMetaData` that same chunk carries.
+fn codec_field() -> E {
+    metadata_field(4)
+}
+
 fn page() -> T {
     T::structure_named("Page", "type", "payload", vec![
         ("header", T::Named("parquet.PageHeader".into())),
         ("type", T::enumeration("PageType", T::computed(header_field(1)), PAGE_TYPE)),
-        ("payload", T::bytes(header_field(3))),
+        ("payload", payload()),
+    ])
+    // A page reads further than a template can take it: the levels of a v1
+    // page, the delta encodings, and the byte stream split all need the
+    // schema or a decoder. See [`super::parquet_page`].
+    .packed_as(super::parquet_page::PACKING)
+}
+
+/// What a page's payload holds, which is not the same shape for every kind of
+/// page.
+///
+/// A v1 data page and a dictionary page are one compressed run from the first
+/// byte to the last. A `DATA_PAGE_V2` is not: its repetition and definition
+/// levels are written in front of the compressed part and are never packed, so
+/// that a reader deciding whether it wants a page at all can read its levels
+/// without unpacking anything. The two lengths are in the header, which is the
+/// other half of the same idea, and what is left after them is the run the
+/// codec was run over.
+fn payload() -> T {
+    T::switch(header_field(1), vec![(3, payload_v2())], packed(header_field(3)))
+}
+
+/// A `DATA_PAGE_V2` payload: levels in the clear, then the values.
+///
+/// `is_compressed` is the writer's one way of saying that the codec was not
+/// run over this page after all, which parquet-mr does when packing made the
+/// page larger. It defaults to true, so a page that says nothing is packed.
+fn payload_v2() -> T {
+    let rep = v2_field(6);
+    let def = v2_field(5);
+    let values = header_field(3).sub(rep.clone()).sub(def.clone()).at_least(E::lit(0));
+    T::structure("DataPageV2Payload", vec![
+        ("repetition_levels", T::bytes(rep)),
+        ("definition_levels", T::bytes(def)),
+        ("values", T::switch(v2_field(7), vec![(2, stored(values.clone()))], packed(values))),
+    ])
+}
+
+/// A compressed run of `len` bytes, opened by whatever the column chunk's
+/// codec names.
+///
+/// Which codecs open and which do not is the part of this worth writing down.
+/// UNCOMPRESSED opens as a stored space rather than staying plain bytes so
+/// that one reader applies to every page: what is inside a page is the same
+/// arrangement of levels and values whether or not anything was run over it,
+/// and a space is where that arrangement is declared.
+///
+/// LZO and the older framed LZ4 are named and keep their bytes. LZO has no
+/// decoder here, and its licence is most of why little else has one either.
+/// LZ4 as codec 5 is not a raw LZ4 block: Hadoop wrapped each block in a pair
+/// of big-endian lengths, writers disagreed for years about how a page with
+/// more than one block in it was written, and no file in the sample collection
+/// holds one, so what would go here would be a reading nothing has checked.
+/// LZ4_RAW, codec 7, is the raw block and does open; it is what every writer
+/// since 2020 produces and what the sample named for it holds.
+fn packed(len: E) -> T {
+    let pack = |codec| T::decoded(len.clone(), codec, page_values());
+    T::switch(codec_field(), vec![
+        (0, stored(len.clone())),
+        (1, pack(Codec::Snappy)),
+        (2, pack(Codec::Gzip)),
+        (4, pack(Codec::Brotli)),
+        (6, pack(Codec::Zstd)),
+        (7, pack(Codec::Lz4Block)),
+    ], T::bytes(len))
+}
+
+/// A run nothing was run over, opened as a space all the same. See
+/// [`Codec::Stored`](crate::codec::Codec::Stored) for why that is a codec here
+/// rather than a flag.
+fn stored(len: E) -> T {
+    T::decoded(len, Codec::Stored, page_values())
+}
+
+/// The column's physical type, as the number the footer wrote. Field 1 of the
+/// `ColumnMetaData`, which is where a page finds out how wide one value is
+/// without going anywhere near the schema.
+fn type_field() -> E {
+    metadata_field(1)
+}
+
+/// What the unpacked bytes of a page hold.
+///
+/// Two of the three kinds of page read as their values here, and the third
+/// does not, for a reason worth stating plainly. A dictionary page is nothing
+/// but values, so it reads. A `DATA_PAGE_V2` says in its header how many bytes
+/// of levels it wrote, so what is left is the values and they read too. A v1
+/// data page says neither: its repetition and definition levels are there only
+/// when the column's maximum level is above zero, and that maximum comes from
+/// the repetition types of every schema element along the column's path, which
+/// is not a thing an expression here can reach. Four bytes at the front of a v1
+/// page are a level run's length or they are the first value, and nothing in
+/// the page tells the two apart. So a v1 page keeps its bytes and the side
+/// reader, which can walk the schema, is what says what they hold.
+fn page_values() -> T {
+    T::switch(header_field(1), vec![(2, plain_values()), (3, v2_values())], T::bytes(E::Remaining))
+}
+
+/// The values of a `DATA_PAGE_V2`, by the encoding its header names.
+///
+/// `PLAIN_DICTIONARY` and `RLE_DICTIONARY` are the same bytes under two
+/// numbers: the first was what parquet-mr wrote before the second was given a
+/// number of its own, and a reader has to take both.
+fn v2_values() -> T {
+    T::switch(v2_field(4), vec![
+        (0, plain_values()),
+        (2, dictionary_indices()),
+        (8, dictionary_indices()),
+        (3, rle_booleans()),
+    ], T::bytes(E::Remaining))
+}
+
+/// PLAIN: values back to back, in the column's physical type.
+///
+/// Every number is little-endian, which is the one thing Parquet fixes
+/// everywhere. A byte array carries its own four-byte length; a fixed-length
+/// one does not, and its width is in the schema rather than in the footer, so
+/// it stays bytes here. So does a boolean, which PLAIN packs a bit at a time
+/// from the low bit of each byte up: that is the opposite of how bits are
+/// addressed here, and a field laid over them would point at the wrong bit of
+/// the right byte.
+fn plain_values() -> T {
+    let rep = |ty| T::repeat(ty, Until::End);
+    T::switch(type_field(), vec![
+        (1, rep(T::i32(Little))),
+        (2, rep(T::Int { bits: 64, endian: Little })),
+        // INT96: twelve bytes Impala wrote a nanosecond timestamp into, as
+        // three little-endian words. Deprecated since 2016 and still in every
+        // file Impala ever wrote.
+        (3, rep(T::bytes(E::lit(12)))),
+        (4, rep(T::F32(Little))),
+        (5, rep(T::F64(Little))),
+        (6, rep(byte_array())),
+    ], T::bytes(E::Remaining))
+}
+
+/// One PLAIN byte array: four bytes of length and then that many bytes.
+fn byte_array() -> T {
+    T::structure_named("ByteArray", "", "bytes", vec![
+        ("length", T::u32(Little)),
+        ("bytes", T::bytes(E::field("length"))),
+    ])
+}
+
+/// RLE booleans: four bytes of length, and then the hybrid at one bit a value.
+///
+/// There is no width byte, because a boolean is one bit. There is a length,
+/// in both page versions, and that is the odd one out: a v2 page's levels are
+/// sized by the header and carry none, and the same runs holding dictionary
+/// indices carry none either. The values are the one place it is written.
+fn rle_booleans() -> T {
+    T::structure("RleBooleans", vec![
+        ("length", T::u32(Little)),
+        ("runs", T::sized(E::field("length"), hybrid_runs(E::lit(1)))),
+    ])
+}
+
+/// Dictionary indices: a byte saying how wide an index is, and then the
+/// hybrid runs that hold them.
+///
+/// The width byte is part of the encoding rather than part of the hybrid: the
+/// same runs appear for levels and for RLE booleans with the width coming from
+/// somewhere else entirely.
+fn dictionary_indices() -> T {
+    T::structure("DictionaryIndices", vec![
+        ("bit_width", T::u8()),
+        ("runs", hybrid_runs(E::field("bit_width"))),
+    ])
+}
+
+/// The RLE and bit-packed hybrid, at a width something outside it fixed.
+fn hybrid_runs(width: E) -> T {
+    T::repeat(hybrid_run(width), Until::End)
+}
+
+/// One run of the hybrid.
+///
+/// Every run starts with an unsigned varint whose low bit says which of the
+/// two kinds this is; the rest of it is a count. An even header repeats a
+/// single value, written in as many whole bytes as the width needs, and the
+/// count is how many times. An odd header introduces groups of eight values
+/// packed at the width, and the count is how many groups, so eight times the
+/// count values follow in `count * width` bytes.
+///
+/// The packed values stay bytes rather than becoming fields. Parquet packs
+/// them from the low bit of each byte upwards, which is the reverse of how
+/// bits are addressed here, so a field per value would name the right byte and
+/// the wrong bits of it. The side reader unpacks them and says what they are.
+fn hybrid_run(width: E) -> T {
+    let header = E::field("header");
+    let count = header.clone().shr(E::lit(1));
+    let rle = T::structure("RleRun", vec![
+        ("count", T::computed(count.clone())),
+        // A width of zero writes no bytes at all: every index is the same
+        // index, and a column with one distinct value has nothing to say.
+        ("value", T::switch(width.clone().equals(E::lit(0)), vec![(1, T::computed(E::lit(0)))],
+            T::uint_expr(width.clone().div_ceil(E::lit(8)).mul(E::lit(8)), Little))),
+    ]);
+    let packed = T::structure("BitPackedRun", vec![
+        ("count", T::computed(count.clone().mul(E::lit(8)))),
+        ("values", T::bytes(count.mul(width))),
+    ]);
+    T::structure_named("HybridRun", "kind", "", vec![
+        ("header", T::leb_u()),
+        ("kind", T::enumeration("HybridRunKind", T::computed(header.and(E::lit(1))), HYBRID_RUN)),
+        ("run", T::switch(E::field("kind"), vec![(1, packed)], rle)),
     ])
 }
 
@@ -788,6 +1064,151 @@ mod tests {
             }
         }
         panic!("page lookup failed to make progress");
+    }
+
+    /// A file of one column chunk holding one page, with the column's physical
+    /// type and codec written where the real thing writes them. `pages` is the
+    /// bytes of every page, header and payload together.
+    fn one_column(physical: u64, codec: u64, pages: Vec<u8>) -> Vec<u8> {
+        let metadata = object(vec![
+            integer(1, physical),
+            integer(4, codec),
+            integer(9, 4),
+            integer(7, pages.len() as u64),
+        ], false);
+        let column = object(vec![integer(2, 0), field(3, 12, metadata)], false);
+        let row = object(vec![one(1, column), integer(3, 1)], false);
+        let footer = object(vec![integer(1, 1), one(4, row), integer(3, 1)], false);
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend(pages);
+        bytes.extend_from_slice(&footer);
+        bytes.extend_from_slice(&(footer.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(MAGIC);
+        bytes
+    }
+
+    /// A page of `kind` whose payload is `body`, with `header` giving whatever
+    /// extra fields that kind of page carries.
+    fn one_page(kind: u64, mut header: Vec<Vec<u8>>, body: &[u8]) -> Vec<u8> {
+        let mut fields = vec![integer(1, kind), integer(2, body.len() as u64), integer(3, body.len() as u64)];
+        fields.append(&mut header);
+        let mut bytes = object(fields, false);
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    /// A dictionary page of four-byte integers reads as those integers, from
+    /// the physical type the column chunk wrote and nothing else.
+    #[test]
+    fn a_dictionary_page_reads_as_the_columns_physical_type() {
+        let mut body = Vec::new();
+        for v in [7i32, -1, 1000] {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        let dict = object(vec![integer(1, 3), integer(2, 0)], false);
+        let bytes = one_column(1, 0, one_page(2, vec![field(7, 12, dict)], &body));
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let page = nodes_of(&mut e, &d, "Page");
+        assert_eq!(page.len(), 1);
+        // payload -> the stored space -> the repeat of values.
+        let mut at = page[0].0.clone();
+        at.extend([2, 0]);
+        assert_eq!(e.node(&d, &at).unwrap().child_count, 3);
+        for (i, want) in [7i128, -1, 1000].into_iter().enumerate() {
+            let mut p = at.clone();
+            p.push(i);
+            assert_eq!(e.node(&d, &p).unwrap().value.as_int(), Some(want), "value {i}");
+        }
+    }
+
+    /// The RLE and bit-packed hybrid, on bytes written by hand: a width byte,
+    /// a run that repeats one index five times, and a run of one group of
+    /// eight packed at that width.
+    #[test]
+    fn dictionary_indices_read_as_hybrid_runs() {
+        // width 3, then header 5 << 1 = 10 with the value 2, then header
+        // (1 << 1) | 1 = 3 with three bytes holding eight three-bit values.
+        let body = [3u8, 10, 2, 3, 0xaa, 0xbb, 0xcc];
+        let v2 = object(vec![
+            integer(1, 8),
+            integer(2, 0),
+            integer(3, 8),
+            integer(4, 8),
+            integer(5, 0),
+            integer(6, 0),
+        ], false);
+        let bytes = one_column(1, 0, one_page(3, vec![field(8, 12, v2)], &body));
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let indices = nodes_of(&mut e, &d, "DictionaryIndices");
+        assert_eq!(indices.len(), 1, "the values should read as dictionary indices");
+        let mut at = indices[0].0.clone();
+        at.push(0);
+        assert_eq!(e.node(&d, &at).unwrap().value, Value::UInt(3), "the width byte");
+        let runs = nodes_of(&mut e, &d, "HybridRun");
+        assert_eq!(runs.len(), 2);
+        // The first run repeats one value: five of index 2, in one byte.
+        let rle = nodes_of(&mut e, &d, "RleRun");
+        assert_eq!(rle.len(), 1);
+        let mut p = rle[0].0.clone();
+        p.push(0);
+        assert_eq!(e.node(&d, &p).unwrap().value.as_int(), Some(5), "how many times");
+        p.pop();
+        p.push(1);
+        assert_eq!(e.node(&d, &p).unwrap().value.as_int(), Some(2), "the repeated index");
+        assert_eq!(e.node(&d, &p).unwrap().size_bits, 8, "a width of 3 takes one whole byte");
+        // The second is one group of eight, three bits each, so three bytes.
+        let packed = nodes_of(&mut e, &d, "BitPackedRun");
+        assert_eq!(packed.len(), 1);
+        let mut q = packed[0].0.clone();
+        q.push(0);
+        assert_eq!(e.node(&d, &q).unwrap().value.as_int(), Some(8), "how many values");
+        q.pop();
+        q.push(1);
+        assert_eq!(e.node(&d, &q).unwrap().size_bits, 24, "eight values of three bits");
+    }
+
+    /// A width of zero writes no value byte at all: every index is the same
+    /// index, and a run of them is the header and nothing else.
+    #[test]
+    fn a_zero_width_index_takes_no_bytes() {
+        // width 0, then header 4 << 1 = 8, repeating the only index there is.
+        let body = [0u8, 8];
+        let v2 = object(vec![integer(1, 4), integer(4, 8), integer(5, 0), integer(6, 0)], false);
+        let bytes = one_column(1, 0, one_page(3, vec![field(8, 12, v2)], &body));
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let rle = nodes_of(&mut e, &d, "RleRun");
+        assert_eq!(rle.len(), 1);
+        assert_eq!(e.node(&d, &rle[0].0).unwrap().size_bits, 0);
+    }
+
+    /// A v2 page keeps its levels out of the packed part, sized by the two
+    /// lengths in its header, so the levels stay readable whatever the codec.
+    #[test]
+    fn a_v2_page_puts_its_levels_in_front_of_the_packed_run() {
+        let body = [0xd0u8, 0xd1, 0xe0, 0xe1, 0xe2, 1, 2, 3, 4];
+        let v2 = object(vec![
+            integer(1, 2),
+            integer(4, 0),
+            integer(5, 3),
+            integer(6, 2),
+        ], false);
+        let bytes = one_column(2, 0, one_page(3, vec![field(8, 12, v2)], &body));
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let payload = nodes_of(&mut e, &d, "DataPageV2Payload");
+        assert_eq!(payload.len(), 1);
+        let at = payload[0].0.clone();
+        let part = |e: &mut Evaluator, i: usize| {
+            let mut p = at.clone();
+            p.push(i);
+            e.node(&d, &p).unwrap()
+        };
+        assert_eq!(part(&mut e, 0).size_bits, 2 * 8, "repetition levels");
+        assert_eq!(part(&mut e, 1).size_bits, 3 * 8, "definition levels");
+        assert_eq!(part(&mut e, 2).size_bits, 4 * 8, "what is left is the values");
     }
 
     #[test]
