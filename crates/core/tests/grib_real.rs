@@ -78,7 +78,7 @@ fn a_real_message_reads_as_its_grid_and_its_values() {
     let count = ev.node(&d, &[0, 1, 4, 3, 2, 0]).unwrap().value.as_int().unwrap();
     let bpv = ev.node(&d, &[0, 1, 4, 3, 2, 2, 3]).unwrap().value.as_int().unwrap();
     assert_eq!(count, ni * nj);
-    let values = ev.node(&d, &[0, 1, 4, 5, 2, 2]).unwrap();
+    let values = ev.node(&d, &[0, 1, 4, 5, 2, 5]).unwrap();
     assert_eq!(i128::from(values.child_count), count);
     assert_eq!(u64::from(values.size_bits), (count * bpv) as u64);
 }
@@ -396,7 +396,7 @@ fn a_cursor_on_a_packed_value_is_told_what_that_value_is_worth() {
 
     // Simple packing, two levels down: the value is where it is in the run.
     let Some((d, mut ev)) = read("regular_ll_sfc.grib2") else { return };
-    match ev.explain(&d, &[0, 1, 4, 5, 2, 2, 5], None).unwrap() {
+    match ev.explain(&d, &[0, 1, 4, 5, 2, 5, 5, 0], None).unwrap() {
         Explain::GribValues { template, at: Some(at), total, problem, .. } => {
             assert_eq!(problem, None);
             assert_eq!((template, total), (0, 16 * 31));
@@ -464,4 +464,84 @@ fn a_file_of_several_messages_reads_as_all_of_them() {
         let length = ev.node(&d, &[m, 1, 3]).unwrap().value.as_int().unwrap();
         assert_eq!(u64::from(message.size_bits), length as u64 * 8);
     }
+}
+
+/// Every simply packed value in the collection, each one's worth as the
+/// template works it out against the same value from `grib_values`, the side
+/// reader the panel shows. The two are separate arithmetic over the same
+/// numbers: the template's `(reference_value + stored * pow2(E)) / pow10(D)`
+/// over its own fields, and the reader's over the bytes of section 7 and a
+/// reference value read here straight from section 5's four bytes.
+///
+/// The template reads the reference value as the float its row shows, the
+/// shortest decimal that reads back as the same bits, and the side reader
+/// reads the bits exactly, so the two meet within a ten-millionth of the value
+/// rather than at the bit.
+#[test]
+fn a_simply_packed_value_agrees_with_the_panel() {
+    use qubero_core::eval::Value;
+    use qubero_core::formats::grib_values::{simple, Packing};
+    let mut checked = 0usize;
+    for name in ["regular_ll_sfc.grib2", "two-messages.grib2", "lambert_bf.grib2", "gfs-1p00-3messages.grib2"] {
+        let Some((d, mut ev)) = read(name) else {
+            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            return;
+        };
+        let raw = std::fs::read(sample(name).unwrap()).unwrap();
+        let found = sections(&d, &mut ev);
+        let mut five: Option<Vec<usize>> = None;
+        for (number, path) in found {
+            if number == 5 {
+                five = Some(path);
+                continue;
+            }
+            if number != 7 {
+                continue;
+            }
+            // Simple packing's section 7, and not the one of bytes that a
+            // packing this does not read leaves behind under the same name.
+            let body = [path.clone(), vec![2]].concat();
+            if ev.node(&d, &body).unwrap().type_name != "PackedData" || ev.child_named(&d, &body, "reference_value").unwrap().is_none() {
+                continue;
+            }
+            let template = [five.clone().expect("a section 5 before section 7"), vec![2, 2]].concat();
+            let field = |ev: &mut Evaluator, of: &[usize], name: &str| {
+                let p = ev.child_named(&d, of, name).unwrap().unwrap_or_else(|| panic!("no {name}"));
+                ev.node(&d, &p).unwrap()
+            };
+            let reference_at = (field(&mut ev, &template, "reference_value").offset_bits / 8) as usize;
+            let reference = f32::from_be_bytes(raw[reference_at..reference_at + 4].try_into().unwrap());
+            let p = Packing {
+                reference,
+                binary_scale: field(&mut ev, &template, "binary_scale_factor").value.as_int().unwrap() as i32,
+                decimal_scale: field(&mut ev, &template, "decimal_scale_factor").value.as_int().unwrap() as i32,
+                bits_per_value: field(&mut ev, &template, "bits_per_value").value.as_int().unwrap() as u32,
+                missing_value_management: 0,
+                n_groups: 0,
+                group_widths_reference: 0,
+                group_widths_bits: 0,
+                group_lengths_reference: 0,
+                group_length_increment: 0,
+                last_group_length: 0,
+                group_lengths_bits: 0,
+                spatial_order: 0,
+                extra_bytes: 0,
+            };
+            let node = ev.node(&d, &body).unwrap();
+            let count = field(&mut ev, &body, "count").value.as_int().unwrap() as usize;
+            let from = (node.offset_bits / 8) as usize;
+            let reading = simple(&p, &raw[from..from + (node.size_bits / 8) as usize], count);
+            assert_eq!(reading.problem, None, "{name}");
+            assert_eq!(reading.values.len(), count, "{name}");
+            let values = ev.child_named(&d, &body, "values").unwrap().unwrap();
+            for (i, want) in reading.values.iter().enumerate() {
+                let worth = ev.node(&d, &[values.clone(), vec![i, 1]].concat()).unwrap();
+                let Value::Float(got) = worth.value else { panic!("{name} value {i} is worth {:?}", worth.value) };
+                assert!((got - want).abs() <= 1e-7 * want.abs().max(1.0), "{name} value {i}: {got} against the panel's {want}");
+                checked += 1;
+            }
+        }
+    }
+    eprintln!("{checked} simply packed values checked");
+    assert!(checked > 0, "no simply packed value in the collection");
 }

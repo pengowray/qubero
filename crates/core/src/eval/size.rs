@@ -58,6 +58,42 @@ impl Evaluator {
             }
             return Ok(Some(n as u64));
         }
+        // The same run with something worked out beside each number: a GRIB
+        // value is the packed integer and what it is worth, and the worth
+        // takes no bits. A record whose fields are all fixed or all as wide
+        // as a field outside it says is as wide as they add up to, and a grid
+        // of a million of them is still placed by arithmetic.
+        //
+        // Only a width that is a number or a name, and a name that is not one
+        // of the record's own fields: asked of the list, a name finds the
+        // field around the list, and a width the record says of itself would
+        // be answered by the wrong field or by none.
+        if let Ty::Struct(s) = &**elem {
+            let mut total = 0u64;
+            for f in &s.fields {
+                if let Some(bits) = fixed_bits(&f.ty) {
+                    total += bits;
+                    continue;
+                }
+                let Ty::UIntExpr { bits, .. } = f.ty.without_sentinel() else { return Ok(None) };
+                match &**bits {
+                    Expr::Lit(_) => {}
+                    Expr::Ref(name) if !s.fields.iter().any(|g| *g.name == **name) => {}
+                    _ => return Ok(None),
+                }
+                let n = self.eval_expr(doc, path, &bits.clone())?;
+                if !(0..=128).contains(&n) {
+                    return Ok(None);
+                }
+                total += n as u64;
+            }
+            // Nothing at all, which an array can count and a repeat cannot,
+            // for the reason a bare width of nought is kept to an array above.
+            if total == 0 && !matches!(ty, Ty::Array { .. }) {
+                return Ok(None);
+            }
+            return Ok(Some(total));
+        }
         let Ty::Sized { size, .. } = &**elem else { return Ok(None) };
         if !uniform(size) {
             return Ok(None);

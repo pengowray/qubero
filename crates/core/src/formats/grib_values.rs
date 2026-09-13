@@ -1,11 +1,12 @@
 //! What a GRIB packed number is worth, and the steps between the two.
 //!
 //! [`grib`](super::grib) says where every packed number is and how wide it is,
-//! which is what a template can say. It cannot say what one is worth: the
-//! arithmetic is a float plus an integer times a power of two, over a power of
-//! ten, and the IR's expressions are integers with no powers in them. For
-//! complex packing with spatial differencing there is worse, a running sum
-//! over the whole grid, which nothing written as an expression could ever be.
+//! which is what a template can say, and for simple packing what each one is
+//! worth as well, as a real beside it. For complex packing it cannot: a value
+//! is counted from its group's reference, and with spatial differencing there
+//! is a running sum over the whole grid, which nothing written as an
+//! expression could ever be. The panel reads all of them here, simple packing
+//! included, so that every packing shows the same steps.
 //!
 //! So this is the other half, the arrangement
 //! [`hdf5_chunk`](super::hdf5_chunk) and [`ggml_quant`](super::ggml_quant)
