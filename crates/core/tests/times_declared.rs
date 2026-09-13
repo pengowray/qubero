@@ -175,6 +175,9 @@ fn reads_as_a_number(ty: &Ty) -> bool {
         Ty::UIntExpr { .. } => true,
         Ty::Leb128 { .. } | Ty::Vlq | Ty::Zigzag | Ty::SqliteVarint | Ty::EbmlVint { .. } => true,
         Ty::Computed(_) => true,
+        // A count with a fraction in it: a CDF_EPOCH is milliseconds in a
+        // double.
+        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) => true,
         // A list of them, which is what a declaration on an array means.
         Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => reads_as_a_number(elem),
         Ty::PointerList { elem, .. } => reads_as_a_number(elem),

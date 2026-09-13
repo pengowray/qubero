@@ -310,7 +310,78 @@ export const TIME = {
    * them. The raw number stays in the value row above.
    */
   impossible: "Not a date",
+  /**
+   * Under a moment whose seconds read 60. The digits are right as they stand
+   * and stay bare, but almost no other tool can print a 60th second (a JS Date
+   * or a Python datetime cannot hold one), so a reader who meets `:60` here for
+   * the first time is more likely to suspect the editor than to recognise a
+   * leap second. Two words give them the term to look up. Only ever shown for
+   * a moment that falls in one, which is about 27 seconds of history, so the
+   * line costs nothing elsewhere. `Inside` ties it to this moment: bare
+   * `Leap second` could be read as a fact about the type, since TT2000 is
+   * described everywhere as counting leap seconds, and a reader would then
+   * expect to see it under every TT2000 date.
+   */
+  leapSecond: "Inside a leap second",
+  /** The quieter line under a moment that is right as far as it goes. Keyed by
+   *  `FieldTime.note`. */
+  note: {
+    /**
+     * Under a moment on or after the day the leap second list stops. The
+     * digits were worked out as if no leap second is added after the last one
+     * on the list, which is the only thing a conversion can do, so the line
+     * does not say so; it states the fact the digits depend on. The date is
+     * the day the list runs out, not 2016 when the last leap second was added,
+     * because it is the day this line starts appearing, so a reader can see
+     * why a 2020 date has no note and a 2028 date does. `not yet known` stays
+     * true once the built-in list is older than the IERS's next decision; `not
+     * yet announced` would not. Which way the digits are off if one is added
+     * (the true UTC is earlier, by a second per leap second) needs a whole
+     * sentence to say without `early` and `late` reading two ways, so it is
+     * left out: a reader who knows what a leap second is knows the direction,
+     * and one who does not has the term first on the line to look up. No verb
+     * with an unstated subject (`Assumes no leap seconds after`), since the
+     * panel already mixes facts about the writer (`Not recorded`) with facts
+     * about the conversion and the subject would not resolve.
+     */
+    past_leap_second_table: (until: string): string => `Leap seconds after ${until} not yet known`,
+    /**
+     * Under a moment before 1972-01-01 UTC. Before then UTC had no leap seconds
+     * and was kept near Earth rotation with stretched seconds and fractional
+     * steps, and before 1960 it did not exist, so any UTC for these dates is a
+     * convention. The one followed is the NASA CDF library's, with its offsets
+     * from 1960 and none earlier: the line names it, since that is the fact a
+     * reader who works with data from this era needs to reproduce the digits,
+     * and it is a name they can search. `other tools may differ` is the whole
+     * hedge. How much they differ is milliseconds for 1960 to 1971 and a
+     * second or more before 1960, and one line cannot carry both honestly, so
+     * a second string for pre-1960 was considered and dropped: the reader who
+     * cares about the size already knows the era, and for them the convention
+     * is the whole answer. `1972` is in the line for the same reason the list's
+     * end date is in the one above: it is where this note starts. Not `leap
+     * second table`, the CDF library's own name for its file, since a reader
+     * who knows there were no leap seconds before 1972 would read that as a
+     * mistake. Comma, not a semicolon, as `UTC or local, the format doesn't
+     * say` is joined.
+     */
+    before_leap_seconds: "UTC before 1972 per NASA's CDF library, other tools may differ",
+  } satisfies Record<NonNullable<FieldTime["note"]>, string | ((until: string) => string)>,
 } as const;
+
+/**
+ * The quieter line under a moment, or null when it needs none. A note from the
+ * core wins over the leap second's own line, though no moment has both: the
+ * table's first leap second is after 1972 began and its last is long before it
+ * runs out. The day the table runs out is printed as the date alone, since it
+ * is a whole day and the line is about days.
+ */
+export function timeNoteText(time: FieldTime): string | null {
+  if (time.note === "past_leap_second_table" && time.leap_table_expires !== null) {
+    return TIME.note.past_leap_second_table(new Date(time.leap_table_expires * 1000).toISOString().slice(0, 10));
+  }
+  if (time.note === "before_leap_seconds") return TIME.note.before_leap_seconds;
+  return time.state === "leap" ? TIME.leapSecond : null;
+}
 
 export const UNPACKED = {
   /** Heading over the one row saying which decoder step produced this field's

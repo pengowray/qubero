@@ -20,7 +20,9 @@
 //! interface, as [`Verdict`](super::Verdict)'s two strings do.
 
 use super::*;
-use crate::template::{Counted, Epoch, Time, Zone};
+use crate::template::{Atomic, Counted, Epoch, Time, Unset, Zone};
+
+pub mod leap_seconds;
 
 /// The moment the field at a path means, and what is honest to say about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,29 @@ pub struct TimeInfo {
     /// wants none, and showing `.000000` on the second is inventing precision
     /// the file never claimed.
     pub step_nanos: u64,
+    /// What else has to be said for the moment to be read honestly, if
+    /// anything. Only a count on a clock with leap seconds has anything to say
+    /// yet.
+    pub note: Option<TimeNote>,
+}
+
+/// A qualification on a moment that is right as far as it goes.
+///
+/// Not a fourth kind of [`Moment`], because the moment is still the best answer
+/// there is and an interface should still show it. What it must not do is show
+/// it as plainly as a count from 1970, and this is what it says instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeNote {
+    /// The moment is after the last day the table of leap seconds vouches for.
+    /// It is worked out as if none has been added since, and one announced
+    /// after the table was copied would make it a second late. See
+    /// [`leap_seconds::EXPIRES`].
+    PastLeapSecondTable,
+    /// The moment is before 1972, when UTC had rubber seconds and fractional
+    /// steps rather than leap seconds, and before 1960 no UTC at all. It is
+    /// worked out as the NASA CDF library works it out, which another library
+    /// may not agree with to the millisecond, and before 1960 to the second.
+    BeforeLeapSeconds,
 }
 
 /// What the number in the field came to.
@@ -54,6 +79,17 @@ pub enum Moment {
     /// caller having to know which way the sign of the fraction goes: -1500
     /// milliseconds is (-2 seconds, 500,000,000 nanoseconds).
     At { unix_seconds: i64, nanos: u32 },
+    /// An instant inside a leap second: `nanos` into second 60 of the minute
+    /// whose second 59 is `unix_seconds`. The end of 2016 had one, and a CDF
+    /// written at the time holds `2016-12-31T23:59:60.5` as a number like any
+    /// other.
+    ///
+    /// Its own answer rather than [`Moment::At`] with a flag on it, because a
+    /// Unix count has no number for this second, and an interface that printed
+    /// the seconds it was given and ignored a flag would print `23:59:59` for
+    /// a moment a second later. As a variant of its own, every interface has
+    /// to decide what to print.
+    LeapSecond { unix_seconds: i64, nanos: u32 },
     /// The stored value is the one this format writes when it has no time to
     /// record. See [`Time::unset`].
     Unset,
@@ -84,6 +120,33 @@ pub const LAST_SECOND: i64 = 253_402_300_799;
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
+/// The number in a field, as the kind of number it is.
+///
+/// Kept apart rather than widened to one type, because each kind has a way of
+/// going wrong the other does not. An integer count multiplied out is exact and
+/// only has to be checked for overflow. A float count is a double counting
+/// milliseconds, which is a CDF_EPOCH, and the same multiplication done in
+/// floating point moves a whole second by thousands of nanoseconds; it is also
+/// the only kind that can be NaN. And a sentinel is compared against its own
+/// kind only: 0.0 in a double is not the 0 a gzip writes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Count {
+    Int(i128),
+    Float(f64),
+}
+
+impl Count {
+    /// Whether this is one of the values the format writes when it has no time
+    /// to record.
+    fn is_unset(self, unset: &[Unset]) -> bool {
+        unset.iter().any(|u| match (u, self) {
+            (Unset::Int(want), Count::Int(v)) => *want == v,
+            (Unset::Float(want), Count::Float(v)) => *want == v,
+            _ => false,
+        })
+    }
+}
+
 impl Evaluator {
     /// The moment the field at `path` means, or nothing when it means none.
     ///
@@ -100,18 +163,27 @@ impl Evaluator {
     pub fn time_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<TimeInfo>> {
         let Some(time) = self.time_at(doc, path)? else { return Ok(None) };
         let Some(value) = self.moment_number(doc, path)? else { return Ok(None) };
-        if time.unset == Some(value) {
-            return Ok(Some(TimeInfo { moment: Moment::Unset, zone: time.zone, step_nanos: step_of(&time.epoch) }));
+        let step_nanos = step_of(&time.epoch);
+        if value.is_unset(&time.unset) {
+            return Ok(Some(TimeInfo { moment: Moment::Unset, zone: time.zone, step_nanos, note: None }));
         }
         let moment = match &time.epoch {
             Epoch::Counted(c) => counted(value, *c),
+            Epoch::Atomic(a) => {
+                let (moment, note) = atomic(value, *a);
+                return Ok(Some(TimeInfo { moment, zone: time.zone, step_nanos, note }));
+            }
             Epoch::Dos => {
                 // The date is the top half and the time the bottom, and a value
                 // wider than the thirty-two bits this is packed into is not one
                 // of these at all rather than one to be masked down to size.
-                match u32::try_from(value) {
-                    Ok(v) => dos(v >> 16, v & 0xffff),
-                    Err(_) => Moment::Impossible,
+                // Nor is a float, which no format packs a date into.
+                match value {
+                    Count::Int(v) => match u32::try_from(v) {
+                        Ok(v) => dos(v >> 16, v & 0xffff),
+                        Err(_) => Moment::Impossible,
+                    },
+                    Count::Float(_) => Moment::Impossible,
                 }
             }
             Epoch::DosHalves { date, time } => {
@@ -125,7 +197,7 @@ impl Evaluator {
                 dos(d, t)
             }
         };
-        Ok(Some(TimeInfo { moment, zone: time.zone, step_nanos: step_of(&time.epoch) }))
+        Ok(Some(TimeInfo { moment, zone: time.zone, step_nanos, note: None }))
     }
 
     /// What the template says about the field at `path`, if anything.
@@ -140,28 +212,26 @@ impl Evaluator {
     /// The list itself is never a moment, which falls out of
     /// [`Evaluator::moment_number`]: a composite reads as its count, and a
     /// count is not a number this will accept.
+    ///
+    /// And a list of lists is the same thing again, so the walk climbs through
+    /// as many lists as there are to the first structure. A CDF variable's
+    /// values are rows of values, one row per record, and the declaration is
+    /// on the field holding the rows: the second level of list is no more a
+    /// place to hang one than the first was. The walk stops at a structure
+    /// whether or not its field is declared, so a list of structures does not
+    /// lend its declaration to the fields inside them.
     fn time_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Time>> {
         self.resolve(doc, path)?;
-        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
-        if let Some(t) = self.declared(parent, idx) {
-            return Ok(Some(t));
-        }
-        let Some((&pidx, grand)) = parent.split_last() else { return Ok(None) };
-        if !matches!(
-            self.memo.get(parent).map(|r| &r.ty),
-            Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. })
-        ) {
-            return Ok(None);
-        }
-        Ok(self.declared(grand, pidx))
-    }
-
-    /// The declaration on field `idx` of the structure at `parent`, if that is
-    /// a structure and the field has one.
-    fn declared(&self, parent: &[usize], idx: usize) -> Option<Time> {
-        match self.memo.get(parent).map(|r| &r.ty) {
-            Some(Ty::Struct(s)) => s.fields.get(idx).and_then(|f| f.time.clone()),
-            _ => None,
+        let Some((mut idx, mut parent)) = path.split_last().map(|(i, p)| (*i, p)) else { return Ok(None) };
+        loop {
+            match self.memo.get(parent).map(|r| &r.ty) {
+                Some(Ty::Struct(s)) => return Ok(s.fields.get(idx).and_then(|f| f.time.clone())),
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. }) => {
+                    let Some((&up, rest)) = parent.split_last() else { return Ok(None) };
+                    (idx, parent) = (up, rest);
+                }
+                _ => return Ok(None),
+            }
         }
     }
 
@@ -176,20 +246,26 @@ impl Evaluator {
     /// number the format wrote in text: an `ar` member's `mtime` is twelve
     /// bytes of ASCII decimal and a cpio header's is eight of ASCII hex, and
     /// both read as [`Value::Int`] before they get here.
-    fn moment_number<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<i128>> {
+    ///
+    /// A float is accepted as the count it is, fraction and all: a CDF_EPOCH
+    /// is milliseconds in a double. See [`Counted`] for how it is multiplied
+    /// out without losing the second it lands on.
+    fn moment_number<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Count>> {
+        fn number(v: &Value) -> Option<Count> {
+            match v {
+                Value::UInt(v) => i128::try_from(*v).ok().map(Count::Int),
+                Value::Int(v) => Some(Count::Int(*v)),
+                Value::Float(v) => Some(Count::Float(*v)),
+                _ => None,
+            }
+        }
         Ok(match &self.node(doc, path)?.value {
-            Value::UInt(v) => i128::try_from(*v).ok(),
-            Value::Int(v) => Some(*v),
-            Value::Enum { raw, .. } => Some(*raw),
+            Value::Enum { raw, .. } => Some(Count::Int(*raw)),
             // A slot the format leaves empty is still the number written there,
             // and a format that has both a sentinel of its own and a declared
             // unset value should have them agree.
-            Value::Unset(inner) => match &**inner {
-                Value::UInt(v) => i128::try_from(*v).ok(),
-                Value::Int(v) => Some(*v),
-                _ => None,
-            },
-            _ => None,
+            Value::Unset(inner) => number(inner),
+            other => number(other),
         })
     }
 
@@ -201,7 +277,7 @@ impl Evaluator {
     /// works and is already tested.
     fn half<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<u32>> {
         let Some(p) = self.field_out_from(doc, path, name)? else { return Ok(None) };
-        let Some(v) = self.moment_number(doc, &p)? else { return Ok(None) };
+        let Some(Count::Int(v)) = self.moment_number(doc, &p)? else { return Ok(None) };
         Ok(u32::try_from(v).ok().filter(|v| *v <= 0xffff))
     }
 }
@@ -212,6 +288,7 @@ impl Evaluator {
 fn step_of(epoch: &Epoch) -> u64 {
     match epoch {
         Epoch::Counted(c) => c.step_nanos,
+        Epoch::Atomic(a) => a.step_nanos,
         Epoch::Dos | Epoch::DosHalves { .. } => 2_000_000_000,
     }
 }
@@ -224,11 +301,85 @@ fn step_of(epoch: &Epoch) -> u64 {
 /// field can be wider, so the multiplication is checked rather than assumed and
 /// an overflow is the same answer an out-of-range instant gets. Never a panic,
 /// and never a wrap.
-fn counted(value: i128, c: Counted) -> Moment {
-    let Some(steps) = value.checked_mul(c.step_nanos as i128) else { return Moment::Impossible };
+fn counted(value: Count, c: Counted) -> Moment {
+    let Some(steps) = nanos_of(value, c.step_nanos) else { return Moment::Impossible };
     let Some(nanos) = (c.zero as i128).checked_mul(NANOS_PER_SECOND).and_then(|z| steps.checked_add(z)) else {
         return Moment::Impossible;
     };
+    instant(nanos)
+}
+
+/// How many nanoseconds a count of `step_nanos`-long steps comes to, or
+/// nothing when that is not a number at all.
+///
+/// A float is split before it is multiplied. The whole part of a double is
+/// exact, and so is that part times the step once it is an integer; the
+/// fraction is less than one step and is the only thing rounded, to the
+/// nearest nanosecond, since a double counting milliseconds is only ever an
+/// approximation of the decimal fraction the writer meant. Multiplying the
+/// whole double out first is what goes wrong: `62545910400000.0` milliseconds
+/// is 6.25e19 nanoseconds, where adjacent doubles are eight thousand apart,
+/// and a count on the second prints as one a few microseconds short of it.
+///
+/// NaN and the infinities are no count. So is a double too large to be an
+/// integer an `i128` holds, which is also far outside the years this names;
+/// CDF's fill value of -1.0E31 is one, and is caught as a sentinel before it
+/// gets here when the template declares it.
+fn nanos_of(value: Count, step_nanos: u64) -> Option<i128> {
+    match value {
+        Count::Int(v) => v.checked_mul(step_nanos as i128),
+        Count::Float(v) => {
+            if !v.is_finite() || v.abs() >= 1e30 {
+                return None;
+            }
+            let whole = v.trunc();
+            let part = ((v - whole) * step_nanos as f64).round() as i128;
+            (whole as i128).checked_mul(step_nanos as i128)?.checked_add(part)
+        }
+    }
+}
+
+/// A count on a clock with leap seconds, resolved to the UTC moment it is and
+/// whatever has to be said about it. See [`Atomic`] and [`leap_seconds`].
+///
+/// The count is laid on TAI first, which is plain arithmetic from its zero,
+/// and only then taken to UTC, which is the table. A count so far out that the
+/// table has no day for it is outside the years this names in any case, and
+/// the TAI instant is held to within a day of those years before it is asked,
+/// so the question is never about the year thirty thousand.
+fn atomic(value: Count, a: Atomic) -> (Moment, Option<TimeNote>) {
+    const SLACK: i128 = 86_400 * NANOS_PER_SECOND;
+    let Some(tai) = nanos_of(value, a.step_nanos).and_then(|n| n.checked_add(a.zero_tai_nanos)) else {
+        return (Moment::Impossible, None);
+    };
+    let band = FIRST_SECOND as i128 * NANOS_PER_SECOND - SLACK..=LAST_SECOND as i128 * NANOS_PER_SECOND + SLACK;
+    if !band.contains(&tai) {
+        return (Moment::Impossible, None);
+    }
+    let (moment, second) = match leap_seconds::utc_of(tai) {
+        Some(leap_seconds::Utc::At(utc)) => (instant(utc), utc.div_euclid(NANOS_PER_SECOND)),
+        Some(leap_seconds::Utc::Inserted { second_59, nanos }) => {
+            let inside = (FIRST_SECOND..LAST_SECOND).contains(&second_59);
+            let moment = if inside { Moment::LeapSecond { unix_seconds: second_59, nanos } } else { Moment::Impossible };
+            (moment, second_59 as i128)
+        }
+        None => (Moment::Impossible, 0),
+    };
+    let note = match moment {
+        Moment::At { .. } | Moment::LeapSecond { .. } if second >= leap_seconds::EXPIRES as i128 => {
+            Some(TimeNote::PastLeapSecondTable)
+        }
+        Moment::At { .. } | Moment::LeapSecond { .. } if second < leap_seconds::FIRST_LEAP_SECOND_ERA as i128 => {
+            Some(TimeNote::BeforeLeapSeconds)
+        }
+        _ => None,
+    };
+    (moment, note)
+}
+
+/// Nanoseconds from 1970-01-01T00:00:00Z as the instant they are, or
+/// [`Moment::Impossible`] outside the years this names.
+fn instant(nanos: i128) -> Moment {
     // Euclidean, so the fraction of an instant before 1970 is still a fraction
     // forwards: -1500 milliseconds is two seconds back and half of one on, not
     // one second back and half of one further back, which would print as a
@@ -300,7 +451,7 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Moment, TimeInfo};
+    use super::{Moment, TimeInfo, TimeNote};
     use crate::document::Document;
     use crate::eval::Evaluator;
     use crate::source::MemSource;
@@ -520,6 +671,249 @@ mod tests {
         let mut ev = Evaluator::new(Template::new("made-up", root));
         let doc = Document::new(MemSource(b"1234567890  ".to_vec()));
         assert_eq!(at(ev.time_of(&doc, &[0]).unwrap()), (KNOWN, 0));
+    }
+
+    fn f64le(v: f64) -> Vec<u8> {
+        v.to_le_bytes().to_vec()
+    }
+
+    /// A CDF_EPOCH, milliseconds from the year 0 in a double. The number is
+    /// `cacsst2.cdf`'s one time, which `cdflib` encodes as
+    /// `1982-01-01T00:00:00.000`. A whole second, and multiplied out to
+    /// nanoseconds in floating point it would not be one.
+    #[test]
+    fn a_float_count_on_the_second_stays_on_it() {
+        let info = one(T::F64(Little), Time::cdf_epoch(), f64le(62545910400000.0));
+        assert_eq!(at(info), (378_691_200, 0));
+        assert_eq!(info.unwrap().step_nanos, 1_000_000, "printed to the millisecond, as CDF's own tools do");
+    }
+
+    /// And a count with a fraction keeps it: half a millisecond past
+    /// 2020-01-01T23:59:59.123, which `cdflib` encodes to the millisecond as
+    /// `2020-01-01T23:59:59.123`.
+    #[test]
+    fn a_float_count_keeps_its_fraction() {
+        let info = one(T::F64(Little), Time::cdf_epoch(), f64le(63745142399123.5));
+        assert_eq!(at(info), (1_577_923_199, 123_500_000));
+    }
+
+    /// The fraction runs forwards before the epoch too, the same as an
+    /// integer count's does.
+    #[test]
+    fn a_negative_float_count_keeps_its_fraction_positive() {
+        let info = one(T::F64(Little), Time::unix_millis(), f64le(-1500.25));
+        assert_eq!(at(info), (-2, 499_750_000));
+    }
+
+    /// NaN is what a float field holds when nobody measured anything, and it
+    /// is not a count of anything.
+    #[test]
+    fn a_float_that_is_not_a_number_is_not_a_date() {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(v))), Moment::Impossible, "{v}");
+        }
+    }
+
+    /// CDF's two values for no time. -1.0E31 is the fill value, and without the
+    /// declaration it is still not a date, since it is far outside the years
+    /// this names; 0.0 is the pad value, and is the first instant of the year
+    /// 0, which is outside them too. Both are declared, so both say what they
+    /// mean rather than only what they are not.
+    #[test]
+    fn a_cdf_epochs_fill_and_pad_values_are_no_time() {
+        for v in [-1.0e31, 0.0] {
+            assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(v))), Moment::Unset, "{v}");
+        }
+        assert_eq!(moment(one(T::F64(Little), Time::unix_millis(), f64le(-1.0e31))), Moment::Impossible);
+    }
+
+    /// The ends of a CDF_EPOCH. A day past the pad value is 0000-01-02, which
+    /// `cdflib` encodes and this does not name, since the year 0 is not one of
+    /// the years it will; 9999-12-31T23:59:59.999 is the last millisecond it
+    /// will, and one more is past it.
+    #[test]
+    fn a_cdf_epoch_at_the_year_0_and_the_year_9999() {
+        assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(86_400_000.0))), Moment::Impossible);
+        let last = one(T::F64(Little), Time::cdf_epoch(), f64le(315_569_519_999_999.0));
+        assert_eq!(at(last), (super::LAST_SECOND, 999_000_000));
+        assert_eq!(moment(one(T::F64(Little), Time::cdf_epoch(), f64le(315_569_520_000_000.0))), Moment::Impossible);
+        // And the first instant of the year 1, which is.
+        let first = one(T::F64(Little), Time::cdf_epoch(), f64le(31_622_400_000.0));
+        assert_eq!(at(first), (super::FIRST_SECOND, 0));
+    }
+
+    /// A sentinel is compared against a count of its own kind. A gzip's 0 is an
+    /// integer, and a float field holding 0.0 is not it.
+    #[test]
+    fn an_integer_sentinel_does_not_match_a_float() {
+        let info = one(T::F64(Little), Time::unix().unset(0), f64le(0.0));
+        assert_eq!(moment(info), Moment::At { unix_seconds: 0, nanos: 0 });
+    }
+
+    /// A CDF variable's values are rows of values, one row per record, and the
+    /// declaration on the rows reaches every value in them. The rows are not
+    /// moments, any more than a list of them is.
+    #[test]
+    fn a_declaration_on_a_list_of_lists_reaches_the_numbers_at_the_bottom() {
+        let rows = T::array(T::array(T::F64(Big), E::lit(2)), E::lit(2));
+        let root = T::structure("Made", vec![("rows", rows)]).field_time("rows", Time::cdf_epoch());
+        let mut ev = Evaluator::new(Template::new("made-up", root));
+        let mut bytes = Vec::new();
+        for ms in [62545910400000.0f64, 62545910401000.0, 62545910402000.0, -1.0e31] {
+            bytes.extend(ms.to_be_bytes());
+        }
+        let doc = Document::new(MemSource(bytes));
+        assert_eq!(at(ev.time_of(&doc, &[0, 0, 1]).unwrap()), (378_691_201, 0));
+        assert_eq!(at(ev.time_of(&doc, &[0, 1, 0]).unwrap()), (378_691_202, 0));
+        assert_eq!(moment(ev.time_of(&doc, &[0, 1, 1]).unwrap()), Moment::Unset);
+        assert!(ev.time_of(&doc, &[0, 1]).unwrap().is_none(), "a row is not itself a moment");
+        assert!(ev.time_of(&doc, &[0]).unwrap().is_none(), "nor are the rows");
+    }
+
+    /// A TT2000, an `int8` of nanoseconds, read through the table.
+    fn tt2000(n: i64) -> TimeInfo {
+        one(i64le(), Time::tt2000(), n.to_le_bytes().to_vec()).expect("declared as a time")
+    }
+
+    /// Seconds from 1970 for a UTC date and time of day, by the same
+    /// arithmetic the core uses, so that a test reads as the date `cdflib`
+    /// printed rather than as a number to check by hand.
+    fn utc(year: i64, month: u32, day: u32, hour: i64, minute: i64, second: i64) -> i64 {
+        super::days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second
+    }
+
+    /// J2000 itself. A TT2000 of nought is noon on 2000-01-01 in Terrestrial
+    /// Time, which is 32.184 seconds ahead of TAI, which was 32 seconds ahead of
+    /// UTC then: `cdflib` gives `2000-01-01T11:58:55.816000000`. And noon in
+    /// UTC is 64.184 seconds further on.
+    #[test]
+    fn a_tt2000_of_nought_is_j2000() {
+        let zero = tt2000(0);
+        assert_eq!(zero.moment, Moment::At { unix_seconds: utc(2000, 1, 1, 11, 58, 55), nanos: 816_000_000 });
+        assert_eq!(zero.step_nanos, 1, "printed to the nanosecond");
+        assert_eq!(zero.note, None);
+        assert_eq!(tt2000(64_184_000_000).moment, Moment::At { unix_seconds: utc(2000, 1, 1, 12, 0, 0), nanos: 0 });
+    }
+
+    /// The Parker Solar Probe file's first and last times, which `cdflib`
+    /// encodes as `2020-01-04T02:33:30.000000000` and `...19:33:30...`. Five
+    /// leap seconds after J2000, so a plain count from the right zero would be
+    /// five seconds out.
+    #[test]
+    fn a_tt2000_from_the_parker_solar_probe() {
+        assert_eq!(tt2000(631_377_279_184_000_000).moment, Moment::At { unix_seconds: utc(2020, 1, 4, 2, 33, 30), nanos: 0 });
+        assert_eq!(tt2000(631_438_479_184_000_000).moment, Moment::At { unix_seconds: utc(2020, 1, 4, 19, 33, 30), nanos: 0 });
+    }
+
+    /// The leap second at the end of 2016, and the half seconds either side of
+    /// it. The numbers are `cdflib`'s `compute_tt2000` for
+    /// `2016-12-31 23:59:59.5`, `23:59:60.0`, `23:59:60.5` and
+    /// `2017-01-01 00:00:00`. `cdflib`'s own `encode` prints the middle two as
+    /// `23:60:00.000000000` and `23:60:00.500000000`, carrying the sixtieth
+    /// second into the minute; the NASA library and ISO 8601 both write
+    /// `23:59:60`, which is what this answers.
+    #[test]
+    fn a_tt2000_inside_the_leap_second_at_the_end_of_2016() {
+        let last = utc(2016, 12, 31, 23, 59, 59);
+        assert_eq!(tt2000(536_500_867_684_000_000).moment, Moment::At { unix_seconds: last, nanos: 500_000_000 });
+        assert_eq!(tt2000(536_500_868_184_000_000).moment, Moment::LeapSecond { unix_seconds: last, nanos: 0 });
+        assert_eq!(tt2000(536_500_868_684_000_000).moment, Moment::LeapSecond { unix_seconds: last, nanos: 500_000_000 });
+        assert_eq!(tt2000(536_500_868_684_000_000 + 499_999_999).moment, Moment::LeapSecond { unix_seconds: last, nanos: 999_999_999 });
+        assert_eq!(tt2000(536_500_869_184_000_000).moment, Moment::At { unix_seconds: last + 1, nanos: 0 });
+    }
+
+    /// 1972-01-01, the first instant of whole leap seconds, and the second
+    /// before it, which is the rubber era: the CDF library's offset for the
+    /// last day of 1971 is 9.890946 seconds, and 0.109054 of a second more was
+    /// inserted at midnight to make it ten. `cdflib`'s numbers.
+    #[test]
+    fn a_tt2000_either_side_of_1972() {
+        let midnight = utc(1972, 1, 1, 0, 0, 0);
+        let first = tt2000(-883_655_957_816_000_000);
+        assert_eq!(first.moment, Moment::At { unix_seconds: midnight, nanos: 0 });
+        assert_eq!(first.note, None);
+        assert_eq!(tt2000(-883_655_956_816_000_000).moment, Moment::At { unix_seconds: midnight + 1, nanos: 0 });
+        let before = tt2000(-883_655_958_925_054_000);
+        assert_eq!(before.moment, Moment::At { unix_seconds: midnight - 1, nanos: 0 });
+        assert_eq!(before.note, Some(TimeNote::BeforeLeapSeconds));
+        // The tenth of a second inserted at midnight is not a sixty-first
+        // second, which UTC never wrote for it: the CDF library reads it with
+        // 1972's offset, as the last tenth of 1971 over again, and `cdflib`
+        // gives `1971-12-31T23:59:59.940946000` for this one.
+        assert_eq!(
+            tt2000(-883_655_958_925_054_000 + 1_050_000_000).moment,
+            Moment::At { unix_seconds: midnight - 1, nanos: 940_946_000 }
+        );
+    }
+
+    /// The first leap second of all, at the end of June 1972, is a sixty-first
+    /// second like every one since. `cdflib` does not agree here and only
+    /// here: it reads the first half of 1972 by its pre-1972 arithmetic, so
+    /// its own `compute_tt2000` for `1972-06-30 23:59:60.5` encodes back as
+    /// `23:59:59.500000000`, while the same for the end of 1972 comes back as
+    /// the sixtieth second.
+    #[test]
+    fn the_first_leap_second_is_a_sixty_first_second() {
+        let last = utc(1972, 6, 30, 23, 59, 59);
+        assert_eq!(tt2000(-867_931_157_316_000_000).moment, Moment::LeapSecond { unix_seconds: last, nanos: 500_000_000 });
+        assert_eq!(tt2000(-867_931_158_316_000_000).moment, Moment::At { unix_seconds: last, nanos: 500_000_000 });
+        assert_eq!(tt2000(-867_931_156_816_000_000).moment, Moment::At { unix_seconds: last + 1, nanos: 0 });
+    }
+
+    /// Dates before 1972, where the offset drifts by the day. `cdflib` gives
+    /// `1965-06-01T12:34:56.789000000` and `1962-03-04T05:06:07.000000000` for
+    /// these, and before 1960 it takes the offset as nought, as the CDF library
+    /// does: `1955-01-01T00:00:00.000000000`.
+    #[test]
+    fn a_tt2000_before_1972() {
+        let mid_sixties = tt2000(-1_091_402_667_190_526_000);
+        assert_eq!(mid_sixties.moment, Moment::At { unix_seconds: utc(1965, 6, 1, 12, 34, 56), nanos: 789_000_000 });
+        assert_eq!(mid_sixties.note, Some(TimeNote::BeforeLeapSeconds));
+        assert_eq!(tt2000(-1_193_813_598_899_942_000).moment, Moment::At { unix_seconds: utc(1962, 3, 4, 5, 6, 7), nanos: 0 });
+        assert_eq!(tt2000(-1_420_113_567_816_000_000).moment, Moment::At { unix_seconds: utc(1955, 1, 1, 0, 0, 0), nanos: 0 });
+    }
+
+    /// A moment after the table's last day is still the best answer there is,
+    /// and says so. `cdflib`, whose table stops at the same leap second, gives
+    /// `2030-06-15T00:00:00.000000000`, and the largest TT2000 there is,
+    /// `2292-04-11T11:46:07.670775807`.
+    #[test]
+    fn a_tt2000_after_the_table_of_leap_seconds_says_so() {
+        let later = tt2000(960_984_069_184_000_000);
+        assert_eq!(later.moment, Moment::At { unix_seconds: utc(2030, 6, 15, 0, 0, 0), nanos: 0 });
+        assert_eq!(later.note, Some(TimeNote::PastLeapSecondTable));
+        let last = tt2000(i64::MAX);
+        assert_eq!(last.moment, Moment::At { unix_seconds: utc(2292, 4, 11, 11, 46, 7), nanos: 670_775_807 });
+        assert_eq!(last.note, Some(TimeNote::PastLeapSecondTable));
+        // Either side of the day the table expires. Since 2017 a TT2000 is
+        // UTC plus 37 leap seconds plus TT's 32.184, counted from noon.
+        let tt2000_of = |unix: i64| (unix - utc(2000, 1, 1, 12, 0, 0)) * 1_000_000_000 + 69_184_000_000;
+        let expires = super::leap_seconds::EXPIRES;
+        let before = tt2000(tt2000_of(expires - 1));
+        assert_eq!(before.moment, Moment::At { unix_seconds: expires - 1, nanos: 0 });
+        assert_eq!(before.note, None);
+        assert_eq!(tt2000(tt2000_of(expires)).note, Some(TimeNote::PastLeapSecondTable));
+    }
+
+    /// CDF's fill value, the most negative `int8`, and its pad value, the one
+    /// after it. Both are dates in 1707 read as counts, and both are no time;
+    /// the one after those is a count like any other, the first nanosecond of
+    /// `1707-09-22T12:12:10.961224194` by `cdflib`.
+    #[test]
+    fn a_tt2000s_fill_and_pad_values_are_no_time() {
+        assert_eq!(tt2000(i64::MIN).moment, Moment::Unset);
+        assert_eq!(tt2000(i64::MIN + 1).moment, Moment::Unset);
+        let next = tt2000(i64::MIN + 2);
+        assert_eq!(next.moment, Moment::At { unix_seconds: utc(1707, 9, 22, 12, 12, 10), nanos: 961_224_194 });
+        assert_eq!(next.note, Some(TimeNote::BeforeLeapSeconds));
+    }
+
+    /// GPS seconds, as a GWF frame writes its start: 1167264018 is the first
+    /// second of 2017 in UTC, eighteen leap seconds after the GPS epoch.
+    #[test]
+    fn gps_seconds_go_through_the_same_table() {
+        let info = one(T::u32(Little), Time::gps_seconds(), 1_167_264_018u32.to_le_bytes().to_vec());
+        assert_eq!(at(info), (utc(2017, 1, 1, 0, 0, 0), 0));
     }
 
     /// A field nothing declared is not a time, and the query says so rather
