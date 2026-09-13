@@ -107,6 +107,7 @@ mod midi;
 mod mkv;
 mod mp4;
 mod mseed;
+mod mseed3;
 mod nes;
 mod netcdf;
 mod npy;
@@ -230,6 +231,7 @@ pub use midi::midi;
 pub use mkv::mkv;
 pub use mp4::mp4;
 pub use mseed::mseed;
+pub use mseed3::mseed3;
 pub use nes::nes;
 pub use netcdf::netcdf;
 pub use npy::npy;
@@ -327,6 +329,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("wasm", |_| wasm()),
     ("mp4", |_| mp4()),
     ("mseed", |_| mseed()),
+    ("mseed3", |_| mseed3()),
     ("mat", |_| mat()),
     ("sac", |_| sac()),
     ("mkv", |_| mkv()),

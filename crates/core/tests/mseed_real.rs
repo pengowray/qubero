@@ -6,6 +6,14 @@
 //! worked out from their values. obspy writes the same samples both ways, so
 //! the two files must give the same differences word for word, and any bit
 //! named wrongly shows up as a number that does not match.
+//!
+//! And, at the end, miniSEED 3, which is a different format under the same
+//! name. Its reference files are libmseed's own, and what is checked of them
+//! is the thing the format changed: a record's length is its three lengths
+//! added to a forty-byte header and nothing is rounded up, so the records
+//! have to tile the file exactly. obspy cannot read these, its reader being
+//! the 2.x one, so the numbers below come from the headers themselves as the
+//! specification lays them out.
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
@@ -16,6 +24,19 @@ use qubero_core::source::MemSource;
 const BLOCKETTES: usize = 18;
 const DATA: usize = 20;
 
+/// The same for a miniSEED 3 record, whose fields are in a different order and
+/// whose data is not behind a blockette.
+mod ms3 {
+    pub const ENCODING: usize = 4;
+    pub const SAMPLE_COUNT: usize = 6;
+    pub const IDENTIFIER_LENGTH: usize = 9;
+    pub const EXTRA_LENGTH: usize = 10;
+    pub const DATA_LENGTH: usize = 11;
+    pub const SOURCE_IDENTIFIER: usize = 12;
+    pub const EXTRA_HEADERS: usize = 13;
+    pub const DATA: usize = 14;
+}
+
 fn samples() -> Option<std::path::PathBuf> {
     let root = match std::env::var_os("QUBERO_SAMPLES") {
         Some(p) => std::path::PathBuf::from(p),
@@ -25,8 +46,12 @@ fn samples() -> Option<std::path::PathBuf> {
 }
 
 fn open(root: &std::path::Path, name: &str) -> (Document<MemSource>, Evaluator) {
+    open_as(root, name, "mseed")
+}
+
+fn open_as(root: &std::path::Path, name: &str, template: &str) -> (Document<MemSource>, Evaluator) {
     let bytes = std::fs::read(root.join("seismic").join(name)).unwrap();
-    (Document::new(MemSource(bytes)), Evaluator::new(formats::builtin("mseed").unwrap()))
+    (Document::new(MemSource(bytes)), Evaluator::new(formats::builtin(template).unwrap()))
 }
 
 /// Every number under the frames of one record, in the order they are written,
@@ -172,4 +197,94 @@ fn a_gain_ranged_record_holds_as_many_words_as_it_says() {
         assert_eq!(words.child_count as i128, count, "{file}");
         assert_eq!(words.size_bits, count as u64 * 16, "{file}: two bytes a word");
     }
+}
+
+/// libmseed's three miniSEED 3 reference files, each read for the things the
+/// format changed: the source identifier that replaced four space-padded
+/// fields, the encoding and sample count that came up out of a blockette into
+/// the fixed header, and the record length that is now the parts added up.
+///
+/// The records tiling the file with nothing between them is the real check. A
+/// 2.4 record is a power of two and a reader that got the length wrong landed
+/// on the next header anyway; a miniSEED 3 record is 507 or 511 or 512 bytes
+/// as its own three lengths decide, so a reader that is a byte out reads the
+/// rest of the file as rubble.
+#[test]
+fn a_miniseed_3_record_is_as_long_as_its_three_lengths_say() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // file, records, encoding, samples in the first record, extra header bytes
+    for (file, records, encoding, count, extra) in [
+        ("reference-testdata-steim2.mseed3", 4, "Steim2", 247, 0),
+        ("reference-testdata-float32.mseed3", 5, "32-bit floats", 113, 0),
+        ("reference-testdata-nsec.mseed3", 12, "32-bit integers", 45, 273),
+    ] {
+        let (d, mut ev) = open_as(&root, file, "mseed3");
+        let all = ev.node(&d, &[0]).unwrap();
+        assert_eq!(all.child_count, records, "{file}: record count");
+        let mut at = 0u64;
+        for i in 0..records as usize {
+            let record = ev.node(&d, &[0, i]).unwrap();
+            assert_eq!(record.type_name, "MiniSEED3Record", "{file} record {i}");
+            // Every record is the forty-byte header and its three lengths,
+            // and the next one starts exactly where this one stops.
+            let lengths = [ms3::IDENTIFIER_LENGTH, ms3::EXTRA_LENGTH, ms3::DATA_LENGTH]
+                .map(|f| ev.node(&d, &[0, i, f]).unwrap().value.as_int().unwrap());
+            let want = 40 + lengths.iter().sum::<i128>();
+            assert_eq!(record.size_bits, want as u64 * 8, "{file} record {i}: length");
+            assert_eq!(record.offset_bits, at, "{file} record {i}: placed");
+            at += record.size_bits;
+            // The identifier every record of these files carries, which is
+            // network, station, location and the three channel codes.
+            let id = ev.node(&d, &[0, i, ms3::SOURCE_IDENTIFIER]).unwrap().value;
+            let Value::Str(id) = id else { panic!("{file} record {i}: no source identifier") };
+            assert!(id.starts_with("FDSN:XX_TEST_"), "{file} record {i}: {id:?}");
+        }
+        assert_eq!(at, d.len_bits(), "{file}: the records do not fill the file");
+        // The first record, against what its header says it holds.
+        let first = ev.node(&d, &[0, 0, ms3::SOURCE_IDENTIFIER]).unwrap().value;
+        assert_eq!(first, Value::Str("FDSN:XX_TEST__B_H_Z".into()), "{file}");
+        let enc = ev.node(&d, &[0, 0, ms3::ENCODING]).unwrap().value;
+        let Value::Enum { name, .. } = enc else { panic!("{file}: the encoding is not named") };
+        assert_eq!(name.as_deref(), Some(encoding), "{file}");
+        let samples = ev.node(&d, &[0, 0, ms3::SAMPLE_COUNT]).unwrap().value.as_int();
+        assert_eq!(samples, Some(count), "{file}");
+        // The extra headers, which are JSON when there are any and nothing
+        // where the length is zero rather than an empty document.
+        let headers = ev.node(&d, &[0, 0, ms3::EXTRA_HEADERS]).unwrap();
+        assert_eq!(headers.size_bits, extra as u64 * 8, "{file}: extra headers");
+        assert_eq!(headers.child_count > 0, extra > 0, "{file}: extra headers read");
+        // And the data, typed by the encoding rather than left as bytes.
+        let data = ev.node(&d, &[0, 0, ms3::DATA, 0]).unwrap();
+        assert_ne!(data.type_name, "bytes[]", "{file}: the payload is untyped");
+        if encoding == "32-bit floats" {
+            assert_eq!((data.type_name.as_str(), data.child_count), ("f32 le[]", count as u64), "{file}");
+        }
+    }
+}
+
+/// The one place a miniSEED 3 record is not little-endian. Its header is,
+/// always; a Steim payload is big-endian, because the frame was defined that
+/// way in 1991 and the FDSN left it alone. Read the other way round the
+/// integration constants are tens of millions instead of a sample value.
+#[test]
+fn a_miniseed_3_steim_payload_is_big_endian_inside_a_little_endian_record() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let (d, mut ev) = open_as(&root, "reference-testdata-steim2.mseed3", "mseed3");
+    // Frame 0 of the first record: its first two words are the first and last
+    // samples of the record, and a byte-swapped reading of either is enormous.
+    let x0 = ev.node(&d, &[0, 0, ms3::DATA, 0, 1]).unwrap().value.as_int().unwrap();
+    let xn = ev.node(&d, &[0, 0, ms3::DATA, 0, 2]).unwrap().value.as_int().unwrap();
+    assert!(x0.abs() < 1 << 20 && xn.abs() < 1 << 20, "read the wrong way round: {x0} then {xn}");
+    // Seven 64-byte frames in 448 bytes of payload, and the last of them read.
+    let steim = ev.node(&d, &[0, 0, ms3::DATA]).unwrap();
+    assert_eq!(steim.type_name, "SteimData");
+    let frames = ev.node(&d, &[0, 0, ms3::DATA, 1]).unwrap();
+    assert_eq!(frames.child_count, 6, "one frame0 and six after it");
+    assert_eq!(steim.size_bits, 448 * 8);
 }

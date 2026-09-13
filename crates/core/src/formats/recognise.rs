@@ -35,6 +35,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"070701", "cpio"),
     (b"070702", "cpio"),
     (b"LPKSHHRH", "journal"),
+    // A miniSEED 3 record, which unlike the 2.4 one it replaced does announce
+    // itself: `MS` and the format version. No relation to the `mseed` probe
+    // further down, which has no signature to go on and reads a date instead.
+    (b"MS\x03", "mseed3"),
     (b"FWS", "swf"),
     (b"CWS", "swf"),
     (b"ZWS", "swf"),
