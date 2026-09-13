@@ -1087,3 +1087,132 @@ fn with_types(mut t: Template) -> Template {
 pub fn arrow() -> Template {
     with_types(Template::new("arrow", file()))
 }
+
+/// An IPC stream: the same messages with nothing around them. The schema
+/// first, then the dictionary and record batches one after another, then the
+/// end-of-stream marker, which a writer may leave off by closing the stream
+/// instead. So the run of messages stops at a message of no length or at the
+/// end of the file, whichever comes first, and the marker is the last message
+/// of the run when there is one.
+///
+/// Nothing indexes a stream, so there is nothing to place the batches from
+/// but the lengths of the messages before them. Placed rather than laid out
+/// from the root, for the reason the file's messages are: every table in them
+/// is placed too, and the cursor finds a table's bytes through what was
+/// placed over them only where the root does not already cover them.
+fn stream() -> T {
+    let message = || T::Named("arrow.EncapsulatedMessage".into());
+    let messages = T::repeat(message(), crate::template::Until::FieldValue { field: "metadata_size".into(), value: 0 });
+    T::structure(
+        "ArrowStream",
+        vec![("schema", T::at_origin(E::lit(0), message())), ("messages", T::at_origin(E::size_of("schema"), messages))],
+    )
+}
+
+pub fn arrow_stream() -> Template {
+    with_types(Template::new("arrowstream", stream()))
+}
+
+/// Whether a file is an IPC stream, which has no magic of its own.
+///
+/// What it has instead is a schema message at the front, and that is a lot of
+/// structure to agree by chance. The first four bytes are all ones, the
+/// continuation marker every writer since Arrow 0.15 puts there; the next
+/// four are a length that is a multiple of eight and fits in the file; the
+/// FlatBuffer that length counts has a root table inside it whose vtable is
+/// inside it too, has room for a version, a header type and a header, says
+/// version V1 to V5 where it says one, and says its header is a `Schema`.
+///
+/// A legacy stream, written without the marker, opens with the length alone
+/// and is not recognised: four bytes of small number are what half the files
+/// there are open with, and the rest of the evidence would be carrying all of
+/// the weight. Such a file still opens with this template picked by hand.
+pub fn is_stream(h: &[u8], len: u64) -> bool {
+    let u32_at = |at: usize| h.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let u16_at = |at: usize| h.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    if u32_at(0) != Some(0xFFFF_FFFF) {
+        return false;
+    }
+    let Some(size) = u32_at(4) else { return false };
+    if size < 16 || size % 8 != 0 || size as u64 + 8 > len {
+        return false;
+    }
+    let end = 8 + size;
+    let Some(root) = u32_at(8) else { return false };
+    let table = 8 + root;
+    if root < 4 || table + 4 > end {
+        return false;
+    }
+    let Some(back) = u32_at(table) else { return false };
+    let vtable = table as i64 - i64::from(back as u32 as i32);
+    if vtable < 12 || vtable as usize + 4 > end {
+        return false;
+    }
+    let vtable = vtable as usize;
+    let (Some(vtable_size), Some(table_size)) = (u16_at(vtable), u16_at(vtable + 2)) else { return false };
+    if vtable_size < 10 || vtable_size % 2 != 0 || vtable + vtable_size > end || table_size < 8 || table + table_size > end {
+        return false;
+    }
+    let entry = |id: usize| u16_at(vtable + 4 + 2 * id).filter(|&at| at != 0 && at < table_size);
+    // `Message.version` is id 0, `header_type` id 1 and `header` id 2.
+    if u16_at(vtable + 4).is_some_and(|at| at != 0) && !entry(0).and_then(|at| u16_at(table + at)).is_some_and(|v| v <= 4) {
+        return false;
+    }
+    let schema = entry(1).and_then(|at| h.get(table + at)) == Some(&1);
+    schema && entry(2).is_some_and(|at| at + 4 <= table_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{document::Document, eval::Evaluator, source::MemSource};
+
+    /// The smallest stream there is: a schema message with no fields, and the
+    /// end-of-stream marker.
+    ///
+    /// The FlatBuffer, by offset from where it starts: the root offset at 0, the
+    /// message's vtable at 4, the message at 16 with its version at +4, its
+    /// header type at +6 and the offset to its header at +8, the schema's
+    /// vtable at 28 and the schema at 32.
+    fn smallest(header_type: u8) -> Vec<u8> {
+        let mut m = Vec::new();
+        m.extend(16u32.to_le_bytes());
+        m.extend([10, 0, 12, 0, 4, 0, 6, 0, 8, 0, 0, 0]);
+        m.extend(12i32.to_le_bytes());
+        m.extend([4, 0, header_type, 0]);
+        m.extend(8u32.to_le_bytes());
+        m.extend([4, 0, 4, 0]);
+        m.extend(4i32.to_le_bytes());
+        m.extend([0, 0, 0, 0]);
+        let mut v = vec![0xff; 4];
+        v.extend((m.len() as u32).to_le_bytes());
+        v.extend(m);
+        v.extend([0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]);
+        v
+    }
+
+    #[test]
+    fn a_stream_is_recognised_by_its_schema_message() {
+        let v = smallest(1);
+        assert!(is_stream(&v, v.len() as u64));
+        // A record batch first is not how a stream opens.
+        let batch = smallest(3);
+        assert!(!is_stream(&batch, batch.len() as u64));
+        // Nor is the marker on its own, or a file too short for its length.
+        assert!(!is_stream(&[0xff; 64], 64));
+        assert!(!is_stream(&v, 20));
+    }
+
+    #[test]
+    fn the_smallest_stream_reads_as_a_schema_and_an_end() {
+        let d = Document::new(MemSource(smallest(1)));
+        let mut e = Evaluator::new(arrow_stream());
+        // schema -> message -> metadata -> root -> table -> Message -> header_type.
+        let header = e.node(&d, &[0, 0, 2, 0, 1, 0, 3, 0]).unwrap().value;
+        assert_eq!(header.as_int(), Some(1));
+        let messages = e.node(&d, &[1, 0]).unwrap();
+        assert_eq!(messages.offset_bits, 48 * 8, "after the schema message and its length");
+        assert_eq!(messages.child_count, 1, "the end-of-stream marker");
+        assert_eq!(e.node(&d, &[1, 0, 0, 1]).unwrap().value.as_int(), Some(0));
+    }
+}

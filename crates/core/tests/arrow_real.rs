@@ -266,6 +266,37 @@ fn every_buffer_is_named_from_the_schema() {
     check_buffers("more-types.arrow", &got, want);
 }
 
+/// The same table written as a stream is the file's messages with nothing
+/// around them: every message eight bytes earlier than in the file, the
+/// marker last, and the first batch's buffers named as the file's are.
+#[test]
+fn a_stream_is_its_messages_one_after_another() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let bytes = std::fs::read(root.join("columns.arrows")).unwrap();
+    assert_eq!(formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64), Some("arrowstream"));
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("arrowstream").unwrap());
+    // pyarrow.ipc.read_message from byte 0 onwards, read on 2026-09-14.
+    let schema = ev.node(&doc, &[0, 0]).unwrap();
+    assert_eq!((schema.offset_bits / 8, schema.size_bits / 8), (0, 856));
+    let messages = ev.node(&doc, &[1, 0]).unwrap();
+    let placed: Vec<(u64, u64)> = (0..messages.child_count as usize)
+        .map(|i| {
+            let n = ev.node(&doc, &[1, 0, i]).unwrap();
+            (n.offset_bits / 8, n.size_bits / 8)
+        })
+        .collect();
+    assert_eq!(placed, [(856, 208), (1064, 1296), (2360, 1048), (3408, 8)]);
+    let body = [1, 0, 1, 4];
+    let n = ev.node(&doc, &body).unwrap().child_count as usize;
+    assert_eq!(n, 31);
+    let tags = ev.node(&doc, &[1, 0, 1, 4, 22]).unwrap();
+    assert_eq!((tags.name.as_str(), tags.type_name.as_str(), tags.offset_bits / 8), ("[22] tags", "offsets", 2240 - 8));
+}
+
 /// The numbers in a buffer, read as its column's type.
 fn values(ev: &mut Evaluator, doc: &Document<MemSource>, at: &[usize]) -> Vec<Value> {
     let n = ev.node(doc, at).unwrap().child_count as usize;

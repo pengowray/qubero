@@ -239,6 +239,7 @@ const PROBES: &[Probe] = &[
     Probe::Is("hdf5", |h, _| is_user_blocked_hdf5(h)),
     Probe::Is("whisper", |h, _| is_whisper(h)),
     Probe::Is("safetensors", |h, _| is_safetensors(h)),
+    Probe::Is("arrowstream", arrow::is_stream),
     // A Claude Code colour theme, which is JSON and has to be told from the
     // rest of JSON by what is in it. Asked before the `{"` in the table of
     // signatures, which would otherwise take every JSON file as plain json.

@@ -177,7 +177,7 @@ mod wasm_opcodes;
 
 pub use aiff::aiff;
 pub use ar::{ar, deb};
-pub use arrow::arrow;
+pub use arrow::{arrow, arrow_stream};
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
@@ -416,6 +416,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("pak", |_| pak()),
     ("parquet", |_| parquet()),
     ("arrow", |_| arrow()),
+    ("arrowstream", |_| arrow_stream()),
     ("hdf4", |_| hdf4()),
     ("cdf", |_| cdf()),
     ("cdrom", |_| cdrom()),
