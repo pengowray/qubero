@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, Explain, Value};
 use qubero_core::formats::{self, fits_tile};
 use qubero_core::source::MemSource;
 
@@ -364,4 +364,37 @@ fn a_real_tile_reports_the_steps_its_bytes_took() {
     let found = ev.locate(&doc, tile_7.offset_bits + 8).unwrap();
     assert!(found.starts_with(&[0, 1, 3, HEAP]) && tile_7.offset_bits > heap.offset_bits);
     assert_eq!(ev.fits_tile(&doc, &found).unwrap().unwrap().index, 7);
+}
+
+/// What the inspector is handed for the cursor on a compressed image: from a
+/// byte of a tile in the heap, and from a descriptor four levels into its row.
+#[test]
+fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
+    let Some((doc, mut ev)) = read("fits/dithered.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // Each row has two descriptors, COMPRESSED_DATA and GZIP_COMPRESSED_DATA,
+    // so the heap's third array is the second tile's compressed bytes.
+    let tile_1 = ev.node(&doc, &[0, 1, 3, HEAP, 2]).unwrap();
+    assert!(tile_1.child_count > 0);
+    let on_byte = ev.locate(&doc, tile_1.offset_bits + 3 * 8).unwrap();
+    let on_count = vec![0, 1, 3, ROWS, 1, 0, 0, 1, 0, 0];
+    for path in [on_byte, on_count] {
+        let Explain::FitsTile { index, tiles, start, shape, image_shape, algorithm, column, steps, values, total, pixels, element_type, problem, .. } =
+            ev.explain(&doc, &path, None).unwrap()
+        else {
+            panic!("not a tile at {path:?}");
+        };
+        assert_eq!((index, tiles, start, shape, image_shape), (1, 6, vec![25, 0], vec![25, 20], vec![50, 60]));
+        assert_eq!((algorithm.as_str(), column, element_type.as_str(), problem), ("RICE_1", Some("COMPRESSED_DATA"), "f32", None));
+        assert_eq!((values.len(), total, pixels), (32, 500, 500));
+        assert_eq!(steps.len(), 3);
+        // The pixels are written as the 32-bit floats they are, the way
+        // astropy prints them.
+        assert_eq!(values[..3], ["-1.9223341", "10.630576", "22.740988"]);
+    }
+    // A cell of the row that is a float, the tile's ZSCALE, still explains
+    // the float it is.
+    assert!(matches!(ev.explain(&doc, &[0, 1, 3, ROWS, 1, 0, 2, 0], None).unwrap(), Explain::Float { .. }));
 }

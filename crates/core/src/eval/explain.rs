@@ -214,6 +214,39 @@ pub enum Explain {
         /// Why the reading stopped early, where it did.
         problem: Option<String>,
     },
+    /// A tile of a FITS compressed image, decompressed. Shown for the cursor
+    /// anywhere in the image's data, a row or its compressed bytes, because
+    /// what is under the cursor is compressed and the pixels are not in the
+    /// file as it stands. See [`fits_tile`].
+    FitsTile {
+        /// Which tile, counted from 0 as its row is, and how many the image
+        /// has.
+        index: u64,
+        tiles: u64,
+        /// Where the tile starts in the image, from 0 along each axis, how
+        /// many pixels it has along each, and the image's own shape.
+        start: Vec<u64>,
+        shape: Vec<u64>,
+        image_shape: Vec<u64>,
+        /// `ZCMPTYPE`, and which column the tile's bytes were read from.
+        algorithm: String,
+        column: Option<&'static str>,
+        /// How many bytes the tile is in the heap, and how many came out of
+        /// undoing its compression.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Every step, in the order it was done.
+        steps: Vec<fits_tile::Step>,
+        /// The first pixels, as text, how many pixels were decoded, and how
+        /// many the tile has.
+        values: Vec<String>,
+        total: u64,
+        pixels: u64,
+        /// What one pixel is: `i16`, `f32`.
+        element_type: String,
+        /// Why fewer pixels than the tile has came out, or none.
+        problem: Option<String>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -363,6 +396,9 @@ impl Evaluator {
             if &*packing == parquet_page::PACKING {
                 return self.explain_parquet_page(doc, at);
             }
+            if &*packing == fits_tile::PACKING {
+                return self.explain_fits_tile(doc, path);
+            }
             if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
                 return self.explain_mseed(doc, at, &r, encoding, big);
             }
@@ -372,14 +408,19 @@ impl Evaluator {
         // A miniSEED record's data is asked about from further down than the
         // field or its parent. The cursor on a Steim difference is four levels
         // under the data: the frame, the word, the word's shape and the
-        // difference. So every ancestor is looked at for that one packing. The
-        // other packings keep to the two levels above, which is as deep as
+        // difference. So every ancestor is looked at for that packing, and for
+        // a FITS compressed image, whose compressed bytes are a byte of an
+        // array in the heap and whose descriptors are four levels into a row.
+        // The other packings keep to the two levels above, which is as deep as
         // their fields go and as far as they have been checked.
         for len in (0..path.len().saturating_sub(1)).rev() {
             let at = &path[..len];
             self.resolve(doc, at)?;
             let r = self.memo.get(at).expect("resolved").clone();
             let Ty::Struct(def) = &r.ty else { continue };
+            if def.packed.as_deref() == Some(fits_tile::PACKING) {
+                return self.explain_fits_tile(doc, path);
+            }
             let Some((encoding, big)) = def.packed.as_deref().and_then(mseed_steim::parse_packing) else { continue };
             return self.explain_mseed(doc, at, &r, encoding, big);
         }
@@ -434,6 +475,30 @@ impl Evaluator {
             total: record.samples.len() as u64,
             check,
             problem: record.problem,
+        })
+    }
+
+    /// The tile of a FITS compressed image that `path` is in, as a panel
+    /// shows it: the steps, and the first of its pixels.
+    fn explain_fits_tile<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Explain> {
+        let Some(tile) = self.fits_tile(doc, path)? else { return Ok(Explain::Plain) };
+        let shown = tile.pixels.len().min(fits_tile::VALUES_SHOWN);
+        Ok(Explain::FitsTile {
+            index: tile.index,
+            tiles: tile.tiles,
+            values: (0..shown).map(|i| tile.text(i)).collect(),
+            total: tile.pixels.len() as u64,
+            pixels: tile.pixel_count(),
+            start: tile.start,
+            shape: tile.shape,
+            image_shape: tile.image_shape,
+            algorithm: tile.algorithm,
+            column: tile.stored.map(fits_tile::Stored::column),
+            packed_bytes: tile.packed_bytes as u64,
+            decoded_bytes: tile.decoded_bytes as u64,
+            steps: tile.steps,
+            element_type: tile.element_type,
+            problem: tile.problem,
         })
     }
 

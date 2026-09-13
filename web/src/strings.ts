@@ -1526,6 +1526,13 @@ export function countText(n: number, noun: string): string {
   return `${n.toLocaleString()} ${n === 1 ? noun : plural(noun)}`;
 }
 
+/** A count from 1 as a place in a run: `1st`, `2nd`, `12th`, `1,001st`. */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n.toLocaleString()}${suffix}`;
+}
+
 /**
  * What one child of a row stands for. The format names them when it has a word
  * for them: blocks, tensors, entries. Otherwise a list holds items and a

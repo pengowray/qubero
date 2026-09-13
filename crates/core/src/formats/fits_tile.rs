@@ -480,9 +480,10 @@ pub struct Tile {
     pub index: u64,
     pub tiles: u64,
     /// Where it starts in the image, from 0 along each axis, and how many
-    /// pixels it has along each.
+    /// pixels it has along each. And how many the whole image has along each.
     pub start: Vec<u64>,
     pub shape: Vec<u64>,
+    pub image_shape: Vec<u64>,
     pub algorithm: String,
     /// Which column the bytes were read from.
     pub stored: Option<Stored>,
@@ -604,6 +605,7 @@ pub fn unread(image: &Image, index: u64, row: &Row, packed_bytes: usize, problem
         tiles: image.tiles(),
         start,
         shape,
+        image_shape: image.shape.clone(),
         algorithm: image.algorithm.clone(),
         stored: row.place.map(|p| p.stored),
         packed_bytes,
@@ -623,6 +625,7 @@ pub fn unreadable(problem: String) -> Tile {
         tiles: 0,
         start: Vec::new(),
         shape: Vec::new(),
+        image_shape: Vec::new(),
         algorithm: String::new(),
         stored: None,
         packed_bytes: 0,

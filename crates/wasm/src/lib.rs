@@ -429,7 +429,7 @@ struct MseedFrameDto {
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "samples" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -553,6 +553,29 @@ struct ExplainDto {
     mseed_check: Option<bool>,
     /// Page: how many bytes the payload is in the file, and how many its
     /// values came to once the codec was undone.
+    /// Tile: which tile of a FITS compressed image, counted from 0 as its row
+    /// is, of how many; where it starts in the image, from 0 along each axis
+    /// with the first axis first; how many pixels along each; and the
+    /// image's shape.
+    tile_index: f64,
+    tile_count: f64,
+    tile_start: Vec<f64>,
+    tile_shape: Vec<f64>,
+    tile_image_shape: Vec<f64>,
+    /// Tile: `ZCMPTYPE`, and the column the bytes were read from, or empty.
+    tile_algorithm: String,
+    tile_column: String,
+    /// Tile: bytes in the heap, and bytes once decompressed.
+    tile_packed: f64,
+    tile_decoded: f64,
+    /// Tile: each step in order. `skipped` is never set.
+    tile_steps: Vec<PageStepDto>,
+    /// Tile: the first pixels, how many were decoded, how many the tile has,
+    /// and what one pixel is.
+    tile_values: Vec<String>,
+    tile_total: f64,
+    tile_pixels: f64,
+    tile_element_type: String,
     page_packed: f64,
     page_decoded: f64,
     /// Page: every step, in the order it was done.
@@ -1067,6 +1090,20 @@ fn explain_dto(e: Explain) -> ExplainDto {
         mseed_last: String::new(),
         mseed_total: 0.0,
         mseed_check: None,
+        tile_index: 0.0,
+        tile_count: 0.0,
+        tile_start: Vec::new(),
+        tile_shape: Vec::new(),
+        tile_image_shape: Vec::new(),
+        tile_algorithm: String::new(),
+        tile_column: String::new(),
+        tile_packed: 0.0,
+        tile_decoded: 0.0,
+        tile_steps: Vec::new(),
+        tile_values: Vec::new(),
+        tile_total: 0.0,
+        tile_pixels: 0.0,
+        tile_element_type: String::new(),
         page_packed: 0.0,
         page_decoded: 0.0,
         page_steps: Vec::new(),
@@ -1203,6 +1240,50 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .map(|c| {
                     let (value_kind, value, _, _) = shown(&c.value);
                     SqliteColumnDto { type_name: c.type_name, value, value_kind, at: c.at as f64, len: c.len as f64 }
+                })
+                .collect();
+        }
+        Explain::FitsTile {
+            index,
+            tiles,
+            start,
+            shape,
+            image_shape,
+            algorithm,
+            column,
+            packed_bytes,
+            decoded_bytes,
+            steps,
+            values,
+            total,
+            pixels,
+            element_type,
+            problem,
+        } => {
+            let floats = |v: Vec<u64>| v.into_iter().map(|n| n as f64).collect();
+            dto.kind = "tile";
+            dto.tile_index = index as f64;
+            dto.tile_count = tiles as f64;
+            dto.tile_start = floats(start);
+            dto.tile_shape = floats(shape);
+            dto.tile_image_shape = floats(image_shape);
+            dto.tile_algorithm = algorithm;
+            dto.tile_column = column.unwrap_or_default().to_string();
+            dto.tile_packed = packed_bytes as f64;
+            dto.tile_decoded = decoded_bytes as f64;
+            dto.tile_values = values;
+            dto.tile_total = total as f64;
+            dto.tile_pixels = pixels as f64;
+            dto.tile_element_type = element_type;
+            dto.problem = problem.unwrap_or_default();
+            dto.tile_steps = steps
+                .into_iter()
+                .map(|s| PageStepDto {
+                    what: s.what,
+                    in_bytes: s.in_bytes as f64,
+                    out_bytes: s.out_bytes as f64,
+                    note: s.note,
+                    skipped: false,
                 })
                 .collect();
         }
