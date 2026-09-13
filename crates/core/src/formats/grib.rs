@@ -861,12 +861,12 @@ fn from_packing(name: &'static str) -> (&'static str, T) {
 ///   exception: its length is `last_group_length`, written in section 5,
 ///   because the scaled form could not hold it.
 ///
-/// Each of the three is padded out to a byte before the next begins. Nothing in
-/// the file says so and the WMO text does not either; it is what NCEP's
-/// `comunpack` does and what every writer therefore matches. Two of the three
-/// messages in the GFS sample have tables that end on a byte anyway, and the
-/// third does not and is unreadable without the padding, which is how it came
-/// to be found.
+/// Each of the three is padded out with zero bits so that it ends on a byte,
+/// which data template 7.2 requires of each sequence in turn. Nothing in the
+/// file says how much: it is what the count and the width come to, rounded up.
+/// Two of the three messages in the GFS sample have tables that land on a byte
+/// anyway and read the same either way; the third does not and is unreadable
+/// without it.
 ///
 /// Then the values, group by group, each group's run at that group's width.
 /// That is the connection worth seeing on screen: `groups[7] width` is
@@ -917,7 +917,7 @@ fn complex_packed_data(spatial: bool) -> T {
         ("group_widths_padding", table_padding("group_widths_bits")),
         ("group_lengths", T::array(T::uint_expr(E::field("group_lengths_bits"), Big), E::field("n_groups"))),
         ("group_lengths_padding", table_padding("group_lengths_bits")),
-        ("groups", T::array(group(), E::field("n_groups")).counted_as("group")),
+        ("groups", T::array(group(), E::field("n_groups"))),
     ]);
     let machinery: Vec<&str> = fields
         .iter()
@@ -929,7 +929,8 @@ fn complex_packed_data(spatial: bool) -> T {
 
 /// The bits between the end of a table of `n_groups` entries `bits` wide and
 /// the byte the next table starts on. Zero when the table already ends on one,
-/// which is the usual case and is why the padding took a while to find.
+/// which is the usual case and is why a reader that leaves this out still gets
+/// most messages right.
 fn table_padding(bits: &str) -> T {
     T::uint_expr(E::field("n_groups").mul(E::field(bits)).pad_to(8), Big)
 }
@@ -971,6 +972,7 @@ fn group() -> T {
     )
     .machinery(&["width", "count"])
     .payload(&["values"])
+    .counted_as("group")
 }
 
 /// Section 7 for data template 5.41: the grid as a PNG.

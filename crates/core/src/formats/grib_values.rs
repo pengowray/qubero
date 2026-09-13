@@ -204,8 +204,8 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
     }
 
     // The three tables. Each is `n_groups` numbers at a width section 5 gave,
-    // and each is padded out to a byte before the next one starts. Nothing in
-    // the file says so; it is what every writer does, following NCEP.
+    // and each is padded out with zero bits so that it ends on a byte before
+    // the next one starts, which data template 7.2 requires of all three.
     let Some(references) = table(&mut bits, n, p.bits_per_value) else {
         out.problem = Some("section 7 ended inside the group references".into());
         return out;
