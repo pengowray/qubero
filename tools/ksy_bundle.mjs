@@ -295,9 +295,9 @@ ${licence.join("\n")}
 
 * ${decided.filter((d) => !d.title).length} of the ${decided.length} files carry no \`meta/title\`. Nothing invents one: the
   chooser shows those by their id.
-* No bundled format's magic is a single byte, so none was dropped from sniffing
-  for claiming too much on one byte. Two were dropped for sharing a magic with
-  each other, and one more for reasons the table gives.
+* ${decided.filter((d) => d.magics.length).length} formats declare a magic and ${decided.filter((d) => d.sniffs).length} of them sniff. None was dropped for
+  having a one-byte magic, because none has one; ${decided.filter((d) => d.magics.length && !d.sniffs).length} were dropped for sharing
+  a magic with each other, which the table names.
 * \`ruby_marshal\` (\`04 08\`) and \`psx_tim\` (\`10 00 00 00\`) pass the two-byte rule
   with weak evidence: both are version numbers rather than a name. They sniff
   only for a file no builtin claims, which is the whole reason that is
