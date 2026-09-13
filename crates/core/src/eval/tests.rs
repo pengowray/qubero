@@ -1330,6 +1330,34 @@ fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
 }
 
 #[test]
+fn a_walk_past_a_node_read_into_keeps_the_node() {
+    // Four records, each a length and then a structure whose second field is
+    // that long. The run is guarded from its first element, so every walk
+    // along it keeps a journal of what it placed and drops that at the end.
+    let mut bytes = Vec::new();
+    for i in 0..4u8 {
+        bytes.extend([i + 1, 0xa0 + i]);
+        bytes.extend(std::iter::repeat_n(0xb0 + i, i as usize + 1));
+    }
+    let inner = T::structure("Inner", vec![("a", T::u8()), ("b", T::bytes(E::field("len")))]);
+    let item = T::structure("Item", vec![("len", T::u8()), ("inner", inner)]);
+    let t = Template::new("t", T::structure("Root", vec![("items", T::repeat(item, Until::End))]));
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    // Reading into record 1 places it, with nothing asking how long it is.
+    assert_eq!(ev.node(&d, &[0, 1, 1, 0]).unwrap().value, Value::UInt(0xa1));
+    // Reaching record 3 walks over record 1 and places it again. It was here
+    // before the walk, so the walk must not take it away when it ends while
+    // what was read inside it stays.
+    ev.node(&d, &[0, 3]).unwrap();
+    // A field of record 1 read now looks up past its structure for `len`,
+    // which is only there if record 1 is.
+    let b = ev.node(&d, &[0, 1, 1, 1]).unwrap();
+    assert_eq!(b.size_bits, 2 * 8);
+}
+
+#[test]
 fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
     // The same long list of uneven strings, asked the question the hex cursor
     // asks: what is under this bit, in the middle of ten thousand elements.

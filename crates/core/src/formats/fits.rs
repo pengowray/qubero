@@ -1423,6 +1423,29 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_heap_is_found_after_reading_a_table_further_on() {
+        // Three tables of the same two rows, each row a descriptor into a heap
+        // of three bytes: two for the first row and one for the second.
+        let one = heap_table(&["1PB"], &[&[(2, 0)], &[(1, 2)]], &[5, 6, 7]);
+        let mut b = one.clone();
+        b.extend_from_slice(&one[2880..]);
+        b.extend_from_slice(&one[2880..]);
+        let (d, mut ev) = eval(b);
+        // A row of the first table, then a row of the third, which walks over
+        // the first table's unit on the way.
+        ev.node(&d, &[0, 1, 3, 1, 0]).unwrap();
+        ev.node(&d, &[0, 3, 3, 1, 0]).unwrap();
+        // The first table's heap starts where its header's cards say, so it
+        // is only found if the walk left that header in place.
+        let heap = ev.node(&d, &[0, 1, 3, 2]).unwrap();
+        assert_eq!(heap.child_count, 2);
+        let first = ev.node(&d, &[0, 1, 3, 2, 0]).unwrap();
+        let second = ev.node(&d, &[0, 1, 3, 2, 1]).unwrap();
+        assert_eq!((first.offset_bits, first.size_bits), (heap.offset_bits, 2 * 8));
+        assert_eq!((second.offset_bits, second.size_bits), (heap.offset_bits + 2 * 8, 8));
+    }
+
+    #[test]
     fn an_empty_cell_covers_no_heap() {
         let b = heap_table(&["1PB"], &[&[(0, 0)], &[(2, 0)]], &[5, 6]);
         let (d, mut ev) = eval(b);

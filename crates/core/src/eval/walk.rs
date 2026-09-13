@@ -538,9 +538,20 @@ impl Evaluator {
     }
 
     /// Record a node, and note it as droppable while a guarded walk is running.
+    ///
+    /// Only a node the memo did not hold is the walk's to drop. One that was
+    /// here already was placed by whatever asked for it, and what was read
+    /// inside it may still be here too: a walk that places it again, as
+    /// `walk_from` does with an element nothing has sized, and then drops it
+    /// would leave its fields standing with no node above them. A field asked
+    /// from in there then finds nothing when it looks up for a name. Three
+    /// FITS tables did this: reading into the third placed the first again,
+    /// and the first table's heap could no longer find its header's cards.
     pub(super) fn remember(&mut self, path: &[usize], r: Resolved) {
-        if let Some(w) = self.journals.last_mut() {
-            w.added.push_back(path.to_vec());
+        if !self.memo.contains_key(path) {
+            if let Some(w) = self.journals.last_mut() {
+                w.added.push_back(path.to_vec());
+            }
         }
         self.memo.insert(path.to_vec(), r);
     }
