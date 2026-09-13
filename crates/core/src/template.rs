@@ -1915,8 +1915,8 @@ pub enum Ty {
     /// A type rather than a computed field beside a `u32`, which is how GRIB's
     /// sign and magnitude could have gone and did not: the answer is a float,
     /// and an expression here is an integer. What writes these is seismic
-    /// processing that began on IBM mainframes, and a SEG-Y trace is still
-    /// most often a run of them.
+    /// processing that began on IBM mainframes, and format code 1 of a SEG-Y
+    /// file is a trace of them.
     ///
     /// Read into an f64, which holds every one exactly. There is no infinity
     /// and no not-a-number: every bit pattern is a number, and the same number

@@ -4,22 +4,30 @@
 //!
 //! A file opens with 3600 bytes of file header and then the traces. The first
 //! 3200 bytes are text: forty lines of eighty columns, `C 1` to `C40`, card
-//! images from when a header was a deck of punched cards. They are EBCDIC in
-//! any file written to the 1975 standard and in most written since, and
-//! revision 1 allowed ASCII as well. What says which is the first byte, which
-//! is `C` either way: 0xC3 in EBCDIC and 0x43 in ASCII. That is how segyio
-//! tells them apart, and there is nothing else to go on.
+//! images from when a header was a deck of punched cards. The 1975 standard
+//! made them EBCDIC and revision 1 allowed ASCII as well. What says which is
+//! the first byte, which is `C` either way: 0xC3 in EBCDIC and 0x43 in ASCII.
+//! segyio tells them apart the same way, and there is nothing else to go on.
 //!
 //! The next 400 bytes are binary and hold what the traces need: the sample
 //! interval, how many samples a trace has and how each is written. Revision 1
 //! added a flag saying whether every trace is the same length and a count of
 //! extended textual headers, 3200-byte blocks of stanzas between the binary
-//! header and the first trace. Revision 2 used bytes that had been unassigned
-//! for 32-bit versions of counts that outgrew sixteen bits, an integer saying
-//! which way round the file is, the offset of the first trace, and the number
-//! of 240-byte headers each trace carries beyond its own. Those are read only
-//! when the revision byte says 2 or later: in an older file the same bytes are
-//! unassigned, and a writer was free to leave anything there.
+//! header and the first trace. Those two are honoured whatever revision the
+//! file claims, because segyio writes both into files it labels revision 0.
+//! Revision 2 used bytes that had been unassigned for 32-bit versions of
+//! counts that outgrew sixteen bits, an integer saying which way round the
+//! file is, the offset of the first trace, and the number of 240-byte headers
+//! each trace carries beyond its own. Those are read only when the revision
+//! byte says 2 or later: in an older file the same bytes are unassigned, and a
+//! writer was free to leave anything there.
+//!
+//! The revision is two bytes, major and minor, and revision 2 says so. Revision
+//! 1 called the same two bytes one 16-bit number, so a little-endian writer
+//! that swapped every number swapped this one too, and its revision 1.0 reads
+//! here as 0.1. segyio 1.9 reads a little-endian file's revision that way
+//! round, and segyio's own C library reads the two bytes as they lie, as this
+//! does.
 //!
 //! *Which way round the numbers are.* SEG-Y is big-endian, and revision 1 said
 //! a little-endian file was not SEG-Y at all. Plenty are written anyway.
@@ -43,8 +51,7 @@
 //!
 //! *What a sample is.* Format code 1 is the IBM System/360 hexadecimal float,
 //! which is what seismic processing wrote when its computers were IBM
-//! mainframes and what most SEG-Y data still is: see
-//! [`Ty::IbmF32`](crate::template::Ty::IbmF32). Codes 2, 3 and 8 are two's
+//! mainframes: see [`Ty::IbmF32`](crate::template::Ty::IbmF32). Codes 2, 3 and 8 are two's
 //! complement integers, 5 and 6 IEEE floats, and 7, 9 to 12, 15 and 16 are the
 //! widths revision 2 added. Code 4, fixed point with a gain byte, has been
 //! obsolete since 2002 and its samples stay four bytes each.
@@ -62,8 +69,11 @@
 //! segyio, whose test files are the samples.
 //!
 //! Seismic Unix's `.su` files are these traces with no file header at all, in
-//! the byte order of whatever wrote them and always as IEEE floats. Nothing in
-//! one says what it is, so it is not recognised and has no template of its own.
+//! the byte order of whatever wrote them and always as IEEE floats. They are
+//! not read here. Nothing in one says what it is, so it could not be
+//! recognised, and its trace header is not this one past byte 180: Seismic
+//! Unix keeps its own sampling and plotting fields where revision 1 put the
+//! CDP position and the in-line and cross-line numbers.
 
 use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 use crate::text::{encode_settled, CodePage, Settled};
