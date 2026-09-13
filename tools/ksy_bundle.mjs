@@ -221,7 +221,7 @@ function reason(d) {
     if (d.params > 0) return `a root type with ${d.params} parameter${d.params === 1 ? "" : "s"}: nothing can open a file as it, and it is here to be imported`;
     return IMPORT_ONLY.get(d.id) ?? "here to be imported";
   }
-  if (d.gaps === 0) return "converts whole";
+  if (d.gaps === 0) return "";
   return why.get(d.id) ?? "GAPS WITH NO REASON WRITTEN -- add one to WHY_WITH_GAPS in tools/ksy_bundle.mjs";
 }
 
@@ -234,7 +234,7 @@ const rows = decided
     return `| \`${d.id}\` | ${d.category} | ${d.license} | ${bundled} | ${d.gaps} | ${sniff} | ${reason(d)} |`;
   });
 
-const dropped = DROPPED.map(([id, lic, r]) => `| \`${id}\` | | ${lic} | no | | | ${r} |`);
+const dropped = DROPPED.map(([id, lic, r]) => `| \`${id}\` | ${lic} | ${r} |`);
 const licence = BY_LICENCE.map(([id, lic]) => `| \`${id}\` | ${lic} |`);
 
 const readme = `# Bundled Kaitai Struct formats
@@ -265,10 +265,13 @@ only licences that may appear are ${ALLOWED.map((l) => `\`${l}\``).join(", ")}.
   be offered: the first \`seq\` field's \`contents\`, plus any further \`contents\`
   the walk reaches through fields of a fixed width. Built-in formats are asked
   first, always, so this only ever answers for a file no builtin claims.
+* **Reason** is filled in only where a row needs explaining: why a format with
+  gaps ships anyway, or why a file is here to be imported and not offered. A
+  blank means the format converts whole and a reader can pick it.
 
 ## Bundled
 
-| Format | Category | Licence | Bundled | Gaps | Sniffs | Why |
+| Format | Category | Licence | Bundled | Gaps | Sniffs | Reason |
 | --- | --- | --- | --- | --- | --- | --- |
 ${rows.join("\n")}
 
@@ -277,10 +280,11 @@ ${rows.join("\n")}
 Candidates from \`HANDOVER-kaitai-gaplist.md\` whose report has gaps on the path
 through the file: the root's own \`seq\`, or the type most of the file is made
 of. A format that reads the front of a file and then loses the rest is worse
-than no format at all, so these wait for the converter to grow.
+than no format at all, so these wait for the converter to grow. They are not
+copied into this repository.
 
-| Format | Category | Licence | Bundled | Gaps | Sniffs | Why |
-| --- | --- | --- | --- | --- | --- | --- |
+| Format | Licence | Why not |
+| --- | --- | --- |
 ${dropped.join("\n")}
 
 ## Not bundled: the licence
