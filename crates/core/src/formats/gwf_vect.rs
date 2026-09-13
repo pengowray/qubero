@@ -106,7 +106,9 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
         return out;
     }
     let Some((width, complex, integer, name)) = element(vect_type) else {
-        out.problem = Some(format!("Not unpacked: type {vect_type} is not a type of number this viewer reads."));
+        // The name the tree shows in the vector's `type` field, where it has one.
+        let shown = if vect_type == 8 { "STRING".to_string() } else { vect_type.to_string() };
+        out.problem = Some(format!("Not unpacked: type {shown} is not a numeric type this viewer reads."));
         return out;
     };
     // A complex vector is two runs of its part's width, one of real parts and
@@ -129,12 +131,12 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
             if compress & 0xff == 3 {
                 if !integer {
                     out.problem = Some(format!(
-                        "Stopped at the differences: the specification defines them for integers, and this vector holds {name}."
+                        "Stopped at differencing: the specification defines it for integers, and this vector holds {name}."
                     ));
                     return out;
                 }
                 sum(&mut out.bytes, word, little);
-                out.steps.push(step("differences summed", out.bytes.len(), out.bytes.len()));
+                out.steps.push(step("differencing", out.bytes.len(), out.bytes.len()));
             }
         }
         scheme @ (5 | 8 | 10) => {
@@ -143,9 +145,11 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
                 8 => 4,
                 _ => 8,
             };
+            // The whole field in the message, 261 rather than 5, since that
+            // is the number the tree shows beside it.
             if packs != word {
                 out.problem = Some(format!(
-                    "Not unpacked: compression {scheme} packs {packs}-byte words, and this vector holds {name}."
+                    "Not unpacked: compression {compress} packs {packs}-byte words, and this vector holds {name}."
                 ));
                 return out;
             }
@@ -161,15 +165,15 @@ pub fn decode(data: &[u8], compress: u16, vect_type: u16, n_data: u64) -> Unpack
                 }
             }
             sum(&mut out.bytes, word, little);
-            out.steps.push(step("differences summed", out.bytes.len(), out.bytes.len()));
+            out.steps.push(step("differencing", out.bytes.len(), out.bytes.len()));
             if complex {
                 out.bytes = interleave(&out.bytes, word);
-                out.steps.push(step("real and imaginary parts paired", out.bytes.len(), out.bytes.len()));
+                out.steps.push(step("real parts, then imaginary parts", out.bytes.len(), out.bytes.len()));
             }
         }
         0 => out.bytes = data.to_vec(),
-        other => {
-            out.problem = Some(format!("Not unpacked: compression {other} is not a scheme this viewer undoes."));
+        _ => {
+            out.problem = Some(format!("Not unpacked: compression {compress} is not a scheme this viewer undoes."));
             return out;
         }
     }
@@ -214,7 +218,7 @@ fn unsuppress(data: &[u8], word: usize, little: bool, count: usize) -> Result<Ve
         return Ok(out);
     }
     if data.len() < 2 {
-        return Err((Vec::new(), "Stopped at zero suppression: the run is too short to hold its block size.".into()));
+        return Err((Vec::new(), "Stopped at zero suppression: the data is under 2 bytes, too short to hold a block size.".into()));
     }
     let block = read(&data[..2], little) as usize;
     if block == 0 {
@@ -241,14 +245,9 @@ fn unsuppress(data: &[u8], word: usize, little: bool, count: usize) -> Result<Ve
     let mut done = 0usize;
     while done < count {
         let Some(n) = reader.take(head) else { break };
+        // The header is exactly wide enough to count to the word's width, so
+        // no block can claim more bits than a word has.
         let n_bits = n as u32 + 1;
-        if n_bits > width {
-            let why = format!(
-                "Stopped at zero suppression after {done} of {count} numbers: a block says its numbers are {n_bits} bits wide, wider than a {word}-byte word."
-            );
-            out.truncate(done * word);
-            return Err((out, why));
-        }
         let offset = (1u64 << (n_bits - 1)) - 1;
         for _ in 0..block.min(count - done) {
             let Some(code) = reader.take(n_bits) else { break };
@@ -405,7 +404,7 @@ mod tests {
         let got: Vec<i16> = v.bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
         assert_eq!(got, vec![82, 85, 85, 81, 80, 82, 84, 85]);
         let steps: Vec<&str> = v.steps.iter().map(|s| s.filter.as_str()).collect();
-        assert_eq!(steps, vec!["zero suppression", "differences summed"]);
+        assert_eq!(steps, vec!["zero suppression", "differencing"]);
         // Written by a big-endian machine, the words are the other way round
         // and nothing else changes.
         let packed: Vec<u8> = [0x0003u16, 0x2D17, 0x37f8, 0x2963, 0x0025].iter().flat_map(|w| w.to_be_bytes()).collect();
@@ -439,7 +438,7 @@ mod tests {
         assert_eq!(v.problem, None);
         let want: Vec<u8> = pairs.iter().flat_map(|p| [p.0.to_le_bytes(), p.1.to_le_bytes()].concat()).collect();
         assert_eq!(v.bytes, want);
-        assert_eq!(v.steps.last().unwrap().filter, "real and imaginary parts paired");
+        assert_eq!(v.steps.last().unwrap().filter, "real parts, then imaginary parts");
         let (name, shown, total) = values(&v.bytes, 6, true);
         assert_eq!((name.as_str(), total), ("complex f32", 3));
         assert_eq!(shown[0], "1.5-2i");
@@ -455,7 +454,7 @@ mod tests {
         assert_eq!(v.problem, None);
         assert_eq!(v.bytes, words(&numbers, 2, true));
         let steps: Vec<(&str, usize, usize)> = v.steps.iter().map(|s| (s.filter.as_str(), s.in_bytes, s.out_bytes)).collect();
-        assert_eq!(steps, vec![("gzip", packed.len(), 600), ("differences summed", 600, 600)]);
+        assert_eq!(steps, vec![("gzip", packed.len(), 600), ("differencing", 600, 600)]);
     }
 
     /// The count comes from outside the run, and the run's last word is
@@ -473,7 +472,7 @@ mod tests {
     #[test]
     fn a_scheme_for_one_width_on_a_vector_of_another_is_not_unpacked() {
         let v = decode(&[3, 0, 0, 0], 261, 2, 1);
-        assert!(v.problem.expect("a problem").contains("compression 5 packs 2-byte words"));
+        assert!(v.problem.expect("a problem").contains("compression 261 packs 2-byte words"));
         assert!(v.steps.is_empty());
     }
 }

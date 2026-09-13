@@ -298,7 +298,7 @@ fn rest(e: Endian) -> T {
     // check that the machine that wrote it spoke ASCII. Version 8 gave the
     // two bytes to the library and the checksum scheme.
     let mut six = checks();
-    six.extend([("ascii_check", T::magic(b"AZ")), ("structures", T::repeat(structure(e, Six), Until::End))]);
+    six.extend([("check_ascii", T::magic(b"AZ")), ("structures", T::repeat(structure(e, Six), Until::End))]);
     let mut other = checks();
     other.push(("rest", T::bytes(E::Remaining)));
     T::switch(
@@ -1065,7 +1065,7 @@ fn toc(e: Endian, v: Version) -> T {
                 ("nameDetector", strings(ndet.clone())),
                 ("positionDetector", u64a(ndet)),
                 ("nStatType", T::u32(e)),
-                ("statTypes", T::array(group, nstat)),
+                ("stat_types", T::array(group, nstat)),
                 ("nADC", T::u32(e)),
                 ("name", strings(nadc.clone())),
                 ("channelID", u32a(nadc.clone())),
@@ -1657,7 +1657,7 @@ mod tests {
         }
         let d = Document::new(MemSource(six(&ser)));
         let mut ev = Evaluator::new(gwf());
-        assert_eq!(ev.node(&d, &[8, 5]).unwrap().name, "ascii_check");
+        assert_eq!(ev.node(&d, &[8, 5]).unwrap().name, "check_ascii");
         assert_eq!(ev.node(&d, &[8, 6]).unwrap().child_count, 2);
         // The dictionary entry is three fields, with no checksum after them.
         assert_eq!(ev.node(&d, &[8, 6, 0, 4]).unwrap().child_count, 3);

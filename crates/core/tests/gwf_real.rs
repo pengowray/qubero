@@ -135,10 +135,10 @@ fn check_against_dictionary(name: &str, bytes: Vec<u8>) -> Vec<String> {
         // group flat, and the template reads a count of those groups as a
         // list of them. The names inside a group are the dictionary's.
         let mut fields = fields.clone();
-        if let Some(at) = names.iter().position(|n| n == "statTypes") {
+        if let Some(at) = names.iter().position(|n| n == "stat_types") {
             let group = ["nameStat", "detector", "nStatInstance", "tStart", "tEnd", "version", "positionStat"];
             assert_eq!(&fields[at..at + group.len()], group, "{name}: the dictionary lists one group");
-            fields.splice(at..at + group.len(), ["statTypes".to_string()]);
+            fields.splice(at..at + group.len(), ["stat_types".to_string()]);
         }
         assert_eq!(names, fields, "{name}: structure {i}, a {class} at {}", raw.offset);
         // And the fields tile the body: the last one ends where it does.
@@ -273,7 +273,7 @@ fn zero_suppressed_shorts_are_half_the_floats_beside_them(name: &str) {
         assert_eq!(problem, None);
         assert_eq!(total, 2000);
         let names: Vec<&str> = steps.iter().map(|s| s.filter.as_str()).collect();
-        assert_eq!(names, ["zero suppression", "differences summed"]);
+        assert_eq!(names, ["zero suppression", "differencing"]);
         // The panel shows the first few; the side reader is asked for all of
         // them, from the same bytes the template placed.
         let packed = f.ev.node(&f.d, &data).unwrap();
@@ -591,7 +591,7 @@ fn every_structure_of_framels_version_6_file_reads_as_the_class_its_dictionary_n
     }
     let mut f = Frames::open(bytes);
     // The header ends in the two letters version 8 gave to the library.
-    assert_eq!(f.ev.node(&f.d, &[8, 5]).unwrap().name, "ascii_check");
+    assert_eq!(f.ev.node(&f.d, &[8, 5]).unwrap().name, "check_ascii");
     // The event columns of the table of contents are as long as the counts
     // per type add up to: 20 of trigger_1 and 10 of Burst_1.
     let toc = f.body("FrTOC", 0);
