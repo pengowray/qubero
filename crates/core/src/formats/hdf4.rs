@@ -17,36 +17,40 @@
 //! What is read here is the chain of blocks and every descriptor in it, with
 //! each descriptor's bytes placed where it says and named by its tag and ref,
 //! and then the data itself: a table's rows with its columns named, a
-//! scientific dataset's values in the shape its dimension record gives them, a
-//! raster image as rows of pixels, a palette as colours, and a vgroup's members
-//! as the places they point at.
+//! scientific dataset's values in the shape its dimension record gives them
+//! and its labels, units and formats one per dimension, a raster image as rows
+//! of pixels, a palette as colours, and a vgroup's members and attributes as
+//! the places they point at.
 //!
 //! None of that can be read from one descriptor alone. A raster image's own
 //! bytes say nothing about how wide a row is; the image dimension record with
 //! the same reference number says. A table's rows say nothing about their
 //! columns; the vdata header with the same reference number does. A scientific
 //! dataset's values are tied to their dimensions by neither, only by the group
-//! that names both. So each block reads its twelve-byte table twice: once as
+//! that names both. So the file's twelve-byte tables are read twice: once as
 //! the descriptors, which place the bytes, and once as an index with the tag
 //! and the reference number as one number, which is a list every lookup here
 //! can search. The index is a second reading of the same twelve bytes, counted
-//! nowhere and pointing nowhere: it answers where a thing is, and the record
-//! itself is then read beside whatever asked, so that a run of bytes is always
-//! named by the descriptor that owns it and never by the reading that went
-//! looking for it.
+//! nowhere, taking no room and pointing nowhere: it answers where a thing is,
+//! and the record itself is then read beside whatever asked, so that a run of
+//! bytes is always named by the descriptor that owns it and never by the
+//! reading that went looking for it.
 //!
-//! That index covers one block. A file grown past sixteen descriptors has more
-//! than one, and a thing in an earlier block is out of reach of a thing in a
-//! later one; where a lookup finds nothing the reading falls back to bytes, so
-//! a file loses detail rather than breaking. In the sample files about a tenth
-//! of the references cross a block.
+//! The index is one list over every block. A file grown past sixteen
+//! descriptors has more than one block, and the library writes a thing and the
+//! thing that describes it wherever there is a free slot, so a group in the
+//! third block names members in the second and a table's rows in the last slot
+//! of one block find their header in the first slot of the next. In the sample
+//! files about a tenth of the references cross a block. Where a lookup finds
+//! nothing at all, the reading falls back to bytes, so a file that names a
+//! thing it never wrote loses detail rather than breaking.
 //!
 //! Everything is big-endian, which HDF4 calls its own on-disk order whatever
 //! the machine that wrote the file was, except where a number type record says
 //! otherwise: class 4 is the Intel byte order for whole numbers and the PC's
 //! IEEE for floating point, and a file written that way is read that way.
 
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, Step, StrLen, Template, Ty as T};
 
 /// What one of these starts with.
 pub const MAGIC: &[u8] = &[0x0E, 0x03, 0x13, 0x01];
@@ -347,20 +351,20 @@ fn sd_dimensions() -> T {
 }
 
 /// A descriptor's tag and reference number read as one number, which is how
-/// the block's index holds them and the only way a search can ask for both at
+/// the index holds them and the only way a search can ask for both at
 /// once. See [`index_entry`].
 fn key(tag: i128, r: E) -> E {
     E::lit(tag * 65536).add(r)
 }
 
 /// Where the descriptor this key names keeps its bytes: `offset` or `length`,
-/// from the block's index.
+/// from the file's index, whichever block the descriptor is in.
 ///
-/// Zero when the block holds no such descriptor, which is what every guard
+/// Zero when the file holds no such descriptor, which is what every guard
 /// here tests. An offset of zero is the four bytes of signature and no
 /// descriptor ever points there, so zero is an answer no file can give.
 fn look(k: E, path: &[&str]) -> E {
-    E::tagged_by_expr("table", &["key"], k, path)
+    E::tagged_by_expr("index", &["key"], k, path)
 }
 
 /// The record the descriptor this key names points at, read where it says it
@@ -378,7 +382,7 @@ fn record_at(k: E, inner: T) -> T {
 /// tested before the field was declared.
 ///
 /// A number type record is named by a reference number written inside the
-/// dimension record, and whether the block holds it cannot be asked until the
+/// dimension record, and whether the file holds it cannot be asked until the
 /// dimension record has been read. So this reads nothing at all rather than
 /// failing when it is not there: no room, no record. Whatever the record was
 /// wanted for still has to ask [`found`] before it reads a value through it.
@@ -397,10 +401,23 @@ fn own_ref() -> E {
     E::field("ref")
 }
 
-/// One when the block holds a descriptor with this tag and this reference
+/// One when the file holds a descriptor with this tag and this reference
 /// number, and zero otherwise.
 fn found(k: E) -> E {
     E::lit(0).less_than(look(k, &["offset"]))
+}
+
+/// Where the thing a `tag` and `ref` beside this field name is: `offset` or
+/// `length`, and zero where the file holds no such thing.
+///
+/// Looked for under the tag as written and then under its special twin, which
+/// is how the HDF4 library looks too. A group names a dataset's values as tag
+/// 702 however they are kept, and values kept in linked blocks have a
+/// descriptor tagged 0x4000 more than that and none tagged 702, so without the
+/// second look every member naming such values points nowhere.
+fn place_of_member(path: &[&str]) -> E {
+    let k = E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
+    look(k.clone(), path).or(look(k.add(E::lit(0x4000 * 65536)), path))
 }
 
 /// A tag and a reference number together, which is how a group names one of
@@ -410,7 +427,6 @@ fn found(k: E) -> E {
 /// a place, so that a reader looking at a group can see what it holds rather
 /// than a pair of numbers to go and find by hand.
 fn tag_ref() -> T {
-    let k = || E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
     T::structure_named(
         "Hdf4GroupMember",
         "tag",
@@ -418,8 +434,8 @@ fn tag_ref() -> T {
         vec![
             ("tag", tag()),
             ("ref", u16be()),
-            ("offset", T::computed(look(k(), &["offset"]))),
-            ("length", T::computed(look(k(), &["length"]))),
+            ("offset", T::computed(place_of_member(&["offset"]))),
+            ("length", T::computed(place_of_member(&["length"]))),
         ],
     )
 }
@@ -439,7 +455,6 @@ fn group() -> T {
 /// rows put the two back together and add where each pair points. They take
 /// no bytes of their own.
 fn members(tag_from: E, ref_of: E, count: E) -> T {
-    let k = || E::field("tag").mul(E::lit(65536)).add(E::field("ref"));
     T::array(
         T::structure_named(
             "Hdf4VgroupMember",
@@ -448,8 +463,8 @@ fn members(tag_from: E, ref_of: E, count: E) -> T {
             vec![
                 ("tag", tag_of(T::computed(tag_from))),
                 ("ref", T::computed(ref_of)),
-                ("offset", T::computed(look(k(), &["offset"]))),
-                ("length", T::computed(look(k(), &["length"]))),
+                ("offset", T::computed(place_of_member(&["offset"]))),
+                ("length", T::computed(place_of_member(&["length"]))),
             ],
         ),
         count,
@@ -512,8 +527,8 @@ fn one_scale() -> T {
         of_the_number_type(),
         E::elem_within(&["dimensions", "dims"], which(), &[]).at_least(E::lit(0)),
     );
-    // A dimension with no scale has no bytes here. One whose number type is in
-    // another block stops the reading where it stands: how wide its values are
+    // A dimension with no scale has no bytes here. One whose number type the
+    // file never wrote stops the reading where it stands: how wide its values are
     // is what says where the next dimension's scale begins, so everything
     // after it is unplaceable and the rest of the record is left as bytes.
     let values = T::switch(found(nt()), vec![(1, run)], T::bytes(E::Remaining));
@@ -630,18 +645,31 @@ fn special_element() -> T {
 
 /// The label, unit and format records of a scientific dataset: one string for
 /// the dataset and then one for each of its dimensions, run together and each
-/// ended with a nul.
+/// ended with a nul. An empty string is a nul on its own, so a dataset with
+/// labelled dimensions and no label of its own starts with one.
+///
+/// How many dimensions there are is in the dimension record with the same
+/// reference number, which is how the library writes these beside it, so the
+/// first string is read as the dataset's and the rest as the dimensions', one
+/// each in the order the dimension record lists them. Without that record the
+/// strings are still read, as a list whose first entry is the dataset's.
 fn sd_strings() -> T {
-    T::structure(
+    let dims = || key(701, own_ref());
+    let text = || T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii);
+    let rank = E::within(&["dimension_record", "rank"]).at_least(E::lit(0));
+    let known = T::structure(
         "Hdf4SdStrings",
-        vec![(
-            "strings",
-            T::repeat(
-                T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii),
-                crate::template::Until::End,
-            ),
-        )],
+        vec![
+            ("dimension_record", record_at(dims(), sd_dimensions())),
+            ("dataset", text()),
+            ("dimensions", T::array(text(), rank)),
+        ],
     )
+    .machinery(&["dimension_record"])
+    .field_aside("dimension_record");
+    let unknown =
+        T::structure("Hdf4SdStringList", vec![("strings", T::repeat(text(), crate::template::Until::End))]);
+    T::switch(found(dims()), vec![(1, known)], unknown)
 }
 
 /// One column of a table: what its values are, how wide one is, where in a
@@ -704,9 +732,8 @@ fn vdata_header() -> T {
 ///
 /// Nothing in the image's own bytes says how wide a row is: the image
 /// dimension record with the same reference number does, and the number type
-/// record that names says how wide one sample is. Where either is missing the
-/// bytes stay bytes, which is what happens to an image whose dimension record
-/// the writer put in another block.
+/// record that names says how wide one sample is. Where the file holds no
+/// such record the bytes stay bytes.
 ///
 /// Interlacing decides the nesting rather than the count, so the three ways
 /// an image can be written are three shapes and each says in its name which
@@ -746,7 +773,7 @@ fn raster_image() -> T {
             ("dimensions", record_at(key(300, own_ref()), image_dimensions())),
             ("number_type", record_at_or_nothing(nt(), number_type())),
             // Which number type it is, is written in the dimension record, so
-            // whether the block holds it cannot be asked until that record has
+            // whether the file holds it cannot be asked until that record has
             // been read: the question belongs here rather than around the
             // whole image.
             ("samples", T::switch(found(nt()), vec![(1, samples)], T::bytes(E::Remaining))),
@@ -785,26 +812,30 @@ fn eight_bit_image() -> T {
 /// order, a column of numbers as that many numbers, and a column of a type
 /// nothing here knows as the bytes the header set aside for it.
 ///
-/// Only a table written a record at a time is opened. With the other
-/// interlacing the file holds every value of the first column, then every
-/// value of the second, and a row is not a run of bytes at all.
+/// The interlacing decides the nesting. A table written a record at a time is
+/// a list of records, each one value per column. A table written a field at a
+/// time holds every value of the first column, then every value of the second,
+/// so a row is not a run of bytes at all and the table reads as a list of
+/// columns, each one value per record. Anything else stays bytes.
 fn vdata_records() -> T {
     let header = || key(1962, own_ref());
+    let nvertices = || E::within(&["header", "nvertices"]).at_least(E::lit(0));
     let records = T::array(
         T::sized(E::within(&["header", "ivsize"]).at_least(E::lit(0)), vdata_record()),
-        E::within(&["header", "nvertices"]).at_least(E::lit(0)),
+        nvertices(),
     );
+    let columns = T::structure(
+        "Hdf4VdataColumns",
+        vec![("columns", T::array(vdata_column(nvertices()), E::within(&["header", "nfields"]).at_least(E::lit(0))))],
+    )
+    .field_elem_named_from("columns", E::elem_within(&["header", "field_names"], E::idx(), &["text"]));
     let rows = T::structure(
         "Hdf4VdataRecords",
         vec![
             ("header", record_at(header(), vdata_header())),
             (
                 "records",
-                T::switch(
-                    E::within(&["header", "interlace"]).equals(E::lit(0)),
-                    vec![(1, records)],
-                    T::bytes(E::Remaining),
-                ),
+                T::switch(E::within(&["header", "interlace"]), vec![(0, records), (1, columns)], T::bytes(E::Remaining)),
             ),
         ],
     )
@@ -833,34 +864,49 @@ fn vdata_record() -> T {
 /// where it is needed: a column of several values is a list, and inside a list
 /// `Idx` is which value this is, not which column. So the number is a field of
 /// the row, worth no bytes, and every question about the column names it.
-///
-/// A field type with bit 14 set is the same type written the other way round,
-/// which is how a vdata written on an Intel machine and left unconverted says
-/// so. A column of characters reads as one string of its order rather than as
-/// that many one-byte numbers.
 fn vdata_value() -> T {
-    let col = |f: &str| E::elem_within(&["header", f], E::field("column"), &[]);
-    let kind = || col("field_types").and(E::lit(0xff));
-    let order = || col("field_orders").at_least(E::lit(0));
-    let one = || number_value(kind(), col("field_types").bit(14).mul(E::lit(4)), E::lit(8));
-    let text = || T::text(StrLen::Padded { size: order(), pad: 0 }, Encoding::Ascii);
     T::structure_named(
         "Hdf4VdataField",
         "",
         "value",
-        vec![
-            ("column", T::computed(E::idx())),
-            (
-                "value",
-                T::switch(
-                    kind(),
-                    vec![(3, text()), (4, text())],
-                    T::switch(order().equals(E::lit(1)), vec![(1, one())], T::array(one(), order())),
-                ),
-            ),
-        ],
+        vec![("column", T::computed(E::idx())), ("value", column_value())],
     )
     .machinery(&["column"])
+}
+
+/// Every value of one column, in a table written a field at a time: one per
+/// record, each read the way [`vdata_value`] reads it. The column's number is
+/// written down for the same reason.
+fn vdata_column(records: E) -> T {
+    T::structure_named(
+        "Hdf4VdataColumn",
+        "",
+        "values",
+        vec![("column", T::computed(E::idx())), ("values", T::array(column_value(), records))],
+    )
+    .machinery(&["column"])
+}
+
+/// One value of the column the `column` field beside or around it names.
+///
+/// A field type with bit 14 set is the same type written the other way round,
+/// which is how a vdata written on an Intel machine and left unconverted says
+/// so. A column of characters reads as one string of its order rather than as
+/// that many one-byte numbers. A type nothing here knows is as many bytes as
+/// the header gives one of it, which is the column's size shared out over its
+/// order, so the columns after it still line up.
+fn column_value() -> T {
+    let col = |f: &str| E::elem_within(&["header", f], E::field("column"), &[]);
+    let kind = || col("field_types").and(E::lit(0xff));
+    let order = || col("field_orders").at_least(E::lit(0));
+    let width = || col("field_sizes").mul(E::lit(8)).div(order().at_least(E::lit(1)));
+    let one = || number_value(kind(), col("field_types").bit(14).mul(E::lit(4)), width());
+    let text = || T::text(StrLen::Padded { size: order(), pad: 0 }, Encoding::Ascii);
+    T::switch(
+        kind(),
+        vec![(3, text()), (4, text())],
+        T::switch(order().equals(E::lit(1)), vec![(1, one())], T::array(one(), order())),
+    )
 }
 
 /// A scientific data group, and the dataset it names.
@@ -939,13 +985,14 @@ fn scientific_data_group() -> T {
     )
 }
 
-/// The attributes a vdata header or a vgroup grew in version 4: a flag word,
-/// a count, and one record per attribute saying which field it belongs to and
-/// where its value is kept.
+/// The attributes a vdata header grew in version 4: a flag word, a count, and
+/// one record per attribute saying which field it belongs to and where its
+/// value is kept. A vgroup's are written differently; see [`vgroup`].
 ///
 /// A field index of -1 is an attribute of the whole thing rather than of one
 /// of its columns. The value itself is a vdata of one record, named by the tag
-/// and ref here.
+/// and ref here, and `offset` and `length` say where that vdata's header is,
+/// the same way a group member says where its member is.
 fn version_four_attributes() -> Vec<(&'static str, T)> {
     vec![
         ("flags", T::present_if(E::lit(3).less_than(E::field("version")), u32be())),
@@ -955,7 +1002,13 @@ fn version_four_attributes() -> Vec<(&'static str, T)> {
             T::array(
                 T::structure(
                     "Hdf4VdataAttribute",
-                    vec![("field_index", T::i32(Big)), ("tag", tag()), ("ref", u16be())],
+                    vec![
+                        ("field_index", T::i32(Big)),
+                        ("tag", tag()),
+                        ("ref", u16be()),
+                        ("offset", T::computed(place_of_member(&["offset"]))),
+                        ("length", T::computed(place_of_member(&["length"]))),
+                    ],
                 ),
                 E::field("nattrs").at_least(E::lit(0)),
             ),
@@ -970,9 +1023,27 @@ fn version_four_attributes() -> Vec<(&'static str, T)> {
 ///
 /// The tags and the reference numbers are written as two runs rather than as
 /// pairs, so `members` reads them back together and is where each one points.
+///
+/// A vgroup is not laid out the way a vdata header is, though the two share
+/// their version numbers. The version and the `more` field are written once,
+/// last, and the library finds them by counting back five bytes from the end
+/// of the record. What version 4 added comes straight after the extension
+/// pair: a flag word, and where the flag says so a count and a tag and a
+/// reference number for each attribute, with no field index, since a vgroup
+/// has no columns. A vgroup with no flags set is written the old way, so the
+/// flag word is there exactly when more than those five bytes are left.
 fn vgroup() -> T {
     let n = || E::field("nvelt").at_least(E::lit(0));
-    let mut fields = vec![
+    let attribute = T::structure(
+        "Hdf4VgroupAttribute",
+        vec![
+            ("tag", tag()),
+            ("ref", u16be()),
+            ("offset", T::computed(place_of_member(&["offset"]))),
+            ("length", T::computed(place_of_member(&["length"]))),
+        ],
+    );
+    let fields = vec![
         ("nvelt", i16be()),
         ("tags", T::array(tag(), n())),
         ("refs", T::array(u16be(), n())),
@@ -981,11 +1052,14 @@ fn vgroup() -> T {
         ("class", counted_name()),
         ("extension_tag", u16be()),
         ("extension_ref", u16be()),
+        ("flags", T::present_if(E::lit(5).less_than(E::Remaining), u32be())),
+        ("nattrs", T::present_if(E::field("flags").bit(0), T::i32(Big))),
+        ("attributes", T::array(attribute, E::field("nattrs").at_least(E::lit(0)))),
         ("version", i16be()),
         ("more", i16be()),
+        // The nul the writer ends the record with.
+        ("terminator", T::bytes(E::Remaining)),
     ];
-    fields.extend(version_four_attributes());
-    fields.push(("terminator", T::bytes(E::Remaining)));
     // The two runs are where the bytes are; `members` is the reading of them a
     // person wants, so it is the one the listing leads with.
     T::structure_named("Hdf4Vgroup", "name", "", fields).machinery(&["tags", "refs"])
@@ -994,13 +1068,13 @@ fn vgroup() -> T {
 /// What a descriptor's bytes are read as.
 ///
 /// A tag on its own says what a run of bytes is for, not how to read it. The
-/// ones here are the ones a reader can take apart with the block's index in
+/// ones here are the ones a reader can take apart with the file's index in
 /// hand: a raster image asks the image dimension record with its own reference
 /// number how wide the rows are, a table's rows ask the vdata header with the
 /// same number what the columns are, and a scientific dataset's values are
 /// reached from the group that names the dimension record and the data
-/// together. Where the descriptor being asked for is not in the same block,
-/// the reading falls back to the bytes, since the index covers one block.
+/// together. Where the file holds no descriptor with that tag and number, the
+/// reading falls back to the bytes.
 fn contents() -> T {
     T::switch(
         E::field("tag"),
@@ -1049,13 +1123,14 @@ fn has_bytes(tag_of: E, offset_of: E) -> E {
     E::lit(1).sub(tag_of.equals(E::lit(1))).mul(E::lit(1).sub(offset_of.equals(E::lit(0xFFFF_FFFFi64))))
 }
 
-/// The same twelve bytes as a descriptor, read a second time as an index the
-/// rest of the template can search.
+/// The same twelve bytes as a descriptor, read a second time as an entry in
+/// an index the rest of the template can search.
 ///
 /// A lookup reaches a list by naming it, and a list cannot name itself: a name
 /// reaches the fields declared before the field asking, and the descriptors
-/// are the field the asking descriptor sits inside. So a block reads its own
-/// table twice over.
+/// are the field the asking descriptor sits inside. So the file reads its
+/// tables twice over, once for the index and once for the descriptors, and
+/// the index comes first. See [`hdf4`].
 ///
 /// The same four numbers, read the same way, so that a reader who lands on
 /// these bytes sees the same rows either way. `key` is the tag and the
@@ -1105,24 +1180,57 @@ fn descriptor() -> T {
 /// because a writer that runs out of slots adds a block wherever there is
 /// room, which may be the end of the file or a hole in the middle of it; a
 /// block with no next holds zero rather than an offset.
-///
-/// The block is an origin so that its index can be placed six bytes into it,
-/// over the same run the descriptors themselves read. See [`index_entry`].
 fn block() -> T {
-    let n = || E::field("ndd").at_least(E::lit(0));
-    T::origin(
-        T::structure(
-            "Hdf4DescriptorBlock",
-            vec![
-                ("ndd", i16be()),
-                ("next", u32be()),
-                ("table", T::at_origin(E::lit(6), T::array(index_entry(), n()))),
-                ("descriptors", T::array(T::Named("Hdf4Descriptor".into()), n())),
-            ],
-        )
-        .machinery(&["next", "table"])
-        .field_aside("table")
-        .counted_as("block"),
+    T::structure(
+        "Hdf4DescriptorBlock",
+        vec![
+            ("ndd", i16be()),
+            ("next", u32be()),
+            ("descriptors", T::array(T::Named("Hdf4Descriptor".into()), E::field("ndd").at_least(E::lit(0)))),
+        ],
+    )
+    .machinery(&["next"])
+    .counted_as("block")
+}
+
+/// The same block again, read for its table and nothing else: the count, the
+/// next, and each descriptor's twelve bytes. See [`hdf4`].
+///
+/// The table is read where the block is and takes no room there, which is
+/// what keeps the block itself the thing a byte of it belongs to. The cursor
+/// finds a byte outside the root by asking what was placed over it, and a
+/// reading that covers exactly the bytes a block covers would be the one it
+/// found, since the first placement over a stretch is the one kept, and the
+/// descriptors would never be reached from their own bytes.
+///
+/// The table is placed at its own start rather than from an origin, because
+/// the index places each entry where `start_of` says its descriptor is, and
+/// `start_of` counts from the nearest origin: inside one, every entry would
+/// land that many bytes early.
+fn index_block() -> T {
+    let table = T::structure(
+        "Hdf4IndexTable",
+        vec![
+            ("ndd", i16be()),
+            ("next", u32be()),
+            ("entries", T::array(index_entry(), E::field("ndd").at_least(E::lit(0)))),
+        ],
+    )
+    .machinery(&["next"]);
+    let here = T::At { anchor: Anchor::SelfAligned(1), at: E::lit(0), inner: Box::new(table) };
+    T::structure("Hdf4IndexBlock", vec![("table", here)])
+}
+
+/// One entry of the file's index: a descriptor's key, and where its bytes are.
+///
+/// Every number is asked of the entry in the table that placed this one, and
+/// none is read here: the entry takes no room, so that nothing but the
+/// descriptor owns the twelve bytes it sits on. See [`index_block`].
+fn gathered_entry() -> T {
+    let from = |f: &str| T::computed(E::placer(E::field(f)));
+    T::structure(
+        "Hdf4IndexEntry",
+        vec![("key", from("key")), ("offset", from("offset")), ("length", from("length"))],
     )
 }
 
@@ -1130,10 +1238,38 @@ pub fn hdf4() -> Template {
     // The first block sits straight after the signature, and each one says
     // where the next is. A list, rather than a block that holds the block that
     // holds the block: a file that has grown a dozen times is a dozen rows.
-    let blocks =
-        T::chain(E::size_of("magic"), &["next"], Anchor::File, T::Named("Hdf4DescriptorBlock".into()));
-    let root = T::structure("Hdf4", vec![("magic", T::magic(MAGIC)), ("blocks", blocks)]);
+    let chain = |next: &[&str], elem: &str| T::chain(E::size_of("magic"), next, Anchor::File, T::Named(elem.into()));
+    // A thing in one block is as often named by a thing in another as by one
+    // beside it: a group written when its block was full lists members in the
+    // block before, and a table's rows can be the last slot of one block and
+    // their header the first slot of the next. A search runs over one list,
+    // and the blocks are a list of lists, so the index is every block's table
+    // flattened into one: the chain walked once for the tables alone, and a
+    // gather that steps into each table and places one entry on each
+    // descriptor's twelve bytes. Both come before `blocks`, which is what lets
+    // a descriptor name them, and neither takes any room: the descriptors are
+    // what those bytes are.
+    let index = T::gather(
+        vec![Step::field("tables"), Step::each(), Step::field("table"), Step::field("entries"), Step::each()],
+        E::start_of(E::field("tag")),
+        Anchor::File,
+        E::lit(0),
+        gathered_entry(),
+    );
+    let root = T::structure(
+        "Hdf4",
+        vec![
+            ("magic", T::magic(MAGIC)),
+            ("tables", chain(&["table", "next"], "Hdf4IndexBlock")),
+            ("index", index),
+            ("blocks", chain(&["next"], "Hdf4DescriptorBlock")),
+        ],
+    )
+    .machinery(&["tables", "index"])
+    .field_aside("tables")
+    .field_aside("index");
     Template::new("hdf4", root)
+        .with_type("Hdf4IndexBlock", index_block())
         .with_type("Hdf4DescriptorBlock", block())
         .with_type("Hdf4Descriptor", descriptor())
 }
@@ -1194,19 +1330,27 @@ mod tests {
         v
     }
 
-    /// A vgroup naming the table in its own block and the image in the next
-    /// one, which the block's index cannot reach.
+    /// A version 4 vgroup naming the table in its own block, the image in the
+    /// next one, and values two blocks on that are kept in linked blocks and so
+    /// have only a special element's tag, with one attribute whose value is
+    /// the second table's header, two blocks on.
     fn vg() -> Vec<u8> {
-        let mut v = be16(2);
+        let mut v = be16(3);
         v.extend(be16(1962));
         v.extend(be16(302));
+        v.extend(be16(702));
         v.extend(be16(4));
         v.extend(be16(7));
+        v.extend(be16(13));
         v.extend(nm("grp"));
         v.extend(nm(""));
         v.extend(be16(0)); // extension tag
         v.extend(be16(0)); // extension ref
-        v.extend(be16(3)); // version
+        v.extend(be32(1)); // flags: has attributes
+        v.extend(be32(1)); // one of them
+        v.extend(be16(1962));
+        v.extend(be16(12));
+        v.extend(be16(4)); // version, last
         v.extend(be16(0)); // more
         v.push(0);
         v
@@ -1265,22 +1409,54 @@ mod tests {
         v
     }
 
+    /// The header of values kept in one linked block, as the special element
+    /// descriptor for them points at.
+    fn linked() -> Vec<u8> {
+        let mut v = be16(1); // linked blocks
+        v.extend(be32(12)); // twelve bytes of values
+        v.extend(be32(12)); // in blocks of twelve
+        v.extend(be32(1)); // one block
+        v.extend(be16(14)); // whose table is reference number 14
+        v
+    }
+
+    /// A table of three records written a field at a time, header and rows, as
+    /// pyhdf's library wrote them with `NO_INTERLACE`: an int16 `a`, a pair of
+    /// float32 `b`, and three characters `c`.
+    fn by_field() -> (Vec<u8>, Vec<u8>) {
+        let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect();
+        (
+            hex("000100000003000d000300160005000400020008000300000002000a000100020003000161000162000163\
+                 000762796669656c64000000000000000300000003000000"),
+            hex("0001000200033fc0000040200000406000004090000040b0000040d00000616263646566676869"),
+        )
+    }
+
     /// A file of three blocks. The first holds the version record, a table's
-    /// rows and then the header that describes them, and a vgroup; the second
-    /// holds an image before the dimension record that says how wide it is,
-    /// and a scientific dataset with the group that names its parts; the third
-    /// holds a second group whose members are all a block away, and an image
-    /// whose dimension record is here but whose number type record is not.
-    /// Both orders are on purpose: an HDF4 writer puts a thing before the
-    /// thing that describes it as often as after.
+    /// rows and then the header that describes them, a vgroup, and a second
+    /// table's rows whose header is in the third block; the second holds an
+    /// image before the dimension record that says how wide it is, and a
+    /// scientific dataset with the group that names its parts and its labels;
+    /// the third holds a second group whose members are all a block back, an
+    /// image whose dimension record is here but whose number type record is
+    /// nowhere, an empty slot, that header, a special element, units for a
+    /// dataset the file has no dimension record for, and a table written a
+    /// field at a time. Both orders are on
+    /// purpose: an HDF4 writer puts a thing before the thing that describes it
+    /// as often as after, and in whatever block has room.
     fn file() -> Vec<u8> {
         let (v, h, r, g) = (ver(), vh(), vs(), vg());
         let (image, ntype, dims) = (vec![10u8, 11, 12, 13, 14, 15], nt(21, 8, 1), id(7));
         let (values, shape, kind, grp) = (sd(), sdd(), nt(22, 16, 4), ndg());
-        let far = id(60);
+        let (far, special) = (id(60), linked());
+        // Labels for the two by three dataset, and units for a dataset the
+        // file has no dimension record for.
+        let (labels, units) = (b"values\0row\0column\0".to_vec(), b"\0m\0s\0".to_vec());
+        let (by_field_header, by_field_rows) = by_field();
         let none = Vec::new();
-        let first: [(u16, u16, &Vec<u8>); 4] = [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g)];
-        let second: [(u16, u16, &Vec<u8>); 7] = [
+        let first: [(u16, u16, &Vec<u8>); 5] =
+            [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g), (1963, 12, &r)];
+        let second: [(u16, u16, &Vec<u8>); 8] = [
             (302, 7, &image),
             (106, 7, &ntype),
             (300, 7, &dims),
@@ -1288,9 +1464,19 @@ mod tests {
             (701, 9, &shape),
             (106, 8, &kind),
             (720, 9, &grp),
+            (704, 9, &labels),
         ];
-        let third: [(u16, u16, &Vec<u8>); 4] =
-            [(720, 11, &grp), (302, 50, &image), (300, 50, &far), (1, 0, &none)];
+        let third: [(u16, u16, &Vec<u8>); 9] = [
+            (720, 11, &grp),
+            (302, 50, &image),
+            (300, 50, &far),
+            (1, 0, &none),
+            (1962, 12, &h),
+            (0x4000 + 702, 13, &special),
+            (705, 77, &units),
+            (1963, 20, &by_field_rows),
+            (1962, 20, &by_field_header),
+        ];
         let block_at = |n: usize, from: usize| from + 6 + 12 * n;
         let b1 = block_at(first.len(), 4);
         let b2 = block_at(second.len(), b1);
@@ -1324,146 +1510,257 @@ mod tests {
         e.node(&d, at).unwrap()
     }
 
+
     #[test]
     fn the_blocks_are_a_flat_list_however_many_of_them_there_are() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
         // Three blocks side by side, not a block holding a block.
-        let blocks = e.node(&d, &[1]).unwrap();
+        let blocks = e.node(&d, &[3]).unwrap();
         assert_eq!(blocks.child_count, 3);
         assert_eq!(blocks.unit.as_deref(), Some("block"));
-        assert_eq!(e.node(&d, &[1, 0, 0]).unwrap().value, Value::Int(4));
-        assert_eq!(e.node(&d, &[1, 0, 3]).unwrap().child_count, 4);
+        assert_eq!(e.node(&d, &[3, 0, 0]).unwrap().value, Value::Int(5));
+        assert_eq!(e.node(&d, &[3, 0, 2]).unwrap().child_count, 5);
         // The last block, found by following the chain, with its own slots. It
         // has no next of its own, so the walk stops rather than pointing back
         // at the signature.
-        assert_eq!(e.node(&d, &[1, 2, 3]).unwrap().child_count, 4);
+        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 9);
     }
 
     #[test]
     fn a_descriptor_is_named_by_its_tag_and_places_its_own_bytes() {
-        let vgroup = read(&[1, 0, 3, 3]);
+        let vgroup = read(&[3, 0, 2, 3]);
         assert_eq!(vgroup.name, "[3] vgroup");
-        assert_eq!(read(&[1, 0, 3, 3, 4, 0]).size_bits, vg().len() as u64 * 8);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0]).size_bits, vg().len() as u64 * 8);
         // The null slot points at nothing rather than at the signature.
-        assert_eq!(read(&[1, 2, 3, 3, 4]).child_count, 0);
+        assert_eq!(read(&[3, 2, 2, 3, 4]).child_count, 0);
     }
 
     #[test]
     fn the_version_record_is_read_and_the_rest_of_it_is_the_line_of_text() {
-        assert_eq!(read(&[1, 0, 3, 0, 4, 0, 0]).value, Value::UInt(4));
-        assert_eq!(read(&[1, 0, 3, 0, 4, 0, 2]).value, Value::UInt(15));
-        assert_eq!(read(&[1, 0, 3, 0, 4, 0, 3]).value, Value::Str("HDF Version 4.2 Release 15".into()));
+        assert_eq!(read(&[3, 0, 2, 0, 4, 0, 0]).value, Value::UInt(4));
+        assert_eq!(read(&[3, 0, 2, 0, 4, 0, 2]).value, Value::UInt(15));
+        assert_eq!(read(&[3, 0, 2, 0, 4, 0, 3]).value, Value::Str("HDF Version 4.2 Release 15".into()));
     }
 
     #[test]
     fn a_vdata_header_says_what_the_columns_are() {
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0]).type_name, "Hdf4VdataHeader");
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 1]).value, Value::UInt(4));
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 3]).value, Value::Int(1));
-        let ty = read(&[1, 0, 3, 2, 4, 0, 4, 0]);
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0]).type_name, "Hdf4VdataHeader");
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 1]).value, Value::UInt(4));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 3]).value, Value::Int(1));
+        let ty = read(&[3, 0, 2, 2, 4, 0, 4, 0]);
         assert_eq!(ty.value, Value::Enum { raw: 24, name: Some("int32".into()), hex: false });
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 8, 0, 1]).value, Value::Str("VALUES".into()));
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 9, 1]).value, Value::Str("attname1".into()));
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 10, 1]).value, Value::Str("Attr0.0".into()));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 8, 0, 1]).value, Value::Str("VALUES".into()));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 9, 1]).value, Value::Str("attname1".into()));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 10, 1]).value, Value::Str("Attr0.0".into()));
     }
 
     #[test]
     fn a_version_three_header_has_no_flags_and_no_attributes() {
         // `version`, then the flags that are not there.
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 13]).value, Value::Int(3));
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 15]).size_bits, 0);
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 16]).size_bits, 0);
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 17]).child_count, 0);
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 13]).value, Value::Int(3));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 15]).size_bits, 0);
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 16]).size_bits, 0);
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 17]).child_count, 0);
         // And the pair written again at the end of the record.
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 18]).value, Value::Int(3));
-        assert_eq!(read(&[1, 0, 3, 2, 4, 0, 20]).size_bits, 8);
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 18]).value, Value::Int(3));
+        assert_eq!(read(&[3, 0, 2, 2, 4, 0, 20]).size_bits, 8);
     }
 
     /// The header is the descriptor after this one, so this is the lookup
-    /// running forward over the block's index rather than back over what has
-    /// already been placed.
+    /// running forward over the index rather than back over what has already
+    /// been placed.
     #[test]
     fn a_tables_rows_take_their_columns_from_a_header_written_after_them() {
-        let rows = read(&[1, 0, 3, 1, 4, 0, 1]);
+        let rows = read(&[3, 0, 2, 1, 4, 0, 1]);
         assert_eq!(rows.child_count, 4);
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 0]).size_bits, 8 * 8);
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 0]).size_bits, 8 * 8);
         // One column of two int32 in each record, named as the header names it.
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 2, 0]).child_count, 1);
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 2, 0, 0]).name, "[0] VALUES");
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 2, 0]).child_count, 1);
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 2, 0, 0]).name, "[0] VALUES");
         // Two per record, so the column is a pair rather than a number.
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 2, 0, 0, 1]).child_count, 2);
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 2, 0, 0, 1, 0]).value, Value::Int(4));
-        assert_eq!(read(&[1, 0, 3, 1, 4, 0, 1, 2, 0, 0, 1, 1]).value, Value::Int(5));
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 2, 0, 0, 1]).child_count, 2);
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 2, 0, 0, 1, 0]).value, Value::Int(4));
+        assert_eq!(read(&[3, 0, 2, 1, 4, 0, 1, 2, 0, 0, 1, 1]).value, Value::Int(5));
+    }
+
+    /// The second table's rows are the last slot of the first block, and the
+    /// header they need is in the third: forward, and past a whole block that
+    /// holds neither.
+    #[test]
+    fn a_tables_rows_find_their_header_two_blocks_on() {
+        assert_eq!(read(&[3, 0, 2, 4, 4, 0]).type_name, "Hdf4VdataRecords");
+        assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1]).child_count, 4);
+        assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1, 3, 0, 0]).name, "[0] VALUES");
+        assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1, 3, 0, 0, 1, 1]).value, Value::Int(7));
+    }
+
+    /// A table written a field at a time holds every `a`, then every pair of
+    /// `b`, then every `c`, so it reads as columns, each one value per record
+    /// and named as the header names it. The values are the ones pyhdf wrote
+    /// and reads back.
+    #[test]
+    fn a_table_written_a_field_at_a_time_reads_as_columns() {
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1]).type_name, "Hdf4VdataColumns");
+        let columns = read(&[3, 2, 2, 7, 4, 0, 1, 0]);
+        assert_eq!(columns.child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 1]).name, "[1] b");
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 0, 1]).child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 0, 1, 2]).value, Value::Int(3));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 1, 1, 2, 1]).value, Value::Float(6.5));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 2, 1, 1]).value, Value::Str("def".into()));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 2]).size_bits, 9 * 8, "three records of three characters");
     }
 
     /// The image comes before its dimension record too, and the number type it
     /// names is a third descriptor again.
     #[test]
     fn an_image_is_rows_of_pixels_once_its_dimension_record_is_found() {
-        assert_eq!(read(&[1, 1, 3, 0, 4, 0]).type_name, "Hdf4RasterImage");
-        assert_eq!(read(&[1, 1, 3, 0, 4, 0, 2, 0]).child_count, 2);
-        assert_eq!(read(&[1, 1, 3, 0, 4, 0, 2, 0, 0]).child_count, 3);
-        assert_eq!(read(&[1, 1, 3, 0, 4, 0, 2, 0, 1, 2, 0]).value, Value::UInt(15));
+        assert_eq!(read(&[3, 1, 2, 0, 4, 0]).type_name, "Hdf4RasterImage");
+        assert_eq!(read(&[3, 1, 2, 0, 4, 0, 2, 0]).child_count, 2);
+        assert_eq!(read(&[3, 1, 2, 0, 4, 0, 2, 0, 0]).child_count, 3);
+        assert_eq!(read(&[3, 1, 2, 0, 4, 0, 2, 0, 1, 2, 0]).value, Value::UInt(15));
     }
 
     /// Two by three, and the number type says the little end comes first, so a
     /// value of 1 is written `01 00` and has to read as 1 and not as 256.
     #[test]
     fn a_dataset_takes_its_shape_from_the_dimensions_and_its_order_from_the_number_type() {
-        let values = read(&[1, 1, 3, 6, 4, 0, 1, 2, 0]);
+        let values = read(&[3, 1, 2, 6, 4, 0, 1, 2, 0]);
         assert_eq!(values.child_count, 2);
-        assert_eq!(read(&[1, 1, 3, 6, 4, 0, 1, 2, 0, 0]).child_count, 3);
-        assert_eq!(read(&[1, 1, 3, 6, 4, 0, 1, 2, 0, 0, 1]).value, Value::Int(1));
-        assert_eq!(read(&[1, 1, 3, 6, 4, 0, 1, 2, 0, 1, 2]).value, Value::Int(5));
+        assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 0]).child_count, 3);
+        assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 0, 1]).value, Value::Int(1));
+        assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 1, 2]).value, Value::Int(5));
     }
 
-    /// The same group again in the next block, where the index reaches none of
-    /// its members: the pairs are still read, and the dataset is not.
+    /// A dataset's labels are its own and then one per dimension, and the
+    /// dimension record with the same reference number says how many that is.
     #[test]
-    fn a_group_whose_members_are_in_another_block_keeps_its_pairs_and_no_more() {
-        assert_eq!(read(&[1, 2, 3, 0, 4, 0, 0]).child_count, 3);
-        assert_eq!(read(&[1, 2, 3, 0, 4, 0, 0, 0, 2]).value, Value::Int(0));
-        assert_eq!(read(&[1, 2, 3, 0, 4, 0, 1]).size_bits, 0);
+    fn labels_are_the_datasets_own_and_then_one_per_dimension() {
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0]).type_name, "Hdf4SdStrings");
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 1]).value, Value::Str("values".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2]).child_count, 2);
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 0]).value, Value::Str("row".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 1]).value, Value::Str("column".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 1]).size_bits, 7 * 8, "the nul is part of each");
+    }
+
+    /// Units whose dimension record the file never wrote are still every
+    /// string in the record, the first of them the dataset's own, which here
+    /// is empty.
+    #[test]
+    fn units_with_no_dimension_record_are_a_list_of_strings() {
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0]).type_name, "Hdf4SdStringList");
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0]).child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0, 0]).value, Value::Str("".into()));
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0, 2]).value, Value::Str("s".into()));
+    }
+
+    /// The same group again in the next block, with every member it names a
+    /// block back: each pair says where its member is, and the dataset they
+    /// make up is read from there.
+    #[test]
+    fn a_group_reaches_members_a_block_back() {
+        assert_eq!(read(&[3, 2, 2, 0, 4, 0, 0]).child_count, 3);
+        let values_at = read(&[3, 1, 2, 3, 2]).value.as_int();
+        assert_eq!(read(&[3, 2, 2, 0, 4, 0, 0, 0, 2]).value.as_int(), values_at);
+        assert_eq!(read(&[3, 2, 2, 0, 4, 0, 1]).type_name, "Hdf4ScientificDataset");
+        assert_eq!(read(&[3, 2, 2, 0, 4, 0, 1, 2, 0, 1, 2]).value, Value::Int(5));
     }
 
     /// Which number type an image has is written in its dimension record, so
     /// an image can find how wide its rows are and still not find how wide a
-    /// sample is. That is a reading that stops rather than one that fails: the
-    /// bytes stay bytes, all of them.
+    /// sample is, where the file never wrote that record. That is a reading
+    /// that stops rather than one that fails: the bytes stay bytes, all of
+    /// them.
     #[test]
-    fn an_image_whose_number_type_is_a_block_away_keeps_its_bytes() {
-        let image = read(&[1, 2, 3, 1, 4, 0]);
+    fn an_image_whose_number_type_is_nowhere_keeps_its_bytes() {
+        let image = read(&[3, 2, 2, 1, 4, 0]);
         assert_eq!(image.type_name, "Hdf4RasterImage");
-        assert_eq!(read(&[1, 2, 3, 1, 4, 0, 0, 0, 0]).value, Value::Int(3), "the dimensions still read");
-        let samples = read(&[1, 2, 3, 1, 4, 0, 2]);
+        assert_eq!(read(&[3, 2, 2, 1, 4, 0, 0, 0, 0]).value, Value::Int(3), "the dimensions still read");
+        let samples = read(&[3, 2, 2, 1, 4, 0, 2]);
         assert_eq!(samples.child_count, 0);
         assert_eq!(samples.size_bits, 6 * 8, "every byte of it is still named");
     }
 
-    /// A vgroup says where each of its members is. The second names an image
-    /// in the next block, which this block's index does not cover, so it comes
-    /// back with no place rather than with the wrong one.
+    /// A vgroup says where each of its members is. The first is in its own
+    /// block and the second is an image in the next.
     #[test]
-    fn a_vgroup_says_where_its_members_are_and_says_nothing_for_one_it_cannot_reach() {
-        assert_eq!(read(&[1, 0, 3, 3, 4, 0, 3]).child_count, 2);
-        let first = read(&[1, 0, 3, 3, 4, 0, 3, 0, 0]);
+    fn a_vgroup_says_where_its_members_are_whichever_block_they_are_in() {
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3]).child_count, 3);
+        let first = read(&[3, 0, 2, 3, 4, 0, 3, 0, 0]);
         assert_eq!(first.value, Value::Enum { raw: 1962, name: Some("vdata description".into()), hex: false });
-        assert_eq!(read(&[1, 0, 3, 3, 4, 0, 3, 0, 3]).value, Value::Int(vh().len() as i128));
-        assert_eq!(read(&[1, 0, 3, 3, 4, 0, 3, 1, 2]).value, Value::Int(0));
-        assert_eq!(read(&[1, 0, 3, 3, 4, 0, 3, 1, 3]).value, Value::Int(0));
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 0, 3]).value, Value::Int(vh().len() as i128));
+        let image_at = read(&[3, 1, 2, 0, 2]).value.as_int();
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 2]).value.as_int(), image_at);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 3]).value, Value::Int(6));
     }
 
-    /// The index is the block's own twelve bytes read a second way, so it is a
-    /// view of them and not another claim on them.
+    /// A version 4 vgroup writes its flags and attributes straight after the
+    /// extension pair and its version last, which is not where a vdata header
+    /// writes them. Read the vdata way, the flag word would be a version of 0
+    /// and a `more` of 1, and the attribute would be lost in the terminator.
     #[test]
-    fn the_index_covers_the_same_bytes_as_the_descriptors() {
+    fn a_vgroup_keeps_its_version_last_and_its_attributes_before_it() {
+        let flags = read(&[3, 0, 2, 3, 4, 0, 8]);
+        assert_eq!((flags.value, flags.size_bits), (Value::UInt(1), 32));
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10]).child_count, 1);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10, 0, 1]).value, Value::UInt(12));
+        let header_at = read(&[3, 2, 2, 4, 2]).value.as_int();
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10, 0, 2]).value.as_int(), header_at);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 11]).value, Value::Int(4));
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 13]).size_bits, 8);
+    }
+
+    /// A version 3 vgroup has no flag word: the five bytes after the extension
+    /// pair are the version, `more` and the nul.
+    #[test]
+    fn a_version_three_vgroup_has_no_flags() {
+        // The same vgroup with the flag word, the count, the attribute and
+        // the version 4 taken off the end, and a version 3 put back.
+        let mut old = vg();
+        old.truncate(old.len() - 17);
+        old.extend(be16(3));
+        old.extend(be16(0));
+        old.push(0);
+        let doc = Document::new(MemSource(old));
+        let mut ev = Evaluator::new(Template::new("vgroup", vgroup()));
+        assert_eq!(ev.node(&doc, &[8]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&doc, &[10]).unwrap().child_count, 0);
+        assert_eq!(ev.node(&doc, &[11]).unwrap().value, Value::Int(3));
+        assert_eq!(ev.node(&doc, &[13]).unwrap().size_bits, 8);
+    }
+
+    /// The vgroup's third member names values as tag 702, and the file holds
+    /// them only as a special element, 0x4000 more. The member is found under
+    /// that tag, which is where the library looks when the plain one is not
+    /// there, and it points at the special element's header.
+    #[test]
+    fn a_member_kept_as_a_special_element_is_found_under_that_tag() {
+        assert_eq!(read(&[3, 2, 2, 5, 4, 0]).type_name, "Hdf4SpecialElement");
+        let special_at = read(&[3, 2, 2, 5, 2]).value.as_int();
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 2]).value.as_int(), special_at);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 3]).value, Value::Int(linked().len() as i128));
+    }
+
+    /// The index is every block's twelve bytes read a second way, as one list,
+    /// and it takes none of those bytes: a byte of a descriptor belongs to the
+    /// descriptor, not to the reading that goes looking for it.
+    #[test]
+    fn the_index_is_one_list_over_every_block_and_owns_no_bytes() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        let table = e.node(&d, &[1, 0, 2, 0]).unwrap();
-        let descriptors = e.node(&d, &[1, 0, 3]).unwrap();
-        assert_eq!(table.offset_bits, descriptors.offset_bits);
-        assert_eq!(table.size_bits, descriptors.size_bits);
-        assert_eq!(e.node(&d, &[1, 0, 2, 0, 2, 4]).unwrap().value, Value::Int(1962 * 65536 + 4));
+        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 8 + 9);
+        // The sixth entry is the first descriptor of the second block, and sits
+        // on its bytes without covering them.
+        let entry = e.node(&d, &[2, 5]).unwrap();
+        let descriptor = e.node(&d, &[3, 1, 2, 0]).unwrap();
+        assert_eq!(entry.offset_bits, descriptor.offset_bits);
+        assert_eq!(entry.size_bits, 0);
+        assert_eq!(e.node(&d, &[2, 5, 0]).unwrap().value, Value::Int(302 * 65536 + 7));
+        assert_eq!(e.node(&d, &[2, 5, 1]).unwrap().value.as_int(), e.node(&d, &[3, 1, 2, 0, 2]).unwrap().value.as_int());
+        // A byte of that descriptor is found as the descriptor.
+        let at = e.locate(&d, descriptor.offset_bits + 8).unwrap();
+        assert_eq!(&at[..4], &[3, 1, 2, 0]);
     }
 }
