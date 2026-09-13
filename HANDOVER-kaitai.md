@@ -287,3 +287,49 @@ Wave 2:
 
 Strings for the panel and the diagram are written by the coordinator with
 `ui-text` and `info-design` loaded and listed at the end of the turn.
+
+## Status, 2026-09-14
+
+Landed on main, in this order: the ksy reader, expression parser and spec
+model; the IR as text (`template_text.rs`, ten snapshots); the Diagram view;
+the IR additions; the lowering (`ksy/lower.rs`, 2,440 lines, wants splitting
+into `lower/{resolve,fields,exprs,instances,repr}.rs`); the converter panel
+(`web/src/ksypanel.ts`); one expression writer shared by the IR text, the
+relations panel and the diagram; and the bundled formats (see
+`crates/core/formats-ksy/README.md` for what shipped and why).
+
+Numbers, uncurated, from `cargo test -p qubero-core --test ksy_oracle -- --nocapture`
+with `KAITAI_STRUCT` set:
+
+| corpus | clean | with gaps | refused |
+|---|---|---|---|
+| tests/formats (339) | 197 | 142 | 0 |
+| formats (185) | 108 | 77 | 0 |
+
+`.kst` asserts: 705 pass, 593 fail, 120 skipped. The failures follow the gap
+reasons below, not converter bugs found so far; each is a field the template
+cannot compute or place.
+
+Top gap reasons over formats/, by occurrence: byte order chosen while the
+file is read (51); `io:` naming another field's stream (40); not placed
+because an earlier field's size is unknown (40); value is text (34); bitwise
+or (26); value is a float (25); `.to_i` on text (19); instance with no `pos`
+(10). The next IR additions, if the corpus is the guide: `Expr::BitOr`,
+`BitXor`, `BitNot` (31 uses, trivial); an anchor naming an earlier field's
+window for `io:` (40); endianness by expression (51, five files, harder).
+
+Decisions taken during the build that the plan did not settle:
+`Expr::Or` is written `or else` everywhere (the boolean is `Either`, written
+`or`); `Pos` and `WindowSize` are bytes; `|` and `^` are gaps rather than
+lowered to the value-or; Kaitai's byte-alignment before a non-bit read is
+made explicit as machinery padding fields; `io: _parent._io` is a gap
+(Window is this field's window, and nothing proves they coincide);
+`Role::Condition` labels a `When` guard in the diagram and the relations
+panel; the diagram caps at 300 boxes (`BOX_CAP`), which HDF5 hits and WAV
+sits one under; `&` binds tighter than a comparison in every written
+expression, the Kaitai and Python reading.
+
+Open: the diagram can pick only the root type's rows (needs a core "first
+path whose type is X" query); an instance overlay on the diagram (counts per
+type, the cursor's type lit); `str` + `.to_i` lowering to `TextInt` by
+whole-program use analysis; a parser for the IR text.

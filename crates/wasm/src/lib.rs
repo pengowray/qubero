@@ -62,6 +62,9 @@ struct Sheet {
     /// at a time. Thrown away on any edit for the same reason the scan is:
     /// every offset in it describes bytes that may have moved.
     kinds: Option<KindWalk>,
+    /// What the last `.ksy` conversion had to say, as the JSON the panel
+    /// shows. Empty for a template that did not come from a `.ksy`.
+    ksy_report: String,
 }
 
 impl Sheet {
@@ -116,6 +119,7 @@ impl Sheet {
             scan: None,
             focus: None,
             kinds: None,
+            ksy_report: String::new(),
         }
     }
 }
@@ -1398,6 +1402,79 @@ struct WriteDto {
     size_bits: f64,
 }
 
+/// What a `.ksy` conversion had to say, for the panel.
+#[derive(Serialize)]
+struct KsyReportDto {
+    /// The format's own id, `meta/id`, which is the name the template goes by
+    /// once it is in use. The menu shows it in place of a built-in's name.
+    name: String,
+    /// One per field converted, in the order the `.ksy` writes them.
+    fields: Vec<KsyLineDto>,
+    /// Everything the IR could not say, each with what was left in its place.
+    gaps: Vec<KsyLineDto>,
+    /// Everything said exactly, but not the way the `.ksy` said it.
+    notes: Vec<KsyLineDto>,
+}
+
+/// The `meta/imports` map both `.ksy` entries take, or what was wrong with it.
+fn ksy_imports(imports_json: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    if imports_json.trim().is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    serde_json::from_str(imports_json).map_err(|e| format!("the imports are not a JSON object of name to text: {e}"))
+}
+
+/// A conversion done for the panel and thrown away: the report, and the
+/// template it produced written out as text. Nothing is read with it, so the
+/// document keeps whatever template it had.
+#[derive(Serialize)]
+struct KsyPreviewDto {
+    report: KsyReportDto,
+    /// The template as [`template_text`](Editor::template_text) writes it.
+    text: String,
+}
+
+/// One line of the report: where in the `.ksy`, the text there, and what of it.
+#[derive(Serialize)]
+struct KsyLineDto {
+    path: String,
+    source: String,
+    message: String,
+}
+
+fn ksy_report_dto(report: &qubero_core::ksy::Report, name: &str) -> KsyReportDto {
+    KsyReportDto {
+        name: name.to_string(),
+        fields: report
+            .fields
+            .iter()
+            .map(|f| KsyLineDto {
+                path: f.path.clone(),
+                source: f.source.clone(),
+                message: f.message.clone(),
+            })
+            .collect(),
+        gaps: report
+            .gaps
+            .iter()
+            .map(|g| KsyLineDto {
+                path: g.path.clone(),
+                source: g.source.clone(),
+                message: g.reason.clone(),
+            })
+            .collect(),
+        notes: report
+            .notes
+            .iter()
+            .map(|n| KsyLineDto {
+                path: n.path.clone(),
+                source: n.source.clone(),
+                message: n.message.clone(),
+            })
+            .collect(),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "status")]
 enum Reply<T: Serialize> {
@@ -2557,6 +2634,90 @@ impl Editor {
             }
             None => false,
         }
+    }
+
+    /// Convert a Kaitai Struct `.ksy` and read the file with what comes out.
+    ///
+    /// `imports_json` is a JSON object mapping an import name to the text of
+    /// that `.ksy`, for a format whose `meta/imports` names others; `{}` where
+    /// it imports nothing. What comes back is the usual reply envelope: `ok`
+    /// with the conversion report, or `error` with the path in the `.ksy` and
+    /// what was wrong with it.
+    ///
+    /// The report is worth reading even on success. A `.ksy` says things the
+    /// IR cannot, and each of those is a gap in the report with the path, the
+    /// text it came from and the reason; the field is left as bytes rather
+    /// than guessed at. See [`ksy_report`](Self::ksy_report).
+    pub fn set_ksy_template(&mut self, text: &str, imports_json: &str) -> String {
+        let map = match ksy_imports(imports_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<KsyReportDto>::Error { message }).unwrap_or_default();
+            }
+        };
+        // TODO: fall back to the bundled formats for an import the caller did
+        // not supply, once `ksy::bundled` exists. Until then a `.ksy` whose
+        // `meta/imports` names a format the panel has no text for is a gap.
+        let converted = match qubero_core::ksy::convert(text, &qubero_core::ksy::MapImports(map)) {
+            Ok(converted) => converted,
+            Err(e) => {
+                return serde_json::to_string(&Reply::<KsyReportDto>::Error { message: e.to_string() })
+                    .unwrap_or_default();
+            }
+        };
+        // A different template may not have the stream a space came from; see
+        // `set_template`, which throws the same working away for the same
+        // reasons.
+        self.forget_spaces();
+        let report = ksy_report_dto(&converted.report, &converted.template.name);
+        let sh = self.sm();
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.kinds = None;
+        sh.template = converted.template.name.clone();
+        let mut e = Evaluator::new(converted.template);
+        e.set_slice(Some(WORK_SLICE));
+        sh.eval = Some(e);
+        sh.ksy_report = serde_json::to_string(&report).unwrap_or_default();
+        serde_json::to_string(&Reply::Ok { node: report, wanted: Vec::new() }).unwrap_or_default()
+    }
+
+    /// The report from the last `.ksy` converted into this space, as JSON.
+    /// Empty when the template in use did not come from one.
+    pub fn ksy_report(&self, space: u32) -> String {
+        self.at(space).ksy_report.clone()
+    }
+
+    /// Convert a `.ksy` and say what it became, without reading anything with
+    /// it. The document keeps the template it had.
+    ///
+    /// This is what the converter panel calls as the text is typed: the reply
+    /// carries the same report [`set_ksy_template`](Self::set_ksy_template)
+    /// gives, plus the template written out as text, so a reader sees what a
+    /// `.ksy` would produce before deciding to read the file with it.
+    pub fn preview_ksy_template(&self, text: &str, imports_json: &str) -> String {
+        let map = match ksy_imports(imports_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message }).unwrap_or_default();
+            }
+        };
+        // TODO: fall back to the bundled formats here too, once `ksy::bundled`
+        // exists; the panel's preview and its apply must resolve the same way.
+        let converted = match qubero_core::ksy::convert(text, &qubero_core::ksy::MapImports(map)) {
+            Ok(converted) => converted,
+            Err(e) => {
+                return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message: e.to_string() })
+                    .unwrap_or_default();
+            }
+        };
+        let node = KsyPreviewDto {
+            report: ksy_report_dto(&converted.report, &converted.template.name),
+            text: qubero_core::template_text::render(&converted.template),
+        };
+        serde_json::to_string(&Reply::Ok { node, wanted: Vec::new() }).unwrap_or_default()
     }
 
     /// Build a template from a `file(1)` rule file and select it, for a format

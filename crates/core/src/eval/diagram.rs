@@ -223,6 +223,20 @@ fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
 /// The switch inside a type, past the same wrappers. Told apart from a
 /// structure because a switch is drawn as a box of its own whose rows are the
 /// cases, which is the one shape a structure's rows cannot say.
+/// What a switch is called: the question it asks. A switch has no name of its
+/// own in the IR, and what a reader wants to know about a choice is what
+/// decides it, so the box and the row that reaches it say the same words.
+///
+/// Only a switch written here, not one reached through a named type or a list:
+/// those have a name already, and `foo` is a better answer than the question
+/// asked inside it. None when the expression has no reading.
+fn switch_title(ty: &Ty) -> Option<String> {
+    match ty {
+        Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).map(|e| format!("switch on {e}")),
+        _ => None,
+    }
+}
+
 fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
     match ty {
         Ty::Switch { .. } | Ty::Match { .. } => Some(ty),
@@ -429,9 +443,9 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
         Ty::Origin { inner } | Ty::Nullable { inner, .. } | Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => {
             sources(inner, out, depth + 1)
         }
-        // Whether the field is there at all. `origin.rs` reports this under
-        // `Type`, which reads well in a panel about one field; drawn, it needs
-        // a word of its own. See [`Role::Condition`].
+        // Whether the field is there at all, which is its own question
+        // wherever it is shown: the panel and the origins say `condition` too.
+        // See [`Role::Condition`].
         Ty::When { cond, inner } => {
             add(cond, Role::Condition, out);
             sources(inner, out, depth + 1);
@@ -767,10 +781,7 @@ impl<'a> Walk<'a> {
         // another switch would then be titled by that case's value, and an ELF
         // would have three boxes called `1`. What the reader wants to know
         // about a choice is what decides it.
-        let title = match sw {
-            Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).map(|e| format!("switch on {e}")),
-            _ => None,
-        };
+        let title = switch_title(sw);
         self.boxes.push(TypeBox {
             name: title.unwrap_or_else(|| name.rsplit_once('.').map_or(name.clone(), |(_, l)| l.to_string())),
             path: name.clone(),
@@ -796,8 +807,12 @@ impl<'a> Walk<'a> {
         };
         for (key, ty) in &cases {
             self.boxes[here].rows.push(Row {
+                // A case that picks another switch says which question that
+                // one asks, in the words its own box is titled with. Bare
+                // `switch` in the type column would leave an ELF's four cases
+                // saying the same word four times.
+                type_text: switch_title(ty).unwrap_or_else(|| ty.display_name()),
                 name: key.clone(),
-                type_text: ty.display_name(),
                 size_text: size_text(self.t, ty),
                 pos_text: String::new(),
                 kind: value_kind(self.t, ty),
@@ -990,6 +1005,40 @@ mod tests {
         assert!(d.edges.iter().any(|e| e.to == (switch, None) && e.role == Role::Type && e.label == "kind"));
         assert!(d.edges.iter().any(|e| e.from == (switch, 0) && e.to == (body_box, None) && e.role == Role::Case));
         assert!(d.edges.iter().any(|e| e.to == (0, Some(1)) && e.role == Role::Type && e.label == "kind"));
+    }
+
+    /// A case whose type is another switch says which question that one asks,
+    /// in the words its own box is titled with. `switch` on its own would be
+    /// the same word in every such row, and the reader could not tell an ELF's
+    /// choice of width from its choice of endianness.
+    #[test]
+    fn a_case_that_picks_another_switch_says_what_that_one_reads() {
+        let inner = T::Switch {
+            on: E::field("endian"),
+            cases: vec![(1i128, T::u16(Endian::Little))].into(),
+            default: std::sync::Arc::new(T::bytes(E::Remaining)),
+        };
+        let root = strukt(
+            "root",
+            vec![
+                ("width", T::u8()),
+                ("endian", T::u8()),
+                (
+                    "rest",
+                    T::Switch {
+                        on: E::field("width"),
+                        cases: vec![(1i128, inner)].into(),
+                        default: std::sync::Arc::new(T::bytes(E::Remaining)),
+                    },
+                ),
+            ],
+        );
+        let d = diagram(&Template::new("test", root));
+        let outer = d.types.iter().position(|b| b.name == "switch on width").expect("the outer switch");
+        assert_eq!(d.types[outer].rows[0].type_text, "switch on endian");
+        // And the box that case reaches is titled the same way, so the row and
+        // the box it points at say one thing.
+        assert!(d.types.iter().any(|b| b.name == "switch on endian"));
     }
 
     #[test]

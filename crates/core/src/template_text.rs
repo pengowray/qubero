@@ -130,6 +130,10 @@
 //!   name  literal  call()   everything else
 //! ```
 //!
+//! Three places take a bracket whatever the table says, because the reading
+//! without one is not the only reading: what `not` negates, what `start of`
+//! names, and a ternary inside a ternary on either side of the colon.
+//!
 //! A name is a field declared earlier, in this structure or in one it sits
 //! inside. `a.b` is a path down into an earlier field. `index` is this
 //! element's place in the list it sits in. `remaining` is from here to the end
@@ -430,10 +434,29 @@ fn write_struct(out: &mut Vec<String>, ind: usize, head: &str, def: &StructDef, 
         return;
     }
     out.push(format!("{}{open}{{", pad(ind)));
+    write_doc(out, ind + 1, def.doc.as_deref());
     for f in &def.fields {
+        write_doc(out, ind + 1, f.doc.as_deref());
         write_field(out, ind + 1, f);
     }
     out.push(format!("{}}}{tail}", pad(ind)));
+}
+
+/// Prose about whatever comes next, as a comment line above it.
+///
+/// Not a clause on the field's own line: a sentence and a notation on one row
+/// would be two readings of the same row. A doc written across several lines
+/// keeps its lines.
+fn write_doc(out: &mut Vec<String>, ind: usize, doc: Option<&str>) {
+    let Some(doc) = doc else { return };
+    for line in doc.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            out.push(format!("{}//", pad(ind)));
+        } else {
+            out.push(format!("{}// {line}", pad(ind)));
+        }
+    }
 }
 
 fn struct_attrs(def: &StructDef) -> Vec<String> {
@@ -649,20 +672,32 @@ fn until_text(u: &Until) -> String {
 fn step_text(s: &Step) -> String {
     match s {
         Step::Field(n) => format!(".{n}"),
-        Step::Tagged { key, tag, shown } => format!(".{shown}[{} = {}]", key.join("."), tag_text(tag)),
+        Step::Tagged { key, tag, shown } => {
+            format!(".{shown}[{} = {}]", key.join("."), tag_text(tag, true).unwrap_or_default())
+        }
         Step::Each => "[]".to_string(),
         Step::Fields(names) => format!(".{{{}}}", names.join(", ")),
     }
 }
 
-fn tag_text(t: &Tag) -> String {
-    match t {
+/// The label a search looks for. `text` marks a key compared as text rather
+/// than as a number, which is the whole difference between two searches that
+/// would otherwise be written the same way.
+///
+/// None on the same terms as [`readable`]: a label worked out by reading bytes
+/// is not something the reader can go and look at.
+///
+/// Public to the crate because the relations panel writes the same searches,
+/// with the value the file gave in place of the expression that found it, and
+/// the constants either side of that have to read the same way in both.
+pub(crate) fn tag_text(t: &Tag, probes: bool) -> Option<String> {
+    Some(match t {
         Tag::Int(v) => tag_lit(*v),
         Tag::Bytes(b) => bytes_lit(b),
-        Tag::Computed(e) => expr(e),
-        Tag::ComputedText(e) => format!("text {}", expr(e)),
+        Tag::Computed(e) => spelled(e, probes)?,
+        Tag::ComputedText(e) => format!("text {}", spelled(e, probes)?),
         Tag::Text(s) => format!("{s:?}"),
-    }
+    })
 }
 
 fn packing(p: &Packing) -> String {
@@ -987,37 +1022,69 @@ fn prec(e: &Expr) -> u32 {
         Expr::Shl(..) | Expr::Shr(..) => 60,
         Expr::Add(..) | Expr::Sub(..) => 70,
         Expr::Mul(..) | Expr::Div(..) | Expr::Mod(..) => 80,
-        _ => 100,
+        _ => CALL,
     }
 }
 
+/// What a leaf and a call bind at, which is tighter than every operator: they
+/// carry their own brackets or need none. Written at this, everything else is
+/// bracketed, which is what `not` and `start of` write their operand at:
+/// `not a == b` has two readings and only one of them is what it means.
+const CALL: u32 = 100;
+
 /// An expression as text.
 pub fn expr(e: &Expr) -> String {
-    write_expr(e, 0, false)
+    spelled(e, true).expect("every leaf has a spelling when the probes are written")
+}
+
+/// The expression, when every leaf in it is something the reader can go and
+/// look at. None when one of them reads bytes rather than naming a field: a
+/// peek, a search, a shape the code deduced. One such leaf drops the whole of
+/// it, since half a formula invites the reader to believe the half they can
+/// see is all of it.
+///
+/// What the relations panel and the diagram write, so that one expression
+/// reads one way wherever it is shown. See [`crate::eval::write_expr`].
+pub fn readable(e: &Expr) -> Option<String> {
+    spelled(e, false)
+}
+
+/// The same expression with the leaves spelled by `leaf` instead of by the
+/// template: what the relations panel writes to put each field's value in its
+/// place. Everything between the leaves is written here: the operators, the
+/// brackets, the words for `min` and `ceil`. So the two forms of one
+/// relationship differ only where they are meant to. See
+/// [`crate::eval::relate`].
+///
+/// None when `leaf` gives up on a leaf, which drops the expression whole.
+pub fn with_leaves(e: &Expr, leaf: &mut dyn FnMut(&Expr) -> Option<String>) -> Option<String> {
+    write_expr(e, 0, false, leaf)
+}
+
+/// The expression with every leaf as the template writes it. `probes` says
+/// whether the leaves that read bytes are among them.
+fn spelled(e: &Expr, probes: bool) -> Option<String> {
+    write_expr(e, 0, false, &mut |l| leaf_text(l, probes))
 }
 
 /// `mask` says the literal here is a mask rather than a count, and is written
 /// in hex: `flags >> 3 & 0x3f` reads as a run of bits and `flags >> 3 & 63`
 /// does not.
-fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
+///
+/// Adding a variant is one arm here and one in `prec`: an operator among the
+/// arms below, and anything else in the one arm that hands the leaves to
+/// `leaf`, which then has to spell it in `leaf_text`.
+fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> Option<String>) -> Option<String> {
     let here = prec(e);
     let wrap = |s: String| if here < outer { format!("({s})") } else { s };
     // The right side of a non-associating operator binds one step tighter, so
     // `a - (b + c)` keeps its brackets and `a - b - c` does not grow any.
-    let two = |a: &Expr, b: &Expr, op: &str| {
-        wrap(format!("{} {op} {}", write_expr(a, here, false), write_expr(b, here + 1, false)))
+    let two = |a: &Expr, b: &Expr, op: &str, leaf: &mut dyn FnMut(&Expr) -> Option<String>| {
+        Some(wrap(format!("{} {op} {}", write_expr(a, here, false, leaf)?, write_expr(b, here + 1, false, leaf)?)))
     };
-    let path = |array: &str, index: &Expr, field: &[String]| {
-        let mut s = format!("{array}[{}]", expr(index));
-        for f in field {
-            s.push('.');
-            s.push_str(f);
-        }
-        s
-    };
-    match e {
-        // Adding a variant is one arm here and one in `prec`. `Expr::Or` is
-        // written `or else` so that `or` is free for the boolean `Either`.
+    Some(match e {
+        // `Expr::Or` is written `or else` so that `or` is free for the boolean
+        // `Either`.
         Expr::Lit(v) => {
             if mask && *v > 9 {
                 hex_lit(*v)
@@ -1025,32 +1092,142 @@ fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
                 int_lit(*v)
             }
         }
+        Expr::Or(a, b) => two(a, b, "or else", leaf)?,
+        Expr::Add(a, b) => two(a, b, "+", leaf)?,
+        Expr::Sub(a, b) => two(a, b, "-", leaf)?,
+        Expr::Mul(a, b) => two(a, b, "*", leaf)?,
+        Expr::Div(a, b) => two(a, b, "/", leaf)?,
+        Expr::Less(a, b) => two(a, b, "<", leaf)?,
+        Expr::Shl(a, b) => two(a, b, "<<", leaf)?,
+        Expr::Shr(a, b) => two(a, b, ">>", leaf)?,
+        Expr::And(a, b) => {
+            wrap(format!("{} & {}", write_expr(a, here, true, leaf)?, write_expr(b, here + 1, true, leaf)?))
+        }
+        Expr::Min(a, b) => format!("min({}, {})", write_expr(a, 0, false, leaf)?, write_expr(b, 0, false, leaf)?),
+        Expr::Max(a, b) => format!("max({}, {})", write_expr(a, 0, false, leaf)?, write_expr(b, 0, false, leaf)?),
+        Expr::PadTo { n, align } => format!("padding({}, {align})", write_expr(n, 0, false, leaf)?),
+        Expr::DivCeil(a, b) => {
+            format!("ceil({} / {})", write_expr(a, 80, false, leaf)?, write_expr(b, 81, false, leaf)?)
+        }
+        Expr::Log2(a) => format!("log2({})", write_expr(a, 0, false, leaf)?),
+        Expr::Bit(a, i) => format!("bit({}, {i})", write_expr(a, 0, false, leaf)?),
+        Expr::Mod(a, b) => two(a, b, "%", leaf)?,
+        Expr::Eq(a, b) => two(a, b, "==", leaf)?,
+        Expr::Ne(a, b) => two(a, b, "!=", leaf)?,
+        Expr::Le(a, b) => two(a, b, "<=", leaf)?,
+        Expr::Gt(a, b) => two(a, b, ">", leaf)?,
+        Expr::Ge(a, b) => two(a, b, ">=", leaf)?,
+        Expr::Either(a, b) => two(a, b, "or", leaf)?,
+        Expr::Both(a, b) => two(a, b, "and", leaf)?,
+        // Bracketed unless what it negates is a leaf or a call: `not a == b`
+        // reads two ways and only one of them is what this means.
+        Expr::Not(a) => wrap(format!("not {}", write_expr(a, CALL, false, leaf)?)),
+        // Every part bracketed when it is itself a ternary, on the right as
+        // well as the left: `a ? b : (c ? d : e)` leaves nothing to work out
+        // about which colon belongs to which question.
+        Expr::Cond { when, then, otherwise } => wrap(format!(
+            "{} ? {} : {}",
+            write_expr(when, here + 1, false, leaf)?,
+            write_expr(then, here + 1, false, leaf)?,
+            write_expr(otherwise, here + 1, false, leaf)?
+        )),
+        // Where a field is, so what it names keeps its brackets: `start of
+        // (a + b)` is one place and `start of a + b` reads as two things
+        // added.
+        Expr::StartOf(a) => format!("start of {}", write_expr(a, CALL, false, leaf)?),
+        // The leaves: everything that names a field or reads the file rather
+        // than combining two other expressions.
+        Expr::Ref(..)
+        | Expr::Remaining
+        | Expr::SizeOf(..)
+        | Expr::BitsOf(..)
+        | Expr::Idx
+        | Expr::Pos
+        | Expr::WindowSize
+        | Expr::LenOf(..)
+        | Expr::Elem { .. }
+        | Expr::ElemWithin { .. }
+        | Expr::Tagged(..)
+        | Expr::Placer(..)
+        | Expr::Product { .. }
+        | Expr::ProductOf(..)
+        | Expr::SumOf(..)
+        | Expr::MaxOf(..)
+        | Expr::PopCount(..)
+        | Expr::Deduced(..)
+        | Expr::Peek { .. }
+        | Expr::PeekAt { .. }
+        | Expr::ToMarker { .. }
+        | Expr::Find { .. }
+        | Expr::Prev(..)
+        | Expr::Sibling(..)
+        | Expr::Within(..) => leaf(e)?,
+    })
+}
+
+/// One leaf as the template writes it. `probes` says whether to write the ones
+/// that read bytes rather than name a field; without them the expression they
+/// are in has no reading at all, and nothing is written.
+///
+/// None for an operator, which never reaches here: `write_expr` writes those
+/// itself.
+fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
+    let path = |array: &str, index: &Expr, field: &[String]| -> Option<String> {
+        let mut s = format!("{array}[{}]", spelled(index, probes)?);
+        for f in field {
+            s.push('.');
+            s.push_str(f);
+        }
+        Some(s)
+    };
+    Some(match e {
         Expr::Ref(n) => n.to_string(),
         Expr::Remaining => "remaining".to_string(),
         Expr::SizeOf(n) => format!("sizeof({n})"),
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
-        Expr::Elem { array, index, field } => path(array, index, field),
-        Expr::ElemWithin { path: into, index, field } => path(&into.join("."), index, field),
+        Expr::Pos => "pos".to_string(),
+        Expr::WindowSize => "size of window".to_string(),
+        // Not `sizeof(x)`, which is the same list measured in bytes. A reader
+        // seeing both beside each other has to be able to tell them apart.
+        Expr::LenOf(n) => format!("count of {n}"),
+        Expr::Elem { array, index, field } => path(array, index, field)?,
+        Expr::ElemWithin { path: into, index, field } => path(&into.join("."), index, field)?,
+        // The list, the question asked of each element, and what is read from
+        // the one that answers. A search over the elements before this one has
+        // no field to name, so it is named for what it searches: `earlier`.
         Expr::Tagged(t) => {
             let array = match &t.array {
-                Some(a) => expr(a),
+                Some(a) => spelled(a, probes)?,
                 None => "earlier".to_string(),
             };
             let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
-            format!("{array}[{} = {}]{field}", t.key.join("."), tag_text(&t.tag))
+            format!("{array}[{} = {}]{field}", t.key.join("."), tag_text(&t.tag, probes)?)
         }
+        // A question for another record, so it says whose: the names inside
+        // are that record's fields, and written bare they would read as fields
+        // beside this one. A name or a path reads as a path into the
+        // descriptor, `descriptor.count`; anything longer is bracketed whole,
+        // since qualifying only its first name would claim the rest were
+        // fields beside this one.
         Expr::Placer(e) => match &**e {
             Expr::Ref(n) => format!("descriptor.{n}"),
             Expr::Within(f) => format!("descriptor.{}", f.join(".")),
-            other => format!("descriptor.({})", expr(other)),
+            other => format!("descriptor.({})", spelled(other, probes)?),
         },
-        Expr::Product { array, index, field } => format!("product({})", path(array, index, field)),
+        Expr::Product { array, index, field } => format!("product({})", path(array, index, field)?),
         Expr::ProductOf(n) => format!("product({n})"),
         Expr::SumOf(n) => format!("sum({n})"),
         Expr::MaxOf(n) => format!("largest({n})"),
         Expr::PopCount(n) => format!("setbits({n})"),
-        Expr::Deduced(d) => format!(
+        Expr::Prev(n) => format!("previous({n})"),
+        Expr::Sibling(f) => format!("earlier({})", f.join(".")),
+        Expr::Within(f) => f.join("."),
+        // What the code worked out, and what it read to work it out. Nothing
+        // to point at: a reader cannot go and look at where these came from,
+        // so an expression holding one is written only where the whole
+        // template is being written out.
+        Expr::Deduced(d) if probes => format!(
             "deduced({})",
             match d {
                 Deduce::PayloadShape => "payload shape",
@@ -1058,62 +1235,23 @@ fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
                 Deduce::Builds => "builds",
             }
         ),
-        Expr::Peek { bits, endian } => format!("peek(u{bits}{})", end(*endian)),
-        Expr::PeekAt { skip, bits, endian } => format!("peek(u{bits}{} at {} bits)", end(*endian), expr(skip)),
-        Expr::ToMarker { lead, unless } => {
+        Expr::Peek { bits, endian } if probes => format!("peek(u{bits}{})", end(*endian)),
+        Expr::PeekAt { skip, bits, endian } if probes => {
+            format!("peek(u{bits}{} at {} bits)", end(*endian), spelled(skip, probes)?)
+        }
+        Expr::ToMarker { lead, unless } if probes => {
             if unless.is_empty() {
                 format!("tomarker({})", bytes_hex(lead))
             } else {
                 format!("tomarker({} unless {})", bytes_hex(lead), bytes_hex(unless))
             }
         }
-        Expr::Find { needle, last } => {
+        Expr::Find { needle, last } if probes => {
             let word = if *last { "findlast" } else { "find" };
             format!("{word}({})", bytes_lit(needle))
         }
-        Expr::Prev(n) => format!("previous({n})"),
-        Expr::Sibling(f) => format!("earlier({})", f.join(".")),
-        Expr::Within(f) => f.join("."),
-        Expr::Or(a, b) => two(a, b, "or else"),
-        Expr::Add(a, b) => two(a, b, "+"),
-        Expr::Sub(a, b) => two(a, b, "-"),
-        Expr::Mul(a, b) => two(a, b, "*"),
-        Expr::Div(a, b) => two(a, b, "/"),
-        Expr::Less(a, b) => two(a, b, "<"),
-        Expr::Shl(a, b) => two(a, b, "<<"),
-        Expr::Shr(a, b) => two(a, b, ">>"),
-        Expr::And(a, b) => {
-            wrap(format!("{} & {}", write_expr(a, here, true), write_expr(b, here + 1, true)))
-        }
-        Expr::Min(a, b) => format!("min({}, {})", expr(a), expr(b)),
-        Expr::Max(a, b) => format!("max({}, {})", expr(a), expr(b)),
-        Expr::PadTo { n, align } => format!("padding({}, {align})", expr(n)),
-        Expr::DivCeil(a, b) => format!("ceil({} / {})", write_expr(a, 80, false), write_expr(b, 81, false)),
-        Expr::Log2(a) => format!("log2({})", expr(a)),
-        Expr::Bit(a, i) => format!("bit({}, {i})", expr(a)),
-        Expr::Mod(a, b) => two(a, b, "%"),
-        Expr::Eq(a, b) => two(a, b, "=="),
-        Expr::Ne(a, b) => two(a, b, "!="),
-        Expr::Le(a, b) => two(a, b, "<="),
-        Expr::Gt(a, b) => two(a, b, ">"),
-        Expr::Ge(a, b) => two(a, b, ">="),
-        Expr::Either(a, b) => two(a, b, "or"),
-        Expr::Both(a, b) => two(a, b, "and"),
-        Expr::Not(a) => wrap(format!("not {}", write_expr(a, here + 1, false))),
-        // Right-nested: `a ? b : c ? d : e` reads as `a ? b : (c ? d : e)`,
-        // so only the condition and the middle need bracketing when they are
-        // themselves ternaries.
-        Expr::Cond { when, then, otherwise } => wrap(format!(
-            "{} ? {} : {}",
-            write_expr(when, here + 1, false),
-            write_expr(then, here + 1, false),
-            write_expr(otherwise, here, false)
-        )),
-        Expr::Pos => "pos".to_string(),
-        Expr::WindowSize => "size of window".to_string(),
-        Expr::LenOf(n) => format!("count of {n}"),
-        Expr::StartOf(a) => format!("start of {}", write_expr(a, 100, false)),
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

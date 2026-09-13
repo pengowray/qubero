@@ -131,6 +131,34 @@ export type ByteSource = {
   slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> } | Blob;
 };
 
+/** One line of a `.ksy` conversion report: where in the `.ksy` it is, the text
+ *  written there, and what became of it. `path` is the YAML path the Kaitai
+ *  compiler would name in an error, e.g. `/types/chunk/seq/2/size`. */
+export type KsyLine = {
+  readonly path: string;
+  readonly source: string;
+  readonly message: string;
+};
+
+/** What converting a `.ksy` had to say.
+ *
+ *  `fields` is one line per field, in the order the `.ksy` writes them.
+ *  `gaps` is everything the template IR could not express: the field was left
+ *  as bytes, or the instance dropped, rather than approximated. `notes` is
+ *  everything expressed exactly but not the way the `.ksy` wrote it, such as a
+ *  string compared as its bytes read as one big-endian number.
+ *
+ *  A conversion with gaps still produced a template, and reading the file with
+ *  it is still right about everything the gaps do not cover. */
+export type KsyReport = {
+  /** The format's own id, `meta/id`: the name the template goes by once it is
+   *  in use, in place of a built-in's name. */
+  readonly name: string;
+  readonly fields: readonly KsyLine[];
+  readonly gaps: readonly KsyLine[];
+  readonly notes: readonly KsyLine[];
+};
+
 /** A field picked in one of the structure views: which node, and the bits
  *  it covers. Every view that lists fields hands one out and the rest of
  *  the app follows it, so it belongs beside the tree the views read rather
@@ -521,7 +549,7 @@ export type SearchStep =
 /** What one other field decided about this one. `points` is the other way
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "points";
   /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
   readonly label: string;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */
@@ -640,7 +668,7 @@ export type Verdict = {
  * never infers a relationship of its own.
  */
 export type Relation = {
-  readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position";
+  readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position" | "condition";
   /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
   readonly written: string;
   /** The same with every field's value in its place: `4 - 1`. */
@@ -737,7 +765,7 @@ export type GraphEdge = {
   readonly from: number;
   /** Index into the node list: the field it decided about. */
   readonly to: number;
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "points";
 };
 
 /**
@@ -1959,6 +1987,60 @@ export class Doc {
    */
   templateText(): string {
     return this.editor.template_text();
+  }
+
+  /**
+   * Read the file with a Kaitai Struct `.ksy`, converted to a template.
+   *
+   * `imports` maps an import name to the text of that `.ksy`, for a format
+   * whose `meta/imports` names others. What comes back is the conversion
+   * report, or an error naming the path in the `.ksy` that was wrong.
+   *
+   * A clean conversion is not the same as an empty report: a `.ksy` says
+   * things the IR cannot, and each of those is a gap saying where it was, what
+   * it said and why, with the field left as bytes rather than guessed at.
+   */
+  setKsyTemplate(text: string, imports: Record<string, string> = {}): KsyReport {
+    if (this.space !== 0) throw new Error("a .ksy reads the file, not an unpacked stream");
+    const reply = JSON.parse(this.editor.set_ksy_template(text, JSON.stringify(imports))) as
+      | { status: "ok"; node: KsyReport }
+      | { status: "error"; message: string };
+    if (reply.status === "error") throw new Error(reply.message);
+    // The format's own id, the way a built-in's name is its id. Everything
+    // that asks whether a file is being read at all asks this, so a `.ksy`
+    // template that left it null would read the file and then be told there
+    // was no template: no fields in the hex grid, no field under the cursor.
+    this.template = reply.node.name;
+    this.notify();
+    return reply.node;
+  }
+
+  /**
+   * Convert a `.ksy` and say what it became, without reading anything with it.
+   *
+   * The same report `setKsyTemplate` gives, plus the template it produced
+   * written out as text, and the document left on whatever template it had.
+   * This is what the converter panel calls as the text is edited; applying is
+   * `setKsyTemplate`.
+   */
+  previewKsyTemplate(
+    text: string,
+    imports: Record<string, string> = {},
+  ): { readonly status: "ok"; readonly report: KsyReport; readonly text: string } | { readonly status: "error"; readonly message: string } {
+    const reply = JSON.parse(this.editor.preview_ksy_template(text, JSON.stringify(imports))) as
+      | { status: "ok"; node: { report: KsyReport; text: string } }
+      | { status: "error"; message: string };
+    if (reply.status === "error") return { status: "error", message: reply.message };
+    return { status: "ok", report: reply.node.report, text: reply.node.text };
+  }
+
+  /**
+   * The report from the last `.ksy` read into this space, or null when the
+   * template in use did not come from one.
+   */
+  ksyReport(): KsyReport | null {
+    const json = this.editor.ksy_report(this.space);
+    return json === "" ? null : (JSON.parse(json) as KsyReport);
   }
 
   private handleReply<T>(json: string): TemplateReply<T> {

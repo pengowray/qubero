@@ -2556,9 +2556,10 @@ fn a_lookup_can_be_keyed_by_text_found_somewhere_else() {
     assert!(seen.contains(&(Role::Value, "kind".to_string())), "{seen:?}");
     assert!(seen.iter().any(|(_, l)| l == "defs[1].width"), "{seen:?}");
     // And the question is written out with the word in its place, rather than
-    // with the expression that found the word.
+    // with the expression that found the word. `text` says the key is compared
+    // as text, which is what tells this search from one keyed on a number.
     let rel = ev.relations(&d, &[1, 0, 1]).unwrap();
-    assert_eq!(rel[0].written, "defs[name = kind].width");
+    assert_eq!(rel[0].written, "defs[name = text kind].width");
     assert_eq!(rel[0].substituted, "defs[name = \"time\"].width");
     assert_eq!(rel[0].result, "8");
 }
@@ -2704,10 +2705,11 @@ fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
     assert_eq!(ev.node(&d, &[4]).unwrap().value.as_int(), Some(-1));
     // A field of no bits is no bits, and asks the file nothing.
     assert_eq!(ev.node(&d, &[5]).unwrap().value.as_int(), Some(0));
-    // The reader is shown the shift and the mask, not thirty added-up bits.
+    // The reader is shown the shift and the mask, not thirty added-up bits,
+    // and the mask in hex, where six set bits look like six set bits.
     assert_eq!(
         write_expr(&E::bit_field(E::field("word"), 29, 6)).as_deref(),
-        Some("word >> 24 & 63")
+        Some("word >> 24 & 0x3f")
     );
 }
 

@@ -5307,3 +5307,187 @@ table.rec tr.is-on td {
 .dv-edge-label.is-end {
   text-anchor: end;
 }
+
+/* ---- .ksy converter ---- */
+/* Three columns: the Kaitai text, the report of what converting it could not
+   carry across, and the template it produced. The middle one is narrow and
+   fixed: it is a margin of news about the two columns either side of it, and a
+   third of the window would be a claim that reading it is the task. Every
+   column scrolls on its own, and the panel itself never does, so the bottom bar
+   is always where it was. */
+.kp {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.kp-cols {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.kp-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+.kp-col-source {
+  flex: 1 1 40%;
+}
+.kp-col-report {
+  flex: 0 0 20rem;
+  max-width: 45vw;
+}
+.kp-col-out {
+  flex: 1 1 40%;
+  border-right: none;
+}
+@media (max-width: 900px) {
+  .kp-col-report {
+    flex: 0 0 16rem;
+  }
+}
+/* One line above each column: what is in it, and for the text, what fills it. */
+.kp-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  min-height: 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.kp-heading {
+  font: 12px var(--sans);
+  color: var(--muted);
+}
+/* The name of the .ksy in the box, where one came from a file. */
+.kp-name {
+  font: 12px var(--mono);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-source {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  padding: 6px 8px;
+  font: 12px/1.45 var(--mono);
+  color: var(--fg);
+  background: var(--bg);
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+.kp-source:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* The template as text. Read-only, and wide: a template line is long, so it
+   scrolls sideways rather than wrapping into something that reads as two
+   fields. */
+.kp-out {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  font: 12px/1.45 var(--mono);
+  color: var(--fg);
+  overflow: auto;
+  white-space: pre;
+}
+.kp-empty {
+  margin: 0;
+  font: 12px var(--sans);
+  color: var(--muted);
+}
+.kp-report {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 8px;
+}
+.kp-group-heading {
+  margin: 0;
+  padding: 4px 8px;
+  font: 600 12px var(--sans);
+  color: var(--fg);
+  cursor: pointer;
+  list-style-position: inside;
+}
+summary.kp-group-heading:hover {
+  background: var(--panel);
+}
+/* A heading over nothing: no triangle, since there is nothing to open. */
+.kp-group-heading.is-empty {
+  cursor: default;
+  color: var(--muted);
+}
+/* The count of what could not be expressed is the one number in the panel a
+   reader is looking for, so it is the one thing coloured. Not when it is zero:
+   nothing was left behind, which is the opposite of something to look at. */
+.kp-gaps > .kp-group-heading {
+  color: var(--warn);
+}
+/* A line of the report: where in the .ksy it is, then what became of it.
+   Clicking goes to that line, so it is a button and looks like a row. */
+.kp-line {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 2px 8px 2px 16px;
+  font: 11px/1.4 var(--sans);
+  color: var(--fg);
+  cursor: pointer;
+}
+.kp-line:hover {
+  background: var(--accent-soft);
+}
+.kp-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.kp-line-path,
+.kp-line-message {
+  display: block;
+}
+.kp-line-path {
+  font: 11px var(--mono);
+  color: var(--addr);
+  overflow-wrap: anywhere;
+}
+.kp-line-message {
+  color: var(--muted);
+}
+/* A .ksy that did not convert at all: one line, in place of the report. */
+.kp-failed-heading {
+  margin: 4px 0 2px;
+  padding: 0 8px;
+  font: 600 12px var(--sans);
+  color: var(--warn);
+}
+.kp-error {
+  margin: 0;
+  padding: 0 8px 4px;
+  font: 11px/1.4 var(--sans);
+}
+.kp-error .kp-line-message {
+  color: var(--warn);
+}
+.kp-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
