@@ -3,31 +3,17 @@
 //
 //   node tools/magdir.mjs
 //
-// They come from the `magic-db` crate rather than from the `file` project,
-// because that is the copy the compiled database in the wasm module was built
-// from. Taking the text from anywhere else would let the name a file is given
-// and the fields shown under it come from two different sets of rules, which
-// disagree in small ways.
+// Where they come from, and why from there, is in tools/magicdb.mjs.
 
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { magicDb } from "./magicdb.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "web", "public", "magdir");
 
-const meta = JSON.parse(
-  execFileSync("cargo", ["metadata", "--format-version", "1", "--filter-platform", "wasm32-unknown-unknown"], {
-    cwd: ROOT,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  }),
-);
-
-const db = meta.packages.find((p) => p.name === "magic-db");
-if (!db) throw new Error("magic-db is not in the dependency tree");
-const src = join(dirname(db.manifest_path), "src", "magdir");
+const { dir: src, version } = magicDb();
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
@@ -42,4 +28,4 @@ for (const name of readdirSync(src)) {
   bytes += statSync(from).size;
 }
 
-console.log(`magdir: ${files} files, ${(bytes / 1024).toFixed(0)} KiB, from magic-db ${db.version}`);
+console.log(`magdir: ${files} files, ${(bytes / 1024).toFixed(0)} KiB, from magic-db ${version}`);
