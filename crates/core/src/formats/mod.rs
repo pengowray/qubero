@@ -116,6 +116,7 @@ mod old_mac;
 mod omf;
 mod pak;
 mod parquet;
+pub mod parquet_page;
 pub mod thrift;
 mod pcx;
 mod pico8;
