@@ -332,9 +332,17 @@ fn numeric_body() -> T {
 /// file says; a reading that answered 0 there would be a number nobody wrote.
 fn real_value() -> T {
     let digits = |ends: &[u8]| T::decimal(StrLen::token(&[b' ', b'+'], ends));
+    // Whether the value carries an exponent, which is a power of ten this
+    // cannot multiply by: the digits before and after the point are read
+    // either way, and `exp` is what says they are not the whole value. The
+    // window this sits in ends at the comment, so a letter found inside it is
+    // the value's own and not a word from the comment.
+    let letter = |c: &[u8]| E::to_bytes(c).less_than(E::Remaining);
+    let exp = letter(b"E").or(letter(b"e")).or(letter(b"D")).or(letter(b"d"));
     let parts = T::inline_structure(
         "Parts",
         vec![
+            ("exp", T::computed(exp)),
             ("int", digits(&[b' ', b'/', b'.', b'E', b'e', b'D', b'd'])),
             ("frac", T::present_if(digit_peek(0), digits(&[b' ', b'/', b'E', b'e', b'D', b'd']))),
         ],
@@ -668,6 +676,8 @@ fn data_array() -> T {
         let with = T::array(worth_of(ty, scale.clone(), real("BZERO", "int")), placed_count());
         let whole = T::switch(real("BSCALE", "frac"), vec![(0, with)], plain.clone());
         let both = T::switch(real("BZERO", "frac"), vec![(0, whole)], plain.clone());
+        let plain_scale = T::switch(real("BSCALE", "exp"), vec![(0, both)], plain.clone());
+        let both = T::switch(real("BZERO", "exp"), vec![(0, plain_scale)], plain.clone());
         T::switch(real("BZERO", "int").or(scale.clone().sub(E::lit(1))), vec![(0, plain)], both)
     };
     T::switch(
@@ -861,9 +871,12 @@ fn binary_cell() -> T {
         )
         .machinery(&["scale", "zero"])
         .payload(&["values"]);
-        // Both cards whole numbers, or this cannot say what a value means.
+        // Both cards whole numbers with no exponent on them, or this cannot
+        // say what a value means.
         let whole = T::switch(real("TSCAL", "frac"), vec![(0, with)], plain.clone());
         let both = T::switch(real("TZERO", "frac"), vec![(0, whole)], plain.clone());
+        let plain_scale = T::switch(real("TSCAL", "exp"), vec![(0, both)], plain.clone());
+        let both = T::switch(real("TZERO", "exp"), vec![(0, plain_scale)], plain.clone());
         // Nothing said, or nothing that changes a value: the plain type. The
         // scale is only looked up when there is no zero point, since `Or`
         // stops at the first answer and most columns have neither card.
@@ -1555,8 +1568,10 @@ mod tests {
             let (d, mut ev) = eval(table(written));
             assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "Scaled column", "{written}");
         }
-        // A fraction, and a zero point of zero, which changes nothing.
-        for written in ["32768.5", "0.5", "0"] {
+        // A fraction; a zero point of zero, which changes nothing; and an
+        // exponent, which is a power of ten the integers here cannot take.
+        // `2.0E+01` is twenty, and reading its digits alone would say two.
+        for written in ["32768.5", "0.5", "0", "2.0E+01", "1.0E-3", "3.2768E4", "2.0D1"] {
             let (d, mut ev) = eval(table(written));
             assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "i16 be[]", "{written}");
         }
