@@ -29,10 +29,11 @@ impl Imports for NoImports {
 
 /// A resolver over a map from import name to `.ksy` text.
 ///
-/// The name is looked up as written, then with any leading `/` taken off, then
-/// by its last component alone. That last one is what lets a caller fill the
-/// map from a directory of files without knowing which of them a given `.ksy`
-/// will ask for by path and which by name.
+/// The name is looked up as written, then with any leading `/` taken off, and
+/// failing both by its last component against the last component of every key.
+/// That last one is what lets a caller fill the map from a directory of files
+/// without knowing which of them a given `.ksy` will ask for by path and which
+/// by name alone.
 pub struct MapImports(pub HashMap<String, String>);
 
 impl MapImports {
@@ -62,7 +63,13 @@ impl Imports for MapImports {
 			return Some(text.clone());
 		}
 		let base = trimmed.rsplit('/').next().unwrap_or(trimmed);
-		self.0.get(base).cloned()
+		if let Some(text) = self.0.get(base) {
+			return Some(text.clone());
+		}
+		self.0
+			.iter()
+			.find(|(key, _)| key.rsplit('/').next().unwrap_or(key) == base)
+			.map(|(_, text)| text.clone())
 	}
 }
 
