@@ -2147,6 +2147,20 @@ impl Editor {
         formats::builtin_names().iter().map(|s| s.to_string()).collect()
     }
 
+    /// The template in use, written out as text: every type, every field and
+    /// every expression behind them. Empty when no template is selected.
+    ///
+    /// The file's own template, space 0, since that is the one `set_template`
+    /// sets; an unpacked stream is read by whatever its `Decoded` node declared
+    /// and has no template of the reader's choosing. Read-only, and read in one
+    /// go: it is a page of text, not a walk.
+    pub fn template_text(&self) -> String {
+        match self.sheets[0].eval.as_ref() {
+            Some(e) => qubero_core::template_text::render(e.template()),
+            None => String::new(),
+        }
+    }
+
     /// Best current projection for a variable-size array being walked, or an
     /// empty string when no unfinished walk has enough information yet.
     pub fn extent_estimate(&self, space: u32) -> String {

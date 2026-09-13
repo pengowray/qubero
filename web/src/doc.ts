@@ -1786,6 +1786,18 @@ export class Doc {
     return ok;
   }
 
+  /**
+   * The template in use, written out as text: every type, every field and the
+   * expressions behind them. Empty when no template is selected.
+   *
+   * The file's own template, whichever space is open, for the reason
+   * `setTemplate` only works on space 0: an unpacked stream is read by what its
+   * `Decoded` node declared, not by anything a reader chose.
+   */
+  templateText(): string {
+    return this.editor.template_text();
+  }
+
   private handleReply<T>(json: string): TemplateReply<T> {
     const r: RawReply<T> = JSON.parse(json);
     if (r.status === "pending") {
