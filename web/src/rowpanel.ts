@@ -5,7 +5,7 @@
 // stayed, so this is where the row's columns are. A column may begin on one
 // page and end on another, so there is nowhere single in the file to go to.
 
-import type { SqliteColumn, TypeInfo } from "./doc.ts";
+import type { SqliteColumn, SqliteRowInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 /** How many pages of numbers are worth printing instead of counting. */
@@ -19,8 +19,8 @@ function span(cls: string, text: string): HTMLElement {
 }
 
 /** How many columns the row has, for the note beside the heading. */
-export function rowNote(info: TypeInfo): string {
-  return countText(info.row_total_columns, "column");
+export function rowNote(info: SqliteRowInfo): string {
+  return countText(info.total_columns, "column");
 }
 
 /** One column: which one it is, what SQLite calls it, and its value. */
@@ -34,10 +34,10 @@ function columnLine(column: SqliteColumn, index: number): HTMLElement {
 }
 
 /** The page numbers, listed while there are few enough to be worth reading. */
-function pagesLine(info: TypeInfo): HTMLElement | null {
-  if (info.row_chain === 0 || info.row_chain > PAGES_LISTED) return null;
-  const numbers = info.row_pages.map((p) => p.toLocaleString()).join(", ");
-  return span("insp-qcount", `Continues on ${countText(info.row_chain, "page")}: ${numbers}.`);
+function pagesLine(info: SqliteRowInfo): HTMLElement | null {
+  if (info.chain === 0 || info.chain > PAGES_LISTED) return null;
+  const numbers = info.pages.map((p) => p.toLocaleString()).join(", ");
+  return span("insp-qcount", `Continues on ${countText(info.chain, "page")}: ${numbers}.`);
 }
 
 /**
@@ -47,18 +47,18 @@ function pagesLine(info: TypeInfo): HTMLElement | null {
  * the walk got are together how a reader tells a damaged file from a gap in
  * this program, which is the same reason the other unpacked views keep theirs.
  */
-export function rowBody(info: TypeInfo): DocumentFragment {
+export function rowBody(info: SqliteRowInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
   const sizes = document.createElement("div");
   sizes.className = "insp-qcount";
   // "Claims", because the two parts add up to what was found rather than to
   // what the cell declared, and those differ when the chain broke.
-  const elsewhere = info.row_found - info.row_on_page;
+  const elsewhere = info.found - info.on_page;
   sizes.textContent =
-    `Claims ${countText(info.row_declared, "byte")}: ` +
-    `${info.row_on_page.toLocaleString()} on this page, ` +
-    `${elsewhere.toLocaleString()} on ${countText(info.row_chain, "page")} elsewhere.`;
+    `Claims ${countText(info.declared, "byte")}: ` +
+    `${info.on_page.toLocaleString()} on this page, ` +
+    `${elsewhere.toLocaleString()} on ${countText(info.chain, "page")} elsewhere.`;
   frag.append(sizes);
 
   const pages = pagesLine(info);
@@ -71,7 +71,7 @@ export function rowBody(info: TypeInfo): DocumentFragment {
     frag.append(p);
   }
 
-  if (info.row_columns.length === 0) return frag;
+  if (info.columns.length === 0) return frag;
 
   // Not the uppercase subhead style: that is for two or three words, and a
   // sentence set in capitals is read a letter at a time.
@@ -84,14 +84,14 @@ export function rowBody(info: TypeInfo): DocumentFragment {
 
   const list = document.createElement("div");
   list.className = "insp-orows";
-  info.row_columns.forEach((column, i) => list.append(columnLine(column, i)));
+  info.columns.forEach((column, i) => list.append(columnLine(column, i)));
   frag.append(list);
 
-  if (info.row_columns.length < info.row_total_columns) {
+  if (info.columns.length < info.total_columns) {
     frag.append(
       span(
         "insp-qcount",
-        `Showing the first ${info.row_columns.length.toLocaleString()} of ${info.row_total_columns.toLocaleString()} columns.`,
+        `Showing the first ${info.columns.length.toLocaleString()} of ${info.total_columns.toLocaleString()} columns.`,
       ),
     );
   }

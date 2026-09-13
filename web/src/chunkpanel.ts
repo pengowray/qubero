@@ -5,14 +5,14 @@
 // Nothing here can be clicked through to, because none of these bytes are in
 // the file.
 
-import type { TypeInfo } from "./doc.ts";
+import type { ChunkInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many elements came out, for the note beside the heading. */
-export function chunkNote(info: TypeInfo): string {
-  if (info.chunk_total === 0) return "";
-  return countText(info.chunk_total, "element");
+export function chunkNote(info: ChunkInfo): string {
+  if (info.total === 0) return "";
+  return countText(info.total, "element");
 }
 
 /**
@@ -23,14 +23,14 @@ export function chunkNote(info: TypeInfo): string {
  * undone before the one that stopped it are how a reader tells an unusual file
  * from a gap in this program.
  */
-export function chunkBody(info: TypeInfo): DocumentFragment {
+export function chunkBody(info: ChunkInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  const packed = `${info.chunk_packed.toLocaleString()} bytes in the file`;
-  const unpacked = info.chunk_decoded > 0 ? `, ${info.chunk_decoded.toLocaleString()} bytes unpacked` : "";
+  const packed = `${info.packed.toLocaleString()} bytes in the file`;
+  const unpacked = info.decoded > 0 ? `, ${info.decoded.toLocaleString()} bytes unpacked` : "";
   frag.append(line("insp-qcount", packed + unpacked));
 
-  const rows = info.chunk_steps.map((s) => ({
+  const rows = info.steps.map((s) => ({
     label: s.filter,
     text: s.skipped ? "not applied to this chunk" : bytesChange(s.in_bytes, s.out_bytes),
   }));
@@ -41,6 +41,6 @@ export function chunkBody(info: TypeInfo): DocumentFragment {
     return frag;
   }
 
-  frag.append(firstValues(`First elements, as ${info.chunk_element_type}`, info.chunk_values, info.chunk_total, "elements"));
+  frag.append(firstValues(`First elements, as ${info.element_type}`, info.values, info.total, "elements"));
   return frag;
 }

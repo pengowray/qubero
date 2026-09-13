@@ -10,28 +10,28 @@
 // core writes them, without digit grouping, so a value can be compared by eye.
 // Counts are grouped.
 
-import type { PageStep, TypeInfo } from "./doc.ts";
+import type { PageStep, TileInfo } from "./doc.ts";
 import { countText, ordinal } from "./strings.ts";
 import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many pixels the tile has, for the note beside the heading. From the
  *  tile's shape, so it shows even when nothing was decompressed. */
-export function tileNote(info: TypeInfo): string {
-  if (info.tile_count === 0) return "";
-  return countText(info.tile_pixels, "pixel");
+export function tileNote(info: TileInfo): string {
+  if (info.count === 0) return "";
+  return countText(info.pixels, "pixel");
 }
 
 /** Which tile, and where it sits in the image. The index is the listing's
  *  own, counted from 0 as the rows are; the ordinal beside it counts from 1,
  *  as do the pixel coordinates. Null for an image whose header would not
  *  read. */
-export function tileLine(info: TypeInfo): string | null {
-  if (info.tile_count === 0) return null;
-  const shape = info.tile_shape.map((n) => n.toLocaleString()).join(" × ");
-  const at = info.tile_start.map((n) => (n + 1).toLocaleString()).join(", ");
-  const image = info.tile_image_shape.map((n) => n.toLocaleString()).join(" × ");
+export function tileLine(info: TileInfo): string | null {
+  if (info.count === 0) return null;
+  const shape = info.shape.map((n) => n.toLocaleString()).join(" × ");
+  const at = info.start.map((n) => (n + 1).toLocaleString()).join(", ");
+  const image = info.image_shape.map((n) => n.toLocaleString()).join(" × ");
   return (
-    `Tile [${info.tile_index}], the ${ordinal(info.tile_index + 1)} of ${info.tile_count.toLocaleString()}: ` +
+    `Tile [${info.index}], the ${ordinal(info.index + 1)} of ${info.count.toLocaleString()}: ` +
     `${shape} pixels, first pixel at (${at}) in the ${image} image (pixel coordinates: axis 1 first, counting from 1)`
   );
 }
@@ -39,23 +39,23 @@ export function tileLine(info: TypeInfo): string | null {
 /** What the bytes were and how large, before and after: the algorithm that
  *  ran, which for a tile in one of the fallback columns is not the one
  *  `ZCMPTYPE` names. */
-export function sizeLine(info: TypeInfo): string | null {
-  if (info.tile_count === 0) return null;
+export function sizeLine(info: TileInfo): string | null {
+  if (info.count === 0) return null;
   const algorithm =
-    info.tile_column === "GZIP_COMPRESSED_DATA" ? "gzip" : info.tile_column === "UNCOMPRESSED_DATA" ? "uncompressed" : info.tile_algorithm;
-  const packed = `${countText(info.tile_packed, "byte")} in the file`;
+    info.column === "GZIP_COMPRESSED_DATA" ? "gzip" : info.column === "UNCOMPRESSED_DATA" ? "uncompressed" : info.algorithm;
+  const packed = `${countText(info.packed, "byte")} in the file`;
   const unpacked =
-    info.tile_decoded > 0 && info.tile_decoded !== info.tile_packed ? `, ${countText(info.tile_decoded, "byte")} unpacked` : "";
+    info.decoded > 0 && info.decoded !== info.packed ? `, ${countText(info.decoded, "byte")} unpacked` : "";
   return `${algorithm}, ${packed}${unpacked}`;
 }
 
 /** Why this tile's bytes were not in COMPRESSED_DATA, where they were not. */
-export function columnLine(info: TypeInfo): string | null {
-  const zcmptype = `ZCMPTYPE (${info.tile_algorithm}) does not apply to this tile.`;
-  if (info.tile_column === "GZIP_COMPRESSED_DATA") {
+export function columnLine(info: TileInfo): string | null {
+  const zcmptype = `ZCMPTYPE (${info.algorithm}) does not apply to this tile.`;
+  if (info.column === "GZIP_COMPRESSED_DATA") {
     return `Stored in GZIP_COMPRESSED_DATA, not COMPRESSED_DATA: the raw floats, gzipped, which is the column for a float tile that would not quantize. ${zcmptype}`;
   }
-  if (info.tile_column === "UNCOMPRESSED_DATA") {
+  if (info.column === "UNCOMPRESSED_DATA") {
     return `Stored in UNCOMPRESSED_DATA, not COMPRESSED_DATA: the raw floats as they are, which is the column for a float tile that would not quantize. ${zcmptype}`;
   }
   return null;
@@ -75,9 +75,9 @@ export function tileStepText(step: PageStep): string {
 
 /** The subhead over the pixels, which says `First` only when some are left
  *  out: a tile of one pixel is not the first of anything. */
-export function pixelsHead(info: TypeInfo): string {
-  const all = info.tile_values.length >= info.tile_total;
-  return `${all ? "Pixels" : "First pixels"}, as ${info.tile_element_type}`;
+export function pixelsHead(info: TileInfo): string {
+  const all = info.values.length >= info.total;
+  return `${all ? "Pixels" : "First pixels"}, as ${info.element_type}`;
 }
 
 /**
@@ -88,14 +88,14 @@ export function pixelsHead(info: TypeInfo): string {
  * the one that stopped it are how a reader tells an unusual file from a gap in
  * this program.
  */
-export function tileBody(info: TypeInfo): DocumentFragment {
+export function tileBody(info: TileInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   for (const text of [tileLine(info), sizeLine(info), columnLine(info)]) {
     if (text !== null) frag.append(line("insp-qcount", text));
   }
-  const rows = info.tile_steps.map((s) => ({ label: s.what, text: tileStepText(s) }));
+  const rows = info.steps.map((s) => ({ label: s.what, text: tileStepText(s) }));
   frag.append(stepList("Steps, in the order they were done", rows, true));
   frag.append(problemLine(info.problem));
-  frag.append(firstValues(pixelsHead(info), info.tile_values, info.tile_total, "pixels"));
+  frag.append(firstValues(pixelsHead(info), info.values, info.total, "pixels"));
   return frag;
 }

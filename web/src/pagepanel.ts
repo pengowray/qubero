@@ -6,14 +6,14 @@
 // reads them before the codec, and a v1 page reads them after. Nothing here
 // can be clicked through to, because none of these values are in the file.
 
-import type { PageStep, TypeInfo } from "./doc.ts";
+import type { PageStep, PageInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many values came out, for the note beside the heading. */
-export function pageNote(info: TypeInfo): string {
-  if (info.page_total === 0) return "";
-  return countText(info.page_total, "value");
+export function pageNote(info: PageInfo): string {
+  if (info.total === 0) return "";
+  return countText(info.total, "value");
 }
 
 /**
@@ -38,17 +38,17 @@ function stepText(step: PageStep): string {
  * one that stopped it are how a reader tells an unusual file from a gap in
  * this program.
  */
-export function pageBody(info: TypeInfo): DocumentFragment {
+export function pageBody(info: PageInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  const packed = `${info.page_packed.toLocaleString()} bytes in the file`;
+  const packed = `${info.packed.toLocaleString()} bytes in the file`;
   const unpacked =
-    info.page_decoded > 0 && info.page_decoded !== info.page_packed
-      ? `, ${info.page_decoded.toLocaleString()} bytes unpacked`
+    info.decoded > 0 && info.decoded !== info.packed
+      ? `, ${info.decoded.toLocaleString()} bytes unpacked`
       : "";
   frag.append(line("insp-qcount", packed + unpacked));
 
-  const rows = info.page_steps.map((s) => ({ label: s.what, text: stepText(s) }));
+  const rows = info.steps.map((s) => ({ label: s.what, text: stepText(s) }));
   frag.append(stepList("Steps, in the order they were done", rows));
 
   if (info.problem !== "") {
@@ -58,8 +58,8 @@ export function pageBody(info: TypeInfo): DocumentFragment {
 
   // Indices into the dictionary page are not the column's values, and a
   // heading saying "as dictionary index" would read as a type.
-  const indices = info.page_element_type === "dictionary index";
-  const head = indices ? "First dictionary indices" : `First values, as ${info.page_element_type}`;
-  frag.append(firstValues(head, info.page_values, info.page_total, indices ? "indices" : "values"));
+  const indices = info.element_type === "dictionary index";
+  const head = indices ? "First dictionary indices" : `First values, as ${info.element_type}`;
+  frag.append(firstValues(head, info.values, info.total, indices ? "indices" : "values"));
   return frag;
 }
