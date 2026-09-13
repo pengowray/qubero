@@ -139,6 +139,8 @@ mod rpm;
 mod sac;
 mod png;
 mod root;
+pub mod root_streamer;
+pub mod root_tree;
 mod safetensors;
 mod le;
 mod spp;
