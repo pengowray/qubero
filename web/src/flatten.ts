@@ -13,6 +13,7 @@
 // how big the file is.
 
 import type { TemplateNode, TemplateReply } from "./doc.ts";
+import { isElementName } from "./elementname.ts";
 import { densityOf, type Density } from "./headingdensity.ts";
 
 /** Children of one list drawn before the reader asks for more. */
@@ -1061,7 +1062,7 @@ function consumerOf(node: TemplateNode, kids: readonly TemplateNode[], base: num
  *  list longer than `LIST_OPEN_MAX`, where `total` is how long the list is:
  *  its element count, not the page of it that is drawn. */
 function arrivesOpen(node: TemplateNode, total: number): boolean {
-  return !(total > LIST_OPEN_MAX && /^\[\d+\]$/.test(node.name));
+  return !(total > LIST_OPEN_MAX && isElementName(node.name));
 }
 
 /** Whether a field's bytes arrive as a dump under its row: only a field the
