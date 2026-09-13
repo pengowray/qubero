@@ -207,8 +207,13 @@ try {
     value: document.querySelector(".tb-tmpl").value,
     note: document.querySelector(".ov-note")?.textContent ?? "",
     action: document.querySelector(".ov-note-action")?.textContent ?? "",
+    // The entry for the .ksy that was pasted earlier named a template the
+    // converter no longer holds, so it is gone rather than left to apply this
+    // one under that name.
+    pastedEntry: document.querySelectorAll('.tb-tmpl option[value="converted-ksy"]').length,
   }));
   console.log("applied bundled", JSON.stringify(asBundled));
+  assert.equal(asBundled.pastedEntry, 0, "the menu kept an entry for a pasted .ksy that is no longer in the converter");
   assert.equal(asBundled.value, `ksy:${bundledId.first}`, "applying a shipped description did not select it in the chooser");
   assert.match(asBundled.note, /Kaitai Struct/, "the note does not say where the description came from");
   assert.equal(asBundled.action, "Show the .ksy", "the note does not offer the description");

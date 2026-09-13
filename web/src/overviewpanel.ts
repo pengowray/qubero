@@ -385,7 +385,10 @@ export class OverviewPanel {
    * only names.
    */
   setNote(text: string, action: NoteAction | null = null): void {
-    if (text === this.note && action?.label === this.noteAction?.label) return;
+    // Same words and no button: nothing to redraw. With a button there is: two
+    // formats can leave out the same number of parts, so the same sentence
+    // with the same label can still lead somewhere else.
+    if (text === this.note && action === null && this.noteAction === null) return;
     this.note = text;
     this.noteAction = text === "" ? null : action;
     this.drawContents();

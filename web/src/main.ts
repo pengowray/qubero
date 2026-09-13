@@ -1295,6 +1295,12 @@ function build(tab: Tab): Page {
           if (doc.setTemplate(name)) {
             tmpl.value = name;
             tmplWas = name;
+            // The entry for a pasted `.ksy` named a template that is no longer
+            // what the converter holds, and picking it would have applied this
+            // one under that name. It goes, and comes back with the next
+            // pasted template.
+            ksyOption?.remove();
+            ksyOption = null;
             say(KSY.applied(id));
             showKaitaiNote(name);
           } else say(KSY.cannotApply(id), true);
