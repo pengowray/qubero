@@ -33,6 +33,9 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S1. `Ty::Gather` and `Expr::Placer`: children placed at offsets read from records the template walks to, and a child asking its record again. | `2153c96` |
+| FITS heap: every `P`/`Q` descriptor's array placed in the heap, sized by its count and typed by its letter. `comp.fits` names all 86,400 bytes, up from a heap of one gap. | `b5c4fd2` |
+| `hdf5.rs` split: the four array chunk indexes and their tests moved to `hdf5_index.rs` (3,112 + 968 lines) | `1e1d5cd` |
 | S2: HDF5 fractal-heap indirect blocks, for a heap grown past its largest direct block | `4308a8f` |
 | S2: children of a version 2 B-tree node below the root (`HANDOVER-open-hazards.md` 4) | `4308a8f` |
 | Kind totals counted an HDF5 object once per hard link to it, so `fractal-heap-deep.h5` covered 9.1 Mbit of a 4.9 Mbit file. What an `At` reaches now counts once. | `0d0ac8f` |
@@ -70,61 +73,26 @@ struct being descended, and a descriptor is four levels inside `rows`;
 unit; and `placed.rs` stops indexing a list after 64 children that add nothing,
 which 64 empty cells in a row would trigger.
 
-**Design (Fable, 2026-09-13), not built.** A `Chain`-like gather:
+**Built 2026-09-13** (`2153c96`, `3b1dc2f`, `b5c4fd2`; merged `1f646f0`), as
+designed, with these differences found by building it: the walk lives in its
+own `eval/gather.rs` with a `GatherState` on the list's `ListState`; only
+reaching a record is charged against a go (the B1 lesson); a `Sized` round a
+gather gives it a region, and without one it covers nothing where declared.
+`Placed::Gathered` reaches the web app and the inspector says `where
+descriptor rows[3].col1[0] points`. DESIGN.md has a section ("A list whose
+offsets are scattered through the records that hold them").
 
-```rust
-pub enum Step {
-    Field(Arc<str>),                                         // into a named field, through an `At`
-    Tagged { key: Arc<[String]>, tag: Tag, shown: Arc<str> }, // first element whose key holds tag
-    Each,                                                    // every element of the list here
-    Fields(Arc<[String]>),                                   // every field here with one of these names
-}
-// in Ty
-Gather { from: Arc<[Step]>, offset: Expr, anchor: Anchor, adjust: Expr, elem: Box<Ty>, skip_zero: bool },
-// in Expr: this expression read in the record that placed this element
-Placer(Box<Expr>),
-```
+The FITS heap reads (see Closed). Left from the design:
 
-Child `i` starts at `anchor + adjust + offset`, with `offset` evaluated in
-record `i` as if it were that record's last field. It covers no bytes where it
-is declared, as `Chain` does; a record whose offset does not read is passed
-over; stops at `CHAIN_CAP`; resumable across `Busy` the way `extend_chain_to`
-is. `ListState` keeps one index per `Each`/`Fields` step per found record and
-re-derives the record path by re-walking, since a million full paths is
-hundreds of MB. `gap_inside` also asks each ancestor struct's scattered siblings
-(`Chain`, `Gather`) for their sorted starts, so a region bounds its own gaps
-without waiting on the placed-index walk.
-
-Parquet with it: a zero-byte-where-declared `RowGroups` region
-(`Sized(Remaining - 8 - footer_length)`) holding four gathers over
-`footer.fields[id=4].value.elems[*].fields[id=1].value.elems[*]`: pages at
-`dictionary_page_offset or data_page_offset` sized by
-`placer(total_compressed_size)`, then offset indexes, column indexes, bloom
-filters. FITS: a `Heap` region holding one gather over
-`rows[*].{col1..col32}[*]` at `offset`, each child sized
-`placer(count * width)` and typed by `placer(kind)`, the letter after `P`/`Q` in
-`TFORMn` (`digits_then` needs to split it out).
-
-Files: `template.rs`, `decode.rs`, `eval/mod.rs` (ListState, node, place_child,
-a new `extend_gather_to` beside `extend_chain_to`, `scattered_starts`),
-`size.rs`, `expr.rs` (Placer), `listing.rs` (child_at, gap_inside), `placed.rs`,
-`shape.rs` (a `Placed::Gathered` mirrored in `crates/wasm/src/lib.rs` and
-`web/src/doc.ts`), `origin.rs`, `relate.rs`, `kinds.rs`, `graph.rs`,
-`explain.rs`, `time.rs`, `machinery.rs`: every `Ty::Chain` arm gains `Gather`.
-
-Build order: IR types; walk, placement and `Placer` with tests beside
-`a_chain_of_pointers_is_a_flat_list` (two lists deep, tagged lists in any
-order, a record with no offset, resuming with `set_slice(8)`); locate and gaps;
-origins and relations; migrate Parquet (bytes named per sample by
-`spans_probe` must not drop); FITS against `comp.fits` (300 rows of `1PB`, a
-66,896-byte heap); DESIGN.md section.
-
-Risks: `memo.rs` `forget_after` assumes a field depends only on what is before
-it, and Parquet's footer is after its pages, so editing a footer offset leaves
-stale placements (already true today; drop every scattered list's starts on
-invalidation). FITS enumeration costs rows times 32 resolves. A walk into an
-unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
-(S4).
+- Parquet still uses the `At` per column chunk. Moving it onto a gather gives
+  the row-group region a node; the attempt stopped at making a struct's gap
+  accounting see its zero-size gathers' children, and that unfinished,
+  untested change is on branch `wip-parquet-gather-region` (`dc1c86c`).
+- `memo.rs` `forget_after` assumes a field depends only on what is before it;
+  a Parquet footer is after its pages, so editing a footer offset leaves
+  stale placements (true before the gather too).
+- A walk into an unpacked RNTuple envelope needs a step through a `Decoded`'s
+  child (S4).
 
 ### S2. log2 and ceiling division in `Expr`
 
@@ -245,11 +213,13 @@ Reads further than any other scientific format. Left:
 
 ### FITS
 
-- The variable-length array heap (S1).
 - `TSCALn`/`TZEROn` not applied, so unsigned 16-bit columns read as signed.
-- Tile-compressed images read as a binary table of compressed tiles.
-- Every cell asks the header for its `TFORMn` again, so large tables are slow.
-  Worth timing once S1 lands.
+- Tile-compressed images read as a binary table of compressed tiles, and now
+  the tiles' compressed bytes in the heap; nothing inflates a Rice or gzip
+  tile into pixels.
+- Every cell asks the header for its `TFORMn` again, so large tables are slow,
+  and the heap walk visits every cell of every row before the heap has any
+  children.
 - Columns past 32, axes past 9, `CONTINUE` cards.
 - Columns keep `Field::name_from`, one per column, rather than moving to
   `elem_name_from` (S3). A row is 32 fields and not a list because each

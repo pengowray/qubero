@@ -2487,6 +2487,62 @@ something else after it, is left as it was, because the element fails again
 with the wider room and the gap says so. Bytes after the room that no element
 starts inside were never touched by either rule; they are still nobody's.
 
+### A list whose offsets are scattered through the records that hold them
+`PointerList` reads its offsets from one array declared beside it, and
+`Chain` reads each from the element before. A FITS binary table keeps its
+variable-length arrays in a heap after the rows, and what places one is a
+descriptor in a cell: a count and an offset, in a column, in a row, one per
+such column in every row, all pointing into the one heap. Parquet's pages
+are placed the same way from inside its footer, by an offset in a column
+chunk in a row group in a list. Neither list has a name to give a
+`PointerList`, since a Thrift struct writes its fields in whatever order it
+likes and a row has thirty-two cells any of which may hold a descriptor.
+
+An `At` under every descriptor was the first answer, and it is what Parquet
+did (`912947b`). It puts each array somewhere, but it puts it under the
+descriptor, four levels into a row, and the heap as a region has no children
+of its own: every byte of it reads as a gap, the cursor cannot find an array
+from its bytes because `locate` asks the placed index only outside the root
+and a FITS root is the whole file, and the placed index gives up on a list
+after 64 children that add nothing, which 64 empty cells in a row are. The
+heap is a list, and `Ty::Gather` (2026-09-13, `2153c96`) is what says so.
+
+A gather is declared where the region is and walks to its records from
+there: `from` is a run of `Step`s, into a named field (through an `At`, as a
+path does everywhere), into the first element of a list whose key holds a
+tag (the search `Expr::Tagged` makes, with a name for the label, since
+`fields[id = 4]` is a question and `row_groups` is an answer), into every
+element of a list, or into every field of a structure with one of a set of
+names. Each record reached places one child at `offset` worked out in that
+record as if it were its last field, so it may name anything the record
+could name. A record whose offset does not read is passed over: a cell with
+no descriptor is a cell, not a broken file. The walk is kept the way a
+chain's is, in `eval/gather.rs`, and carries on across goes; only reaching a
+record is charged, which is the lesson `walk.rs` learned the same week (B1 in
+`HANDOVER-science-formats.md`: a walk that charges for what the last go
+already found spends every go going back over it).
+
+What a child is read as may ask its record too. Every other expression looks
+backwards from the field asking, and a heap array has nothing behind it that
+knows about it: its count is in one descriptor out of three hundred, in the
+rows before the heap. The gather already walked to that descriptor, so
+`Expr::Placer(e)` asks it again, in the same frame the offset was worked out
+in. `placer(count * width)` sizes the array and `placer(kind)` picks its type
+from the letter after the `P` in `TFORMn`. The panel names the connection
+the way it names a pointer table's: the type column reads `descriptors →
+u8[]`, the position row reads `where descriptor rows[3].col1[0] points`, and
+a formula reads `descriptor.count`.
+
+What it does not do yet. Parquet still places its pages with the `At` per
+column chunk; moving it onto a gather would give the row-group region a node
+of its own, and the unfinished attempt (a struct's gap accounting has to see
+its zero-size gathers' scattered children) is on branch
+`wip-parquet-gather-region`. An edit to a descriptor leaves the arrays where
+they were until the memo forgets them, and the memo forgets forwards
+(`forget_after`), which is right for a heap after its rows and wrong for a
+Parquet footer after its pages. Neither the placed index nor `kinds` counts a
+gathered child twice, but a gather over records that two paths reach would.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
