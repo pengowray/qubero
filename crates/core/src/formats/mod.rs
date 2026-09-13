@@ -34,6 +34,7 @@ mod aiff;
 mod ar;
 mod aseprite;
 mod assimp;
+mod bam;
 mod appledouble;
 mod au;
 mod bmp;
@@ -178,6 +179,7 @@ pub use ar::{ar, deb};
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
+pub use bam::bgzf;
 pub use bmp::bmp;
 pub use bzip2::bzip2;
 pub use cab::cab;
@@ -388,6 +390,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("fits", |_| fits()),
     ("grubenv", |_| grubenv()),
     ("gzip", |_| gzip()),
+    ("bgzf", |_| bgzf()),
     ("zlib", |_| zlib()),
     ("bzip2", |_| bzip2()),
     ("lzip", |_| lzip()),
