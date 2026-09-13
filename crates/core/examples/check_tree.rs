@@ -50,7 +50,7 @@ fn main() {
             }
             continue;
         }
-        let Some(template) = formats::builtin(name) else {
+        let Some(template) = formats::template(name) else {
             if meant_to_fail {
                 not_checked += 1;
             }

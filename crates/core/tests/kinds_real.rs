@@ -53,7 +53,7 @@ fn every_sample_adds_up() {
                 None => continue,
             },
         };
-        let Some(template) = formats::builtin(name) else { continue };
+        let Some(template) = formats::template(name) else { continue };
         let len = bytes.len() as u64 * 8;
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);

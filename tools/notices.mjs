@@ -20,8 +20,8 @@
 // file, which is why that is an error and not a warning.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -278,7 +278,54 @@ if (npmMissing.length > 0) {
   md += `\n${npmMissing.length} bundled package(s) ship no licence file: ${npmMissing.map((p) => p.name).join(", ")}. Check these by hand.\n`;
 }
 
+// ---- Kaitai Struct format descriptions ----
+//
+// Not a crate and not an npm package: `.ksy` files copied verbatim into
+// `crates/core/formats-ksy` and compiled into the core. Each is licensed on
+// its own, so each is listed on its own, and the licence texts follow once per
+// licence rather than once per file.
+const KSY_DIR = join(ROOT, "crates", "core", "formats-ksy");
+const KSY_UPSTREAM = "https://github.com/kaitai-io/kaitai_struct_formats/blob/master";
+
+function ksyFiles(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) ksyFiles(path, out);
+    else if (name.endsWith(".ksy")) out.push(path);
+  }
+  return out;
+}
+
+const ksy = ksyFiles(KSY_DIR).map((path) => {
+  const source = relative(KSY_DIR, path).replaceAll("\\", "/");
+  const text = readFileSync(path, "utf8");
+  const read = (key) => new RegExp(`^ {2}${key}: *(.*?) *$`, "m").exec(text)?.[1]?.replace(/^["'](.*)["']$/, "$1") ?? "";
+  return { source, id: read("id"), licence: read("license") };
+});
+
+const ksyLicences = [...new Set(ksy.map((f) => f.licence))].sort();
+
+if (ksy.length > 0) {
+  md += `\n## Kaitai Struct format descriptions\n\n${ksy.length} \`.ksy\` files from the [Kaitai Struct format\nlibrary](https://github.com/kaitai-io/kaitai_struct_formats) are copied\nverbatim into \`crates/core/formats-ksy\` and compiled into the core, where they\nare converted into templates. Each file carries its own licence; nothing from\nthe Kaitai Struct compiler, which is GPL-3.0, is used here. Which files these\nare and why is \`crates/core/formats-ksy/README.md\`.\n\n| Format | Licence | Source |\n| --- | --- | --- |\n`;
+  for (const f of ksy) md += `| ${f.id} | ${f.licence} | [${f.source}](${KSY_UPSTREAM}/${f.source}) |\n`;
+}
+
 md += `\n## Licence texts\n\nOne section per shipped crate and bundled package, in its own words.\n`;
+
+if (ksy.length > 0) {
+  md += `\nThe licences the format descriptions are under come first, once each, since\n${ksy.length} files share ${ksyLicences.length} of them. The texts are SPDX's, with SPDX's own\nmatching markup taken out.\n`;
+  for (const spdx of ksyLicences) {
+    const path = join(ROOT, "tools", "licences", `${spdx}.txt`);
+    if (!existsSync(path)) {
+      md += `\n### ${spdx}\n\n**No text for this licence in \`tools/licences\`: add \`${spdx}.txt\` from https://spdx.org/licenses/${spdx}.txt.**\n`;
+      continue;
+    }
+    const used = ksy.filter((f) => f.licence === spdx);
+    md += `\n### ${spdx}\n\nThe licence of ${used.length} of the format descriptions above.  \nSource: https://spdx.org/licenses/${spdx}.html\n`;
+    md += `\n<details><summary>${spdx}</summary>\n\n\`\`\`\n${readFileSync(path, "utf8").trim()}\n\`\`\`\n\n</details>\n`;
+  }
+}
 for (const { pkg } of shipped) {
   const took = chosen(pkg.license).join(" and ") || "**a licence expression this script could not read: check by hand**";
   md += `\n### ${pkg.name} ${pkg.version}\n\nOffered under \`${pkg.license ?? pkg.license_file ?? "unstated"}\`, taken under ${took}.  \n`;

@@ -17,8 +17,8 @@ import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -203,6 +203,8 @@ const signatureOption = (name: string): string =>
 /** The menu entry that opens the `.ksy` converter. An action rather than a
  *  template, so picking it puts the menu back where it was. */
 const KSY_OPEN_VALUE = "open-ksy-converter";
+/** What a bundled Kaitai format's template name starts with. */
+const KAITAI_PREFIX = "ksy:";
 /** The menu entry for the template a converted `.ksy` produced, added once one
  *  is in use. Neither value can collide with a built-in's name. */
 const KSY_VALUE = "converted-ksy";
@@ -637,7 +639,22 @@ function build(tab: Tab): Page {
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
-  for (const n of doc.templateNames) tmpl.append(el("option", { value: n, textContent: `Template: ${templateLabel(n)}` }));
+  // The built-ins first, then the bundled Kaitai Struct formats under a
+  // heading of their own: a reader picking one should know the description
+  // came from elsewhere, and a hundred more names run into the built-ins
+  // without a break between them.
+  const choices = doc.templateChoices;
+  rememberKaitaiTitles(choices);
+  for (const c of choices.filter((c) => c.source === "builtin")) {
+    tmpl.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
+  }
+  const kaitai = choices.filter((c) => c.source === "kaitai");
+  if (kaitai.length > 0) {
+    const group = el("optgroup");
+    group.label = KAITAI_TEMPLATE.group;
+    for (const c of kaitai) group.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
+    tmpl.append(group);
+  }
   // Last, after every template there is: it opens a tool rather than choosing
   // one of them. The generated-signature entry is added later and goes in front
   // of this one, so the tool stays at the end of the menu.
@@ -670,6 +687,13 @@ function build(tab: Tab): Page {
       return;
     }
     doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
+    // A bundled Kaitai format says where it came from, and says so again with
+    // a count when its description holds things the template does not: those
+    // fields are missing or read another way, and a reader who is not told
+    // has no way to know which.
+    if (tmpl.value.startsWith(KAITAI_PREFIX)) {
+      overview.setNote(KAITAI_TEMPLATE.note(doc.ksyReport()?.gaps.length ?? 0));
+    }
     // Picking a template is asking to read fields, so the panel goes back to
     // them. It is left on the raw reading only for a file that has none.
     if (tmpl.value !== "") inspector.setMode("structure");

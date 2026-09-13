@@ -197,7 +197,7 @@ fn every_compressed_sample_opens_as_a_space() {
         if !matches!(name, "zlib" | "gzip" | "zip" | "lz4" | "zstd" | "xz") {
             continue;
         }
-        let Some(template) = qubero_core::formats::builtin(name) else { continue };
+        let Some(template) = qubero_core::formats::template(name) else { continue };
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         let mut found = Vec::new();

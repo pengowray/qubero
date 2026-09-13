@@ -1321,6 +1321,35 @@ struct WriteDto {
     size_bits: f64,
 }
 
+/// What a `.ksy` the reader pasted in resolves its `meta/imports` against:
+/// the files they supplied alongside it first, then the bundled collection.
+///
+/// The bundled half is what makes `imports: [/common/vlq_base128_le]` work
+/// without the reader hunting down a second file: `common/` is seven small
+/// files that half the Kaitai library leans on, and they are already here.
+/// Their own copy still wins, so a file of theirs by the same name is the one
+/// used.
+struct PastedImports(qubero_core::ksy::MapImports);
+
+impl qubero_core::ksy::Imports for PastedImports {
+    fn load(&self, name: &str) -> Option<String> {
+        self.0.load(name).or_else(|| qubero_core::ksy::BundledImports.load(name))
+    }
+}
+
+/// One entry in the template chooser.
+#[derive(Serialize)]
+struct TemplateChoiceDto {
+    /// What `set_template` takes: a built-in's own name, or `ksy:` and a
+    /// bundled format's `meta/id`.
+    name: String,
+    /// The format's `meta/title`, for a bundled Kaitai format that has one.
+    /// Empty otherwise, and the chooser then shows the name.
+    title: String,
+    /// `builtin` or `kaitai`.
+    source: &'static str,
+}
+
 /// What a `.ksy` conversion had to say, for the panel.
 #[derive(Serialize)]
 struct KsyReportDto {
@@ -2481,8 +2510,30 @@ impl Editor {
 
     // ----- templates -----
 
-    pub fn template_names(&self) -> Vec<String> {
-        formats::builtin_names().iter().map(|s| s.to_string()).collect()
+    /// Every template a reader may pick, as JSON: the built-in ones first,
+    /// then the bundled Kaitai Struct formats.
+    ///
+    /// Each carries the name [`set_template`](Self::set_template) takes, the
+    /// title to show for it, and which of the two kinds it is, because the
+    /// chooser groups them. A built-in has no title of its own: the name is
+    /// what it has always been shown as, and the web side already knows how to
+    /// spell each one out. A bundled format's title is its `meta/title`, which
+    /// is empty for the third of them that carry none.
+    pub fn template_names(&self) -> String {
+        let builtins = formats::builtin_names().into_iter().map(|name| TemplateChoiceDto {
+            name: name.to_string(),
+            title: String::new(),
+            source: "builtin",
+        });
+        let kaitai = qubero_core::ksy::bundled::all()
+            .iter()
+            .filter(|entry| entry.offered)
+            .map(|entry| TemplateChoiceDto {
+                name: entry.name.to_string(),
+                title: entry.title.to_string(),
+                source: "kaitai",
+            });
+        serde_json::to_string(&builtins.chain(kaitai).collect::<Vec<_>>()).unwrap_or_default()
     }
 
     /// The template in use, written out as text: every type, every field and
@@ -2525,7 +2576,13 @@ impl Editor {
         formats::sniff(head, file_len as u64).unwrap_or("").to_string()
     }
 
-    /// Select a built-in template by name; "" clears it. Returns false if unknown.
+    /// Select a template by name; "" clears it. Returns false if unknown.
+    ///
+    /// A name starting `ksy:` is one of the bundled Kaitai Struct formats,
+    /// converted here and now. Its conversion report is kept beside the
+    /// template, so [`ksy_report`](Self::ksy_report) answers for a bundled
+    /// format exactly as it does for a `.ksy` the reader pasted in: a bundled
+    /// format may have gaps, and they are only honest if they are visible.
     pub fn set_template(&mut self, name: &str) -> bool {
         // A different template may not have the stream a space came from, so
         // the spaces are worked out again against it before anything else.
@@ -2540,11 +2597,26 @@ impl Editor {
         // byte-class scan beside it is about bytes and stands; this does not.
         sh.kinds = None;
         sh.template = name.to_string();
+        sh.ksy_report = String::new();
         if name.is_empty() {
             sh.eval = None;
             return true;
         }
-        match formats::builtin(name) {
+        let template = match name.strip_prefix(qubero_core::ksy::bundled::PREFIX) {
+            Some(id) => match qubero_core::ksy::bundled::template(id) {
+                Some(Ok(converted)) => {
+                    sh.ksy_report =
+                        serde_json::to_string(&ksy_report_dto(&converted.report, &converted.template.name)).unwrap_or_default();
+                    Some(converted.template)
+                }
+                // A bundled `.ksy` that no longer converts is a broken build,
+                // not a format the reader chose wrongly; there is nothing to
+                // select and nothing useful to say here about why.
+                Some(Err(_)) | None => None,
+            },
+            None => formats::builtin(name),
+        };
+        match template {
             Some(t) => {
                 let mut e = Evaluator::new(t);
                 e.set_slice(Some(WORK_SLICE));
@@ -2574,10 +2646,8 @@ impl Editor {
                 return serde_json::to_string(&Reply::<KsyReportDto>::Error { message }).unwrap_or_default();
             }
         };
-        // TODO: fall back to the bundled formats for an import the caller did
-        // not supply, once `ksy::bundled` exists. Until then a `.ksy` whose
-        // `meta/imports` names a format the panel has no text for is a gap.
-        let converted = match qubero_core::ksy::convert(text, &qubero_core::ksy::MapImports(map)) {
+        let imports = PastedImports(qubero_core::ksy::MapImports(map));
+        let converted = match qubero_core::ksy::convert(text, &imports) {
             Ok(converted) => converted,
             Err(e) => {
                 return serde_json::to_string(&Reply::<KsyReportDto>::Error { message: e.to_string() })
@@ -2623,9 +2693,8 @@ impl Editor {
                 return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message }).unwrap_or_default();
             }
         };
-        // TODO: fall back to the bundled formats here too, once `ksy::bundled`
-        // exists; the panel's preview and its apply must resolve the same way.
-        let converted = match qubero_core::ksy::convert(text, &qubero_core::ksy::MapImports(map)) {
+        let imports = PastedImports(qubero_core::ksy::MapImports(map));
+        let converted = match qubero_core::ksy::convert(text, &imports) {
             Ok(converted) => converted,
             Err(e) => {
                 return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message: e.to_string() })
