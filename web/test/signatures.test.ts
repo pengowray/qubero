@@ -1,6 +1,6 @@
-// The Wikidata file format patterns: reading the values as editors wrote them,
-// and matching the result against bytes. The values in the cleaning tests are
-// real ones from Wikidata, each the first of its kind.
+// The file signature database: reading the Wikidata values as editors wrote
+// them, and matching the patterns against bytes. The values in the cleaning
+// tests are real ones from Wikidata, each the first of its kind.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,16 +9,19 @@ import { readFileSync } from "node:fs";
 import { cleanPattern, canonicalPronom, ENC } from "../../tools/wikidata/patterns.mjs";
 import { infoboxExtensions } from "../../tools/wikidata/infobox.mjs";
 import {
+  buildIndex,
   compile,
   compileAll,
+  decode,
   extensionOf,
   fixedBytes,
   matchAt,
   matchFormats,
+  matchFormatsSlowly,
   namingMatch,
-  type WikiData,
-  type WikiFormat,
-} from "../src/wikiformats.ts";
+  type SigData,
+  type SigFormat,
+} from "../src/signatures.ts";
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 const hex = (h: string): Uint8Array => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
@@ -95,11 +98,12 @@ test("a match counts only the bytes it pins down", () => {
   assert.equal(fixedBytes(compile("0000{6}01(01|04|08)")), 4);
 });
 
-const fmt = (id: string, label: string, sigs: WikiFormat["sigs"], ext?: string[]): WikiFormat => ({ id, label, sigs, ...(ext ? { ext } : {}) });
+const fmt = (id: string, label: string, sigs: SigFormat["sigs"], ext?: string[]): SigFormat =>
+  ({ source: "wikidata", id, label, sigs, ...(ext ? { ext } : {}) });
+const indexOf = (data: SigData): ReturnType<typeof buildIndex> => buildIndex(compileAll(data));
 
 test("the longest match comes first, with an agreeing extension counting for more", () => {
-  const data: WikiData = {
-    source: "",
+  const data: SigData = {
     fetched: "",
     formats: [
       fmt("Q1", "Any XML", [["3C", 0]]),
@@ -108,25 +112,24 @@ test("the longest match comes first, with an agreeing extension counting for mor
       fmt("Q4", "PDF", [["2525454F46", 1024, "eof"]], ["pdf"]),
     ],
   };
-  const compiled = compileAll(data);
+  const index = indexOf(data);
   const xml = bytes('<?xml version="1.0"?><a/>');
-  const found = matchFormats(compiled, { head: xml, tail: xml, name: "thing.foo" });
+  const found = matchFormats(index, { head: xml, tail: xml, name: "thing.foo" });
   assert.deepEqual(found.map((m) => m.format.id), ["Q3", "Q2", "Q1"]);
   assert.equal(namingMatch(found)?.format.id, "Q3");
   // Nothing breaks the tie without an extension, so nothing names the file.
-  assert.equal(namingMatch(matchFormats(compiled, { head: xml, tail: xml, name: "thing" })), null);
+  assert.equal(namingMatch(matchFormats(index, { head: xml, tail: xml, name: "thing" })), null);
 
   const pdf = bytes("%PDF-1.4\n...\n%%EOF\r\n");
-  assert.deepEqual(matchFormats(compiled, { head: pdf, tail: pdf, name: "a.pdf" }).map((m) => m.format.id), ["Q4"]);
+  assert.deepEqual(matchFormats(index, { head: pdf, tail: pdf, name: "a.pdf" }).map((m) => m.format.id), ["Q4"]);
 });
 
 test("a few bytes name a file only with its extension behind them", () => {
-  const compiled = compileAll({
-    source: "",
+  const index = indexOf({
     fetched: "",
     formats: [fmt("Q1", "Any XML", [["3C", 0]], ["xml"]), fmt("Q2", "Compress", [["1F9D", 0]], ["z"]), fmt("Q3", "LiteDB", [["00000000", 0]])],
   });
-  const one = (head: Uint8Array, name: string): string | undefined => namingMatch(matchFormats(compiled, { head, tail: head, name }))?.format.id;
+  const one = (head: Uint8Array, name: string): string | undefined => namingMatch(matchFormats(index, { head, tail: head, name }))?.format.id;
   assert.equal(one(bytes("<a/>"), "a.xml"), undefined);
   assert.equal(one(hex("1F9D90"), "words.Z"), "Q2");
   assert.equal(one(hex("1F9D90"), "words"), undefined);
@@ -139,9 +142,49 @@ test("the extension is what follows the last dot", () => {
   assert.equal(extensionOf("README"), "");
 });
 
-test("every pattern in the shipped file compiles", () => {
-  const path = new URL("../public/wikidata/formats.json", import.meta.url);
-  const data = JSON.parse(readFileSync(path, "utf8")) as WikiData;
+test("the index gives the same answer as running every pattern", () => {
+  // Two formats sharing a pattern, one format with two patterns that pin the
+  // same number of bytes, patterns at an offset, the shapes the index cannot
+  // hold, and one measured from the end.
+  const data: SigData = {
+    fetched: "",
+    formats: [
+      fmt("Q1", "Any XML", [["3C", 0]]),
+      fmt("Q2", "XML with a prolog", [["3C3F786D6C", 0]], ["xml"]),
+      fmt("Q3", "Also that prolog", [["3C3F786D6C", 0]]),
+      fmt("Q4", "Two ways, same length", [["3C3F786D6C", 0], ["3C3F786D60", 0]]),
+      fmt("Q5", "RIFF with a gap", [["52494646{4}57454250", 0]]),
+      fmt("Q6", "A version range", [["255044462D312E[30:37]", 0]]),
+      fmt("Q7", "Deep in the file", [["57415645", 8]]),
+      fmt("Q8", "Alternatives", [["2525454F(46|460A)", 0]]),
+      fmt("Q9", "From the end", [["2525454F46", 1024, "eof"]], ["pdf"]),
+      fmt("Q10", "Never matches", [["FFFFFFFFFF", 0]]),
+    ],
+  };
+  const compiled = compileAll(data);
+  const index = buildIndex(compiled);
+  const files: readonly { head: Uint8Array; name: string }[] = [
+    { head: bytes('<?xml version="1.0"?>'), name: "a.xml" },
+    { head: bytes('<?xml version="1.0"?>'), name: "a" },
+    { head: bytes("<html>"), name: "page.html" },
+    { head: bytes("RIFF\x10\x20\x30\x40WEBPVP8 "), name: "a.webp" },
+    { head: bytes("RIFF\x10\x20\x30\x40WAVEfmt "), name: "a.wav" },
+    { head: bytes("%PDF-1.4\nbody\n%%EOF\r\n"), name: "a.pdf" },
+    { head: bytes("%%EOF\n"), name: "odd" },
+    { head: bytes(""), name: "empty" },
+    { head: hex("3C3F786D60"), name: "near.xml" },
+  ];
+  for (const { head, name } of files) {
+    const file = { head, tail: head, name };
+    assert.deepEqual(matchFormats(index, file), matchFormatsSlowly(compiled, file), name);
+  }
+});
+
+test("every pattern in the shipped database compiles", () => {
+  const path = new URL("../public/signatures.json", import.meta.url);
+  const data = decode(JSON.parse(readFileSync(path, "utf8")));
   const compiled = compileAll(data);
   assert.ok(compiled.length > 9000);
+  assert.ok(data.formats.some((f) => f.source === "file"));
+  assert.ok(data.formats.some((f) => f.source === "wikidata"));
 });

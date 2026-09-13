@@ -3,9 +3,9 @@
 // The toolbar shows one line; everything the rules said is a click away.
 
 import { el } from "./dom.ts";
-import type { Doc, Identification, TemplateNode, ToolMatch, WikiVerdict } from "./doc.ts";
+import type { Doc, Identification, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
-import { namingMatch, wikidataUrl, wikipediaUrl, type WikiMatch } from "./wikiformats.ts";
+import { namingMatch, wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
 
 const IDENTIFYING_MSG = "Identifying file type...";
 const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
@@ -162,12 +162,18 @@ export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin
 export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
-const WIKIDATA_INTRO = "Formats whose Wikidata signature this file matches:";
-const WIKIDATA_LINK = "Wikidata";
+const SIGNATURE_INTRO = "Formats whose signature this file matches:";
 const WIKIPEDIA_LINK = "Wikipedia";
-const WIKIDATA_CREDIT = (fetched: string): string => `Signatures from Wikidata property P4152, as of ${fetched}.`;
-/** The toolbar, for a file only Wikidata could name. */
-const WIKIDATA_NAMED = (label: string): string => `${label} (signature listed on Wikidata)`;
+/** Which of the two lists a row came from, shown beside it. */
+const SOURCE_WORD = { wikidata: "Wikidata", file: "file rules" } as const;
+/** The rule prints more once it has read the file's own values, so its label
+ *  is only the start of the sentence. */
+const UNFINISHED_MARK = "…";
+const SIGNATURE_CREDIT = (fetched: string): string =>
+  `Signatures from Wikidata property P4152 and the file(1) magic rules. ${fetched}.`;
+/** The toolbar, for a file only the signature database could name. */
+const SIGNATURE_NAMED = (label: string, source: SigMatch["format"]["source"]): string =>
+  source === "file" ? `${label} (file(1) rule)` : `${label} (signature listed on Wikidata)`;
 /** How many rows the dialog shows before folding the rest away. */
 const WIKIDATA_SHOWN = 5;
 /** A signature so many formats share that listing them says nothing. */
@@ -176,7 +182,7 @@ const WIKIDATA_MORE = (n: number): string => `${n} more formats`;
 const WIKIDATA_SHARED = (n: number, where: string, hex: string): string => `${n} formats sharing ${where} (${hex})`;
 const WIKIDATA_SHARED_EXT = (n: number, where: string, hex: string, ext: string): string =>
   `${n} formats sharing ${where} (${hex}), all with extension .${ext}`;
-const bytesAt = (m: WikiMatch): string => {
+const bytesAt = (m: SigMatch): string => {
   const n = m.fixed === 1 ? "1 byte" : `${m.fixed} bytes`;
   return m.fromEnd ? `${n} within the last ${m.offset.toLocaleString("en")} bytes` : `${n} at offset ${m.offset}`;
 };
@@ -305,9 +311,9 @@ dialog.addEventListener("click", (e) => {
 // Filled in once the signature rules have answered, so reopening the
 // dialog shows them without asking again.
 let tools: ToolMatch[] | null = null;
-let wiki: WikiVerdict | null = null;
+let wiki: SigVerdict | null = null;
 // The last note the caller gave, so an answer that arrives later (the
-// Wikidata patterns are a slow fetch) redraws with it rather than with a note
+// signature database is a slow fetch) redraws with it rather than with a note
 // worked out from what the caller knew when it asked. The signature template
 // is installed after that ask, and its row was lost this way.
 let lastNote: TemplateNote = null;
@@ -350,21 +356,29 @@ const showDetails = (id: Identification | null, template: TemplateNote): void =>
       rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
     }
   }
-  // What Wikidata lists, after the answers with real evidence behind them.
-  // Most of these patterns are a few bytes long and shared by hundreds of
-  // formats, so the best few are shown and the rest are a click away.
+  // What the signature database lists, after the answers with real evidence
+  // behind them. Most of these patterns are a few bytes long and shared by
+  // hundreds of formats, so the best few are shown and the rest are a click away.
   if (wiki !== null && wiki.matches.length > 0) {
-    rows.push(el("p", { textContent: WIKIDATA_INTRO }), ...wikiRows(wiki.matches, wiki.extension));
-    rows.push(el("p", { className: "dlg-muted", textContent: WIKIDATA_CREDIT(wiki.fetched) }));
+    rows.push(el("p", { textContent: SIGNATURE_INTRO }), ...wikiRows(wiki.matches, wiki.extension));
+    rows.push(el("p", { className: "dlg-muted", textContent: SIGNATURE_CREDIT(wiki.fetched) }));
   }
   dlgBody.replaceChildren(...rows);
   kindInfo.hidden = false;
 };
 
-/** One format Wikidata lists: its name, linked, what matched, and where to read more. */
-const wikiRow = (m: WikiMatch): HTMLElement => {
+/** One format the database lists: its name, what matched, which list it came
+ *  from, and where to read more. Only a Wikidata item has a page to link to;
+ *  a file(1) rule's name is the sentence the rule prints. */
+const wikiRow = (m: SigMatch): HTMLElement => {
   const f = m.format;
-  const parts: (Node | string)[] = [el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: f.label })];
+  const label = f.source === "file" && f.unfinished === true ? `${f.label}${UNFINISHED_MARK}` : f.label;
+  const parts: (Node | string)[] = [
+    f.source === "wikidata"
+      ? el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: label })
+      : el("span", { textContent: label }),
+    el("span", { className: "dlg-muted", textContent: SOURCE_WORD[f.source] }),
+  ];
   const exts = [...(f.ext ?? []), ...(f.wpExt ?? [])];
   if (exts.length > 0) {
     parts.push(el("span", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") }));
@@ -386,8 +400,8 @@ const wikiRow = (m: WikiMatch): HTMLElement => {
  * A crowd whose members all list the file's extension is a crowd of its own,
  * ahead of the rest, and says so.
  */
-const wikiRows = (matches: readonly WikiMatch[], extension: string): HTMLElement[] => {
-  type Group = { readonly key: string; readonly members: WikiMatch[] };
+const wikiRows = (matches: readonly SigMatch[], extension: string): HTMLElement[] => {
+  type Group = { readonly key: string; readonly members: SigMatch[] };
   const groups: Group[] = [];
   const byKey = new Map<string, Group>();
   for (const m of matches) {
@@ -424,10 +438,11 @@ const wikiRows = (matches: readonly WikiMatch[], extension: string): HTMLElement
 };
 
 /**
- * Ask the signature rules what made this file, and Wikidata what it might be,
- * and fold the answers into what is already on screen. A file nothing else
- * could name is named by the first of these that can, since for a .COM there
- * is nothing else to go on, and for a Parquet file only Wikidata has a word.
+ * Ask the signature rules what made this file, and the signature database what
+ * it might be, and fold the answers into what is already on screen. A file
+ * nothing else could name is named by the first of these that can, since for a
+ * .COM there is nothing else to go on, and for a Parquet file only Wikidata has
+ * a word.
  */
 const addOtherMatches = async (doc: Doc, id: Identification | null, template: string | null): Promise<void> => {
   let found: ToolMatch[];
@@ -456,16 +471,16 @@ const addOtherMatches = async (doc: Doc, id: Identification | null, template: st
     }
   }
   try {
-    wiki = await doc.wikidataMatches();
+    wiki = await doc.signatureMatches();
   } catch (e) {
-    console.error("wikidataMatches", e);
+    console.error("signatureMatches", e);
     return;
   }
   if (wiki === null) return;
   showDetails(id, id === null && found.length > 0 ? null : template === null ? lastNote : note);
   if (id === null && template === null && found.length === 0) {
     const best = namingMatch(wiki.matches);
-    if (best !== null) named(WIKIDATA_NAMED(best.format.label));
+    if (best !== null) named(SIGNATURE_NAMED(best.format.label, best.format.source));
   }
 };
 

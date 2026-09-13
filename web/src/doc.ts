@@ -6,11 +6,11 @@ import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.
 import type { GlyphSet } from "./hexcell.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { UNPACKED } from "./strings.ts";
-import { extensionOf, loadWikiFormats, matchFormats, type WikiMatch } from "./wikiformats.ts";
+import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
 
-/** What Wikidata's patterns made of a file, and when they were fetched. */
-export type WikiVerdict = {
-  readonly matches: readonly WikiMatch[];
+/** What the signature database made of a file, and where its lists came from. */
+export type SigVerdict = {
+  readonly matches: readonly SigMatch[];
   readonly fetched: string;
   /** The file's own extension, lowercase without the dot, or "" for none. */
   readonly extension: string;
@@ -1140,8 +1140,8 @@ const COM_LIMIT = 65280;
  */
 const DOS_WINDOW = 1024 * 1024;
 
-/** How much of the end of a file the Wikidata patterns measured from there see. */
-const WIKIDATA_TAIL = 4096;
+/** How much of the end of a file the patterns measured from there see. */
+const SIGNATURE_TAIL = 4096;
 
 export type WrittenRange = { readonly offset_bits: number; readonly size_bits: number };
 
@@ -2034,27 +2034,27 @@ export class Doc {
   }
 
   /**
-   * The formats on Wikidata whose identification patterns this file matches,
-   * best first, or null when the patterns could not be fetched. Only the file
+   * The formats in the signature database whose patterns this file matches,
+   * best first, or null when the database could not be fetched. Only the file
    * itself: unpacked bytes were named by the stream
    * that holds them, and have no name of their own to check an extension
    * against.
    */
-  async wikidataMatches(): Promise<WikiVerdict | null> {
+  async signatureMatches(): Promise<SigVerdict | null> {
     if (this.space !== 0) return null;
     const n = Math.min(IDENTIFY_WINDOW, this.lengthBytes);
     if (n === 0) return null;
-    const formats = await loadWikiFormats();
-    if (formats === null) return null;
+    const signatures = await loadSignatures();
+    if (signatures === null) return null;
     // The patterns measured from the end reach back at most a KiB and a bit.
-    const tailLen = Math.min(WIKIDATA_TAIL, this.lengthBytes);
+    const tailLen = Math.min(SIGNATURE_TAIL, this.lengthBytes);
     const tailAt = this.lengthBytes - tailLen;
     await Promise.all([this.ensureRange(0, n), this.ensureRange(tailAt, tailLen)]);
     const head = this.read(0, n);
     const tail = this.read(tailAt, tailLen);
     if (!head.complete || !tail.complete) return null;
-    const matches = matchFormats(formats.compiled, { head: head.bytes, tail: tail.bytes, name: this.name });
-    return { matches, fetched: formats.fetched, extension: extensionOf(this.name) };
+    const matches = matchFormats(signatures.index, { head: head.bytes, tail: tail.bytes, name: this.name });
+    return { matches, fetched: signatures.fetched, extension: extensionOf(this.name) };
   }
 
   /** Path of the deepest template field covering `bitOffset`. */

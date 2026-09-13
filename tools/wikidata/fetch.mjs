@@ -1,6 +1,7 @@
 // Downloads what Wikidata knows about identifying file formats by their bytes,
 // and the extensions English Wikipedia's infoboxes give for the same formats,
-// into target/wikidata. Then builds the file the page reads from it.
+// into target/wikidata. Then rebuilds tools/wikidata/formats.json from them,
+// and web/public/signatures.json, which the page reads, from that.
 //
 //   node tools/wikidata/fetch.mjs
 //
@@ -172,6 +173,7 @@ async function main() {
   console.log(`wikipedia: ${Object.keys(pages).length} of ${titles.length} articles`);
   writeFileSync(join(CACHE, "fetched.json"), JSON.stringify({ fetched: new Date().toISOString().slice(0, 10) }));
   await import("./build.mjs");
+  await import("../signatures.mjs");
 }
 
 await main();
