@@ -394,6 +394,9 @@ struct PageStepDto {
     /// many of them in `note` instead.
     out_bytes: f64,
     note: String,
+    /// Set when the step was not done at all: a v2 page that says
+    /// `is_compressed` is false names its column's codec and never ran it.
+    skipped: bool,
 }
 
 /// One filter undone on the way back to a chunk's elements.
@@ -1054,6 +1057,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     in_bytes: s.in_bytes as f64,
                     out_bytes: s.out_bytes as f64,
                     note: s.note,
+                    skipped: s.skipped,
                 })
                 .collect();
         }

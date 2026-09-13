@@ -106,9 +106,13 @@ pub struct Step {
     /// values in `note` instead.
     pub in_bytes: usize,
     pub out_bytes: usize,
-    /// What it said, in words: how many values, at what width, how many levels
-    /// and how high they went.
+    /// What it said, in words: how many values, at what width, how many
+    /// levels and how high they went.
     pub note: String,
+    /// Set when the step was not done at all: a v2 page whose `is_compressed`
+    /// is false names its column's codec and was never run through it, and
+    /// saying `snappy 127 to 127 bytes` there would read as if snappy had run.
+    pub skipped: bool,
 }
 
 /// What the page turned out to hold, and what it took to get there.
@@ -202,7 +206,7 @@ pub fn type_name(column: &Column) -> String {
         FLOAT => "f32".into(),
         DOUBLE => "f64".into(),
         BYTE_ARRAY => "byte array".into(),
-        FIXED_LEN_BYTE_ARRAY => format!("{} bytes", column.type_length.max(0)),
+        FIXED_LEN_BYTE_ARRAY => format!("{}-byte array", column.type_length.max(0)),
         _ => "unknown type".into(),
     }
 }
@@ -252,7 +256,8 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                 what: name.into(),
                 in_bytes: used,
                 out_bytes: 0,
-                note: format!("{count} levels, {} bits each, up to {max}", width_for(max)),
+                note: level_note(count, width_for(max), max, encoding),
+                skipped: false,
             });
             at += used;
         }
@@ -276,7 +281,8 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                 what: name.into(),
                 in_bytes: len,
                 out_bytes: 0,
-                note: format!("{} levels, {} bits each, up to {max}", count.len(), width_for(max)),
+                note: level_note(count.len(), width_for(max), max, RLE),
+                skipped: false,
             });
             at += len;
         }
@@ -290,7 +296,8 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
             what: name.into(),
             in_bytes: packed.len(),
             out_bytes: packed.len(),
-            note: if compressed { "nothing was run over it".into() } else { "the writer left this page packed".into() },
+            note: String::new(),
+            skipped: !compressed,
         });
         packed.to_vec()
     } else {
@@ -299,9 +306,11 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                 what: name.into(),
                 in_bytes: packed.len(),
                 out_bytes: 0,
-                note: "no decoder here".into(),
+                note: String::new(),
+                skipped: false,
             });
-            page.problem = Some(format!("The page is packed with {name}, which this does not read."));
+            page.problem =
+                Some(format!("Stopped at {name}: this viewer has no {name} decoder, so the values could not be read."));
             return page;
         };
         match codec::decode(which, packed) {
@@ -311,6 +320,7 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                     in_bytes: packed.len(),
                     out_bytes: out.len(),
                     note: String::new(),
+                    skipped: false,
                 });
                 out
             }
@@ -319,9 +329,10 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
                     what: name.into(),
                     in_bytes: packed.len(),
                     out_bytes: 0,
-                    note: refusal(why).into(),
+                    note: String::new(),
+                    skipped: false,
                 });
-                page.problem = Some(format!("The {name} run would not open: {}.", refusal(why)));
+                page.problem = Some(format!("Stopped at {name}: {}.", refusal(why)));
                 return page;
             }
         }
@@ -337,13 +348,42 @@ pub fn read(payload: &[u8], header: &Header, column: &Column) -> Page {
     page
 }
 
+/// `1 bit each` or `3 bits each`, since a level of one bit is the ordinary
+/// case and `1 bits` is the kind of thing a reader stops trusting.
+fn bits(n: u32) -> String {
+    if n == 1 {
+        "1 bit each".into()
+    } else {
+        format!("{n} bits each")
+    }
+}
+
+/// What a list of levels says about itself: how many there are, how wide one
+/// is, how high they go, and which encoding they are in.
+///
+/// The maximum is the spec's own number and is what decides the width, so both
+/// are worth saying: a reader who sees `1 bit each, max level 1` can check the
+/// arithmetic, and one who sees only a width cannot.
+///
+/// `BIT_PACKED` is the deprecated level encoding, and its levels are counted
+/// from the header rather than read: it packs from the high bit of each byte
+/// down, which is the other way up from everything else here, so what this
+/// knows is how many bytes it takes and not what is in them.
+fn level_note(count: usize, width: u32, max: u32, encoding: i64) -> String {
+    let how = encoding_name(encoding);
+    if encoding == BIT_PACKED {
+        return format!("{count} levels, {}, max level {max}, {how}, counted from the header, not read", bits(width));
+    }
+    format!("{count} levels, {}, max level {max}, {how}", bits(width))
+}
+
 /// The word a refusal goes by, in a sentence rather than as a tag.
 fn refusal(why: codec::Refusal) -> &'static str {
     match why {
-        codec::Refusal::TooLarge => "what comes out is past this viewer's limit",
-        codec::Refusal::Failed => "the decoder would not read it",
-        codec::Refusal::Unaligned => "it does not start on a byte",
-        codec::Refusal::Settings => "how it was packed could not be worked out",
+        codec::Refusal::TooLarge => "too large to unpack (over 64 MiB)",
+        codec::Refusal::Failed => "unpacking failed",
+        codec::Refusal::Unaligned => "not on a byte boundary",
+        codec::Refusal::Settings => "the file doesn't say how this was packed",
     }
 }
 
@@ -402,13 +442,15 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                 in_bytes: bytes.len(),
                 out_bytes: 0,
                 note: format!("{total} values, as {}", page.element_type),
+                skipped: false,
             });
             page.total = total as u64;
             page.values = values;
         }
         PLAIN_DICTIONARY | RLE_DICTIONARY => {
             let Some((&width, rest)) = bytes.split_first() else {
-                page.problem = Some("The page ends before its index width.".into());
+                page.problem =
+                    Some(format!("Stopped at {name}: the page ends before the bit width byte that starts the indices."));
                 return;
             };
             let (indices, used) = hybrid(rest, u32::from(width), want);
@@ -416,7 +458,8 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                 what: name.into(),
                 in_bytes: used + 1,
                 out_bytes: 0,
-                note: format!("{} indices, {width} bits each", indices.len()),
+                note: format!("{} dictionary indices, {}", indices.len(), bits(u32::from(width))),
+                skipped: false,
             });
             page.total = indices.len() as u64;
             page.element_type = "dictionary index".into();
@@ -427,7 +470,8 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
             // versions. Unlike a v2 page's levels, which the page header
             // sizes, the values carry their own length here.
             if bytes.len() < 4 {
-                page.problem = Some("The page ends before its run length.".into());
+                page.problem =
+                    Some(format!("Stopped at {name}: the page is under 4 bytes, too short for the length that starts it."));
                 return;
             }
             let len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
@@ -438,7 +482,8 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                 what: name.into(),
                 in_bytes: used,
                 out_bytes: 0,
-                note: format!("{} booleans, one bit each, behind a four-byte length", values.len()),
+                note: format!("{} bool values, 1 bit each, after a 4-byte length", values.len()),
+                skipped: false,
             });
             page.total = values.len() as u64;
             page.element_type = "bool".into();
@@ -448,10 +493,11 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
         DELTA_LENGTH_BYTE_ARRAY => {
             let (lengths, used) = delta(bytes, want);
             page.steps.push(Step {
-                what: "delta lengths".into(),
+                what: "lengths (DELTA_BINARY_PACKED)".into(),
                 in_bytes: used,
                 out_bytes: 0,
-                note: format!("{} lengths", lengths.values.len()),
+                note: format!("{} lengths, one per value", lengths.values.len()),
+                skipped: false,
             });
             let mut at = used;
             let mut out = Vec::new();
@@ -471,7 +517,8 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                 what: name.into(),
                 in_bytes: at - used,
                 out_bytes: 0,
-                note: format!("{total} byte arrays, their lengths delta packed in front of them"),
+                note: format!("{total} values, as byte array, sized by the lengths above"),
+                skipped: false,
             });
             page.total = total;
             page.values = out;
@@ -483,10 +530,18 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
             let (prefixes, used) = delta(bytes, want);
             let (suffixes, used2) = delta(&bytes[used.min(bytes.len())..], want);
             page.steps.push(Step {
-                what: "delta prefixes".into(),
+                what: "prefix lengths (DELTA_BINARY_PACKED)".into(),
                 in_bytes: used,
                 out_bytes: 0,
-                note: format!("{} shared prefix lengths", prefixes.values.len()),
+                note: format!("{} prefix lengths", prefixes.values.len()),
+                skipped: false,
+            });
+            page.steps.push(Step {
+                what: "suffix lengths (DELTA_BINARY_PACKED)".into(),
+                in_bytes: used2,
+                out_bytes: 0,
+                note: format!("{} suffix lengths", suffixes.values.len()),
+                skipped: false,
             });
             let mut at = used + used2;
             let mut last: Vec<u8> = Vec::new();
@@ -509,17 +564,25 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
             }
             page.steps.push(Step {
                 what: name.into(),
-                in_bytes: at - used,
+                in_bytes: at - used - used2,
                 out_bytes: 0,
-                note: format!("{total} byte arrays, each carrying on from the one before it"),
+                note: format!("{total} values, as byte array, each a shared prefix and its own suffix"),
+                skipped: false,
             });
             page.total = total;
             page.values = out;
         }
         BYTE_STREAM_SPLIT => {
             let width = value_width(column);
-            if width == 0 || bytes.is_empty() {
-                page.problem = Some("BYTE_STREAM_SPLIT needs a fixed-width type.".into());
+            if bytes.is_empty() {
+                page.problem = Some(format!("Stopped at {name}: nothing came out of the codec."));
+                return;
+            }
+            if width == 0 {
+                page.problem = Some(format!(
+                    "Stopped at {name}: this column is {}, which has no fixed width, so the streams cannot be split.",
+                    page.element_type
+                ));
                 return;
             }
             let count = bytes.len() / width;
@@ -529,13 +592,17 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                     joined[i * width + k] = *byte;
                 }
             }
+            let (values, total) = plain(&joined, column, count);
             page.steps.push(Step {
                 what: name.into(),
                 in_bytes: bytes.len(),
                 out_bytes: joined.len(),
-                note: format!("{width} streams of {count} bytes, one per byte of a value"),
+                note: format!(
+                    "{total} values, as {}, from {width} streams of {count} bytes",
+                    page.element_type
+                ),
+                skipped: false,
             });
-            let (values, total) = plain(&joined, column, count);
             page.total = total as u64;
             page.values = values;
         }
@@ -544,9 +611,11 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
                 what: name.into(),
                 in_bytes: bytes.len(),
                 out_bytes: 0,
-                note: "not read here".into(),
+                note: String::new(),
+                skipped: false,
             });
-            page.problem = Some(format!("The values are in {name}, which this does not read."));
+            page.problem =
+                Some(format!("Stopped at {name}: this viewer has no reader for this encoding, so the values could not be read."));
         }
     }
 }
@@ -812,9 +881,12 @@ fn delta_values(page: &mut Page, bytes: &[u8], want: usize, name: &str) {
         in_bytes: used,
         out_bytes: 0,
         note: format!(
-            "{} values in blocks of {}, {} miniblocks each, up to {widest} bits a difference",
-            stream.declared, stream.block_size, stream.miniblocks
+            "{} values, block size {}, {} miniblocks per block, delta bit width up to {widest}",
+            stream.values.len(),
+            stream.block_size,
+            stream.miniblocks
         ),
+        skipped: false,
     });
     page.total = stream.values.len() as u64;
     page.values = stream.values.iter().take(VALUES_SHOWN).map(i128::to_string).collect();
