@@ -385,11 +385,14 @@ fn a_whole_file_listing_settles_in_goes() {
     let mut checked = 0;
     for entry in std::fs::read_dir(&root).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "arrow") {
+        if path.extension().is_none_or(|e| e != "arrow" && e != "arrows") {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let (doc, mut ev) = open(&root, &name);
+        let bytes = std::fs::read(&path).unwrap();
+        let template = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64).unwrap();
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin(template).unwrap());
         let len = doc.len_bits();
         ev.set_slice(Some(5_000));
         let mut goes = 0;
@@ -413,7 +416,7 @@ fn a_whole_file_listing_settles_in_goes() {
             let (a, b) = ((s.offset_bits / 8) as usize, ((s.offset_bits + s.size_bits) / 8) as usize);
             assert!(b - a < 8 && bytes[a..b].iter().all(|&x| x == 0), "{name}: gap {a:#x}..{b:#x} is {:02x?}", &bytes[a..b.min(a + 16)]);
         }
-        eprintln!("{name}: {} spans in {goes} goes, {gap} bytes of gap", spans.len());
+        eprintln!("{name}: {} spans in {goes} goes, {} of {} bytes named, {gap} bytes of padding", spans.len(), len / 8 - gap, len / 8);
         checked += 1;
     }
     assert!(checked > 0);
