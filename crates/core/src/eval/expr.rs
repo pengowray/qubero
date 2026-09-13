@@ -254,12 +254,62 @@ impl Evaluator {
             Expr::Less(a, b) => {
                 i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
             }
+            Expr::Eq(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? == self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Ne(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? != self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Le(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? <= self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Gt(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? > self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Ge(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? >= self.eval_expr_at(doc, at, b, here)?)
+            }
+            // Short-circuiting, and that is part of what they say rather than
+            // an optimisation: a guard in front of a read only guards while
+            // what it guards is left unread. See [`Expr::Both`].
+            Expr::Both(a, b) => match self.eval_expr_at(doc, at, a, here)? {
+                0 => 0,
+                _ => i128::from(self.eval_expr_at(doc, at, b, here)? != 0),
+            },
+            Expr::Either(a, b) => match self.eval_expr_at(doc, at, a, here)? {
+                0 => i128::from(self.eval_expr_at(doc, at, b, here)? != 0),
+                _ => 1,
+            },
+            Expr::Not(a) => i128::from(self.eval_expr_at(doc, at, a, here)? == 0),
+            // Only the branch taken is asked, so a question that cannot be
+            // answered in the other branch never comes up.
+            Expr::Cond { when, then, otherwise } => {
+                let taken = match self.eval_expr_at(doc, at, when, here)? {
+                    0 => otherwise,
+                    _ => then,
+                };
+                self.eval_expr_at(doc, at, taken, here)?
+            }
             Expr::Div(a, b) => {
                 let d = self.eval_expr_at(doc, at, b, here)?;
                 if d == 0 {
                     return fail("division by zero");
                 }
                 self.eval_expr_at(doc, at, a, here)? / d
+            }
+            // With the sign of the divisor, which is the rule the formats
+            // that use one were written against. `rem_euclid` is a third rule
+            // again, always non-negative, and would disagree here whenever
+            // the divisor is negative. See [`Expr::Mod`].
+            Expr::Mod(a, b) => {
+                let d = self.eval_expr_at(doc, at, b, here)?;
+                if d == 0 {
+                    return fail("division by zero");
+                }
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                // `i128::MIN % -1` overflows; the answer is nought either way.
+                let r = n.checked_rem(d).unwrap_or(0);
+                if r != 0 && (r < 0) != (d < 0) { r + d } else { r }
             }
             Expr::DivCeil(a, b) => {
                 let d = self.eval_expr_at(doc, at, b, here)?;

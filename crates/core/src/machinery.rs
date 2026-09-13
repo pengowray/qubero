@@ -215,12 +215,20 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(index, out);
         }
         Expr::Or(a, b)
+        | Expr::Either(a, b)
+        | Expr::Both(a, b)
         | Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Mod(a, b)
         | Expr::DivCeil(a, b)
         | Expr::Less(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b)
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
@@ -229,7 +237,15 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(a, out);
             expr_refs(b, out);
         }
-        Expr::Log2(a) => expr_refs(a, out),
+        // Every branch, not only the one this file takes: which field is
+        // machinery for which is a fact about the template, and the template
+        // reads all three.
+        Expr::Cond { when, then, otherwise } => {
+            expr_refs(when, out);
+            expr_refs(then, out);
+            expr_refs(otherwise, out);
+        }
+        Expr::Log2(a) | Expr::Not(a) => expr_refs(a, out),
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
         Expr::Bit(a, _) => expr_refs(a, out),

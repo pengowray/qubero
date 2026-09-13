@@ -2747,6 +2747,133 @@ fn a_logarithm_of_nothing_and_a_division_by_nothing_are_refused() {
     }
 }
 
+/// A scratch template with one byte in it, so an expression made of literals
+/// has somewhere to be asked from.
+fn nowhere() -> (Document<MemSource>, Evaluator) {
+    let t = T::structure("Root", vec![("n", T::u8()), ("after", T::u8())]);
+    let d = doc(&[7, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    ev.resolve(&d, &[]).unwrap();
+    (d, ev)
+}
+
+/// Kaitai's `%` and Python's: the answer takes the sign of the divisor, so
+/// `-5 % 3` is 1. The machine's own remainder would say -2, and a template
+/// written against a specification that says the first would read the file
+/// wrongly.
+#[test]
+fn a_modulo_takes_the_sign_of_the_divisor() {
+    let (d, mut ev) = nowhere();
+    let mut m = |a: i128, b: i128| ev.eval_expr(&d, &[1], &E::lit(a).modulo(E::lit(b))).unwrap();
+    assert_eq!(m(7, 3), 1);
+    assert_eq!(m(6, 3), 0);
+    assert_eq!(m(-5, 3), 1);
+    assert_eq!(m(5, -3), -1);
+    assert_eq!(m(-5, -3), -2);
+    // The padding idiom it replaces, as a check that the two agree.
+    assert_eq!(m(13, 4), 13 - (13 / 4) * 4);
+    // And nothing to divide by is refused, as it is for a division.
+    assert!(ev.eval_expr(&d, &[1], &E::field("n").modulo(E::lit(0))).is_err());
+}
+
+/// Each comparison answers one or nothing, so it is a number like any other.
+#[test]
+fn the_comparisons_answer_one_or_nothing() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    let cases = [
+        (l(3).equal_to(l(3)), 1),
+        (l(3).equal_to(l(4)), 0),
+        (l(3).not_equal(l(4)), 1),
+        (l(3).not_equal(l(3)), 0),
+        (l(3).less_than(l(4)), 1),
+        (l(3).less_or_equal(l(3)), 1),
+        (l(4).less_or_equal(l(3)), 0),
+        (l(4).greater_than(l(3)), 1),
+        (l(3).greater_than(l(3)), 0),
+        (l(3).greater_or_equal(l(3)), 1),
+        (l(2).greater_or_equal(l(3)), 0),
+        // Signs are the arithmetic's, not the bytes'.
+        (l(-1).less_than(l(0)), 1),
+    ];
+    for (e, want) in cases {
+        assert_eq!(ev.eval_expr(&d, &[1], &e).unwrap(), want, "{e:?}");
+    }
+    // The field a comparison names is read, and the answer is about its value.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::field("n").equal_to(l(7))).unwrap(), 1);
+}
+
+/// `and` and `or` answer a truth, and leave the far side alone once the near
+/// side has settled it: a guard is only a guard while what it guards stays
+/// unread.
+#[test]
+fn the_boolean_operators_stop_once_the_answer_is_settled() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    // Something no reading can answer, to stand where the far side is.
+    let bad = || l(1).div(l(0));
+    assert_eq!(ev.eval_expr(&d, &[1], &l(1).both(l(2))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(1).both(l(0))).unwrap(), 0);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).both(bad())).unwrap(), 0);
+    assert!(ev.eval_expr(&d, &[1], &l(1).both(bad())).is_err());
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).either(l(9))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).either(l(0))).unwrap(), 0);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(5).either(bad())).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).negate()).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(5).negate()).unwrap(), 0);
+    // A truth, not a value: the value-or answers 12 where this answers 1.
+    assert_eq!(ev.eval_expr(&d, &[1], &l(12).either(l(4))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(12).or(l(4))).unwrap(), 12);
+}
+
+/// Only the branch taken is worked out, and a `then` of nothing is still the
+/// answer, which is where the older `Less` and `Or` pairing went wrong.
+#[test]
+fn only_the_branch_a_condition_takes_is_worked_out() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    let bad = || l(1).div(l(0));
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(1), l(5), bad())).unwrap(), 5);
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(0), bad(), l(9))).unwrap(), 9);
+    // Zero is an answer, not a fall-through.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(1), l(0), l(9))).unwrap(), 0);
+    // Which is what the pair it replaces gets wrong: `or` takes its right
+    // side whenever the left comes to nothing.
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).or(l(9))).unwrap(), 9);
+    // The condition itself is read from the file like anything else.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(E::field("n").equal_to(l(7)), l(1), l(2))).unwrap(), 1);
+    // A condition that cannot be worked out is a failure, not a branch.
+    assert!(ev.eval_expr(&d, &[1], &E::cond(bad(), l(1), l(2))).is_err());
+}
+
+/// The condition decides which branch a field's shape came from, so the panel
+/// names the field the condition read and the fields of the branch that was
+/// taken, and nothing from the branch that was not.
+#[test]
+fn a_condition_names_the_branch_it_took_and_not_the_other() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("wide", T::u8()),
+            ("short", T::u8()),
+            ("long", T::u8()),
+            ("body", T::bytes(E::cond(E::field("wide"), E::field("long"), E::field("short")))),
+        ],
+    );
+    let d = doc(&[1, 2, 4, 0, 0, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[3]).unwrap().size_bits, 4 * 8);
+    let origins = ev.origins(&d, &[3]).unwrap();
+    let labels: Vec<&str> = origins.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(labels, vec!["wide", "long"]);
+    // Written out as the template writes it, with both branches shown: a
+    // reader checking the answer needs the case that did not come up.
+    let rel = ev.relations(&d, &[3]).unwrap();
+    assert_eq!(rel[0].written, "wide ? long : short");
+    assert_eq!(rel[0].substituted, "1 ? 4 : 2");
+    assert_eq!(rel[0].result, "4");
+}
+
 #[test]
 fn a_shift_of_more_than_a_word_is_refused_either_way() {
     let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);

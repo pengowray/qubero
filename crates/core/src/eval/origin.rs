@@ -563,9 +563,17 @@ impl Evaluator {
             | Expr::Sub(a, b)
             | Expr::Mul(a, b)
             | Expr::Div(a, b)
+            | Expr::Mod(a, b)
             | Expr::DivCeil(a, b)
             | Expr::Or(a, b)
+            | Expr::Either(a, b)
+            | Expr::Both(a, b)
             | Expr::Less(a, b)
+            | Expr::Eq(a, b)
+            | Expr::Ne(a, b)
+            | Expr::Le(a, b)
+            | Expr::Gt(a, b)
+            | Expr::Ge(a, b)
             | Expr::Shl(a, b)
             | Expr::Shr(a, b)
             | Expr::And(a, b)
@@ -574,7 +582,23 @@ impl Evaluator {
                 self.from_expr(doc, at, a, role, out)?;
                 self.from_expr(doc, at, b, role, out)?;
             }
-            Expr::Log2(a) => self.from_expr(doc, at, a, role, out)?,
+            // The condition, and then only the branch this file took. A field
+            // in the branch nobody took settled nothing here, and offering it
+            // as a place the answer came from would send a reader to a number
+            // that had no part in it.
+            Expr::Cond { when, then, otherwise } => {
+                self.from_expr(doc, at, when, role, out)?;
+                let taken = match self.eval_expr(doc, at, when) {
+                    Ok(0) => otherwise,
+                    Ok(_) => then,
+                    // Which branch is unknown, so neither is named: the
+                    // condition alone is the honest answer.
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(()),
+                };
+                self.from_expr(doc, at, &taken.clone(), role, out)?;
+            }
+            Expr::Log2(a) | Expr::Not(a) => self.from_expr(doc, at, a, role, out)?,
             // The fields of the record that placed this element, read from
             // where that record's offset was: a heap array's length is the
             // `count` of its own descriptor, which is a field a reader can go

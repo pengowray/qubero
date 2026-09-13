@@ -320,6 +320,22 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    /// What is left over after dividing, taking the sign of the *divisor*:
+    /// `-5 % 3` is 1, not -2.
+    ///
+    /// Which of the two rules this is decides answers, so it is written down
+    /// rather than left to whatever the machine does. This is Python's and
+    /// Ruby's rule, and Kaitai Struct's, which says outright that its `%` is
+    /// a modulo and not a remainder. C's `%` and Rust's are the other rule,
+    /// and the two disagree for every negative dividend.
+    ///
+    /// Dividing by zero fails, as [`Expr::Div`] does.
+    ///
+    /// The same answer can be written as the quotient multiplied back out and
+    /// taken away, which is how three templates here say it. That reads as
+    /// arithmetic nobody meant, and a panel showing the working shows the
+    /// idiom rather than the question.
+    Mod(Box<Expr>, Box<Expr>),
     /// One when the first is less than the second, and zero otherwise.
     ///
     /// There is no `if` here and this is not one. It is a number like any
@@ -335,6 +351,57 @@ pub enum Expr {
     /// read in exactly the cases it was put there to avoid, and what comes
     /// back is whatever was at an offset nothing checked.
     Less(Box<Expr>, Box<Expr>),
+    /// One when the two are the same number, and zero otherwise. The four
+    /// below are the rest of the set: not equal, at most, greater than, at
+    /// least.
+    ///
+    /// Each answers one or zero, as [`Expr::Less`] does, so a comparison is a
+    /// number like any other and can be multiplied by, added to or switched
+    /// on. [`Expr::equals`] says the same thing as a pair of `Less`
+    /// comparisons and six terms, which is how a template asked before these
+    /// existed; it stays as it is, so that the templates using it keep the
+    /// working they already show.
+    Eq(Box<Expr>, Box<Expr>),
+    Ne(Box<Expr>, Box<Expr>),
+    Le(Box<Expr>, Box<Expr>),
+    Gt(Box<Expr>, Box<Expr>),
+    Ge(Box<Expr>, Box<Expr>),
+    /// One when both sides are nonzero, and zero otherwise. Nonzero is true
+    /// and zero is false, which is what the comparisons above answer.
+    ///
+    /// The right side is not worked out at all when the left is zero, so a
+    /// guard may stand in front of the thing it guards: `4 <= remaining and
+    /// header.flags == 3` is what a record with an optional trailer needs,
+    /// and reading past the end to find out is exactly what the guard was
+    /// written to stop.
+    Both(Box<Expr>, Box<Expr>),
+    /// One when either side is nonzero, and zero otherwise. The right side is
+    /// left alone when the left is nonzero, for the reason [`Expr::Both`]'s
+    /// is.
+    ///
+    /// Not the same operator as [`Expr::Or`], and both are here because a
+    /// template has to be able to say which it meant. `Or` answers a *value*:
+    /// the left side, or the right side when the left comes to zero, which is
+    /// how a format says "this length, or the last record that had one". This
+    /// answers a *truth*: one or zero, whatever the sides hold. For
+    /// `flags or 4` with `flags` at 12, one of them is 12 and the other is 1.
+    Either(Box<Expr>, Box<Expr>),
+    /// One when what is under it is zero, and zero when it is nonzero. The
+    /// other half of the boolean set.
+    Not(Box<Expr>),
+    /// `then` when `when` is nonzero, `otherwise` when it is zero.
+    ///
+    /// Only the branch taken is worked out, so the other may be something
+    /// that cannot be read here at all: a field of a record that is only
+    /// present in the other case, an element of a list that may be empty. A
+    /// question that fails in the branch nobody took is not a failure, and
+    /// that is the point rather than a convenience.
+    ///
+    /// [`Expr::Less`] and [`Expr::Or`] together nearly say this and get one
+    /// case wrong: `Or` takes its right side whenever the left comes to zero,
+    /// so a `then` that is legitimately zero falls through to the answer for
+    /// the other branch.
+    Cond { when: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     /// This shifted left by that many bits.
     ///
     /// A format that stores a shift count rather than a size needs it: a
@@ -703,6 +770,56 @@ impl Expr {
     /// This divided by `rhs`, rounded up.
     pub fn div_ceil(self, rhs: Expr) -> Expr {
         Expr::DivCeil(Box::new(self), Box::new(rhs))
+    }
+    /// What is left of this after taking out whole `rhs`es, with the sign of
+    /// `rhs`. See [`Expr::Mod`].
+    pub fn modulo(self, rhs: Expr) -> Expr {
+        Expr::Mod(Box::new(self), Box::new(rhs))
+    }
+    /// One when the two are the same number, and zero otherwise. See
+    /// [`Expr::Eq`], and [`Expr::equals`] for the older spelling this does not
+    /// replace.
+    pub fn equal_to(self, rhs: Expr) -> Expr {
+        Expr::Eq(Box::new(self), Box::new(rhs))
+    }
+    /// One when the two are different numbers, and zero otherwise.
+    pub fn not_equal(self, rhs: Expr) -> Expr {
+        Expr::Ne(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is `rhs` or less, and zero otherwise. Not
+    /// [`Expr::at_most`], which answers one of the two numbers rather than
+    /// whether it is the smaller.
+    pub fn less_or_equal(self, rhs: Expr) -> Expr {
+        Expr::Le(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is more than `rhs`, and zero otherwise.
+    pub fn greater_than(self, rhs: Expr) -> Expr {
+        Expr::Gt(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is `rhs` or more, and zero otherwise. Not
+    /// [`Expr::at_least`], which answers one of the two numbers.
+    pub fn greater_or_equal(self, rhs: Expr) -> Expr {
+        Expr::Ge(Box::new(self), Box::new(rhs))
+    }
+    /// One when both this and `rhs` are nonzero. `rhs` is left alone when this
+    /// is zero. See [`Expr::Both`].
+    pub fn both(self, rhs: Expr) -> Expr {
+        Expr::Both(Box::new(self), Box::new(rhs))
+    }
+    /// One when either this or `rhs` is nonzero. `rhs` is left alone when this
+    /// is nonzero. Not [`Expr::or`], which answers a value; see
+    /// [`Expr::Either`].
+    pub fn either(self, rhs: Expr) -> Expr {
+        Expr::Either(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is zero, and zero when it is not.
+    pub fn negate(self) -> Expr {
+        Expr::Not(Box::new(self))
+    }
+    /// `then` when `when` is nonzero, `otherwise` when it is zero, and only
+    /// the one taken is worked out. See [`Expr::Cond`].
+    pub fn cond(when: Expr, then: Expr, otherwise: Expr) -> Expr {
+        Expr::Cond { when: Box::new(when), then: Box::new(then), otherwise: Box::new(otherwise) }
     }
     /// The base-2 logarithm of this, rounded down.
     pub fn log2(self) -> Expr {
