@@ -3043,6 +3043,38 @@ fn an_optional_field_the_file_left_out_is_absent_and_not_empty() {
     assert_eq!(rel[0].substituted, "bit(0, 0)");
 }
 
+/// A field that is not in the file has no number, and is not nought either.
+/// Reading one as nought would let a switch quietly take case 0 and a length
+/// quietly be none, with nothing said about either.
+#[test]
+fn an_absent_field_has_no_number_rather_than_nought() {
+    let t = |cond: Expr| {
+        T::structure(
+            "Root",
+            vec![
+                ("flags", T::u8()),
+                ("extra", T::when(E::field("flags"), T::u8())),
+                ("body", T::bytes(cond)),
+            ],
+        )
+    };
+    // Naming it outright is refused, and so is asking how long it is.
+    let d = doc(&[0, 1, 2, 3]);
+    for e in [E::field("extra"), E::SizeOf("extra".into())] {
+        let mut ev = Evaluator::new(Template::new("t", t(e)));
+        let err = ev.node(&d, &[2]).unwrap_err();
+        assert!(format!("{err:?}").contains("not in this file"), "{err:?}");
+    }
+    // Asking whether it is there first is how a template reads one: the
+    // branch that names it is never taken when it is not.
+    let guarded = E::cond(E::field("flags"), E::field("extra"), E::lit(2));
+    let mut ev = Evaluator::new(Template::new("t", t(guarded.clone())));
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 2 * 8);
+    // And with the flag set it reads the field, which is there.
+    let d2 = doc(&[1, 3, 0, 0, 0]);
+    assert_eq!(Evaluator::new(Template::new("t", t(guarded))).node(&d2, &[2]).unwrap().size_bits, 3 * 8);
+}
+
 /// A whole structure can be the optional thing, and an absent one has no rows
 /// at all rather than a heading with nothing under it.
 #[test]

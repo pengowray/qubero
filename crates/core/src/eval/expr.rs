@@ -69,7 +69,7 @@ impl Evaluator {
             Expr::Deduced(what) => self.deduced_int(doc, at, *what, here)?,
             Expr::Elem { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, array)? {
                     Some(v) => v,
                     None => return fail(format!("{array} holds no number there")),
                 }
@@ -230,7 +230,7 @@ impl Evaluator {
             Expr::Within(field) => {
                 let field = field.clone();
                 let p = self.within_path(doc, at, &field)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, &field.join("."))? {
                     Some(v) => v,
                     None => return fail(format!("{} holds no number", field.join("."))),
                 }
@@ -239,7 +239,7 @@ impl Evaluator {
             // because a name reaches only a sibling.
             Expr::ElemWithin { path, index, field } => {
                 let p = self.elem_within_path(doc, at, path, index, field, here)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, &path.join("."))? {
                     Some(v) => v,
                     None => return fail(format!("{} holds no number there", path.join("."))),
                 }
@@ -358,6 +358,21 @@ impl Evaluator {
                 i128::from(n.ilog2())
             }
         })
+    }
+
+    /// The number the node at `path` holds, for an expression that reached it
+    /// by a path. `None` when it has a reading that is not a number, which
+    /// each caller words its own refusal for.
+    ///
+    /// A field the file did not write is refused here rather than answered:
+    /// see the note in [`Evaluator::lookup_bits`], which is the same trap one
+    /// name further out.
+    fn int_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<Option<i128>> {
+        let info = self.node(doc, path)?;
+        if info.absent {
+            return fail(format!("{what} is not in this file"));
+        }
+        Ok(info.value.as_int())
     }
 
     /// Where the window around the field at `at` starts and ends, in bits of
@@ -991,6 +1006,15 @@ impl Evaluator {
                         p.push(0);
                     }
                     let info = self.node(doc, &p)?;
+                    // A field the file did not write holds nothing, and
+                    // nothing is not zero. Left to read as the empty node it
+                    // is, a switch keyed on an absent field would quietly
+                    // take case 0 and a length would quietly be none, which
+                    // is the file being read wrongly with nothing said. See
+                    // [`NodeInfo::absent`].
+                    if info.absent {
+                        return fail(format!("{name} is not in this file"));
+                    }
                     // A field with no numeric reading can still be measured.
                     return Ok((info.value.as_int(), info.size_bits as i128));
                 }

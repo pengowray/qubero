@@ -1560,6 +1560,11 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
 
 fn dto(n: NodeInfo) -> NodeDto {
     let (kind, value, edit_text, ok) = shown(&n.value);
+    // A field the file did not write has nothing to show. Its node reads as an
+    // empty composite, and a value column saying `0` there is a number nobody
+    // wrote and one a reader would take for the field's contents. `absent` is
+    // the whole of what there is to say about the row.
+    let (value, edit_text) = if n.absent { (String::new(), String::new()) } else { (value, edit_text) };
     NodeDto {
         path: n.path,
         name: n.name,
