@@ -33,6 +33,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| NetCDF classic: a file with exactly one record variable writes its records unpadded, and the template stepped by the padded `vsize`. `recsize` is now the unpadded width in that case. Also fixed on the way: a record variable narrower than four bytes read values that belonged to later records. Four generated samples pin both cases. | 82c8c9d |
+| miniSEED 3: a new template (`mseed3.rs`) recognised by `MS\x03`, records sized from their three lengths, extra headers as JSON, Steim frames shared with `mseed.rs`. Three libmseed samples. | 14e413d |
 | S6, NPZ half: members already open as NPY through the ZIP entry's decoded space being sniffed; a test pins it and the stale doc is gone. Zarr ZipStore chunks remain (a reader, not an IR change). | d6b864a |
 | S1. `Ty::Gather` and `Expr::Placer`: children placed at offsets read from records the template walks to, and a child asking its record again. | `2153c96` |
 | FITS heap: every `P`/`Q` descriptor's array placed in the heap, sized by its count and typed by its letter. `comp.fits` names all 86,400 bytes, up from a heap of one gap. | `b5c4fd2` |
@@ -302,8 +304,11 @@ only; anything else is bytes.
 
 ### miniSEED
 
-- Steim1/2 read as differences; undoing them into samples is not done.
-- miniSEED 3 (FDSN, 2023) is not recognised.
+- Steim1/2 read as differences; undoing them into samples is not done (a
+  decoder-tier side reader, the `hdf5_chunk.rs` pattern).
+- miniSEED 3 reads (see Closed). Its CRC-32C is placed and not verified, and
+  obspy cannot read the format, so the sample facts were checked by a
+  `struct.unpack` walk rather than a second reader.
 - Steim3 and HGLP encodings are bytes.
 
 ### GWF
@@ -315,9 +320,13 @@ only; anything else is bytes.
 
 ### NetCDF classic
 
-Reads correctly. A file with exactly one record variable writes its records
-unpadded and this places them slightly wrong for an odd record width. Corpus:
-3 tiny files of the same data.
+Reads correctly, the one-record-variable case included (see Closed). Corpus:
+seven small generated files. The generator's `surface()` builds `sst` with
+`np.arange(..., dtype=">f4") / 4 + 270`, and the arithmetic drops the byte
+order, so the three `sst-cdf*.nc` files hold little-endian floats that read
+back as values near 1e-38 in every library; the files were kept byte-identical
+rather than churned. Fix the generator and regenerate when nothing else is
+pinned to those bytes. NetCDF-4 is HDF5 and reads as `hdf5`.
 
 ### Zarr
 
