@@ -741,8 +741,8 @@ export const KAITAI_TEMPLATE = {
   group: "From Kaitai Struct",
   note: (gaps: number): string =>
     gaps === 0
-      ? "Format description from Kaitai Struct."
-      : `Format description from Kaitai Struct. This template leaves out ${gaps === 1 ? "one part" : `${gaps} parts`} of it.`,
+      ? "Format description from Kaitai Struct, converted in full."
+      : `Format description from Kaitai Struct. ${gaps === 1 ? "1 part" : `${gaps} parts`} of it could not be converted and read as plain bytes.`,
 };
 
 /** The Logical tab for an ELF, when the parsed header has no field of a name
