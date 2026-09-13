@@ -120,6 +120,7 @@ mod pak;
 mod parquet;
 pub mod parquet_page;
 pub mod thrift;
+pub mod flatbuf;
 mod pcx;
 mod pico8;
 mod pdb;
