@@ -110,6 +110,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   mseed: "miniSEED seismic records",
   mseed3: "miniSEED 3 seismic records",
   sac: "SAC seismogram",
+  segy: "SEG-Y seismic traces",
   cdf: "NASA CDF",
   hdf4: "HDF4",
   parquet: "Parquet",
