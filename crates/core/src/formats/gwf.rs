@@ -30,24 +30,33 @@
 //!
 //! The constant table below is what is left when that question has no answer:
 //! a file with no dictionary at all, or one whose dictionary does not cover
-//! the class in hand. It is the numbering FrameL and FrameCPP assign, which is
-//! the order the specification lists the structures in. A file that both
-//! declares a class and calls it something this reader has never heard of gets
-//! its bytes, which is the honest answer.
+//! the class in hand. It is the numbering FrameCPP assigns, which is the order
+//! the specification lists the structures in. A file that both declares a
+//! class and calls it something this reader has never heard of gets its bytes,
+//! which is the honest answer.
 //!
-//! Two names, then, for a file that numbers its classes its own way: the class
-//! byte reads as an enum of the standard numbering, and `class_name` beside it
-//! reads as what this file's own dictionary calls that number. Where the two
-//! disagree, the declared name is the one to believe, and seeing both is how a
-//! reader knows they disagreed at all.
+//! There is no standard numbering to fall back on, which the samples showed.
+//! FrameCPP numbers `FrameH` 3; FrameL 8.30 numbers it 4 and its `FrAdcData` 5;
+//! FrameL 8.20 numbers classes in the order it first wrote one, so in the gwpy
+//! sample `FrVect` is 5. So the class byte names only the two classes the
+//! specification fixes, and `class_name` beside it reads as what this file's
+//! own dictionary calls the number. The structure is labelled by that, and a
+//! pointer's class stays a number: an enum of one library's numbering would
+//! label a FrameL frame header as an ADC channel, and nothing on screen would
+//! say that it had.
 //!
 //! What is read: the header, the structure stream, and every class the
-//! specification defines. FrameH, FrDetector, FrProcData, FrVect, FrEndOfFrame,
-//! FrTOC and FrEndOfFile are checked field for field against the GWOSC
-//! sample's own dictionary, all 162 structures of it. The other eleven are
-//! from FrameL 8.30's `Fr*Def()` functions, which are what writes the
-//! dictionary a file carries; no sample here declares them, so nothing has
-//! checked them against bytes.
+//! specification defines, each checked field for field against a file's own
+//! dictionary. `gwf_real.rs` walks each sample's FrSH and FrSE structures off
+//! the bytes, without the template, and asks that every structure the
+//! dictionary covers reads as the class it names, with the fields it lists in
+//! that order, the last of them ending where the structure's length says.
+//! The GWOSC file covers FrameH, FrDetector, FrProcData, FrVect, FrEndOfFrame,
+//! FrTOC and FrEndOfFile. The other eleven (FrAdcData, FrEvent, FrHistory,
+//! FrMsg, FrRawData, FrSerData, FrSimData, FrSimEvent, FrStatData, FrSummary,
+//! FrTable) are covered by the test file FrameL ships, written by its
+//! `exampleFull.c`, and their values are checked against what that program
+//! says it put in them.
 //!
 //! What stays bytes: the contents of a compressed FrVect, which is named but
 //! not unpacked; the body of a class this reader has no layout for; and the
@@ -67,9 +76,19 @@ const CHECKSUM_SCHEME: &[(i128, &str)] = &[(0, "none"), (1, "CRC")];
 /// What a structure's own checksum covers.
 const CHECKSUM_KIND: &[(i128, &str)] = &[(0, "none"), (1, "structure")];
 
-/// The class numbers as FrameL and FrameCPP assign them, which is the order
-/// the specification lists the structures in. Only 1 and 2 are fixed by the
-/// format; see the note at the top about the rest.
+/// The two class numbers the specification fixes. Every other number is the
+/// writer's to assign, so a name for it can only come from the file.
+const FIXED_CLASSES: &[(i128, &str)] = &[(1, "FrSH"), (2, "FrSE")];
+
+/// The class numbers FrameCPP assigns in a version 8 file, which is the order
+/// the specification lists the structures in. Used only for a structure whose
+/// class no dictionary entry in the file covers; see the note at the top.
+///
+/// Not FrameL's numbering, which is why it names nothing on screen. FrameL
+/// 8.30 calls class 4 `FrameH` where FrameCPP calls it `FrAdcData`, and FrameL
+/// 8.20 numbers classes in the order it first wrote one, so its `FrVect` is 5.
+/// A row that read class 4 as `FrAdcData` above a frame header would be the
+/// kind of wrong a reader has no way to catch.
 const CLASSES: &[(i128, &str)] = &[
     (1, "FrSH"),
     (2, "FrSE"),
@@ -92,14 +111,6 @@ const CLASSES: &[(i128, &str)] = &[
     (19, "FrTOC"),
     (20, "FrVect"),
 ];
-
-/// The same numbers as a pointer writes them, where nothing pointed at is
-/// class zero.
-fn pointer_classes() -> Vec<(i128, &'static str)> {
-    let mut v = vec![(0i128, "null")];
-    v.extend_from_slice(CLASSES);
-    v
-}
 
 /// How the numbers in an FrVect are packed, from FrameL 8.30's
 /// `FrVectCompData` and `FrVectExpand`.
@@ -215,22 +226,32 @@ fn rest(e: Endian) -> T {
 fn structure(e: Endian) -> T {
     T::structure_named(
         "FrStructure",
-        "class",
+        "class_name",
         "body",
         vec![
             ("length", T::u64(e)),
             ("checksum_kind", T::enumeration("ChecksumKind", T::u8(), CHECKSUM_KIND)),
-            ("class", T::enumeration("FrClass", T::u8(), CLASSES)),
-            // What this file calls that class. The number is in the file and
-            // the word is in the file, in a dictionary entry further back, and
-            // before this the reader was shown the number and left to go and
-            // find the entry themselves. A row of no bytes beside it says it.
-            ("class_name", T::computed_text(declared_name())),
+            ("class", T::enumeration("FrClass", T::u8(), FIXED_CLASSES)),
+            ("class_name", class_name()),
             ("instance", T::u32(e)),
             ("body", T::sized(body_size(14), class_body(e))),
         ],
     )
     .machinery(&["length", "checksum_kind", "instance"])
+}
+
+/// What this file calls a structure's class. The number is in the file and the
+/// word is in the file, in a dictionary entry further back, and before this
+/// the reader was shown the number and left to go and find the entry
+/// themselves. A row of no bytes beside the class says it, and it is what the
+/// structure is labelled by.
+///
+/// FrSH and FrSE are the two classes no dictionary entry describes, since they
+/// are the dictionary, so their names are the specification's and read off
+/// the number.
+fn class_name() -> T {
+    let fixed = T::enumeration("FrClass", T::computed(E::field("class")), FIXED_CLASSES);
+    T::switch(E::field("class"), vec![(1, fixed.clone()), (2, fixed)], T::computed_text(declared_name()))
 }
 
 /// One structure of a version 6 or 7 file. The header the specification gives
@@ -270,13 +291,16 @@ fn string(e: Endian) -> T {
 
 /// A reference to another structure in the same file, by class and instance.
 /// Class zero points at nothing.
+///
+/// The class is this file's own number, and it stays a number. The dictionary
+/// entry that names it is often further on than the pointer is, since a frame
+/// header points at the channels written after it, so no search back through
+/// the stream can name it; and a table of one library's numbers would name
+/// the other library's classes wrongly. See [`CLASSES`].
 fn pointer(e: Endian) -> T {
     T::inline_structure(
         "FrPtr",
-        vec![
-            ("class", T::enumeration("FrPtrClass", T::u16(e), &pointer_classes())),
-            ("instance", T::u32(e)),
-        ],
+        vec![("class", T::enumeration("FrPtrClass", T::u16(e), &[(0, "null")])), ("instance", T::u32(e))],
     )
 }
 
@@ -321,13 +345,6 @@ fn class_body(e: Endian) -> T {
     T::switch(E::field("class"), vec![(1, frsh(e)), (2, frse(e))], declared_body(e))
 }
 
-/// The body of everything else: whatever the FrSH earlier in this stream that
-/// numbered itself with this structure's class byte calls it.
-///
-/// A file with no dictionary entry for the class answers with no name at all,
-/// and the empty name is a case here rather than the default: it takes the
-/// constant table. A file that names a class something this reader has no
-/// layout for falls to the default and keeps its bytes.
 /// The name this file gives the class the asking structure carries: the `FrSH`
 /// earlier in the stream that numbered itself with this structure's class byte,
 /// and the name written in it. Empty when the file declared no such class.
@@ -335,6 +352,13 @@ fn declared_name() -> E {
     E::sibling_tagged(&["body", "class"], E::field("class"), &["body", "name", "text"])
 }
 
+/// The body of everything else: whatever the FrSH earlier in this stream that
+/// numbered itself with this structure's class byte calls it.
+///
+/// A file with no dictionary entry for the class answers with no name at all,
+/// and the empty name is a case here rather than the default: it takes the
+/// constant table. A file that names a class something this reader has no
+/// layout for falls to the default and keeps its bytes.
 fn declared_body(e: Endian) -> T {
     let declared = declared_name();
     let mut cases = bodies(e);
@@ -781,7 +805,7 @@ fn vect(e: Endian) -> T {
             ("type", T::enumeration("FrVectType", T::u16(e), VECT_TYPE)),
             ("nData", T::u64(e)),
             ("nBytes", T::u64(e)),
-            ("data", T::sized(E::field("nBytes").at_most(E::Remaining), numbers(e))),
+            ("data", T::sized(E::field("nBytes").at_most(E::Remaining), vect_data(e))),
             ("nDim", T::u32(e)),
             ("nx", T::array(T::u64(e), dims.clone())),
             ("dx", T::array(T::F64(e), dims.clone())),
@@ -796,32 +820,44 @@ fn vect(e: Endian) -> T {
 }
 
 /// What is inside a vector: the numbers themselves when nothing was packed,
-/// and the packed bytes otherwise. Unpacking gzip or a zero-suppressed run is
-/// not done here, so a compressed vector says what it is and keeps its bytes.
+/// and the packed bytes otherwise.
+///
+/// Nothing packed is 0 or 256, the same scheme written by a big-endian and a
+/// little-endian machine, and both read the way round the file's header says.
+/// FrameL writes 256 on every vector it leaves alone, so reading only 0 left
+/// every vector of a FrameL file as bytes.
+fn vect_data(e: Endian) -> T {
+    T::switch(E::field("compress"), vec![(0, numbers(e)), (256, numbers(e))], T::bytes(E::Remaining))
+}
+
+/// The `nData` numbers of a vector, as its `type` names them, read from the
+/// front of however many bytes there are.
+///
+/// A complex number is its real part and then its imaginary part, one pair
+/// after another. A string vector is `nData` counted strings, which is how an
+/// FrTable keeps a column of channel names. The count is held to what the
+/// bytes could hold, so a vector whose `nData` is wrong reads as many numbers
+/// as are there rather than asking for billions.
 fn numbers(e: Endian) -> T {
-    let n = E::field("nData");
-    let each = |t: T| T::array(t, n.clone());
+    let each = |t: T, width: i128| T::array(t, E::field("nData").at_most(E::Remaining.div(E::lit(width))));
+    let complex = |part: T| T::inline_structure("Complex", vec![("re", part.clone()), ("im", part)]);
     T::switch(
-        E::field("compress"),
-        vec![(
-            0,
-            T::switch(
-                E::field("type"),
-                vec![
-                    (0, each(T::Int { bits: 8, endian: e })),
-                    (1, each(T::Int { bits: 16, endian: e })),
-                    (2, each(T::F64(e))),
-                    (3, each(T::F32(e))),
-                    (4, each(T::i32(e))),
-                    (5, each(T::Int { bits: 64, endian: e })),
-                    (9, each(T::u16(e))),
-                    (10, each(T::u32(e))),
-                    (11, each(T::u64(e))),
-                    (12, each(T::u8())),
-                ],
-                T::bytes(E::Remaining),
-            ),
-        )],
+        E::field("type"),
+        vec![
+            (0, each(T::Int { bits: 8, endian: e }, 1)),
+            (1, each(T::Int { bits: 16, endian: e }, 2)),
+            (2, each(T::F64(e), 8)),
+            (3, each(T::F32(e), 4)),
+            (4, each(T::i32(e), 4)),
+            (5, each(T::Int { bits: 64, endian: e }, 8)),
+            (6, each(complex(T::F32(e)), 8)),
+            (7, each(complex(T::F64(e)), 16)),
+            (8, each(string(e), 2)),
+            (9, each(T::u16(e), 2)),
+            (10, each(T::u32(e), 4)),
+            (11, each(T::u64(e), 8)),
+            (12, each(T::u8(), 1)),
+        ],
         T::bytes(E::Remaining),
     )
 }
@@ -1087,6 +1123,12 @@ mod tests {
         let mut ev = Evaluator::new(gwf());
         let sh = ev.node(&d, &at(&[0, 2])).unwrap();
         assert_eq!(sh.value, Value::Enum { raw: 1, name: Some("FrSH".into()), hex: false });
+        // The two classes the specification fixes are named off the number,
+        // since no dictionary entry describes the dictionary.
+        assert_eq!(ev.node(&d, &at(&[0, 3])).unwrap().value, Value::Enum { raw: 1, name: Some("FrSH".into()), hex: false });
+        assert_eq!(ev.node(&d, &at(&[1, 3])).unwrap().value, Value::Enum { raw: 2, name: Some("FrSE".into()), hex: false });
+        // And every other class by what the dictionary entry before it says.
+        assert_eq!(ev.node(&d, &at(&[2, 3])).unwrap().value, Value::Str("FrameH".into()));
         // name, then the class number this file gave it.
         assert_eq!(ev.node(&d, &at(&[0, 5, 0, 1])).unwrap().value, Value::Str("FrameH".into()));
         assert_eq!(ev.node(&d, &at(&[0, 5, 1])).unwrap().value, Value::UInt(3));
@@ -1103,9 +1145,13 @@ mod tests {
         // A pointer is six bytes: a class and an instance.
         let aux = ev.node(&d, &at(&[2, 5, 19])).unwrap();
         assert_eq!(aux.size_bits, 48);
+        // The file's own number for the class, left as a number: this file's
+        // vector is class 20, and another writer's could be 5.
+        assert_eq!(ev.node(&d, &at(&[2, 5, 19, 0])).unwrap().value, Value::Enum { raw: 20, name: None, hex: false });
+        // Nothing pointed at is the one class a pointer names outright.
         assert_eq!(
-            ev.node(&d, &at(&[2, 5, 19, 0])).unwrap().value,
-            Value::Enum { raw: 20, name: Some("FrVect".into()), hex: false }
+            ev.node(&d, &at(&[2, 5, 8, 0])).unwrap().value,
+            Value::Enum { raw: 0, name: Some("null".into()), hex: false }
         );
     }
 
@@ -1120,6 +1166,46 @@ mod tests {
         // The dimensions come after the data, so nBytes is what placed them.
         assert_eq!(ev.node(&d, &at(&[3, 5, 6])).unwrap().value, Value::UInt(1));
         assert_eq!(ev.node(&d, &at(&[3, 5, 10, 0, 1])).unwrap().value, Value::Str("s".into()));
+    }
+
+    /// FrameL writes 256 on a vector it did not pack, which is the same
+    /// nothing as 0 written by a little-endian machine.
+    #[test]
+    fn a_vector_marked_unpacked_by_a_little_endian_writer_reads_as_numbers() {
+        let w = W(true);
+        let mut b = file(true);
+        let mut fv = w.str("names");
+        fv.extend(w.u16(256));
+        fv.extend(w.u16(8)); // STRING
+        fv.extend(w.u64(2));
+        let strings = [w.str("H1"), w.str("L1")].concat();
+        fv.extend(w.u64(strings.len() as u64));
+        fv.extend_from_slice(&strings);
+        fv.extend(w.u32(0)); // nDim
+        fv.extend(w.str("")); // unitY
+        fv.extend(w.ptr(0, 0));
+        fv.extend(w.u32(0));
+        b.extend(w.structure(20, 1, &fv));
+        let mut cx = w.str("response");
+        cx.extend(w.u16(256));
+        cx.extend(w.u16(6)); // COMPLEX_8
+        cx.extend(w.u64(2));
+        cx.extend(w.u64(16));
+        for v in [0.5f32, -1.0, 2.0, 0.25] {
+            cx.extend(w.f32(v));
+        }
+        cx.extend(w.u32(0));
+        cx.extend(w.str(""));
+        cx.extend(w.ptr(0, 0));
+        cx.extend(w.u32(0));
+        b.extend(w.structure(20, 2, &cx));
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(gwf());
+        assert_eq!(ev.node(&d, &at(&[6, 5, 5, 1, 1])).unwrap().value, Value::Str("L1".into()));
+        // A complex number is its real part and then its imaginary part.
+        assert_eq!(ev.node(&d, &at(&[7, 5, 5])).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &at(&[7, 5, 5, 1, 0])).unwrap().value, Value::Float(2.0));
+        assert_eq!(ev.node(&d, &at(&[7, 5, 5, 1, 1])).unwrap().value, Value::Float(0.25));
     }
 
     #[test]
@@ -1235,8 +1321,11 @@ mod tests {
         let d = Document::new(MemSource(file(true)));
         let mut ev = Evaluator::new(gwf());
         let s = ev.node(&d, &at(&[4, 2])).unwrap();
-        assert_eq!(s.value, Value::Enum { raw: 9, name: Some("FrHistory".into()), hex: false });
+        assert_eq!(s.value, Value::Enum { raw: 9, name: None, hex: false });
         assert_eq!(ev.node(&d, &at(&[4, 5])).unwrap().type_name, "FrHistory");
+        // No name is claimed for the class: the table is a guess at what the
+        // number meant, and the body is the only place the guess shows.
+        assert_eq!(ev.node(&d, &at(&[4, 3])).unwrap().value, Value::Str(String::new()));
     }
 
     /// One of the eleven classes no sample here declares, read from the field
