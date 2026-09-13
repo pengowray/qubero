@@ -878,10 +878,19 @@ impl FlagsDef {
 /// Names for the values an integer field is expected to take: `color_type` 6
 /// reads as "rgba". The underlying integer is untouched, so expressions and
 /// switches still see the number, and a value with no name is still shown.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
     pub cases: Vec<(i128, String)>,
+    /// What one of the named values means, beyond its name, by value.
+    ///
+    /// Beside `cases` rather than a third element of it, so that every
+    /// template that writes a list of (number, name) pairs goes on doing so
+    /// and only the ones with prose to add say anything here. Values with no
+    /// entry have no prose, which is nearly all of them; a value named in a
+    /// span rather than in `cases` cannot have one, since there is no one
+    /// value to hang it on.
+    pub docs: Vec<(i128, Arc<str>)>,
     /// Names for whole runs of values, where a format stops naming them one at
     /// a time and starts counting. Tried after `cases`, in order.
     pub spans: Vec<EnumSpan>,
@@ -893,7 +902,7 @@ pub struct EnumDef {
 /// A run of values that mean the same thing and differ only by a number: every
 /// even value from 12 up is a SQLite blob, and how far up it is says how many
 /// bytes long. `label` is written with `{n}` where that number goes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumSpan {
     pub from: i128,
     /// How far apart the values of the run are. One for a solid run, two for
@@ -924,6 +933,11 @@ impl EnumDef {
         self.label(v)
             .map(str::to_string)
             .or_else(|| self.spans.iter().find_map(|s| s.label(v)))
+    }
+    /// What the format says about the value `v`, beyond its name. Nothing for
+    /// a value nobody wrote prose for. See [`EnumDef::docs`].
+    pub fn doc_of(&self, v: i128) -> Option<&str> {
+        self.docs.iter().find(|(k, _)| *k == v).map(|(_, d)| &**d)
     }
     pub fn value_of(&self, name: &str) -> Option<i128> {
         self.cases.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(k, _)| *k)
@@ -1124,6 +1138,22 @@ impl Step {
 pub struct Field {
     pub name: Arc<str>,
     pub ty: Ty,
+    /// What this field is, in the words of whoever wrote the format down.
+    ///
+    /// A name is all a template says about a field, and a name is four
+    /// characters: `ihdr`, `e_shoff`, `bits_per_value`. The prose that goes
+    /// with it lives in a specification the reader does not have open, and a
+    /// format description that carries it is throwing it away at the point
+    /// where a reader is looking straight at the field.
+    ///
+    /// Whatever the source says, unchanged and not reworded, so nothing here
+    /// invents a meaning the format did not claim. A URL belongs on a line of
+    /// its own at the end, which is where a Kaitai `doc-ref` goes.
+    ///
+    /// `Arc<str>` for the reason [`Expr::Ref`] is one: a type is cloned every
+    /// time an element of a list is placed, and a paragraph per field copied
+    /// per element is a copy per element of a paragraph nobody changed.
+    pub doc: Option<Arc<str>>,
     /// Where this field's *displayed* name is written in the file, when the
     /// format writes it somewhere rather than fixing it.
     ///
@@ -2151,6 +2181,10 @@ pub struct LinePart {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
+    /// What this structure is, in the words of whoever wrote the format down.
+    /// The same slot [`Field::doc`] is, one level up: a Kaitai type's `doc`
+    /// describes the record, and a field's describes one thing in it.
+    pub doc: Option<Arc<str>>,
     /// Which of this structure's fields names it. A RIFF chunk is identified
     /// by its `id`, not by the name of the field holding its contents, and
     /// nothing generic can work out which sibling that is: guessing at the
@@ -2324,6 +2358,7 @@ impl Ty {
                 .map(|(n, ty)| Field {
                     name: n.into(),
                     ty,
+                    doc: None,
                     name_from: None,
                     elem_name_from: None,
                     aside: false,
@@ -2332,6 +2367,7 @@ impl Ty {
                     time: None,
                 })
                 .collect(),
+            doc: None,
             named_by: None,
             contents: None,
             unit: None,
@@ -2380,6 +2416,52 @@ impl Ty {
                     f.elem_name_from = Some(from);
                 }
                 Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say what the field called `field` is, in the words of the format's own
+    /// description. See [`Field::doc`].
+    ///
+    /// A builder rather than an argument to [`Ty::structure`], so that the
+    /// hundred templates that have no prose to add go on reading as a list of
+    /// names and types. Silently does nothing to anything but a structure, and
+    /// to a name no field of it has, the way the builders below do.
+    pub fn field_doc(self, field: &str, text: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.doc = Some(text.into());
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say what this structure is, in the words of the format's own
+    /// description. See [`StructDef::doc`].
+    pub fn doc(self, text: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { doc: Some(text.into()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Say what the enum value `value` means, beyond the name it goes by. See
+    /// [`EnumDef::docs`].
+    ///
+    /// Applies to the enumeration this type is, so it is written straight
+    /// after [`Ty::enumeration`] and before anything wraps the result.
+    pub fn enum_doc(self, value: i128, text: &str) -> Ty {
+        match self {
+            Ty::Enum { inner, def } => {
+                let mut def = (*def).clone();
+                def.docs.retain(|(v, _)| *v != value);
+                def.docs.push((value, text.into()));
+                Ty::Enum { inner, def: Arc::new(def) }
             }
             other => other,
         }
@@ -2721,6 +2803,7 @@ impl Ty {
             def: Arc::new(EnumDef {
                 name: name.to_string(),
                 cases: cases.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+                docs: Vec::new(),
                 spans: spans
                     .iter()
                     .map(|(from, step, label)| EnumSpan { from: *from, step: *step, label: label.to_string() })

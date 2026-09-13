@@ -198,6 +198,11 @@ export type TemplateNode = {
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
   readonly space_root: boolean;
+  /** What the format's own description says this field is, where the template
+   *  carries it: the field's own prose, or failing that the prose on the
+   *  structure it is. Absent for a field nobody wrote prose for, which is most
+   *  of them. Nothing renders it yet. */
+  readonly doc?: string;
 };
 
 /** The bit range a successful `writeNode` replaced. */

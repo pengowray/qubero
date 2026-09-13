@@ -264,6 +264,16 @@ pub struct NodeInfo {
     /// a structure is a value with parts rather than a part of the file.
     /// See `StructDef::inline`.
     pub inline: bool,
+    /// What the format's own description says this field is, when the template
+    /// carries it. See [`crate::template::Field::doc`].
+    ///
+    /// The field's own prose, and where it has none, the prose on the
+    /// structure it is: a Kaitai type's `doc` describes the record and a
+    /// field's describes one thing in it, and a field whose type is that
+    /// record is described by both. Never an enum value's prose, which
+    /// describes the number the field happens to hold rather than the field,
+    /// and belongs beside that value in a list of them.
+    pub doc: Option<String>,
 }
 
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
@@ -738,7 +748,27 @@ impl Evaluator {
             machinery,
             contents,
             inline: matches!(r.ty.base(), Ty::Struct(s) if s.inline),
+            doc: self.doc_of(path, &r.ty),
         })
+    }
+
+    /// What the format says this field is: the declaration's own prose, and
+    /// failing that the prose on the structure the field turned out to be.
+    ///
+    /// The declaration first because it is the more specific of the two: a
+    /// dozen fields may all be `Chunk`, and what this one is for is written
+    /// where it was declared. See [`NodeInfo::doc`].
+    fn doc_of(&self, path: &[usize], ty: &Ty) -> Option<String> {
+        let declared = path.split_last().and_then(|(&last, parent)| match self.memo.get(parent).map(|r| &r.ty) {
+            Some(Ty::Struct(s)) => s.fields.get(last).and_then(|f| f.doc.clone()),
+            _ => None,
+        });
+        declared
+            .or_else(|| match ty.base() {
+                Ty::Struct(s) => s.doc.clone(),
+                _ => None,
+            })
+            .map(|d| d.to_string())
     }
 
     /// What the field at `path` is machinery for, what its structure says about

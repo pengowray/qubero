@@ -203,6 +203,11 @@ struct NodeDto {
     /// True for the one node a stream holds. Its parent is the stream, so this
     /// is where the listing offers Open unpacked.
     space_root: bool,
+    /// What the format's own description says this field is, where the
+    /// template carries it. Null for a field nobody wrote prose for, which is
+    /// most of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    doc: Option<String>,
 }
 
 /// One element of a folded run, as the value table draws it.
@@ -1579,6 +1584,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         refused: n.refused,
         decoded: n.decoded,
         space_root: n.space_root,
+        doc: n.doc,
     }
 }
 

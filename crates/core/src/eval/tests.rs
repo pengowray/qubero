@@ -3592,3 +3592,42 @@ fn a_composite_contributes_only_what_its_children_leave_over() {
     assert_eq!(out.unmapped_bits, 32);
     assert_eq!(out.covered_bits + out.unmapped_bits, d.len_bits());
 }
+
+/// The prose a format carries about a field reaches the node, and where a
+/// field has none, the structure it is speaks for it.
+#[test]
+fn a_node_carries_what_the_format_says_about_it() {
+    let chunk = || {
+        T::structure("Chunk", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))])
+            .doc("A length and the bytes it counts.")
+            .field_doc("len", "How many bytes of body follow.")
+    };
+    let t = Template::new("t", T::structure("Root", vec![("first", chunk()), ("second", chunk())]));
+    let d = doc(&[2, 7, 8, 1, 9]);
+    let mut ev = Evaluator::new(t);
+
+    // The declaration's own prose, on the field that has it.
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().doc.as_deref(), Some("How many bytes of body follow."));
+    // A field with none of its own: nothing, since `body` is a run of bytes
+    // and no structure speaks for it.
+    assert_eq!(ev.node(&d, &[0, 1]).unwrap().doc, None);
+    // The structure's own prose, on a field declared as that structure.
+    assert_eq!(ev.node(&d, &[1]).unwrap().doc.as_deref(), Some("A length and the bytes it counts."));
+    // A structure nobody wrote prose for says nothing.
+    assert_eq!(ev.node(&d, &[]).unwrap().doc, None);
+}
+
+/// What an enum value means is a fact about the value, kept beside it in the
+/// definition rather than folded into the field's own prose.
+#[test]
+fn an_enum_value_keeps_its_own_prose() {
+    let ty = T::enumeration("Method", T::u8(), &[(0, "stored"), (8, "deflate")])
+        .enum_doc(0, "The bytes as they are, with no compression at all.");
+    let Ty::Enum { def, .. } = &ty else { panic!("not an enum") };
+    assert_eq!(def.doc_of(0), Some("The bytes as they are, with no compression at all."));
+    assert_eq!(def.doc_of(8), None);
+    // It is the value's, not the field's: the node goes on saying nothing.
+    let t = Template::new("t", T::structure("Root", vec![("method", ty.clone())]));
+    let d = doc(&[0]);
+    assert_eq!(Evaluator::new(t).node(&d, &[0]).unwrap().doc, None);
+}
