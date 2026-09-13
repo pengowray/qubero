@@ -352,6 +352,14 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::SizeOf(n) => format!("sizeof({n})"),
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
+        // Where this field starts, counted in the window around it rather than
+        // in the file, which is what the two words say: `pos` is a position
+        // and `size of window` names what it is a position in.
+        Expr::Pos => "pos".to_string(),
+        Expr::WindowSize => "size of window".to_string(),
+        // Not `sizeof(x)`, which is the same list measured in bytes. A reader
+        // seeing both beside each other has to be able to tell them apart.
+        Expr::LenOf(n) => format!("count of {n}"),
         // Nothing to point at: the answer comes from running the file, not
         // from a field a reader could go and look at.
         Expr::Deduced(_) => return None,

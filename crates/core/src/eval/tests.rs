@@ -2874,6 +2874,77 @@ fn a_condition_names_the_branch_it_took_and_not_the_other() {
     assert_eq!(rel[0].result, "4");
 }
 
+/// Where a field starts is counted from the window around it, not from the
+/// file, and in bits: a field packed partway through a byte starts somewhere
+/// a count of bytes cannot say.
+#[test]
+fn a_position_is_counted_in_bits_from_the_window_it_sits_in() {
+    let inner = T::structure(
+        "Inner",
+        vec![("a", T::u16(Big)), ("here", T::computed(E::Pos)), ("room", T::computed(E::WindowSize))],
+    );
+    let t = T::structure(
+        "Root",
+        vec![
+            ("tag", T::u8()),
+            ("body", T::sized(E::lit(6), inner)),
+            ("top", T::computed(E::Pos)),
+            ("whole", T::computed(E::WindowSize)),
+        ],
+    );
+    let d = doc(&[9, 0, 1, 0, 0, 0, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // Two bytes into a window that starts one byte into the file.
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value.as_int(), Some(16));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(48));
+    // Outside any window the file is the window, so the position is the
+    // field's own offset and the size is the file's.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(7 * 8));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(8 * 8));
+    assert_eq!(write_expr(&E::Pos).as_deref(), Some("pos"));
+    assert_eq!(write_expr(&E::WindowSize).as_deref(), Some("size of window"));
+}
+
+/// How many elements a list holds is a different number from how many bytes
+/// it took, and only a list has one at all.
+#[test]
+fn a_count_of_elements_is_not_a_count_of_bytes() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("n", T::u8()),
+            ("items", T::array(T::u16(Big), E::field("n"))),
+            ("count", T::computed(E::len_of("items"))),
+            ("bytes", T::computed(E::SizeOf("items".into()))),
+        ],
+    );
+    let d = doc(&[3, 0, 1, 0, 2, 0, 3]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(3));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(6));
+    assert_eq!(write_expr(&E::len_of("items")).as_deref(), Some("count of items"));
+
+    // A run that stops at the end of its window is counted the same way.
+    let t2 = T::structure(
+        "Root",
+        vec![
+            ("body", T::sized(E::lit(4), T::repeat(T::u16(Big), Until::End))),
+            ("count", T::computed(E::len_of("body"))),
+        ],
+    );
+    assert_eq!(Evaluator::new(Template::new("t", t2)).node(&doc(&[0; 4]), &[1]).unwrap().value.as_int(), Some(2));
+
+    // Something that is not a list has no element count, and is told so
+    // rather than answered with its length.
+    let t3 = T::structure("Root", vec![("n", T::u8()), ("count", T::computed(E::len_of("n")))]);
+    let mut ev3 = Evaluator::new(Template::new("t", t3));
+    let e = ev3.node(&doc(&[3]), &[1]).unwrap_err();
+    assert!(format!("{e:?}").contains("not a list"), "{e:?}");
+    // And a name nothing declared is an error too.
+    let t4 = T::structure("Root", vec![("n", T::u8()), ("count", T::computed(E::len_of("nowhere")))]);
+    assert!(Evaluator::new(Template::new("t", t4)).node(&doc(&[3]), &[1]).is_err());
+}
+
 #[test]
 fn a_shift_of_more_than_a_word_is_refused_either_way() {
     let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);

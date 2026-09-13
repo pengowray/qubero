@@ -34,6 +34,36 @@ impl Evaluator {
             // The index of the element this sits in, which is what a field
             // whose type comes from a list read earlier needs.
             Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
+            // How far into the window this field starts, and how big that
+            // window is. Both in bits: see `Expr::Pos`.
+            Expr::Pos => {
+                let Some((offset, _)) = here else { return fail("nothing to measure from") };
+                let (start, _) = self.window_of(doc, at);
+                match offset.checked_sub(start) {
+                    Some(n) => n as i128,
+                    // A field placed outside the window it was declared in,
+                    // which an `At` counted from the file can be. There is no
+                    // honest distance to answer with.
+                    None => return fail("this field starts before the window it sits in"),
+                }
+            }
+            Expr::WindowSize => {
+                let (start, end) = self.window_of(doc, at);
+                end.saturating_sub(start) as i128
+            }
+            // How many elements a list holds, which is not how many bytes it
+            // took: see `Expr::LenOf`.
+            Expr::LenOf(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.resolve(doc, &p)?;
+                if !matches!(
+                    self.memo[&p].ty,
+                    Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+                ) {
+                    return fail(format!("{name} is not a list, so it has no count of elements"));
+                }
+                self.child_count(doc, &p)? as i128
+            }
             // An answer no field holds, worked out by running the container.
             // See `eval::deduced`.
             Expr::Deduced(what) => self.deduced_int(doc, at, *what, here)?,
@@ -327,6 +357,31 @@ impl Evaluator {
                 }
                 i128::from(n.ilog2())
             }
+        })
+    }
+
+    /// Where the window around the field at `at` starts and ends, in bits of
+    /// whatever space that field is read in.
+    ///
+    /// The window is the nearest [`Ty::Sized`] above the field, which is the
+    /// node the evaluator recorded a `declared_size` on. Above rather than
+    /// including: a window declared *on* this field is the window its contents
+    /// sit in, and the field itself sits in the one around that, which is the
+    /// same stretch a Kaitai `_io` names at each level.
+    ///
+    /// In the same space only. A decoded stream's children count from zero in
+    /// the stream's own bytes, and an outer `Sized` counted in the file would
+    /// answer with offsets from another numbering entirely. Where the space
+    /// has no window in it, the window is the whole space.
+    fn window_of<S: Source>(&self, doc: &Document<S>, at: &[usize]) -> (u64, u64) {
+        let space = self.space_at(at);
+        let found = (0..at.len()).rev().find_map(|k| match self.memo.get(&at[..k]) {
+            Some(r) if r.space == space => r.declared_size.map(|n| (r.offset, r.offset + n)),
+            _ => None,
+        });
+        found.unwrap_or(match space {
+            0 => (0, doc.len_bits()),
+            other => (0, self.spaces.len_bits(other)),
         })
     }
 

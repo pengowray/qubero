@@ -114,6 +114,37 @@ pub enum Expr {
     BitsOf(Arc<str>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
+    /// How far into its window this field starts, in bits.
+    ///
+    /// The window is the nearest [`Ty::Sized`] (or [`Ty::SizedBits`]) around
+    /// the field, and where there is none it is the whole space the field is
+    /// read in: the file at the top level, and the bytes a compressed run came
+    /// to for anything inside one. That is the same stretch a Kaitai `_io`
+    /// names, so `_io.pos` is this.
+    ///
+    /// **In bits**, unlike [`Expr::Remaining`] and [`Expr::SizeOf`], which are
+    /// bytes. The same choice [`Expr::BitsOf`] made and for the same reason: a
+    /// field partway through a byte starts somewhere no count of bytes can
+    /// say, and rounding the answer off before it is asked loses exactly the
+    /// case worth asking about. A template converting from a format that
+    /// counts bytes divides by eight.
+    Pos,
+    /// How big that window is, in bits: the size the nearest [`Ty::Sized`]
+    /// set, or the length of the whole space where there is none. A Kaitai
+    /// `_io.size` is this. In bits, for the reason [`Expr::Pos`] is.
+    WindowSize,
+    /// How many elements the earlier list field `name` holds.
+    ///
+    /// [`Expr::SizeOf`] measures a field in bytes, which for a list of records
+    /// says how much room they took and not how many there are, and the two
+    /// are the same number only for a list of single bytes. A format that
+    /// sizes one run by the length of another needs the count: a table with
+    /// one row per entry of a list read earlier is as long as that list.
+    ///
+    /// Only a list has an element count. A field that is not one fails rather
+    /// than answering with its byte length, which would be a different number
+    /// wearing the same name.
+    LenOf(Arc<str>),
     /// The value of one element of an earlier array, by index. `Ref` names a
     /// field; this reaches inside one, which is what a list of pointers or a
     /// list of column types needs. When the elements are structures, `field`
@@ -704,6 +735,11 @@ impl Expr {
     /// [`Expr::PopCount`].
     pub fn pop_count(name: &str) -> Expr {
         Expr::PopCount(name.into())
+    }
+    /// How many elements the earlier list field `name` holds. See
+    /// [`Expr::LenOf`].
+    pub fn len_of(name: &str) -> Expr {
+        Expr::LenOf(name.into())
     }
     /// The next `bits` bits without consuming them, read the given way round.
     pub fn deduced(what: Deduce) -> Expr {
