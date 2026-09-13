@@ -496,14 +496,27 @@ impl Evaluator {
             Ty::Insn { isa } => Value::Str(self.read_insn(doc, r, *isa)?.text),
             Ty::EbmlVint { strip_marker } => Value::UInt(self.read_ebml_vint(doc, r, *strip_marker)?.0),
             Ty::Computed(e) => {
-                if let Some(v) = self.memo.get(at).and_then(|m| m.computed) {
+                if let Some(Computed::Int(v)) = self.memo.get(at).and_then(|m| m.computed) {
                     return Ok(Value::Int(v));
                 }
                 let v = self.eval_expr_at(doc, at, e, Some((r.offset, r.limit)))?;
                 if let Some(m) = self.memo.get_mut(at) {
-                    m.computed = Some(v);
+                    m.computed = Some(Computed::Int(v));
                 }
                 Value::Int(v)
+            }
+            // The same, worked out as reals from the top. Kept in the same
+            // slot, for the same reason: an element that asks the one before
+            // it for its worth would otherwise be as deep as the list is long.
+            Ty::ComputedReal(e) => {
+                if let Some(Computed::Real(v)) = self.memo.get(at).and_then(|m| m.computed) {
+                    return Ok(Value::Float(v));
+                }
+                let v = self.eval_real_at(doc, at, e, Some((r.offset, r.limit)))?;
+                if let Some(m) = self.memo.get_mut(at) {
+                    m.computed = Some(Computed::Real(v));
+                }
+                Value::Float(v)
             }
             // Text found elsewhere in the file. Not cached on the node the way
             // a computed number is: a string on `Resolved` would be cloned for

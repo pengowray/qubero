@@ -292,7 +292,7 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
         Ty::F8 { .. } => Some(8),
         Ty::Magic(b) => Some(b.len() as u64 * 8),
         // Worked out rather than read, so it covers nothing at all.
-        Ty::Computed(_) | Ty::ComputedText(_) => Some(0),
+        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => Some(0),
         // The field itself is nothing; its contents are somewhere else.
         Ty::At { .. } => Some(0),
         // Through `try_from` rather than `as`: a negative literal is not a

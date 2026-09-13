@@ -86,8 +86,9 @@
 //! for the unsigned one. Then `leb128` `sleb128` `zigzag` `vlq`
 //! `sqlite varint` `7z number` `ebml vint` (`ebml vint with marker` keeps the
 //! marker bit), `magic` and a byte literal, `bytes[expr]`, `json object` and
-//! the shape of the value, `text[expr]` and its encoding, `computed expr` and
-//! `computed text expr` for a value with no bytes of its own.
+//! the shape of the value, `text[expr]` and its encoding, `computed expr`,
+//! `computed text expr` and `computed real expr` for a value with no bytes of
+//! its own. A `computed real` works its expression out as reals.
 //!
 //! Text says how it ends and what it is in: `text[expr]`,
 //! `text[expr] padded with 0x20`, `text until 0x00` (`or end` where a missing
@@ -149,6 +150,10 @@
 //! there), `previous(f)` (the element before this one), `earlier(a.b)` and
 //! `earlier[key = tag].f` (the nearest earlier element that has one),
 //! `array[i].f`, `descriptor.f` (the record that placed this element).
+//! And the four a real is made with: `real(f)` (the number the text of a field
+//! spells, `2.0E+01` included), `pow2(e)` and `pow10(e)` (two or ten to a whole
+//! power, a fraction when the power is negative) and `trunc(x)` (the whole part
+//! of a real, which is the only way one becomes a size).
 //!
 //! Numbers are decimal, with three exceptions. A number whose bytes spell
 //! printable ASCII with letters in it is written as those bytes in single
@@ -158,7 +163,8 @@
 //! a constant the format fixed rather than counts with, which is a case of a
 //! `switch`, the label on a record, the value a `repeat` stops at, or a value
 //! of an enumeration declared in hex, is written in hex from 256 up, to an even
-//! number of digits: `0x04034b50`. Byte strings are `"SQLite format 3\0"` when
+//! number of digits: `0x04034b50`. A real is written with a point, `1.0`, so
+//! that it is never read as the whole number beside it. Byte strings are `"SQLite format 3\0"` when
 //! they are mostly letters, with the escapes a string uses for the rest, and
 //! `89 50 4E 47 0D 0A 1A 0A` otherwise. Text is in double quotes.
 //!
@@ -765,6 +771,7 @@ fn inline(ty: &Ty) -> Option<String> {
         Ty::F8 { e4m3 } => if *e4m3 { "f8e4m3" } else { "f8e5m2" }.to_string(),
         Ty::Computed(e) => format!("computed {}", expr(e)),
         Ty::ComputedText(e) => format!("computed text {}", expr(e)),
+        Ty::ComputedReal(e) => format!("computed real {}", expr(e)),
         Ty::Leb128 { signed } => if *signed { "sleb128" } else { "leb128" }.to_string(),
         Ty::Zigzag => "zigzag".to_string(),
         Ty::EbmlVint { strip_marker } => {
@@ -1112,6 +1119,13 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
             format!("ceil({} / {})", write_expr(a, 80, false, leaf)?, write_expr(b, 81, false, leaf)?)
         }
         Expr::Log2(a) => format!("log2({})", write_expr(a, 0, false, leaf)?),
+        // A real is a literal like any other, written here rather than handed
+        // to `leaf`: it reads nothing, and a leaf is what the relations panel
+        // puts a value in place of.
+        Expr::Real(v) => real_lit(*v),
+        Expr::Pow2(a) => format!("pow2({})", write_expr(a, 0, false, leaf)?),
+        Expr::Pow10(a) => format!("pow10({})", write_expr(a, 0, false, leaf)?),
+        Expr::Trunc(a) => format!("trunc({})", write_expr(a, 0, false, leaf)?),
         Expr::Bit(a, i) => format!("bit({}, {i})", write_expr(a, 0, false, leaf)?),
         Expr::Mod(a, b) => two(a, b, "%", leaf)?,
         Expr::Eq(a, b) => two(a, b, "==", leaf)?,
@@ -1163,8 +1177,21 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::Find { .. }
         | Expr::Prev(..)
         | Expr::Sibling(..)
-        | Expr::Within(..) => leaf(e)?,
+        | Expr::Within(..)
+        // One leaf, the way `descriptor.(...)` is, rather than a call around
+        // one: what a panel puts in its place is the number the text spelled,
+        // not the text, and certainly not the search that found the card.
+        | Expr::RealText(..) => leaf(e)?,
     })
+}
+
+/// A real as the template writes it: with a point, always, so that `1.0` is
+/// never read as the whole number 1, and the shortest digits that read back as
+/// the same double. An exponent is written where Rust writes one, `1e-7`,
+/// which says it is a real as plainly as a point does.
+pub(crate) fn real_lit(v: f64) -> String {
+    let s = format!("{v:?}");
+    if s.contains(['.', 'e', 'E']) || !v.is_finite() { s } else { format!("{s}.0") }
 }
 
 /// One leaf as the template writes it. `probes` says whether to write the ones
@@ -1225,6 +1252,7 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::Prev(n) => format!("previous({n})"),
         Expr::Sibling(f) => format!("earlier({})", f.join(".")),
         Expr::Within(f) => f.join("."),
+        Expr::RealText(e) => format!("real({})", spelled(e, probes)?),
         // What the code worked out, and what it read to work it out. Nothing
         // to point at: a reader cannot go and look at where these came from,
         // so an expression holding one is written only where the whole
@@ -1272,6 +1300,32 @@ mod tests {
         let field = E::field("w").shr(E::lit(3)).and(E::lit(0x3f));
         assert_eq!(expr(&field), "w >> 3 & 0x3f");
         assert_eq!(expr(&field.less_than(E::lit(4))), "w >> 3 & 0x3f < 4");
+    }
+
+    /// A real keeps its point, and the four that make and take apart a real
+    /// are calls, so a scaled value reads as the formula a specification
+    /// writes.
+    #[test]
+    fn real_expressions_read_as_written() {
+        assert_eq!(expr(&E::real(1.0)), "1.0");
+        assert_eq!(expr(&E::real(0.5)), "0.5");
+        assert_eq!(expr(&E::real(-2.5)), "-2.5");
+        assert_eq!(expr(&E::real(1e-7)), "1e-7");
+        let worth = E::field("stored").mul(E::within(&["header", "scl_slope"])).add(E::within(&["header", "scl_inter"]));
+        assert_eq!(expr(&worth), "stored * header.scl_slope + header.scl_inter");
+        let grib = E::field("reference_value")
+            .add(E::field("stored").mul(E::pow2(E::field("binary_scale_factor"))))
+            .div(E::pow10(E::field("decimal_scale_factor")));
+        assert_eq!(expr(&grib), "(reference_value + stored * pow2(binary_scale_factor)) / pow10(decimal_scale_factor)");
+        let scale = E::real_text(E::within(&["card", "text"])).or(E::real(1.0));
+        assert_eq!(expr(&scale), "real(card.text) or else 1.0");
+        assert_eq!(expr(&E::trunc(E::field("vox_offset")).at_least(E::lit(0))), "max(trunc(vox_offset), 0)");
+        assert_eq!(inline(&Ty::computed_real(E::field("a").mul(E::real(0.5)))).as_deref(), Some("computed real a * 0.5"));
+        assert_eq!(Ty::computed_real(E::real(0.5)).display_name(), "computed real");
+        // The panel and the IR text are one writer here too.
+        for e in [worth, grib, scale] {
+            assert_eq!(readable(&e), Some(expr(&e)));
+        }
     }
 
     #[test]

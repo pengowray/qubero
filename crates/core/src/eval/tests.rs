@@ -1122,6 +1122,228 @@ fn a_brain_float_reads_as_the_float_it_is_the_top_half_of() {
     assert_eq!(w.data, 0x3e59u16.to_le_bytes().to_vec());
 }
 
+/// A stored integer, a slope and an intercept as floats, and what the integer
+/// is worth: the shape of a NIfTI voxel and a FITS cell.
+fn scaled_voxel(stored: i16, slope: f32, inter: f32, worth: Expr) -> (Document<MemSource>, Evaluator) {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("slope", T::F32(Little)),
+                ("inter", T::F32(Little)),
+                ("stored", T::Int { bits: 16, endian: Little }),
+                ("worth", T::computed_real(worth)),
+            ],
+        ),
+    );
+    let mut bytes = slope.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&inter.to_le_bytes());
+    bytes.extend_from_slice(&stored.to_le_bytes());
+    (doc(&bytes), Evaluator::new(t))
+}
+
+fn failure(e: EvalError) -> String {
+    match e {
+        EvalError::Failed(s) => s,
+        other => panic!("not a failure: {other:?}"),
+    }
+}
+
+#[test]
+fn a_real_computed_field_reads_as_the_number_it_works_out() {
+    let worth = E::field("stored").mul(E::field("slope")).add(E::field("inter"));
+    let (d, mut ev) = scaled_voxel(11980, 0.0754, 3100.76, worth);
+    let node = ev.node(&d, &[3]).unwrap();
+    assert_eq!((node.type_name.as_str(), node.size_bits), ("computed real", 0));
+    // The floats as they read, which is the value the row beside them shows,
+    // and the arithmetic done in doubles.
+    assert_eq!(node.value, Value::Float(11980.0 * 0.0754 + 3100.76));
+    // Kept on the node, and the same the second time.
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, node.value);
+
+    // A literal with a fraction, a condition that stays a whole-number
+    // question, and a negative power of two, which is a fraction too.
+    let halves = E::cond(E::field("stored").less_than(E::lit(0)), E::real(0.5), E::field("stored").mul(E::pow2(E::lit(-3))));
+    let (d, mut ev) = scaled_voxel(12, 1.0, 0.0, halves);
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(1.5));
+    let (d, mut ev) = scaled_voxel(-12, 1.0, 0.0, E::cond(E::field("stored").less_than(E::lit(0)), E::real(0.5), E::lit(7)));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(0.5));
+
+    // A slope of nought is an answer rather than a reason to take the other
+    // side, and a division by nought fails as it does in a whole number.
+    let (d, mut ev) = scaled_voxel(3, 0.5, 0.0, E::field("slope").or(E::real(1.0)).mul(E::field("stored")));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(1.5));
+    let (d, mut ev) = scaled_voxel(3, 0.0, 0.0, E::field("slope").or(E::real(1.0)).mul(E::field("stored")));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(3.0));
+    let (d, mut ev) = scaled_voxel(3, 0.0, 0.0, E::field("stored").div(E::field("inter")));
+    assert_eq!(failure(ev.node(&d, &[3]).unwrap_err()), "division by zero");
+}
+
+#[test]
+fn a_real_has_no_place_in_a_size_or_a_count() {
+    let within = |len: Expr| {
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("n", T::F32(Little)), ("text", T::bytes(E::lit(4))), ("data", T::bytes(len))]),
+        );
+        let mut bytes = 2.0f32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(b"2.0 ");
+        bytes.extend_from_slice(&[0; 8]);
+        let mut ev = Evaluator::new(t);
+        failure(ev.node(&doc(&bytes), &[2]).unwrap_err())
+    };
+    let hint = "trunc(...) drops the fraction";
+    // A float named where a length is wanted says it was read as a whole
+    // number, rather than calling it not a number at all.
+    assert_eq!(within(E::field("n")), format!("n is a real number, but a whole number is needed here; {hint}"));
+    assert_eq!(within(E::within(&["n"])), format!("n is a real number, but a whole number is needed here; {hint}"));
+    // A real literal, and the real text spells.
+    for len in [E::real(2.0), E::real_text(E::field("text"))] {
+        assert_eq!(within(len.clone()), format!("a real number where a whole number is needed; {hint}"), "{len:?}");
+    }
+    // A negative power is a fraction, and says so rather than sending the
+    // reader to `trunc`, which would make it nought.
+    assert_eq!(within(E::pow2(E::lit(-1))), "two to a negative power is not a whole number");
+    assert_eq!(within(E::pow10(E::lit(-1))), "ten to a negative power is not a whole number");
+    // A count the same way, and a computed whole number too.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::F32(Little)), ("k", T::computed(E::field("n"))), ("items", T::array(T::u8(), E::real(1.0)))]),
+    );
+    let mut ev = Evaluator::new(t);
+    let d = doc(&[0, 0, 0x80, 0x3f, 9]);
+    assert!(failure(ev.node(&d, &[2]).unwrap_err()).ends_with(hint));
+    assert!(failure(ev.node(&d, &[1]).unwrap_err()).starts_with("n is a real number"));
+    // And a power that is whole is the whole number it comes to.
+    assert_eq!(within(E::pow2(E::lit(4))), "runs past the end of its container");
+}
+
+#[test]
+fn the_whole_part_of_a_float_places_bytes() {
+    let placed = |offset: f32| {
+        let t = Template::new(
+            "t",
+            T::structure("Root", vec![("vox_offset", T::F32(Little)), ("voxel", T::at(E::trunc(E::field("vox_offset")), T::u8()))]),
+        );
+        let mut bytes = offset.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[10, 11, 12, 13, 14]);
+        let mut ev = Evaluator::new(t);
+        ev.node(&doc(&bytes), &[1, 0]).map(|n| (n.offset_bits / 8, n.value)).map_err(failure)
+    };
+    assert_eq!(placed(6.0), Ok((6, Value::UInt(12))));
+    // Towards nought, as nibabel takes a fraction off.
+    assert_eq!(placed(6.9), Ok((6, Value::UInt(12))));
+    assert_eq!(placed(-1.5), Err("negative offset".to_string()));
+    assert_eq!(placed(f32::NAN), Err("trunc(...) of NaN".to_string()));
+    assert_eq!(placed(f32::INFINITY), Err("trunc(...) of infinity".to_string()));
+    assert_eq!(placed(3e38), Err("trunc(...) of a number too large to hold".to_string()));
+}
+
+#[test]
+fn digits_read_as_the_real_they_spell() {
+    let spelled = |text: &str| {
+        let t = Template::new(
+            "t",
+            T::structure(
+                "Root",
+                vec![
+                    ("text", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii)),
+                    ("value", T::computed_real(E::real_text(E::field("text")))),
+                ],
+            ),
+        );
+        let mut ev = Evaluator::new(t);
+        match ev.node(&doc(text.as_bytes()), &[1]) {
+            Ok(n) => Ok(n.value),
+            Err(e) => Err(failure(e)),
+        }
+    };
+    for (text, want) in [
+        ("2.0E+01", 20.0),
+        ("1.0D-3", 0.001),
+        ("   .5  ", 0.5),
+        ("1.", 1.0),
+        ("32768", 32768.0),
+        ("-2.5e2", -250.0),
+        ("", 0.0),
+        ("        ", 0.0),
+    ] {
+        assert_eq!(spelled(text), Ok(Value::Float(want)), "{text:?}");
+    }
+    assert_eq!(spelled("abc"), Err("\"abc\" is not a number".to_string()));
+    assert_eq!(spelled("nan"), Err("\"nan\" is not a number".to_string()));
+    // A search that finds no card is nothing, which reads as nought, and so
+    // `Or` can give it a default.
+    let card = T::structure("Card", vec![("key", T::bytes(E::lit(2))), ("text", T::text(StrLen::Fixed(E::lit(6)), Encoding::Ascii))]);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("cards", T::array(card, E::lit(1))),
+                ("scale", T::computed_real(E::real_text(E::tagged_bytes("cards", &["key"], b"SC", &["text"])).or(E::real(1.0)))),
+                ("zero", T::computed_real(E::real_text(E::tagged_bytes("cards", &["key"], b"ZE", &["text"])).or(E::real(1.0)))),
+            ],
+        ),
+    );
+    let mut ev = Evaluator::new(t);
+    let d = doc(b"ZE 0.25 ");
+    assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Float(1.0));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Float(0.25));
+}
+
+#[test]
+fn two_to_a_negative_power_is_a_real_and_not_a_shift() {
+    let (d, mut ev) = scaled_voxel(639, 1.0, 253.02, E::field("inter").add(E::field("stored").mul(E::pow2(E::lit(-5)))));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(253.02 + 639.0 / 32.0));
+    // Over a power of ten, the way a GRIB value is.
+    let (d, mut ev) = scaled_voxel(5, 1.0, 0.0, E::field("stored").mul(E::pow2(E::lit(3))).div(E::pow10(E::lit(2))));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(0.4));
+    // In a whole number the same two are the shift and the power they would
+    // be, and nothing past what 128 bits hold.
+    let whole = |e: Expr| {
+        let t = Template::new("t", T::structure("Root", vec![("k", T::computed(e))]));
+        Evaluator::new(t).node(&doc(&[]), &[0]).map(|n| n.value).map_err(failure)
+    };
+    assert_eq!(whole(E::pow2(E::lit(10))), Ok(Value::Int(1024)));
+    assert_eq!(whole(E::pow10(E::lit(38))), Ok(Value::Int(10i128.pow(38))));
+    assert_eq!(whole(E::pow2(E::lit(127))), Err("two to the power 127 is too large to hold".to_string()));
+    assert_eq!(whole(E::pow10(E::lit(39))), Err("ten to the power 39 is too large to hold".to_string()));
+    // And ten to a power is exact as far as a double holds one.
+    let real = |e: Expr| {
+        let t = Template::new("t", T::structure("Root", vec![("k", T::computed_real(e))]));
+        Evaluator::new(t).node(&doc(&[]), &[0]).unwrap().value
+    };
+    assert_eq!(real(E::pow10(E::lit(22))), Value::Float(1e22));
+    assert_eq!(real(E::pow10(E::lit(-9))), Value::Float(1e-9));
+    assert_eq!(real(E::pow10(E::lit(-30))), Value::Float(1e-30));
+    assert_eq!(real(E::pow10(E::lit(300))), Value::Float(1e300));
+}
+
+/// What a `computed` field was is what it is: a whole number, cached on the
+/// node, that reads a float field as a refusal and not as a nought.
+#[test]
+fn an_integer_computed_field_reads_as_it_did() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("a", T::u16(Big)),
+                ("b", T::u16(Big)),
+                ("total", T::computed(E::field("a").add(E::field("b")).div(E::lit(3)))),
+                ("items", T::array(T::structure("Item", vec![("v", T::u8()), ("running", T::computed(E::prev("running").add(E::field("v"))))]), E::lit(3))),
+            ],
+        ),
+    );
+    let d = doc(&[0, 10, 0, 1, 1, 2, 3]);
+    let mut ev = Evaluator::new(t);
+    let total = ev.node(&d, &[2]).unwrap();
+    assert_eq!((total.type_name.as_str(), total.value.clone(), total.size_bits), ("computed", Value::Int(3), 0));
+    assert_eq!(ev.node(&d, &[3, 2, 1]).unwrap().value, Value::Int(6));
+}
+
 #[test]
 fn a_run_of_same_sized_blocks_is_counted_by_division() {
     // What a paged file is: a header saying how big a block is, then blocks of

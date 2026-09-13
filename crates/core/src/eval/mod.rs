@@ -452,7 +452,7 @@ struct Resolved {
     /// A computed field's value, once worked out. Element `n` of a list asks
     /// element `n - 1` for its value, so without this a track of ten thousand
     /// events is ten thousand deep rather than one.
-    computed: Option<i128>,
+    computed: Option<Computed>,
     /// Which address space `offset` and `limit` are bits of. 0 is the file.
     space: u32,
     /// The bits of this field its value proper occupies, when that is less
@@ -462,6 +462,19 @@ struct Resolved {
     /// the part an editor writes and a reader is shown. None for a field
     /// whose value is the whole of it, which is nearly all of them.
     payload: Option<(u64, u64)>,
+}
+
+/// What a computed field came to, kept on its node: a whole number for a
+/// [`Ty::Computed`] and a real for a [`Ty::ComputedReal`].
+///
+/// One slot for both rather than a second one beside it, since a node is one
+/// type or the other, and [`Resolved`] is cloned for every element of every
+/// list: an `Option<i128>` and an `Option<f64>` side by side would widen all of
+/// them to hold a value only one kind of field ever has.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Computed {
+    Int(i128),
+    Real(f64),
 }
 
 /// Where a child sits before its type is unwrapped: what it is called, what

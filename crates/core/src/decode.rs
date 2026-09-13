@@ -96,7 +96,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => fixed_bits(inner)?,
         // A computed field is a value and no bits, whether that value is a
         // number or a word.
-        Ty::Computed(_) | Ty::ComputedText(_) => 0,
+        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => 0,
         // A field pointing somewhere else is a place and no bits, so a
         // structure holding one is still as fixed as the rest of it. A chain
         // is the same: it is a run of places, and the places are elsewhere. So

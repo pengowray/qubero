@@ -391,6 +391,10 @@ pub(super) fn uniform(e: &Expr) -> bool {
             uniform(a) && uniform(b)
         }
         Expr::Log2(a) => uniform(a),
+        // A real reads nothing, and the three that take one apart ask what
+        // their operand asks.
+        Expr::Real(_) => true,
+        Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) => uniform(a),
         // Padding asks nothing the run it follows did not already ask.
         Expr::PadTo { n, .. } => uniform(n),
         // Remaining and Idx count from the element; the peeks read it; Prev,
