@@ -258,6 +258,54 @@ const P8SCII_HIGH: [char; 128] = [
     '\u{30f2}', '\u{30f3}', '\u{30c3}', '\u{30e3}', '\u{30e5}', '\u{30e7}', '\u{25dc}', '\u{25dd}',
 ];
 
+/// EBCDIC code page 037, all 256 bytes of it, from Python's `cp037` codec like
+/// the tables above. The one page here that is not ASCII in its low half: IBM's
+/// mainframe character set puts the letters and digits above 0x80 and the
+/// space at 0x40, so it is two tables of 128 rather than one, and a byte below
+/// 0x80 is looked up rather than passed through.
+///
+/// Every byte is defined, the control characters included, so this page
+/// never refuses a byte. What SEG-Y means by EBCDIC is this page: a seismic
+/// file's textual header was written on an IBM tape drive in 1975 and still
+/// is, by software that has long since stopped running on one.
+const EBCDIC037_LOW: [char; 128] = [
+    '\u{0000}', '\u{0001}', '\u{0002}', '\u{0003}', '\u{009c}', '\u{0009}', '\u{0086}', '\u{007f}',
+    '\u{0097}', '\u{008d}', '\u{008e}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{000e}', '\u{000f}',
+    '\u{0010}', '\u{0011}', '\u{0012}', '\u{0013}', '\u{009d}', '\u{0085}', '\u{0008}', '\u{0087}',
+    '\u{0018}', '\u{0019}', '\u{0092}', '\u{008f}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}',
+    '\u{0080}', '\u{0081}', '\u{0082}', '\u{0083}', '\u{0084}', '\u{000a}', '\u{0017}', '\u{001b}',
+    '\u{0088}', '\u{0089}', '\u{008a}', '\u{008b}', '\u{008c}', '\u{0005}', '\u{0006}', '\u{0007}',
+    '\u{0090}', '\u{0091}', '\u{0016}', '\u{0093}', '\u{0094}', '\u{0095}', '\u{0096}', '\u{0004}',
+    '\u{0098}', '\u{0099}', '\u{009a}', '\u{009b}', '\u{0014}', '\u{0015}', '\u{009e}', '\u{001a}',
+    '\u{0020}', '\u{00a0}', '\u{00e2}', '\u{00e4}', '\u{00e0}', '\u{00e1}', '\u{00e3}', '\u{00e5}',
+    '\u{00e7}', '\u{00f1}', '\u{00a2}', '\u{002e}', '\u{003c}', '\u{0028}', '\u{002b}', '\u{007c}',
+    '\u{0026}', '\u{00e9}', '\u{00ea}', '\u{00eb}', '\u{00e8}', '\u{00ed}', '\u{00ee}', '\u{00ef}',
+    '\u{00ec}', '\u{00df}', '\u{0021}', '\u{0024}', '\u{002a}', '\u{0029}', '\u{003b}', '\u{00ac}',
+    '\u{002d}', '\u{002f}', '\u{00c2}', '\u{00c4}', '\u{00c0}', '\u{00c1}', '\u{00c3}', '\u{00c5}',
+    '\u{00c7}', '\u{00d1}', '\u{00a6}', '\u{002c}', '\u{0025}', '\u{005f}', '\u{003e}', '\u{003f}',
+    '\u{00f8}', '\u{00c9}', '\u{00ca}', '\u{00cb}', '\u{00c8}', '\u{00cd}', '\u{00ce}', '\u{00cf}',
+    '\u{00cc}', '\u{0060}', '\u{003a}', '\u{0023}', '\u{0040}', '\u{0027}', '\u{003d}', '\u{0022}',
+];
+
+const EBCDIC037_HIGH: [char; 128] = [
+    '\u{00d8}', '\u{0061}', '\u{0062}', '\u{0063}', '\u{0064}', '\u{0065}', '\u{0066}', '\u{0067}',
+    '\u{0068}', '\u{0069}', '\u{00ab}', '\u{00bb}', '\u{00f0}', '\u{00fd}', '\u{00fe}', '\u{00b1}',
+    '\u{00b0}', '\u{006a}', '\u{006b}', '\u{006c}', '\u{006d}', '\u{006e}', '\u{006f}', '\u{0070}',
+    '\u{0071}', '\u{0072}', '\u{00aa}', '\u{00ba}', '\u{00e6}', '\u{00b8}', '\u{00c6}', '\u{00a4}',
+    '\u{00b5}', '\u{007e}', '\u{0073}', '\u{0074}', '\u{0075}', '\u{0076}', '\u{0077}', '\u{0078}',
+    '\u{0079}', '\u{007a}', '\u{00a1}', '\u{00bf}', '\u{00d0}', '\u{00dd}', '\u{00de}', '\u{00ae}',
+    '\u{005e}', '\u{00a3}', '\u{00a5}', '\u{00b7}', '\u{00a9}', '\u{00a7}', '\u{00b6}', '\u{00bc}',
+    '\u{00bd}', '\u{00be}', '\u{005b}', '\u{005d}', '\u{00af}', '\u{00a8}', '\u{00b4}', '\u{00d7}',
+    '\u{007b}', '\u{0041}', '\u{0042}', '\u{0043}', '\u{0044}', '\u{0045}', '\u{0046}', '\u{0047}',
+    '\u{0048}', '\u{0049}', '\u{00ad}', '\u{00f4}', '\u{00f6}', '\u{00f2}', '\u{00f3}', '\u{00f5}',
+    '\u{007d}', '\u{004a}', '\u{004b}', '\u{004c}', '\u{004d}', '\u{004e}', '\u{004f}', '\u{0050}',
+    '\u{0051}', '\u{0052}', '\u{00b9}', '\u{00fb}', '\u{00fc}', '\u{00f9}', '\u{00fa}', '\u{00ff}',
+    '\u{005c}', '\u{00f7}', '\u{0053}', '\u{0054}', '\u{0055}', '\u{0056}', '\u{0057}', '\u{0058}',
+    '\u{0059}', '\u{005a}', '\u{00b2}', '\u{00d4}', '\u{00d6}', '\u{00d2}', '\u{00d3}', '\u{00d5}',
+    '\u{0030}', '\u{0031}', '\u{0032}', '\u{0033}', '\u{0034}', '\u{0035}', '\u{0036}', '\u{0037}',
+    '\u{0038}', '\u{0039}', '\u{00b3}', '\u{00db}', '\u{00dc}', '\u{00d9}', '\u{00da}', '\u{009f}',
+];
+
 /// The glyphs the low half of CP437 has on a screen, which is where a control
 /// character has a picture instead of an effect: 0x01 is a smiling face and
 /// 0x0D a musical note, because the DOS video hardware had a glyph for all 256
@@ -310,6 +358,11 @@ pub enum CodePage {
     /// `P8scii`: it is named by the templates that read a screen captured into
     /// a file, and a file is never guessed against it. @see CP437_SCREEN_LOW
     Cp437Screen,
+    /// EBCDIC code page 037, IBM's mainframe character set. Not a page a file
+    /// is guessed against either: it is named by the templates whose format
+    /// says its text is EBCDIC, which a seismic file's headers often are.
+    /// @see EBCDIC037_LOW
+    Ebcdic037,
 }
 
 impl CodePage {
@@ -344,6 +397,7 @@ impl CodePage {
             CodePage::Cp866 => "CP866",
             CodePage::P8scii => "P8SCII",
             CodePage::Cp437Screen => "CP437 screen",
+            CodePage::Ebcdic037 => "EBCDIC 037",
         }
     }
 
@@ -370,17 +424,20 @@ impl CodePage {
             CodePage::P8scii => &P8SCII_HIGH,
             // The screen and the encoding part below 0x80 and nowhere else.
             CodePage::Cp437Screen => &CP437_HIGH,
+            CodePage::Ebcdic037 => &EBCDIC037_HIGH,
         }
     }
 
     /// What this page reads a byte as, or U+FFFD where it defines nothing.
     ///
-    /// Every page is ASCII below 0x80 except the one that is not a page: a DOS
-    /// screen drew a picture for the control characters, which is the whole
-    /// reason that entry exists.
+    /// Every page is ASCII below 0x80 except two: a DOS screen drew a picture
+    /// for the control characters, which is the whole reason that entry
+    /// exists, and EBCDIC was never ASCII anywhere.
     pub fn char_of(self, b: u8) -> char {
         if self == CodePage::Cp437Screen {
             cp437_screen_char(b)
+        } else if self == CodePage::Ebcdic037 && b < 0x80 {
+            EBCDIC037_LOW[b as usize]
         } else if b < 0x80 {
             b as char
         } else {
@@ -451,6 +508,7 @@ pub fn settle(enc: &Encoding, head: &[u8]) -> (Settled, usize, Option<String>) {
         Encoding::Cp437 => (Settled::Cp437, 0, None),
         Encoding::P8scii => (Settled::SingleByte(CodePage::P8scii), 0, None),
         Encoding::Cp437Screen => (Settled::SingleByte(CodePage::Cp437Screen), 0, None),
+        Encoding::Ebcdic => (Settled::SingleByte(CodePage::Ebcdic037), 0, None),
         Encoding::Utf16(e) => (Settled::Utf16(*e), 0, None),
         Encoding::Bom { fallback } => match head {
             [0xef, 0xbb, 0xbf, ..] => (Settled::Utf8, 3, Some("Read as UTF-8, from a byte-order mark".into())),
@@ -529,6 +587,12 @@ pub fn encode_settled(settled: Settled, text: &str) -> Result<Vec<u8>, char> {
     match settled {
         Settled::Utf8 => Ok(text.as_bytes().to_vec()),
         Settled::Ascii => text.chars().map(|c| if c.is_ascii() { Ok(c as u8) } else { Err(c) }).collect(),
+        // Both halves searched, since an ASCII character is not its own byte
+        // here: `C` is 0xC3 and a space is 0x40.
+        Settled::SingleByte(CodePage::Ebcdic037) => text
+            .chars()
+            .map(|c| (0u8..=255).find(|b| CodePage::Ebcdic037.char_of(*b) == c).ok_or(c))
+            .collect(),
         // The table read backwards. A page's undefined slots are skipped, so
         // U+FFFD is a character no page can hold rather than a way in.
         Settled::SingleByte(p) => text
@@ -877,6 +941,21 @@ mod tests {
         let (text, lossy) = decode_settled(Settled::Cp437, &all);
         assert!(!lossy);
         assert_eq!(encode_settled(Settled::Cp437, &text).unwrap(), all);
+    }
+
+    #[test]
+    fn ebcdic_landmarks_and_round_trip() {
+        // Checked against Python's `cp037` codec, which generated the table.
+        let page = Settled::SingleByte(CodePage::Ebcdic037);
+        let (card, lossy) = decode_settled(page, &[0xc3, 0x40, 0xf1, 0x40, 0x4d, 0x5d, 0x81, 0xe9]);
+        assert!(!lossy);
+        assert_eq!(card, "C 1 ()aZ");
+        assert_eq!(encode_settled(page, "C 1").unwrap(), [0xc3, 0x40, 0xf1]);
+        let all: Vec<u8> = (0u8..=255).collect();
+        let (text, lossy) = decode_settled(page, &all);
+        assert!(!lossy, "every byte of the page is defined");
+        assert_eq!(encode_settled(page, &text).unwrap(), all);
+        assert_eq!(encode_settled(page, "\u{20ac}"), Err('\u{20ac}'));
     }
 
     #[test]

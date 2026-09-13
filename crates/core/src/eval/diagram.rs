@@ -288,6 +288,7 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
         Ty::F32(_) => Some(32),
         Ty::F64(_) => Some(64),
         Ty::F80(_) => Some(80),
+        Ty::IbmF32(_) => Some(32),
         Ty::F8 { .. } => Some(8),
         Ty::Magic(b) => Some(b.len() as u64 * 8),
         // Worked out rather than read, so it covers nothing at all.

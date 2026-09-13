@@ -143,6 +143,7 @@ mod rar4;
 mod rar5;
 mod rpm;
 mod sac;
+mod segy;
 mod png;
 mod root;
 pub mod root_streamer;
@@ -266,6 +267,7 @@ pub use rar4::rar4;
 pub use rar5::rar5;
 pub use rpm::rpm;
 pub use sac::sac;
+pub use segy::segy;
 pub use pico8::p8png;
 pub use png::png;
 pub use root::root;
@@ -343,6 +345,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("sac", |_| sac()),
     ("nifti", |_| nifti()),
     ("analyze", |_| analyze()),
+    ("segy", |_| segy()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),
     ("draco", |_| draco()),

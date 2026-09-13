@@ -1169,6 +1169,10 @@ pub enum Encoding {
     /// the middle, and above 0x7f the glyphs a cart draws with and the two
     /// Japanese syllabaries. See [`crate::text::CodePage::P8scii`].
     P8scii,
+    /// EBCDIC code page 037, where `C` is 0xC3 and a space is 0x40. What a
+    /// SEG-Y file's textual headers are in when they are not ASCII. See
+    /// [`crate::text::CodePage::Ebcdic037`].
+    Ebcdic,
 }
 
 impl Encoding {
@@ -1185,6 +1189,7 @@ impl Encoding {
             Encoding::Unknown => "text?".into(),
             Encoding::P8scii => "p8scii".into(),
             Encoding::Cp437Screen => "cp437 screen".into(),
+            Encoding::Ebcdic => "ebcdic".into(),
         }
     }
 }
@@ -1902,6 +1907,22 @@ pub enum Ty {
     /// and a fraction of all ones is not a number. The other, `e5m2`, spends
     /// five and two, reaches 57344, and does have them.
     F8 { e4m3: bool },
+    /// IBM System/360 hexadecimal floating point, thirty-two bits: a sign,
+    /// seven bits of exponent counting powers of sixteen from 64, and a
+    /// twenty-four bit fraction below the point, so the value is
+    /// `fraction / 2^24 * 16^(exponent - 64)` with nothing assumed in front.
+    ///
+    /// A type rather than a computed field beside a `u32`, which is how GRIB's
+    /// sign and magnitude could have gone and did not: the answer is a float,
+    /// and an expression here is an integer. What writes these is seismic
+    /// processing that began on IBM mainframes, and format code 1 of a SEG-Y
+    /// file is a trace of them.
+    ///
+    /// Read into an f64, which holds every one exactly. There is no infinity
+    /// and no not-a-number: every bit pattern is a number, and the same number
+    /// can be written several ways, since a fraction whose top nibble is zero
+    /// is only a different exponent away from one whose top nibble is not.
+    IbmF32(Endian),
     /// A field of no bits whose value is worked out rather than read. What it
     /// takes to say "the same as the last one" without inventing a byte.
     Computed(Expr),
@@ -3119,6 +3140,7 @@ impl Ty {
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
             Ty::F80(en) => format!("f80 {}", e(*en)),
+            Ty::IbmF32(en) => format!("ibm32 {}", e(*en)),
             Ty::Fixed { bits, frac, endian, signed } => {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }

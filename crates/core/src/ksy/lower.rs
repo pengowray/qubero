@@ -2156,6 +2156,7 @@ pub fn static_bits(ty: &Ty) -> Option<u64> {
 		Ty::F32(_) => 32,
 		Ty::F64(_) => 64,
 		Ty::F80(_) => 80,
+		Ty::IbmF32(_) => 32,
 		Ty::F8 { .. } => 8,
 		Ty::Fixed { bits, .. } => u64::from(*bits),
 		Ty::Magic(b) => b.len() as u64 * 8,

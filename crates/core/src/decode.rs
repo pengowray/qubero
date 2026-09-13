@@ -83,6 +83,7 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         Ty::F32(_) => 32,
         Ty::F64(_) => 64,
         Ty::F80(_) => 80,
+        Ty::IbmF32(_) => 32,
         Ty::Magic(b) => b.len() as u64 * 8,
         Ty::Bytes(Expr::Lit(n)) => (*n).max(0) as u64 * 8,
         // Text is fixed-size only when its length does not depend on the bytes.
@@ -215,6 +216,21 @@ pub(crate) fn f80_to_f64(bits: u128) -> f64 {
     // is past what an f64 can hold even though the answer is not: the
     // significand brings it back up, but only if it is still there to.
     sign * (significand as f64 * 2f64.powi(-63)) * 2f64.powi(exp - 16383)
+}
+
+/// An IBM hexadecimal float: the top bit is the sign, the next seven an
+/// exponent of sixteen biased by 64, and the low twenty-four a fraction with
+/// the point in front of it. See [`Ty::IbmF32`].
+///
+/// Nothing is special. A zero fraction is zero whatever the exponent says, and
+/// an exponent of all ones is just a large number: the largest this can hold
+/// is a whisker under 16^63, and the smallest with its top nibble set is
+/// 16^-65. Both are well inside an f64, and so is every step between them.
+pub(crate) fn ibm32_to_f64(word: u32) -> f64 {
+    let sign = if word >> 31 == 1 { -1.0 } else { 1.0 };
+    let exp = ((word >> 24) & 0x7f) as i32 - 64;
+    let fraction = f64::from(word & 0x00ff_ffff) / f64::from(1u32 << 24);
+    sign * fraction * 16f64.powi(exp)
 }
 
 pub(crate) fn f8_to_f64(b: u8, e4m3: bool) -> f64 {

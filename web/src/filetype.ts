@@ -112,6 +112,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   sac: "SAC seismogram",
   nifti: "NIfTI image",
   analyze: "Analyze 7.5 image",
+  segy: "SEG-Y seismic traces",
   cdf: "NASA CDF",
   hdf4: "HDF4",
   parquet: "Parquet",
