@@ -162,11 +162,15 @@
 //! field.
 //!
 //! A variable-length element is a length, the address of a global heap
-//! collection and an index into it. All three are shown, and the collection is
-//! placed, so the bytes are one step from the note that names them. Which
-//! object in the collection is the one is left to the reader: the objects have
-//! no fixed size, so the fifteenth is wherever the fourteen before it ended,
-//! and there is no expression here for "the element whose index is this".
+//! collection and an index into it. All three are shown, the collection is
+//! placed, and so is the object itself: the collection is searched for the
+//! object carrying that index, and `Expr::StartOf` turns where that object was
+//! found into an address to place a field at. The objects have no fixed size,
+//! so the fifteenth is wherever the fourteen before it ended and the search is
+//! a walk; what one walk learned is kept by the stretch of bytes it covered,
+//! so a column of two thousand strings is one walk and not two thousand. The
+//! bytes are counted in the collection and not in the column, since several
+//! notes can point at one object.
 //!
 //! An attribute's value reads as elements too, by the datatype written inside
 //! the attribute rather than beside it. That is the one thing the IR could not
@@ -868,18 +872,31 @@ fn element_type(by: Described) -> T {
             // A variable-length element is not the thing but a note saying
             // where the thing is: how long it is, which global heap
             // collection holds it, and which object in that collection it is.
-            // The collection is reached from here and from nowhere else, and
-            // an object inside one is found by walking it rather than by
-            // arithmetic, so this stops at the note. Sixteen bytes is the
-            // shape a file with eight-byte addresses writes; anything else is
-            // left as its bytes.
+            // The note carries the object too, found by searching the
+            // collection for that index. Sixteen bytes is the shape a file
+            // with eight-byte addresses writes; anything else is left as its
+            // bytes.
+            //
+            // Class nine covers two things and the low four bits of the class
+            // bit field say which: a string, or a sequence of some other type.
+            // Asked here rather than inside the note, so that a column of a
+            // million strings asks it once: reaching a datatype message two
+            // levels away is what `element_size_field` exists to avoid doing
+            // per element.
             (
                 9,
-                T::switch(
-                    width.clone(),
-                    vec![(16, of(T::sized(width.clone(), vlen_reference())))],
-                    opaque.clone(),
-                ),
+                {
+                    let bits = by.part("bit_field");
+                    let string = bits.clone().sub(bits.div(E::lit(16)).mul(E::lit(16)));
+                    let note = |text: bool| {
+                        T::switch(
+                            width.clone(),
+                            vec![(16, of(T::sized(width.clone(), vlen_reference(text))))],
+                            opaque.clone(),
+                        )
+                    };
+                    T::switch(string, vec![(1, note(true))], note(false))
+                },
             ),
         ],
         opaque,
@@ -887,21 +904,54 @@ fn element_type(by: Described) -> T {
 }
 
 /// The note a variable-length element leaves in place of its contents: how
-/// long it is, which global heap collection holds it, and which object in that
-/// collection it is. The collection is placed, so the bytes are one step away;
-/// which object is which is a matter of reading the indices, since the objects
+/// long it is, which global heap collection holds it, which object in that
+/// collection it is, and the object itself.
+///
+/// Which object is which is a matter of reading the indices, since the objects
 /// are of no fixed size and the fifteenth is wherever the fourteen before it
-/// ended.
-fn vlen_reference() -> T {
-    T::structure(
+/// ended. So `object` searches the collection for the index written here and
+/// is then placed at wherever that object's bytes begin, which is what
+/// [`E::start_of`] is for.
+///
+/// The bytes are counted in the collection and not here. This field is a
+/// second reading of them: several notes can point at one object, and an
+/// object nothing points at is still part of the heap. See [`Field::aside`].
+///
+/// `text` says whether these are a string, which is the low four bits of the
+/// datatype's class bit field, asked where the column is typed rather than
+/// once per element.
+fn vlen_reference(text: bool) -> T {
+    let found = |field: &[&str]| {
+        E::tagged_in_by(E::within(&["collection", "objects"]), &["object_index"], E::field("object_index"), field)
+    };
+    // A sequence is left as its bytes: what its elements are is a datatype
+    // message of its own, and nothing here has reached it.
+    let contents = match text {
+        true => T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8),
+        false => T::bytes(E::Remaining),
+    };
+    T::structure_named(
         "GlobalHeapId",
+        "object",
+        "",
         vec![
             ("length", T::u32(Little).counted_as("bytes")),
             ("collection_address", addr()),
             ("object_index", T::u32(Little)),
             ("collection", at_address("collection_address", T::Named("GlobalHeap".into()))),
+            // An element of no length writes the undefined address and points
+            // at nothing, the same as every other address in this format.
+            (
+                "object",
+                T::switch(
+                    E::field("collection_address"),
+                    vec![(UNDEFINED, T::bytes(E::lit(0)))],
+                    T::at_origin(E::start_of(found(&["payload"])), T::sized(found(&["size"]), contents)),
+                ),
+            ),
         ],
     )
+    .field_aside("object")
 }
 
 /// The heap a group keeps its links in once there are too many of them to
@@ -1455,13 +1505,18 @@ fn heap_object() -> T {
     T::structure_named(
         "HeapObject",
         "object_index",
-        "data",
+        "payload",
         vec![
             ("object_index", T::u16(Little)),
             ("reference_count", T::u16(Little)),
             ("reserved", T::u32(Little)),
             ("size", length().counted_as("bytes")),
-            // Rounded up to eight bytes, and the padding belongs to nobody.
+            // The object's own bytes, and then the padding that rounds the
+            // collection on to the next multiple of eight. They were one field
+            // covering both, which reads the same and says less: what a
+            // variable-length element points at is the object, and a field
+            // that runs on past its end cannot be that. The padding belongs to
+            // nobody and is written down as its own row for the same reason.
             //
             // Object zero is the free space rather than an object, and its
             // size counts the sixteen bytes of header this one has already
@@ -1469,8 +1524,16 @@ fn heap_object() -> T {
             // that is what free space is, and it saves subtracting a header
             // from a length that may be shorter than one.
             (
-                "data",
-                T::switch(E::field("object_index"), vec![(0, T::bytes(E::Remaining))], T::bytes(pad8(E::field("size")))),
+                "payload",
+                T::switch(E::field("object_index"), vec![(0, T::bytes(E::Remaining))], T::bytes(E::field("size"))),
+            ),
+            (
+                "padding",
+                T::switch(
+                    E::field("object_index"),
+                    vec![(0, T::bytes(E::lit(0)))],
+                    T::bytes(pad8(E::field("size")).sub(E::field("size"))),
+                ),
             ),
         ],
     )

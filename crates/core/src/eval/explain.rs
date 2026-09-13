@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{hdf5_chunk, mseed_steim, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -192,6 +192,28 @@ pub enum Explain {
         /// Why fewer samples than the header gives were decoded, or none.
         problem: Option<String>,
     },
+    /// A Parquet page, read the whole way: the codec, the levels, the encoding
+    /// and the values. Shown for the cursor anywhere in the page, because what
+    /// the hex view shows there is packed bytes and the values are nowhere in
+    /// the file as they stand.
+    ParquetPage {
+        /// How many bytes the payload is in the file, and how many the values
+        /// came to once the codec was undone.
+        packed_bytes: u64,
+        decoded_bytes: u64,
+        /// Every step, in the order it was done: the codec, each level list,
+        /// then the encoding.
+        steps: Vec<parquet_page::Step>,
+        /// The first values, as text.
+        values: Vec<String>,
+        /// How many values the page holds, of which `values` shows the first
+        /// few.
+        total: u64,
+        /// What one value is called: `i32`, `byte array`, `dictionary index`.
+        element_type: String,
+        /// Why the reading stopped early, where it did.
+        problem: Option<String>,
+    },
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -333,6 +355,9 @@ impl Evaluator {
             if &*packing == sqlite_overflow::PACKING {
                 return self.explain_sqlite_row(doc, at);
             }
+            if &*packing == parquet_page::PACKING {
+                return self.explain_parquet_page(doc, at);
+            }
             if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
                 return self.explain_mseed(doc, at, &r, encoding, big);
             }
@@ -460,6 +485,243 @@ impl Evaluator {
             // usually a consequence of a chain that did not finish.
             problem: found.problem.or(row.problem),
         })
+    }
+
+    /// A page of a column chunk, read the whole way.
+    ///
+    /// Three things have to be found before the bytes mean anything, and they
+    /// are in three different places. The page's own header says which kind of
+    /// page it is, how many values it holds and which encoding they are in.
+    /// The column chunk two levels up says the physical type and the codec.
+    /// And the schema, at the far end of the file, says how deep the column
+    /// sits, which is the whole of what decides whether a v1 page has levels
+    /// in front of its values. See [`parquet_page`].
+    fn explain_parquet_page<S: Source>(&mut self, doc: &Document<S>, at: &[usize]) -> R<Explain> {
+        use crate::formats::parquet_page as pp;
+
+        let empty = |problem: Option<String>| Explain::ParquetPage {
+            packed_bytes: 0,
+            decoded_bytes: 0,
+            steps: Vec::new(),
+            values: Vec::new(),
+            total: 0,
+            element_type: String::new(),
+            problem,
+        };
+        // The page's three fields: the header, the type worked out from it,
+        // and the payload.
+        let mut header_fields = at.to_vec();
+        header_fields.extend([0, 0]);
+        let field = |ev: &mut Self, list: &[usize], id: i128| -> R<Option<i128>> {
+            let Some(p) = ev.thrift_field(doc, list, id)? else { return Ok(None) };
+            Ok(ev.node(doc, &p)?.value.as_int())
+        };
+        let page_type = field(self, &header_fields, 1)?.unwrap_or(0) as i64;
+        // Which of the three sub-headers carries the value count and the
+        // encoding depends on the kind of page, and so do the field numbers
+        // inside it: a v2 header calls its encoding field 4 and the older one
+        // calls it 2.
+        let (sub, enc_id) = match page_type {
+            pp::DICTIONARY_PAGE => (7, 2),
+            pp::DATA_PAGE_V2 => (8, 4),
+            _ => (5, 2),
+        };
+        let mut inner = Vec::new();
+        if let Some(p) = self.thrift_field(doc, &header_fields, sub)? {
+            inner = p;
+            inner.push(0);
+        }
+        let mut header = pp::Header { page_type, is_compressed: true, ..pp::Header::default() };
+        if !inner.is_empty() {
+            header.num_values = field(self, &inner, 1)?.unwrap_or(0) as i64;
+            header.encoding = field(self, &inner, enc_id)?.unwrap_or(0) as i64;
+            if page_type == pp::DATA_PAGE_V2 {
+                header.definition_levels_byte_length = field(self, &inner, 5)?.unwrap_or(0) as i64;
+                header.repetition_levels_byte_length = field(self, &inner, 6)?.unwrap_or(0) as i64;
+                // A boolean reads as 1 for true and 2 for false, and a field
+                // nothing wrote is not there at all; the default is true.
+                header.is_compressed = field(self, &inner, 7)? != Some(2);
+            } else {
+                header.definition_level_encoding = field(self, &inner, 3)?.unwrap_or(0) as i64;
+                header.repetition_level_encoding = field(self, &inner, 4)?.unwrap_or(0) as i64;
+            }
+        }
+
+        // The column chunk this page was placed by, found by walking back up
+        // rather than by counting levels: the arrangement between the two is
+        // the template's business and may change.
+        let mut chunk = at.to_vec();
+        loop {
+            if self.node(doc, &chunk).map(|n| n.type_name == "ColumnChunk").unwrap_or(false) {
+                break;
+            }
+            if chunk.pop().is_none() {
+                return Ok(empty(Some("The page is not under a column chunk.".into())));
+            }
+        }
+        let column_index = chunk.last().copied().unwrap_or(0);
+        let mut chunk_fields = chunk.clone();
+        chunk_fields.push(0);
+        let mut meta = Vec::new();
+        if let Some(p) = self.thrift_field(doc, &chunk_fields, 3)? {
+            meta = p;
+            meta.push(0);
+        }
+        let mut column = pp::Column::default();
+        if !meta.is_empty() {
+            column.physical = field(self, &meta, 1)?.unwrap_or(0) as i64;
+            column.codec = field(self, &meta, 4)?.unwrap_or(0) as i64;
+        }
+        let (max_definition, max_repetition, type_length) = self.parquet_levels(doc, column_index)?;
+        column.max_definition = max_definition;
+        column.max_repetition = max_repetition;
+        column.type_length = type_length;
+
+        // The payload, which for a v2 page takes in the levels in front of the
+        // packed part as well as the packed part itself.
+        let mut payload = at.to_vec();
+        payload.push(2);
+        self.resolve(doc, &payload)?;
+        let r = self.memo.get(&payload).expect("resolved").clone();
+        let bits = self.size_of(doc, &payload)?;
+        if bits / 8 > pp::PACKED_LIMIT as u64 {
+            let mb = pp::PACKED_LIMIT / (1 << 20);
+            return Ok(empty(Some(format!("Not unpacked: the page is over this viewer's {mb} MB limit."))));
+        }
+        let bytes = self.read(doc, &r, r.offset, bits)?;
+        let page = pp::read(&bytes, &header, &column);
+        Ok(Explain::ParquetPage {
+            packed_bytes: page.packed_bytes as u64,
+            decoded_bytes: page.decoded_bytes as u64,
+            steps: page.steps,
+            values: page.values,
+            total: page.total,
+            element_type: page.element_type,
+            problem: page.problem,
+        })
+    }
+
+    /// The path to the value of the Thrift field numbered `id` in the field
+    /// list at `list`, or nothing when the writer left it out.
+    ///
+    /// A compact-protocol struct is a list of fields in whatever order the
+    /// writer chose, each carrying its own number, so this is a search and not
+    /// an index. Every field reads as four children: the header byte, the kind
+    /// worked out from it, the number, and the value.
+    fn thrift_field<S: Source>(&mut self, doc: &Document<S>, list: &[usize], id: i128) -> R<Option<Vec<usize>>> {
+        let n = self.child_count(doc, list)?;
+        for i in 0..n.min(256) {
+            let mut at = list.to_vec();
+            at.push(i as usize);
+            let mut which = at.clone();
+            which.push(2);
+            if self.node(doc, &which).ok().and_then(|n| n.value.as_int()) == Some(id) {
+                at.push(3);
+                return Ok(Some(at));
+            }
+        }
+        Ok(None)
+    }
+
+    /// How deep the `nth` column sits in the schema: its maximum definition
+    /// level, its maximum repetition level, and the width of one value where
+    /// the type has a fixed one.
+    ///
+    /// The schema is written depth first, root first, each element saying how
+    /// many children follow it, and the leaves are the columns in the order
+    /// the row groups list them. So the walk is the lookup: nothing names a
+    /// column chunk's schema element, and matching on `path_in_schema` would
+    /// be a guess, because a list's element is called `element` wherever it
+    /// appears.
+    ///
+    /// A definition level counts every element along the path that is not
+    /// REQUIRED; a repetition level counts the REPEATED ones. The root itself
+    /// counts for neither.
+    fn parquet_levels<S: Source>(&mut self, doc: &Document<S>, nth: usize) -> R<(u32, u32, i64)> {
+        // footer -> FileMetaData -> fields -> the one numbered 2.
+        let mut fields = vec![1usize, 0, 0];
+        let mut list = match self.thrift_field(doc, &fields, 2)? {
+            Some(p) => p,
+            None => return Ok((0, 0, 0)),
+        };
+        // The list's elements, past the header fields Thrift writes in front
+        // of them.
+        let elems = match self.child_index(doc, &list, "elems")? {
+            Some(i) => {
+                list.push(i);
+                list
+            }
+            None => return Ok((0, 0, 0)),
+        };
+        let n = self.child_count(doc, &elems)?.min(4096) as usize;
+        // Every element's repetition type, how many children it has, and how
+        // wide a fixed-length value of it is, read once.
+        let mut read = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut at = elems.clone();
+            at.extend([i, 0]);
+            let of = |ev: &mut Self, id: i128| -> R<i128> {
+                let Some(p) = ev.thrift_field(doc, &at, id)? else { return Ok(-1) };
+                Ok(ev.node(doc, &p)?.value.as_int().unwrap_or(-1))
+            };
+            read.push((of(self, 3)?, of(self, 5)?, of(self, 2)?));
+        }
+        fields.clear();
+
+        // The walk: an element with no children is a column, and the ones
+        // above it on the stack are what it is nested inside.
+        let mut leaf = 0usize;
+        let mut definition = 0u32;
+        let mut repetition = 0u32;
+        // How many children are still owed at each level above.
+        let mut owed: Vec<i128> = Vec::new();
+        let mut levels: Vec<(u32, u32)> = Vec::new();
+        for (i, (repetition_type, children, length)) in read.iter().copied().enumerate() {
+            if i > 0 {
+                // OPTIONAL is 1 and REPEATED is 2; a missing field means
+                // REQUIRED, which the footer may leave out.
+                if repetition_type >= 1 {
+                    definition += 1;
+                }
+                if repetition_type == 2 {
+                    repetition += 1;
+                }
+            }
+            if children > 0 {
+                owed.push(children);
+                levels.push((definition, repetition));
+            } else {
+                if i > 0 {
+                    if leaf == nth {
+                        return Ok((definition, repetition, length.max(0) as i64));
+                    }
+                    leaf += 1;
+                }
+                // Close off every parent this was the last child of.
+                while let Some(left) = owed.last_mut() {
+                    *left -= 1;
+                    if *left > 0 {
+                        let (d, r) = *levels.last().expect("a level per owed group");
+                        definition = d;
+                        repetition = r;
+                        break;
+                    }
+                    owed.pop();
+                    levels.pop();
+                    match levels.last() {
+                        Some((d, r)) => {
+                            definition = *d;
+                            repetition = *r;
+                        }
+                        None => {
+                            definition = 0;
+                            repetition = 0;
+                        }
+                    }
+                }
+            }
+        }
+        Ok((0, 0, 0))
     }
 
     /// A chunk of a dataset, undone.

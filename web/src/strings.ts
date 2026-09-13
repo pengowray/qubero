@@ -434,6 +434,7 @@ export const UNPACKED = {
     pxu_bits: "index bits per token",
     lzma_props: "LZMA properties (lc, lp, pb)",
     range_init: "range decoder init",
+    unpacked_size: "unpacked size",
     code_len: "code-length code",
     lit_len: "literal code length",
     dist_len: "distance code length",
@@ -2185,6 +2186,10 @@ export const ROLE_GROUP: Readonly<Record<string, string>> = {
   type: "Type",
   value: "Value",
   name: "Name",
+  // Only the diagram draws one: a resolved field has taken its case already, so
+  // no panel over a file ever has one to show. The word names what the arrow
+  // says, which is that this value of the switch picks that shape.
+  case: "Case",
 };
 
 /** The same words on an arrow over the hex grid. The core writes the role as
@@ -2595,6 +2600,61 @@ export const GRAPH = {
    *  and it is what lets two groups be compared at a glance. */
   hull: (kind: string, n: number): string => `${kind} \u00b7 ${countText(n, "field")}`,
 };
+
+/**
+ * The diagram view: the format as boxes and arrows.
+ *
+ * Every other view is about this file. This one is about the format the file
+ * was opened with, so its words say "the format" and never "the file", and
+ * nothing in it is a measurement of anything on disk.
+ *
+ * Plain and short on purpose; the wording is the coordinator's to settle.
+ */
+export const DIAGRAM = {
+  /** The main view's button, beside Hex, Listing, Text and Strings. */
+  button: "Diagram",
+  regionLabel: "The format as boxes and arrows",
+  /** Under the title, once, so a reader knows what they are looking at before
+   *  they look for their file in it. */
+  about: (format: string): string => `The ${format} format, as the template describes it. Not this file.`,
+  noTemplate: "No format is chosen, so there is nothing to draw.",
+  /**
+   * Types the picture leaves out.
+   *
+   * The count and nothing else, because the reasons differ per type and the
+   * line cannot carry them: one is unreachable from the root, another is a
+   * named number rather than a structure, a third is past the core's cap. A
+   * sentence naming one of those would be wrong about the other two.
+   */
+  omitted: (n: number): string => (n === 1 ? "1 type is not drawn." : `${n.toLocaleString()} types are not drawn.`),
+  /** The row that stands for the fields a long type's box does not show.
+   *  Clicking it shows them. */
+  more: (n: number): string => `… ${n.toLocaleString()} more fields`,
+  moreTitle: "Show the rest of this type's fields",
+  less: "Show fewer fields",
+  /** Beside a box's name, for a box that is a choice rather than a structure. */
+  switchTag: "switch",
+  /** Beside a box's name, for a type written inside a field rather than
+   *  declared with a name of its own. */
+  inlineTag: "written inline",
+  fit: "Fit",
+  fitTitle: "Draw the whole diagram inside the window",
+  /** What a click on a field row does. Only the format's first type can be
+   *  found in the file so far, so the promise is kept narrow. */
+  pickTitle: "Put the cursor on this field in the open file",
+  /** The columns, as a screen reader reads them out. The table itself shows no
+   *  header row: four of them repeated per box is more ink than the words are
+   *  worth. */
+  column: {
+    pos: "Position in the type",
+    size: "Size",
+    type: "Type",
+    name: "Field",
+    /** A switch box's rows are values rather than fields, so its first column
+     *  is the value the switch reads and not a place in the file. */
+    caseValue: "Read as this value",
+  },
+} as const;
 
 /**
  * The strings view: what a file that is not a text file has to say in words.

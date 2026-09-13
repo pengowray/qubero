@@ -1,0 +1,1443 @@
+template sqlite
+
+root SQLite {
+  magic: magic "SQLite format 3\0"
+  page_size: u16be
+  write_version: u8be enum WriteVersion {1 = legacy, 2 = wal}
+  read_version: u8be enum ReadVersion {1 = legacy, 2 = wal}
+  reserved_space: u8be
+  max_payload_fraction: u8be
+  min_payload_fraction: u8be
+  leaf_payload_fraction: u8be
+  change_counter: u32be
+  page_count: u32be
+  first_freelist_page: u32be
+  freelist_page_count: u32be
+  schema_cookie: u32be
+  schema_format: u32be
+  default_cache_size: i32be
+  vacuum_root_page: u32be
+  text_encoding: u32be enum TextEncoding {1 = utf8, 2 = utf16le, 3 = utf16be}
+  user_version: i32be
+  incremental_vacuum: u32be
+  application_id: u32be
+  reserved: bytes[20]
+  version_valid_for: u32be
+  sqlite_version: u32be
+  page1: switch page_size {
+    1 => sized(65536 - 100) switch peek(u8be) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          left_child_page: u32be
+          payload_size: sqlite varint
+          payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          left_child_page: u32be
+          rowid: sqlite varint
+        }
+      }
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          payload_size: sqlite varint
+          payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          payload_size: sqlite varint
+          rowid: sqlite varint
+          payload: switch payload_size / (65536 - reserved_space - 35 + 1) {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  (65536 - reserved_space - 35 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      _ => switch freelist_page_count + vacuum_root_page {
+        0 => Overflow {
+          next_page: u32be
+          content: bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+    _ => sized(page_size - 100) switch peek(u8be) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          left_child_page: u32be
+          payload_size: sqlite varint
+          payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
+              {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          left_child_page: u32be
+          rowid: sqlite varint
+        }
+      }
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          payload_size: sqlite varint
+          payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
+              {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
+          payload_size: sqlite varint
+          rowid: sqlite varint
+          payload: switch payload_size / (page_size - reserved_space - 35 + 1) {
+            0 => sized(payload_size) SchemaRecord (named by name) {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              type: switch types[0] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[0] - types[0] / 2 * 2 {
+                  0 => bytes[(types[0] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[0] - 13) / 2] utf16le
+                    3 => text[(types[0] - 13) / 2] utf16be
+                    _ => text[(types[0] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              name: switch types[1] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[1] - types[1] / 2 * 2 {
+                  0 => bytes[(types[1] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[1] - 13) / 2] utf16le
+                    3 => text[(types[1] - 13) / 2] utf16be
+                    _ => text[(types[1] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              tbl_name: switch types[2] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[2] - types[2] / 2 * 2 {
+                  0 => bytes[(types[2] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[2] - 13) / 2] utf16le
+                    3 => text[(types[2] - 13) / 2] utf16be
+                    _ => text[(types[2] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              rootpage: switch types[3] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[3] - types[3] / 2 * 2 {
+                  0 => bytes[(types[3] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[3] - 13) / 2] utf16le
+                    3 => text[(types[3] - 13) / 2] utf16be
+                    _ => text[(types[3] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+              sql: switch types[4] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[4] - types[4] / 2 * 2 {
+                  0 => bytes[(types[4] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[4] - 13) / 2] utf16le
+                    3 => text[(types[4] - 13) / 2] utf16be
+                    _ => text[(types[4] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  (page_size - reserved_space - 35 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      _ => switch freelist_page_count + vacuum_root_page {
+        0 => Overflow {
+          next_page: u32be
+          content: bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+  }
+  pages: switch page_size {
+    1 => repeat(until end) sized(65536) switch peek(u8be) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          left_child_page: u32be
+          payload_size: sqlite varint
+          payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          left_child_page: u32be
+          rowid: sqlite varint
+        }
+      }
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          payload_size: sqlite varint
+          payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          payload_size: sqlite varint
+          rowid: sqlite varint
+          payload: switch payload_size / (65536 - reserved_space - 35 + 1) {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                  (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
+                  (65536 - reserved_space - 35 + 1) {
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
+                    (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
+                _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      _ => switch freelist_page_count + vacuum_root_page {
+        0 => Overflow {
+          next_page: u32be
+          content: bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+    _ => repeat(until end) sized(page_size) switch peek(u8be) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          left_child_page: u32be
+          payload_size: sqlite varint
+          payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
+              {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        right_most_page: u32be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          left_child_page: u32be
+          rowid: sqlite varint
+        }
+      }
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          payload_size: sqlite varint
+          payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
+              {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
+        page_type: u8be enum PageType {
+          2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
+        }
+        first_freeblock: u16be
+        cell_count: u16be
+        cell_content_start: u16be
+        fragmented_free_bytes: u8be
+        cell_pointers: u16be[cell_count]
+        cells: pointers(at cell_pointers[] from window) Cell {
+          payload_size: sqlite varint
+          rowid: sqlite varint
+          payload: switch payload_size / (page_size - reserved_space - 35 + 1) {
+            0 => sized(payload_size) Record {
+              header_size: sqlite varint
+              types: sized(header_size - sizeof(header_size)) repeat(until end) sqlite varint
+                  enum SerialType {
+                0 = null, 1 = i8, 2 = i16, 3 = i24, 4 = i32, 5 = i48, 6 = i64, 7 = f64,
+                8 = zero, 9 = one, 10 = reserved, 11 = reserved,
+                from 12 by 2 = "blob, {n} bytes", from 13 by 2 = "text, {n} bytes"
+              }
+              columns: switch types[index] {
+                0 => bytes[0]
+                1 => i8be
+                2 => i16be
+                3 => i24be
+                4 => i32be
+                5 => i48be
+                6 => i64be
+                7 => f64be
+                8 => computed 0
+                9 => computed 1
+                10 => bytes[0]
+                11 => bytes[0]
+                _ => switch types[index] - types[index] / 2 * 2 {
+                  0 => bytes[(types[index] - 12) / 2]
+                  1 => switch text_encoding {
+                    2 => text[(types[index] - 13) / 2] utf16le
+                    3 => text[(types[index] - 13) / 2] utf16be
+                    _ => text[(types[index] - 13) / 2] utf8
+                  }
+                  _ => bytes[0]
+                }
+              }[types]
+            }
+            _ => Spilled (inline, packed sqlite_overflow) {
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                  (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
+                  (page_size - reserved_space - 35 + 1) {
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
+                    (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
+                _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
+              }
+              overflow_page: u32be
+            }
+          }
+        }
+      }
+      _ => switch freelist_page_count + vacuum_root_page {
+        0 => Overflow {
+          next_page: u32be
+          content: bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+  }
+}

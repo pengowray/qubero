@@ -27,6 +27,10 @@ bzip2 = "0.6.1"
 # tests can walk all of them. It is also a second reading of the format, which
 # is worth having beside `lzma-rs` when the two are asked the same question.
 lzma-rust2 = { version = "0.20", default-features = false, features = ["std", "encoder"] }
+# A Snappy *encoder*, and a second reading of the format. `codec::snappy` is
+# our own, for the trace; what it gives has to be what this gives, over random
+# data and over every shape of literal and copy the format has.
+snap = "1.1.1"
 
 [dependencies]
 # Hashing a path of child indices happens several times per field; the default
@@ -67,3 +71,26 @@ lzma-rs = { version = "0.3", default-features = false }
 # The default features are the empty set; the `rustc_*` ones only tell its own
 # dependencies which language version to assume.
 bzip2-rs = { version = "0.1.2", default-features = false }
+# Brotli, decoding only and pure Rust. The decompressor half of the `brotli`
+# crate, published on its own: no encoder, no build script, no C, and it builds
+# for wasm32 as it stands. What a Parquet page packed with BROTLI needs.
+#
+# No trace finer than the whole run comes out of it, and that is the format
+# rather than the crate: brotli splits its own blocks by a model that changes
+# as it reads, so where one block ended is not a thing the stream says and not
+# a thing this crate is asked. One step over the run is what is true.
+brotli-decompressor = { version = "6.0.0", default-features = false, features = ["std"] }
+
+# YAML 1.2, pure Rust, for the `.ksy` reader in `ksy`. A `.ksy` is walked as a
+# generic tree rather than deserialised into structs, because every error has to
+# name the path it happened at (`/types/chunk/seq/2/size`) the way the Kaitai
+# compiler's errors do, and because the same key legitimately holds an int in
+# one file and a string in the next. Default features off drops `encoding_rs`:
+# a `.ksy` is UTF-8 and nothing else. `saphyr-parser` is saphyr's own scanner,
+# already underneath it; the reader walks that event stream directly, which is
+# what gives it mapping keys in file order, a line and column per node, and the
+# duplicate-key error a hash map would swallow. `saphyr` itself is still what
+# resolves a plain scalar to null, bool, int, float or string, so the YAML core
+# schema is read in one place rather than two.
+saphyr = { version = "0.0.12", default-features = false }
+saphyr-parser = "0.0.12"

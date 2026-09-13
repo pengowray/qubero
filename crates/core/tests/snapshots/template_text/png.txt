@@ -1,0 +1,28 @@
+template png
+
+root PNG {
+  signature: magic 89 50 4E 47 0D 0A 1A 0A
+  chunks: repeat(until element.type is "IEND") Chunk (named by type, contents data) {
+    length: u32be
+    type: text[4] utf8
+    data: sized(length) switch type {
+      'IHDR' => IHDR {
+        width: u32be
+        height: u32be
+        bit_depth: u8be
+        color_type: u8be enum ColorType {
+          0 = greyscale, 2 = rgb, 3 = indexed, 4 = greyscale alpha, 6 = rgba
+        }
+        compression: u8be enum Compression {0 = deflate}
+        filter: u8be enum FilterMethod {0 = adaptive}
+        interlace: u8be enum Interlace {0 = none, 1 = adam7}
+      }
+      'tEXt' => tEXt {
+        keyword: text until 0x00 latin1
+        text: text[length - sizeof(keyword)] latin1
+      }
+      _ => bytes[length]
+    }
+    crc: u32be  check crc32 over sizeof(type) + length bytes at sizeof(length)
+  }
+}

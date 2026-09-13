@@ -1,0 +1,1783 @@
+template wav
+
+root RIFF {
+  magic: text[4] ascii
+  size: switch magic {'RIFX' => u32be, _ => u32le}
+  form: text[4] ascii
+  chunks: sized(min(max(size, 4) - 4 or else remaining, remaining)) switch magic {
+    'RIFX' => repeat(until end) ChunkBE
+    _ => repeat(until end) Chunk
+  }
+}
+
+type Chunk (named by id, contents body) {
+  id: text[4] ascii
+  size: u32le
+  body: sized(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) switch
+      id {
+    'fmt ' => Format {
+      format: u16le enum FormatTag {
+        0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
+        0xfffe = extensible
+      }
+      channels: u16le
+      sample_rate: u32le
+      byte_rate: u32le
+      block_align: u16le
+      bits_per_sample: u16le
+      extra: switch format {
+        0xfffe => Extensible {
+          extension_size: u16le
+          valid_bits_per_sample: u16le
+          channel_mask: u32le enum ChannelMask {
+            0x03 = stereo, 0x04 = mono, 0x33 = quad, 0x3f = 5.1, 0x060f = 5.1 side, 0xff = 7.1,
+            0x063f = 7.1 side
+          }
+          sub_format: SubFormat {
+            format: u16le enum FormatTag {
+              0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
+              0xfffe = extensible
+            }
+            guid: bytes[14]
+          }
+        }
+        _ => bytes[remaining]
+      }
+    }
+    'fact' => Fact {
+      sample_count: u32le
+    }
+    'guan' => repeat(until end) text until 0x0a or end utf8
+    'wamd' => repeat(until end) Item {
+      tag: u16le enum WamdTag {
+        0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
+        6 = position, 7 = temperature
+      }
+      length: u32le
+      value: sized(length) switch tag {
+        1 => text[remaining] latin1
+        2 => text[remaining] latin1
+        3 => text[remaining] latin1
+        4 => text[remaining] latin1
+        5 => text[remaining] latin1
+        6 => text[remaining] latin1
+        7 => text[remaining] latin1
+        _ => bytes[remaining]
+      }
+    }
+    'cue ' => Cue {
+      count: u32le
+      points: CuePoint {
+        id: u32le
+        position: u32le
+        chunk: text[4] ascii
+        chunk_start: u32le
+        block_start: u32le
+        sample_offset: u32le
+      }[count]
+    }
+    'LIST' => List {
+      type: text[4] ascii
+      items: repeat(until end) ListItem
+    }
+    'ds64' => DataSize64 {
+      riff_size: u64le
+      data_size: u64le
+      sample_count: u64le
+      table_length: u32le
+      table: bytes[remaining]
+    }
+    'bext' => Broadcast {
+      description: text[256] padded with 0x00 ascii
+      originator: text[32] padded with 0x00 ascii
+      originator_reference: text[32] padded with 0x00 ascii
+      origination_date: text[10] padded with 0x00 ascii
+      origination_time: text[8] padded with 0x00 ascii
+      time_reference_low: u32le
+      time_reference_high: u32le
+      version: u16le
+      umid: switch version {0 => bytes[0], _ => bytes[64]}
+      loudness: switch version {
+        2 => Loudness {
+          integrated: i16le
+          range: i16le
+          max_true_peak: i16le
+          max_momentary: i16le
+          max_short_term: i16le
+        }
+        _ => bytes[0]
+      }
+      reserved: bytes[254 - sizeof(umid) - sizeof(loudness)]
+      coding_history: text[remaining] padded with 0x00 ascii
+    }
+    'smpl' => Sampler {
+      manufacturer: u32le
+      product: u32le
+      sample_period: u32le
+      midi_unity_note: u32le
+      midi_pitch_fraction: u32le
+      smpte_format: u32le enum SmpteFormat {
+        0 = none, 24 = 24 fps, 25 = 25 fps, 29 = 30 fps drop, 30 = 30 fps
+      }
+      smpte_offset: u32le
+      loop_count: u32le
+      sampler_data: u32le
+      loops: Loop {
+        id: u32le
+        type: u32le enum LoopType {0 = forward, 1 = alternating, 2 = backward}
+        start: u32le
+        end: u32le
+        fraction: u32le
+        play_count: u32le
+      }[loop_count]
+      extra: bytes[remaining]
+    }
+    'inst' => Instrument {
+      unshifted_note: u8be
+      fine_tune: i8le
+      gain: i8le
+      low_note: u8be
+      high_note: u8be
+      low_velocity: u8be
+      high_velocity: u8be
+    }
+    'plst' => Playlist {
+      count: u32le
+      segments: Segment {
+        cue_id: u32le
+        length: u32le
+        repeats: u32le
+      }[count]
+    }
+    'iXML' => text[remaining] padded with 0x00 utf8
+    '_PMX' => text[remaining] padded with 0x00 utf8
+    'axml' => text[remaining] padded with 0x00 utf8
+    'id3 ' => ID3 {
+      magic: magic "ID3"
+      version: u8be
+      revision: u8be
+      flags: u8be
+      size_0: u8be
+      size_1: u8be
+      size_2: u8be
+      size_3: u8be
+      frames: sized(size_0 * 2097152 + size_1 * 16384 + size_2 * 128 + size_3)
+          repeat(until element.id is 00 00 00 00) Frame (named by id, contents body) {
+        id: text[4] ascii
+        size: u32be
+        flags: u16be
+        body: switch version {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+          _ => sized(size) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+    'ID3 ' => ID3 {
+      magic: magic "ID3"
+      version: u8be
+      revision: u8be
+      flags: u8be
+      size_0: u8be
+      size_1: u8be
+      size_2: u8be
+      size_3: u8be
+      frames: sized(size_0 * 2097152 + size_1 * 16384 + size_2 * 128 + size_3)
+          repeat(until element.id is 00 00 00 00) Frame (named by id, contents body) {
+        id: text[4] ascii
+        size: u32be
+        flags: u16be
+        body: switch version {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+          _ => sized(size) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+    'data' => switch earlier(body.format) {
+      0xfffe => switch earlier(body.extra.sub_format.format) {
+        1 => switch earlier(body.bits_per_sample) {
+          8 => u8be[remaining / 1]
+          16 => i16le[remaining / 2]
+          24 => i24le[remaining / 3]
+          32 => i32le[remaining / 4]
+          _ => bytes[remaining]
+        }
+        3 => switch earlier(body.bits_per_sample) {
+          32 => f32le[remaining / 4]
+          64 => f64le[remaining / 8]
+          _ => bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+      _ => switch earlier(body.format) {
+        1 => switch earlier(body.bits_per_sample) {
+          8 => u8be[remaining / 1]
+          16 => i16le[remaining / 2]
+          24 => i24le[remaining / 3]
+          32 => i32le[remaining / 4]
+          _ => bytes[remaining]
+        }
+        3 => switch earlier(body.bits_per_sample) {
+          32 => f32le[remaining / 4]
+          64 => f64le[remaining / 8]
+          _ => bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+    _ => bytes[remaining]
+  }
+  pad: bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
+      (((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) / 2 * 2) *
+      (0 < remaining)]
+}
+
+type ChunkBE = Chunk (named by id, contents body) {
+  id: text[4] ascii
+  size: u32be
+  body: sized(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) switch
+      id {
+    'fmt ' => Format {
+      format: u16be enum FormatTag {
+        0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
+        0xfffe = extensible
+      }
+      channels: u16be
+      sample_rate: u32be
+      byte_rate: u32be
+      block_align: u16be
+      bits_per_sample: u16be
+      extra: switch format {
+        0xfffe => Extensible {
+          extension_size: u16be
+          valid_bits_per_sample: u16be
+          channel_mask: u32be enum ChannelMask {
+            0x03 = stereo, 0x04 = mono, 0x33 = quad, 0x3f = 5.1, 0x060f = 5.1 side, 0xff = 7.1,
+            0x063f = 7.1 side
+          }
+          sub_format: SubFormat {
+            format: u16be enum FormatTag {
+              0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
+              0xfffe = extensible
+            }
+            guid: bytes[14]
+          }
+        }
+        _ => bytes[remaining]
+      }
+    }
+    'fact' => Fact {
+      sample_count: u32be
+    }
+    'guan' => repeat(until end) text until 0x0a or end utf8
+    'wamd' => repeat(until end) Item {
+      tag: u16be enum WamdTag {
+        0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
+        6 = position, 7 = temperature
+      }
+      length: u32be
+      value: sized(length) switch tag {
+        1 => text[remaining] latin1
+        2 => text[remaining] latin1
+        3 => text[remaining] latin1
+        4 => text[remaining] latin1
+        5 => text[remaining] latin1
+        6 => text[remaining] latin1
+        7 => text[remaining] latin1
+        _ => bytes[remaining]
+      }
+    }
+    'cue ' => Cue {
+      count: u32be
+      points: CuePoint {
+        id: u32be
+        position: u32be
+        chunk: text[4] ascii
+        chunk_start: u32be
+        block_start: u32be
+        sample_offset: u32be
+      }[count]
+    }
+    'LIST' => List {
+      type: text[4] ascii
+      items: repeat(until end) ListItemBE
+    }
+    'ds64' => DataSize64 {
+      riff_size: u64be
+      data_size: u64be
+      sample_count: u64be
+      table_length: u32be
+      table: bytes[remaining]
+    }
+    'bext' => Broadcast {
+      description: text[256] padded with 0x00 ascii
+      originator: text[32] padded with 0x00 ascii
+      originator_reference: text[32] padded with 0x00 ascii
+      origination_date: text[10] padded with 0x00 ascii
+      origination_time: text[8] padded with 0x00 ascii
+      time_reference_low: u32be
+      time_reference_high: u32be
+      version: u16be
+      umid: switch version {0 => bytes[0], _ => bytes[64]}
+      loudness: switch version {
+        2 => Loudness {
+          integrated: i16be
+          range: i16be
+          max_true_peak: i16be
+          max_momentary: i16be
+          max_short_term: i16be
+        }
+        _ => bytes[0]
+      }
+      reserved: bytes[254 - sizeof(umid) - sizeof(loudness)]
+      coding_history: text[remaining] padded with 0x00 ascii
+    }
+    'smpl' => Sampler {
+      manufacturer: u32be
+      product: u32be
+      sample_period: u32be
+      midi_unity_note: u32be
+      midi_pitch_fraction: u32be
+      smpte_format: u32be enum SmpteFormat {
+        0 = none, 24 = 24 fps, 25 = 25 fps, 29 = 30 fps drop, 30 = 30 fps
+      }
+      smpte_offset: u32be
+      loop_count: u32be
+      sampler_data: u32be
+      loops: Loop {
+        id: u32be
+        type: u32be enum LoopType {0 = forward, 1 = alternating, 2 = backward}
+        start: u32be
+        end: u32be
+        fraction: u32be
+        play_count: u32be
+      }[loop_count]
+      extra: bytes[remaining]
+    }
+    'inst' => Instrument {
+      unshifted_note: u8be
+      fine_tune: i8le
+      gain: i8le
+      low_note: u8be
+      high_note: u8be
+      low_velocity: u8be
+      high_velocity: u8be
+    }
+    'plst' => Playlist {
+      count: u32be
+      segments: Segment {
+        cue_id: u32be
+        length: u32be
+        repeats: u32be
+      }[count]
+    }
+    'iXML' => text[remaining] padded with 0x00 utf8
+    '_PMX' => text[remaining] padded with 0x00 utf8
+    'axml' => text[remaining] padded with 0x00 utf8
+    'id3 ' => ID3 {
+      magic: magic "ID3"
+      version: u8be
+      revision: u8be
+      flags: u8be
+      size_0: u8be
+      size_1: u8be
+      size_2: u8be
+      size_3: u8be
+      frames: sized(size_0 * 2097152 + size_1 * 16384 + size_2 * 128 + size_3)
+          repeat(until element.id is 00 00 00 00) Frame (named by id, contents body) {
+        id: text[4] ascii
+        size: u32be
+        flags: u16be
+        body: switch version {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+          _ => sized(size) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+    'ID3 ' => ID3 {
+      magic: magic "ID3"
+      version: u8be
+      revision: u8be
+      flags: u8be
+      size_0: u8be
+      size_1: u8be
+      size_2: u8be
+      size_3: u8be
+      frames: sized(size_0 * 2097152 + size_1 * 16384 + size_2 * 128 + size_3)
+          repeat(until element.id is 00 00 00 00) Frame (named by id, contents body) {
+        id: text[4] ascii
+        size: u32be
+        flags: u16be
+        body: switch version {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+          _ => sized(size) switch id {
+            'TIT2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE1' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPE2' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TALB' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCON' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TRCK' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TYER' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TDRC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TCOM' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TENC' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TSSE' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'TPOS' => TextFrame {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            'COMM' => Comment {
+              encoding: u8be enum TextEncoding {
+                0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
+              }
+              language: text[3] ascii
+              text: switch encoding {
+                0 => text[remaining] latin1
+                1 => text[remaining] bom(utf16be)
+                2 => text[remaining] utf16be
+                3 => text[remaining] utf8
+                _ => text[remaining] encoding unknown
+              }
+            }
+            _ => bytes[remaining]
+          }
+        }
+      }
+    }
+    'data' => switch earlier(body.format) {
+      0xfffe => switch earlier(body.extra.sub_format.format) {
+        1 => switch earlier(body.bits_per_sample) {
+          8 => u8be[remaining / 1]
+          16 => i16be[remaining / 2]
+          24 => i24be[remaining / 3]
+          32 => i32be[remaining / 4]
+          _ => bytes[remaining]
+        }
+        3 => switch earlier(body.bits_per_sample) {
+          32 => f32be[remaining / 4]
+          64 => f64be[remaining / 8]
+          _ => bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+      _ => switch earlier(body.format) {
+        1 => switch earlier(body.bits_per_sample) {
+          8 => u8be[remaining / 1]
+          16 => i16be[remaining / 2]
+          24 => i24be[remaining / 3]
+          32 => i32be[remaining / 4]
+          _ => bytes[remaining]
+        }
+        3 => switch earlier(body.bits_per_sample) {
+          32 => f32be[remaining / 4]
+          64 => f64be[remaining / 8]
+          _ => bytes[remaining]
+        }
+        _ => bytes[remaining]
+      }
+    }
+    _ => bytes[remaining]
+  }
+  pad: bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
+      (((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) / 2 * 2) *
+      (0 < remaining)]
+}
+
+type ListItem = Chunk {
+  id: text[4] ascii
+  size: u32le
+  body: sized(size) switch id {
+    'labl' => Label {
+      cue_id: u32le
+      text: text until 0x00 or end latin1
+    }
+    'note' => Label {
+      cue_id: u32le
+      text: text until 0x00 or end latin1
+    }
+    'ltxt' => LabelledText {
+      cue_id: u32le
+      sample_length: u32le
+      purpose: text[4] ascii
+      country: u16le
+      language: u16le
+      dialect: u16le
+      code_page: u16le
+      text: text[remaining] padded with 0x00 latin1
+    }
+    _ => text until 0x00 or end latin1
+  }
+  pad: bytes[(size - size / 2 * 2) * (0 < remaining)]
+}
+
+type ListItemBE = Chunk {
+  id: text[4] ascii
+  size: u32be
+  body: sized(size) switch id {
+    'labl' => Label {
+      cue_id: u32be
+      text: text until 0x00 or end latin1
+    }
+    'note' => Label {
+      cue_id: u32be
+      text: text until 0x00 or end latin1
+    }
+    'ltxt' => LabelledText {
+      cue_id: u32be
+      sample_length: u32be
+      purpose: text[4] ascii
+      country: u16be
+      language: u16be
+      dialect: u16be
+      code_page: u16be
+      text: text[remaining] padded with 0x00 latin1
+    }
+    _ => text until 0x00 or end latin1
+  }
+  pad: bytes[(size - size / 2 * 2) * (0 < remaining)]
+}

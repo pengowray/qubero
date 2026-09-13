@@ -22,6 +22,52 @@ use super::{ListState, Resolved};
 use crate::json;
 use crate::template::Deduced;
 
+/// A label a tagged search looks for, in the form a map can be keyed by.
+///
+/// The three ways a format labels a record, as [`crate::template::Tag`] has
+/// them once a computed label has been worked out. Text is held trimmed at the
+/// end, because that is how `tag_matches` compares it: a key stored with the
+/// padding of a fixed-width field on it would never be found again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) enum TagKey {
+    Int(i128),
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+/// Which list a tagged search walked, and what it found there.
+///
+/// One of these per stretch of bytes read as a list, rather than one per path,
+/// which is the whole point: an HDF5 global heap collection is reached through
+/// the address every variable-length element carries, so a column of two
+/// thousand strings is two thousand paths to one collection. Walking it once
+/// per path is quadratic; walking it once and answering the rest from here is
+/// not.
+pub(super) struct TagIndex {
+    /// The list the labels were read from, which is whichever path asked
+    /// first. Everything else that reaches these bytes is answered from this
+    /// walk rather than from its own.
+    pub(super) list: Vec<usize>,
+    /// How many of its elements have been read. Everything below this is in
+    /// `found` unless its label could not be read at all, so a label missing
+    /// from `found` is a label the walk has not reached yet.
+    pub(super) scanned: usize,
+    /// Which element carried each label, the first one where a label is
+    /// written twice: a search answers with the first match, and so does this.
+    pub(super) found: FxHashMap<TagKey, usize>,
+    /// True once this stopped growing because the index was full, after which
+    /// a search that misses walks its own list the old way.
+    pub(super) full: bool,
+}
+
+/// How many labels one list may have indexed. Far past any header: the largest
+/// FITS header anyone writes is a few hundred cards, and a global heap
+/// collection holds a few thousand objects. A list longer than this is one
+/// where the walk is the cost whatever is remembered about it, and remembering
+/// a million labels to save a comparison each is the memory this was meant to
+/// save.
+const TAG_INDEX_CAP: usize = 100_000;
+
 #[derive(Default)]
 pub(super) struct Memo {
     /// Where each node starts, how long it is, and what type it turned out to
@@ -30,6 +76,14 @@ pub(super) struct Memo {
     nodes: FxHashMap<Vec<usize>, Resolved>,
     lists: FxHashMap<Vec<usize>, ListState>,
     json: FxHashMap<Vec<usize>, Arc<json::Val>>,
+    /// What a tagged search over a named list has learned, by the stretch of
+    /// bytes the list covers and the field of an element the label is read
+    /// from: `(space, offset, limit, key)`. Not by path, so that every
+    /// referrer to one collection shares one walk. See [`TagIndex`].
+    tags: FxHashMap<(u32, u64, u64, Arc<[String]>), TagIndex>,
+    /// How many labels are held across every list, so that a file full of
+    /// them cannot grow this without bound.
+    tag_entries: usize,
     /// What running the whole file said about it. One per document rather
     /// than one per path: a format that has to be run is run whole, and the
     /// run is over the file rather than over any node. What the reading is
@@ -85,12 +139,75 @@ impl Memo {
             self.lists.remove(&p);
             self.json.remove(&p);
         }
+        // What a search learned about a list inside a stream goes with the
+        // stream: the offsets it is keyed by count in that space, and the
+        // space is about to be opened again.
+        self.tags.retain(|(space, ..), _| *space == 0);
+        self.tag_entries = self.tags.values().map(|t| t.found.len()).sum();
     }
 
     /// How many nodes are held. What a walk over a long list costs in memory
     /// is measured here rather than guessed at.
     pub(super) fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// What has been learned about the labels of the list covering these
+    /// bytes, read from this field of each element. Nothing until a search has
+    /// walked one.
+    pub(super) fn tag_index(&self, slot: &(u32, u64, u64, Arc<[String]>)) -> Option<&TagIndex> {
+        self.tags.get(slot)
+    }
+
+    /// The same, made if it is not there yet, with `list` as the one path every
+    /// referrer will be answered from.
+    pub(super) fn tag_index_mut(
+        &mut self,
+        slot: (u32, u64, u64, Arc<[String]>),
+        list: &[usize],
+    ) -> &mut TagIndex {
+        self.tags.entry(slot).or_insert_with(|| TagIndex {
+            list: list.to_vec(),
+            scanned: 0,
+            found: FxHashMap::default(),
+            full: false,
+        })
+    }
+
+    /// Write down which element of a list carried a label, unless the index is
+    /// full or that label is already written down. The first element wins,
+    /// because that is the one a search answers with.
+    pub(super) fn remember_tag(&mut self, slot: &(u32, u64, u64, Arc<[String]>), key: TagKey, idx: usize) {
+        let full = self.tag_entries >= TAG_INDEX_CAP;
+        let Some(entry) = self.tags.get_mut(slot) else { return };
+        if full {
+            entry.full = true;
+            return;
+        }
+        // Written once and never changed. A label can appear twice in a list,
+        // and a search answers with the first element carrying it; a walk that
+        // resumes and meets the second would otherwise replace the answer with
+        // it. FITS headers do this: `COMMENT` and `HISTORY` are written as
+        // often as anyone likes.
+        if let std::collections::hash_map::Entry::Vacant(slot) = entry.found.entry(key) {
+            slot.insert(idx);
+            self.tag_entries += 1;
+        }
+    }
+
+    /// How far the walk of this list has got, once it has gone further.
+    pub(super) fn tag_scanned(&mut self, slot: &(u32, u64, u64, Arc<[String]>), upto: usize) {
+        if let Some(entry) = self.tags.get_mut(slot) {
+            entry.scanned = entry.scanned.max(upto);
+        }
+    }
+
+    /// Forget what was learned about one list, for a hit that turned out to
+    /// name an element that is no longer labelled that way.
+    pub(super) fn forget_tags(&mut self, slot: &(u32, u64, u64, Arc<[String]>)) {
+        if let Some(entry) = self.tags.remove(slot) {
+            self.tag_entries = self.tag_entries.saturating_sub(entry.found.len());
+        }
     }
 
     /// Forget one node, and what any list at that path had learned. The two go
@@ -170,6 +287,8 @@ impl Memo {
         self.nodes.clear();
         self.lists.clear();
         self.json.clear();
+        self.tags.clear();
+        self.tag_entries = 0;
         self.deduced = None;
     }
 
@@ -185,6 +304,12 @@ impl Memo {
         // A run over the whole file says nothing about which half of it an
         // edit touched, so an edit anywhere means running it again.
         self.deduced = None;
+        // What a search learned about a list is a claim about the bytes the
+        // list covers, so it stands exactly when those bytes ended before the
+        // edit. The index is keyed by the stretch, so the range is right
+        // there and nothing has to be looked up to decide.
+        self.tags.retain(|(_, _, limit, _), _| *limit <= bit);
+        self.tag_entries = self.tags.values().map(|t| t.found.len()).sum();
         let nodes = &self.nodes;
         self.lists.retain(|path, l| {
             l.checkpoints.retain(|(_, at)| *at <= bit);

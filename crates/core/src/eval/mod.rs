@@ -19,6 +19,7 @@ use crate::text::{self, Settled};
 mod cells;
 mod check;
 mod deduced;
+mod diagram;
 mod explain;
 mod gather;
 mod go;
@@ -41,6 +42,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};

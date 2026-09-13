@@ -9,6 +9,7 @@ import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.t
 import { quantBody, type GoTo } from "./quantpanel.ts";
 import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
+import { pageBody, pageNote } from "./pagepanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
 import { rowBody, rowNote } from "./rowpanel.ts";
 import { samplesBody, samplesNote } from "./samplespanel.ts";
@@ -42,6 +43,7 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "sqliterow") return "Columns in this row";
   if (info.kind === "chunk") return "Inside this chunk";
   if (info.kind === "samples") return "Samples in this record";
+  if (info.kind === "page") return "Inside this page";
   return `Defined values (${info.cases.length})`;
 }
 
@@ -54,6 +56,7 @@ function headingNote(info: TypeInfo): string {
   if (info.kind === "sqliterow") return rowNote(info);
   if (info.kind === "chunk") return chunkNote(info);
   if (info.kind === "samples") return samplesNote(info);
+  if (info.kind === "page") return pageNote(info);
   return "";
 }
 
@@ -429,6 +432,7 @@ export function typePanel(
   else if (info.kind === "sqliterow") frag.append(rowBody(info));
   else if (info.kind === "chunk") frag.append(chunkBody(info));
   else if (info.kind === "samples") frag.append(samplesBody(info));
+  else if (info.kind === "page") frag.append(pageBody(info));
   else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));

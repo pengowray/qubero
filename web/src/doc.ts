@@ -749,6 +749,68 @@ export type FieldGraph = {
   readonly omitted: number;
 };
 
+/** What a diagram box stands for: a structure and its fields, a block of
+ *  worked-out fields, or a choice and its cases. */
+export type DiagramBoxKind = "seq" | "instances" | "switch";
+
+/** One row of a diagram box: one field of a type, or one case of a switch. */
+export type DiagramRow = {
+  readonly name: string;
+  /** The type as the listing's type column writes it. */
+  readonly type_text: string;
+  /** How long the field runs (`4 bytes`), or the expression that decides it
+   *  (`len bytes`). Empty when only reading a file settles it. */
+  readonly size_text: string;
+  /** Where it starts inside its own type (`0x4`), or the address it reads its
+   *  contents at. Empty when the template fixes neither. */
+  readonly pos_text: string;
+  /** The word the listing gives a field of this type, so the same field is the
+   *  same colour in both. Pass it to `fieldClass`. */
+  readonly kind: string;
+};
+
+/** One type of the format, and its fields. */
+export type DiagramBox = {
+  readonly name: string;
+  readonly kind: DiagramBoxKind;
+  /** The type this one was written inside, for a box the template gave no name
+   *  of its own (`Header.entry`). Absent for a named type. */
+  readonly parent?: string;
+  readonly rows: DiagramRow[];
+};
+
+/** One connection, drawn the way a reader follows it: from the row that
+ *  decides to the row it decides about. */
+export type DiagramEdge = {
+  /** Box index and row index: where the edge leaves. */
+  readonly from: readonly [number, number];
+  /** Box index where it lands. */
+  readonly to: number;
+  /** Row index in that box. Absent for an edge to the box as a whole, which is
+   *  what naming a type is. */
+  readonly to_row?: number;
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case";
+  /** The expression the edge stands for, as the template writes it. Empty for a
+   *  declaration rather than an expression. */
+  readonly label: string;
+};
+
+/**
+ * The format as boxes and arrows, read off the template rather than off a file.
+ *
+ * `graph` answers about one file: these are the fields it turned out to have.
+ * This answers about the format: these are the types it declares. Nothing in it
+ * depends on a file being open.
+ */
+export type TemplateDiagram = {
+  readonly types: DiagramBox[];
+  readonly edges: DiagramEdge[];
+  /** Named types of the template with no box here: the ones nothing reachable
+   *  from the root refers to, the ones that are not structures, and the ones
+   *  past the core's box cap. */
+  readonly omitted: number;
+};
+
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
   /** Where the node is in the template. Empty for a version 2 node below the
@@ -877,6 +939,20 @@ export type ChunkStep = {
   readonly in_bytes: number;
   readonly out_bytes: number;
   /** True when this chunk's own mask said the filter was not applied to it. */
+  readonly skipped: boolean;
+};
+
+/** One step of reading a Parquet page: the codec, a list of levels, or the
+ *  encoding its values are in. */
+export type PageStep = {
+  readonly what: string;
+  readonly in_bytes: number;
+  /** Zero for a step that produced values rather than bytes; its note says
+   *  how many. */
+  readonly out_bytes: number;
+  readonly note: string;
+  /** True when the page never went through this step: a DATA_PAGE_V2 whose
+   *  is_compressed is false still names its column's codec. */
   readonly skipped: boolean;
 };
 
@@ -1054,7 +1130,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "samples" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1152,6 +1228,17 @@ export type TypeInfo = {
   readonly chunk_element_type: string;
   readonly chunk_values: readonly string[];
   readonly chunk_total: number;
+  /** Page: how many bytes its payload is in the file, and how many its values
+   *  came to once the codec was undone. */
+  readonly page_packed: number;
+  readonly page_decoded: number;
+  /** Page: every step, in the order it was done. */
+  readonly page_steps: readonly PageStep[];
+  /** Page: what one value is called, the first few of them, and how many
+   *  there are altogether. */
+  readonly page_element_type: string;
+  readonly page_values: readonly string[];
+  readonly page_total: number;
   /** Samples: a miniSEED record's encoding by name and number, and whether its
    *  data was laid out big-endian. */
   readonly mseed_encoding: string;
@@ -1823,6 +1910,18 @@ export class Doc {
     return ok;
   }
 
+  /**
+   * The template in use, written out as text: every type, every field and the
+   * expressions behind them. Empty when no template is selected.
+   *
+   * The file's own template, whichever space is open, for the reason
+   * `setTemplate` only works on space 0: an unpacked stream is read by what its
+   * `Decoded` node declared, not by anything a reader chose.
+   */
+  templateText(): string {
+    return this.editor.template_text();
+  }
+
   private handleReply<T>(json: string): TemplateReply<T> {
     const r: RawReply<T> = JSON.parse(json);
     if (r.status === "pending") {
@@ -2030,6 +2129,18 @@ export class Doc {
    */
   graph(path: readonly number[], limit: number): TemplateReply<FieldGraph> {
     return this.handleReply<FieldGraph>(this.editor.graph(this.space, Uint32Array.from(path), limit));
+  }
+
+  /**
+   * The format as boxes and arrows: the types the template declares, the fields
+   * of each, and which field decides what about which other.
+   *
+   * About the format, not about this file. Nothing is read, no field is
+   * resolved, and the answer is the same for every file the same template
+   * opens, so it never comes back pending.
+   */
+  templateDiagram(): TemplateReply<TemplateDiagram> {
+    return this.handleReply<TemplateDiagram>(this.editor.template_diagram(this.space));
   }
 
   /**

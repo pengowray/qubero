@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
+use qubero_core::eval::{Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -383,6 +383,22 @@ struct SqliteColumnDto {
     len: f64,
 }
 
+/// One step of reading a Parquet page: the codec, a list of levels, or the
+/// encoding the values are in.
+#[derive(Serialize)]
+struct PageStepDto {
+    /// The codec's name, the encoding's name, or which list of levels.
+    what: String,
+    in_bytes: f64,
+    /// Zero for a step that produced values rather than bytes, which says how
+    /// many of them in `note` instead.
+    out_bytes: f64,
+    note: String,
+    /// Set when the step was not done at all: a v2 page that says
+    /// `is_compressed` is false names its column's codec and never ran it.
+    skipped: bool,
+}
+
 /// One filter undone on the way back to a chunk's elements.
 #[derive(Serialize)]
 struct ChunkStepDto {
@@ -526,6 +542,17 @@ struct ExplainDto {
     /// Samples: whether the last sample equals the reverse integration
     /// constant, or null where there is no check to make.
     mseed_check: Option<bool>,
+    /// Page: how many bytes the payload is in the file, and how many its
+    /// values came to once the codec was undone.
+    page_packed: f64,
+    page_decoded: f64,
+    /// Page: every step, in the order it was done.
+    page_steps: Vec<PageStepDto>,
+    /// Page: what one value is called, the first few of them, and how many
+    /// there are altogether.
+    page_element_type: String,
+    page_values: Vec<String>,
+    page_total: f64,
     /// Quant: the scale the block keeps for each run of weights, where it keeps
     /// them, and how many weights one run covers. Empty for a block with one
     /// scale for all of them.
@@ -730,6 +757,101 @@ struct GraphDto {
     omitted: f64,
 }
 
+/// One row of a diagram box: one field of a type, or one case of a switch.
+#[derive(Serialize)]
+struct DiagramRowDto {
+    name: String,
+    /// The type as the listing's type column writes it.
+    type_text: String,
+    /// How long the field runs, or the expression that decides it. Empty when
+    /// only reading a file settles it.
+    size_text: String,
+    /// Where it starts inside its own type, or the address it reads its
+    /// contents at. Empty when neither is fixed by the template.
+    pos_text: String,
+    /// The word the listing gives a field of this type, so the same field is
+    /// the same colour in both: "uint", "str", "magic", "composite" and the
+    /// rest. See `qubero_core::eval::value_kind`.
+    kind: &'static str,
+}
+
+/// One type of the format, and its fields.
+#[derive(Serialize)]
+struct DiagramBoxDto {
+    name: String,
+    /// "seq" | "instances" | "switch"
+    kind: &'static str,
+    /// The type this one was written inside, for a box the template gave no
+    /// name of its own. Absent for a named type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    rows: Vec<DiagramRowDto>,
+}
+
+/// One connection, from the row that decides to the row it decides about.
+#[derive(Serialize)]
+struct DiagramEdgeDto {
+    /// Box index and row index: where the edge leaves.
+    from: (f64, f64),
+    /// Box index where it lands.
+    to: f64,
+    /// Row index in that box, absent for an edge to the box as a whole, which
+    /// is what naming a type is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to_row: Option<f64>,
+    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case"
+    role: &'static str,
+    /// The expression the edge stands for, as the template writes it. Empty for
+    /// a declaration rather than an expression.
+    label: String,
+}
+
+/// The format as boxes and arrows, read off the template rather than a file.
+#[derive(Serialize)]
+struct DiagramDto {
+    types: Vec<DiagramBoxDto>,
+    edges: Vec<DiagramEdgeDto>,
+    /// Named types of the template with no box here.
+    omitted: f64,
+}
+
+fn diagram_dto(d: Diagram) -> DiagramDto {
+    DiagramDto {
+        types: d
+            .types
+            .into_iter()
+            .map(|b| DiagramBoxDto {
+                name: b.name,
+                kind: b.kind.as_str(),
+                parent: b.parent,
+                rows: b
+                    .rows
+                    .into_iter()
+                    .map(|r| DiagramRowDto {
+                        name: r.name,
+                        type_text: r.type_text,
+                        size_text: r.size_text,
+                        pos_text: r.pos_text,
+                        kind: r.kind,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        edges: d
+            .edges
+            .into_iter()
+            .map(|e| DiagramEdgeDto {
+                from: (e.from.0 as f64, e.from.1 as f64),
+                to: e.to.0 as f64,
+                to_row: e.to.1.map(|r| r as f64),
+                role: e.role.as_str(),
+                label: e.label,
+            })
+            .collect(),
+        omitted: f64::from(d.omitted),
+    }
+}
+
 /// One Huffman-coded number of a deflate symbol: the symbol, how wide the code
 /// that carried it was, the bits that followed it outright, and what the two
 /// came to. See `qubero_core::codec::inflate::DecodedCode`.
@@ -931,6 +1053,12 @@ fn explain_dto(e: Explain) -> ExplainDto {
         mseed_last: String::new(),
         mseed_total: 0.0,
         mseed_check: None,
+        page_packed: 0.0,
+        page_decoded: 0.0,
+        page_steps: Vec::new(),
+        page_element_type: String::new(),
+        page_values: Vec::new(),
+        page_total: 0.0,
         problem: String::new(),
         groups: Vec::new(),
         group_weights: 0.0,
@@ -1061,6 +1189,25 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 .map(|c| {
                     let (value_kind, value, _, _) = shown(&c.value);
                     SqliteColumnDto { type_name: c.type_name, value, value_kind, at: c.at as f64, len: c.len as f64 }
+                })
+                .collect();
+        }
+        Explain::ParquetPage { packed_bytes, decoded_bytes, steps, values, total, element_type, problem } => {
+            dto.kind = "page";
+            dto.page_packed = packed_bytes as f64;
+            dto.page_decoded = decoded_bytes as f64;
+            dto.page_total = total as f64;
+            dto.page_element_type = element_type;
+            dto.page_values = values;
+            dto.problem = problem.unwrap_or_default();
+            dto.page_steps = steps
+                .into_iter()
+                .map(|s| PageStepDto {
+                    what: s.what,
+                    in_bytes: s.in_bytes as f64,
+                    out_bytes: s.out_bytes as f64,
+                    note: s.note,
+                    skipped: s.skipped,
                 })
                 .collect();
         }
@@ -2240,6 +2387,20 @@ impl Editor {
         formats::builtin_names().iter().map(|s| s.to_string()).collect()
     }
 
+    /// The template in use, written out as text: every type, every field and
+    /// every expression behind them. Empty when no template is selected.
+    ///
+    /// The file's own template, space 0, since that is the one `set_template`
+    /// sets; an unpacked stream is read by whatever its `Decoded` node declared
+    /// and has no template of the reader's choosing. Read-only, and read in one
+    /// go: it is a page of text, not a walk.
+    pub fn template_text(&self) -> String {
+        match self.sheets[0].eval.as_ref() {
+            Some(e) => qubero_core::template_text::render(e.template()),
+            None => String::new(),
+        }
+    }
+
     /// Best current projection for a variable-size array being walked, or an
     /// empty string when no unfinished walk has enough information yet.
     pub fn extent_estimate(&self, space: u32) -> String {
@@ -2491,6 +2652,23 @@ impl Editor {
                 e.begin_slice();
                 reply(e.graph(&sh.doc, &p, limit as usize).map(graph_dto))
             }
+        }
+    }
+
+    /// The template as boxes and arrows: one box per type, one row per field,
+    /// and one edge per connection between two of them. JSON, in the same reply
+    /// shape as the rest.
+    ///
+    /// About the format rather than about the file. Nothing here is read from
+    /// the document, no node is resolved, and the answer is the same for every
+    /// file the same template opens. `space` picks which template, since an
+    /// unpacked stream is read by one of its own.
+    pub fn template_diagram(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        match &sh.eval {
+            None => reply::<DiagramDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
         }
     }
 

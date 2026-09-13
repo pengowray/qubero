@@ -13,3 +13,6 @@ web/public/*.db
 web/public/*.wav
 web/public/*.bin
 web/public/*.safetensors
+
+# Screenshots a browser test drops; the test is committed, its output is not.
+web/test/out/

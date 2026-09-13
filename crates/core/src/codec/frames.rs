@@ -30,6 +30,35 @@ pub(super) fn whole(input: usize, output: usize) -> Trace {
     b.done()
 }
 
+/// A Brotli stream: the bytes, and one step over the whole of it.
+///
+/// The step is as fine as the truth goes. Brotli's blocks are not delimited by
+/// anything a second reader could find: the stream carries three interleaved
+/// categories of block, each switching on a count the decoder maintains as it
+/// goes, and the crate that reads it is not asked where the boundaries fell.
+/// So this says these bits made those bytes, which is what a reader standing
+/// on a byte of the output needs, and does not pretend to a map it has not
+/// got.
+///
+/// The output is capped rather than trusted: a page header may claim any
+/// uncompressed size it likes, and one of the Parquet samples claims two
+/// gigabytes from three kilobytes of input.
+pub fn brotli(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    // One byte past the cap, so a stream that only just fits is told from one
+    // that does not.
+    let mut reader = brotli_decompressor::Decompressor::new(data, 4096);
+    match reader.by_ref().take(super::CAP_BYTES as u64 + 1).read_to_end(&mut out) {
+        Ok(_) if out.len() > super::CAP_BYTES => Err(Refusal::TooLarge),
+        Ok(_) => {
+            let n = out.len();
+            Ok((out, whole(data.len(), n)))
+        }
+        Err(_) => Err(Refusal::Failed),
+    }
+}
+
 /// A zstd run: the bytes, and a step per frame header and per block.
 ///
 /// The blocks are stepped through one at a time rather than parsed twice: the
