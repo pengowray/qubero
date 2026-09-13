@@ -32,6 +32,8 @@ fn sample(name: &str) -> Option<Vec<u8>> {
 const GWOSC: &str = "H-H1_GWOSC_4KHZ_R1-1126259447-32.gwf";
 const FRAMEL: &str = "framel-8.30-test.gwf";
 const HLV: &str = "HLV-HW100916-968654552-1.gwf";
+const FRAMEL_V6: &str = "framel-6.24-test-v6.gwf";
+const CAL_FAC: &str = "H-CAL_FAC_V03-729273600-5094000.gwf";
 
 /// One structure as the bytes have it, found without the template.
 struct Raw {
@@ -129,7 +131,16 @@ fn check_against_dictionary(name: &str, bytes: Vec<u8>) -> Vec<String> {
                 ev.node(&d, &p).unwrap().name
             })
             .collect();
-        assert_eq!(&names, fields, "{name}: structure {i}, a {class} at {}", raw.offset);
+        // A version 6 table of contents lists the fields of one static data
+        // group flat, and the template reads a count of those groups as a
+        // list of them. The names inside a group are the dictionary's.
+        let mut fields = fields.clone();
+        if let Some(at) = names.iter().position(|n| n == "statTypes") {
+            let group = ["nameStat", "detector", "nStatInstance", "tStart", "tEnd", "version", "positionStat"];
+            assert_eq!(&fields[at..at + group.len()], group, "{name}: the dictionary lists one group");
+            fields.splice(at..at + group.len(), ["statTypes".to_string()]);
+        }
+        assert_eq!(names, fields, "{name}: structure {i}, a {class} at {}", raw.offset);
         // And the fields tile the body: the last one ends where it does.
         if let Some(last) = body.child_count.checked_sub(1) {
             let mut p = path.clone();
@@ -221,7 +232,17 @@ fn the_gwosc_strain_opens_as_the_samples_its_hdf5_twin_holds() {
 /// frames, has its double beside it in bytes nothing packed.
 #[test]
 fn every_zero_suppressed_short_in_framels_test_file_is_half_the_float_written_beside_it() {
-    let Some(bytes) = sample(FRAMEL) else {
+    zero_suppressed_shorts_are_half_the_floats_beside_them(FRAMEL);
+}
+
+/// The same program's output in version 6, packed the same way.
+#[test]
+fn every_zero_suppressed_short_in_framels_version_6_file_is_half_the_float_written_beside_it() {
+    zero_suppressed_shorts_are_half_the_floats_beside_them(FRAMEL_V6);
+}
+
+fn zero_suppressed_shorts_are_half_the_floats_beside_them(name: &str) {
+    let Some(bytes) = sample(name) else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
     };
@@ -411,20 +432,36 @@ impl Frames {
 /// masses 1.4 and 1.3 and a chi-squared of 2.3, a table of 0.2 cos(0.1 j).
 #[test]
 fn framels_test_file_holds_what_its_example_program_wrote() {
-    let Some(bytes) = sample(FRAMEL) else {
+    holds_what_the_example_program_wrote(FRAMEL);
+}
+
+/// The same program in FrameL 6.24, in version 6, where the event parameters
+/// and two sample rates are 4-byte floats. It made no FrStatData then.
+#[test]
+fn framels_version_6_file_holds_what_its_example_program_wrote() {
+    holds_what_the_example_program_wrote(FRAMEL_V6);
+}
+
+fn holds_what_the_example_program_wrote(name: &str) {
+    let Some(bytes) = sample(name) else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
     };
+    let six = bytes[5] == 6;
     let mut f = Frames::open(bytes);
 
     let adc = f.named("FrAdcData", "fastAdc0");
-    assert_eq!(f.text(&adc, "comment"), "test");
     assert_eq!(f.int(&adc, "nBits"), 16);
-    // A 4-byte float comes back as the shortest decimal that reads as the
-    // same 4 bytes, so it is compared as one.
-    assert_eq!(f.float(&adc, "slope") as f32, 20.0f32 / 65536.0);
-    assert_eq!(f.text(&adc, "units"), "Volts");
     assert_eq!(f.float(&adc, "sampleRate"), 2000.0);
+    if !six {
+        // FrameL 6.24's example made its fast channels without a comment,
+        // a slope or units; 8.30's gives them all three.
+        assert_eq!(f.text(&adc, "comment"), "test");
+        // A 4-byte float comes back as the shortest decimal that reads as the
+        // same 4 bytes, so it is compared as one.
+        assert_eq!(f.float(&adc, "slope") as f32, 20.0f32 / 65536.0);
+        assert_eq!(f.text(&adc, "units"), "Volts");
+    }
     let bad = f.named("FrAdcData", "Bad_data_(data[0]=nan)");
     assert_eq!(f.int(&bad, "dataValid"), 1);
 
@@ -456,10 +493,23 @@ fn framels_test_file_holds_what_its_example_program_wrote() {
     assert_eq!(f.elem(&inspiral, "parameters", 1), Value::Float(1.333));
     assert_eq!(f.elem_text(&inspiral, "parameterNames", 1), "M2");
 
-    let gain = f.named("FrStatData", "gain");
-    assert_eq!(f.text(&gain, "comment"), "ADC 1 gain");
-    assert_eq!(f.text(&gain, "representation"), "calibration");
-    assert_eq!(f.int(&gain, "timeEnd") - f.int(&gain, "timeStart"), 20);
+    if six {
+        // Four bytes wide in version 6: the event's parameters, and the
+        // sample rates of the serial and simulated channels.
+        let width = |f: &mut Frames, at: &[usize], field: &str| {
+            let p = f.child(at, field);
+            f.ev.node(&f.d, &p).unwrap().size_bits
+        };
+        assert_eq!(width(&mut f, &event, "parameters"), 3 * 32);
+        assert_eq!(width(&mut f, &ser, "sampleRate"), 32);
+        assert_eq!(width(&mut f, &sim, "sampleRate"), 32);
+        assert_eq!(width(&mut f, &adc, "sampleRate"), 64);
+    } else {
+        let gain = f.named("FrStatData", "gain");
+        assert_eq!(f.text(&gain, "comment"), "ADC 1 gain");
+        assert_eq!(f.text(&gain, "representation"), "calibration");
+        assert_eq!(f.int(&gain, "timeEnd") - f.int(&gain, "timeStart"), 20);
+    }
 
     let table = f.named("FrTable", "table_1");
     assert_eq!(f.text(&table, "comment"), "slow monitoring");
@@ -507,4 +557,74 @@ fn every_structure_of_the_gwpy_frame_reads_as_the_class_its_dictionary_names() {
     assert_eq!(count(&seen, "FrVect"), 3);
     assert_eq!(count(&seen, "FrProcData"), 3);
     assert_eq!(count(&seen, "FrHistory"), 1);
+}
+
+/// Version 6, from FrameL 6.24: every class but FrStatData, with no checksum
+/// on any structure and a table of contents with no totals in it.
+#[test]
+fn every_structure_of_framels_version_6_file_reads_as_the_class_its_dictionary_names() {
+    let Some(bytes) = sample(FRAMEL_V6) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let seen = check_against_dictionary(FRAMEL_V6, bytes.clone());
+    for (class, n) in [
+        ("FrameH", 10),
+        ("FrDetector", 10),
+        ("FrHistory", 20),
+        ("FrRawData", 10),
+        ("FrAdcData", 80),
+        ("FrSerData", 10),
+        ("FrTable", 10),
+        ("FrMsg", 10),
+        ("FrProcData", 10),
+        ("FrSimData", 20),
+        ("FrEvent", 30),
+        ("FrSimEvent", 20),
+        ("FrSummary", 20),
+        ("FrVect", 130),
+        ("FrEndOfFrame", 10),
+        ("FrTOC", 1),
+        ("FrEndOfFile", 1),
+    ] {
+        assert_eq!(count(&seen, class), n, "{class}");
+    }
+    let mut f = Frames::open(bytes);
+    // The header ends in the two letters version 8 gave to the library.
+    assert_eq!(f.ev.node(&f.d, &[8, 5]).unwrap().name, "ascii_check");
+    // The event columns of the table of contents are as long as the counts
+    // per type add up to: 20 of trigger_1 and 10 of Burst_1.
+    let toc = f.body("FrTOC", 0);
+    assert_eq!(f.int(&toc, "nEventType"), 2);
+    assert_eq!(f.int(&toc, "GTimeSEvent"), 30);
+    assert_eq!(f.int(&toc, "nStatType"), 0);
+    let end = f.body("FrEndOfFile", 0);
+    assert_eq!(f.int(&end, "nFrames"), 10);
+}
+
+/// Version 6 again, from FrameCPP: calibration factors from 2003, as complex
+/// numbers FrameCPP left unpacked.
+#[test]
+fn every_structure_of_the_version_6_calibration_frame_reads_as_the_class_its_dictionary_names() {
+    let Some(bytes) = sample(CAL_FAC) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let seen = check_against_dictionary(CAL_FAC, bytes.clone());
+    assert_eq!(count(&seen, "FrProcData"), 2);
+    assert_eq!(count(&seen, "FrVect"), 2);
+    assert_eq!(count(&seen, "FrHistory"), 1);
+    let mut f = Frames::open(bytes);
+    let vect = f.named("FrVect", "H1:CAL-OLOOP_FAC");
+    assert_eq!(f.int(&vect, "nData"), 84_900);
+    let mut p = f.child(&vect, "data");
+    assert_eq!(f.ev.node(&f.d, &p).unwrap().child_count, 84_900);
+    // The first factor: its real part the float whose bits are 0x3f6b4db8,
+    // and nothing imaginary.
+    p.extend([0, 0]);
+    let Value::Float(re) = f.ev.node(&f.d, &p).unwrap().value else { panic!("not a float") };
+    assert_eq!(re as f32, f32::from_bits(0x3f6b_4db8));
+    p.pop();
+    p.push(1);
+    assert_eq!(f.ev.node(&f.d, &p).unwrap().value, Value::Float(0.0));
 }

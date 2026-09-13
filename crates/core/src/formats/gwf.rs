@@ -1,5 +1,6 @@
 //! IGWD frame files: the raw and processed data of the LIGO, Virgo and KAGRA
-//! gravitational wave detectors. Specification LIGO-T970130, version 8.
+//! gravitational wave detectors. Specification LIGO-T970130, versions 6 and 8
+//! of the format.
 //!
 //! A frame file is forty bytes of header and then a flat stream of
 //! self-describing structures. The header is the only part with a fixed
@@ -16,8 +17,8 @@
 //! instance number, and a body. Two classes are fixed by the specification:
 //! class 1 is FrSH, a dictionary entry naming a class, and class 2 is FrSE,
 //! one field of the class the FrSH before it named. So a frame file carries
-//! its own schema, and the first hundred and fifty structures of the sample
-//! this was written against are nothing but that schema.
+//! its own schema, and the first hundred and fifty structures of the GWOSC
+//! sample are nothing but that schema.
 //!
 //! **How a body is chosen.** Every class number other than 1 and 2 is assigned
 //! by the writer, and what it means is only knowable by reading the FrSH
@@ -28,17 +29,19 @@
 //! so a file that numbers `FrAdcData` 4 and a file that numbers it 40 both
 //! read as an `FrAdcData`.
 //!
-//! The constant table below is what is left when that question has no answer:
-//! a file with no dictionary at all, or one whose dictionary does not cover
-//! the class in hand. It is the numbering FrameCPP assigns, which is the order
-//! the specification lists the structures in. A file that both declares a
-//! class and calls it something this reader has never heard of gets its bytes,
-//! which is the honest answer.
+//! The constant tables below are what is left when that question has no
+//! answer: a file with no dictionary at all, or one whose dictionary does not
+//! cover the class in hand. For version 8 it is the numbering FrameCPP
+//! assigns, which is the order the specification lists the structures in; for
+//! version 6 it is the numbering both version 6 samples use. A file that both
+//! declares a class and calls it something this reader has never heard of
+//! gets its bytes, which is the honest answer.
 //!
 //! There is no standard numbering to fall back on, which the samples showed.
-//! FrameCPP numbers `FrameH` 3; FrameL 8.30 numbers it 4 and its `FrAdcData` 5;
-//! FrameL 8.20 numbers classes in the order it first wrote one, so in the gwpy
-//! sample `FrVect` is 5. So the class byte names only the two classes the
+//! In version 8, FrameCPP numbers `FrameH` 3; FrameL 8.30 numbers it 4 and its
+//! `FrAdcData` 5; FrameL 8.20 numbers classes in the order it first wrote one,
+//! so in the gwpy sample `FrVect` is 5. So the class byte names only the two
+//! classes the
 //! specification fixes, and `class_name` beside it reads as what this file's
 //! own dictionary calls the number. The structure is labelled by that, and a
 //! pointer's class stays a number: an enum of one library's numbering would
@@ -56,7 +59,8 @@
 //! FrMsg, FrRawData, FrSerData, FrSimData, FrSimEvent, FrStatData, FrSummary,
 //! FrTable) are covered by the test file FrameL ships, written by its
 //! `exampleFull.c`, and their values are checked against what that program
-//! says it put in them.
+//! says it put in them. Five files in all: GWOSC's, FrameL 8.30's, a FrameL
+//! 8.20 frame from gwpy's tests, and two in version 6.
 //!
 //! **Vectors.** An FrVect's numbers are read as its `type` names them, all
 //! thirteen types, complex pairs and counted strings included. A packed vector
@@ -69,12 +73,37 @@
 //! zero-suppressed shorts unpack to half the floats its example wrote beside
 //! them. Only those two schemes have samples.
 //!
-//! What stays bytes: the body of a class this reader has no layout for, a
-//! vector packed with a scheme the specification does not list, and the
-//! whole stream of a version 6 or 7 file past its structure headers, which
-//! nothing here has a sample of. Version 6 differs in more than its header:
-//! `sampleRate` and the event parameters are 4-byte floats there and 8-byte
-//! ones from version 8, and no field is written out on a guess.
+//! **Versions.** Version 6 is read as fully as version 8, from two samples:
+//! FrameL 6.24's copy of the same test file, which has every class but
+//! FrStatData, and a 2003 LIGO calibration frame FrameCPP wrote, which
+//! LALSuite keeps for its tests. What differs was found in their bytes and
+//! their dictionaries and checked against both, not carried over from the
+//! version 8 layout:
+//!
+//! - the file header ends in the letters `AZ` where version 8 has the library
+//!   and the checksum scheme;
+//! - a structure's class is two bytes, where version 8 has a checksum kind and
+//!   a one-byte class, so the header is fourteen bytes in both;
+//! - no body ends in a checksum, and FrEndOfFrame and FrEndOfFile carry the
+//!   frame's and the file's instead, in a different order;
+//! - `sampleRate` of FrSerData and FrSimData, and the parameters of FrEvent and
+//!   FrSimEvent, are 4-byte floats;
+//! - the table of contents has no totals, so its event columns are as long as
+//!   the per-type counts add up to, and its static data is a list of groups.
+//!
+//! FrStatData in version 6 has no sample. Its fields are the specification's
+//! version 6 table, which is version 8's without the checksum, and the table
+//! of contents' static data groups are the specification's and FrameL 6.24's
+//! writer's; neither has been read against bytes.
+//!
+//! Version 7 is bytes past the check words. The specification's revision
+//! history lists the changes after version 6 without saying which of them
+//! came with 7 and which with 8, one of them moves a byte into the structure
+//! header, and no version 7 file is here. Versions before 6 are bytes the
+//! same way.
+//!
+//! What else stays bytes: the body of a class this reader has no layout for,
+//! and a vector packed with a scheme the specification does not list.
 
 use crate::codec::Codec;
 use crate::template::{Endian, Endian::*, Expr as E, Template, Ty as T, Until};
@@ -122,6 +151,33 @@ const CLASSES: &[(i128, &str)] = &[
     (18, "FrTable"),
     (19, "FrTOC"),
     (20, "FrVect"),
+];
+
+/// The class numbers of a version 6 file, for the same fallback. Both version
+/// 6 samples use them, one written by FrameL 6.24 and one by FrameCPP, for
+/// every class either declares; `FrStatData` is in neither and has FrameL
+/// 8.30's number, which uses this same numbering in version 8.
+const V6_CLASSES: &[(i128, &str)] = &[
+    (1, "FrSH"),
+    (2, "FrSE"),
+    (4, "FrameH"),
+    (5, "FrAdcData"),
+    (6, "FrDetector"),
+    (7, "FrEndOfFrame"),
+    (8, "FrEvent"),
+    (9, "FrMsg"),
+    (10, "FrHistory"),
+    (11, "FrRawData"),
+    (12, "FrProcData"),
+    (13, "FrSimData"),
+    (14, "FrSimEvent"),
+    (15, "FrSerData"),
+    (16, "FrStatData"),
+    (17, "FrSummary"),
+    (18, "FrTable"),
+    (19, "FrTOC"),
+    (20, "FrVect"),
+    (21, "FrEndOfFile"),
 ];
 
 /// How the numbers in an FrVect are packed, from FrameL 8.30's
@@ -205,51 +261,80 @@ fn header() -> T {
     .machinery(&["size_int2", "size_int4", "size_int8", "size_real4", "size_real8"])
 }
 
-/// Everything past the widths, read the way round the check word says.
+/// The two layouts of the structures this reader has samples of.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Version {
+    Six,
+    Eight,
+}
+
+use Version::{Eight, Six};
+
+/// Everything past the widths, read the way round the check word says, and
+/// laid out the way the version says.
+///
+/// Version 7 is bytes past the check words. The specification's revision
+/// history puts the move from 6 to 7 and the move to 8 in one list without
+/// saying which change was which version's, and one of them moved a byte into
+/// the structure header; no version 7 file is here to settle it.
 fn rest(e: Endian) -> T {
-    T::structure(
-        "FrameFileBody",
+    let checks = || {
         vec![
             ("check_int2", T::u16(e)),
             ("check_int4", T::u32(e)),
             ("check_int8", T::u64(e)),
             ("check_real4", T::F32(e)),
             ("check_real8", T::F64(e)),
-            ("library", T::enumeration("FrameLibrary", T::u8(), LIBRARY)),
-            ("checksum_scheme", T::enumeration("ChecksumScheme", T::u8(), CHECKSUM_SCHEME)),
-            (
-                "structures",
-                // Version 8 grew the length to eight bytes and gained the
-                // checksum byte. Nothing here has a version 6 or 7 file to
-                // check the older header against, so its bodies stay bytes.
-                T::switch(
-                    E::field("version").less_than(E::lit(8)),
-                    vec![(1, T::repeat(old_structure(e), Until::End))],
-                    T::repeat(structure(e), Until::End),
-                ),
-            ),
+        ]
+    };
+    let machinery = ["check_int2", "check_int4", "check_int8", "check_real4", "check_real8"];
+    let mut eight = checks();
+    eight.extend([
+        ("library", T::enumeration("FrameLibrary", T::u8(), LIBRARY)),
+        ("checksum_scheme", T::enumeration("ChecksumScheme", T::u8(), CHECKSUM_SCHEME)),
+        ("structures", T::repeat(structure(e, Eight), Until::End)),
+    ]);
+    // Version 6 ends its header with the letters A and Z, for a reader to
+    // check that the machine that wrote it spoke ASCII. Version 8 gave the
+    // two bytes to the library and the checksum scheme.
+    let mut six = checks();
+    six.extend([("ascii_check", T::magic(b"AZ")), ("structures", T::repeat(structure(e, Six), Until::End))]);
+    let mut other = checks();
+    other.push(("rest", T::bytes(E::Remaining)));
+    T::switch(
+        E::field("version"),
+        vec![
+            (6, T::structure("FrameFileBody", six).machinery(&machinery)),
+            (8, T::structure("FrameFileBody", eight).machinery(&machinery)),
         ],
+        T::structure("FrameFileBody", other).machinery(&machinery),
     )
-    .machinery(&["check_int2", "check_int4", "check_int8", "check_real4", "check_real8"])
 }
 
-/// One structure of a version 8 file: fourteen bytes of header and a body as
-/// long as the length says.
-fn structure(e: Endian) -> T {
-    T::structure_named(
-        "FrStructure",
-        "class_name",
-        "body",
-        vec![
-            ("length", T::u64(e)),
+/// One structure: fourteen bytes of header and a body as long as the length
+/// says.
+///
+/// Version 8 split the two-byte class of version 6 into a checksum kind and a
+/// one-byte class, which is why the header is the same length in both.
+fn structure(e: Endian, v: Version) -> T {
+    let mut fields = vec![("length", T::u64(e))];
+    match v {
+        Eight => fields.extend([
             ("checksum_kind", T::enumeration("ChecksumKind", T::u8(), CHECKSUM_KIND)),
             ("class", T::enumeration("FrClass", T::u8(), FIXED_CLASSES)),
-            ("class_name", class_name()),
-            ("instance", T::u32(e)),
-            ("body", T::sized(body_size(14), class_body(e))),
-        ],
-    )
-    .machinery(&["length", "checksum_kind", "instance"])
+        ]),
+        Six => fields.push(("class", T::enumeration("FrClass", T::u16(e), FIXED_CLASSES))),
+    }
+    fields.extend([
+        ("class_name", class_name()),
+        ("instance", T::u32(e)),
+        ("body", T::sized(body_size(14), class_body(e, v))),
+    ]);
+    let machinery: &[&str] = match v {
+        Eight => &["length", "checksum_kind", "instance"],
+        Six => &["length", "instance"],
+    };
+    T::structure_named("FrStructure", "class_name", "body", fields).machinery(machinery)
 }
 
 /// What this file calls a structure's class. The number is in the file and the
@@ -264,25 +349,6 @@ fn structure(e: Endian) -> T {
 fn class_name() -> T {
     let fixed = T::enumeration("FrClass", T::computed(E::field("class")), FIXED_CLASSES);
     T::switch(E::field("class"), vec![(1, fixed.clone()), (2, fixed)], T::computed_text(declared_name()))
-}
-
-/// One structure of a version 6 or 7 file. The header the specification gives
-/// for those, and the body left as bytes: no file of either is here to check a
-/// layout against, and a guessed one would read as words rather than as the
-/// numbers it got wrong.
-fn old_structure(e: Endian) -> T {
-    T::structure_named(
-        "FrStructure",
-        "class",
-        "body",
-        vec![
-            ("length", T::u32(e)),
-            ("class", T::enumeration("FrClass", T::u16(e), CLASSES)),
-            ("instance", T::u32(e)),
-            ("body", T::sized(body_size(10), T::bytes(E::Remaining))),
-        ],
-    )
-    .machinery(&["length", "instance"])
 }
 
 /// How much of a structure is body: its length less its header, never below
@@ -319,30 +385,53 @@ fn pointer(e: Endian) -> T {
 /// Every body this reader knows, by the name the specification gives the
 /// class. This is the list both routes below choose from: the file's own
 /// dictionary picks by the name it declares, and the constant table picks by
-/// the number FrameL would have used.
-fn bodies(e: Endian) -> Vec<(&'static str, T)> {
+/// the number a library would have used.
+fn bodies(e: Endian, v: Version) -> Vec<(&'static str, T)> {
     vec![
-        ("FrSH", frsh(e)),
-        ("FrSE", frse(e)),
-        ("FrameH", frame_h(e)),
-        ("FrAdcData", adc_data(e)),
-        ("FrDetector", detector(e)),
-        ("FrEndOfFile", end_of_file(e)),
-        ("FrEndOfFrame", end_of_frame(e)),
-        ("FrEvent", event(e)),
-        ("FrHistory", history(e)),
-        ("FrMsg", msg(e)),
-        ("FrProcData", proc_data(e)),
-        ("FrRawData", raw_data(e)),
-        ("FrSerData", ser_data(e)),
-        ("FrSimData", sim_data(e)),
-        ("FrSimEvent", sim_event(e)),
-        ("FrStatData", stat_data(e)),
-        ("FrSummary", summary(e)),
-        ("FrTable", table(e)),
-        ("FrTOC", toc(e)),
-        ("FrVect", vect(e)),
+        ("FrSH", frsh(e, v)),
+        ("FrSE", frse(e, v)),
+        ("FrameH", frame_h(e, v)),
+        ("FrAdcData", adc_data(e, v)),
+        ("FrDetector", detector(e, v)),
+        ("FrEndOfFile", end_of_file(e, v)),
+        ("FrEndOfFrame", end_of_frame(e, v)),
+        ("FrEvent", event(e, v)),
+        ("FrHistory", history(e, v)),
+        ("FrMsg", msg(e, v)),
+        ("FrProcData", proc_data(e, v)),
+        ("FrRawData", raw_data(e, v)),
+        ("FrSerData", ser_data(e, v)),
+        ("FrSimData", sim_data(e, v)),
+        ("FrSimEvent", sim_event(e, v)),
+        ("FrStatData", stat_data(e, v)),
+        ("FrSummary", summary(e, v)),
+        ("FrTable", table(e, v)),
+        ("FrTOC", toc(e, v)),
+        ("FrVect", vect(e, v)),
     ]
+}
+
+/// A body's own fields, and in version 8 the checksum every structure there
+/// ends with. Version 6 has no checksum on a structure; its only checksums
+/// are the frame's and the file's, which have fields of their own.
+fn sealed(e: Endian, v: Version, mut fields: Vec<(&'static str, T)>) -> Vec<(&'static str, T)> {
+    if v == Eight {
+        fields.push(("chkSum", T::u32(e)));
+    }
+    fields
+}
+
+/// The four fields that grew after version 6: `sampleRate` of an FrSerData
+/// and an FrSimData, and the parameters of an FrEvent and an FrSimEvent. Four
+/// bytes in version 6 and eight in version 8. FrameL's version 6 file says
+/// REAL_4 for all four in its dictionary, and FrAdcData's `sampleRate`, which
+/// a loose reading of the same change could take in, is REAL_8 in both version
+/// 6 samples.
+fn widened(e: Endian, v: Version) -> T {
+    match v {
+        Six => T::F32(e),
+        Eight => T::F64(e),
+    }
 }
 
 /// The body of a structure, chosen by what this file says its class is.
@@ -353,8 +442,8 @@ fn bodies(e: Endian) -> Vec<(&'static str, T)> {
 /// through dictionary entries would make every one of them ask about every one
 /// before it. In the GWOSC sample that is 151 of the 162 structures answered
 /// without a search at all.
-fn class_body(e: Endian) -> T {
-    T::switch(E::field("class"), vec![(1, frsh(e)), (2, frse(e))], declared_body(e))
+fn class_body(e: Endian, v: Version) -> T {
+    T::switch(E::field("class"), vec![(1, frsh(e, v)), (2, frse(e, v))], declared_body(e, v))
 }
 
 /// The name this file gives the class the asking structure carries: the `FrSH`
@@ -371,18 +460,22 @@ fn declared_name() -> E {
 /// and the empty name is a case here rather than the default: it takes the
 /// constant table. A file that names a class something this reader has no
 /// layout for falls to the default and keeps its bytes.
-fn declared_body(e: Endian) -> T {
+fn declared_body(e: Endian, v: Version) -> T {
     let declared = declared_name();
-    let mut cases = bodies(e);
-    cases.push(("", by_class_number(e)));
+    let mut cases = bodies(e, v);
+    cases.push(("", by_class_number(e, v)));
     T::matches(declared, cases, T::bytes(E::Remaining))
 }
 
-/// The fallback: the class numbers FrameL and FrameCPP assign, for a file that
-/// never said. See the note at the top.
-fn by_class_number(e: Endian) -> T {
-    let named = bodies(e);
-    let cases = CLASSES
+/// The fallback: a library's class numbers, for a file that never said. See
+/// the note at the top.
+fn by_class_number(e: Endian, v: Version) -> T {
+    let named = bodies(e, v);
+    let table = match v {
+        Six => V6_CLASSES,
+        Eight => CLASSES,
+    };
+    let cases = table
         .iter()
         .filter_map(|(n, name)| named.iter().find(|(k, _)| k == name).map(|(_, t)| (*n, t.clone())))
         .collect();
@@ -390,17 +483,16 @@ fn by_class_number(e: Endian) -> T {
 }
 
 /// A dictionary entry: this file calls class `class` by this name.
-fn frsh(e: Endian) -> T {
+fn frsh(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrSH",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("class", T::u16(e)),
             ("comment", string(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     // The two together are the entry: this file calls class 4 `FrAdcData`.
     .payload(&["name", "class"])
@@ -408,26 +500,25 @@ fn frsh(e: Endian) -> T {
 
 /// One field of the class the FrSH before it named: what it is called and what
 /// it is. The type is written as text, `INT_4U` or `REAL_8[nDim]`.
-fn frse(e: Endian) -> T {
+fn frse(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrSE",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("type", string(e)),
             ("comment", string(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
-fn frame_h(e: Endian) -> T {
+fn frame_h(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrameH",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("run", T::i32(e)),
             ("frame", T::u32(e)),
@@ -449,18 +540,17 @@ fn frame_h(e: Endian) -> T {
             ("summaryData", pointer(e)),
             ("auxData", pointer(e)),
             ("auxTable", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["GTimeS", "dt"])
 }
 
-fn detector(e: Endian) -> T {
+fn detector(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrDetector",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("prefix", T::utf8(E::lit(2))),
             ("longitude", T::F64(e)),
@@ -476,17 +566,16 @@ fn detector(e: Endian) -> T {
             ("aux", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
-fn proc_data(e: Endian) -> T {
+fn proc_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrProcData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("type", T::u16(e)),
@@ -505,8 +594,7 @@ fn proc_data(e: Endian) -> T {
             ("table", pointer(e)),
             ("history", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
@@ -515,12 +603,12 @@ fn proc_data(e: Endian) -> T {
 ///
 /// `bias` and `slope` are what turn a count back into volts, and `nBits` how
 /// many of the bits of a sample the converter actually set.
-fn adc_data(e: Endian) -> T {
+fn adc_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrAdcData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("channelGroup", T::u32(e)),
@@ -538,8 +626,7 @@ fn adc_data(e: Endian) -> T {
             ("data", pointer(e)),
             ("aux", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["sampleRate", "slope", "units"])
 }
@@ -548,13 +635,13 @@ fn adc_data(e: Endian) -> T {
 ///
 /// The parameters are a list of doubles with a list of names beside it, which
 /// is how one structure carries whatever a given search wanted to record.
-fn event(e: Endian) -> T {
+fn event(e: Endian, v: Version) -> T {
     let n = E::field("nParam");
     T::structure_named(
         "FrEvent",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("inputs", string(e)),
@@ -567,106 +654,101 @@ fn event(e: Endian) -> T {
             ("probability", T::F32(e)),
             ("statistics", string(e)),
             ("nParam", T::u16(e)),
-            ("parameters", T::array(T::F64(e), n.clone())),
+            ("parameters", T::array(widened(e, v), n.clone())),
             ("parameterNames", T::array(string(e), n)),
             ("data", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["GTimeS", "amplitude"])
 }
 
 /// A line of the record of what was done to this frame: a program, when it
 /// ran, and what it said about itself.
-fn history(e: Endian) -> T {
+fn history(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrHistory",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("time", T::u32(e)),
             ("comment", string(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
 /// One line of the detector's log, kept in the frame so that what the
 /// instrument was complaining about arrives with the data it was recording.
-fn msg(e: Endian) -> T {
+fn msg(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrMsg",
         "alarm",
         "",
-        vec![
+        sealed(e, v, vec![
             ("alarm", string(e)),
             ("message", string(e)),
             ("severity", T::u32(e)),
             ("GTimeS", T::u32(e)),
             ("GTimeN", T::u32(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["message"])
 }
 
 /// The head of the raw data: five pointers at the lists of everything the
 /// instrument itself wrote, and nothing of its own but a name.
-fn raw_data(e: Endian) -> T {
+fn raw_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrRawData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("firstSer", pointer(e)),
             ("firstAdc", pointer(e)),
             ("firstTable", pointer(e)),
             ("logMsg", pointer(e)),
             ("more", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
 /// A slow channel that arrives as text: the station keeping, read off a serial
 /// line, with the whole line kept as it came.
-fn ser_data(e: Endian) -> T {
+fn ser_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrSerData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("timeSec", T::u32(e)),
             ("timeNsec", T::u32(e)),
-            ("sampleRate", T::F64(e)),
+            ("sampleRate", widened(e, v)),
             ("data", string(e)),
             ("serial", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["timeSec", "data"])
 }
 
 /// A channel that was made up rather than recorded: an injected signal, kept
 /// beside the real data it was added to.
-fn sim_data(e: Endian) -> T {
+fn sim_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrSimData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
-            ("sampleRate", T::F64(e)),
+            ("sampleRate", widened(e, v)),
             ("timeOffset", T::F64(e)),
             ("fShift", T::F64(e)),
             ("phase", T::F32(e)),
@@ -674,20 +756,19 @@ fn sim_data(e: Endian) -> T {
             ("input", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
 /// An event that was injected rather than found. The same shape as an FrEvent
 /// without the fields that only mean something for a trigger.
-fn sim_event(e: Endian) -> T {
+fn sim_event(e: Endian, v: Version) -> T {
     let n = E::field("nParam");
     T::structure_named(
         "FrSimEvent",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("inputs", string(e)),
@@ -697,13 +778,12 @@ fn sim_event(e: Endian) -> T {
             ("timeAfter", T::F32(e)),
             ("amplitude", T::F32(e)),
             ("nParam", T::u16(e)),
-            ("parameters", T::array(T::F64(e), n.clone())),
+            ("parameters", T::array(widened(e, v), n.clone())),
             ("parameterNames", T::array(string(e), n)),
             ("data", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["GTimeS", "amplitude"])
 }
@@ -711,12 +791,12 @@ fn sim_event(e: Endian) -> T {
 /// Something about the detector that does not change every frame: a
 /// calibration, valid between two times, with a version so a later one can
 /// replace it.
-fn stat_data(e: Endian) -> T {
+fn stat_data(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrStatData",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("representation", string(e)),
@@ -726,20 +806,19 @@ fn stat_data(e: Endian) -> T {
             ("detector", pointer(e)),
             ("data", pointer(e)),
             ("table", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["timeStart", "timeEnd", "version"])
 }
 
 /// A number worked out about a stretch of data rather than sampled from it:
 /// what the test was, and a vector of what it came to.
-fn summary(e: Endian) -> T {
+fn summary(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrSummary",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("test", string(e)),
@@ -748,19 +827,18 @@ fn summary(e: Endian) -> T {
             ("moments", pointer(e)),
             ("table", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
 }
 
 /// A table: the column names here, and the columns themselves in the FrVect
 /// chain `column` points at, one vector per column.
-fn table(e: Endian) -> T {
+fn table(e: Endian, v: Version) -> T {
     T::structure_named(
         "FrTable",
         "name",
         "",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("comment", string(e)),
             ("nColumn", T::u16(e)),
@@ -768,50 +846,50 @@ fn table(e: Endian) -> T {
             ("columnName", T::array(string(e), E::field("nColumn"))),
             ("column", pointer(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["nRow", "nColumn"])
 }
 
-fn end_of_frame(e: Endian) -> T {
-    T::structure(
-        "FrEndOfFrame",
-        vec![
-            ("run", T::i32(e)),
-            ("frame", T::u32(e)),
-            ("GTimeS", T::u32(e)),
-            ("GTimeN", T::u32(e)),
-            ("chkSum", T::u32(e)),
-        ],
-    )
+/// The end of a frame. Version 6 keeps the frame's checksum here, and what
+/// kind of checksum it is; version 8 checksums each structure instead, and
+/// repeats the frame's start time.
+fn end_of_frame(e: Endian, v: Version) -> T {
+    let mut fields = vec![("run", T::i32(e)), ("frame", T::u32(e))];
+    match v {
+        Six => fields.extend([("chkType", T::u32(e)), ("chkSum", T::u32(e))]),
+        Eight => fields.extend([("GTimeS", T::u32(e)), ("GTimeN", T::u32(e)), ("chkSum", T::u32(e))]),
+    }
+    T::structure("FrEndOfFrame", fields)
 }
 
-fn end_of_file(e: Endian) -> T {
-    T::structure(
-        "FrEndOfFile",
-        vec![
-            ("nFrames", T::u32(e)),
-            ("nBytes", T::u64(e)),
+/// The end of the file: how many frames, how many bytes, and where the table
+/// of contents is. The same three things in both versions, in a different
+/// order around different checksums.
+fn end_of_file(e: Endian, v: Version) -> T {
+    let mut fields = vec![("nFrames", T::u32(e)), ("nBytes", T::u64(e))];
+    match v {
+        Six => fields.extend([("chkType", T::u32(e)), ("chkSum", T::u32(e)), ("seekTOC", T::u64(e))]),
+        Eight => fields.extend([
             ("seekTOC", T::u64(e)),
             ("chkSumFrHeader", T::u32(e)),
             ("chkSum", T::u32(e)),
             ("chkSumFile", T::u32(e)),
-        ],
-    )
-    .payload(&["nFrames", "nBytes"])
+        ]),
+    }
+    T::structure("FrEndOfFile", fields).payload(&["nFrames", "nBytes"])
 }
 
 /// A vector: a name, how its numbers are packed, and the packed bytes. The
 /// dimensions come after the data, which is why `nBytes` has to say how far it
 /// runs rather than the shape working it out.
-fn vect(e: Endian) -> T {
+fn vect(e: Endian, v: Version) -> T {
     let dims = E::field("nDim");
     T::structure_named(
         "FrVect",
         "name",
         "data",
-        vec![
+        sealed(e, v, vec![
             ("name", string(e)),
             ("compress", compression(e)),
             ("type", T::enumeration("FrVectType", T::u16(e), VECT_TYPE)),
@@ -825,8 +903,7 @@ fn vect(e: Endian) -> T {
             ("unitX", T::array(string(e), dims)),
             ("unitY", string(e)),
             ("next", pointer(e)),
-            ("chkSum", T::u32(e)),
-        ],
+        ]),
     )
     .payload(&["nData"])
 }
@@ -927,7 +1004,15 @@ fn count(name: &str) -> E {
 /// after one channel need not walk the file. Every table in it is a count and
 /// then that many of each column, and a count of 0xffffffff means the table is
 /// not there at all.
-fn toc(e: Endian) -> T {
+///
+/// Version 6 has no totals. Its static data is a run of groups, one per type,
+/// each with its own count of instances; and its event columns are as long as
+/// the per-type counts before them add up to, which `nTotalEvent` says outright
+/// from version 8. That is how FrameL 6.24's `FrTOCWrite` lays it out and what
+/// the version 6 specification's table says. FrameL's version 6 file checks
+/// the events, with 30 in two types; no version 6 sample has static data, so
+/// the groups are the specification's and FrameL's word.
+fn toc(e: Endian, v: Version) -> T {
     let (u32a, u64a, f64a, i32a) = (
         |n: E| T::array(T::u32(e), n),
         |n: E| T::array(T::u64(e), n),
@@ -939,6 +1024,82 @@ fn toc(e: Endian) -> T {
     let per_frame = |n: E| T::array(T::array(T::u64(e), count("nFrame")), n);
     let (nf, nsh, ndet) = (count("nFrame"), count("nSH"), count("nDetector"));
     let (nstat, ntotal, nadc) = (count("nStatType"), count("nTotalStat"), count("nADC"));
+    if v == Six {
+        let group = T::structure_named(
+            "FrTOCStat",
+            "nameStat",
+            "",
+            vec![
+                ("nameStat", string(e)),
+                ("detector", string(e)),
+                ("nStatInstance", T::u32(e)),
+                ("tStart", u32a(count("nStatInstance"))),
+                ("tEnd", u32a(count("nStatInstance"))),
+                ("version", u32a(count("nStatInstance"))),
+                ("positionStat", u64a(count("nStatInstance"))),
+            ],
+        );
+        // A column as long as the counts in `counts` add up to, held to what
+        // the bytes left could hold.
+        let summed = |counts: &str, width: i128| E::sum_of(counts).at_most(E::Remaining.div(E::lit(width)));
+        return T::structure(
+            "FrTOC",
+            vec![
+                ("ULeapS", T::Int { bits: 16, endian: e }),
+                ("nFrame", T::u32(e)),
+                ("dataQuality", u32a(nf.clone())),
+                ("GTimeS", u32a(nf.clone())),
+                ("GTimeN", u32a(nf.clone())),
+                ("dt", f64a(nf.clone())),
+                ("runs", i32a(nf.clone())),
+                ("frame", u32a(nf.clone())),
+                ("positionH", u64a(nf.clone())),
+                ("nFirstADC", u64a(nf.clone())),
+                ("nFirstSer", u64a(nf.clone())),
+                ("nFirstTable", u64a(nf.clone())),
+                ("nFirstMsg", u64a(nf)),
+                ("nSH", T::u32(e)),
+                ("SHid", T::array(T::u16(e), nsh.clone())),
+                ("SHname", strings(nsh)),
+                ("nDetector", T::u32(e)),
+                ("nameDetector", strings(ndet.clone())),
+                ("positionDetector", u64a(ndet)),
+                ("nStatType", T::u32(e)),
+                ("statTypes", T::array(group, nstat)),
+                ("nADC", T::u32(e)),
+                ("name", strings(nadc.clone())),
+                ("channelID", u32a(nadc.clone())),
+                ("groupID", u32a(nadc.clone())),
+                ("positionADC", per_frame(nadc)),
+                ("nProc", T::u32(e)),
+                ("nameProc", strings(count("nProc"))),
+                ("positionProc", per_frame(count("nProc"))),
+                ("nSim", T::u32(e)),
+                ("nameSim", strings(count("nSim"))),
+                ("positionSim", per_frame(count("nSim"))),
+                ("nSer", T::u32(e)),
+                ("nameSer", strings(count("nSer"))),
+                ("positionSer", per_frame(count("nSer"))),
+                ("nSummary", T::u32(e)),
+                ("nameSum", strings(count("nSummary"))),
+                ("positionSum", per_frame(count("nSummary"))),
+                ("nEventType", T::u32(e)),
+                ("nameEvent", strings(count("nEventType"))),
+                ("nEvent", u32a(count("nEventType"))),
+                ("GTimeSEvent", u32a(summed("nEvent", 4))),
+                ("GTimeNEvent", u32a(summed("nEvent", 4))),
+                ("amplitudeEvent", T::array(T::F32(e), summed("nEvent", 4))),
+                ("positionEvent", u64a(summed("nEvent", 8))),
+                ("nSimEventType", T::u32(e)),
+                ("nameSimEvent", strings(count("nSimEventType"))),
+                ("nSimEvent", u32a(count("nSimEventType"))),
+                ("GTimeSSim", u32a(summed("nSimEvent", 4))),
+                ("GTimeNSim", u32a(summed("nSimEvent", 4))),
+                ("amplitudeSimEvent", T::array(T::F32(e), summed("nSimEvent", 4))),
+                ("positionSimEvent", u64a(summed("nSimEvent", 8))),
+            ],
+        );
+    }
     T::structure(
         "FrTOC",
         vec![
@@ -1453,6 +1614,72 @@ mod tests {
         let last = ev.node(&d, &at(&[1, 5, 16])).unwrap();
         let whole = ev.node(&d, &at(&[1])).unwrap();
         assert_eq!(last.offset_bits + last.size_bits, whole.offset_bits + whole.size_bits);
+    }
+
+    /// A version 6 file: the header ends in `AZ`, a structure's class is two
+    /// bytes where version 8 has a checksum kind and a one-byte class, and no
+    /// body ends in a checksum.
+    fn six(serial: &[u8]) -> Vec<u8> {
+        let w = W(true);
+        let mut b = b"IGWD\0".to_vec();
+        b.extend_from_slice(&[6, 9, 2, 4, 8, 4, 8]);
+        b.extend(w.u16(0x1234));
+        b.extend(w.u32(0x1234_5678));
+        b.extend(w.u64(0x0123_4567_89ab_cdef));
+        b.extend(w.f32(std::f32::consts::PI));
+        b.extend(w.f64(std::f64::consts::PI));
+        b.extend_from_slice(b"AZ");
+        let structure = |class: u16, body: &[u8]| {
+            let mut v = w.u64(body.len() as u64 + 14);
+            v.extend(w.u16(class));
+            v.extend(w.u32(0));
+            v.extend_from_slice(body);
+            v
+        };
+        let mut sh = w.str("FrSerData");
+        sh.extend(w.u16(15));
+        sh.extend(w.str(""));
+        b.extend(structure(1, &sh));
+        b.extend(structure(15, serial));
+        b
+    }
+
+    #[test]
+    fn a_version_6_file_reads_its_narrower_fields_and_no_checksums() {
+        let w = W(true);
+        let mut ser = w.str("sms1");
+        ser.extend(w.u32(600_000_000)); // timeSec
+        ser.extend(w.u32(0)); // timeNsec
+        ser.extend(w.f32(1.0)); // sampleRate, four bytes wide here
+        ser.extend(w.str("sms data are here"));
+        for _ in 0..3 {
+            ser.extend(w.ptr(0, 0));
+        }
+        let d = Document::new(MemSource(six(&ser)));
+        let mut ev = Evaluator::new(gwf());
+        assert_eq!(ev.node(&d, &[8, 5]).unwrap().name, "ascii_check");
+        assert_eq!(ev.node(&d, &[8, 6]).unwrap().child_count, 2);
+        // The dictionary entry is three fields, with no checksum after them.
+        assert_eq!(ev.node(&d, &[8, 6, 0, 4]).unwrap().child_count, 3);
+        let body = [8, 6, 1, 4];
+        assert_eq!(ev.node(&d, &body).unwrap().type_name, "FrSerData");
+        assert_eq!(ev.node(&d, &[8, 6, 1, 2]).unwrap().value, Value::Str("FrSerData".into()));
+        assert_eq!(ev.node(&d, &[8, 6, 1, 4, 3]).unwrap().size_bits, 32);
+        assert_eq!(ev.node(&d, &[8, 6, 1, 4, 4, 1]).unwrap().value, Value::Str("sms data are here".into()));
+        assert_eq!(ev.node(&d, &body).unwrap().child_count, 8);
+    }
+
+    /// Nothing here settles version 7's layout, so past the check words it is
+    /// the bytes it is.
+    #[test]
+    fn a_version_7_file_is_bytes_past_its_check_words() {
+        let mut b = six(&[]);
+        b[5] = 7;
+        let len = b.len() as u64;
+        let d = Document::new(MemSource(b));
+        let mut ev = Evaluator::new(gwf());
+        let rest = ev.node(&d, &[8, 5]).unwrap();
+        assert_eq!((rest.name.as_str(), rest.offset_bits + rest.size_bits), ("rest", len * 8));
     }
 
     #[test]
