@@ -2,7 +2,7 @@
 //! fixtures live in QUBERO_SAMPLES/arrow, or in the sibling qubero-samples
 //! collection, and are written by its `tools/make_arrow_samples.py`.
 use std::path::PathBuf;
-use qubero_core::{document::Document, eval::Evaluator, formats, source::MemSource};
+use qubero_core::{document::Document, eval::{Evaluator, Value}, formats, source::MemSource};
 
 fn arrow_samples() -> Option<PathBuf> {
     let mut roots = Vec::new();
@@ -66,9 +66,9 @@ const LAYOUTS: &[Layout] = &[
     Layout {
         name: "more-types.arrow",
         prefix: 8,
-        messages: &[(8, 960, 0), (976, 1040, 472)],
-        end_of_stream: 2496,
-        footer: 2504,
+        messages: &[(8, 1144, 0), (1160, 1232, 536)],
+        end_of_stream: 2936,
+        footer: 2944,
     },
 ];
 
@@ -116,6 +116,231 @@ fn every_block_the_footer_lists_is_placed() {
         assert_eq!(footer.offset_bits + footer.size_bits, doc.len_bits() - 80, "{name}: footer runs to its length");
         eprintln!("{name}: {} batches placed, end of stream at {}", placed.len(), layout.end_of_stream);
     }
+}
+
+/// Every buffer of a body, as (column, what it is for, offset in the file,
+/// length), in the order the batch lists them. The column is what the
+/// buffer's row is called after its index, and what it is for is its type.
+fn buffers_of(ev: &mut Evaluator, doc: &Document<MemSource>, batch: usize) -> Vec<(String, String, u64, u64)> {
+    let body = [BATCHES, batch, 4];
+    let n = ev.node(doc, &body).unwrap().child_count as usize;
+    (0..n)
+        .map(|i| {
+            let node = ev.node(doc, &[BATCHES, batch, 4, i]).unwrap();
+            let column = node.name.split_once(' ').map_or(String::new(), |(_, c)| c.to_string());
+            (column, node.type_name, node.offset_bits / 8, node.size_bits / 8)
+        })
+        .collect()
+}
+
+/// A buffer pyarrow reports as absent is one of no bytes, whose place
+/// pyarrow does not say.
+const ANYWHERE: u64 = u64::MAX;
+
+fn check_buffers(name: &str, got: &[(String, String, u64, u64)], want: &[(&str, &str, u64, u64)]) {
+    assert_eq!(got.len(), want.len(), "{name}: how many buffers");
+    for (i, ((column, role, at, len), (w_column, w_role, w_at, w_len))) in got.iter().zip(want).enumerate() {
+        assert_eq!((column.as_str(), role.as_str()), (*w_column, *w_role), "{name}: buffer {i}");
+        assert_eq!(*len, *w_len, "{name}: buffer {i} length");
+        if *w_at != ANYWHERE {
+            assert_eq!(*at, *w_at, "{name}: buffer {i} offset");
+        }
+    }
+}
+
+/// Which column every buffer of a record batch belongs to, what it is for,
+/// and where it is, against pyarrow.
+///
+/// pyarrow's answers were read on 2026-09-14 with
+/// `pyarrow.ipc.open_file(path).get_batch(0)`: for each column,
+/// `column.buffers()` lists the column's buffers and then its children's, and
+/// each buffer's `address` less the address of the file's own bytes is where
+/// it sits in the file. A buffer of no bytes comes back as `None`.
+#[test]
+fn every_buffer_is_named_from_the_schema() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (doc, mut ev) = open(&root, "columns-uncompressed.arrow");
+    // The footer lists the dictionary batch first, then the two record
+    // batches, and the gather keeps that order.
+    let first = buffers_of(&mut ev, &doc, 1);
+    let want: &[(&str, &str, u64, u64)] = &[
+        ("id", "validity", ANYWHERE, 0),
+        ("id", "data", 1904, 20),
+        ("count", "validity", 1928, 1),
+        ("count", "data", 1936, 40),
+        ("small", "validity", 1976, 1),
+        ("small", "data", 1984, 10),
+        ("ratio", "validity", 2000, 1),
+        ("ratio", "data", 2008, 40),
+        ("score", "validity", ANYWHERE, 0),
+        ("score", "data", 2048, 20),
+        ("flag", "validity", 2072, 1),
+        ("flag", "data", 2080, 1),
+        ("name", "validity", 2088, 1),
+        ("name", "offsets", 2096, 16),
+        ("name", "data", 2112, 12),
+        ("colour", "validity", ANYWHERE, 0),
+        ("colour", "indices", 2128, 20),
+        ("seen", "validity", 2152, 1),
+        ("seen", "data", 2160, 40),
+        ("day", "validity", 2200, 1),
+        ("day", "data", 2208, 20),
+        ("tags", "validity", 2232, 1),
+        ("tags", "offsets", 2240, 16),
+        ("item", "validity", ANYWHERE, 0),
+        ("item", "data", 2256, 48),
+        ("point", "validity", 2304, 1),
+        ("x", "validity", ANYWHERE, 0),
+        ("x", "data", 2312, 20),
+        ("label", "validity", 2336, 1),
+        ("label", "offsets", 2344, 16),
+        ("label", "data", 2360, 4),
+    ];
+    check_buffers("columns-uncompressed.arrow batch 0", &first, want);
+
+    // The dictionary batch: the dictionary of `colour`, which pyarrow gives
+    // as `column.dictionary.buffers()`, three strings with no nulls.
+    let dictionary = buffers_of(&mut ev, &doc, 0);
+    let want: &[(&str, &str, u64, u64)] =
+        &[("colour", "validity", ANYWHERE, 0), ("colour", "offsets", 1040, 16), ("colour", "data", 1056, 12)];
+    check_buffers("columns-uncompressed.arrow dictionary", &dictionary, want);
+
+    // The less common layouts. The last column nests four levels of field,
+    // and the fourth level's two buffers are past where the walk follows:
+    // they are placed, and they are bytes.
+    let (doc, mut ev) = open(&root, "more-types.arrow");
+    let got = buffers_of(&mut ev, &doc, 0);
+    let want: &[(&str, &str, u64, u64)] = &[
+        ("big_text", "validity", 2400, 1),
+        ("big_text", "offsets", 2408, 32),
+        ("big_text", "data", 2440, 8),
+        ("blob", "validity", 2448, 1),
+        ("blob", "offsets", 2456, 16),
+        ("blob", "data", 2472, 2),
+        ("half", "validity", 2480, 1),
+        ("half", "data", 2488, 6),
+        ("price", "validity", 2496, 1),
+        ("price", "data", 2504, 48),
+        ("clock", "validity", 2552, 1),
+        ("clock", "data", 2560, 12),
+        ("wait", "validity", 2576, 1),
+        ("wait", "data", 2584, 24),
+        ("hash", "validity", 2608, 1),
+        ("hash", "data", 2616, 12),
+        ("grid", "validity", 2632, 1),
+        ("grid", "offsets", 2640, 16),
+        ("item", "validity", ANYWHERE, 0),
+        ("item", "offsets", 2656, 16),
+        ("item", "validity", ANYWHERE, 0),
+        ("item", "data", 2672, 6),
+        ("lookup", "validity", 2680, 1),
+        ("lookup", "offsets", 2688, 16),
+        ("entries", "validity", ANYWHERE, 0),
+        ("key", "validity", ANYWHERE, 0),
+        ("key", "offsets", 2704, 8),
+        ("key", "data", 2712, 1),
+        ("value", "validity", ANYWHERE, 0),
+        ("value", "data", 2720, 4),
+        ("either", "type ids", 2728, 3),
+        ("either", "offsets", 2736, 12),
+        ("int", "validity", ANYWHERE, 0),
+        ("int", "data", 2752, 8),
+        ("str", "validity", ANYWHERE, 0),
+        ("str", "offsets", 2760, 8),
+        ("str", "data", 2768, 1),
+        ("view", "validity", 2776, 1),
+        ("view", "views", 2784, 48),
+        ("view", "data", 2832, 33),
+        ("deep", "validity", 2872, 1),
+        ("deep", "offsets", 2880, 16),
+        ("item", "validity", ANYWHERE, 0),
+        ("item", "offsets", 2896, 16),
+        ("item", "validity", ANYWHERE, 0),
+        ("item", "offsets", 2912, 12),
+        ("", "bytes[]", ANYWHERE, 0),
+        ("", "bytes[]", 2928, 3),
+    ];
+    check_buffers("more-types.arrow", &got, want);
+}
+
+/// The numbers in a buffer, read as its column's type.
+fn values(ev: &mut Evaluator, doc: &Document<MemSource>, at: &[usize]) -> Vec<Value> {
+    let n = ev.node(doc, at).unwrap().child_count as usize;
+    (0..n)
+        .map(|i| {
+            let mut p = at.to_vec();
+            p.push(i);
+            ev.node(doc, &p).unwrap().value
+        })
+        .collect()
+}
+
+/// The values the buffers read as, against `pyarrow.ipc.open_file(path)
+/// .read_all().column(name).to_pylist()`, read on 2026-09-14. A null reads
+/// as whatever its slot holds, which for pyarrow is nought, so the nulls are
+/// noughts here.
+///
+/// Only the batch's own rows are values. pyarrow writing batches of three
+/// writes the first batch's fixed-width buffers whole, all five rows of them,
+/// and the node says three: the other two are `past_length`.
+#[test]
+fn buffers_read_as_their_columns() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    for name in ["columns-uncompressed.arrow", "columns-legacy.arrow", "columns-zstd.arrow"] {
+        let (doc, mut ev) = open(&root, name);
+        // A buffer of a compressed body is its uncompressed length and the
+        // stream, and the stream opens into the same structure a plain one
+        // is: [values, past_length].
+        let data = |buffer: usize| -> Vec<usize> {
+            let mut p = vec![BATCHES, 1, 4, buffer];
+            if name.contains("zstd") {
+                p.extend([1, 0]);
+            }
+            p.push(0);
+            p
+        };
+        let ints = |v: Vec<Value>| v.iter().map(|x| x.as_int().unwrap()).collect::<Vec<_>>();
+        assert_eq!(ints(values(&mut ev, &doc, &data(1))), [1, 2, 3], "{name}: id");
+        assert_eq!(ints(values(&mut ev, &doc, &data(3))), [10, 0, 30], "{name}: count");
+        assert_eq!(ints(values(&mut ev, &doc, &data(5))), [7, 8, 0], "{name}: small");
+        assert_eq!(values(&mut ev, &doc, &data(7)), [Value::Float(0.5), Value::Float(1.25), Value::Float(0.0)], "{name}: ratio");
+        // Booleans are bits, low bit first: the byte's bits, then the values.
+        let mut flag = data(11);
+        flag.push(0);
+        let flags: Vec<i128> = ints(values(&mut ev, &doc, &flag));
+        assert_eq!(flags.len(), 3, "{name}: one bit per row of the batch");
+        assert_eq!(&flags[..2], [1, 0], "{name}: flag");
+        assert_eq!(ints(values(&mut ev, &doc, &data(13))), [0, 3, 6, 6], "{name}: name offsets");
+        // Indices into ['red', 'green', 'blue']: red, green, red.
+        assert_eq!(ints(values(&mut ev, &doc, &data(16))), [0, 1, 0], "{name}: colour indices");
+        // Milliseconds since 1970 for 2026-09-14 09:30 and 12:00:00.25 UTC.
+        let mut seen = data(18);
+        seen.push(0);
+        assert_eq!(ints(values(&mut ev, &doc, &seen)), [1_789_378_200_000, 1_789_387_200_250, 0], "{name}: seen");
+        // Days since 1970 for 2026-09-14, a null, and 1969-12-31.
+        let mut day = data(20);
+        day.push(0);
+        assert_eq!(ints(values(&mut ev, &doc, &day)), [20_710, 0, -1], "{name}: day");
+        assert_eq!(ints(values(&mut ev, &doc, &data(22))), [0, 2, 2, 2], "{name}: tags offsets");
+        assert_eq!(ints(values(&mut ev, &doc, &data(24))), [1, 2], "{name}: tags values");
+        assert_eq!(ints(values(&mut ev, &doc, &data(27))), [1, 2, 0], "{name}: point.x");
+        eprintln!("{name}: values of batch 0 match pyarrow");
+    }
+    // The views of a string view column: a short value whole, a null, and a
+    // long one's first four bytes and where the rest is.
+    let (doc, mut ev) = open(&root, "more-types.arrow");
+    // views -> values -> [i] -> length, value.
+    let views = [BATCHES, 0, 4, 38, 0];
+    assert_eq!(ev.node(&doc, &views).unwrap().child_count, 3);
+    assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 0, 1]).unwrap().value, Value::Str("short".into()));
+    assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 2, 0]).unwrap().value.as_int(), Some(33));
+    assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 2, 1]).unwrap().type_name, "ViewReference");
 }
 
 /// The listing of a whole file, asked for the way the browser asks: in goes
