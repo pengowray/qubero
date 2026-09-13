@@ -114,6 +114,7 @@ mod mseed3;
 pub mod mseed_steim;
 mod nes;
 mod netcdf;
+mod nifti;
 mod npy;
 mod ogg;
 mod old_mac;
@@ -241,6 +242,7 @@ pub use mseed::mseed;
 pub use mseed3::mseed3;
 pub use nes::nes;
 pub use netcdf::netcdf;
+pub use nifti::{analyze, nifti};
 pub use npy::npy;
 pub use ogg::ogg;
 pub use old_mac::{binhex, compactpro, macbinary, stuffit};
@@ -339,6 +341,8 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("mseed3", |_| mseed3()),
     ("mat", |_| mat()),
     ("sac", |_| sac()),
+    ("nifti", |_| nifti()),
+    ("analyze", |_| analyze()),
     ("mkv", |_| mkv()),
     ("dtb", |_| dtb()),
     ("draco", |_| draco()),
