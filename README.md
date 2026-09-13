@@ -24,7 +24,8 @@ steps the deploy workflow runs. Serve that with `npm run preview` in `web`.
 Tests: `cargo test -p qubero-core`. Typecheck: `cd web && npx tsc --noEmit`.
 `npm run wasm` builds two modules: the editor, and the file(1) rule database
 used to identify formats with no template, which the page fetches only when it
-meets one.
+meets one. `node tools/wikidata/fetch.mjs` refreshes the file format patterns
+taken from Wikidata (`web/public/wikidata/formats.json`, committed).
 
 ## Licences
 

@@ -140,6 +140,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## The Wikidata file format patterns
+
+The file type dialog also lists which formats on Wikidata have an
+identification pattern the file matches. The patterns, names, extensions and
+media types come from Wikidata, whose data is released under the Creative
+Commons CC0 1.0 Universal public domain dedication; the extensions that only
+English Wikipedia's infoboxes give are facts, not text, and are used on the
+same footing. They are fetched by `node tools/wikidata/fetch.mjs` into
+`web/public/wikidata/formats.json`, which records the date.
+
+Upstream: https://www.wikidata.org/wiki/Property:P4152
+
 ## The RAR 5 decompressor
 
 Qubero's RAR 5 unpacker (`crates/core/src/codec/rar5.rs`) is a Rust port of

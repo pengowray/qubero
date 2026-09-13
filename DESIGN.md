@@ -1020,6 +1020,22 @@ and are none of `PE`, `NE`, `LE` or `LX`: a Windows 3.x program is left to the
 rule database, which can name it, rather than to a template that would describe
 its stub.
 
+### What Wikidata lists
+A third source is the weakest and the widest. Wikidata's "file format
+identification pattern" property (P4152) carries around 9,400 patterns on as
+many items, most of them imported from TrID and PRONOM, and it knows formats
+neither `file(1)` nor a template does: Parquet, UF2, Godot resources. It also
+knows hundreds of formats that are ZIP or XML underneath, whose pattern is the
+container's, and 140 whose whole pattern is a `<`. So a match is ranked by the
+bytes it pinned down, with the file's extension worth a few more when the
+format lists it, and names the file only when nothing else could and the best
+match stands alone with either the extension behind it or eight bytes of its
+own. The dialog shows them all, best first, with a crowd that matched the same
+bytes folded into one line, and links each to its Wikidata item and, where
+there is one, its English Wikipedia article. `tools/wikidata/fetch.mjs` asks
+the query service and `build.mjs` writes what the page reads plus a report of
+every value it had to read some other way than as written, or could not read.
+
 ### What made a file
 A second database answers a different question. Where `file(1)` says what
 format a file is, the Detect It Easy signature rules say what tool produced it:

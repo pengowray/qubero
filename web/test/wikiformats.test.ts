@@ -97,7 +97,7 @@ test("a match counts only the bytes it pins down", () => {
 
 const fmt = (id: string, label: string, sigs: WikiFormat["sigs"], ext?: string[]): WikiFormat => ({ id, label, sigs, ...(ext ? { ext } : {}) });
 
-test("the longest match comes first, and an agreeing extension breaks a tie", () => {
+test("the longest match comes first, with an agreeing extension counting for more", () => {
   const data: WikiData = {
     source: "",
     fetched: "",
@@ -120,9 +120,17 @@ test("the longest match comes first, and an agreeing extension breaks a tie", ()
   assert.deepEqual(matchFormats(compiled, { head: pdf, tail: pdf, name: "a.pdf" }).map((m) => m.format.id), ["Q4"]);
 });
 
-test("one or two bytes never name a file", () => {
-  const compiled = compileAll({ source: "", fetched: "", formats: [fmt("Q1", "Any XML", [["3C", 0]])] });
-  assert.equal(namingMatch(matchFormats(compiled, { head: bytes("<a/>"), tail: bytes("<a/>"), name: "a" })), null);
+test("a few bytes name a file only with its extension behind them", () => {
+  const compiled = compileAll({
+    source: "",
+    fetched: "",
+    formats: [fmt("Q1", "Any XML", [["3C", 0]], ["xml"]), fmt("Q2", "Compress", [["1F9D", 0]], ["z"]), fmt("Q3", "LiteDB", [["00000000", 0]])],
+  });
+  const one = (head: Uint8Array, name: string): string | undefined => namingMatch(matchFormats(compiled, { head, tail: head, name }))?.format.id;
+  assert.equal(one(bytes("<a/>"), "a.xml"), undefined);
+  assert.equal(one(hex("1F9D90"), "words.Z"), "Q2");
+  assert.equal(one(hex("1F9D90"), "words"), undefined);
+  assert.equal(one(hex("0000000001"), "test.mat"), undefined);
 });
 
 test("the extension is what follows the last dot", () => {

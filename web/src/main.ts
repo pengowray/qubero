@@ -678,11 +678,11 @@ function build(tab: Tab): Page {
           kind.named(identity);
           overview.setIdentity(identity);
           kind.details(null, builtinTemplate(name));
-          void kind.addTools(doc, null, name);
+          void kind.addMatches(doc, null, name);
         } else {
           kind.unknown();
           kind.details(null, null);
-          void kind.addTools(doc, null, name);
+          void kind.addMatches(doc, null, name);
         }
         return;
       }
@@ -702,7 +702,7 @@ function build(tab: Tab): Page {
       const said = (name === null ? null : templateSentence(doc, name) ?? (half ? templateTypeName(name) : null)) ?? rules;
       kind.named(said);
       overview.setIdentity(said);
-      void kind.addTools(doc, id, name);
+      void kind.addMatches(doc, id, name);
       if (name !== null) {
         kind.details(id, builtinTemplate(name));
         return;

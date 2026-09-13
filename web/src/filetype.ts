@@ -3,8 +3,9 @@
 // The toolbar shows one line; everything the rules said is a click away.
 
 import { el } from "./dom.ts";
-import type { Doc, Identification, TemplateNode, ToolMatch } from "./doc.ts";
+import type { Doc, Identification, TemplateNode, ToolMatch, WikiVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
+import { namingMatch, wikidataUrl, wikipediaUrl, type WikiMatch } from "./wikiformats.ts";
 
 const IDENTIFYING_MSG = "Identifying file type...";
 const IDENTIFY_FAILED_MSG = "Couldn't check the file type";
@@ -161,6 +162,24 @@ export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin
 export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
+const WIKIDATA_INTRO = "Formats on Wikidata with a matching signature:";
+const WIKIDATA_LINK = "Wikidata";
+const WIKIPEDIA_LINK = "Wikipedia";
+const WIKIDATA_CREDIT = (fetched: string): string => `Signatures from Wikidata property P4152, as of ${fetched}.`;
+/** The toolbar, for a file only Wikidata could name. */
+const WIKIDATA_NAMED = (label: string): string => `${label} (signature listed on Wikidata)`;
+/** How many rows the dialog shows before folding the rest away. */
+const WIKIDATA_SHOWN = 5;
+/** A signature so many formats share that listing them says nothing. */
+const WIKIDATA_CROWD = 4;
+const WIKIDATA_MORE = (n: number): string => `${n} more formats`;
+const WIKIDATA_SHARED = (n: number, where: string, hex: string): string => `${n} formats sharing ${where} (${hex})`;
+const WIKIDATA_SHARED_EXT = (n: number, where: string, hex: string, ext: string): string =>
+  `${n} formats sharing ${where} (${hex}), all listing .${ext}`;
+const bytesAt = (m: WikiMatch): string => {
+  const n = m.fixed === 1 ? "1 byte" : `${m.fixed} bytes`;
+  return m.fromEnd ? `${n} in the last ${m.offset}` : `${n} at offset ${m.offset}`;
+};
 
 /**
  * The database writes its categories as slugs. Two of them are not words, and
@@ -252,8 +271,8 @@ export type FileType = {
   named(message: string): void;
   /** Fill the dialog for one outcome, and show the button that opens it. */
   details(id: Identification | null, template: TemplateNote): void;
-  /** Ask the signature database as well, and fold in what it makes of the file. */
-  addTools(doc: Doc, id: Identification | null, template: string | null): Promise<void>;
+  /** Ask the signature database and Wikidata as well, and fold in what they make of the file. */
+  addMatches(doc: Doc, id: Identification | null, template: string | null): Promise<void>;
 };
 
 export function fileType(): FileType {
@@ -286,6 +305,7 @@ dialog.addEventListener("click", (e) => {
 // Filled in once the signature rules have answered, so reopening the
 // dialog shows them without asking again.
 let tools: ToolMatch[] | null = null;
+let wiki: WikiVerdict | null = null;
 const showDetails = (id: Identification | null, template: TemplateNote): void => {
   const rows: HTMLElement[] = [];
   const row = (label: string, value: Node | string): void => {
@@ -324,40 +344,123 @@ const showDetails = (id: Identification | null, template: TemplateNote): void =>
       rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
     }
   }
+  // What Wikidata lists, after the answers with real evidence behind them.
+  // Most of these patterns are a few bytes long and shared by hundreds of
+  // formats, so the best few are shown and the rest are a click away.
+  if (wiki !== null && wiki.matches.length > 0) {
+    rows.push(el("p", { textContent: WIKIDATA_INTRO }), ...wikiRows(wiki.matches, wiki.extension));
+    rows.push(el("p", { className: "dlg-muted", textContent: WIKIDATA_CREDIT(wiki.fetched) }));
+  }
   dlgBody.replaceChildren(...rows);
   kindInfo.hidden = false;
 };
 
+/** One format Wikidata lists: its name, linked, what matched, and where to read more. */
+const wikiRow = (m: WikiMatch): HTMLElement => {
+  const f = m.format;
+  const parts: (Node | string)[] = [el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: f.label })];
+  const exts = [...(f.ext ?? []), ...(f.wpExt ?? [])];
+  if (exts.length > 0) {
+    parts.push(el("span", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") }));
+  }
+  parts.push(el("span", { className: "dlg-muted", textContent: bytesAt(m) }));
+  // An article about the format itself, or failing that about the format it
+  // is a version or part of, named so the link says where it goes.
+  const wp = f.wp !== undefined ? { title: f.wp, text: WIKIPEDIA_LINK } : f.parent !== undefined ? { title: f.parent.wp, text: `${WIKIPEDIA_LINK}: ${f.parent.label}` } : null;
+  if (wp !== null) parts.push(el("a", { href: wikipediaUrl(wp.title), target: "_blank", rel: "noopener", textContent: wp.text }));
+  const row = el("li", { title: m.pattern }, ...parts);
+  if (m.extensionAgrees) row.classList.add("dlg-wiki-ext-agrees");
+  return row;
+};
+
 /**
- * Ask the signature rules what made this file, and fold the answer into what
- * is already on screen. A file nothing else could name is named by this if it
- * can be, since for a .COM there is nothing else to go on.
+ * The matches as rows: the best few in the open, the rest folded away, and
+ * a crowd that all matched the same bytes folded into one line, since a
+ * hundred formats that are all ZIP inside say only that the file is a ZIP.
+ * A crowd whose members all list the file's extension is a crowd of its own,
+ * ahead of the rest, and says so.
  */
-const addToolMatches = async (doc: Doc, id: Identification | null, template: string | null): Promise<void> => {
+const wikiRows = (matches: readonly WikiMatch[], extension: string): HTMLElement[] => {
+  type Group = { readonly key: string; readonly members: WikiMatch[] };
+  const groups: Group[] = [];
+  const byKey = new Map<string, Group>();
+  for (const m of matches) {
+    const key = `${m.pattern} ${m.offset} ${m.fromEnd} ${m.extensionAgrees}`;
+    let g = byKey.get(key);
+    if (g === undefined) {
+      g = { key, members: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    g.members.push(m);
+  }
+  const render = (g: Group): HTMLElement => {
+    const first = g.members[0];
+    if (first === undefined) throw new Error("empty group");
+    if (g.members.length < WIKIDATA_CROWD) return el("ul", { className: "dlg-wiki" }, ...g.members.map(wikiRow));
+    const hex = first.pattern.replace(/(..)(?=.)/g, "$1 ");
+    return el(
+      "details",
+      { className: "dlg-more" },
+      el("summary", {
+        textContent: first.extensionAgrees
+          ? WIKIDATA_SHARED_EXT(g.members.length, bytesAt(first), hex, extension)
+          : WIKIDATA_SHARED(g.members.length, bytesAt(first), hex),
+      }),
+      el("ul", { className: "dlg-wiki" }, ...g.members.map(wikiRow)),
+    );
+  };
+  const shown = groups.slice(0, WIKIDATA_SHOWN).map(render);
+  const rest = groups.slice(WIKIDATA_SHOWN);
+  if (rest.length === 0) return shown;
+  const count = rest.reduce((n, g) => n + g.members.length, 0);
+  return [...shown, el("details", { className: "dlg-more" }, el("summary", { textContent: WIKIDATA_MORE(count) }), ...rest.map(render))];
+};
+
+/**
+ * Ask the signature rules what made this file, and Wikidata what it might be,
+ * and fold the answers into what is already on screen. A file nothing else
+ * could name is named by the first of these that can, since for a .COM there
+ * is nothing else to go on, and for a Parquet file only Wikidata has a word.
+ */
+const addOtherMatches = async (doc: Doc, id: Identification | null, template: string | null): Promise<void> => {
   let found: ToolMatch[];
   try {
     found = await doc.detectTools(id !== null);
   } catch (e) {
     console.error("detectTools", e);
-    return;
+    found = [];
   }
   tools = found;
   const note = template === null ? null : builtinTemplate(template);
   showDetails(id, id === null && found.length > 0 ? null : note);
-  if (found.length === 0) return;
-  if (id === null) {
-    // Nothing else knew anything, so this is the answer rather than a note
-    // beside one.
-    const m = sortTools(found)[0];
-    if (m !== undefined) {
-      const line = `Signature match: ${nameAndVersion(m)} (${m.category})`;
-      kindLabel.textContent = line;
-      kindLabel.title = line;
+  const named = (line: string): void => {
+    kindLabel.textContent = line;
+    kindLabel.title = line;
+  };
+  if (found.length > 0) {
+    if (id === null) {
+      // Nothing else knew anything, so this is the answer rather than a note
+      // beside one.
+      const m = sortTools(found)[0];
+      if (m !== undefined) named(`Signature match: ${nameAndVersion(m)} (${m.category})`);
+    } else {
+      const suffix = wrapperSuffix(found);
+      if (suffix !== "") kindLabel.textContent = `${id.message}${suffix}`;
     }
+  }
+  try {
+    wiki = await doc.wikidataMatches();
+  } catch (e) {
+    console.error("wikidataMatches", e);
     return;
   }
-  const suffix = wrapperSuffix(found);
-  if (suffix !== "") kindLabel.textContent = `${id.message}${suffix}`;
+  if (wiki === null) return;
+  showDetails(id, id === null && found.length > 0 ? null : note);
+  if (id === null && template === null && found.length === 0) {
+    const best = namingMatch(wiki.matches);
+    if (best !== null) named(WIKIDATA_NAMED(best.format.label));
+  }
 };
 
   return {
@@ -381,6 +484,6 @@ const addToolMatches = async (doc: Doc, id: Identification | null, template: str
       kindLabel.title = message;
     },
     details: showDetails,
-    addTools: addToolMatches,
+    addMatches: addOtherMatches,
   };
 }

@@ -6,8 +6,8 @@
 // PRONOM, and hundreds of formats share a prefix: every format that is XML
 // underneath starts `<?xml`, every one that is ZIP starts `PK\3\4`, and 140 of
 // them are identified by nothing more than a first byte of `<`. So a match is
-// ranked by how many bytes it pinned down, and one that agrees with the file's
-// extension goes first.
+// ranked by how many bytes it pinned down, with the file's extension counting
+// for some more when the format lists it.
 
 /** One pattern: canonical PRONOM syntax, its offset, and whether that offset
  *  counts back from the end of the file. */
@@ -42,7 +42,18 @@ export type WikiMatch = {
   readonly fixed: number;
   /** The file's own extension is one the format lists. */
   readonly extensionAgrees: boolean;
+  /** What the ranking sorts by: the bytes, and `EXTENSION_WORTH` more when the extension agrees. */
+  readonly score: number;
 };
+
+/**
+ * How many pinned bytes an agreeing extension is worth. Set by sweeping the
+ * sample collection. Counting it for nothing, a `.lzh` came out as an Amiga
+ * WHDLoad package (five bytes) ahead of LHA (three), and a NetCDF `.nc` as
+ * MINC1 (four) ahead of NetCDF (three). Four puts both right without letting
+ * an extension outrank a long signature.
+ */
+export const EXTENSION_WORTH = 4;
 
 /** A compiled pattern. Gaps have a minimum and maximum length. */
 type Token =
@@ -179,7 +190,7 @@ function minLength(tokens: readonly Token[]): number {
   return n;
 }
 
-type Compiled = { readonly format: WikiFormat; readonly sig: WikiSig; readonly tokens: Token[]; readonly fixed: number };
+export type Compiled = { readonly format: WikiFormat; readonly sig: WikiSig; readonly tokens: Token[]; readonly fixed: number };
 
 /** Every pattern compiled once, for a set of formats. */
 export function compileAll(data: WikiData): Compiled[] {
@@ -235,43 +246,43 @@ export function matchFormats(compiled: readonly Compiled[], file: FileBytes): Wi
     const prev = best.get(c.format.id);
     if (prev !== undefined && prev.fixed >= c.fixed) continue;
     const agrees = ext !== "" && ((c.format.ext?.includes(ext) ?? false) || (c.format.wpExt?.includes(ext) ?? false));
-    best.set(c.format.id, { format: c.format, pattern, offset, fromEnd: from === "eof", fixed: c.fixed, extensionAgrees: agrees });
+    const score = c.fixed + (agrees ? EXTENSION_WORTH : 0);
+    best.set(c.format.id, { format: c.format, pattern, offset, fromEnd: from === "eof", fixed: c.fixed, extensionAgrees: agrees, score });
   }
-  return [...best.values()].sort(
-    (a, b) =>
-      b.fixed - a.fixed ||
-      Number(b.extensionAgrees) - Number(a.extensionAgrees) ||
-      a.format.label.localeCompare(b.format.label),
-  );
+  return [...best.values()].sort((a, b) => b.score - a.score || b.fixed - a.fixed || a.format.label.localeCompare(b.format.label));
 }
 
 /**
- * A match good enough to name a file nothing else could: at least four bytes,
- * the kind of magic number a format picks on purpose, and either the only
- * format at that strength or the only one there whose extension agrees.
- * Null when the best is a tie between formats that cannot be told apart.
+ * A match good enough to name a file nothing else could, or null. It must be
+ * the only format with the best score, and either have the file's extension
+ * behind it (and more than one byte: a `{` names nothing, even in a .json) or
+ * pin down eight bytes on its own. Four unexplained bytes were not enough in
+ * the sample sweep: they called a MATLAB file LiteDB and a PowerShell script
+ * an ArtCAM model.
  */
-export const NAMING_MIN_BYTES = 4;
+export const NAMING_BYTES_WITH_EXTENSION = 2;
+export const NAMING_BYTES_ALONE = 8;
 export function namingMatch(matches: readonly WikiMatch[]): WikiMatch | null {
   const top = matches[0];
-  if (top === undefined || top.fixed < NAMING_MIN_BYTES) return null;
-  const tied = matches.filter((m) => m.fixed === top.fixed);
-  if (tied.length === 1) return top;
-  const agreeing = tied.filter((m) => m.extensionAgrees);
-  return agreeing.length === 1 ? (agreeing[0] ?? null) : null;
+  if (top === undefined) return null;
+  if (matches[1] !== undefined && matches[1].score === top.score) return null;
+  const enough = top.extensionAgrees ? top.fixed >= NAMING_BYTES_WITH_EXTENSION : top.fixed >= NAMING_BYTES_ALONE;
+  return enough ? top : null;
 }
 
 export const wikidataUrl = (id: string): string => `https://www.wikidata.org/wiki/${id}`;
 export const wikipediaUrl = (title: string): string =>
   `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_")).replace(/%2F/g, "/")}`;
 
-let loaded: Promise<Compiled[] | null> | null = null;
+export type WikiFormats = { readonly compiled: readonly Compiled[]; readonly fetched: string };
+
+let loaded: Promise<WikiFormats | null> | null = null;
 
 /** The compiled patterns, fetched on first use; null when they cannot be had. */
-export function loadWikiFormats(): Promise<Compiled[] | null> {
+export function loadWikiFormats(): Promise<WikiFormats | null> {
   loaded ??= fetch("wikidata/formats.json")
     .then((r) => (r.ok ? (r.json() as Promise<WikiData>) : null))
-    .then((d) => (d === null ? null : compileAll(d)))
+    .then((d) => (d === null ? null : { compiled: compileAll(d), fetched: d.fetched }))
     .catch((e: unknown) => {
       console.error("wikidata formats", e);
       return null;
