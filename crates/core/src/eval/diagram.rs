@@ -579,53 +579,58 @@ impl<'a> Walk<'a> {
         here
     }
 
-    /// Where one field's type edge goes: a named type's box, a switch's box, or
-    /// a box made here for a structure written inline in the field.
+    /// Where one field's type edge goes, and what the edge says.
     fn field_target(&mut self, here: usize, row: usize, owner: &str, field: &str, ty: &Ty) {
+        let Some((to, label)) = self.box_for(owner, field, ty) else { return };
+        self.edges.push(DiagramEdge { from: (here, row), to: (to, None), role: Role::Type, label });
+    }
+
+    /// The box a type is drawn as, making it if this is the first time it has
+    /// been reached: a switch's own box, a named type's box, or a box made here
+    /// for a structure written inline. The label is the expression a switch
+    /// reads, and empty for everything else.
+    ///
+    /// `owner` and `label` name the inline box when one is made, so a type the
+    /// template never named is named for where it was found. Nothing for a type
+    /// that is not one of the three, which is every number and every run of
+    /// bytes: those say what they are in their own type column.
+    fn box_for(&mut self, owner: &str, label: &str, ty: &Ty) -> Option<(usize, String)> {
+        // A switch first, since a switch whose cases are structures is both and
+        // the choice is what the reader has to see: skipping to the structure
+        // would draw one case as though it were the only one.
         if let Some(sw) = as_switch(self.t, ty) {
             let sw = sw.clone();
-            let name = format!("{owner}.{field}");
-            if self.by_name.contains_key(&name) || self.boxes.len() >= BOX_CAP {
-                if !self.by_name.contains_key(&name) {
-                    self.capped += 1;
-                }
-                return;
+            let name = format!("{owner}.{label}");
+            if let Some(&at) = self.by_name.get(&name) {
+                return Some((at, String::new()));
+            }
+            if self.boxes.len() >= BOX_CAP {
+                self.capped += 1;
+                return None;
             }
             let to = self.switch_box(name, Some(owner.to_string()), &sw);
-            let label = match &sw {
+            let on = match &sw {
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
                 _ => String::new(),
             };
-            self.edges.push(DiagramEdge { from: (here, row), to: (to, None), role: Role::Type, label });
-            return;
+            return Some((to, on));
         }
         if let Some(target) = named_target(ty) {
-            if let Some(to) = self.named_box(&target) {
-                self.edges.push(DiagramEdge {
-                    from: (here, row),
-                    to: (to, None),
-                    role: Role::Type,
-                    label: String::new(),
-                });
-            }
-            return;
+            return self.named_box(&target).map(|to| (to, String::new()));
         }
         // A structure written where it is used rather than declared in the
         // table. It is still a type and still worth a box; it is named for
         // where it was found, since the template gave it no name of its own.
-        if let Some(sd) = as_struct(self.t, ty) {
-            let name = format!("{owner}.{field}");
-            if self.by_name.contains_key(&name) {
-                return;
-            }
-            if self.boxes.len() >= BOX_CAP {
-                self.capped += 1;
-                return;
-            }
-            let sd = sd.clone();
-            let to = self.struct_box(name, Some(owner.to_string()), &sd);
-            self.edges.push(DiagramEdge { from: (here, row), to: (to, None), role: Role::Type, label: String::new() });
+        let sd = as_struct(self.t, ty)?.clone();
+        let name = format!("{owner}.{label}");
+        if let Some(&at) = self.by_name.get(&name) {
+            return Some((at, String::new()));
         }
+        if self.boxes.len() >= BOX_CAP {
+            self.capped += 1;
+            return None;
+        }
+        Some((self.struct_box(name, Some(owner.to_string()), &sd), String::new()))
     }
 
     /// One switch as a box: a row per case, and an edge from each case to the
@@ -662,30 +667,12 @@ impl<'a> Walk<'a> {
         for (i, (key, ty)) in cases.iter().enumerate() {
             // A case that picks a type with a box of its own fans out to it;
             // one that picks a number or a run of bytes says so in its own
-            // type column and reaches nothing.
-            if let Some(target) = named_target(ty) {
-                if let Some(to) = self.named_box(&target) {
-                    self.edges.push(DiagramEdge {
-                        from: (here, i),
-                        to: (to, None),
-                        role: Role::Case,
-                        label: String::new(),
-                    });
-                }
-                continue;
-            }
-            if let Some(sd) = as_struct(self.t, ty) {
-                let inline = format!("{name}.{key}");
-                if self.by_name.contains_key(&inline) {
-                    continue;
-                }
-                if self.boxes.len() >= BOX_CAP {
-                    self.capped += 1;
-                    continue;
-                }
-                let sd = sd.clone();
-                let to = self.struct_box(inline, Some(name.clone()), &sd);
-                self.edges.push(DiagramEdge { from: (here, i), to: (to, None), role: Role::Case, label: String::new() });
+            // type column and reaches nothing. A case that is itself a switch
+            // gets its own box too: an ELF picks a width and then picks an
+            // endianness, and stopping at the first choice would leave the
+            // whole of the format behind one unopened row.
+            if let Some((to, label)) = self.box_for(&name, key, ty) {
+                self.edges.push(DiagramEdge { from: (here, i), to: (to, None), role: Role::Case, label });
             }
         }
         here

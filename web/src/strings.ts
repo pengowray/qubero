@@ -2644,6 +2644,9 @@ export const DIAGRAM = {
     size: "Size",
     type: "Type",
     name: "Field",
+    /** A switch box's rows are values rather than fields, so its first column
+     *  is the value the switch reads and not a place in the file. */
+    caseValue: "Read as this value",
   },
 } as const;
 

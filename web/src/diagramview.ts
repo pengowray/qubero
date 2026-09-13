@@ -41,8 +41,10 @@ export const ROW_CAP = 24;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 3;
 
-/** Room round the whole drawing, and between the boxes dagre places. */
-const MARGIN = 24;
+/** Room round the whole drawing, and between the boxes dagre places. Wide
+ *  enough on the left for the brackets that join two rows of one box, which
+ *  run down the outside of it. */
+const MARGIN = 44;
 const NODE_SEP = 28;
 const RANK_SEP = 90;
 
@@ -51,12 +53,32 @@ const BACK_LANE = 22;
 
 type Placed = { box: DiagramBox; el: HTMLElement; rows: HTMLElement[]; x: number; y: number; w: number; h: number };
 
+/** One drawn arrow: the path, and where its role word goes. `end` puts the word
+ *  before the point rather than centred on it, for a run of arrows that all
+ *  leave the same edge. */
+type Route = { d: string; lx: number; ly: number; end?: boolean };
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string, string> = {}): SVGElementTagNameMap[K] {
   const node = document.createElementNS(SVG_NS, name);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
   return node;
+}
+
+/**
+ * A box's name, shortened to the part that tells it from its neighbours.
+ *
+ * The core names a type written inside a field for the whole path it was found
+ * down, so a PNG chunk's packed payload is
+ * `png.chunks.data.0x49444154.code.0x7070b1.packed`. Every box in that layer
+ * shares the front of that, and the last two steps are what differ. The whole
+ * name is on the element's title, so nothing is lost.
+ */
+function shortName(name: string): string {
+  const parts = name.split(".");
+  if (parts.length <= 3) return name;
+  return `…${parts.slice(-2).join(".")}`;
 }
 
 export class DiagramView {
@@ -124,10 +146,16 @@ export class DiagramView {
     this.about = d === null ? DIAGRAM.noTemplate : DIAGRAM.about(formatName);
     this.note.classList.toggle("is-warn", d === null);
     this.build();
+    // A new diagram starts on the root type at life size: that is where the
+    // format starts, and life size is the only scale its rows can be read at.
+    // Fitting a format of seventy types into a window would land the reader on
+    // a wall of four-point text. `Fit` is one click away for the reader who
+    // wants the shape of the whole thing first.
+    this.home();
   }
 
-  /** Measure, place and draw. Called on every change that moves a box: a new
-   *  diagram, a fold opened, or the view coming back on screen at a new size. */
+  /** Measure, place and draw again, keeping wherever the reader had panned to.
+   *  Called when the view comes back on screen, and when a fold opens. */
   relayout(): void {
     if (this.diagram === null) return;
     this.build();
@@ -149,7 +177,7 @@ export class DiagramView {
     for (const [i, box] of d.types.entries()) this.placed.push(this.buildBox(i, box));
     this.place(d);
     this.drawEdges(d);
-    this.fit();
+    this.apply();
   }
 
   /** One type as a table. The rows carry the listing's field colours, so a
@@ -160,7 +188,15 @@ export class DiagramView {
     if (box.kind === "switch") el.classList.add("is-switch");
     const head = document.createElement("div");
     head.className = "dv-box-name";
-    head.textContent = box.name;
+    const label = document.createElement("span");
+    label.className = "dv-box-label";
+    label.textContent = shortName(box.name);
+    // A type written inside a switch case inside a chunk is named for the whole
+    // path it was found down, which is honest and longer than the fields under
+    // it. Shortened to the part that tells it from its neighbours, with the
+    // whole of it on hover.
+    label.title = box.name;
+    head.append(label);
     if (box.kind === "switch") {
       const tag = document.createElement("span");
       tag.className = "dv-tag";
@@ -183,12 +219,23 @@ export class DiagramView {
       if (r === undefined) continue;
       const tr = document.createElement("tr");
       tr.className = `dv-row ${fieldClass(r.kind)}`;
-      for (const [cls, text, label] of [
-        ["dv-pos", r.pos_text, DIAGRAM.column.pos],
-        ["dv-size", r.size_text, DIAGRAM.column.size],
-        ["dv-type", r.type_text, DIAGRAM.column.type],
-        ["dv-name", r.name, DIAGRAM.column.name],
-      ] as const) {
+      // A case has no position and no size of its own: what it has is a value
+      // and the type that value picks, which is what the two columns say. A
+      // field has all four, in the order a reader scans them: where, how long,
+      // what, and what it is called.
+      const cells =
+        box.kind === "switch"
+          ? ([
+              ["dv-case", r.name, DIAGRAM.column.caseValue],
+              ["dv-type", r.type_text, DIAGRAM.column.type],
+            ] as const)
+          : ([
+              ["dv-pos", r.pos_text, DIAGRAM.column.pos],
+              ["dv-size", r.size_text, DIAGRAM.column.size],
+              ["dv-type", r.type_text, DIAGRAM.column.type],
+              ["dv-name", r.name, DIAGRAM.column.name],
+            ] as const);
+      for (const [cls, text, label] of cells) {
         const td = document.createElement("td");
         td.className = cls;
         td.textContent = text;
@@ -209,7 +256,7 @@ export class DiagramView {
       const tr = document.createElement("tr");
       tr.className = "dv-more";
       const td = document.createElement("td");
-      td.colSpan = 4;
+      td.colSpan = box.kind === "switch" ? 2 : 4;
       td.textContent = open ? DIAGRAM.less : DIAGRAM.more(box.rows.length - ROW_CAP);
       td.title = open ? DIAGRAM.less : DIAGRAM.moreTitle;
       tr.append(td);
@@ -307,7 +354,12 @@ export class DiagramView {
       if (from === null || to === null) continue;
       const lane = lanes.get(`${e.from[0]}>${e.to}`) ?? 0;
       lanes.set(`${e.from[0]}>${e.to}`, lane + 1);
-      const path = e.from[0] === e.to ? this.loop(e, lane) : this.route(from, to, e, lane);
+      const path =
+        e.from[0] !== e.to
+          ? this.route(from, to, e, lane)
+          : e.to_row === undefined
+            ? this.loop(e, lane)
+            : this.inside(e, lane);
       if (path === null) continue;
       const group = svg("g", { class: `dv-edge dv-role-${e.role}` });
       const line = svg("path", { d: path.d, "marker-end": "url(#dv-arrow)" });
@@ -318,7 +370,11 @@ export class DiagramView {
       // decided.
       title.textContent = e.label === "" ? roleLabel(e.role) : `${roleLabel(e.role)}: ${e.label}`;
       group.append(line, title);
-      const text = svg("text", { x: String(path.lx), y: String(path.ly), class: "dv-edge-label" });
+      const text = svg("text", {
+        x: String(path.lx),
+        y: String(path.ly),
+        class: path.end === true ? "dv-edge-label is-end" : "dv-edge-label",
+      });
       text.textContent = roleLabel(e.role).toLowerCase();
       group.append(text);
       this.lines.append(group);
@@ -334,7 +390,7 @@ export class DiagramView {
     to: { x: number; y: number },
     e: DiagramEdge,
     lane: number,
-  ): { d: string; lx: number; ly: number } | null {
+  ): Route | null {
     const stub = 10 + (lane % 4) * 5;
     if (to.x > from.x + stub * 2) {
       // Forwards: one turn out, one turn in, both in the gap between the boxes.
@@ -358,9 +414,36 @@ export class DiagramView {
     };
   }
 
+  /**
+   * Two rows of one type: a bracket down the left of the box, from the field
+   * that decided to the field it decided about.
+   *
+   * The commonest arrow there is, since a length and the run it sizes are
+   * nearly always neighbours. Routed round the outside like every other edge it
+   * would be a loop the width of the box for two rows an inch apart, and a box
+   * with five lengths in it would be five of them.
+   */
+  private inside(e: DiagramEdge, lane: number): Route | null {
+    const p = this.placed[e.from[0]];
+    const from = this.port(e.from[0], e.from[1], "left");
+    const to = this.port(e.to, e.to_row, "left");
+    if (p === undefined || from === null || to === null) return null;
+    if (from.y === to.y) return null;
+    const out = p.x - 8 - (lane % 4) * 6;
+    return {
+      d: `M ${from.x} ${from.y} H ${out} V ${to.y} H ${to.x}`,
+      // At the end the arrow leaves from, not at its middle: a box with eight
+      // of these has eight brackets side by side, and eight words stacked over
+      // the middle of them is a smudge. One word per row is one word per line.
+      lx: out - 3,
+      ly: from.y - 2,
+      end: true,
+    };
+  }
+
   /** A type that holds itself: a loop off the right of the row and back into
    *  the left of the same box. Never an expansion, which would not end. */
-  private loop(e: DiagramEdge, lane: number): { d: string; lx: number; ly: number } | null {
+  private loop(e: DiagramEdge, lane: number): Route | null {
     const p = this.placed[e.from[0]];
     const from = this.port(e.from[0], e.from[1], "right");
     const to = this.port(e.to, e.to_row, "left");
@@ -373,6 +456,31 @@ export class DiagramView {
       lx: (out + back) / 2,
       ly: under - 4,
     };
+  }
+
+  /**
+   * Life size, looking at the root type.
+   *
+   * Left is easy: the root is the leftmost box, so the drawing starts at its
+   * left edge. Up is not, because dagre centres each layer, so the root of a
+   * seventy-type format sits halfway down a drawing three thousand pixels tall
+   * with nothing of its own above it. So the root is centred in the window,
+   * and then pulled back down far enough that no gap opens over the top of the
+   * drawing: on a format that fits, the whole of it is on screen.
+   */
+  private home(): void {
+    const root = this.placed[0];
+    this.scale = 1;
+    if (root === undefined) {
+      this.tx = 0;
+      this.ty = 0;
+      this.apply();
+      return;
+    }
+    const top = Math.min(...this.placed.map((p) => p.y));
+    this.tx = 12 - root.x;
+    this.ty = Math.min(12 - top, this.board.clientHeight / 2 - (root.y + root.h / 2));
+    this.apply();
   }
 
   /** Scale and centre so the whole drawing is in the window. */

@@ -5184,6 +5184,15 @@ table.rec tr.is-on td {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   font: 600 12px var(--sans);
 }
+/* A type found inside a switch case inside a chunk carries the whole path it
+   was found down. Clipped here so one long name cannot set the width of its
+   whole layer; the element's title says the rest. */
+.dv-box-label {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* A choice rather than a structure: its rows are values, not fields. */
 .dv-box.is-switch .dv-box-name {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -5212,6 +5221,11 @@ table.rec tr.is-on td {
 }
 .dv-pos {
   color: var(--addr);
+}
+/* The value a switch reads to pick this case. Not an address, so not the
+   address colour: it is what the field says, which is the value vocabulary. */
+.dv-case {
+  color: var(--fg);
 }
 .dv-size,
 .dv-type {
@@ -5259,4 +5273,9 @@ table.rec tr.is-on td {
   stroke-width: 3;
   paint-order: stroke;
   text-anchor: middle;
+}
+/* A word before the point it labels rather than over it, for the brackets down
+   the left of a box: eight of them centred would be eight words in one place. */
+.dv-edge-label.is-end {
+  text-anchor: end;
 }
