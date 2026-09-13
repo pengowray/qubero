@@ -283,8 +283,9 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
     match ty {
         // Postfix: a list is its element type and how many of them.
         Ty::Array { elem, count } => {
-            // An element whose own reading ends in a trailing word is bracketed
-            // first, so that `(u32le unset 0)[10]` cannot be read as an index.
+            // An element of more than one word is bracketed first, so that the
+            // count cannot read as an index into the last of them. See
+            // [`brackets`].
             let (open, close) = brackets(elem);
             let head = format!("{head}{open}");
             return write_ty(out, ind, &head, elem, &format!("{close}[{}]{tail}", expr(count)));
