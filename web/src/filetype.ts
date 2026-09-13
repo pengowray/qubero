@@ -183,8 +183,18 @@ export const templateLabel = (name: string): string => TEMPLATE_LABEL[name] ?? n
 export const templateTypeName = (name: string): string => {
   if (name === "bardstale") return "The Bard's Tale I MS-DOS save game";
   const label = templateLabel(name);
-  return label.endsWith("s") && label.includes(" ") ? label : `${label} file`;
+  if (label.endsWith("s") && label.includes(" ")) return label;
+  // A label whose last word already says what kind of thing it is needs no
+  // "file" after it: "ZIP archive file" and "PNG image file" read as typos.
+  const last = label.split(/[\s/]+/).pop()?.toLowerCase() ?? "";
+  return NOUNS.has(last) ? label : `${label} file`;
 };
+const NOUNS: ReadonlySet<string> = new Set([
+  "archive", "image", "audio", "video", "database", "executable", "container", "module", "stream", "model", "tag", "mesh",
+  "index", "region", "package", "object", "firmware", "cartridge", "program", "resource", "frame", "map", "shortcut", "blob",
+  "block", "table", "record", "log", "list", "sheet", "cabinet", "journal", "rom", "metadata", "packets", "profile", "wad",
+  "pak", "vpk", "tap", "midi", "json", "cbor", "pdf", "hdf5", "hdf4", "fits", "elf", "mach-o", "symbols)", "db",
+]);
 
 /**
  * What the file is, in a sentence, read from the fields the template found.
@@ -445,13 +455,18 @@ export function fileType(): FileType {
       if (id.source !== "tools") line += wrapperSuffix(tools);
     } else if (failed) line = IDENTIFY_FAILED_MSG;
     else if (identifying) line = IDENTIFYING_MSG;
-    else if (answers.file === null && answers.signatures !== undefined) line = UNKNOWN_TYPE_MSG;
+    // Unknown as soon as the rules say so; a signature that lands later
+    // replaces it, and a blank line in the meantime would say nothing.
+    else if (answers.file === null) line = UNKNOWN_TYPE_MSG;
     else line = "";
     kindLabel.textContent = line;
     // The toolbar copy is cut short, so the whole sentence stays reachable
     // on hover as well as in the dialog.
     kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : line;
-    api.onIdentity(id.name ?? "");
+    // The overview hears the name once there is one, or once the rules have
+    // said there is none: an empty name before that reads as "no answer"
+    // when the answer is still on its way.
+    if (id.name !== null || answers.file !== undefined) api.onIdentity(id.name ?? "");
     // Nothing to open until something has answered or the rules have given
     // up: an empty dialog is worse than no button.
     if (answers.file === undefined && answers.template === null) return;

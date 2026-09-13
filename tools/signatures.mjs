@@ -186,8 +186,9 @@ function readMagicFile(name, text, count) {
     // A leading `=` is the default relation written out, which a rule does to
     // protect a value that starts with a character that would otherwise be
     // read as one: `=!<arch>` is the `ar` archive, `=BLENDER` is Blender.
-    const value = split[1].startsWith("=") && split[1].length > 1 ? split[1].slice(1) : split[1];
-    if (value === "x" || /^[<>!&^~]/.test(value)) {
+    const written = split[1].startsWith("=") && split[1].length > 1;
+    const value = written ? split[1].slice(1) : split[1];
+    if (!written && (value === "x" || /^[<>!&^~]/.test(value))) {
       count.skip(`value is a comparison, not a constant: ${value === "x" ? "x" : value[0]}`, `${name}:${i + 1}`);
       continue;
     }
