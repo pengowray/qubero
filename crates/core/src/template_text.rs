@@ -912,6 +912,7 @@ fn encoding(e: &Encoding) -> String {
         Encoding::Bom { fallback } => format!("bom({})", encoding(fallback)),
         Encoding::Unknown => "encoding unknown".to_string(),
         Encoding::P8scii => "p8scii".to_string(),
+        Encoding::Ebcdic => "ebcdic".to_string(),
     }
 }
 

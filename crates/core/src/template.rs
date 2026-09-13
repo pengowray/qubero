@@ -1169,6 +1169,10 @@ pub enum Encoding {
     /// the middle, and above 0x7f the glyphs a cart draws with and the two
     /// Japanese syllabaries. See [`crate::text::CodePage::P8scii`].
     P8scii,
+    /// EBCDIC code page 037, where `C` is 0xC3 and a space is 0x40. What a
+    /// SEG-Y file's textual headers are in when they are not ASCII. See
+    /// [`crate::text::CodePage::Ebcdic037`].
+    Ebcdic,
 }
 
 impl Encoding {
@@ -1185,6 +1189,7 @@ impl Encoding {
             Encoding::Unknown => "text?".into(),
             Encoding::P8scii => "p8scii".into(),
             Encoding::Cp437Screen => "cp437 screen".into(),
+            Encoding::Ebcdic => "ebcdic".into(),
         }
     }
 }
