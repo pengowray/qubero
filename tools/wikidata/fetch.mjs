@@ -53,11 +53,6 @@ const QUERIES = {
       ?item p:P4152 [] ; rdfs:label ?label .
       FILTER(LANG(?label) = "en" || LANG(?label) = "mul")
     }`,
-  descriptions: `
-    SELECT DISTINCT ?item ?description WHERE {
-      ?item p:P4152 [] ; schema:description ?description .
-      FILTER(LANG(?description) = "en")
-    }`,
   extensions: `
     SELECT DISTINCT ?item ?ext WHERE {
       ?item p:P4152 [] ; p:P1195 ?s .

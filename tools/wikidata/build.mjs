@@ -1,12 +1,14 @@
-// Builds web/public/wikidata/formats.json, the file format patterns the page
-// matches a file against, from what fetch.mjs downloaded into target/wikidata.
-// Also writes tools/wikidata/cleanup.md, which lists every pattern that had to
-// be read some other way than as written, and every one that was left out.
+// Builds tools/wikidata/formats.json, one of the two sources tools/signatures.mjs
+// merges into the database the page matches a file against, from what fetch.mjs
+// downloaded into target/wikidata. Also writes tools/wikidata/cleanup.md, which
+// lists every pattern that had to be read some other way than as written, and
+// every one that was left out.
 //
 //   node tools/wikidata/build.mjs
 //
-// The report is the place to look before fixing anything on Wikidata: each
-// entry links to the item, and says what was wrong with its value.
+// formats.json is committed so that rebuilding the database never needs the
+// query service. The report is the place to look before fixing anything on
+// Wikidata: each entry links to the item, and says what was wrong with its value.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,7 +19,7 @@ import { infoboxExtensions } from "./infobox.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 const CACHE = join(ROOT, "target", "wikidata");
-const OUT = join(ROOT, "web", "public", "wikidata", "formats.json");
+const OUT = join(HERE, "formats.json");
 const REPORT = join(HERE, "cleanup.md");
 
 const ENTITY = "http://www.wikidata.org/entity/";
@@ -39,7 +41,7 @@ const item = (uri) => {
   const id = qid(uri);
   let it = items.get(id);
   if (it === undefined) {
-    it = { id, label: null, mul: null, desc: null, ext: new Set(), mime: new Set(), wp: null, parents: [], sigs: new Map() };
+    it = { id, label: null, mul: null, ext: new Set(), mime: new Set(), wp: null, parents: [], sigs: new Map() };
     items.set(id, it);
   }
   return it;
@@ -101,10 +103,6 @@ for (const r of load("labels")) {
   if (r["label@"] === "en") it.label = r.label;
   else it.mul = r.label;
 }
-for (const r of load("descriptions")) {
-  const it = items.get(qid(r.item));
-  if (it !== undefined) it.desc = r.description;
-}
 const extension = (e) => e.trim().replace(/^\*?\./, "").toLowerCase();
 for (const r of load("extensions")) {
   const it = items.get(qid(r.item));
@@ -135,7 +133,6 @@ const formats = [];
 for (const it of [...items.values()].sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)))) {
   if (it.sigs.size === 0) continue;
   const f = { id: it.id, label: it.label ?? it.mul ?? it.id };
-  if (it.desc !== null) f.desc = it.desc;
   if (it.ext.size > 0) f.ext = [...it.ext].sort();
   const text = it.wp === null ? undefined : wikipedia[it.wp];
   if (text !== undefined) {
