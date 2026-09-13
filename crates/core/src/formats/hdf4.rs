@@ -812,26 +812,30 @@ fn eight_bit_image() -> T {
 /// order, a column of numbers as that many numbers, and a column of a type
 /// nothing here knows as the bytes the header set aside for it.
 ///
-/// Only a table written a record at a time is opened. With the other
-/// interlacing the file holds every value of the first column, then every
-/// value of the second, and a row is not a run of bytes at all.
+/// The interlacing decides the nesting. A table written a record at a time is
+/// a list of records, each one value per column. A table written a field at a
+/// time holds every value of the first column, then every value of the second,
+/// so a row is not a run of bytes at all and the table reads as a list of
+/// columns, each one value per record. Anything else stays bytes.
 fn vdata_records() -> T {
     let header = || key(1962, own_ref());
+    let nvertices = || E::within(&["header", "nvertices"]).at_least(E::lit(0));
     let records = T::array(
         T::sized(E::within(&["header", "ivsize"]).at_least(E::lit(0)), vdata_record()),
-        E::within(&["header", "nvertices"]).at_least(E::lit(0)),
+        nvertices(),
     );
+    let columns = T::structure(
+        "Hdf4VdataColumns",
+        vec![("columns", T::array(vdata_column(nvertices()), E::within(&["header", "nfields"]).at_least(E::lit(0))))],
+    )
+    .field_elem_named_from("columns", E::elem_within(&["header", "field_names"], E::idx(), &["text"]));
     let rows = T::structure(
         "Hdf4VdataRecords",
         vec![
             ("header", record_at(header(), vdata_header())),
             (
                 "records",
-                T::switch(
-                    E::within(&["header", "interlace"]).equals(E::lit(0)),
-                    vec![(1, records)],
-                    T::bytes(E::Remaining),
-                ),
+                T::switch(E::within(&["header", "interlace"]), vec![(0, records), (1, columns)], T::bytes(E::Remaining)),
             ),
         ],
     )
@@ -860,34 +864,49 @@ fn vdata_record() -> T {
 /// where it is needed: a column of several values is a list, and inside a list
 /// `Idx` is which value this is, not which column. So the number is a field of
 /// the row, worth no bytes, and every question about the column names it.
-///
-/// A field type with bit 14 set is the same type written the other way round,
-/// which is how a vdata written on an Intel machine and left unconverted says
-/// so. A column of characters reads as one string of its order rather than as
-/// that many one-byte numbers.
 fn vdata_value() -> T {
-    let col = |f: &str| E::elem_within(&["header", f], E::field("column"), &[]);
-    let kind = || col("field_types").and(E::lit(0xff));
-    let order = || col("field_orders").at_least(E::lit(0));
-    let one = || number_value(kind(), col("field_types").bit(14).mul(E::lit(4)), E::lit(8));
-    let text = || T::text(StrLen::Padded { size: order(), pad: 0 }, Encoding::Ascii);
     T::structure_named(
         "Hdf4VdataField",
         "",
         "value",
-        vec![
-            ("column", T::computed(E::idx())),
-            (
-                "value",
-                T::switch(
-                    kind(),
-                    vec![(3, text()), (4, text())],
-                    T::switch(order().equals(E::lit(1)), vec![(1, one())], T::array(one(), order())),
-                ),
-            ),
-        ],
+        vec![("column", T::computed(E::idx())), ("value", column_value())],
     )
     .machinery(&["column"])
+}
+
+/// Every value of one column, in a table written a field at a time: one per
+/// record, each read the way [`vdata_value`] reads it. The column's number is
+/// written down for the same reason.
+fn vdata_column(records: E) -> T {
+    T::structure_named(
+        "Hdf4VdataColumn",
+        "",
+        "values",
+        vec![("column", T::computed(E::idx())), ("values", T::array(column_value(), records))],
+    )
+    .machinery(&["column"])
+}
+
+/// One value of the column the `column` field beside or around it names.
+///
+/// A field type with bit 14 set is the same type written the other way round,
+/// which is how a vdata written on an Intel machine and left unconverted says
+/// so. A column of characters reads as one string of its order rather than as
+/// that many one-byte numbers. A type nothing here knows is as many bytes as
+/// the header gives one of it, which is the column's size shared out over its
+/// order, so the columns after it still line up.
+fn column_value() -> T {
+    let col = |f: &str| E::elem_within(&["header", f], E::field("column"), &[]);
+    let kind = || col("field_types").and(E::lit(0xff));
+    let order = || col("field_orders").at_least(E::lit(0));
+    let width = || col("field_sizes").mul(E::lit(8)).div(order().at_least(E::lit(1)));
+    let one = || number_value(kind(), col("field_types").bit(14).mul(E::lit(4)), width());
+    let text = || T::text(StrLen::Padded { size: order(), pad: 0 }, Encoding::Ascii);
+    T::switch(
+        kind(),
+        vec![(3, text()), (4, text())],
+        T::switch(order().equals(E::lit(1)), vec![(1, one())], T::array(one(), order())),
+    )
 }
 
 /// A scientific data group, and the dataset it names.
@@ -1396,6 +1415,18 @@ mod tests {
         v
     }
 
+    /// A table of three records written a field at a time, header and rows, as
+    /// pyhdf's library wrote them with `NO_INTERLACE`: an int16 `a`, a pair of
+    /// float32 `b`, and three characters `c`.
+    fn by_field() -> (Vec<u8>, Vec<u8>) {
+        let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect();
+        (
+            hex("000100000003000d000300160005000400020008000300000002000a000100020003000161000162000163\
+                 000762796669656c64000000000000000300000003000000"),
+            hex("0001000200033fc0000040200000406000004090000040b0000040d00000616263646566676869"),
+        )
+    }
+
     /// A file of three blocks. The first holds the version record, a table's
     /// rows and then the header that describes them, a vgroup, and a second
     /// table's rows whose header is in the third block; the second holds an
@@ -1403,8 +1434,9 @@ mod tests {
     /// scientific dataset with the group that names its parts and its labels;
     /// the third holds a second group whose members are all a block back, an
     /// image whose dimension record is here but whose number type record is
-    /// nowhere, an empty slot, that header, a special element, and units for a
-    /// dataset the file has no dimension record for. Both orders are on
+    /// nowhere, an empty slot, that header, a special element, units for a
+    /// dataset the file has no dimension record for, and a table written a
+    /// field at a time. Both orders are on
     /// purpose: an HDF4 writer puts a thing before the thing that describes it
     /// as often as after, and in whatever block has room.
     fn file() -> Vec<u8> {
@@ -1415,6 +1447,7 @@ mod tests {
         // Labels for the two by three dataset, and units for a dataset the
         // file has no dimension record for.
         let (labels, units) = (b"values\0row\0column\0".to_vec(), b"\0m\0s\0".to_vec());
+        let (by_field_header, by_field_rows) = by_field();
         let none = Vec::new();
         let first: [(u16, u16, &Vec<u8>); 5] =
             [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g), (1963, 12, &r)];
@@ -1428,7 +1461,7 @@ mod tests {
             (720, 9, &grp),
             (704, 9, &labels),
         ];
-        let third: [(u16, u16, &Vec<u8>); 7] = [
+        let third: [(u16, u16, &Vec<u8>); 9] = [
             (720, 11, &grp),
             (302, 50, &image),
             (300, 50, &far),
@@ -1436,6 +1469,8 @@ mod tests {
             (1962, 12, &h),
             (0x4000 + 702, 13, &special),
             (705, 77, &units),
+            (1963, 20, &by_field_rows),
+            (1962, 20, &by_field_header),
         ];
         let block_at = |n: usize, from: usize| from + 6 + 12 * n;
         let b1 = block_at(first.len(), 4);
@@ -1484,7 +1519,7 @@ mod tests {
         // The last block, found by following the chain, with its own slots. It
         // has no next of its own, so the walk stops rather than pointing back
         // at the signature.
-        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 7);
+        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 9);
     }
 
     #[test]
@@ -1553,6 +1588,23 @@ mod tests {
         assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1]).child_count, 4);
         assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1, 3, 0, 0]).name, "[0] VALUES");
         assert_eq!(read(&[3, 0, 2, 4, 4, 0, 1, 3, 0, 0, 1, 1]).value, Value::Int(7));
+    }
+
+    /// A table written a field at a time holds every `a`, then every pair of
+    /// `b`, then every `c`, so it reads as columns, each one value per record
+    /// and named as the header names it. The values are the ones pyhdf wrote
+    /// and reads back.
+    #[test]
+    fn a_table_written_a_field_at_a_time_reads_as_columns() {
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1]).type_name, "Hdf4VdataColumns");
+        let columns = read(&[3, 2, 2, 7, 4, 0, 1, 0]);
+        assert_eq!(columns.child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 1]).name, "[1] b");
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 0, 1]).child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 0, 1, 2]).value, Value::Int(3));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 1, 1, 2, 1]).value, Value::Float(6.5));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 2, 1, 1]).value, Value::Str("def".into()));
+        assert_eq!(read(&[3, 2, 2, 7, 4, 0, 1, 0, 2]).size_bits, 9 * 8, "three records of three characters");
     }
 
     /// The image comes before its dimension record too, and the number type it
@@ -1693,7 +1745,7 @@ mod tests {
     fn the_index_is_one_list_over_every_block_and_owns_no_bytes() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 8 + 7);
+        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 8 + 9);
         // The sixth entry is the first descriptor of the second block, and sits
         // on its bytes without covering them.
         let entry = e.node(&d, &[2, 5]).unwrap();
