@@ -149,7 +149,8 @@ pub fn diagram(t: &Template) -> Diagram {
         t,
         boxes: Vec::new(),
         defs: Vec::new(),
-        by_ptr: HashMap::new(),
+        by_text: HashMap::new(),
+        by_switch: HashMap::new(),
         by_path: HashMap::new(),
         edges: Vec::new(),
         named_drawn: 0,
@@ -409,6 +410,29 @@ fn at_text(ty: &Ty) -> Option<String> {
     }
 }
 
+/// What tells one type definition from another: its name and everything it
+/// says.
+///
+/// Two structures with the same key are the same type however many times the
+/// template built one, and are drawn once. Two with different keys are two
+/// types however alike they look, and are drawn twice. The name is in the key
+/// as well as the body because a format may give two shapes the same fields and
+/// different names, and a box is labelled by its name: sharing them would put
+/// one name on bytes the format calls something else.
+fn struct_key(sd: &Arc<StructDef>) -> String {
+    format!("{}\u{0}{}", sd.name, crate::template_text::ty_text(&Ty::Struct(sd.clone())))
+}
+
+/// The same question for a switch, which the IR does not put behind an `Arc`:
+/// what it reads and what each case picks.
+///
+/// Scoped to the box it was found in by the caller, since two switches in two
+/// different types are two choices even when they read alike; what this is for
+/// is the thirteen copies of one choice inside thirteen copies of one type.
+fn switch_key(sw: &Ty) -> String {
+    crate::template_text::ty_text(sw)
+}
+
 /// One expression a row holds, and what it decides about the row.
 struct Source {
     expr: Expr,
@@ -596,20 +620,33 @@ struct Walk<'a> {
     /// down the template is a second answer to a question already answered.
     /// None for a switch box, whose rows are cases rather than fields.
     defs: Vec<Option<StructDef>>,
-    /// Box index by the address of the `Arc<StructDef>` it was drawn from, so
-    /// one type read in nine places is one box.
+    /// Box index by what the type *says*, so one type written in nine places is
+    /// one box.
     ///
     /// This is what makes the picture the size of the format rather than the
-    /// size of the walk: an ELF declares one program-header type and reaches it
-    /// from four combinations of width and endianness, and drawn per reaching
-    /// it was four boxes saying the same thing. Filled in before the box's own
-    /// fields are walked, so a type holding itself stops.
+    /// size of the walk. An ID3 tag's `switch on id` names `TextFrame` in
+    /// thirteen cases and the template builds a fresh `StructDef` for each, so
+    /// a WAV carrying one drew ninety-six identical `TextFrame` boxes and a
+    /// hundred and four identical `switch on encoding` boxes beside them: a
+    /// column of the same picture over and over, which says nothing thirteen
+    /// times.
     ///
-    /// The address is only a key while the `Arc` is alive, which it is: the
-    /// template outlives this walk, and `defs` keeps a clone besides.
-    by_ptr: HashMap<usize, usize>,
-    /// Box index by the path it was first reached down, for the boxes an `Arc`
-    /// cannot key: a switch, which the IR does not put behind one.
+    /// Keyed on the structure's name and its rendering by
+    /// [`crate::template_text::ty_text`] rather than on the `Arc` it came in.
+    /// Pointer identity is the wrong question: it says whether two fields were
+    /// handed the same object, and what a reader wants to know is whether they
+    /// are the same type. The rendering answers that exactly, and it keeps
+    /// apart what should be kept apart — an ELF's four class-and-endianness
+    /// section headers print `u32 le` against `u32 be` and stay four boxes.
+    ///
+    /// Filled in before the box's own fields are walked, so a type holding
+    /// itself stops.
+    by_text: HashMap<String, usize>,
+    /// Box index by the choice a switch makes, within the type that makes it.
+    /// See [`switch_key`].
+    by_switch: HashMap<String, usize>,
+    /// Box index by the path it was first reached down, for the boxes neither
+    /// key reaches.
     by_path: HashMap<String, usize>,
     edges: Vec<DiagramEdge>,
     /// How many of the template's named types got a box.
@@ -634,7 +671,7 @@ impl<'a> Walk<'a> {
             // its names. One type, one box, whichever way the walk got here
             // first; the table's name for it is recorded all the same so a
             // second `Named` lookup is answered without another search.
-            if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
+            if let Some(&at) = self.by_text.get(&struct_key(&sd)) {
                 self.by_path.insert(name.to_string(), at);
                 self.named_drawn += 1;
                 return Some(at);
@@ -666,7 +703,7 @@ impl<'a> Walk<'a> {
     /// the reader who wants to know how they would get there.
     fn struct_box(&mut self, path: String, parent: Option<String>, sd: &Arc<StructDef>) -> usize {
         let here = self.boxes.len();
-        self.by_ptr.insert(Arc::as_ptr(sd) as usize, here);
+        self.by_text.insert(struct_key(sd), here);
         self.by_path.insert(path.clone(), here);
         let name = if sd.name.is_empty() { path.clone() } else { sd.name.clone() };
         let sd = (**sd).clone();
@@ -738,18 +775,28 @@ impl<'a> Walk<'a> {
         if let Some(sw) = as_switch(self.t, ty) {
             let sw = sw.clone();
             let name = format!("{owner}.{label}");
+            let on = match &sw {
+                Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
+                _ => String::new(),
+            };
+            // One choice, one box, however many of this type's fields make it.
+            // Scoped to the type it was found in: the same words read in two
+            // different structures are two choices, and what this collapses is
+            // the one choice a type makes, reached once per field that makes
+            // it.
+            let key = format!("{owner}\u{0}{}", switch_key(&sw));
+            if let Some(&at) = self.by_switch.get(&key) {
+                return Some((at, on));
+            }
             if let Some(&at) = self.by_path.get(&name) {
-                return Some((at, String::new()));
+                return Some((at, on));
             }
             if self.boxes.len() >= BOX_CAP {
                 self.capped += 1;
                 return None;
             }
             let to = self.switch_box(name, Some(owner.to_string()), &sw);
-            let on = match &sw {
-                Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
-                _ => String::new(),
-            };
+            self.by_switch.insert(key, to);
             return Some((to, on));
         }
         if let Some(target) = named_target(ty) {
@@ -761,7 +808,7 @@ impl<'a> Walk<'a> {
         let sd = as_struct(self.t, ty)?.clone();
         // The same structure reached a second time is the same box, whether it
         // was reached by another name or from another case.
-        if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
+        if let Some(&at) = self.by_text.get(&struct_key(&sd)) {
             return Some((at, String::new()));
         }
         let name = format!("{owner}.{label}");
@@ -1151,6 +1198,37 @@ mod tests {
         // The field the run stops on is the element's, not the container's, so
         // the arrow leaves the element's box.
         assert!(d.edges.iter().any(|e| e.from == (chunk, 0) && e.to == (0, Some(0)) && e.role == Role::Count));
+    }
+
+    #[test]
+    fn a_type_written_out_once_per_case_is_drawn_once() {
+        // ID3 builds a fresh `StructDef` for each of the thirteen cases that
+        // name a text frame, so nothing about the objects says they are one
+        // type. What they say does.
+        let Some(t) = crate::formats::builtin("id3") else { return };
+        let d = diagram(&t);
+        let frames: Vec<_> = d.types.iter().filter(|b| b.name == "TextFrame").collect();
+        assert_eq!(frames.len(), 1, "one text frame, not {}", frames.len());
+        // And the choice inside it, which used to be drawn once per copy.
+        let under = frames[0].path.clone();
+        let inside: Vec<_> =
+            d.types.iter().filter(|b| b.kind == BoxKind::Switch && b.parent.as_deref() == Some(&under)).collect();
+        assert_eq!(inside.len(), 1, "one choice inside it, not {}", inside.len());
+    }
+
+    #[test]
+    fn an_elf_keeps_the_headers_it_reads_two_ways_apart() {
+        // The opposite case, and the one sharing must not break: an ELF's four
+        // section headers are one shape read at two widths and two byte
+        // orders, and `u32 le` is not `u32 be`. Four boxes, and their rows say
+        // why.
+        let Some(t) = crate::formats::builtin("elf") else { return };
+        let d = diagram(&t);
+        let heads: Vec<_> = d.types.iter().filter(|b| b.name == "SectionHeader").collect();
+        assert!(heads.len() > 1, "the endianness variants were merged into {}", heads.len());
+        let spellings: std::collections::HashSet<String> =
+            heads.iter().map(|b| b.rows.iter().map(|r| r.type_text.clone()).collect::<Vec<_>>().join(",")).collect();
+        assert_eq!(spellings.len(), heads.len(), "two of them say the same thing and should have been shared");
     }
 
     #[test]
