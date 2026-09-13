@@ -64,6 +64,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     refused: null,
     decoded: false,
     space_root: false,
+    absent: false,
     value_bytes: spec.bytes,
     value_offset_bits: at * 8,
     read_as: null,

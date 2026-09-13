@@ -49,12 +49,42 @@ impl Evaluator {
             // The index of the element this sits in, which is what a field
             // whose type comes from a list read earlier needs.
             Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
+            // How far into the window this field starts, and how big that
+            // window is. Both in bytes, rounded down: see `Expr::Pos`.
+            Expr::Pos => {
+                let Some((offset, _)) = here else { return fail("nothing to measure from") };
+                let (start, _) = self.window_of(doc, at);
+                match offset.checked_sub(start) {
+                    Some(n) => (n / 8) as i128,
+                    // A field placed outside the window it was declared in,
+                    // which an `At` counted from the file can be. There is no
+                    // honest distance to answer with.
+                    None => return fail("this field starts before the window it sits in"),
+                }
+            }
+            Expr::WindowSize => {
+                let (start, end) = self.window_of(doc, at);
+                (end.saturating_sub(start) / 8) as i128
+            }
+            // How many elements a list holds, which is not how many bytes it
+            // took: see `Expr::LenOf`.
+            Expr::LenOf(name) => {
+                let Some(p) = self.find_field(at, name) else { return fail(format!("unknown field {name}")) };
+                self.resolve(doc, &p)?;
+                if !matches!(
+                    self.memo[&p].ty,
+                    Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+                ) {
+                    return fail(format!("{name} is not a list, so it has no count of elements"));
+                }
+                self.child_count(doc, &p)? as i128
+            }
             // An answer no field holds, worked out by running the container.
             // See `eval::deduced`.
             Expr::Deduced(what) => self.deduced_int(doc, at, *what, here)?,
             Expr::Elem { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, array)? {
                     Some(v) => v,
                     None => return fail(format!("{array} holds no number there")),
                 }
@@ -240,7 +270,7 @@ impl Evaluator {
             Expr::Within(field) => {
                 let field = field.clone();
                 let p = self.within_path(doc, at, &field)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, &field.join("."))? {
                     Some(v) => v,
                     None => return fail(format!("{} holds no number", field.join("."))),
                 }
@@ -249,7 +279,7 @@ impl Evaluator {
             // because a name reaches only a sibling.
             Expr::ElemWithin { path, index, field } => {
                 let p = self.elem_within_path(doc, at, path, index, field, here)?;
-                match self.node(doc, &p)?.value.as_int() {
+                match self.int_at(doc, &p, &path.join("."))? {
                     Some(v) => v,
                     None => return fail(format!("{} holds no number there", path.join("."))),
                 }
@@ -294,12 +324,62 @@ impl Evaluator {
             Expr::Less(a, b) => {
                 i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
             }
+            Expr::Eq(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? == self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Ne(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? != self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Le(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? <= self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Gt(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? > self.eval_expr_at(doc, at, b, here)?)
+            }
+            Expr::Ge(a, b) => {
+                i128::from(self.eval_expr_at(doc, at, a, here)? >= self.eval_expr_at(doc, at, b, here)?)
+            }
+            // Short-circuiting, and that is part of what they say rather than
+            // an optimisation: a guard in front of a read only guards while
+            // what it guards is left unread. See [`Expr::Both`].
+            Expr::Both(a, b) => match self.eval_expr_at(doc, at, a, here)? {
+                0 => 0,
+                _ => i128::from(self.eval_expr_at(doc, at, b, here)? != 0),
+            },
+            Expr::Either(a, b) => match self.eval_expr_at(doc, at, a, here)? {
+                0 => i128::from(self.eval_expr_at(doc, at, b, here)? != 0),
+                _ => 1,
+            },
+            Expr::Not(a) => i128::from(self.eval_expr_at(doc, at, a, here)? == 0),
+            // Only the branch taken is asked, so a question that cannot be
+            // answered in the other branch never comes up.
+            Expr::Cond { when, then, otherwise } => {
+                let taken = match self.eval_expr_at(doc, at, when, here)? {
+                    0 => otherwise,
+                    _ => then,
+                };
+                self.eval_expr_at(doc, at, taken, here)?
+            }
             Expr::Div(a, b) => {
                 let d = self.eval_expr_at(doc, at, b, here)?;
                 if d == 0 {
                     return fail("division by zero");
                 }
                 self.eval_expr_at(doc, at, a, here)? / d
+            }
+            // With the sign of the divisor, which is the rule the formats
+            // that use one were written against. `rem_euclid` is a third rule
+            // again, always non-negative, and would disagree here whenever
+            // the divisor is negative. See [`Expr::Mod`].
+            Expr::Mod(a, b) => {
+                let d = self.eval_expr_at(doc, at, b, here)?;
+                if d == 0 {
+                    return fail("division by zero");
+                }
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                // `i128::MIN % -1` overflows; the answer is nought either way.
+                let r = n.checked_rem(d).unwrap_or(0);
+                if r != 0 && (r < 0) != (d < 0) { r + d } else { r }
             }
             Expr::DivCeil(a, b) => {
                 let d = self.eval_expr_at(doc, at, b, here)?;
@@ -317,6 +397,47 @@ impl Evaluator {
                 }
                 i128::from(n.ilog2())
             }
+        })
+    }
+
+    /// The number the node at `path` holds, for an expression that reached it
+    /// by a path. `None` when it has a reading that is not a number, which
+    /// each caller words its own refusal for.
+    ///
+    /// A field the file did not write is refused here rather than answered:
+    /// see the note in [`Evaluator::lookup_bits`], which is the same trap one
+    /// name further out.
+    fn int_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<Option<i128>> {
+        let info = self.node(doc, path)?;
+        if info.absent {
+            return fail(format!("{what} is not in this file"));
+        }
+        Ok(info.value.as_int())
+    }
+
+    /// Where the window around the field at `at` starts and ends, in bits of
+    /// whatever space that field is read in. Bits because every offset here is
+    /// one; the two expressions built on this answer in bytes.
+    ///
+    /// The window is the nearest [`Ty::Sized`] above the field, which is the
+    /// node the evaluator recorded a `declared_size` on. Above rather than
+    /// including: a window declared *on* this field is the window its contents
+    /// sit in, and the field itself sits in the one around that, which is the
+    /// same stretch a Kaitai `_io` names at each level.
+    ///
+    /// In the same space only. A decoded stream's children count from zero in
+    /// the stream's own bytes, and an outer `Sized` counted in the file would
+    /// answer with offsets from another numbering entirely. Where the space
+    /// has no window in it, the window is the whole space.
+    fn window_of<S: Source>(&self, doc: &Document<S>, at: &[usize]) -> (u64, u64) {
+        let space = self.space_at(at);
+        let found = (0..at.len()).rev().find_map(|k| match self.memo.get(&at[..k]) {
+            Some(r) if r.space == space => r.declared_size.map(|n| (r.offset, r.offset + n)),
+            _ => None,
+        });
+        found.unwrap_or(match space {
+            0 => (0, doc.len_bits()),
+            other => (0, self.spaces.len_bits(other)),
         })
     }
 
@@ -1047,6 +1168,15 @@ impl Evaluator {
                         p.push(0);
                     }
                     let info = self.node(doc, &p)?;
+                    // A field the file did not write holds nothing, and
+                    // nothing is not zero. Left to read as the empty node it
+                    // is, a switch keyed on an absent field would quietly
+                    // take case 0 and a length would quietly be none, which
+                    // is the file being read wrongly with nothing said. See
+                    // [`NodeInfo::absent`].
+                    if info.absent {
+                        return fail(format!("{name} is not in this file"));
+                    }
                     // A field with no numeric reading can still be measured.
                     return Ok((info.value.as_int(), info.size_bits as i128));
                 }

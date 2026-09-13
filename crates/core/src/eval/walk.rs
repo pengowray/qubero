@@ -258,6 +258,30 @@ impl Evaluator {
             Until::End => false,
             Until::FieldBytes { field, bytes } => self.child_raw_bytes(doc, elem, field)? == *bytes,
             Until::FieldValue { field, value } => self.child_int(doc, elem, field)? == Some(*value),
+            // Asked of the element that was just read, from where its last
+            // field would be asking: a name reaches the element's fields, and
+            // the index reaches past the element to the run it is in. The
+            // frame is the element's end and the list's own limit, so what is
+            // left over is what is left of the list's container.
+            //
+            // An element that is not a structure has no last field to stand
+            // after, and is asked from itself. Standing a step inside it would
+            // put the question inside the element rather than after it, and
+            // for an element that is a list of its own would make the index
+            // that list's rather than the run's.
+            Until::Cond(e) => {
+                let e = e.clone();
+                let fields = match self.memo.get(elem).map(|r| r.ty.base()) {
+                    Some(Ty::Struct(s)) => Some(s.fields.len()),
+                    _ => None,
+                };
+                let mut frame = elem.to_vec();
+                if let Some(n) = fields {
+                    frame.push(n);
+                }
+                let room = self.memo.get(path).map(|r| (end, r.limit));
+                self.eval_expr_at(doc, &frame, &e, room)? != 0
+            }
         };
         let n = {
             let m = self.list_mut(path);

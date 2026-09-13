@@ -263,7 +263,7 @@ impl Evaluator {
                     Some(t) => ty = t,
                     None => return false,
                 },
-                Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } => ty = inner,
+                Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::When { inner, .. } => ty = inner,
                 other => return listing::plain(other) || matches!(other, Ty::Str { .. }),
             }
         }

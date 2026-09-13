@@ -2747,6 +2747,376 @@ fn a_logarithm_of_nothing_and_a_division_by_nothing_are_refused() {
     }
 }
 
+/// A scratch template with one byte in it, so an expression made of literals
+/// has somewhere to be asked from.
+fn nowhere() -> (Document<MemSource>, Evaluator) {
+    let t = T::structure("Root", vec![("n", T::u8()), ("after", T::u8())]);
+    let d = doc(&[7, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    ev.resolve(&d, &[]).unwrap();
+    (d, ev)
+}
+
+/// Kaitai's `%` and Python's: the answer takes the sign of the divisor, so
+/// `-5 % 3` is 1. The machine's own remainder would say -2, and a template
+/// written against a specification that says the first would read the file
+/// wrongly.
+#[test]
+fn a_modulo_takes_the_sign_of_the_divisor() {
+    let (d, mut ev) = nowhere();
+    let mut m = |a: i128, b: i128| ev.eval_expr(&d, &[1], &E::lit(a).modulo(E::lit(b))).unwrap();
+    assert_eq!(m(7, 3), 1);
+    assert_eq!(m(6, 3), 0);
+    assert_eq!(m(-5, 3), 1);
+    assert_eq!(m(5, -3), -1);
+    assert_eq!(m(-5, -3), -2);
+    // The padding idiom it replaces, as a check that the two agree.
+    assert_eq!(m(13, 4), 13 - (13 / 4) * 4);
+    // And nothing to divide by is refused, as it is for a division.
+    assert!(ev.eval_expr(&d, &[1], &E::field("n").modulo(E::lit(0))).is_err());
+}
+
+/// Each comparison answers one or nothing, so it is a number like any other.
+#[test]
+fn the_comparisons_answer_one_or_nothing() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    let cases = [
+        (l(3).equal_to(l(3)), 1),
+        (l(3).equal_to(l(4)), 0),
+        (l(3).not_equal(l(4)), 1),
+        (l(3).not_equal(l(3)), 0),
+        (l(3).less_than(l(4)), 1),
+        (l(3).less_or_equal(l(3)), 1),
+        (l(4).less_or_equal(l(3)), 0),
+        (l(4).greater_than(l(3)), 1),
+        (l(3).greater_than(l(3)), 0),
+        (l(3).greater_or_equal(l(3)), 1),
+        (l(2).greater_or_equal(l(3)), 0),
+        // Signs are the arithmetic's, not the bytes'.
+        (l(-1).less_than(l(0)), 1),
+    ];
+    for (e, want) in cases {
+        assert_eq!(ev.eval_expr(&d, &[1], &e).unwrap(), want, "{e:?}");
+    }
+    // The field a comparison names is read, and the answer is about its value.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::field("n").equal_to(l(7))).unwrap(), 1);
+}
+
+/// `and` and `or` answer a truth, and leave the far side alone once the near
+/// side has settled it: a guard is only a guard while what it guards stays
+/// unread.
+#[test]
+fn the_boolean_operators_stop_once_the_answer_is_settled() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    // Something no reading can answer, to stand where the far side is.
+    let bad = || l(1).div(l(0));
+    assert_eq!(ev.eval_expr(&d, &[1], &l(1).both(l(2))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(1).both(l(0))).unwrap(), 0);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).both(bad())).unwrap(), 0);
+    assert!(ev.eval_expr(&d, &[1], &l(1).both(bad())).is_err());
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).either(l(9))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).either(l(0))).unwrap(), 0);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(5).either(bad())).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).negate()).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(5).negate()).unwrap(), 0);
+    // A truth, not a value: the value-or answers 12 where this answers 1.
+    assert_eq!(ev.eval_expr(&d, &[1], &l(12).either(l(4))).unwrap(), 1);
+    assert_eq!(ev.eval_expr(&d, &[1], &l(12).or(l(4))).unwrap(), 12);
+}
+
+/// Only the branch taken is worked out, and a `then` of nothing is still the
+/// answer, which is where the older `Less` and `Or` pairing went wrong.
+#[test]
+fn only_the_branch_a_condition_takes_is_worked_out() {
+    let (d, mut ev) = nowhere();
+    let l = E::lit;
+    let bad = || l(1).div(l(0));
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(1), l(5), bad())).unwrap(), 5);
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(0), bad(), l(9))).unwrap(), 9);
+    // Zero is an answer, not a fall-through.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(l(1), l(0), l(9))).unwrap(), 0);
+    // Which is what the pair it replaces gets wrong: `or` takes its right
+    // side whenever the left comes to nothing.
+    assert_eq!(ev.eval_expr(&d, &[1], &l(0).or(l(9))).unwrap(), 9);
+    // The condition itself is read from the file like anything else.
+    assert_eq!(ev.eval_expr(&d, &[1], &E::cond(E::field("n").equal_to(l(7)), l(1), l(2))).unwrap(), 1);
+    // A condition that cannot be worked out is a failure, not a branch.
+    assert!(ev.eval_expr(&d, &[1], &E::cond(bad(), l(1), l(2))).is_err());
+}
+
+/// The condition decides which branch a field's shape came from, so the panel
+/// names the field the condition read and the fields of the branch that was
+/// taken, and nothing from the branch that was not.
+#[test]
+fn a_condition_names_the_branch_it_took_and_not_the_other() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("wide", T::u8()),
+            ("short", T::u8()),
+            ("long", T::u8()),
+            ("body", T::bytes(E::cond(E::field("wide"), E::field("long"), E::field("short")))),
+        ],
+    );
+    let d = doc(&[1, 2, 4, 0, 0, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[3]).unwrap().size_bits, 4 * 8);
+    let origins = ev.origins(&d, &[3]).unwrap();
+    let labels: Vec<&str> = origins.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(labels, vec!["wide", "long"]);
+    // Written out as the template writes it, with both branches shown: a
+    // reader checking the answer needs the case that did not come up.
+    let rel = ev.relations(&d, &[3]).unwrap();
+    assert_eq!(rel[0].written, "wide ? long : short");
+    assert_eq!(rel[0].substituted, "1 ? 4 : 2");
+    assert_eq!(rel[0].result, "4");
+}
+
+/// Where a field starts is counted from the window around it rather than from
+/// the file, in bytes, as everything else here that measures a distance is.
+#[test]
+fn a_position_is_counted_in_bytes_from_the_window_it_sits_in() {
+    let inner = T::structure(
+        "Inner",
+        vec![("a", T::u16(Big)), ("here", T::computed(E::Pos)), ("room", T::computed(E::WindowSize))],
+    );
+    let t = T::structure(
+        "Root",
+        vec![
+            ("tag", T::u8()),
+            ("body", T::sized(E::lit(6), inner)),
+            ("top", T::computed(E::Pos)),
+            ("whole", T::computed(E::WindowSize)),
+        ],
+    );
+    let d = doc(&[9, 0, 1, 0, 0, 0, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // Two bytes into a window that starts one byte into the file, and the
+    // window is six bytes: neither number counts the byte in front of it.
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value.as_int(), Some(2));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value.as_int(), Some(6));
+    // Outside any window the file is the window, so the position is the
+    // field's own offset and the size is the file's.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(7));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(8));
+    assert_eq!(write_expr(&E::Pos).as_deref(), Some("pos"));
+    assert_eq!(write_expr(&E::WindowSize).as_deref(), Some("size of window"));
+
+    // A field partway through a byte is in that byte, so the answer rounds
+    // down: four bits in is still byte nought. `BitsOf` is what counts bits.
+    let packed = T::structure(
+        "Root",
+        vec![
+            ("nibble", T::UInt { bits: 4, endian: Big }),
+            ("here", T::computed(E::Pos)),
+            ("rest", T::UInt { bits: 12, endian: Big }),
+            ("later", T::computed(E::Pos)),
+        ],
+    );
+    let mut ev = Evaluator::new(Template::new("t", packed));
+    assert_eq!(ev.node(&doc(&[0xab, 0xcd]), &[1]).unwrap().value.as_int(), Some(0));
+    assert_eq!(ev.node(&doc(&[0xab, 0xcd]), &[3]).unwrap().value.as_int(), Some(2));
+}
+
+/// How many elements a list holds is a different number from how many bytes
+/// it took, and only a list has one at all.
+#[test]
+fn a_count_of_elements_is_not_a_count_of_bytes() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("n", T::u8()),
+            ("items", T::array(T::u16(Big), E::field("n"))),
+            ("count", T::computed(E::len_of("items"))),
+            ("bytes", T::computed(E::SizeOf("items".into()))),
+        ],
+    );
+    let d = doc(&[3, 0, 1, 0, 2, 0, 3]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(3));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value.as_int(), Some(6));
+    assert_eq!(write_expr(&E::len_of("items")).as_deref(), Some("count of items"));
+
+    // A run that stops at the end of its window is counted the same way.
+    let t2 = T::structure(
+        "Root",
+        vec![
+            ("body", T::sized(E::lit(4), T::repeat(T::u16(Big), Until::End))),
+            ("count", T::computed(E::len_of("body"))),
+        ],
+    );
+    assert_eq!(Evaluator::new(Template::new("t", t2)).node(&doc(&[0; 4]), &[1]).unwrap().value.as_int(), Some(2));
+
+    // Something that is not a list has no element count, and is told so
+    // rather than answered with its length.
+    let t3 = T::structure("Root", vec![("n", T::u8()), ("count", T::computed(E::len_of("n")))]);
+    let mut ev3 = Evaluator::new(Template::new("t", t3));
+    let e = ev3.node(&doc(&[3]), &[1]).unwrap_err();
+    assert!(format!("{e:?}").contains("not a list"), "{e:?}");
+    // And a name nothing declared is an error too.
+    let t4 = T::structure("Root", vec![("n", T::u8()), ("count", T::computed(E::len_of("nowhere")))]);
+    assert!(Evaluator::new(Template::new("t", t4)).node(&doc(&[3]), &[1]).is_err());
+}
+
+/// A run that ends on a question rather than on one field holding one fixed
+/// thing. The element that answers is part of the run.
+#[test]
+fn a_run_can_stop_on_a_question_about_its_element() {
+    let rec = || T::structure("Rec", vec![("tag", T::u8()), ("len", T::u8())]);
+    let ends_empty = || Until::Cond(E::field("len").equal_to(E::lit(0)));
+
+    // Three records, the last of them empty, and two bytes after the run that
+    // belong to nothing.
+    let t = T::structure("Root", vec![("items", T::repeat(rec(), ends_empty()))]);
+    let d = doc(&[1, 3, 2, 4, 3, 0, 9, 9]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 3);
+    assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 6 * 8);
+
+    // A file that stops before the element that would have ended the run is
+    // read as far as it goes, the same as a run told to read to the end.
+    let t2 = T::structure("Root", vec![("items", T::repeat(rec(), ends_empty()))]);
+    let mut ev2 = Evaluator::new(Template::new("t", t2));
+    assert_eq!(ev2.node(&doc(&[1, 3, 2, 4]), &[0]).unwrap().child_count, 2);
+}
+
+/// The index in the question is the element's place in the run, and what is
+/// left over is measured in the list's own container once the element has
+/// been read.
+#[test]
+fn a_stopping_question_knows_the_index_and_the_room_left() {
+    // Stop after the element at index 1, which is two of them.
+    let t = T::structure("Root", vec![("items", T::repeat(T::u8(), Until::Cond(E::Idx.equal_to(E::lit(1)))))]);
+    let d = doc(&[7, 7, 7, 7]);
+    assert_eq!(Evaluator::new(Template::new("t", t)).node(&d, &[0]).unwrap().child_count, 2);
+
+    // Stop once there is no room for another two-byte element: a window of
+    // five bytes holds two of them and a byte nobody reads.
+    let run = T::repeat(T::u16(Big), Until::Cond(E::Remaining.less_than(E::lit(2))));
+    let t2 = T::structure("Root", vec![("body", T::sized(E::lit(5), run))]);
+    let mut ev = Evaluator::new(Template::new("t", t2));
+    assert_eq!(ev.node(&d5(), &[0]).unwrap().child_count, 2);
+    assert_eq!(ev.node(&d5(), &[0, 1]).unwrap().offset_bits, 2 * 8);
+}
+
+fn d5() -> Document<MemSource> {
+    doc(&[0, 1, 0, 2, 0])
+}
+
+fn optional_record() -> Ty {
+    T::structure(
+        "Root",
+        vec![
+            ("flags", T::u8()),
+            ("extra", T::when(E::field("flags").bit(0), T::u16(Big))),
+            ("tail", T::u8()),
+        ],
+    )
+}
+
+/// A field the file wrote is read as itself, with nothing in the type column
+/// about the question that let it in.
+#[test]
+fn an_optional_field_the_file_wrote_reads_as_itself() {
+    let d = doc(&[1, 0, 9, 7]);
+    let mut ev = Evaluator::new(Template::new("t", optional_record()));
+    let n = ev.node(&d, &[1]).unwrap();
+    assert_eq!(n.size_bits, 16);
+    assert_eq!(n.type_name, "u16 be");
+    assert_eq!(n.value.as_int(), Some(9));
+    assert!(!n.absent);
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, 3 * 8);
+}
+
+/// One the file left out is absent: no bytes, nothing inside, and a type
+/// column that says the field may not be here rather than one that shows an
+/// empty structure. Nothing after it moves.
+#[test]
+fn an_optional_field_the_file_left_out_is_absent_and_not_empty() {
+    let d = doc(&[0, 9, 7]);
+    let mut ev = Evaluator::new(Template::new("t", optional_record()));
+    let n = ev.node(&d, &[1]).unwrap();
+    assert_eq!(n.size_bits, 0);
+    assert!(n.absent);
+    assert_eq!(n.type_name, "optional u16 be");
+    assert_eq!(n.child_count, 0);
+    assert!(!n.composite);
+    // The field after it starts where it would have, and reads the bytes the
+    // absent one did not take.
+    let after = ev.node(&d, &[2]).unwrap();
+    assert_eq!((after.offset_bits, after.value.as_int()), (8, Some(9)));
+
+    // The question is a connection like any other: the reader is pointed at
+    // the field that decided it, and shown the working.
+    let origins = ev.origins(&d, &[1]).unwrap();
+    let labels: Vec<&str> = origins.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(labels, vec!["flags"]);
+    let rel = ev.relations(&d, &[1]).unwrap();
+    assert_eq!(rel[0].written, "bit(flags, 0)");
+    assert_eq!(rel[0].substituted, "bit(0, 0)");
+}
+
+/// A field that is not in the file has no number, and is not nought either.
+/// Reading one as nought would let a switch quietly take case 0 and a length
+/// quietly be none, with nothing said about either.
+#[test]
+fn an_absent_field_has_no_number_rather_than_nought() {
+    let t = |cond: Expr| {
+        T::structure(
+            "Root",
+            vec![
+                ("flags", T::u8()),
+                ("extra", T::when(E::field("flags"), T::u8())),
+                ("body", T::bytes(cond)),
+            ],
+        )
+    };
+    // Naming it outright is refused, and so is asking how long it is.
+    let d = doc(&[0, 1, 2, 3]);
+    for e in [E::field("extra"), E::SizeOf("extra".into())] {
+        let mut ev = Evaluator::new(Template::new("t", t(e)));
+        let err = ev.node(&d, &[2]).unwrap_err();
+        assert!(format!("{err:?}").contains("not in this file"), "{err:?}");
+    }
+    // Asking whether it is there first is how a template reads one: the
+    // branch that names it is never taken when it is not.
+    let guarded = E::cond(E::field("flags"), E::field("extra"), E::lit(2));
+    let mut ev = Evaluator::new(Template::new("t", t(guarded.clone())));
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 2 * 8);
+    // And with the flag set it reads the field, which is there.
+    let d2 = doc(&[1, 3, 0, 0, 0]);
+    assert_eq!(Evaluator::new(Template::new("t", t(guarded))).node(&d2, &[2]).unwrap().size_bits, 3 * 8);
+}
+
+/// A whole structure can be the optional thing, and an absent one has no rows
+/// at all rather than a heading with nothing under it.
+#[test]
+fn an_absent_structure_has_no_rows_under_it() {
+    let inner = || T::structure("Inner", vec![("a", T::u8()), ("b", T::u8())]);
+    let t = |bytes: &[u8]| {
+        let ty = T::structure(
+            "Root",
+            vec![("n", T::u8()), ("body", T::when(E::field("n"), inner())), ("tail", T::u8())],
+        );
+        (doc(bytes), Evaluator::new(Template::new("t", ty)))
+    };
+    let (d, mut ev) = t(&[0, 5]);
+    let n = ev.node(&d, &[1]).unwrap();
+    assert!(n.absent);
+    assert_eq!((n.child_count, n.size_bits), (0, 0));
+    assert_eq!(n.type_name, "optional Inner");
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(5));
+    // And present, it is an ordinary structure again.
+    let (d2, mut ev2) = t(&[1, 2, 3, 5]);
+    let n2 = ev2.node(&d2, &[1]).unwrap();
+    assert!(!n2.absent);
+    assert_eq!((n2.child_count, n2.size_bits), (2, 16));
+    assert_eq!(n2.type_name, "Inner");
+    assert_eq!(ev2.node(&d2, &[2]).unwrap().value.as_int(), Some(5));
+}
+
 #[test]
 fn a_shift_of_more_than_a_word_is_refused_either_way() {
     let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);
@@ -3591,6 +3961,45 @@ fn a_composite_contributes_only_what_its_children_leave_over() {
     assert_eq!(spent(&out, "uint", "u32 be"), (32, 1));
     assert_eq!(out.unmapped_bits, 32);
     assert_eq!(out.covered_bits + out.unmapped_bits, d.len_bits());
+}
+
+/// The prose a format carries about a field reaches the node, and where a
+/// field has none, the structure it is speaks for it.
+#[test]
+fn a_node_carries_what_the_format_says_about_it() {
+    let chunk = || {
+        T::structure("Chunk", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))])
+            .doc("A length and the bytes it counts.")
+            .field_doc("len", "How many bytes of body follow.")
+    };
+    let t = Template::new("t", T::structure("Root", vec![("first", chunk()), ("second", chunk())]));
+    let d = doc(&[2, 7, 8, 1, 9]);
+    let mut ev = Evaluator::new(t);
+
+    // The declaration's own prose, on the field that has it.
+    assert_eq!(ev.node(&d, &[0, 0]).unwrap().doc.as_deref(), Some("How many bytes of body follow."));
+    // A field with none of its own: nothing, since `body` is a run of bytes
+    // and no structure speaks for it.
+    assert_eq!(ev.node(&d, &[0, 1]).unwrap().doc, None);
+    // The structure's own prose, on a field declared as that structure.
+    assert_eq!(ev.node(&d, &[1]).unwrap().doc.as_deref(), Some("A length and the bytes it counts."));
+    // A structure nobody wrote prose for says nothing.
+    assert_eq!(ev.node(&d, &[]).unwrap().doc, None);
+}
+
+/// What an enum value means is a fact about the value, kept beside it in the
+/// definition rather than folded into the field's own prose.
+#[test]
+fn an_enum_value_keeps_its_own_prose() {
+    let ty = T::enumeration("Method", T::u8(), &[(0, "stored"), (8, "deflate")])
+        .enum_doc(0, "The bytes as they are, with no compression at all.");
+    let Ty::Enum { def, .. } = &ty else { panic!("not an enum") };
+    assert_eq!(def.doc_of(0), Some("The bytes as they are, with no compression at all."));
+    assert_eq!(def.doc_of(8), None);
+    // It is the value's, not the field's: the node goes on saying nothing.
+    let t = Template::new("t", T::structure("Root", vec![("method", ty.clone())]));
+    let d = doc(&[0]);
+    assert_eq!(Evaluator::new(t).node(&d, &[0]).unwrap().doc, None);
 }
 
 /// A tagged search reaches a list that lives behind an address, and finds the

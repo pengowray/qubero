@@ -349,7 +349,9 @@ impl Evaluator {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
                 Self::places(elem, named)
             }
-            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => Self::places(inner, named),
+            Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => {
+                Self::places(inner, named)
+            }
             // A stream is walked into only when something inside it points
             // back at the file, which is exactly the RNTuple case: the anchor
             // is compressed and the envelopes it names are at file offsets.

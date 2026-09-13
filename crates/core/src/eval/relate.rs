@@ -39,18 +39,32 @@ pub struct Relation {
 /// written. Zero is a leaf or a call, which never needs any.
 fn prec(e: &Expr) -> u32 {
     match e {
-        Expr::Or(..) => 1,
-        // Between `or` and a comparison, as it is in every language that
-        // writes these: `a & b < c` is the comparison of `a & b`, and a mask
-        // written beside an addition binds looser than the addition.
-        Expr::And(..) => 2,
-        Expr::Less(..) => 3,
-        Expr::Shl(..) | Expr::Shr(..) => 4,
-        Expr::Add(..) | Expr::Sub(..) => 5,
-        Expr::Mul(..) | Expr::Div(..) => 6,
+        // A question about a question, so everything in it binds tighter.
+        Expr::Cond { .. } => 1,
+        // The value-or, which takes its right side only when the left comes to
+        // nothing. Loosest of the binary operators, which is where it was
+        // before the boolean set arrived beside it.
+        Expr::Or(..) => 2,
+        Expr::Either(..) => 3,
+        Expr::Both(..) => 4,
+        Expr::Not(..) => 5,
+        // Between the booleans and a comparison, as it is in every language
+        // that writes these: `a & b < c` is the comparison of `a & b`, and a
+        // mask written beside an addition binds looser than the addition.
+        Expr::And(..) => 6,
+        Expr::Less(..) | Expr::Eq(..) | Expr::Ne(..) | Expr::Le(..) | Expr::Gt(..) | Expr::Ge(..) => 7,
+        Expr::Shl(..) | Expr::Shr(..) => 8,
+        Expr::Add(..) | Expr::Sub(..) => 9,
+        Expr::Mul(..) | Expr::Div(..) | Expr::Mod(..) => 10,
         _ => 0,
     }
 }
+
+/// An outer precedence no operator reaches, so that whatever is written at it
+/// is bracketed unless it is a leaf. What `not` writes its operand at: `not a
+/// == b` has two readings and only one of them is this one, and a bracket is
+/// cheaper than being right for the wrong reason.
+const ALWAYS: u32 = u32::MAX;
 
 impl Evaluator {
     /// The relationships behind the field at `path`: what decided its length,
@@ -107,6 +121,13 @@ impl Evaluator {
                 // the `At` parent handled above.
                 Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
+                // Whether the field is here, written out like the question a
+                // switch asks: `flags & 8` reading as `12 & 8 = 8` is the
+                // whole of why a row is there or is not.
+                Ty::When { cond, inner } => {
+                    self.relation(doc, path, &cond, Role::Type, None, &mut out);
+                    ty = *inner;
+                }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.relation(doc, path, &on, Role::Type, None, &mut out);
                     break;
@@ -202,8 +223,34 @@ impl Evaluator {
         };
         let s = match e {
             Expr::Lit(_) => write_at(e, outer),
-            Expr::Or(a, b) => two(a, b, "or", self, named)?.map(wrap),
+            Expr::Or(a, b) => two(a, b, "or else", self, named)?.map(wrap),
+            Expr::Either(a, b) => two(a, b, "or", self, named)?.map(wrap),
+            Expr::Both(a, b) => two(a, b, "and", self, named)?.map(wrap),
             Expr::Less(a, b) => two(a, b, "<", self, named)?.map(wrap),
+            Expr::Eq(a, b) => two(a, b, "==", self, named)?.map(wrap),
+            Expr::Ne(a, b) => two(a, b, "!=", self, named)?.map(wrap),
+            Expr::Le(a, b) => two(a, b, "<=", self, named)?.map(wrap),
+            Expr::Gt(a, b) => two(a, b, ">", self, named)?.map(wrap),
+            Expr::Ge(a, b) => two(a, b, ">=", self, named)?.map(wrap),
+            Expr::Mod(a, b) => two(a, b, "%", self, named)?.map(wrap),
+            Expr::Not(a) => match self.substitute(doc, at, a, ALWAYS, here, named)? {
+                Some(inner) => Some(wrap(format!("not {inner}"))),
+                None => return Ok(None),
+            },
+            // Both branches, whichever one was taken. Writing out only the
+            // branch the condition chose would say the reader was shown the
+            // whole question, and leave them unable to check the answer
+            // against the case that did not come up.
+            Expr::Cond { when, then, otherwise } => {
+                let (Some(c), Some(t), Some(f)) = (
+                    self.substitute(doc, at, when, here_prec + 1, here, named)?,
+                    self.substitute(doc, at, then, here_prec + 1, here, named)?,
+                    self.substitute(doc, at, otherwise, here_prec + 1, here, named)?,
+                ) else {
+                    return Ok(None);
+                };
+                Some(wrap(format!("{c} ? {t} : {f}")))
+            }
             Expr::Shl(a, b) => two(a, b, "<<", self, named)?.map(wrap),
             Expr::Shr(a, b) => two(a, b, ">>", self, named)?.map(wrap),
             Expr::And(a, b) => two(a, b, "&", self, named)?.map(wrap),
@@ -320,6 +367,14 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::SizeOf(n) => format!("sizeof({n})"),
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
+        // Where this field starts, counted in the window around it rather than
+        // in the file, which is what the two words say: `pos` is a position
+        // and `size of window` names what it is a position in.
+        Expr::Pos => "pos".to_string(),
+        Expr::WindowSize => "size of window".to_string(),
+        // Not `sizeof(x)`, which is the same list measured in bytes. A reader
+        // seeing both beside each other has to be able to tell them apart.
+        Expr::LenOf(n) => format!("count of {n}"),
         // Nothing to point at: the answer comes from running the file, not
         // from a field a reader could go and look at.
         Expr::Deduced(_) => return None,
@@ -355,8 +410,31 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
             let array = match &t.array { Some(array) => write_expr(array)?, None => "earlier".into() };
             format!("{array}[{key} = {}]{field}", t.tag.written()?)
         }
-        Expr::Or(a, b) => two(a, b, "or")?,
+        // "or else" rather than "or", which the boolean one below is. The two
+        // answer different things and there is one English word between them:
+        // `flags or 4` is 12 under this and 1 under the other, and a reader
+        // shown the same word for both cannot tell which they are looking at.
+        // This is the fallback: "the length in this record, or else the last
+        // record that had one".
+        Expr::Or(a, b) => two(a, b, "or else")?,
+        Expr::Either(a, b) => two(a, b, "or")?,
+        Expr::Both(a, b) => two(a, b, "and")?,
         Expr::Less(a, b) => two(a, b, "<")?,
+        Expr::Eq(a, b) => two(a, b, "==")?,
+        Expr::Ne(a, b) => two(a, b, "!=")?,
+        Expr::Le(a, b) => two(a, b, "<=")?,
+        Expr::Gt(a, b) => two(a, b, ">")?,
+        Expr::Ge(a, b) => two(a, b, ">=")?,
+        Expr::Mod(a, b) => two(a, b, "%")?,
+        // Bracketed unless what it negates is a leaf: `not a == b` reads two
+        // ways and only one of them is what this means.
+        Expr::Not(a) => wrap(format!("not {}", write_at(a, ALWAYS)?)),
+        Expr::Cond { when, then, otherwise } => wrap(format!(
+            "{} ? {} : {}",
+            write_at(when, here + 1)?,
+            write_at(then, here + 1)?,
+            write_at(otherwise, here + 1)?
+        )),
         Expr::Shl(a, b) => two(a, b, "<<")?,
         Expr::Shr(a, b) => two(a, b, ">>")?,
         Expr::And(a, b) => two(a, b, "&")?,
@@ -366,7 +444,7 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::Div(a, b) => two(a, b, "/")?,
         Expr::Min(a, b) => format!("min({}, {})", write_at(a, 0)?, write_at(b, 0)?),
         Expr::Max(a, b) => format!("max({}, {})", write_at(a, 0)?, write_at(b, 0)?),
-        Expr::DivCeil(a, b) => format!("ceil({} / {})", write_at(a, 6)?, write_at(b, 7)?),
+        Expr::DivCeil(a, b) => format!("ceil({} / {})", write_at(a, 10)?, write_at(b, 11)?),
         Expr::Log2(a) => format!("log2({})", write_at(a, 0)?),
         Expr::StartOf(a) => format!("start of {}", write_at(a, 0)?),
         Expr::PadTo { n, align } => format!("align({}, {align})", write_at(n, 0)?),
@@ -420,6 +498,80 @@ mod tests {
         // read as a field beside the element.
         let product = E::placer(E::field("count").mul(E::field("width")));
         assert_eq!(write_expr(&product).as_deref(), Some("descriptor.(count * width)"));
+    }
+
+    #[test]
+    fn the_arithmetic_and_the_comparisons_read_as_they_are_written() {
+        let a = || E::field("a");
+        let b = || E::field("b");
+        assert_eq!(write_expr(&a().modulo(E::lit(4))).as_deref(), Some("a % 4"));
+        assert_eq!(write_expr(&a().equal_to(b())).as_deref(), Some("a == b"));
+        assert_eq!(write_expr(&a().not_equal(b())).as_deref(), Some("a != b"));
+        assert_eq!(write_expr(&a().less_or_equal(b())).as_deref(), Some("a <= b"));
+        assert_eq!(write_expr(&a().greater_than(b())).as_deref(), Some("a > b"));
+        assert_eq!(write_expr(&a().greater_or_equal(b())).as_deref(), Some("a >= b"));
+        // A modulo binds as tightly as the division it is written beside.
+        assert_eq!(write_expr(&a().add(b()).modulo(E::lit(4))).as_deref(), Some("(a + b) % 4"));
+        assert_eq!(write_expr(&a().modulo(E::lit(4)).add(b())).as_deref(), Some("a % 4 + b"));
+        // A comparison binds looser than the arithmetic in it.
+        assert_eq!(write_expr(&a().add(E::lit(1)).equal_to(b())).as_deref(), Some("a + 1 == b"));
+    }
+
+    /// Two operators that both mean something like "or", so they cannot both
+    /// be written "or": one answers a truth and the other answers a value.
+    #[test]
+    fn the_two_kinds_of_or_are_told_apart_in_words() {
+        let a = || E::field("a");
+        let b = || E::field("b");
+        assert_eq!(write_expr(&a().either(b())).as_deref(), Some("a or b"));
+        assert_eq!(write_expr(&a().or(b())).as_deref(), Some("a or else b"));
+        assert_eq!(write_expr(&a().both(b())).as_deref(), Some("a and b"));
+        // A comparison inside a boolean needs no brackets; a value-or does,
+        // since the reader would otherwise have to know which binds tighter.
+        assert_eq!(
+            write_expr(&a().equal_to(E::lit(1)).both(b().greater_than(E::lit(2)))).as_deref(),
+            Some("a == 1 and b > 2")
+        );
+        assert_eq!(write_expr(&a().both(b().or(E::lit(3)))).as_deref(), Some("a and (b or else 3)"));
+        // `or` is looser than `and`, as it is everywhere these words are used.
+        assert_eq!(
+            write_expr(&a().either(b().both(E::lit(1)))).as_deref(),
+            Some("a or b and 1")
+        );
+        assert_eq!(
+            write_expr(&a().either(b()).both(E::lit(1))).as_deref(),
+            Some("(a or b) and 1")
+        );
+    }
+
+    /// `not a == b` has two readings, so it is never written: what is negated
+    /// is bracketed unless it is a single name or number.
+    #[test]
+    fn a_negation_brackets_whatever_is_not_a_leaf() {
+        assert_eq!(write_expr(&E::field("a").negate()).as_deref(), Some("not a"));
+        assert_eq!(write_expr(&E::Remaining.negate()).as_deref(), Some("not remaining"));
+        assert_eq!(
+            write_expr(&E::field("a").equal_to(E::lit(1)).negate()).as_deref(),
+            Some("not (a == 1)")
+        );
+        assert_eq!(
+            write_expr(&E::field("a").negate().both(E::field("b"))).as_deref(),
+            Some("not a and b")
+        );
+    }
+
+    #[test]
+    fn a_ternary_reads_as_a_ternary_and_nests_in_brackets() {
+        let e = E::cond(E::field("wide"), E::field("long"), E::field("short"));
+        assert_eq!(write_expr(&e).as_deref(), Some("wide ? long : short"));
+        // Inside arithmetic it is one term.
+        assert_eq!(write_expr(&e.clone().add(E::lit(1))).as_deref(), Some("(wide ? long : short) + 1"));
+        // And a ternary inside a ternary is bracketed on either side, so
+        // there is nothing to work out about which colon belongs to which.
+        let nested = E::cond(E::field("a"), e.clone(), E::lit(0));
+        assert_eq!(write_expr(&nested).as_deref(), Some("a ? (wide ? long : short) : 0"));
+        let tail = E::cond(E::field("a"), E::lit(0), e);
+        assert_eq!(write_expr(&tail).as_deref(), Some("a ? 0 : (wide ? long : short)"));
     }
 
     #[test]
