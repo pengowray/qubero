@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| HDF4 references across descriptor blocks: one `Ty::Gather` index over every block's table, searched by `Tagged`, so every group and ref in every sample opens (one vgroup member names ref 0, which nothing can have). Also: members kept as special elements found under the `0x4000` tag, version 4 vgroups read in the library's order (they were read with the vdata header layout), labels/units/formats per dimension, by-field vdata as columns. | 290dd24, 742748d |
 | ROOT RNTuple: header and footer envelopes as frames (fields named, columns typed), each cluster group followed to its page list, every page placed with its checksum, and page values by column type where the header is stored. Matches uproot 5.7.6 on both samples. A tree walk names 25,113 of 25,318 bytes of `staff`, up from 1,296 (the hex view does not show it; see ROOT below). | 48f2d4b, a3fadfe, 3801d23 |
 | miniSEED samples: a side reader (`mseed_steim.rs`) undoes Steim1/Steim2 differences, decodes the fixed-width encodings, CDSN and SRO, checks the reverse integration constant, and shows a samples panel. Exact match with obspy on all 22 records of 2.4 files; miniSEED 3 matches obspy's reading of libmseed's 2.x twins. | 54dca11, caef124 |
 | MAT subsystem data: placed from the header offset, read as its own small MAT file, the `FileWrapper__` table's classes, objects and properties labelled by name, and each `MCOS` variable's object reference. Sparse arrays read as columns with a computed `row` per entry. A VAX level 4 file is recognised (it was not). Two BSD-3 samples from foreverallama/matio. | 007fbe9, 19c5cc1, 845c824 |
@@ -307,23 +308,25 @@ the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
 Vdata rows, scientific datasets (rank 1 to 4, byte order from the number
 type, scales, max and min), raster images by interlace, palettes, vgroups
 with their members, and special elements (linked blocks, compressed) all read
-now (see Closed). Six samples, cross-checked with pyhdf. Left:
+now, and references are found across every descriptor block (see Closed).
+Seven samples, cross-checked with pyhdf. Left:
 
-- **A reference is found only inside its own descriptor block.** Each block
-  reads its table a second time as a zero-width index keyed `tag * 65536 +
-  ref`, and a `Tagged` lookup searches one list, so a reference into another
-  block falls back to bytes: `ntcheck.hdf` opens 7 of 13 groups, `tvattr.hdf`
-  3 of 19 refs. Chaining the blocks' indexes into one list is the fix.
-- By-field vdata interlace stays bytes; compressed rasters name their
-  compression and stay bytes.
-- Labels, units and formats (704/705/706) have no sample and no fixture.
+- Compressed rasters name their compression and stay bytes. `tdata.hdf`'s
+  three datasets keep their values in linked blocks, which are placed but
+  not joined into one run (the stitched-space gap).
 - No HDF-EOS2 granule: hdfeos.org's zoo now needs an Earthdata login.
+- The root's `tables` and `index` are hidden machinery rows; how the web
+  listing shows them is unchecked. The index table is placed with
+  `Anchor::SelfAligned(1)`, which says "at its own start" only by accident;
+  an `Anchor::Own` would say it plainly.
+- `dimensions` is the hidden 701 record elsewhere and the visible list of
+  per-dimension strings in `Hdf4SdStrings`; one of them wants renaming.
 - The type column reads `switch[][]` for a shaped array whose element type is
   decided at read time; `f32 be[10][10]` would need a list node to report its
   resolved element type, and would improve HDF5, FITS and NPY too.
-- `hdf4.rs` is about 1,300 lines; the standalone records (number type,
+- `hdf4.rs` is about 1,750 lines; the standalone records (number type,
   dimensions, palette, strings, vgroup, special element) would split out as
-  `hdf4_records.rs`.
+  `hdf4_records.rs`. Due.
 
 ### HDF5
 
