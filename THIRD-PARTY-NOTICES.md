@@ -400,7 +400,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Kaitai Struct format descriptions
 
-108 `.ksy` files from the [Kaitai Struct format
+112 `.ksy` files from the [Kaitai Struct format
 library](https://github.com/kaitai-io/kaitai_struct_formats) are copied
 verbatim into `crates/core/formats-ksy` and compiled into the core, where they
 are converted into templates. Each file carries its own licence; nothing from
@@ -497,6 +497,7 @@ are and why is `crates/core/formats-ksy/README.md`.
 | ipv4_packet | CC0-1.0 | [network/ipv4_packet.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/ipv4_packet.ksy) |
 | ipv6_packet | CC0-1.0 | [network/ipv6_packet.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/ipv6_packet.ksy) |
 | microsoft_network_monitor_v2 | CC0-1.0 | [network/microsoft_network_monitor_v2.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/microsoft_network_monitor_v2.ksy) |
+| packet_ppi | CC0-1.0 | [network/packet_ppi.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/packet_ppi.ksy) |
 | protocol_body | CC0-1.0 | [network/protocol_body.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/protocol_body.ksy) |
 | rtp_packet | Unlicense | [network/rtp_packet.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/rtp_packet.ksy) |
 | rtpdump | Unlicense | [network/rtpdump.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/network/rtpdump.ksy) |
@@ -509,8 +510,11 @@ are and why is `crates/core/formats-ksy/README.md`.
 | efivar_signature_list | CC0-1.0 | [security/efivar_signature_list.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/security/efivar_signature_list.ksy) |
 | openpgp_message | MIT | [security/openpgp_message.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/security/openpgp_message.ksy) |
 | ssh_public_key | CC0-1.0 | [security/ssh_public_key.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/security/ssh_public_key.ksy) |
+| asn1_der | CC0-1.0 | [serialization/asn1/asn1_der.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/asn1/asn1_der.ksy) |
+| bson | CC0-1.0 | [serialization/bson.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/bson.ksy) |
 | chrome_pak | CC0-1.0 | [serialization/chrome_pak.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/chrome_pak.ksy) |
 | google_protobuf | MIT | [serialization/google_protobuf.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/google_protobuf.ksy) |
+| msgpack | CC0-1.0 | [serialization/msgpack.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/msgpack.ksy) |
 | php_serialized_value | CC0-1.0 | [serialization/php_serialized_value.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/php_serialized_value.ksy) |
 | ruby_marshal | CC0-1.0 | [serialization/ruby_marshal.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/ruby_marshal.ksy) |
 | regf | CC0-1.0 | [windows/regf.ksy](https://github.com/kaitai-io/kaitai_struct_formats/blob/master/windows/regf.ksy) |
@@ -523,7 +527,7 @@ are and why is `crates/core/formats-ksy/README.md`.
 One section per shipped crate and bundled package, in its own words.
 
 The licences the format descriptions are under come first, once each, since
-108 files share 5 of them. The texts are SPDX's, with SPDX's own
+112 files share 5 of them. The texts are SPDX's, with SPDX's own
 matching markup taken out.
 
 ### Apache-2.0
@@ -634,7 +638,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ### CC0-1.0
 
-The licence of 78 of the format descriptions above.  
+The licence of 82 of the format descriptions above.  
 Source: https://spdx.org/licenses/CC0-1.0.html
 
 <details><summary>CC0-1.0</summary>

@@ -52,6 +52,13 @@ pub fn convert(text: &str, imports: &dyn Imports) -> Result<Converted, KsyError>
 	let mut report = Report::new();
 	load_imports(&mut files, imports, &mut report)?;
 
+	let root_name = file_name(&files[0].spec);
+	// A file's own `meta/id` names its root type, and a recursive format says
+	// "one of me" by writing it: `type: asn1_der` inside a type of asn1_der.
+	// A declared type of the same name is what that name means instead, and
+	// then the root has no name of its own.
+	let root_named = !files[0].spec.types.iter().any(|(n, _)| *n == root_name);
+
 	let mut lower = Lower {
 		files: &files,
 		report,
@@ -61,11 +68,21 @@ pub fn convert(text: &str, imports: &dyn Imports) -> Result<Converted, KsyError>
 		parents: HashMap::new(),
 		bit_offset: 0,
 		pending: Vec::new(),
+		root_name: if root_named { root_name.clone() } else { String::new() },
+		root_wanted: false,
 	};
+	// The root is lowered once, below, as the template's root. Claiming its
+	// name up front is what keeps a reference to it from lowering it again.
+	if root_named {
+		lower.emitted.insert(root_name.clone());
+	}
 	lower.collect_parents();
 
 	let root_ctx = Ctx { stack: vec![&files[0].spec], names: vec![String::new()], elem: None };
-	let root = lower.lower_class(&root_ctx, &file_name(&files[0].spec), &[]);
+	let root = lower.lower_class(&root_ctx, &root_name, &[]);
+	if lower.root_wanted {
+		lower.types.push((root_name.clone(), root.clone()));
+	}
 
 	// Every type the files declare, whether or not anything refers to it, so
 	// that the panel and the diagram show the whole format. A type with
@@ -185,6 +202,13 @@ struct Lower<'a> {
 	/// Instances of the type being lowered that have not been written out yet.
 	/// A field naming one of these is reading forwards, which the IR cannot do.
 	pending: Vec<String>,
+	/// The `meta/id` of the file being converted, which is also the name of its
+	/// root type. Empty when a declared type has that name already.
+	root_name: String,
+	/// Whether anything wrote that name. The root is the template's root
+	/// regardless; a copy of it in the type table earns its place only when
+	/// something refers to it.
+	root_wanted: bool,
 }
 
 impl<'a> Lower<'a> {
@@ -262,6 +286,17 @@ impl<'a> Lower<'a> {
 				// A type may also name itself or one of its own siblings by
 				// the name the level above it filed it under.
 				let _ = first;
+			}
+		}
+		// The file's own id names its root type, so a type inside it can say
+		// `type: asn1_der` for another whole one of the format it is part of.
+		if !self.root_name.is_empty() && *first == self.root_name {
+			let root = &self.files[0].spec;
+			if name.names.len() == 1 {
+				return Some((self.root_name.clone(), root));
+			}
+			if let Some(found) = descend(root, &name.names[1..]) {
+				return Some((join_name("", &name.names[1..]), found));
 			}
 		}
 		// An imported file's own id is the name of its top-level type, so
@@ -809,8 +844,9 @@ impl<'a> Lower<'a> {
 			return Err(Gap::sized(format!("no type named `{name}` is in scope")));
 		};
 		if args.is_empty() && cls.params.is_empty() {
-			let target = ctx.inner("", cls);
-			let _ = target;
+			if ir == self.root_name {
+				self.root_wanted = true;
+			}
 			self.ensure_type_named(&ir, cls);
 			return Ok(Ty::Named(ir.into()));
 		}
@@ -874,6 +910,12 @@ impl<'a> Lower<'a> {
 	/// Rebuild the scope a type sits in from its IR name, which is the chain of
 	/// names it is nested under.
 	fn ctx_for(&self, ir: &str, cls: &'a ClassSpec) -> Option<Ctx<'a>> {
+		// The root of the file being converted is named after the file and
+		// nested under nothing, so its scope is not a path to walk.
+		if !self.root_name.is_empty() && ir == self.root_name {
+			let root = &self.files[0].spec;
+			return Some(Ctx { stack: vec![root], names: vec![String::new()], elem: None });
+		}
 		for file in self.files {
 			let rest = if file.prefix.is_empty() {
 				Some(ir)
@@ -2267,6 +2309,48 @@ instances:
 		assert!(out.contains("a: inner"), "{out}");
 		assert!(out.contains("b: sized(4) inner"), "{out}");
 		assert!(out.contains("type inner {"), "{out}");
+	}
+
+	#[test]
+	fn a_format_can_hold_another_whole_one_of_itself() {
+		let text = "\
+meta:
+  id: tree
+  endian: le
+seq:
+  - id: leaf
+    type: u1
+  - id: child
+    type: tree
+    if: leaf != 0
+";
+		let out = rendered(text);
+		assert!(out.contains("child: optional(when leaf != 0) tree"), "{out}");
+		assert!(out.contains("type tree {"), "{out}");
+		assert!(convert_text(text).report.gaps.is_empty(), "{out}");
+	}
+
+	#[test]
+	fn a_type_of_the_files_own_name_is_the_one_it_declares() {
+		// Where a declared type has the id's name, that is what the name means,
+		// and the root keeps no name of its own.
+		let text = "\
+meta:
+  id: tree
+  endian: le
+seq:
+  - id: child
+    type: tree
+types:
+  tree:
+    seq:
+      - id: leaf
+        type: u1
+";
+		let out = rendered(text);
+		assert!(out.contains("child: tree"), "{out}");
+		assert!(out.contains("leaf: u8"), "{out}");
+		assert_eq!(out.matches("type tree {").count(), 1, "{out}");
 	}
 
 	#[test]

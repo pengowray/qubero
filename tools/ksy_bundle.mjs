@@ -29,13 +29,9 @@ const README = join(KSY_DIR, "README.md");
 // exclusions are separate, below.
 const DROPPED = [
   ["android_sparse", "CC0-1.0", "the size of a chunk's header reads `_root.header`, which a field of the same name hides, so no chunk body is placed"],
-  ["asn1_der", "CC0-1.0", "a sequence's body is another `asn1_der`, and the converter does not register a root type under its own name"],
-  ["bson", "CC0-1.0", "an element's value is another `bson` document, and the converter does not register a root type under its own name"],
   ["dbf", "CC0-1.0", "a record's field widths come from `.length` over the header's field list, which the IR cannot take"],
   ["gettext_mo", "BSD-2-Clause", "the whole file's endianness is chosen from its first word, and the IR has no form for that"],
-  ["msgpack", "CC0-1.0", "the root holds another `msgpack`, and the converter does not register a root type under its own name"],
   ["nitf", "MIT", "every sub-header's count is text read as a number, so twenty-one fields on the path through the file are left as bytes"],
-  ["packet_ppi", "CC0-1.0", "the packet body switches to `packet_ppi` for PPI inside PPI, and the converter does not register a root type under its own name"],
   ["pcap", "CC0-1.0", "the whole file's endianness is chosen from its magic, and the IR has no form for that"],
   ["windows_resource_file", "CC0-1.0", "a resource's name is a `repeat-until` over `_`, which the IR cannot say, so everything after the name misplaces"],
 ];
@@ -56,7 +52,7 @@ const BY_LICENCE = [
 const IMPORT_ONLY = new Map([
   ["bytes_with_io", "imported by six formats that need a sub-stream; on its own it says the file is bytes, which is what no template says already"],
   ["pcx","imported by pcx_dcx; Qubero reads a PCX with its own template"],
-  ["php_serialized_value", "imported by phar_without_stub; on its own, a mapping entry is another php_serialized_value, which the converter cannot say"],
+  ["php_serialized_value", "imported by phar_without_stub; on its own, every string's length is a decimal count read out of text, which a template does only where the field is declared as digits"],
   ["rtp_packet", "imported by rtpdump; a packet on the wire, with no file form of its own"],
   ["protocol_body", "imported by ipv4_packet and ipv6_packet; a dispatch table, not a file"],
 ]);
@@ -67,6 +63,7 @@ const IMPORT_ONLY = new Map([
 const WHY_WITH_GAPS = {
   android_bootldr_asus: "one instance naming a file inside the image is text, and the IR's expressions are integers",
   android_super: "three bit fields, all of them reserved padding, are read most-significant-bit first instead of least",
+  bson: "the one instance that unpacks a three-byte integer needs a bitwise or; every element is placed",
   compressed_resource: "one instance reads inside another field's stream; the header and the compressed run are placed",
   creative_voice_file: "three sample-rate instances are floating point; every block is placed",
   dcmp_0: "two instances of the decompressor's own bookkeeping; the compressed run is placed",
