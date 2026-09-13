@@ -67,3 +67,16 @@ lzma-rs = { version = "0.3", default-features = false }
 # The default features are the empty set; the `rustc_*` ones only tell its own
 # dependencies which language version to assume.
 bzip2-rs = { version = "0.1.2", default-features = false }
+# YAML 1.2, pure Rust, for the `.ksy` reader in `ksy`. A `.ksy` is walked as a
+# generic tree rather than deserialised into structs, because every error has to
+# name the path it happened at (`/types/chunk/seq/2/size`) the way the Kaitai
+# compiler's errors do, and because the same key legitimately holds an int in
+# one file and a string in the next. Default features off drops `encoding_rs`:
+# a `.ksy` is UTF-8 and nothing else. `saphyr-parser` is saphyr's own scanner,
+# already underneath it; the reader walks that event stream directly, which is
+# what gives it mapping keys in file order, a line and column per node, and the
+# duplicate-key error a hash map would swallow. `saphyr` itself is still what
+# resolves a plain scalar to null, bool, int, float or string, so the YAML core
+# schema is read in one place rather than two.
+saphyr = { version = "0.0.12", default-features = false }
+saphyr-parser = "0.0.12"
