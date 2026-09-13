@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| NI TDMS: a new template. Segments, metadata, properties, raw data contiguous or interleaved, layouts reused from the last list and one segment back, index files. Matches npTDMS 1.11 on every channel of ten samples. | 31c731c, 5d00193, 11afb26, dea17d1 |
 | CDF time values as moments: float counts (CDF_EPOCH, EPOCH16 seconds), `Epoch::Atomic` with a leap-second table for TT2000 (IERS from 1972, the CDF library's drifting offsets 1960 to 1971), fill and pad values as no time, and `23:59:60` shown inside a leap second. 2,489 sample sites and a 34,640-count sweep match cdflib, bar two cdflib faults. | c9cfdb5, f70cf0c, 97b3565 |
 | Arrow IPC files and streams: a new template and a FlatBuffers reader in the IR (`flatbuf.rs`), the footer read from the back, batches placed from their blocks, buffers typed by schema field to three levels, ZSTD bodies decoded. Matches pyarrow on six samples. | 92aa7cc, 24ca3b6, 5c596ad |
 | Decoder panels: one `Unpacker` table picks the side reader for the cursor (near or any ancestor), `ExplainDto` is a tagged enum mirrored as a TypeScript union, GWF vectors have their own panel, and GRIB values reach a panel that says which value the cursor is on and how it decodes. | 63806d1, d803c1e, f2ac9b4, 0685d12 |
@@ -512,8 +513,47 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-ADIOS2 BP. BUFR and TDMS were being built on 2026-09-14. DICOM is read by the
-bundled Kaitai description (`dicom.ksy`) rather than a native template.
+ADIOS2 BP. BUFR was being built on 2026-09-14. DICOM is read by the bundled
+Kaitai description (`dicom.ksy`) rather than a native template.
+
+### Engine: recursion the stack guard does not see
+
+Two agents hit it on 2026-09-14. `eval/go.rs` guards stack depth when sizing
+a type, but not in recursion through `Expr::Tagged`, `Expr::Placer` and chains
+of computed fields. TDMS's first design chained "same as before" lookups
+segment to segment and overflowed the real stack at 80 chained segments in a
+**release** build; Arrow needs about 2 MB of stack in debug to read one late
+buffer from a cold start. Tests run with the 64 MB stack in
+`.cargo/config.toml`, so they would not catch it, and a wasm build that
+overflows traps rather than failing a read. A depth guard on expression and
+computed-value evaluation, turning an overflow into an `EvalError`, is the
+fix. Also: `ComputedText` is not cached, so a long chain of them re-evaluates
+(TDMS changed-list chains over 3,000 segments ran past ten minutes before
+they were cut to one link).
+
+### NI TDMS (built 2026-09-14)
+
+Segments with their lead-in (tag and ToC little-endian, the rest by
+`kBigEndian`, which NI's document and npTDMS both show and an earlier brief
+had wrong), metadata objects, properties with timestamps as moments on the
+1904 epoch, and raw data contiguous or interleaved with strings as offsets
+then text (see Closed). Ten samples, every channel's count, first, last and
+sum matching npTDMS 1.11. Left:
+
+- **Layouts carry only one segment back.** A metadata-less segment reuses the
+  last channel list however far back, and "same as before" is followed one
+  segment to the nearest explicit index; longer chains read as "not known"
+  with raw data as bytes. The IR cannot walk back through earlier segments by
+  path without asking each one's answer in turn (see the engine note above).
+- A channel dropped from a changed list (without `kTocNewObjList`) is not
+  removed: position-based entries cannot close the gap.
+- DAQmx raw data is named with its scalers read; samples stay bytes.
+- ExtendedFloat, ExtendedFloatWithUnit and FixedPoint values stay bytes (NI
+  gives no widths; npTDMS does not read them either).
+- A finished segment's tail that is not a whole number of chunks reads channel
+  by channel, where npTDMS shares it out.
+- `InterleavedData.sample_size` is the metadata's `frame_size` under another
+  name.
 
 ### Arrow IPC files and streams (built 2026-09-14)
 
