@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| BGZF, BAM, BAI and CSI: new templates. BGZF sniffs apart from gzip (which fixed false CRC mismatches on every `.bam`), the first block's header and records as fields, later records through a side reader, indexes with split virtual offsets. Matches bamnostic. | 1830e4a, 3b48b16, 8f47af1 |
 | NIfTI-1, NIfTI-2 and Analyze 7.5: a new template, headers in either byte order, extensions, voxels shaped by `dim` with `dim[1]` innermost, whole-number scaling. Matches nibabel. `.nii.gz` opens through gzip. | 44d98c4, 12cf556, 8f63c5b |
 | SEG-Y: a new template, EBCDIC 037 text, binary header, trace headers and samples for rev 0 to 2.1 in either byte order, and a new `ibm32` float type. Matches segyio on 13 files. | 1cadde4, 7254613, 11c297b |
 | FITS tile-compressed images: the table named as a compressed image, and a side reader (`fits_tile.rs`) decoding RICE_1 (1, 2, 4 bytes), GZIP_1, GZIP_2, NOCOMPRESS and the fallback columns, un-quantizing with the standard's dither sequence. Every pixel of 8 images in 4 samples matches astropy. The chunk and page panels now share `steplist.ts`. | 89614b1, ffac1dd |
@@ -517,9 +518,40 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-BUFR, ADIOS2 BP, TDMS. Arrow IPC / Feather and BAM / BGZF / BAI were being
-built on 2026-09-14. DICOM is read by the bundled Kaitai description
-(`dicom.ksy`) rather than a native template.
+BUFR, ADIOS2 BP, TDMS. Arrow IPC / Feather was being built on 2026-09-14.
+DICOM is read by the bundled Kaitai description (`dicom.ksy`) rather than a
+native template.
+
+### BGZF, BAM, BAI and CSI (built 2026-09-14)
+
+Every BGZF block as fields with its `BC` size and both checks; the BAM header,
+references and whole records in the first block as fields; BAI and CSI with
+every virtual offset split into block and in-block halves (see Closed). Nine
+htslib and samtools samples, matched against bamnostic. Left:
+
+- **Records past the first block need a stitched space.** A record can start
+  in one block and end in another, and nothing joins several decoded members
+  into one space, so later blocks read only through the side reader
+  (`bam_records.rs`, `Evaluator::bam_block`). The addition that would fix it,
+  as the agent specified: `Ty::Stitched { from: Arc<[Step]>, inner: Box<Ty> }`,
+  a zero-width node like `Gather` whose `from` walks to Decoded nodes;
+  `open_space_at` joins their outputs in walk order, inflating lazily under
+  `CAP_BYTES`, with a part table of (start byte, member path) so a position
+  maps back to (member k, offset j), which is exactly a BGZF virtual offset.
+  PDB scattered streams, HDF4 linked blocks, Godot RSCC and FITS `CONTINUE`
+  are the same shape.
+- **No panel.** `bam_block` is a method, not an `Explain` variant, and it
+  walks from the header on every call (up to 256 MB unpacked); a panel needs
+  a variant, a `bampanel.ts` on `steplist.ts`, and a per-block cache.
+- **A `.bam` is labelled "BGZF gzip blocks".** The label names the container,
+  not the contents; a reader opening a BAM file wants to be told it is BAM.
+  `templateSentence` is where Fable suggested saying so.
+- A plain gzip file of several members that is not BGZF still reports a false
+  CRC mismatch (its CRC compared with the last member's trailer): the gzip
+  template needs a compressed run that ends where its decoder stopped.
+- Blocks after the first read as invalid text: only block 0 knows it is BAM.
+- `bam.rs` is about 980 lines; the BAI and CSI parts would split out as
+  `bam_index.rs`.
 
 ### NIfTI and Analyze 7.5 (built 2026-09-14)
 
