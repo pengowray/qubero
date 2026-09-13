@@ -42,13 +42,13 @@
 //! current export target wants it), but it costs one switch to read and the
 //! alternative was to misread every number in it.
 //!
+//! **Compressed.** A resource saved with compression (`RSCC`) is cut into
+//! blocks of one size, each compressed on its own. One that fits in a single
+//! block is that block opened; one written across several is the blocks
+//! joined into the resource they were cut from. See [`compressed`].
+//!
 //! **What this does not read.**
 //!
-//! - A compressed resource (`RSCC`) written across more than one block. Every
-//!   block opens as the codec the header names, but the resource straddles
-//!   them and nothing in the IR says "one space stitched from several runs",
-//!   so a block of such a file holds bytes rather than a resource. See
-//!   [`compressed`].
 //! - Tag 21, an image written inline, and tag 25, an input event. Both are
 //!   Godot 2 leftovers that Godot 3 kept a number for and dropped the reader
 //!   for, and neither engine writes one. They are named, and reading one stops.
@@ -60,7 +60,7 @@
 //! - Encrypted packs. See [`super::godot_pck`].
 
 use crate::codec::Codec;
-use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T};
+use crate::template::{Anchor, Encoding, Endian, Endian::*, Expr as E, Step, StrLen, Template, Ty as T};
 
 /// A resource written plainly. Also the last four bytes of one: the saver
 /// writes the magic again at the end, which is how a reader that has been
@@ -861,11 +861,10 @@ fn compressed() -> T {
             // is rather than as a table of sizes.
             //
             // A resource written across several blocks is one document spread
-            // over several runs, and nothing in the IR can say that: a space
-            // is fed by one run, so block 1 opened on its own would start
-            // partway through whatever field block 0 ended in. Those stay
-            // bytes. A known gap rather than an oversight, and closing it
-            // means a space that more than one run can fill.
+            // over several runs: block 1 opened on its own would start partway
+            // through whatever field block 0 ended in. So each of those blocks
+            // is only the bytes it unpacks to, and the resource is `resource`
+            // below, joined from all of them.
             //
             // The count is asked outside the stream on purpose. A field name
             // inside a decoded space is looked up in that space's own tree,
@@ -880,6 +879,27 @@ fn compressed() -> T {
                         compressed_block(super::decoded_object()),
                     ),
                     blocks(),
+                ),
+            ),
+            // The resource a file of several blocks holds, joined from what
+            // every block unpacks to. Each block is `block_size` bytes of it
+            // but the last, which the total cuts: the table counts one block
+            // more than the division gives, and the one the engine writes
+            // after a total that divides exactly starts where the total ends
+            // and adds nothing. Only for the four codecs the blocks open as,
+            // since a block left as its packed bytes is no part of anything.
+            (
+                "resource",
+                T::when(
+                    E::lit(1)
+                        .less_than(blocks())
+                        .both(E::field("compression").less_than(E::lit(4))),
+                    T::stitched(
+                        vec![Step::field("blocks"), Step::each()],
+                        Some(E::field("block_size")),
+                        Some(E::field("uncompressed_size")),
+                        unpacked(),
+                    ),
                 ),
             ),
             // The wrapper writes its own magic at the end as well, the same
@@ -1266,7 +1286,17 @@ mod tests {
         // Each block is as long as its own row of the table says.
         assert_eq!(e.node(&d, &[5, 0]).unwrap().size_bits / 8, 40);
         assert_eq!(e.node(&d, &[5, 1]).unwrap().size_bits / 8, 9);
-        assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
+        // Two blocks are one resource joined from both, which is no bytes
+        // where it is declared and as long as the total inside.
+        let resource = e.node(&d, &[6]).unwrap();
+        assert_eq!((resource.size_bits, resource.child_count), (0, 1));
+        // The blocks here are not zstd at all, so reading anything inside says
+        // which block it could not get the bytes from.
+        match e.node(&d, &[6, 0]) {
+            Err(crate::eval::EvalError::Failed(why)) => assert_eq!(why, "blocks[0] could not be unpacked"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(e.node(&d, &[7]).unwrap().size_bits / 8, 4);
     }
 
     /// A block table row of zero, which is a damaged file rather than an
@@ -1298,9 +1328,9 @@ mod tests {
         assert!(!last.decoded, "an empty block should not be opened as a stream");
         assert_eq!(last.refused, None);
         assert_eq!(last.size_bits, 0);
-        // And a file of several blocks holds bytes in them, not a resource:
-        // one document across several runs is not something a space can say.
-        assert_eq!(e.node(&d, &[6]).unwrap().size_bits / 8, 4);
+        // And the end magic is after the joined resource, which covers no
+        // bytes of the file.
+        assert_eq!(e.node(&d, &[7]).unwrap().size_bits / 8, 4);
     }
 
     /// A format version from no engine leaves everything below it unread

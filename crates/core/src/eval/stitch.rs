@@ -373,27 +373,39 @@ impl Evaluator {
         }))
     }
 
-    /// Why a field inside a joined stream cannot be written, when its first
-    /// byte is kept in a run stored as it sits in the file. Nothing for a run
-    /// that was unpacked, whose bytes are in no place in the file, and which
-    /// the refusal for any unpacked stream already words: see
-    /// [`encode::UNPACKED_MSG`].
+    /// Where in the file a write to the field `r` goes, when `r` is in a space
+    /// that is not the file: the bit its first bit is at.
     ///
-    /// The run is named, and the byte's place in the file given, because the
-    /// hex view is a real way to make the change and the address the panel
-    /// shows is an offset of the joined stream: without these the reader would
-    /// work out a page-relative offset by hand. "Starting" because only the
-    /// first byte's run is known, and a field may carry on into the next.
-    pub(super) fn joined_refusal<S: Source>(&mut self, doc: &Document<S>, r: &Resolved) -> R<Option<String>> {
-        let Some(hit) = self.part_of(doc, r.space, r.offset / 8)? else { return Ok(None) };
-        if hit.packed || hit.run_space != 0 {
-            return Ok(None);
+    /// Only a field of a joined stream that lies wholly in one run stored as
+    /// it sits in the file has such a place. Those bits are a stretch of the
+    /// file under another address, and writing them is writing the file. A
+    /// field that runs from one run into the next is refused naming both,
+    /// since the two are apart in the file and a write is one stretch; the hex
+    /// view can change each half. A field in a run that had to be unpacked,
+    /// and any field of an unpacked stream, is in no place in the file at all,
+    /// and gets the refusal that says so.
+    pub(super) fn joined_write(&self, r: &Resolved, size: u64) -> Result<u64, String> {
+        let unpacked = || encode::UNPACKED_MSG.to_string();
+        let Some(stitch) = self.spaces.stitch(r.space) else { return Err(unpacked()) };
+        let first_byte = r.offset / 8;
+        let last_byte = ((r.offset + size).div_ceil(8)).max(first_byte + 1) - 1;
+        let Some(first) = stitch.part_at(first_byte) else { return Err(unpacked()) };
+        let last = stitch.part_at(last_byte).unwrap_or(first);
+        if last != first {
+            // Named the way the listing names each run. Two apart or more is
+            // a range, since naming two of three would leave one out.
+            let joiner = if last == first + 1 { "and" } else { "to" };
+            return Err(format!(
+                "Can't edit here: this field is split across {} {joiner} {}. Use the hex view.",
+                self.part_label(stitch, first),
+                self.part_label(stitch, last)
+            ));
         }
-        let at = hit.run_offset_bits / 8 + hit.in_part;
-        Ok(Some(format!(
-            "Can't edit here: editing inside a joined stream isn't supported yet. This field's bytes are in the file, starting at 0x{at:x} in {}; edit them in the hex view.",
-            hit.label
-        )))
+        let part = &stitch.parts[first];
+        match part.source {
+            PartSource::Stored { space: 0, at_bits } => Ok(at_bits + (r.offset - part.start * 8)),
+            _ => Err(unpacked()),
+        }
     }
 
     /// Where the BGZF block a run is a field of starts, when it is one: the
@@ -573,27 +585,47 @@ mod tests {
     }
 
     #[test]
-    fn nothing_inside_a_stitched_space_is_editable() {
-        let d = Document::new(MemSource(file(20)));
+    fn a_field_inside_one_stored_part_writes_to_that_part() {
+        let mut d = Document::new(MemSource(file(20)));
         let mut e = Evaluator::new(paged(record(), false));
         let b = e.node(&d, &[STREAM, 0, 1]).unwrap();
-        assert!(!b.editable);
-        // The page the same bytes sit in is a field of the file.
-        assert_eq!(e.node(&d, &[PAGES, 0, 0]).unwrap().space, 0);
-        // `b` starts two bytes into page 3, which is at 0x18 in the file, and
-        // the refusal says where to make the change instead.
-        assert_eq!(
-            e.prepare_write(&d, &[STREAM, 0, 1], "1"),
-            Err(crate::eval::EvalError::Failed(
-                "Can't edit here: editing inside a joined stream isn't supported yet. This field's bytes are in the file, starting at 0x1a in pages[0]; edit them in the hex view.".into()
-            ))
-        );
+        assert!(b.editable, "all four bytes of `b` are in page 3");
+        // `b` is two bytes into the stream and so two bytes into page 3, which
+        // is at 0x18 in the file: the write goes there.
+        let w = e.prepare_write(&d, &[STREAM, 0, 1], "305419896").unwrap();
+        assert_eq!((w.offset_bits, w.n_bits), (0x1a * 8, 32));
+        d.overwrite_bytes(w.offset_bits / 8, &w.data);
+        e.invalidate_from(w.offset_bits);
+        assert_eq!(e.node(&d, &[STREAM, 0, 1]).unwrap().value, Value::UInt(0x1234_5678));
+        assert_eq!(e.field_bytes(&d, &[PAGES, 0, 0], 8).unwrap().0[2..6], [0x12, 0x34, 0x56, 0x78], "the page itself holds it");
         // A field of a joined stream whose run was unpacked says what any
         // unpacked field says: its bytes are in no place in the file.
         let d = Document::new(MemSource(bgzf_of(&[b"some text in one block"])));
         let mut e = Evaluator::new(crate::formats::bgzf());
         let text = e.child_named(&d, &JOINED, "text").unwrap().unwrap();
+        assert!(!e.node(&d, &text).unwrap().editable);
         assert_eq!(e.prepare_write(&d, &text, "x"), Err(crate::eval::EvalError::Failed(crate::encode::UNPACKED_MSG.into())));
+    }
+
+    #[test]
+    fn a_field_across_two_stored_parts_is_refused_naming_both() {
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        // `c` is the last two bytes of page 3 and the first two of page 1,
+        // which are sixteen bytes apart the other way round in the file.
+        assert!(!e.node(&d, &[STREAM, 0, 2]).unwrap().editable);
+        assert_eq!(
+            e.prepare_write(&d, &[STREAM, 0, 2], "1"),
+            Err(crate::eval::EvalError::Failed(
+                "Can't edit here: this field is split across pages[0] and pages[1]. Use the hex view.".into()
+            ))
+        );
+        // And `rest` runs from page 1 into page 2 and no further, so it names
+        // those two.
+        match e.prepare_write(&d, &[STREAM, 0, 3], "x") {
+            Err(crate::eval::EvalError::Failed(why)) => assert!(why.contains("split across pages[1] and pages[2]"), "{why}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A BGZF file of `pieces`, one block each, and the block every BGZF file

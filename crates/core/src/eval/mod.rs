@@ -763,7 +763,10 @@ impl Evaluator {
             // Nothing inside a decoded stream is written back: there is no
             // mapping from a decoded byte to a byte of the file, so a change
             // made there has nowhere to go.
-            editable: r.space == 0
+            // Except where a joined stream's field lies wholly in one run
+            // stored as it sits in the file, which is a stretch of the file
+            // under another address.
+            editable: (r.space == 0 || self.joined_write(&r, size).is_ok())
                 && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
             edit_text: match &r.ty {
                 Ty::Json(json::Shape::Number, _) => {
@@ -914,12 +917,19 @@ impl Evaluator {
         // already says so; this is the same answer where it cannot be ignored,
         // since the offset below would otherwise be a bit of the stream used as
         // a bit of the file.
-        if r.space != 0 {
-            if let Some(why) = self.joined_refusal(doc, &r)? {
-                return fail(why);
+        //
+        // A field of a joined stream that lies wholly in one stored run of the
+        // file is the exception: those bits are in the file, at the run's
+        // place, and `shift` is how far the write moves to get there.
+        let shift: i128 = if r.space == 0 {
+            0
+        } else {
+            match self.joined_write(&r, size) {
+                Ok(file_bits) => file_bits as i128 - r.offset as i128,
+                Err(why) => return fail(why),
             }
-            return fail(encode::UNPACKED_MSG);
-        }
+        };
+        let to_file = |at: u64| (at as i128 + shift) as u64;
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
                 Ty::Magic(_) => encode::MAGIC_MSG.to_string(),
@@ -981,13 +991,15 @@ impl Evaluator {
             };
             let data = literal.into_bytes();
             let new_bits = data.len() as u64 * 8;
-            if new_bits != n_bits && self.json_length_is_recorded(path) {
+            // A run of a joined stream is as long as its page, whatever the
+            // text in it says, so its length is recorded too.
+            if new_bits != n_bits && (r.space != 0 || self.json_length_is_recorded(path)) {
                 return fail(encode::JSON_FIXED_LENGTH.to_string());
             }
-            return Ok(Write { offset_bits: at, data, n_bits: new_bits, old_bits: n_bits });
+            return Ok(Write { offset_bits: to_file(at), data, n_bits: new_bits, old_bits: n_bits });
         }
         let data = encode::encode(&r.ty, text, n_bits, &state).map_err(EvalError::Failed)?;
-        Ok(Write { offset_bits: at, data, n_bits, old_bits: n_bits })
+        Ok(Write { offset_bits: to_file(at), data, n_bits, old_bits: n_bits })
     }
 
     /// Whether anything this field sits inside has a length the file already

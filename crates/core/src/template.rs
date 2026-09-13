@@ -2289,8 +2289,10 @@ pub enum Ty {
     /// total has to be known before anything inside is placed, since a run
     /// to the end of its room needs to know where the end is, so opening one
     /// walks to every part, which for a packed stream is every member's
-    /// header and trailer and none of its deflate. Nothing inside is
-    /// editable. See `eval/stitch.rs`.
+    /// header and trailer and none of its deflate.
+    ///
+    /// A field inside that lies wholly in one stored run of the file writes to
+    /// that run; nothing else inside is editable. See `eval/stitch.rs`.
     Stitched { from: Arc<[Step]>, part_len: Option<Expr>, len: Option<Expr>, inner: Box<Ty> },
     /// Fields laid out from what the decoder read, rather than from what a
     /// template says.

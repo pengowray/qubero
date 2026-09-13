@@ -2697,10 +2697,23 @@ sniff and the records cut short at the end of a block are gone.
 template, stays as the reading the template is checked against, record by
 record, in `tests/bam_real.rs`.
 
-Not yet: nothing inside a joined stream is editable (a field whose first byte
-is in a stored page says where that byte is in the file); a joined stream opens
-no tab of its own; `map_out` has nothing to delegate to without one. HDF4 linked
-blocks and Godot `RSCC` fit the shape and are not written.
+A Godot `RSCC` written across more than one block is the third: `resource`
+after its blocks joins what each unpacks to, each claimed at `block_size` and
+the last cut by the total.
+
+**Edits.** A field of a joined stream that lies wholly in one run stored as it
+sits in the file is a stretch of the file under another address, so it is
+editable, and `prepare_write` moves the write to the run's place. A field that
+runs from one run into the next is refused naming both (`split across
+pages[0] and pages[1]`), since the two are apart in the file and a write is one
+stretch. A field in an unpacked run gets the refusal any unpacked field does.
+
+Not yet: a joined stream opens no tab of its own, so `map_out` has nothing to
+delegate to. HDF4 linked blocks fit the shape and are not written. HDF4's
+`linkinfo_t` does carry a `first_length`, but the file does not: `HLIstaccess`
+reads the 16-byte header as length, block length, block count and link ref,
+and takes the first block's length from that block's own descriptor. A
+template that reads every block's length from its descriptor already has it.
 
 ## Roadmap (not yet built)
 
@@ -2724,8 +2737,8 @@ built, and see "A stream that ends at something longer than a byte".
 
 A program database's stream directory, when its blocks are not one run, is
 still its blocks and nothing more; its streams are joined (see "One stream kept
-in several runs"). A Godot `RSCC` written across more than one block and an
-HDF4 element in linked blocks can be joined the same way and are not yet.
+in several runs"). An HDF4 element in linked blocks can be joined the same
+way and is not yet.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 

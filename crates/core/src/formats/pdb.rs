@@ -26,8 +26,9 @@
 //! each read where it is, and a [`Ty::Stitched`](crate::template::Ty::Stitched)
 //! over them that reads the stream the blocks make end to end, in the order the
 //! block list gives and cut at the stream's length. The blocks are stored
-//! rather than compressed, so joining them is the whole of the work. Nothing
-//! inside a joined stream is editable yet.
+//! rather than compressed, so joining them is the whole of the work. A field
+//! of a joined stream that lies inside one block is edited in that block; one
+//! that crosses from one block into the next is refused, naming both.
 //!
 //! Of the 39 program databases on the machine this was written on, all 39 kept
 //! their stream directory in one run, 38 kept the info stream in one, 34 the
