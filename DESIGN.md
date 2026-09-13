@@ -1021,8 +1021,9 @@ rule database, which can name it, rather than to a template that would describe
 its stub.
 
 ### The signature database
-A third source is the weakest and the widest: one database of 11,800 formats
-that a file's first bytes are checked against directly, without a magic engine.
+A third source is the weakest and the widest: one database of about twelve
+thousand formats that a file's first bytes are checked against directly,
+without a magic engine.
 
 Two lists go into it. Wikidata's "file format identification pattern" property
 (P4152) carries around 9,400 patterns on as many items, most of them imported
@@ -1048,13 +1049,20 @@ article. A `file(1)` row's name is the sentence the rule prints, cut at the
 first value the rule would have filled in from the file, with an ellipsis when
 something was cut.
 
-A signature is stored once however many formats claim it, and the file is
-columnar: 9,900 signatures and 11,800 formats in 991 KiB, which is smaller than
-the Wikidata half alone used to be. `tools/wikidata/fetch.mjs` asks the query
-service and `build.mjs` writes `tools/wikidata/formats.json` plus a report of
-every value it had to read some other way than as written, or could not read;
-`tools/signatures.mjs` merges that with the magic rules into the file the page
-reads.
+That rule about standing alone was written when there was one list, and the
+second one has shown its edge: where both lists know a format and pin the same
+bytes, the two rows tie and neither names the file. Parquet, RAR 5 and HDF5
+went unnamed for exactly that reason, and forty of the 396 sample files did.
+Whether two lists agreeing should name a file, and under whose label, is still
+to decide.
+
+A signature is stored once however many formats claim it, and the file holds
+one array a column rather than one object a format. The two together fit both
+lists into less space than the Wikidata half alone used to take.
+`tools/wikidata/fetch.mjs` asks the query service and `build.mjs` writes
+`tools/wikidata/formats.json` plus a report of every value it had to read some
+other way than as written, or could not read; `tools/signatures.mjs` merges
+that with the magic rules into the file the page reads.
 
 Matching probes an index rather than running every pattern. A pattern that is
 one run of literal bytes at a fixed offset from the start, which nearly all of
