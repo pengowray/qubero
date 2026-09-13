@@ -42,6 +42,8 @@
 use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
 use super::{xz, zlib, zstd};
 
+mod rntuple;
+
 /// The two letters a compressed block opens with, read as one big-endian
 /// sixteen-bit number. `CS` is the zlib of ROOT 3 and before, which nothing
 /// has written this century but which files still in use were written by.
@@ -357,8 +359,9 @@ fn rntuple_record() -> T {
 /// information to read.
 ///
 /// The two envelopes hold everything else: the header describes the fields and
-/// columns, the footer lists the clusters and where their pages are. Neither
-/// is taken apart here.
+/// columns, the footer lists the clusters and where their pages are. Both are
+/// read in [`rntuple`], which is the part of the format that is RNTuple's own
+/// rather than ROOT's.
 fn anchor() -> T {
     T::structure(
         "RNTupleAnchor",
@@ -394,23 +397,11 @@ fn anchor() -> T {
 }
 
 /// An envelope where the anchor says it is: `nbytes` bytes of it, holding
-/// `len` once unpacked. It is not behind a key of its own, so what is at the
-/// offset is the bytes themselves, compressed the same nine-byte way a record
-/// is when the two lengths disagree.
+/// `len` once unpacked. It is not behind a key the directory lists, so what is
+/// at the offset is the bytes themselves, compressed the same nine-byte way a
+/// record is when the two lengths disagree.
 fn envelope(seek: &str, nbytes: &str, len: &str) -> T {
-    let inner = T::sized(
-        E::field(nbytes),
-        T::switch(
-            E::field(nbytes).less_than(E::field(len)),
-            vec![(1, T::repeat(T::Named("Compressed".into()), Until::End))],
-            T::bytes(E::Remaining),
-        ),
-    );
-    T::switch(
-        E::lit(0).less_than(E::field(seek)),
-        vec![(1, T::at(E::field(seek), inner))],
-        T::bytes(E::lit(0)),
-    )
+    at_if_set(seek, rntuple::placed_envelope(E::field(nbytes), E::field(len)))
 }
 
 /// The free-space list: a record whose contents are the stretches of the file
@@ -501,11 +492,11 @@ pub fn root() -> Template {
             t = t.with_type(&format!("DirRecord@{level}"), dir_record(level));
         }
     }
-    t
+    rntuple::with_types(t)
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
@@ -682,7 +673,7 @@ mod tests {
 
     /// `path` and then the indices after it, since a path here is built up a
     /// record at a time.
-    fn down(path: &[usize], more: &[usize]) -> Vec<usize> {
+    pub(super) fn down(path: &[usize], more: &[usize]) -> Vec<usize> {
         [path, more].concat()
     }
 
@@ -889,9 +880,12 @@ mod tests {
         }
     }
 
-    /// A file whose one key is an RNTuple anchor, and the two envelopes that
-    /// anchor points at: a compressed header and an uncompressed footer.
-    fn with_rntuple() -> Vec<u8> {
+    /// A file whose one key is an RNTuple anchor, followed by whatever `blobs`
+    /// writes. `blobs` is handed the offset its bytes will start at, since
+    /// everything an RNTuple points at is found by offset, and answers with
+    /// the bytes and the six numbers the anchor holds about the header and the
+    /// footer: where each is, how long, and how long unpacked.
+    pub(super) fn rntuple_file(blobs: impl FnOnce(u64) -> (Vec<u8>, [u64; 6])) -> Vec<u8> {
         const BEGIN: i32 = 100;
         let file_kl = keylen("TFile", "t.root", "");
         let dir_body = rstr("t.root").len() as i32 + rstr("").len() as i32 + 60;
@@ -899,9 +893,9 @@ mod tests {
         let anchor_key = keylen("ROOT::RNTuple", "nt", "");
         let keys_body = 4 + anchor_key;
         let anchor_at = keys_at + file_kl + keys_body;
-        let header_at = anchor_at + anchor_key + 78;
-        let footer_at = header_at + 17;
-        let end = footer_at + 6;
+        let blobs_at = anchor_at + anchor_key + 78;
+        let (blobs, links) = blobs(blobs_at as u64);
+        let end = blobs_at + blobs.len() as i32;
 
         let mut b = header_bytes(end);
         b.extend(key("TFile", "t.root", "", dir_body, dir_body, BEGIN, 0));
@@ -920,22 +914,41 @@ mod tests {
         for v in [1u16, 0, 0, 0] {
             b.extend_from_slice(&v.to_be_bytes());
         }
-        // The header is compressed, the footer is not, which is what the two
-        // lengths say and nothing else does.
-        for v in [header_at as u64, 17, 20, footer_at as u64, 6, 6, 0x4000_0000, 0x0123_4567_89ab_cdef] {
+        for v in links.into_iter().chain([0x4000_0000, 0x0123_4567_89ab_cdef]) {
             b.extend_from_slice(&v.to_be_bytes());
         }
         assert_eq!(b.len() - start, 78);
-
-        b.extend_from_slice(b"ZL");
-        b.push(8);
-        b.extend_from_slice(&[8, 0, 0]);
-        b.extend_from_slice(&[20, 0, 0]);
-        b.extend_from_slice(&[0x78, 0x9c, 0x03, 0x00, 0, 0, 0, 1]);
-        assert_eq!(b.len() as i32, footer_at);
-        b.extend_from_slice(&[0xee; 6]);
+        assert_eq!(b.len() as i32, blobs_at);
+        b.extend(blobs);
         assert_eq!(b.len() as i32, end);
         b
+    }
+
+    /// A key path's worth of the directory, down to the anchor inside the one
+    /// RNTuple key [`rntuple_file`] writes.
+    pub(super) fn anchor_path() -> Vec<usize> {
+        down(&DIRECTORY, &[K_FIELDS + 2, 11, 0, K_FIELDS + 1, 0, K_FIELDS, 0, K_FIELDS])
+    }
+
+    /// The two envelopes an anchor points at: a compressed header and a
+    /// footer as it stands. The header is an empty zlib stream standing for
+    /// twenty bytes, which places and opens and holds nothing; the footer is
+    /// a footer envelope with nothing in its lists.
+    fn with_rntuple() -> Vec<u8> {
+        rntuple_file(|at| {
+            let mut b = b"ZL".to_vec();
+            b.push(8);
+            b.extend_from_slice(&[8, 0, 0]);
+            b.extend_from_slice(&[20, 0, 0]);
+            b.extend_from_slice(&[0x78, 0x9c, 0x03, 0x00, 0, 0, 0, 1]);
+            let footer = rntuple::tests::empty_footer();
+            let footer_at = at + b.len() as u64;
+            let n = footer.len() as u64;
+            b.extend(footer);
+            // The header is compressed, the footer is not, which is what the
+            // two lengths say and nothing else does.
+            (b, [at, 17, 20, footer_at, n, n])
+        })
     }
 
     #[test]
@@ -965,10 +978,15 @@ mod tests {
             ev.node(&d, &down(&header, &[0, 0])).unwrap().value,
             Value::Enum { raw: 0x5a4c, name: Some("zlib".into()), hex: true }
         );
-        // The footer's lengths agree, so it is six bytes as they stand.
+        // The footer's lengths agree, so it is an envelope as it stands, and
+        // the first thing in it says it is a footer.
         let footer = down(&anchor, &[16, 0]);
-        assert_eq!(ev.node(&d, &footer).unwrap().size_bits, 6 * 8);
-        assert_eq!(ev.node(&d, &footer).unwrap().child_count, 0);
+        let n = rntuple::tests::empty_footer().len() as u64;
+        assert_eq!(ev.node(&d, &footer).unwrap().size_bits, n * 8);
+        assert_eq!(
+            ev.node(&d, &down(&footer, &[0])).unwrap().value,
+            Value::Enum { raw: 2, name: Some("footer".into()), hex: false }
+        );
     }
 
     #[test]

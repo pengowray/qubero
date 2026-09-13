@@ -609,3 +609,119 @@ fn every_sample_reads() {
     }
     assert!(checked >= 8, "only {checked} samples read");
 }
+
+// ---------------------------------------------------------------------------
+// RNTuple, read by the template. Every number and name below was read out of
+// the same two files by uproot 5.7.6 (`f['Staff'].field_records`,
+// `.column_records`, `.page_link_list`, `.arrays()`), and the template has to
+// come to the same.
+
+/// The first node under `at`, breadth first, whose type is called `name`. The
+/// path from an anchor to its envelope depends on whether it was compressed and
+/// with what, so it is looked for rather than spelled.
+fn find_type(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], name: &str, depth: u32) -> Option<Vec<usize>> {
+    let mut level = vec![at.to_vec()];
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for p in level {
+            let Ok(node) = ev.node(d, &p) else { continue };
+            if node.type_name == name {
+                return Some(p);
+            }
+            for i in 0..node.child_count.min(16) as usize {
+                next.push([p.as_slice(), &[i]].concat());
+            }
+        }
+        level = next;
+    }
+    None
+}
+
+/// The one RNTuple anchor in a sample, which in both samples is the first key
+/// of the top directory, opened out of its block if it was compressed.
+fn rntuple_anchor(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<usize> {
+    let record = [DIRECTORY.as_slice(), &[K_FIELDS + 2, 11, 0, K_FIELDS + 1, 0, K_FIELDS, 0, K_FIELDS]].concat();
+    find_type(d, ev, &record, "RNTupleAnchor", 10).expect("an anchor")
+}
+
+fn rntuple_sample(folder: &Path, name: &str) -> (Document<MemSource>, Evaluator) {
+    let path = folder.join(name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    (Document::new(MemSource(bytes)), Evaluator::new(root()))
+}
+
+/// What a column's type is called, as the template reads it.
+fn enum_name(value: Value) -> String {
+    match value {
+        Value::Enum { name: Some(name), .. } => name,
+        other => panic!("not a named value: {other:?}"),
+    }
+}
+
+#[test]
+fn rntuple_headers_list_the_fields_and_columns_uproot_reads() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let staff_fields = [
+        ("Category", "std::int32_t"),
+        ("Flag", "std::uint32_t"),
+        ("Age", "std::int32_t"),
+        ("Service", "std::int32_t"),
+        ("Children", "std::int32_t"),
+        ("Grade", "std::int32_t"),
+        ("Step", "std::int32_t"),
+        ("Hrweek", "std::int32_t"),
+        ("Cost", "std::int32_t"),
+        ("Division", "std::string"),
+        ("Nation", "std::string"),
+    ];
+    // Column type and the field it belongs to. A compressed ntuple stores its
+    // integers split and zigzagged and its string offsets split and as
+    // differences; an uncompressed one stores both as they are.
+    let mut staff_columns: Vec<(&str, usize)> = (0..9).map(|i| (if i == 1 { "SplitUInt32" } else { "SplitInt32" }, i)).collect();
+    staff_columns.extend([("SplitIndex64", 9), ("Char", 9), ("SplitIndex64", 10), ("Char", 10)]);
+    let viewer_fields = [("firstName", "std::string"), ("lastName", "std::string")];
+    let viewer_columns = [("Index64", 0), ("Char", 0), ("Index64", 1), ("Char", 1)];
+    let cases: [(&str, &str, &[(&str, &str)], &[(&str, usize)], bool); 2] = [
+        ("ntpl001_staff_rntuple_v1-0-1-0.root", "Staff", &staff_fields, &staff_columns, true),
+        ("rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root", "Contributors", &viewer_fields, &viewer_columns, false),
+    ];
+    for (file, ntuple, fields, columns, packed) in cases {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let anchor = rntuple_anchor(&d, &mut ev);
+        let header = find_type(&d, &mut ev, &[anchor.as_slice(), &[15]].concat(), "RNTupleEnvelope", 10).expect("a header");
+        // Whether the header came out of a block is what the anchor's two
+        // lengths say, and the envelope says which space it is in.
+        assert_eq!(ev.node(&d, &header).unwrap().space != 0, packed, "{file}");
+        let payload = [header.as_slice(), &[2]].concat();
+        let at = |more: &[usize]| [payload.as_slice(), more].concat();
+        assert_eq!(ev.node(&d, &at(&[2, 1])).unwrap().value, Value::Str(ntuple.into()), "{file}");
+        let writer = ev.node(&d, &at(&[4, 1])).unwrap().value;
+        assert!(matches!(&writer, Value::Str(s) if s.starts_with("ROOT v6.")), "{file}: {writer:?}");
+
+        assert_eq!(ev.node(&d, &at(&[5, 2])).unwrap().child_count as usize, fields.len(), "{file}");
+        for (i, (name, type_name)) in fields.iter().enumerate() {
+            let field = at(&[5, 2, i]);
+            assert_eq!(ev.node(&d, &field).unwrap().name, format!("[{i}] {name}"), "{file}");
+            assert_eq!(ev.node(&d, &[field.as_slice(), &[7, 1]].concat()).unwrap().value, Value::Str((*type_name).into()));
+            // Every field of both files is top-level, so its own parent.
+            assert_eq!(ev.node(&d, &[field.as_slice(), &[3]].concat()).unwrap().value.as_int(), Some(i as i128));
+        }
+        assert_eq!(ev.node(&d, &at(&[6, 2])).unwrap().child_count as usize, columns.len(), "{file}");
+        for (i, (type_name, field)) in columns.iter().enumerate() {
+            let column = at(&[6, 2, i]);
+            assert_eq!(enum_name(ev.node(&d, &[column.as_slice(), &[1]].concat()).unwrap().value), *type_name, "{file} column {i}");
+            assert_eq!(ev.node(&d, &[column.as_slice(), &[3]].concat()).unwrap().value.as_int(), Some(*field as i128));
+            assert_eq!(ev.node(&d, &column).unwrap().name, format!("[{i}] {}", fields[*field].0), "{file}");
+        }
+
+        // The footer names the header it goes with by the same checksum the
+        // header ends with.
+        let footer = find_type(&d, &mut ev, &[anchor.as_slice(), &[16]].concat(), "RNTupleEnvelope", 10).expect("a footer");
+        let header_sum = ev.node(&d, &[header.as_slice(), &[3]].concat()).unwrap().value;
+        assert_eq!(ev.node(&d, &[footer.as_slice(), &[2, 2]].concat()).unwrap().value, header_sum, "{file}");
+        eprintln!("--- {file}: {} fields and {} columns, as uproot reads them", fields.len(), columns.len());
+    }
+}
