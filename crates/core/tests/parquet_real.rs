@@ -3,14 +3,54 @@
 use std::path::PathBuf;
 use qubero_core::{document::Document, eval::Evaluator, formats, source::MemSource};
 
-#[test]
-fn pages_and_indexes_are_separate_in_real_files() {
+fn parquet_samples() -> Option<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
         roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
     }
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    let Some(root) = roots.into_iter().map(|p| p.join("parquet")).find(|p| p.is_dir()) else {
+    roots.into_iter().map(|p| p.join("parquet")).find(|p| p.is_dir())
+}
+
+/// The listing of a whole file, asked for the way the browser asks: in goes of
+/// 5,000, starting again from the top of the window each time. Every go has to
+/// get further than the last. `delta_binary_packed.parquet` never finished,
+/// because going back over the rows already listed cost a whole go.
+#[test]
+fn a_whole_file_listing_settles_in_goes() {
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut checked = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "parquet") { continue; }
+        let bytes = std::fs::read(&path).unwrap();
+        let len = bytes.len() as u64 * 8;
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        ev.set_slice(Some(5_000));
+        let mut goes = 0;
+        let spans = loop {
+            goes += 1;
+            assert!(goes <= 200, "{}: the listing never settled", path.display());
+            ev.begin_slice();
+            match ev.spans(&doc, 0, len, 4000) {
+                Ok(v) => break v,
+                Err(e) if e.interrupted() => continue,
+                Err(e) => panic!("{} {e:?}", path.display()),
+            }
+        };
+        eprintln!("{}: {} spans in {goes} goes", path.display(), spans.len());
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn pages_and_indexes_are_separate_in_real_files() {
+    let Some(root) = parquet_samples() else {
         eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
         return;
     };
