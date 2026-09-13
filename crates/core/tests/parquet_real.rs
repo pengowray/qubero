@@ -326,3 +326,114 @@ fn a_v2_data_page_reads_its_levels_and_its_indices() {
     assert!(levels.iter().any(|(r, d)| *r > 0 && *d > 0), "a list column writes both");
     eprintln!("datapage_v2.snappy.parquet: index widths {found:?}, levels {levels:?}");
 }
+
+/// Every page of every sample, read the whole way by the side reader.
+///
+/// The first values of each are pyarrow's, read on 2026-09-13 with
+/// `pq.read_table(path).column(i).to_pylist()`. A data page holds the column;
+/// a dictionary page holds its distinct values, which for these files is the
+/// column with the repeats taken out.
+#[test]
+fn the_side_reader_reads_every_page() {
+    use qubero_core::eval::Explain;
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // file, which page counting from the front, and the first values of it.
+    let cases: &[(&str, usize, &[&str])] = &[
+        // PLAIN v1 with BIT_PACKED levels, gzip.
+        ("data_index_bloom_encoding_stats.parquet", 0, &["Hello", "This is", "a", "test"]),
+        // PLAIN v1, LZ4_RAW, a required INT64 column with no levels at all.
+        ("lz4_raw_compressed.parquet", 0, &["1593604800", "1593604800", "1593604801", "1593604801"]),
+        // DELTA_BINARY_PACKED, uncompressed: 200 values a block.
+        ("delta_binary_packed.parquet", 1, &["0", "-1", "-1", "-1"]),
+        // BYTE_STREAM_SPLIT under zstd.
+        ("byte_stream_split.zstd.parquet", 0, &["1.7640524", "0.4001572", "0.978738", "2.2408931"]),
+        // RLE booleans behind their four-byte length. pyarrow gives
+        // [True, False, None, True, ...]: a null is written in the definition
+        // levels and nowhere else, so the values are the list with the Nones
+        // taken out.
+        ("rle_boolean_encoding.parquet", 0, &["true", "false", "true", "true"]),
+        // A dictionary page of doubles, snappy.
+        ("nan_in_stats.parquet", 0, &["1", "NaN"]),
+    ];
+    for (name, nth, want) in cases {
+        let path = root.join(name);
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        let pages = every_page(&mut ev, &doc);
+        let at = &pages[*nth];
+        let Explain::ParquetPage { steps, values, total, element_type, problem, .. } =
+            ev.explain(&doc, at, None).unwrap()
+        else {
+            panic!("{name}: page {nth} did not read as a page");
+        };
+        assert_eq!(problem, None, "{name} page {nth}");
+        assert!(!steps.is_empty(), "{name} page {nth}: no steps");
+        let shown: Vec<&str> = values.iter().take(want.len()).map(String::as_str).collect();
+        assert_eq!(&shown[..], *want, "{name} page {nth}, as {element_type}");
+        eprintln!(
+            "{name} page {nth}: {total} {element_type}, steps {:?}",
+            steps.iter().map(|s| format!("{} {}->{} {}", s.what, s.in_bytes, s.out_bytes, s.note)).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Every page of every sample reads, or says in words why it does not.
+#[test]
+fn no_page_of_any_sample_is_left_unexplained() {
+    use qubero_core::eval::Explain;
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut read = 0;
+    let mut refused = Vec::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "parquet") {
+            continue;
+        }
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        for at in every_page(&mut ev, &doc) {
+            let Explain::ParquetPage { values, total, problem, .. } = ev.explain(&doc, &at, None).unwrap() else {
+                panic!("{}: {at:?} did not read as a page", path.display());
+            };
+            match problem {
+                Some(why) => refused.push(format!("{}: {why}", path.file_name().unwrap().to_string_lossy())),
+                None => {
+                    assert!(total > 0 || values.is_empty(), "{}: {at:?} read no values and said nothing", path.display());
+                    read += 1;
+                }
+            }
+        }
+    }
+    // The two brotli pages of `large_string_map.brotli.parquet`, which claim
+    // 2,147,483,749 uncompressed bytes from three kilobytes of input. That is
+    // what the file is for.
+    assert_eq!(refused.len(), 2, "refused: {refused:?}");
+    assert!(refused.iter().all(|r| r.starts_with("large_string_map")), "{refused:?}");
+    assert!(read > 50, "only {read} pages read");
+    eprintln!("{read} pages read, {} refused", refused.len());
+}
+
+/// Every page of a file, in the order the column chunks are declared.
+fn every_page(ev: &mut Evaluator, doc: &Document<MemSource>) -> Vec<Vec<usize>> {
+    let mut stack = vec![Vec::new()];
+    let mut pages = Vec::new();
+    while let Some(at) = stack.pop() {
+        let node = ev.node(doc, &at).unwrap();
+        for i in (0..node.child_count as usize).rev() {
+            let mut next = at.clone();
+            next.push(i);
+            stack.push(next);
+        }
+        if node.type_name == "Page" {
+            pages.push(at);
+        }
+    }
+    pages.sort();
+    pages
+}

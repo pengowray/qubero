@@ -30,7 +30,8 @@
 //!
 //! The values are in one of eight encodings. PLAIN writes them as they are.
 //! The two dictionary encodings write indices into the dictionary page, as a
-//! width byte and then the hybrid. RLE is booleans, one bit each. The three
+//! width byte and then the hybrid. RLE is booleans, one bit each, behind a
+//! four-byte length that is there in both page versions. The three
 //! delta encodings pack differences at a width that changes every few dozen
 //! values, and BYTE_STREAM_SPLIT takes every value apart and writes all the
 //! first bytes, then all the second bytes, and so on, which compresses far
@@ -422,12 +423,22 @@ fn values_of(page: &mut Page, bytes: &[u8], header: &Header, column: &Column) {
             page.values = indices.iter().take(VALUES_SHOWN).map(u64::to_string).collect();
         }
         RLE => {
-            let (values, used) = hybrid(bytes, 1, want);
+            // Four bytes of length in front of the runs, in both page
+            // versions. Unlike a v2 page's levels, which the page header
+            // sizes, the values carry their own length here.
+            if bytes.len() < 4 {
+                page.problem = Some("The page ends before its run length.".into());
+                return;
+            }
+            let len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+            let end = (4 + len).min(bytes.len());
+            let (values, _) = hybrid(&bytes[4..end], 1, want);
+            let used = end;
             page.steps.push(Step {
                 what: name.into(),
                 in_bytes: used,
                 out_bytes: 0,
-                note: format!("{} booleans", values.len()),
+                note: format!("{} booleans, one bit each, behind a four-byte length", values.len()),
             });
             page.total = values.len() as u64;
             page.element_type = "bool".into();

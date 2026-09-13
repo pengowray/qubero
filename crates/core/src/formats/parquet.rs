@@ -45,7 +45,9 @@
 //! else, so it reads as the column's physical type outright: four-byte
 //! integers, doubles, byte arrays each behind their own length. A
 //! `DATA_PAGE_V2` says in its header which encoding its values are in, and
-//! PLAIN, the two dictionary encodings and RLE booleans all read. The
+//! PLAIN, the two dictionary encodings and RLE booleans all read. RLE
+//! booleans are behind a four-byte length, which is the one place in a page
+//! the hybrid carries one. The
 //! dictionary encodings and RLE are the same thing underneath, the RLE and
 //! bit-packed hybrid, and it reads as its runs: a varint header whose low bit
 //! says which kind, then either one value repeated or a group of eight packed
@@ -568,6 +570,10 @@ fn page() -> T {
         ("type", T::enumeration("PageType", T::computed(header_field(1)), PAGE_TYPE)),
         ("payload", payload()),
     ])
+    // A page reads further than a template can take it: the levels of a v1
+    // page, the delta encodings, and the byte stream split all need the
+    // schema or a decoder. See [`super::parquet_page`].
+    .packed_as(super::parquet_page::PACKING)
 }
 
 /// What a page's payload holds, which is not the same shape for every kind of
@@ -670,11 +676,7 @@ fn v2_values() -> T {
         (0, plain_values()),
         (2, dictionary_indices()),
         (8, dictionary_indices()),
-        // RLE is only ever booleans, one bit a value, and in a v2 page the
-        // run starts straight away: there is no width byte, because a boolean
-        // is one bit, and no length in front of it, because the header
-        // already said how long the values are.
-        (3, hybrid_runs(E::lit(1))),
+        (3, rle_booleans()),
     ], T::bytes(E::Remaining))
 }
 
@@ -707,6 +709,19 @@ fn byte_array() -> T {
     T::structure_named("ByteArray", "", "bytes", vec![
         ("length", T::u32(Little)),
         ("bytes", T::bytes(E::field("length"))),
+    ])
+}
+
+/// RLE booleans: four bytes of length, and then the hybrid at one bit a value.
+///
+/// There is no width byte, because a boolean is one bit. There is a length,
+/// in both page versions, and that is the odd one out: a v2 page's levels are
+/// sized by the header and carry none, and the same runs holding dictionary
+/// indices carry none either. The values are the one place it is written.
+fn rle_booleans() -> T {
+    T::structure("RleBooleans", vec![
+        ("length", T::u32(Little)),
+        ("runs", T::sized(E::field("length"), hybrid_runs(E::lit(1)))),
     ])
 }
 
