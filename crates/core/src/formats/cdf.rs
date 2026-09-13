@@ -1046,23 +1046,54 @@ mod tests {
         assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2, 12]).unwrap().child_count, 1);
     }
 
-    #[test]
-    fn a_compressed_file_holds_one_record_and_the_settings_that_made_it() {
-        let mut cpr = be32(5); // gzip
-        cpr.extend(be32(0));
-        cpr.extend(be32(1));
-        cpr.extend(be32(6)); // level six
-        let mut ccr = be64(0); // filled in below
-        ccr.extend(be64(4096)); // what it was before
+    /// CDF's run-length coding: a zero byte escapes one less than the number
+    /// of zeroes to write, and every other byte is itself.
+    fn rle(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < data.len() {
+            if data[at] != 0 {
+                out.push(data[at]);
+                at += 1;
+                continue;
+            }
+            let run = data[at..].iter().take_while(|b| **b == 0).count().min(256);
+            out.push(0);
+            out.push((run - 1) as u8);
+            at += run;
+        }
+        out
+    }
+
+    /// A compressed file: the whole of [`file`] after its signature, squeezed,
+    /// and the parameters that say how.
+    ///
+    /// The point of the test is that the walk inside lands in the right place.
+    /// Every offset in there counts from the front of the file it was, and what
+    /// comes out of the stream is that file from its ninth byte on, so a reader
+    /// that does not take the eight back reads every record eight bytes late.
+    fn compressed() -> Vec<u8> {
+        let plain = file();
+        let mut ccr = be64(0); // the parameters, filled in below
+        ccr.extend(be64((plain.len() - 8) as i64));
         ccr.extend(be32(0));
-        ccr.extend_from_slice(b"\x78\x9c squeezed");
-        let mut b = MAGIC.to_vec();
-        b.extend_from_slice(&[0xCC, 0xCC, 0x00, 0x01]);
+        ccr.extend(rle(&plain[8..]));
         let cpr_at = (8 + 12 + ccr.len()) as i64;
         ccr[0..8].copy_from_slice(&cpr_at.to_be_bytes());
+        let mut cpr = be32(1); // run-length
+        cpr.extend(be32(0));
+        cpr.extend(be32(1));
+        cpr.extend(be32(0)); // its one parameter, which means nothing
+        let mut b = MAGIC.to_vec();
+        b.extend_from_slice(&[0xCC, 0xCC, 0x00, 0x01]);
         b.extend(rec(10, ccr));
         b.extend(rec(11, cpr));
-        let d = Document::new(MemSource(b));
+        b
+    }
+
+    #[test]
+    fn a_compressed_file_holds_one_record_and_the_settings_that_made_it() {
+        let d = Document::new(MemSource(compressed()));
         let mut e = Evaluator::new(cdf());
         assert_eq!(
             e.node(&d, &[2]).unwrap().value,
@@ -1070,14 +1101,196 @@ mod tests {
         );
         let body = e.node(&d, &[3, 2]).unwrap();
         assert_eq!(body.type_name, "CdfCompressed");
-        assert_eq!(e.node(&d, &[3, 2, 1]).unwrap().value, Value::UInt(4096));
-        let parms = e.node(&d, &[3, 2, 4, 0, 2]).unwrap();
+        assert_eq!(e.node(&d, &[3, 2, 1]).unwrap().value, Value::UInt(file().len() as u128 - 8));
+        let parms = e.node(&d, &[3, 2, 3, 0, 2]).unwrap();
         assert_eq!(parms.type_name, "CdfCompressionParameters");
         assert_eq!(
-            e.node(&d, &[3, 2, 4, 0, 2, 0]).unwrap().value,
-            Value::Enum { raw: 5, name: Some("gzip".into()), hex: false }
+            e.node(&d, &[3, 2, 3, 0, 2, 0]).unwrap().value,
+            Value::Enum { raw: 1, name: Some("run-length".into()), hex: false }
         );
-        assert_eq!(e.node(&d, &[3, 2, 4, 0, 2, 3, 0]).unwrap().value, Value::Int(6));
+    }
+
+    /// The file inside the compressed one, read as a file: the same records in
+    /// the same order, found by the same offsets taken back by the eight bytes
+    /// of signature that are not in the stream.
+    #[test]
+    fn a_compressed_file_reads_as_the_file_it_holds() {
+        let d = Document::new(MemSource(compressed()));
+        let mut e = Evaluator::new(cdf());
+        // What comes out is longer than the file it came out of, which is the
+        // whole point of squeezing it and the reason the walk inside cannot be
+        // bounded by the length of the file.
+        let inside = e.node(&d, &[3, 2, 4, 0]).unwrap();
+        assert_eq!(inside.type_name, "CdfInsideCompressed");
+        assert_eq!(e.node(&d, &[3, 2, 4, 0, 0]).unwrap().value, Value::Int(8));
+        // The descriptor record is the first byte of the stream, and the global
+        // descriptor is at the offset it names less those eight.
+        let cdr = e.node(&d, &[3, 2, 4, 0, 1, 2]).unwrap();
+        assert_eq!(cdr.type_name, "CdfDescriptor");
+        assert_eq!(e.node(&d, &[3, 2, 4, 0, 1, 2, 11, 0, 2]).unwrap().type_name, "CdfGlobalDescriptor");
+        let gdr = e.node(&d, &[3, 2, 4, 0, 1, 2, 11, 0]).unwrap();
+        assert_eq!(gdr.offset_bits, (e.node(&d, &[3, 2, 4, 0, 1, 2, 0]).unwrap().value.as_int().unwrap() - 8) as u64 * 8);
+        // And the chains below it, which are the reason for all of it: the
+        // zVariable is the same one, with the same name.
+        let z = e.node(&d, &[3, 2, 4, 0, 1, 2, 11, 0, 2, 15, 0, 2]).unwrap();
+        assert_eq!(z.name, "body sea_temp");
+        let a = e.node(&d, &[3, 2, 4, 0, 1, 2, 11, 0, 2, 16, 0, 2]).unwrap();
+        assert_eq!(a.name, "body TITLE");
+        assert_eq!(e.node(&d, &[3, 2, 4, 0, 1, 2, 11, 0, 2, 16, 0, 2, 12, 0, 2, 10]).unwrap().value, Value::Str("depth".into()));
+    }
+
+    /// A file with one zVariable and one block of its values: the smallest
+    /// thing that exercises the walk from a descriptor to numbers.
+    ///
+    /// `encoding` is the machine the numbers are in, `data_type` what they
+    /// are, `dim` how many of them are in one record, and `block` the bytes of
+    /// the block, already in that byte order. With `compressed` the block is a
+    /// compressed one, and `block` is the stream rather than the values.
+    fn with_values(encoding: i32, data_type: i32, dim: i32, records: i32, block: &[u8], compressed: bool) -> Vec<u8> {
+        // Every record here is a fixed size given the arguments, so the
+        // offsets are worked out rather than measured.
+        let (gdr_at, vdr_at) = (8 + 312, 8 + 312 + 84);
+        // A descriptor with one dimension in it, and an index with one entry.
+        let vxr_at = vdr_at + 352;
+        let block_at = vxr_at + 44;
+
+        let mut cdr = be64(gdr_at);
+        cdr.extend(be32(3)); // version
+        cdr.extend(be32(8)); // release
+        cdr.extend(be32(encoding));
+        cdr.extend(be32(3)); // row-major, single file
+        for _ in 0..3 {
+            cdr.extend(be32(0));
+        }
+        cdr.extend(be32(-1));
+        cdr.extend(be32(-1));
+        cdr.resize(cdr.len() + 256, 0);
+
+        let mut gdr = be64(0); // no rVariables
+        gdr.extend(be64(vdr_at));
+        gdr.extend(be64(0)); // no attributes
+        gdr.extend(be64(0)); // eof, which nothing here reads back
+        for v in [0, 0, -1, 0, 1] {
+            gdr.extend(be32(v)); // no rVariables, no attributes, no rDims, one zVariable
+        }
+        gdr.extend(be64(0)); // no free list
+        for v in [0, -1, -1] {
+            gdr.extend(be32(v));
+        }
+
+        let mut vdr = be64(0); // the only variable of its kind
+        vdr.extend(be32(data_type));
+        vdr.extend(be32(records - 1)); // the highest record number written
+        vdr.extend(be64(vxr_at));
+        vdr.extend(be64(vxr_at));
+        vdr.extend(be32(if compressed { 5 } else { 1 })); // record variance, and compressed
+        for v in [0, 0, -1, -1] {
+            vdr.extend(be32(v));
+        }
+        vdr.extend(be32(1)); // one element per value
+        vdr.extend(be32(0)); // variable number zero
+        vdr.extend(be64(-1)); // no parameters
+        vdr.extend(be32(0));
+        vdr.extend(nm("measured"));
+        vdr.extend(be32(1)); // one dimension
+        vdr.extend(be32(dim));
+        vdr.extend(be32(1)); // which varies
+
+        let mut vxr = be64(0); // no second index record
+        vxr.extend(be32(1)); // one entry, and it is used
+        vxr.extend(be32(1));
+        vxr.extend(be32(0)); // covering records nought to the last
+        vxr.extend(be32(records - 1));
+        vxr.extend(be64(block_at));
+
+        let mut b = MAGIC.to_vec();
+        b.extend_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        b.extend(rec(1, cdr));
+        b.extend(rec(2, gdr));
+        b.extend(rec(8, vdr));
+        b.extend(rec(6, vxr));
+        match compressed {
+            false => b.extend(rec(7, block.to_vec())),
+            true => {
+                let mut cvvr = be32(0);
+                cvvr.extend(be64(block.len() as i64));
+                cvvr.extend_from_slice(block);
+                b.extend(rec(13, cvvr));
+            }
+        }
+        assert_eq!(b.len() as i64, block_at + 12 + block.len() as i64 + if compressed { 12 } else { 0 });
+        b
+    }
+
+    /// Where the values of the one variable in [`with_values`] are.
+    const VALUES: &[usize] = &[3, 2, 11, 0, 2, 15, 0, 2, 19, 0, 2, 6, 0, 3, 0, 2];
+
+    /// The same three numbers written by a big-endian machine and by a little-
+    /// endian one, which is what the encoding field is for. Both come out as
+    /// the numbers somebody measured; read the one way round they would be
+    /// four orders of magnitude apart.
+    #[test]
+    fn the_encoding_says_which_way_round_the_values_are() {
+        let numbers: [f32; 3] = [1.5, -2.25, 3.75];
+        let mut network = Vec::new();
+        let mut ibm_pc = Vec::new();
+        for v in numbers {
+            network.extend(v.to_be_bytes());
+            ibm_pc.extend(v.to_le_bytes());
+        }
+        // 1 is network order and 6 is an IBM PC, which is the pair nearly every
+        // CDF in the world is one of.
+        for (encoding, block) in [(1, network), (6, ibm_pc)] {
+            let d = Document::new(MemSource(with_values(encoding, 21, 3, 1, &block, false)));
+            let mut e = Evaluator::new(cdf());
+            let values = e.node(&d, VALUES).unwrap();
+            assert_eq!(values.child_count, 1, "one record, encoding {encoding}");
+            for (i, want) in numbers.iter().enumerate() {
+                let mut p = VALUES.to_vec();
+                p.extend([0, i]);
+                assert_eq!(e.node(&d, &p).unwrap().value, Value::Float(*want as f64), "encoding {encoding}");
+            }
+        }
+    }
+
+    /// A block that was squeezed. CDF hands the whole block to gzip, so what is
+    /// in the record is a member with its own header and its own check, and
+    /// what the values are read over is what comes out of it.
+    #[test]
+    fn a_compressed_block_of_values_is_unpacked() {
+        let numbers: [i32; 4] = [7, -1, 1000, 0];
+        let mut plain = Vec::new();
+        for v in numbers {
+            plain.extend(v.to_be_bytes());
+        }
+        let d = Document::new(MemSource(with_values(1, 4, 2, 2, &gzip_member(&plain), true)));
+        let mut e = Evaluator::new(cdf());
+        // The record's body is the stream and what it says about itself; the
+        // values are what came out of it.
+        let mut values_at = VALUES.to_vec();
+        values_at.extend([2, 0]);
+        let values = e.node(&d, &values_at).unwrap();
+        // Two records of two numbers each, which is what the index entry and
+        // the variable's one dimension say between them.
+        assert_eq!(values.child_count, 2);
+        for (i, want) in numbers.iter().enumerate() {
+            let mut p = values_at.clone();
+            p.extend([i / 2, i % 2]);
+            assert_eq!(e.node(&d, &p).unwrap().value, Value::Int(*want as i128));
+        }
+    }
+
+    /// A gzip member holding `data`, written as one stored deflate block, which
+    /// is the shape that can be built by hand.
+    fn gzip_member(data: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+        out.push(1); // the last block, and stored
+        out.extend((data.len() as u16).to_le_bytes());
+        out.extend((!(data.len() as u16)).to_le_bytes());
+        out.extend_from_slice(data);
+        out.extend(crate::checksum::crc32(data).to_le_bytes());
+        out.extend((data.len() as u32).to_le_bytes());
+        out
     }
 
     #[test]
