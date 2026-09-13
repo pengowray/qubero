@@ -1992,6 +1992,21 @@ button.insp-prop-head:hover {
 .dlg-tool {
   font-family: var(--mono);
 }
+/* The answers that were not chosen: name, then how each knows. */
+.dlg-others {
+  margin: 0 0 6px;
+  padding-left: 1.2em;
+}
+.dlg-others li {
+  margin-bottom: 2px;
+}
+.dlg-others li > * + * {
+  margin-left: 0.6em;
+}
+/* A source that names a different format from the chosen one. */
+.dlg-disagrees {
+  color: var(--warn);
+}
 /* The formats Wikidata lists, one to a line: name, extensions, what matched, links. */
 .dlg-wiki {
   margin: 0 0 6px;

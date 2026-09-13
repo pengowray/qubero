@@ -1071,6 +1071,33 @@ slice of the file and one map lookup. What is left, the patterns with a gap,
 alternatives or a byte range and the fourteen measured back from the end of the
 file, is still run one at a time.
 
+### Which answer names the file
+Four sources answer, at different times: the template as soon as the first
+bytes are read, the `file(1)` rules once their module has loaded, the tool
+signatures and the format signatures after their fetches. `identity.ts`
+decides in one place, from whatever has answered so far, and `filetype.ts`
+redraws the toolbar, the overview and the dialog from that decision every time
+an answer lands, so nothing on screen depends on which answer came last.
+
+A template that read the file outranks the rules that matched its bytes,
+unless the two agree about the format, in which case the rules' sentence is
+the name because it says more: the template calls a PNG a PNG, the rule says
+it is 1280 by 720. Agreement is a shared extension or media type first, and
+the words of the sentence only as a last resort, with the words that are in
+every sentence (data, file, archive, image) left out. A weak template, one
+that infers rather than matches (zlib's two bytes that agree with each other,
+a pickle that parses to the end), yields to the rules either way. With no
+template the rules name the file; failing them, the tool that built it;
+failing that, a signature the extension vouches for or one long enough to
+vouch for itself. The dialog lists every answer under the chosen one, each
+with what it rests on, and marks the ones that name a different format.
+
+The case that forced this was a Parquet file called "PARity archive data":
+not a ranking problem in the end but a parsing one, the engine dropping the
+NUL from the end of `PAR\0` so that the rule matched `PAR1` (fixed in the
+copy of `pure-magic` under `crates/vendor`, and 333 rules end that way). The
+ranking is the safety net for the next one.
+
 ### What made a file
 A second database answers a different question. Where `file(1)` says what
 format a file is, the Detect It Easy signature rules say what tool produced it:

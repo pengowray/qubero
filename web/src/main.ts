@@ -16,7 +16,7 @@ import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
-import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateIdentity, templateSentence, templateTypeName } from "./filetype.ts";
+import { fileType, builtinTemplate, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
 import { DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -614,6 +614,8 @@ function build(tab: Tab): Page {
   };
 
   const kind = fileType();
+  // The overview shows the same name the toolbar does, whatever named it.
+  kind.onIdentity = (name) => overview.setIdentity(name);
   const tmpl = el("select", { className: "tb-tmpl" });
   tmpl.setAttribute("aria-label", "Template");
   tmpl.append(el("option", { value: "", textContent: "No template" }));
@@ -649,6 +651,10 @@ function build(tab: Tab): Page {
     if (name !== null) {
       tmpl.value = name;
       doc.setTemplate(name);
+      // The template's answer goes up at once: it is the one source that
+      // has read the file, and the one that answers before anything else.
+      kind.setTemplate({ name, label: templateTypeName(name), sentence: templateSentence(doc, name) });
+      kind.setNote(builtinTemplate(name));
     } else {
       // Nothing to read a field from, so start on the raw reading instead.
       inspector.setMode("le");
@@ -668,57 +674,20 @@ function build(tab: Tab): Page {
       // is fetched for the template: that second wait must not be able to
       // write "identifying" over a name already on screen.
       if (waiting !== null) clearTimeout(waiting);
-      if (id === null) {
-        overview.setIdentity("");
-        // A full template has stronger structural evidence than the generic
-        // rule database. Keep its answer visible when those rules have no
-        // signature for the format (as with a Bard's Tale TPW record).
-        if (templated && name !== null) {
-          const identity = templateIdentity(doc, name);
-          kind.named(identity);
-          overview.setIdentity(identity);
-          kind.details(null, builtinTemplate(name));
-          void kind.addMatches(doc, null, name);
-        } else {
-          kind.unknown();
-          kind.details(null, null);
-          void kind.addMatches(doc, null, name);
-        }
-        return;
-      }
-      // What the template read beats what the rules matched, where it has
-      // anything to say: the rules see a theme as JSON and stop there.
-      //
-      // And where the rules only half matched. A file(1) rule builds its
-      // sentence out of nested clauses, so an answer that ends in a comma is
-      // one whose first line matched and whose every branch under it did not:
-      // a Godot resource starts `RSRC`, which is also what a LabVIEW file
-      // starts with, and the rules said "National Instruments," and stopped.
-      // Four bytes against a template that read the file is not a contest, so
-      // the template's own name wins; the comma is trimmed either way, since a
-      // sentence ending in one is unfinished however it got there.
-      const rules = id.message.replace(/,\s*$/, "");
-      const half = rules !== id.message;
-      const said = (name === null ? null : templateSentence(doc, name) ?? (half ? templateTypeName(name) : null)) ?? rules;
-      kind.named(said);
-      overview.setIdentity(said);
-      void kind.addMatches(doc, id, name);
-      if (name !== null) {
-        kind.details(id, builtinTemplate(name));
-        return;
-      }
+      // Which answer names the file is decided in one place, from every
+      // source that has spoken: see identity.ts.
+      kind.setFile(id);
+      void kind.addMatches(doc);
+      if (id === null || name !== null) return;
       // The rule that named the format also says where its signature is. That
       // is one field, but it is a field: clickable, highlighted, and true.
       const signature = await doc.signatureTemplate(id);
-      if (signature === null) {
-        kind.details(id, null);
-        return;
-      }
+      if (signature === null) return;
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
       tmpl.append(option);
       tmpl.value = SIGNATURE_VALUE;
       overview.setNote(SIGNATURE_NOTE);
-      kind.details(id, SIGNATURE_TEMPLATE);
+      kind.setNote(SIGNATURE_TEMPLATE);
       reapplySignature = async (): Promise<void> => {
         await doc.signatureTemplate(id);
         overview.setNote(SIGNATURE_NOTE);

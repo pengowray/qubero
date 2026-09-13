@@ -405,7 +405,20 @@ export const NAMING_BYTES_ALONE = 8;
 export function namingMatch(matches: readonly SigMatch[]): SigMatch | null {
   const top = matches[0];
   if (top === undefined) return null;
-  if (matches[1] !== undefined && matches[1].score === top.score) return null;
+  // A tie between two sources naming the same bytes is not a tie between
+  // formats: file(1) and Wikidata both know a PNG. The rule's label wins,
+  // since it is the one the file(1) module would have written. A tie within
+  // one source is two formats that cannot be told apart, and names nothing.
+  const tied = matches.filter((m) => m.score === top.score);
+  if (tied.length > 1) {
+    const fromRules = tied.filter((m) => m.format.source === "file");
+    const fromWikidata = tied.filter((m) => m.format.source === "wikidata");
+    if (fromRules.length !== 1 || fromWikidata.length !== tied.length - 1) return null;
+    const [rule] = fromRules;
+    if (rule === undefined) return null;
+    const enough = rule.extensionAgrees ? rule.fixed >= NAMING_BYTES_WITH_EXTENSION : rule.fixed >= NAMING_BYTES_ALONE;
+    return enough ? rule : null;
+  }
   const enough = top.extensionAgrees ? top.fixed >= NAMING_BYTES_WITH_EXTENSION : top.fixed >= NAMING_BYTES_ALONE;
   return enough ? top : null;
 }
