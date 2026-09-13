@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S5. `Expr::StartOf`, `E::tagged_in_by`, and a tag index shared by every referrer to one list: an HDF5 variable-length string reads as its text, over its own bytes. Two generated samples, one behind a 512-byte user block. | 240ca28, fea1214 |
 | FITS `TSCALn`/`TZEROn` and `BSCALE`/`BZERO`: the stored integer keeps its bytes and a zero-bit `worth = zero + scale * stored` hangs off it. Not read as the unsigned type: the convention is a bias, and `scaled.fits` shows physical 0 on disk as signed -32768. | ef3e54f |
 | FITS columns past 32: a row is a list of cells, each working out its own `TFORMn` from `Idx`, so the cap is the standard's 999. Labels are `[2] flux` now, were `col3 flux`. Axes past 9 read; `NAXISn = 0` reads as no data. | cdb051f |
 | FITS `CONTINUE` cards read as the pieces they hold; a bare `TFORM1 = 'I'` reads as one binary value (it went down the ASCII path and failed, which broke three of four astropy-written samples). | c2dcf36, ecd6b31 |
@@ -162,42 +163,33 @@ HDF5 files.
   variable-length strings and every other global-heap object. `h5ad.rs` does
   the walk as a reader because a field cannot.
 
-  **Design (Fable, 2026-09-13), not built.** Mostly there already:
-  `Expr::Tagged` with `array: Some(within(["collection","objects"]))` and
-  `Tag::Computed(field("object_index"))` finds the object today, since
-  `descend` steps through an `At`. What is missing is (a) a child that
-  *covers* the found object's bytes rather than a number read out of it, and
-  (b) a cost fix: every referrer's `collection` is a distinct path to the
-  same bytes, nothing dedups the search, so a column of N strings is O(N^2).
+  **Built 2026-09-13** (`3b35878`..`f17a881`), as designed, with these
+  differences found by building it:
 
-  Recommended: one `Expr::StartOf(expr)`, the byte offset at which the field
-  the expression names begins (counted from the nearest `Origin`, so it pairs
-  with `at_origin` like every HDF5 address), then in `vlen_reference` an
-  `object` field: `T::at_origin(E::start_of(find(["data","payload"])),
-  T::sized(find(["size"]), text of `length` bytes or bytes))` marked
-  `field_aside` (required: without it `kinds_real` counts every string
-  twice, as ELF's `name` shows) and `named_by("object")`. Split
-  `heap_object.data` into `payload: bytes(size)` and `padding`. Add a
-  builder `E::tagged_in_by(array: Expr, key, tag: Expr, field)`. Plus a key
-  index in `tagged_path` for `array: Some(..)` searches: a map key -> element
-  index per list keyed by the list node's `(space, offset, limit)`, dropped by
-  range in `forget_after`, bounded; excludes `array: None` (GWF's
-  nearest-earlier semantics). That index also closes the FITS "every cell
-  asks the header for its `TFORMn` card again" note.
+  - `within` did not step through an `At` chosen by a `Switch`
+    (`at_address` wraps one for the undefined address), so the lookup failed
+    on every real file. `within_path` now steps through an `At` the file
+    turned out to have, the same rule `descend` applies further down.
+  - A map of tag to element index would not have paid: placing element *i*
+    of a `Repeat` still walks 0..i-1 in each referrer's own copy of the list.
+    The index keeps the list *path* that did the walking and resumes there,
+    so every referrer to one stretch of bytes shares one walk (310 extra memo
+    nodes for a second referrer without it, under 12 with). The origins panel
+    for element 1999 therefore points at a node under element 0's
+    `collection`: same bytes, different path.
+  - A repeated label keeps its first element (`or_insert`); FITS repeats
+    `COMMENT` and `HISTORY`.
+  - h5py always appends within a collection, so indices ascend; the sample
+    has gaps and a high start instead, and real out-of-order is a unit test.
 
-  Build order: (1) template-only `payload`/`padding` split and
-  `tagged_in_by`, `h5ad::attribute` reads the field and `h5ad::vlen_string`
-  goes; (2) the key index, with a test that two referrers walk one
-  collection once; (3) `StartOf` (arms in `expr.rs` eval and `text_path`,
-  `relate.rs`, `origin.rs`, `machinery.rs`, builder; `uniform()` false) and
-  the `object` field; (4) a generated `vlen-strings.h5` (h5py: thousands of
-  strings over two collections, VL attributes, a 512-byte user block
-  variant, indices out of order) checked in `hdf5_real.rs`; (5) DESIGN.md
-  lines on the global heap rewritten. Rejected: a `Ty::Pick` type (every
-  `At`/`Chain` arm would need a twin; only HDF5 wants the bytes). Risks: the
-  `StartOf` base convention is silent on plain files and off by 512 on
-  MATLAB 7.3 if wrong; the placed index walks one stretch per string; a VL
-  string inside a VL sequence must not read as a ring.
+  A VL string now reads as its text on an `object` row, the cursor on its
+  bytes lands there, and `h5ad::vlen_string` is a three-line accessor. The
+  index also speeds FITS (full walk of `comp.fits` 310 to 219 ms,
+  `manyrows.fits` 172 to 125 ms). **Cost to watch:** every note now places
+  its heap object and names itself from it, so a listing of a million-string
+  column costs a million placements; if a real `.h5ad` is slow in the
+  browser, have the listing not ask for a `named_by` field that is an `At`
+  until the row is opened.
 
 - **S6. A ZIP entry takes a template by its name.** NPZ members as NPY, the
   chunks of a Zarr ZipStore.
@@ -306,7 +298,8 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- Variable-length strings (S5).
+- Variable-length sequences (not strings) stay bytes until the base type in
+  the datatype's properties is read.
 - Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
 - Huge and tiny fractal-heap objects, free-space managers.
