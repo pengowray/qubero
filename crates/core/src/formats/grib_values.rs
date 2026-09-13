@@ -45,8 +45,9 @@
 //! this hands back the values as section 7 holds them and says how many, which
 //! is what the section is. Missing-value management past 0, where a group
 //! reference of all ones means the group has no value, is not undone either:
-//! those groups come back as the numbers they hold and are counted in
-//! [`Reading::problem`].
+//! those groups come back as the numbers they hold, and how many points that
+//! is is said in [`Reading::problem`] rather than left for a reader to notice
+//! in a measurement of 4 billion.
 
 /// The largest section 7 this will unpack. Section 7 of a global model at
 /// half a degree is about a megabyte; a claim far past that is a reason to
@@ -70,6 +71,10 @@ pub struct Packing {
     /// How wide one group reference is. For simple packing, how wide one value
     /// is, and everything below is left at zero.
     pub bits_per_value: u32,
+    /// What section 5 says about points with no value: 0 for none, and 1 or 2
+    /// for a group reference of all ones meaning the group is missing. Only
+    /// counted here, not undone.
+    pub missing_value_management: u32,
     pub n_groups: u32,
     pub group_widths_reference: u32,
     pub group_widths_bits: u32,
@@ -239,11 +244,11 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
     let mut missing = 0u64;
     for g in 0..n {
         let (width, reference) = (widths[g], references[g]);
-        // A group of all ones is how a message says the group has no value,
-        // and only when section 5 turned that on, which this does not read.
-        // Counted so that the answer says it rather than quietly claiming a
-        // very large measurement.
-        if width > 0 && reference == (1u64 << p.bits_per_value.min(63)) - 1 {
+        // A reference of all ones is how a message with missing-value
+        // management on says the whole group has no value. Counted rather than
+        // undone, so that the answer says so instead of quietly handing back a
+        // very large measurement as if it were one.
+        if p.missing_value_management > 0 && p.bits_per_value > 0 && reference == (1u64 << p.bits_per_value.min(63)) - 1 {
             missing += lengths[g];
         }
         for _ in 0..lengths[g] {
@@ -263,7 +268,7 @@ pub fn complex(p: &Packing, section7: &[u8]) -> Reading {
     }
     out.steps.push(Step { what: format!("added each group's reference to its {total} values"), count: total });
     if missing > 0 {
-        out.problem = Some(format!("{missing} values are in groups whose reference is all ones, which may mean the group has no value"));
+        out.problem = Some(format!("{missing} values are in groups section 5 marked as having no value, and are handed back as the numbers they hold"));
     }
     finish(p, out, first, minimum)
 }
@@ -374,6 +379,7 @@ mod tests {
             binary_scale: 0,
             decimal_scale: 0,
             bits_per_value: 6,
+            missing_value_management: 0,
             n_groups: 2,
             group_widths_reference: 1,
             group_widths_bits: 3,

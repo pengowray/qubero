@@ -280,6 +280,9 @@ fn packing_and_data(name: &str, message: usize) -> Option<(qubero_core::formats:
         binary_scale: signed(&mut ev, 1),
         decimal_scale: signed(&mut ev, 2),
         bits_per_value: at(&mut ev, 0) as u32,
+        // Section 7 has no use for this one, so it comes from section 5 with
+        // the reference value and the scale factors.
+        missing_value_management: signed(&mut ev, 6) as u32,
         n_groups: at(&mut ev, 1) as u32,
         group_widths_reference: at(&mut ev, 2) as u32,
         group_widths_bits: at(&mut ev, 3) as u32,
