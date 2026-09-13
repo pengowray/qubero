@@ -111,13 +111,11 @@ fn the_data_behind_the_descriptors_is_opened() {
         let found = walk(&mut ev, &doc, name);
         let of = |what: &str| found.get(what).map_or(0, |v| v.len());
         match name.as_str() {
-            // Twelve datasets, one per number type. The first is ten by ten
-            // float32 counting up along the second dimension, which is what
-            // pyhdf reads out of it.
+            // Twelve datasets, one per number type, under thirteen groups,
+            // and the seven whose members are in the same block open. Each is
+            // ten by ten counting up along the second dimension, which is
+            // what pyhdf reads out of them.
             "ntcheck.hdf" => {
-                // Thirteen groups, and the seven whose members are in the
-                // same block open. Each is ten by ten, counting up along the
-                // second dimension, which is what pyhdf reads out of them.
                 assert_eq!(of("Hdf4ScientificDataset"), 7);
                 let mut ten_by_ten = 0;
                 for at in found["Hdf4ScientificDataset"].clone() {
@@ -142,6 +140,18 @@ fn the_data_behind_the_descriptors_is_opened() {
                 // would call half of them something the file did not say.
                 assert!(of("Hdf4FloatClass") > 0, "a float's class byte");
                 assert!(of("Hdf4IntClass") > 0, "a whole number's class byte");
+                // Every dataset has a scale along its first dimension and
+                // none along its second, and the flag bytes are the only
+                // thing that says so.
+                assert_eq!(of("Hdf4SdScales"), 7, "the rest name a dimension record a block away");
+                for at in found["Hdf4SdScales"].clone() {
+                    assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 0]].concat()), Value::UInt(1));
+                    assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 1]].concat()), Value::UInt(0));
+                    assert_eq!(ev.node(&doc, &[at.clone(), vec![2, 0, 1]].concat()).unwrap().child_count, 10);
+                    assert_eq!(ev.node(&doc, &[at, vec![2, 1, 1]].concat()).unwrap().size_bits, 0);
+                }
+                // A maximum and a minimum in the dataset's own number type.
+                assert_eq!(of("Hdf4MaxAndMin"), 6);
             }
             // The same datasets the other way round. A value of 1 is written
             // `01 00` and reads as 1, not as 256.
@@ -194,6 +204,13 @@ fn the_data_behind_the_descriptors_is_opened() {
                     })
                     .collect();
                 assert!(ranks.contains(&3) && ranks.contains(&2) && ranks.contains(&1));
+                // Three special elements, each naming the chain of blocks its
+                // values are really in.
+                assert_eq!(of("Hdf4LinkedBlocks"), 3);
+                for at in found["Hdf4LinkedBlocks"].clone() {
+                    let blocks = number(value(&mut ev, &doc, &[at, vec![2]].concat()));
+                    assert!(blocks > 0.0, "a chain of no blocks holds nothing");
+                }
             }
             // Twenty tables, and the rows of each take their columns from the
             // header with the same reference number, which in this file is

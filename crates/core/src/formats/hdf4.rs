@@ -445,6 +445,147 @@ fn palette() -> T {
     )
 }
 
+/// The scales of a scientific dataset: what the steps along each of its
+/// dimensions stand for.
+///
+/// One byte per dimension says whether that dimension has a scale at all, and
+/// then the scales that are there follow one after another, each as long as
+/// its dimension and in the number type the dimension record gave it. So
+/// nothing here can be read without the dimension record with the same
+/// reference number, which says how many dimensions there are, how long each
+/// is, and what each scale's values are.
+fn sd_scales() -> T {
+    let dims = || key(701, own_ref());
+    let rank = || E::within(&["dimensions", "rank"]).at_least(E::lit(0));
+    let body = T::structure(
+        "Hdf4SdScales",
+        vec![
+            (
+                "dimensions",
+                T::at(look(dims(), &["offset"]), T::sized(look(dims(), &["length"]), sd_dimensions())),
+            ),
+            ("has_scale", T::array(T::u8(), rank())),
+            ("scales", T::array(one_scale(), rank())),
+        ],
+    )
+    .machinery(&["dimensions"])
+    .field_aside("dimensions");
+    T::switch(found(dims()), vec![(1, body)], T::bytes(E::Remaining))
+}
+
+/// The scale along one dimension, or nothing where the flag byte for that
+/// dimension said there is none.
+///
+/// Which dimension this is, is written down as a field of no bits rather than
+/// asked for as `Idx` where it is needed, for the reason a vdata's columns
+/// are: inside the run of values `Idx` is which value this is.
+fn one_scale() -> T {
+    let which = || E::field("dimension");
+    let nt = |f: &str| {
+        look(key(106, E::elem_within(&["dimensions", "scales"], which(), &["ref"])), &["record", f])
+    };
+    T::structure_named(
+        "Hdf4SdScale",
+        "",
+        "values",
+        vec![
+            ("dimension", T::computed(E::idx())),
+            (
+                "values",
+                T::present_if(
+                    E::elem("has_scale", which()),
+                    T::array(
+                        number_value(nt("type"), nt("class"), nt("width")),
+                        E::elem_within(&["dimensions", "dims"], which(), &[]).at_least(E::lit(0)),
+                    ),
+                ),
+            ),
+        ],
+    )
+    .machinery(&["dimension"])
+}
+
+/// The largest and the smallest value in a scientific dataset, in the number
+/// type of the dataset itself, which is the number type record with the same
+/// reference number.
+fn max_and_min() -> T {
+    let nt = |f: &str| look(key(106, own_ref()), &["record", f]);
+    let value = || number_value(nt("type"), nt("class"), nt("width"));
+    T::switch(
+        found(key(106, own_ref())),
+        vec![(1, T::structure("Hdf4MaxAndMin", vec![("max", value()), ("min", value())]))],
+        T::bytes(E::Remaining),
+    )
+}
+
+/// The header of a special element: the same object kept somewhere other than
+/// in one run of bytes.
+///
+/// Every tag has a twin with 0x4000 added, and a descriptor carrying one of
+/// those points at this rather than at the object. The first number says which
+/// of the seven ways it is kept, and the two worth reading say where the rest
+/// is: linked blocks name the first of a chain of them, and a compressed
+/// element names the run of compressed bytes and says what compressed it. The
+/// bytes themselves stay bytes either way, under the tag that holds them.
+fn special_element() -> T {
+    let linked = T::structure(
+        "Hdf4LinkedBlocks",
+        vec![
+            ("length", T::i32(Big)),
+            ("block_length", T::i32(Big)),
+            ("number_blocks", T::i32(Big)),
+            ("link_ref", u16be()),
+        ],
+    );
+    let compressed = T::structure(
+        "Hdf4CompressedElement",
+        vec![
+            ("version", i16be()),
+            ("length", T::i32(Big)),
+            ("data_ref", u16be()),
+            ("model_type", T::enumeration("Hdf4CompressionModel", u16be(), &[(0, "stored as read")])),
+            (
+                "compression",
+                T::enumeration(
+                    "Hdf4Compression",
+                    u16be(),
+                    &[
+                        (0, "none"),
+                        (1, "run-length"),
+                        (2, "n-bit"),
+                        (3, "skipping Huffman"),
+                        (4, "deflate"),
+                        (5, "szip"),
+                    ],
+                ),
+            ),
+            ("settings", T::bytes(E::Remaining)),
+        ],
+    );
+    T::structure(
+        "Hdf4SpecialElement",
+        vec![
+            (
+                "kind",
+                T::enumeration(
+                    "Hdf4SpecialKind",
+                    i16be(),
+                    &[
+                        (1, "linked blocks"),
+                        (2, "in another file"),
+                        (3, "compressed"),
+                        (4, "variable-length linked blocks"),
+                        (5, "chunked"),
+                        (6, "buffered"),
+                        (7, "compressed raster"),
+                    ],
+                ),
+            ),
+            ("kept", T::switch(E::field("kind"), vec![(1, linked), (3, compressed)], T::bytes(E::Remaining))),
+        ],
+    )
+}
+
 /// The label, unit and format records of a scientific dataset: one string for
 /// the dataset and then one for each of its dimensions, run together and each
 /// ended with a nul.
@@ -816,15 +957,20 @@ fn contents() -> T {
             (307, image_dimensions()),
             (700, scientific_data_group()),
             (701, sd_dimensions()),
+            (703, sd_scales()),
             (704, sd_strings()),
             (705, sd_strings()),
             (706, sd_strings()),
+            (707, max_and_min()),
             (720, scientific_data_group()),
             (1962, vdata_header()),
             (1963, vdata_records()),
             (1965, vgroup()),
         ],
-        T::bytes(E::Remaining),
+        // Anything with 0x4000 added is a tag naming an object kept somewhere
+        // other than in one run of bytes, and what the descriptor points at is
+        // the header that says where.
+        T::switch(E::field("tag").bit(14), vec![(1, special_element())], T::bytes(E::Remaining)),
     )
 }
 
