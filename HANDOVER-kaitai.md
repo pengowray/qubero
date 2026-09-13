@@ -295,24 +295,26 @@ model; the IR as text (`template_text.rs`, ten snapshots); the Diagram view;
 the IR additions; the lowering (`ksy/lower.rs`, 2,440 lines, wants splitting
 into `lower/{resolve,fields,exprs,instances,repr}.rs`); the converter panel
 (`web/src/ksypanel.ts`); one expression writer shared by the IR text, the
-relations panel and the diagram; and the bundled formats (see
-`crates/core/formats-ksy/README.md` for what shipped and why).
+relations panel and the diagram; and the bundled formats: 112 files, 105 offered in the chooser, 20 of
+them sniffable, 6 excluded by licence and 6 by conversion gaps on their
+main path (see `crates/core/formats-ksy/README.md` for each decision;
+`node tools/ksy_bundle.mjs` regenerates it).
 
 Numbers, uncurated, from `cargo test -p qubero-core --test ksy_oracle -- --nocapture`
 with `KAITAI_STRUCT` set:
 
 | corpus | clean | with gaps | refused |
 |---|---|---|---|
-| tests/formats (339) | 197 | 142 | 0 |
-| formats (185) | 108 | 77 | 0 |
+| tests/formats (339) | 200 | 139 | 0 |
+| formats (185) | 111 | 74 | 0 |
 
-`.kst` asserts: 705 pass, 593 fail, 120 skipped. The failures follow the gap
+`.kst` asserts: 709 pass, 589 fail, 120 skipped. The failures follow the gap
 reasons below, not converter bugs found so far; each is a field the template
 cannot compute or place.
 
 Top gap reasons over formats/, by occurrence: byte order chosen while the
 file is read (51); `io:` naming another field's stream (40); not placed
-because an earlier field's size is unknown (40); value is text (34); bitwise
+because an earlier field's size is unknown (35); value is text (34); bitwise
 or (26); value is a float (25); `.to_i` on text (19); instance with no `pos`
 (10). The next IR additions, if the corpus is the guide: `Expr::BitOr`,
 `BitXor`, `BitNot` (31 uses, trivial); an anchor naming an earlier field's
