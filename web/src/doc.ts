@@ -780,7 +780,12 @@ export type DiagramRow = {
 
 /** One type of the format, and its fields. */
 export type DiagramBox = {
+  /** What the type is called: the structure's own name in the template
+   *  (`IHDR`, `Chunk`), or what a switch reads (`switch on class`). */
   readonly name: string;
+  /** Where the walk first reached it (`png.chunks.data.'IHDR'`). A type read in
+   *  nine places has one box and this is the first of the nine ways to it. */
+  readonly path: string;
   readonly kind: DiagramBoxKind;
   /** The type this one was written inside, for a box the template gave no name
    *  of its own (`Header.entry`). Absent for a named type. */
@@ -798,7 +803,7 @@ export type DiagramEdge = {
   /** Row index in that box. Absent for an edge to the box as a whole, which is
    *  what naming a type is. */
   readonly to_row?: number;
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "case";
   /** The expression the edge stands for, as the template writes it. Empty for a
    *  declaration rather than an expression. */
   readonly label: string;
@@ -1139,7 +1144,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1248,6 +1253,43 @@ export type TypeInfo = {
   readonly page_element_type: string;
   readonly page_values: readonly string[];
   readonly page_total: number;
+  /** Samples: a miniSEED record's encoding by name and number, and whether its
+   *  data was laid out big-endian. */
+  readonly mseed_encoding: string;
+  readonly mseed_encoding_number: number;
+  readonly mseed_big_endian: boolean;
+  /** Samples: how many the header gives, and the bytes of data they come from. */
+  readonly mseed_declared: number;
+  readonly mseed_bytes: number;
+  /** Samples: whether the record is Steim, and the steps if it is. The
+   *  constants are null otherwise; the first difference is null for a record
+   *  with no samples. */
+  readonly mseed_steim: boolean;
+  readonly mseed_x0: number | null;
+  readonly mseed_xn: number | null;
+  readonly mseed_first_difference: number | null;
+  /** Samples: what each frame held and gave (the first few hundred frames),
+   *  how many frames were walked, and how many the data has room for. */
+  readonly mseed_frames: readonly MseedFrame[];
+  readonly mseed_frames_walked: number;
+  readonly mseed_frames_in_record: number;
+  /** Samples: the rule a gain-ranged encoding is decoded by, or empty. */
+  readonly mseed_rule: string;
+  /** Samples: the first few, the last, and how many were decoded. */
+  readonly mseed_values: readonly string[];
+  readonly mseed_last: string;
+  readonly mseed_total: number;
+  /** Samples: whether the last sample equals the reverse integration constant,
+   *  or null where there is no check to make. */
+  readonly mseed_check: boolean | null;
+};
+
+/** One Steim frame: the differences its codes name, and how many samples they
+ *  made. Frame 0's count includes the skipped first difference, which stands
+ *  for sample 0, so the counts add up to sample numbers. */
+export type MseedFrame = {
+  readonly held: number;
+  readonly used: number;
 };
 
 /** One run of weights inside a block that share a scale of their own. */

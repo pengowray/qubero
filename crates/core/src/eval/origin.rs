@@ -42,6 +42,17 @@ pub enum Role {
     Name,
     /// Not about this field at all: this field is an offset, and points there.
     Points,
+    /// Whether the field is there at all: the expression a [`Ty::When`] is
+    /// guarded by, and the fields that expression reads.
+    ///
+    /// Apart from `Type`, which is what `wrapper_origins` reports for the same
+    /// guard, because the two questions read differently once they are drawn
+    /// side by side. In a panel about one field, "what decides which of these
+    /// this is" covers both. In a diagram, `Type` is already the heavy arrow
+    /// from a field to the box of the type it is read as, and an arrow saying
+    /// `type` from a flag to an optional field would read as that flag naming
+    /// the type. See [`crate::eval::diagram`].
+    Condition,
     /// One value a switch may read, and the type it picks when it reads it.
     ///
     /// Not `Type`, which is the connection between a field and what it is read
@@ -64,6 +75,7 @@ impl Role {
             Role::Value => "value",
             Role::Name => "name",
             Role::Points => "points",
+            Role::Condition => "condition",
             Role::Case => "case",
         }
     }

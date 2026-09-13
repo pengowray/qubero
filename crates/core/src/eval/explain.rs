@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{hdf5_chunk, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -159,6 +159,39 @@ pub enum Explain {
         /// Why the walk stopped early, where it did.
         problem: Option<String>,
     },
+    /// A miniSEED record's samples, worked out of its data by
+    /// [`mseed_steim`]. Shown for the cursor anywhere in the data, because a
+    /// Steim sample is not at any one place in the file: it is every
+    /// difference before it added up, and what the cursor is on is one word
+    /// of one frame.
+    MseedSamples {
+        /// The encoding's number and what it is called, and whether the data
+        /// was laid out big-endian.
+        encoding: u8,
+        encoding_name: String,
+        big_endian: bool,
+        /// How many samples the header gives, and how many bytes of data they
+        /// were decoded from.
+        declared: u64,
+        payload_bytes: u64,
+        /// The Steim steps: the integration constants, the skipped first
+        /// difference, and what each frame held and gave. None for every
+        /// other encoding. The frames are cut to [`MSEED_FRAMES_SHOWN`], and
+        /// `frames_walked` says how many there were.
+        steim: Option<mseed_steim::Steim>,
+        frames_walked: u64,
+        /// The rule a gain-ranged encoding's words are turned into samples by.
+        rule: Option<String>,
+        /// The first samples, and the last, and how many were decoded.
+        values: Vec<String>,
+        last: Option<String>,
+        total: u64,
+        /// The last sample against the reverse integration constant, where
+        /// the record is Steim and every sample was decoded.
+        check: Option<mseed_steim::Check>,
+        /// Why fewer samples than the header gives were decoded, or none.
+        problem: Option<String>,
+    },
     /// A Parquet page, read the whole way: the codec, the levels, the encoding
     /// and the values. Shown for the cursor anywhere in the page, because what
     /// the hex view shows there is packed bytes and the values are nowhere in
@@ -184,6 +217,16 @@ pub enum Explain {
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
+
+/// How many of a record's samples the panel shows, beside the last one. A
+/// 4096-byte record holds thousands; a row of them says what the signal is
+/// doing, and the count and the last sample say how far it goes.
+pub const MSEED_VALUES_SHOWN: usize = 32;
+
+/// How many of a record's frames the panel lists. A 4096-byte record has 63;
+/// a payload of a megabyte has sixteen thousand, which is a number to state
+/// rather than a list to read.
+pub const MSEED_FRAMES_SHOWN: usize = 256;
 
 /// How many objects of an object stream are handed to a reader at once.
 pub const OBJSTM_SHOWN: usize = 256;
@@ -315,10 +358,78 @@ impl Evaluator {
             if &*packing == parquet_page::PACKING {
                 return self.explain_parquet_page(doc, at);
             }
+            if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
+                return self.explain_mseed(doc, at, &r, encoding, big);
+            }
             let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { continue };
             return Ok(quant_of(kind, block, at_block, at_bits));
         }
+        // A miniSEED record's data is asked about from further down than the
+        // field or its parent. The cursor on a Steim difference is four levels
+        // under the data: the frame, the word, the word's shape and the
+        // difference. So every ancestor is looked at for that one packing. The
+        // other packings keep to the two levels above, which is as deep as
+        // their fields go and as far as they have been checked.
+        for len in (0..path.len().saturating_sub(1)).rev() {
+            let at = &path[..len];
+            self.resolve(doc, at)?;
+            let r = self.memo.get(at).expect("resolved").clone();
+            let Ty::Struct(def) = &r.ty else { continue };
+            let Some((encoding, big)) = def.packed.as_deref().and_then(mseed_steim::parse_packing) else { continue };
+            return self.explain_mseed(doc, at, &r, encoding, big);
+        }
         Ok(Explain::Plain)
+    }
+
+    /// A miniSEED record's data, decoded into samples.
+    ///
+    /// The template said which encoding and byte order it laid the data out
+    /// in, by the packing name, so the only thing looked up here is the sample
+    /// count. It is a field of the record in both versions of the format,
+    /// before the data, and found the way a template expression finds one.
+    fn explain_mseed<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        r: &Resolved,
+        encoding: u8,
+        big: bool,
+    ) -> R<Explain> {
+        let bits = self.size_of(doc, at)?;
+        let declared = self
+            .find_field(at, "sample_count")
+            .and_then(|p| self.node(doc, &p).ok())
+            .and_then(|n| n.value.as_int())
+            .unwrap_or(0)
+            .max(0) as usize;
+        // Over the limit, the bytes are not read at all.
+        let record = if bits / 8 > mseed_steim::PAYLOAD_LIMIT as u64 {
+            mseed_steim::refused((bits / 8) as usize, encoding, big, declared)
+        } else {
+            mseed_steim::decode(&self.read(doc, r, r.offset, bits)?, encoding, big, declared)
+        };
+        let shown = record.samples.len().min(MSEED_VALUES_SHOWN);
+        let check = record.check();
+        let mut steim = record.steim.clone();
+        let frames_walked = steim.as_ref().map_or(0, |s| s.frames.len()) as u64;
+        if let Some(s) = steim.as_mut() {
+            s.frames.truncate(MSEED_FRAMES_SHOWN);
+        }
+        Ok(Explain::MseedSamples {
+            encoding,
+            encoding_name: mseed_steim::encoding_name(encoding),
+            big_endian: big,
+            declared: declared as u64,
+            payload_bytes: record.payload_bytes as u64,
+            steim,
+            frames_walked,
+            rule: mseed_steim::rule(encoding).map(str::to_string),
+            values: (0..shown).map(|i| record.text(i)).collect(),
+            last: (!record.samples.is_empty()).then(|| record.text(record.samples.len() - 1)),
+            total: record.samples.len() as u64,
+            check,
+            problem: record.problem,
+        })
     }
 
     /// The block at `path` taken apart into its numbers, if it is one of the

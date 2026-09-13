@@ -418,10 +418,18 @@ struct ChunkStepDto {
     skipped: bool,
 }
 
+/// One Steim frame of a miniSEED record: how many differences its codes named,
+/// and how many of them became samples.
+#[derive(Serialize)]
+struct MseedFrameDto {
+    held: f64,
+    used: f64,
+}
+
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "samples" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -513,6 +521,36 @@ struct ExplainDto {
     chunk_element_type: String,
     chunk_values: Vec<String>,
     chunk_total: f64,
+    /// Samples: a miniSEED record's encoding, by name and number, and whether
+    /// its data was laid out big-endian.
+    mseed_encoding: String,
+    mseed_encoding_number: f64,
+    mseed_big_endian: bool,
+    /// Samples: how many the header gives, and how many bytes of data they
+    /// were decoded from.
+    mseed_declared: f64,
+    mseed_bytes: f64,
+    /// Samples: the Steim steps, where the record is Steim. `mseed_steim` says
+    /// whether it is; the constants are null otherwise, and the first
+    /// difference is null too for a record with no samples.
+    mseed_steim: bool,
+    mseed_x0: Option<f64>,
+    mseed_xn: Option<f64>,
+    mseed_first_difference: Option<f64>,
+    /// Samples: what each frame held and gave, the first few hundred of them,
+    /// how many frames were walked, and how many the data has room for.
+    mseed_frames: Vec<MseedFrameDto>,
+    mseed_frames_walked: f64,
+    mseed_frames_in_record: f64,
+    /// Samples: the rule a gain-ranged encoding is decoded by. Empty otherwise.
+    mseed_rule: String,
+    /// Samples: the first few, the last, and how many were decoded.
+    mseed_values: Vec<String>,
+    mseed_last: String,
+    mseed_total: f64,
+    /// Samples: whether the last sample equals the reverse integration
+    /// constant, or null where there is no check to make.
+    mseed_check: Option<bool>,
     /// Page: how many bytes the payload is in the file, and how many its
     /// values came to once the codec was undone.
     page_packed: f64,
@@ -749,7 +787,11 @@ struct DiagramRowDto {
 /// One type of the format, and its fields.
 #[derive(Serialize)]
 struct DiagramBoxDto {
+    /// What the type is called: the structure's own name in the template.
     name: String,
+    /// Where the walk first reached it, for the reader who wants to know how
+    /// they would get there.
+    path: String,
     /// "seq" | "instances" | "switch"
     kind: &'static str,
     /// The type this one was written inside, for a box the template gave no
@@ -770,7 +812,7 @@ struct DiagramEdgeDto {
     /// is what naming a type is.
     #[serde(skip_serializing_if = "Option::is_none")]
     to_row: Option<f64>,
-    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case"
+    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "case"
     role: &'static str,
     /// The expression the edge stands for, as the template writes it. Empty for
     /// a declaration rather than an expression.
@@ -793,6 +835,7 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             .into_iter()
             .map(|b| DiagramBoxDto {
                 name: b.name,
+                path: b.path,
                 kind: b.kind.as_str(),
                 parent: b.parent,
                 rows: b
@@ -1007,6 +1050,23 @@ fn explain_dto(e: Explain) -> ExplainDto {
         chunk_element_type: String::new(),
         chunk_values: Vec::new(),
         chunk_total: 0.0,
+        mseed_encoding: String::new(),
+        mseed_encoding_number: 0.0,
+        mseed_big_endian: false,
+        mseed_declared: 0.0,
+        mseed_bytes: 0.0,
+        mseed_steim: false,
+        mseed_x0: None,
+        mseed_xn: None,
+        mseed_first_difference: None,
+        mseed_frames: Vec::new(),
+        mseed_frames_walked: 0.0,
+        mseed_frames_in_record: 0.0,
+        mseed_rule: String::new(),
+        mseed_values: Vec::new(),
+        mseed_last: String::new(),
+        mseed_total: 0.0,
+        mseed_check: None,
         page_packed: 0.0,
         page_decoded: 0.0,
         page_steps: Vec::new(),
@@ -1182,6 +1242,44 @@ fn explain_dto(e: Explain) -> ExplainDto {
                     skipped: s.skipped,
                 })
                 .collect();
+        }
+        Explain::MseedSamples {
+            encoding,
+            encoding_name,
+            big_endian,
+            declared,
+            payload_bytes,
+            steim,
+            frames_walked,
+            rule,
+            values,
+            last,
+            total,
+            check,
+            problem,
+        } => {
+            dto.kind = "samples";
+            dto.mseed_encoding = encoding_name;
+            dto.mseed_encoding_number = f64::from(encoding);
+            dto.mseed_big_endian = big_endian;
+            dto.mseed_declared = declared as f64;
+            dto.mseed_bytes = payload_bytes as f64;
+            if let Some(s) = steim {
+                dto.mseed_steim = true;
+                dto.mseed_x0 = Some(f64::from(s.x0));
+                dto.mseed_xn = Some(f64::from(s.xn));
+                dto.mseed_first_difference = s.first_difference.map(f64::from);
+                dto.mseed_frames_in_record = s.frames_in_record as f64;
+                dto.mseed_frames =
+                    s.frames.into_iter().map(|f| MseedFrameDto { held: f.held as f64, used: f.used as f64 }).collect();
+            }
+            dto.mseed_frames_walked = frames_walked as f64;
+            dto.mseed_rule = rule.unwrap_or_default();
+            dto.mseed_values = values;
+            dto.mseed_last = last.unwrap_or_default();
+            dto.mseed_total = total as f64;
+            dto.mseed_check = check.map(|c| c.passed());
+            dto.problem = problem.unwrap_or_default();
         }
         Explain::Float { format, width, bits } => {
             dto.kind = "float";
