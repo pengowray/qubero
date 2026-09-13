@@ -25,6 +25,44 @@
 //! An index file is a copy of the data file with the raw data left out, so its
 //! segments keep the data file's offsets and each one ends where its metadata
 //! does.
+//!
+//! **Metadata.** A list of objects, each a path, a raw data index saying how
+//! the object's values are laid out in this segment, and properties, each a
+//! name, a type and a value. A timestamp is whole seconds from 1904 and a
+//! fraction in 2^-64ths, and the seconds are declared a moment. After what the
+//! file writes, the metadata works out what the raw data needs: each object's
+//! layout, the channels in the order their data is written, and what one chunk
+//! of them comes to.
+//!
+//! **Raw data.** Chunks of every channel's values one channel after another,
+//! repeated as often as they fit, or with the interleaved flag, samples of one
+//! value of every channel. Strings are a run of end offsets and then the text.
+//! DAQmx raw data is named and left as bytes.
+//!
+//! **What carries over.** The format is a stream: a segment can reuse the
+//! whole of the one before, change its channel list without restating it, or
+//! say a channel is laid out as before. Every one of those is followed here,
+//! but only one link back, since a chain as long as the file cannot be worked
+//! out without running out of stack. See [`prior_new_list`] for the rule and
+//! the measurements behind it, and [`metadata`] for how a changed list is
+//! kept. A segment whose layout cannot be reached that way says its layout is
+//! not known, and its raw data is bytes.
+//!
+//! What was checked: every channel of ten files, counted, first, last and
+//! summed against npTDMS 1.11, in `tdms_real.rs`. Four are npTDMS's own test
+//! files: LabVIEW's big-endian example, a digital input log from LabVIEW
+//! SignalExpress 2011, a DAQmx raw data log and a file of 128 doubles. Six are
+//! from the sample collection's generator, which packs by hand the reuse,
+//! interleaving, byte order and unfinished writes npTDMS's writer does not
+//! produce.
+//!
+//! What is not read: values of `ExtendedFloat`, `ExtendedFloatWithUnit` and
+//! `FixedPoint`, whose widths NI does not give and npTDMS does not read
+//! either, and DAQmx samples, which need their scalers applied. One thing is
+//! read differently from npTDMS: the tail of a finished segment that is not a
+//! whole number of chunks, which npTDMS shares out between the channels by how
+//! many values each has, and which this reads channel by channel as it does
+//! the chunk a writer did not finish.
 
 use std::sync::Arc;
 
@@ -193,12 +231,10 @@ fn laid_out_by(from: LaidOut, field: &str) -> E {
 /// and cut out by scaler, which the index describes and the raw data does not
 /// repeat.
 ///
-/// The data is placed when the channel list is one the template holds whole.
-/// That is a segment with metadata that starts a new list, or a segment with
-/// no metadata after one of those, which reuses it. A segment with metadata
-/// that adds to the list before it is not placed: the list it adds to is the
-/// sum of every segment since the last new one, and a field can hold a number
-/// or some text but not a list carried from one segment to the next.
+/// The data is placed when the channel list is known whole and every channel
+/// in it has a layout: `list_known` and `unknown_layout_count` in the
+/// metadata that lays it out, which is this segment's own or, for a segment
+/// with no metadata, the nearest earlier one's.
 ///
 /// Interleaved data needs every channel to have a width, since a sample is one
 /// value of each. npTDMS reads a segment flagged interleaved that holds a
@@ -736,9 +772,10 @@ fn computed_data_type(value: E) -> T {
 /// every segment the state was carried through. Worked out cold from the end
 /// of a long file, that is as deep as the file is long: a file of eighty
 /// segments that each say "same as before" runs out of stack in a release
-/// build, and a list changed segment after segment asks for its paths again at
-/// every level and never finishes. Nothing in the IR can walk back through
-/// earlier segments by a path without asking each one's answer in turn.
+/// build, and three thousand segments that each change the list had not
+/// finished after ten minutes, since every level asks for its paths again as
+/// text, which is not kept. Nothing in the IR can walk back through earlier
+/// segments by a path without asking each one's answer in turn.
 ///
 /// So the chain stops at one link. A raw data index of 0 is followed to the
 /// object for the same path in the nearest earlier segment with metadata, and
@@ -748,11 +785,12 @@ fn computed_data_type(value: E) -> T {
 /// new one. A segment with no metadata reads whatever list the nearest segment
 /// with metadata has, which asks at most one segment further back again.
 ///
-/// That covers what was seen: LabVIEW's big-endian example lists its channels
-/// again in its second segment with an index of 0, and each segment after a
-/// writer's first usually has no metadata at all. Files whose writer changes
-/// its metadata in every segment read to the first link and are bytes after
-/// it.
+/// That covers what the samples hold: LabVIEW's big-endian example lists its
+/// channels again in its second segment with an index of 0, and a segment with
+/// no metadata reads the list however far back it is, three thousand segments
+/// in well under a second. A file whose writer says "same as before" or
+/// changes the list in segment after segment reads to the first link and is
+/// bytes after it.
 ///
 /// This asks the first of those questions: whether the nearest earlier
 /// segment with metadata started a new list.
