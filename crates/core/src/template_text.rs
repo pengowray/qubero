@@ -16,7 +16,10 @@
 //! file        := "template" NAME
 //!                ["deducer: in code"]
 //!                "root" ty
-//!                {"type" NAME ["=" ...] ty}        types in alphabetical order
+//!                {type}                            in alphabetical order
+//! type        := "type" struct                     a structure filed under its own name
+//!              | "type" NAME "=" ty                anything else, under the name a
+//!                                                  `Named` reaches it by
 //!
 //! ty          := struct | wrapper ty | ty annotation | leaf
 //! struct      := NAME ["(" attr {"," attr} ")"] "{" {field} "}"
@@ -36,7 +39,10 @@
 //!              | "flags" NAME "{" {"bit" int "=" NAME} "}"
 //!              | "unset" number                     that value means "nothing here"
 //! anchor      := "file" | "window" | "origin" | "own start aligned to" int
-//! until       := "end" | "element." NAME ("is" bytes | "==" int)
+//! until       := "until end" | "until element." NAME ("is" bytes | "==" int)
+//!
+//! An element of a list that ends in a word of its own is bracketed first, so
+//! `(u32le unset 0)[4]` is four of them rather than an index into one.
 //!
 //! extra       := "check" sum "over" covers ["when" expr] ["blanking" byte]
 //!              | "element check" ...                the check is on each element
@@ -57,11 +63,10 @@
 //!              | "unit" NAME                        what one is called when counted
 //!              | "inline"                           one row, not one row per field
 //!              | "packed" NAME                      contents only the format unpacks
-//!              | "machinery" NAME {"," NAME}
-//!              | "payload" NAME {"," NAME}
-//!              | "line" part {"," part}              how one reads on a single line
-//!              | "type name" NAME                   printed when the structure's own
-//!                                                   name differs from the table key
+//!              | "machinery" NAME {NAME}            fields that are this structure's
+//!                                                   own plumbing, whatever they decide
+//!              | "payload" NAME {NAME}              fields that are the point
+//!              | "line" part {"then" part}          how one reads on a single line
 //! part        := NAME ["worded" text] ["except" text]
 //! ```
 //!
@@ -129,12 +134,21 @@
 //! `earlier[key = tag].f` (the nearest earlier element that has one),
 //! `array[i].f`, `descriptor.f` (the record that placed this element).
 //!
-//! Literals are decimal, except a mask, which is hex, and a number whose bytes
-//! spell printable ASCII with letters in it, which is written as those bytes in
-//! single quotes: `'IHDR'` is 1,229,472,850 read big-endian, which is what a
-//! switch on a four-letter tag is keyed on. Byte strings are `"RIFF"` when
-//! every byte is printable and `89 50 4E 47` otherwise. Text is in double
-//! quotes.
+//! Numbers are decimal, with three exceptions. A number whose bytes spell
+//! printable ASCII with letters in it is written as those bytes in single
+//! quotes wherever it appears: `'IHDR'` is 1,229,472,850 read big-endian,
+//! which is what a switch on a four-letter tag is keyed on. A mask of ten or
+//! more -- the right side of `&` -- is hex, so a run of bits reads as bits. And
+//! a constant the format fixed rather than counts with, which is a case of a
+//! `switch`, the label on a record, the value a `repeat` stops at, or a value
+//! of an enumeration declared in hex, is written in hex from 256 up, to an even
+//! number of digits: `0x04034b50`. Byte strings are `"SQLite format 3\0"` when
+//! they are mostly letters, with the escapes a string uses for the rest, and
+//! `89 50 4E 47 0D 0A 1A 0A` otherwise. Text is in double quotes.
+//!
+//! Every line is folded at [`WIDTH`] columns, carrying on four spaces further
+//! in than the line it continues, and folded as shallow in its brackets as it
+//! can be.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -229,7 +243,14 @@ fn wrap_line(line: &str, out: &mut Vec<String>) {
                     best = i;
                 }
             }
-            end = best;
+            // A shallow fold is worth having only while it still fills the
+            // line. The one place it does not is a field whose whole type is
+            // one bracketed term: folding at the only shallow point there
+            // would leave a line holding nothing but the field's name.
+            let kept: usize = lead + words[start..best].iter().map(|w| w.chars().count() + 1).sum::<usize>();
+            if kept * 2 >= WIDTH {
+                end = best;
+            }
         }
         let mut s = " ".repeat(lead);
         s.push_str(&words[start..end].join(" "));
@@ -258,7 +279,13 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
     }
     match ty {
         // Postfix: a list is its element type and how many of them.
-        Ty::Array { elem, count } => return write_ty(out, ind, head, elem, &format!("[{}]{tail}", expr(count))),
+        Ty::Array { elem, count } => {
+            // An element whose own reading ends in a trailing word is bracketed
+            // first, so that `(u32le unset 0)[10]` cannot be read as an index.
+            let (open, close) = brackets(elem);
+            let head = format!("{head}{open}");
+            return write_ty(out, ind, &head, elem, &format!("{close}[{}]{tail}", expr(count)));
+        }
         Ty::Nullable { inner, unset } => {
             return write_ty(out, ind, head, inner, &format!(" unset {}{tail}", unset_text(unset)))
         }
@@ -281,13 +308,23 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
             let cases: Vec<(String, &Ty)> = cases.iter().map(|(k, t)| (format!("{k:?}"), t)).collect();
             write_choice(out, ind, head, &format!("match {}", expr(on)), &cases, default, tail);
         }
+        // An enumeration over a structure is nothing any format writes, and
+        // naming the values of one would say nothing. It is still written out
+        // whole rather than summarised: the structure opens its own block and
+        // the names follow it.
         Ty::Enum { inner, def } => {
             let cases = enum_cases(def);
-            write_body(out, ind, &format!("{head}{} enum {} ", brief(inner), def.name), &cases, tail);
+            match inline(inner) {
+                Some(one) => write_body(out, ind, &format!("{head}{one} enum {} ", def.name), &cases, tail),
+                None => write_ty(out, ind, head, inner, &format!(" enum {} {{{}}}{tail}", def.name, cases.join(", "))),
+            }
         }
         Ty::Flags { inner, def } => {
             let cases: Vec<String> = def.bits.iter().map(|(b, n)| format!("bit {b} = {n}")).collect();
-            write_body(out, ind, &format!("{head}{} flags {} ", brief(inner), def.name), &cases, tail);
+            match inline(inner) {
+                Some(one) => write_body(out, ind, &format!("{head}{one} flags {} ", def.name), &cases, tail),
+                None => write_ty(out, ind, head, inner, &format!(" flags {} {{{}}}{tail}", def.name, cases.join(", "))),
+            }
         }
         // Everything else has an inline form and no way to break it, so it goes
         // out over width rather than mangled.
@@ -301,6 +338,8 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
 /// that a new wrapper is one arm here.
 fn wrapper<'a>(head: &str, ty: &'a Ty) -> Option<(String, &'a Ty)> {
     let with = |word: String, inner: &'a Ty| Some((format!("{head}{word} "), inner));
+    // `Ty::When { cond, inner }` is one arm here, in the shape the others
+    // have: `optional(when <cond>) <inner>`.
     match ty {
         Ty::Sized { size, inner } => with(format!("sized({})", expr(size)), inner),
         Ty::SizedBits { bits, inner } => with(format!("sizedbits({})", expr(bits)), inner),
@@ -353,12 +392,18 @@ fn path_of(array: &str, field: &[String]) -> String {
     }
 }
 
-/// How far the offsets are shifted, left off entirely when they are not.
+/// How far the offsets are shifted, left off entirely when they are not, and
+/// written as a subtraction when it shifts them back.
 fn adjustment(s: &mut String, adjust: &Expr) {
-    if let Expr::Lit(0) = adjust {
-        return;
+    match adjust {
+        Expr::Lit(0) => {}
+        Expr::Lit(v) if *v < 0 => {
+            let _ = write!(s, " - {}", v.unsigned_abs());
+        }
+        other => {
+            let _ = write!(s, " + {}", expr(other));
+        }
     }
-    let _ = write!(s, " + {}", expr(adjust));
 }
 
 fn write_struct(out: &mut Vec<String>, ind: usize, head: &str, def: &StructDef, tail: &str) {
@@ -468,18 +513,24 @@ fn write_field(out: &mut Vec<String>, ind: usize, f: &Field) {
     let cont = format!("{}    ", pad(ind));
     let mut line = out.pop().unwrap_or_default();
     for extra in extras {
-        let sep = if line.trim_end() == line.trim_end().trim_start_matches(' ') && line.is_empty() { "" } else { "  " };
-        if line.chars().count() + sep.len() + extra.chars().count() > WIDTH {
+        // Two spaces, so that what a field *is* and what is said about it do
+        // not read as one clause.
+        if line.chars().count() + 2 + extra.chars().count() > WIDTH {
             out.push(line);
             line = format!("{cont}{extra}");
         } else {
-            line.push_str(sep);
+            line.push_str("  ");
             line.push_str(&extra);
         }
     }
     out.push(line);
 }
 
+/// What a template says about a field on top of its type, in a fixed order.
+///
+/// The `doc` slot being added goes here too, but not as a clause: prose is a
+/// `// text` line written above the field, since a sentence and a notation on
+/// one line is two readings of the same row.
 fn field_extras(f: &Field) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(e) = &f.name_from {
@@ -573,6 +624,8 @@ fn anchor_text(a: Anchor) -> String {
 }
 
 fn until_text(u: &Until) -> String {
+    // `Until::Cond(e)` is one arm here: `until` and then the expression, which
+    // names the element's own fields.
     match u {
         Until::End => "until end".to_string(),
         // `is` compares the bytes as they are written; `==` compares the value
@@ -680,7 +733,10 @@ fn inline(ty: &Ty) -> Option<String> {
         Ty::Str { len, enc } => format!("{} {}", strlen(len), encoding(enc)),
         Ty::TextInt { len, radix } => format!("{} base {radix} as number", strlen(len)),
         Ty::Struct(_) => return None,
-        Ty::Array { elem, count } => format!("{}[{}]", inline(elem)?, expr(count)),
+        Ty::Array { elem, count } => {
+            let (open, close) = brackets(elem);
+            format!("{open}{}{close}[{}]", inline(elem)?, expr(count))
+        }
         Ty::Repeat { elem, until } => format!("repeat({}) {}", until_text(until), inline(elem)?),
         Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
             let (head, inner) = wrapper("", ty)?;
@@ -705,9 +761,9 @@ fn inline(ty: &Ty) -> Option<String> {
             let bits: Vec<String> = def.bits.iter().map(|(b, n)| format!("bit {b} = {n}")).collect();
             format!("{} flags {} {{{}}}", inline(inner)?, def.name, bits.join(", "))
         }
-        Ty::Json(shape, schema) => match schema {
-            Some(s) => format!("json {} {}", shape.name(), json_schema(s)),
-            None => format!("json {}", shape.name()),
+        Ty::Json(shape, schema) => match schema.as_ref().map(|s| json_schema(s)) {
+            Some(s) if !s.is_empty() => format!("json {} {s}", shape.name()),
+            _ => format!("json {}", shape.name()),
         },
         Ty::Match { on, cases, default } => {
             let mut parts = Vec::new();
@@ -732,15 +788,12 @@ fn inline(ty: &Ty) -> Option<String> {
     Some(s)
 }
 
-/// A type in as few words as identify it, for the places a full reading cannot
-/// go: a structure answers with its name.
-fn brief(ty: &Ty) -> String {
-    match inline(ty) {
-        Some(s) => s,
-        None => match ty {
-            Ty::Struct(d) => d.name.clone(),
-            _ => String::new(),
-        },
+/// The brackets a type needs around it to be the element of a list: a reading
+/// that ends in a word of its own would otherwise run into the count.
+fn brackets(elem: &Ty) -> (&'static str, &'static str) {
+    match elem {
+        Ty::Nullable { .. } => ("(", ")"),
+        _ => ("", ""),
     }
 }
 
@@ -810,10 +863,22 @@ fn encoding(e: &Encoding) -> String {
     }
 }
 
-/// A run of bytes: as text when every one of them is printable, and as hex
-/// otherwise. Both forms say the same thing about the same bytes.
+/// A run of bytes: as text when it is text, and as hex otherwise. Both forms
+/// say the same thing about the same bytes.
+///
+/// A signature is often a word with a byte or two of punctuation in it, and
+/// `"SQLite format 3\0"` is the thing a reader is looking for while
+/// `53 51 4C 69 ...` is sixteen numbers to decode. So the escapes a string
+/// carries count as text, as long as most of the run is still letters; a
+/// signature with a byte outside that, as PNG's is, stays hex rather than
+/// reading as a line of escapes.
 fn bytes_lit(b: &[u8]) -> String {
-    if !b.is_empty() && b.iter().all(|c| (0x20..0x7f).contains(c)) {
+    let printable = |c: &u8| (0x20..0x7f).contains(c);
+    let escaped = |c: &u8| matches!(c, 0x00 | 0x09 | 0x0a | 0x0d);
+    let text = !b.is_empty()
+        && b.iter().all(|c| printable(c) || escaped(c))
+        && b.iter().filter(|c| printable(c)).count() * 2 >= b.len();
+    if text {
         format!("{:?}", String::from_utf8_lossy(b))
     } else {
         bytes_hex(b)
@@ -887,8 +952,8 @@ fn as_ascii(v: i128) -> Option<String> {
 /// where a looser expression sits inside a tighter one.
 ///
 /// Spaced out so that a new operator lands between two existing ones without
-/// renumbering: the boolean and comparison variants being added go at 20, 30
-/// and 40, and `%` beside `*` at 80.
+/// renumbering: `c ? a : b` goes at 5, the booleans at 20 and 30, the
+/// comparisons beside `<` at 40, and `%` beside `*` at 80.
 fn prec(e: &Expr) -> u32 {
     match e {
         Expr::Or(..) => 10,
@@ -931,9 +996,8 @@ fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
         // of `*`), `== != <= >= >` for the comparisons (beside `<`), `and`,
         // `or` and `not` for the booleans (looser than a comparison, and
         // `Expr::Or` is written `or else` here so the word is free),
-        // `when a then b else c` for `Cond`, `pos` for `Pos`, `size of window`
-        // for `WindowSize`, `count of x` for `LenOf(x)`, and a `doc` slot
-        // renders as a `// text` line above the field it is on.
+        // `c ? a : b` for `Cond` (loosest of all), `pos` for `Pos`,
+        // `size of window` for `WindowSize`, and `count of x` for `LenOf(x)`.
         Expr::Lit(v) => {
             if mask && *v > 9 {
                 hex_lit(*v)
@@ -1034,6 +1098,13 @@ mod tests {
         // Not a number that merely happens to be printable.
         assert_eq!(int_lit(0x3132), "12594");
         assert_eq!(int_lit(4), "4");
+    }
+
+    #[test]
+    fn an_element_that_ends_in_a_word_keeps_its_brackets() {
+        let elem = Ty::Nullable { inner: Box::new(Ty::u32(Endian::Little)), unset: Unset::Int(0) };
+        let list = Ty::Array { elem: Box::new(elem), count: E::lit(4) };
+        assert_eq!(inline(&list).as_deref(), Some("(u32le unset 0)[4]"));
     }
 
     #[test]

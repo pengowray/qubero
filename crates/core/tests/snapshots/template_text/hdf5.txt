@@ -254,8 +254,8 @@ type BTree2 {
       _ => computed 8 + child_records_size + previous(total_records_size)
     }
     max_records: computed (node_size - 10 - pointer_size) / (record_size + pointer_size)
-    max_total_records: computed
-        min(max_records + (max_records + 1) * previous(max_total_records), 18446744073709551615)
+    max_total_records: computed min(max_records + (max_records + 1) *
+        previous(max_total_records), 18446744073709551615)
     total_records_size: switch index < 1 {
       1 => computed 0
       _ => computed log2(max_total_records) / 8 + 1
@@ -508,8 +508,8 @@ type ExtensibleArray {
                     elements: switch datatype.class {
                       0 => switch datatype.class * 1000 +
                           (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
-                          datatype.size * 2 +
-                          (datatype.bit_field / 8 - datatype.bit_field / 16 * 2) {
+                          datatype.size * 2 + (datatype.bit_field / 8 - datatype.bit_field / 16
+                          * 2) {
                         2 => u8be[run_bytes / element_size]
                         3 => i8le[run_bytes / element_size]
                         4 => u16le[run_bytes / element_size]
@@ -536,8 +536,8 @@ type ExtensibleArray {
                       }
                       1 => switch datatype.class * 1000 +
                           (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
-                          datatype.size * 2 +
-                          (datatype.bit_field / 8 - datatype.bit_field / 16 * 2) {
+                          datatype.size * 2 + (datatype.bit_field / 8 - datatype.bit_field / 16
+                          * 2) {
                         2 => u8be[run_bytes / element_size]
                         3 => i8le[run_bytes / element_size]
                         4 => u16le[run_bytes / element_size]
@@ -586,8 +586,8 @@ type ExtensibleArray {
           }
         }
       }[2 * (secondary_block_min_pointers - 1)]
-      secondary_blocks: SecondaryBlockPointer
-          (machinery super_block data_block_count block_entries page_entries page_count) {
+      secondary_blocks: SecondaryBlockPointer (machinery super_block data_block_count
+          block_entries page_entries page_count) {
         address: u64le
         super_block: computed index + 2 * log2(secondary_block_min_pointers)
         data_block_count: computed 1 << super_block / 2
@@ -1393,8 +1393,8 @@ type Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1421,8 +1421,8 @@ type Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1490,8 +1490,8 @@ type Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1518,8 +1518,8 @@ type Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1582,8 +1582,8 @@ type Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1610,8 +1610,8 @@ type Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1764,8 +1764,8 @@ type Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -1792,8 +1792,8 @@ type Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -2053,101 +2053,69 @@ type Message (named by type, contents body) {
                   _ => at(address from origin) ImplicitChunks
                       (machinery chunks_across chunk_bytes) {
                     chunks_across: switch index {
-                      0 => computed
-                          ceil((earlier(body.max_dimensions.0) or else
+                      0 => computed ceil((earlier(body.max_dimensions.0) or else
                           earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed
-                          ceil((earlier(body.max_dimensions.1) or else
+                      1 => computed ceil((earlier(body.max_dimensions.1) or else
                           earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed
-                          ceil((earlier(body.max_dimensions.2) or else
+                      2 => computed ceil((earlier(body.max_dimensions.2) or else
                           earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed
-                          ceil((earlier(body.max_dimensions.3) or else
+                      3 => computed ceil((earlier(body.max_dimensions.3) or else
                           earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed
-                          ceil((earlier(body.max_dimensions.4) or else
+                      4 => computed ceil((earlier(body.max_dimensions.4) or else
                           earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed
-                          ceil((earlier(body.max_dimensions.5) or else
+                      5 => computed ceil((earlier(body.max_dimensions.5) or else
                           earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed
-                          ceil((earlier(body.max_dimensions.6) or else
+                      6 => computed ceil((earlier(body.max_dimensions.6) or else
                           earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed
-                          ceil((earlier(body.max_dimensions.7) or else
+                      7 => computed ceil((earlier(body.max_dimensions.7) or else
                           earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed
-                          ceil((earlier(body.max_dimensions.8) or else
+                      8 => computed ceil((earlier(body.max_dimensions.8) or else
                           earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed
-                          ceil((earlier(body.max_dimensions.9) or else
+                      9 => computed ceil((earlier(body.max_dimensions.9) or else
                           earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed
-                          ceil((earlier(body.max_dimensions.10) or else
+                      10 => computed ceil((earlier(body.max_dimensions.10) or else
                           earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed
-                          ceil((earlier(body.max_dimensions.11) or else
+                      11 => computed ceil((earlier(body.max_dimensions.11) or else
                           earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed
-                          ceil((earlier(body.max_dimensions.12) or else
+                      12 => computed ceil((earlier(body.max_dimensions.12) or else
                           earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed
-                          ceil((earlier(body.max_dimensions.13) or else
+                      13 => computed ceil((earlier(body.max_dimensions.13) or else
                           earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed
-                          ceil((earlier(body.max_dimensions.14) or else
+                      14 => computed ceil((earlier(body.max_dimensions.14) or else
                           earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed
-                          ceil((earlier(body.max_dimensions.15) or else
+                      15 => computed ceil((earlier(body.max_dimensions.15) or else
                           earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed
-                          ceil((earlier(body.max_dimensions.16) or else
+                      16 => computed ceil((earlier(body.max_dimensions.16) or else
                           earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed
-                          ceil((earlier(body.max_dimensions.17) or else
+                      17 => computed ceil((earlier(body.max_dimensions.17) or else
                           earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed
-                          ceil((earlier(body.max_dimensions.18) or else
+                      18 => computed ceil((earlier(body.max_dimensions.18) or else
                           earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed
-                          ceil((earlier(body.max_dimensions.19) or else
+                      19 => computed ceil((earlier(body.max_dimensions.19) or else
                           earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed
-                          ceil((earlier(body.max_dimensions.20) or else
+                      20 => computed ceil((earlier(body.max_dimensions.20) or else
                           earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed
-                          ceil((earlier(body.max_dimensions.21) or else
+                      21 => computed ceil((earlier(body.max_dimensions.21) or else
                           earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed
-                          ceil((earlier(body.max_dimensions.22) or else
+                      22 => computed ceil((earlier(body.max_dimensions.22) or else
                           earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed
-                          ceil((earlier(body.max_dimensions.23) or else
+                      23 => computed ceil((earlier(body.max_dimensions.23) or else
                           earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed
-                          ceil((earlier(body.max_dimensions.24) or else
+                      24 => computed ceil((earlier(body.max_dimensions.24) or else
                           earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed
-                          ceil((earlier(body.max_dimensions.25) or else
+                      25 => computed ceil((earlier(body.max_dimensions.25) or else
                           earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed
-                          ceil((earlier(body.max_dimensions.26) or else
+                      26 => computed ceil((earlier(body.max_dimensions.26) or else
                           earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed
-                          ceil((earlier(body.max_dimensions.27) or else
+                      27 => computed ceil((earlier(body.max_dimensions.27) or else
                           earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed
-                          ceil((earlier(body.max_dimensions.28) or else
+                      28 => computed ceil((earlier(body.max_dimensions.28) or else
                           earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed
-                          ceil((earlier(body.max_dimensions.29) or else
+                      29 => computed ceil((earlier(body.max_dimensions.29) or else
                           earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed
-                          ceil((earlier(body.max_dimensions.30) or else
+                      30 => computed ceil((earlier(body.max_dimensions.30) or else
                           earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed
-                          ceil((earlier(body.max_dimensions.31) or else
+                      31 => computed ceil((earlier(body.max_dimensions.31) or else
                           earlier(body.dimensions.31)) / chunk_dimensions[index])
                       _ => computed 0
                     }[dimensionality - 1]
@@ -2270,8 +2238,8 @@ type Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -2298,8 +2266,8 @@ type Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -2559,101 +2527,69 @@ type Message (named by type, contents body) {
                   _ => at(address from origin) ImplicitChunks
                       (machinery chunks_across chunk_bytes) {
                     chunks_across: switch index {
-                      0 => computed
-                          ceil((earlier(body.max_dimensions.0) or else
+                      0 => computed ceil((earlier(body.max_dimensions.0) or else
                           earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed
-                          ceil((earlier(body.max_dimensions.1) or else
+                      1 => computed ceil((earlier(body.max_dimensions.1) or else
                           earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed
-                          ceil((earlier(body.max_dimensions.2) or else
+                      2 => computed ceil((earlier(body.max_dimensions.2) or else
                           earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed
-                          ceil((earlier(body.max_dimensions.3) or else
+                      3 => computed ceil((earlier(body.max_dimensions.3) or else
                           earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed
-                          ceil((earlier(body.max_dimensions.4) or else
+                      4 => computed ceil((earlier(body.max_dimensions.4) or else
                           earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed
-                          ceil((earlier(body.max_dimensions.5) or else
+                      5 => computed ceil((earlier(body.max_dimensions.5) or else
                           earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed
-                          ceil((earlier(body.max_dimensions.6) or else
+                      6 => computed ceil((earlier(body.max_dimensions.6) or else
                           earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed
-                          ceil((earlier(body.max_dimensions.7) or else
+                      7 => computed ceil((earlier(body.max_dimensions.7) or else
                           earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed
-                          ceil((earlier(body.max_dimensions.8) or else
+                      8 => computed ceil((earlier(body.max_dimensions.8) or else
                           earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed
-                          ceil((earlier(body.max_dimensions.9) or else
+                      9 => computed ceil((earlier(body.max_dimensions.9) or else
                           earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed
-                          ceil((earlier(body.max_dimensions.10) or else
+                      10 => computed ceil((earlier(body.max_dimensions.10) or else
                           earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed
-                          ceil((earlier(body.max_dimensions.11) or else
+                      11 => computed ceil((earlier(body.max_dimensions.11) or else
                           earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed
-                          ceil((earlier(body.max_dimensions.12) or else
+                      12 => computed ceil((earlier(body.max_dimensions.12) or else
                           earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed
-                          ceil((earlier(body.max_dimensions.13) or else
+                      13 => computed ceil((earlier(body.max_dimensions.13) or else
                           earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed
-                          ceil((earlier(body.max_dimensions.14) or else
+                      14 => computed ceil((earlier(body.max_dimensions.14) or else
                           earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed
-                          ceil((earlier(body.max_dimensions.15) or else
+                      15 => computed ceil((earlier(body.max_dimensions.15) or else
                           earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed
-                          ceil((earlier(body.max_dimensions.16) or else
+                      16 => computed ceil((earlier(body.max_dimensions.16) or else
                           earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed
-                          ceil((earlier(body.max_dimensions.17) or else
+                      17 => computed ceil((earlier(body.max_dimensions.17) or else
                           earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed
-                          ceil((earlier(body.max_dimensions.18) or else
+                      18 => computed ceil((earlier(body.max_dimensions.18) or else
                           earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed
-                          ceil((earlier(body.max_dimensions.19) or else
+                      19 => computed ceil((earlier(body.max_dimensions.19) or else
                           earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed
-                          ceil((earlier(body.max_dimensions.20) or else
+                      20 => computed ceil((earlier(body.max_dimensions.20) or else
                           earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed
-                          ceil((earlier(body.max_dimensions.21) or else
+                      21 => computed ceil((earlier(body.max_dimensions.21) or else
                           earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed
-                          ceil((earlier(body.max_dimensions.22) or else
+                      22 => computed ceil((earlier(body.max_dimensions.22) or else
                           earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed
-                          ceil((earlier(body.max_dimensions.23) or else
+                      23 => computed ceil((earlier(body.max_dimensions.23) or else
                           earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed
-                          ceil((earlier(body.max_dimensions.24) or else
+                      24 => computed ceil((earlier(body.max_dimensions.24) or else
                           earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed
-                          ceil((earlier(body.max_dimensions.25) or else
+                      25 => computed ceil((earlier(body.max_dimensions.25) or else
                           earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed
-                          ceil((earlier(body.max_dimensions.26) or else
+                      26 => computed ceil((earlier(body.max_dimensions.26) or else
                           earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed
-                          ceil((earlier(body.max_dimensions.27) or else
+                      27 => computed ceil((earlier(body.max_dimensions.27) or else
                           earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed
-                          ceil((earlier(body.max_dimensions.28) or else
+                      28 => computed ceil((earlier(body.max_dimensions.28) or else
                           earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed
-                          ceil((earlier(body.max_dimensions.29) or else
+                      29 => computed ceil((earlier(body.max_dimensions.29) or else
                           earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed
-                          ceil((earlier(body.max_dimensions.30) or else
+                      30 => computed ceil((earlier(body.max_dimensions.30) or else
                           earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed
-                          ceil((earlier(body.max_dimensions.31) or else
+                      31 => computed ceil((earlier(body.max_dimensions.31) or else
                           earlier(body.dimensions.31)) / chunk_dimensions[index])
                       _ => computed 0
                     }[dimensionality - 1]
@@ -3076,8 +3012,8 @@ type MessageV2 = Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3104,8 +3040,8 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3173,8 +3109,8 @@ type MessageV2 = Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3201,8 +3137,8 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3265,8 +3201,8 @@ type MessageV2 = Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3293,8 +3229,8 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3447,8 +3383,8 @@ type MessageV2 = Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3475,8 +3411,8 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3736,101 +3672,69 @@ type MessageV2 = Message (named by type, contents body) {
                   _ => at(address from origin) ImplicitChunks
                       (machinery chunks_across chunk_bytes) {
                     chunks_across: switch index {
-                      0 => computed
-                          ceil((earlier(body.max_dimensions.0) or else
+                      0 => computed ceil((earlier(body.max_dimensions.0) or else
                           earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed
-                          ceil((earlier(body.max_dimensions.1) or else
+                      1 => computed ceil((earlier(body.max_dimensions.1) or else
                           earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed
-                          ceil((earlier(body.max_dimensions.2) or else
+                      2 => computed ceil((earlier(body.max_dimensions.2) or else
                           earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed
-                          ceil((earlier(body.max_dimensions.3) or else
+                      3 => computed ceil((earlier(body.max_dimensions.3) or else
                           earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed
-                          ceil((earlier(body.max_dimensions.4) or else
+                      4 => computed ceil((earlier(body.max_dimensions.4) or else
                           earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed
-                          ceil((earlier(body.max_dimensions.5) or else
+                      5 => computed ceil((earlier(body.max_dimensions.5) or else
                           earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed
-                          ceil((earlier(body.max_dimensions.6) or else
+                      6 => computed ceil((earlier(body.max_dimensions.6) or else
                           earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed
-                          ceil((earlier(body.max_dimensions.7) or else
+                      7 => computed ceil((earlier(body.max_dimensions.7) or else
                           earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed
-                          ceil((earlier(body.max_dimensions.8) or else
+                      8 => computed ceil((earlier(body.max_dimensions.8) or else
                           earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed
-                          ceil((earlier(body.max_dimensions.9) or else
+                      9 => computed ceil((earlier(body.max_dimensions.9) or else
                           earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed
-                          ceil((earlier(body.max_dimensions.10) or else
+                      10 => computed ceil((earlier(body.max_dimensions.10) or else
                           earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed
-                          ceil((earlier(body.max_dimensions.11) or else
+                      11 => computed ceil((earlier(body.max_dimensions.11) or else
                           earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed
-                          ceil((earlier(body.max_dimensions.12) or else
+                      12 => computed ceil((earlier(body.max_dimensions.12) or else
                           earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed
-                          ceil((earlier(body.max_dimensions.13) or else
+                      13 => computed ceil((earlier(body.max_dimensions.13) or else
                           earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed
-                          ceil((earlier(body.max_dimensions.14) or else
+                      14 => computed ceil((earlier(body.max_dimensions.14) or else
                           earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed
-                          ceil((earlier(body.max_dimensions.15) or else
+                      15 => computed ceil((earlier(body.max_dimensions.15) or else
                           earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed
-                          ceil((earlier(body.max_dimensions.16) or else
+                      16 => computed ceil((earlier(body.max_dimensions.16) or else
                           earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed
-                          ceil((earlier(body.max_dimensions.17) or else
+                      17 => computed ceil((earlier(body.max_dimensions.17) or else
                           earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed
-                          ceil((earlier(body.max_dimensions.18) or else
+                      18 => computed ceil((earlier(body.max_dimensions.18) or else
                           earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed
-                          ceil((earlier(body.max_dimensions.19) or else
+                      19 => computed ceil((earlier(body.max_dimensions.19) or else
                           earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed
-                          ceil((earlier(body.max_dimensions.20) or else
+                      20 => computed ceil((earlier(body.max_dimensions.20) or else
                           earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed
-                          ceil((earlier(body.max_dimensions.21) or else
+                      21 => computed ceil((earlier(body.max_dimensions.21) or else
                           earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed
-                          ceil((earlier(body.max_dimensions.22) or else
+                      22 => computed ceil((earlier(body.max_dimensions.22) or else
                           earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed
-                          ceil((earlier(body.max_dimensions.23) or else
+                      23 => computed ceil((earlier(body.max_dimensions.23) or else
                           earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed
-                          ceil((earlier(body.max_dimensions.24) or else
+                      24 => computed ceil((earlier(body.max_dimensions.24) or else
                           earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed
-                          ceil((earlier(body.max_dimensions.25) or else
+                      25 => computed ceil((earlier(body.max_dimensions.25) or else
                           earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed
-                          ceil((earlier(body.max_dimensions.26) or else
+                      26 => computed ceil((earlier(body.max_dimensions.26) or else
                           earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed
-                          ceil((earlier(body.max_dimensions.27) or else
+                      27 => computed ceil((earlier(body.max_dimensions.27) or else
                           earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed
-                          ceil((earlier(body.max_dimensions.28) or else
+                      28 => computed ceil((earlier(body.max_dimensions.28) or else
                           earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed
-                          ceil((earlier(body.max_dimensions.29) or else
+                      29 => computed ceil((earlier(body.max_dimensions.29) or else
                           earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed
-                          ceil((earlier(body.max_dimensions.30) or else
+                      30 => computed ceil((earlier(body.max_dimensions.30) or else
                           earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed
-                          ceil((earlier(body.max_dimensions.31) or else
+                      31 => computed ceil((earlier(body.max_dimensions.31) or else
                           earlier(body.dimensions.31)) / chunk_dimensions[index])
                       _ => computed 0
                     }[dimensionality - 1]
@@ -3953,8 +3857,8 @@ type MessageV2 = Message (named by type, contents body) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -3981,8 +3885,8 @@ type MessageV2 = Message (named by type, contents body) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -4242,101 +4146,69 @@ type MessageV2 = Message (named by type, contents body) {
                   _ => at(address from origin) ImplicitChunks
                       (machinery chunks_across chunk_bytes) {
                     chunks_across: switch index {
-                      0 => computed
-                          ceil((earlier(body.max_dimensions.0) or else
+                      0 => computed ceil((earlier(body.max_dimensions.0) or else
                           earlier(body.dimensions.0)) / chunk_dimensions[index])
-                      1 => computed
-                          ceil((earlier(body.max_dimensions.1) or else
+                      1 => computed ceil((earlier(body.max_dimensions.1) or else
                           earlier(body.dimensions.1)) / chunk_dimensions[index])
-                      2 => computed
-                          ceil((earlier(body.max_dimensions.2) or else
+                      2 => computed ceil((earlier(body.max_dimensions.2) or else
                           earlier(body.dimensions.2)) / chunk_dimensions[index])
-                      3 => computed
-                          ceil((earlier(body.max_dimensions.3) or else
+                      3 => computed ceil((earlier(body.max_dimensions.3) or else
                           earlier(body.dimensions.3)) / chunk_dimensions[index])
-                      4 => computed
-                          ceil((earlier(body.max_dimensions.4) or else
+                      4 => computed ceil((earlier(body.max_dimensions.4) or else
                           earlier(body.dimensions.4)) / chunk_dimensions[index])
-                      5 => computed
-                          ceil((earlier(body.max_dimensions.5) or else
+                      5 => computed ceil((earlier(body.max_dimensions.5) or else
                           earlier(body.dimensions.5)) / chunk_dimensions[index])
-                      6 => computed
-                          ceil((earlier(body.max_dimensions.6) or else
+                      6 => computed ceil((earlier(body.max_dimensions.6) or else
                           earlier(body.dimensions.6)) / chunk_dimensions[index])
-                      7 => computed
-                          ceil((earlier(body.max_dimensions.7) or else
+                      7 => computed ceil((earlier(body.max_dimensions.7) or else
                           earlier(body.dimensions.7)) / chunk_dimensions[index])
-                      8 => computed
-                          ceil((earlier(body.max_dimensions.8) or else
+                      8 => computed ceil((earlier(body.max_dimensions.8) or else
                           earlier(body.dimensions.8)) / chunk_dimensions[index])
-                      9 => computed
-                          ceil((earlier(body.max_dimensions.9) or else
+                      9 => computed ceil((earlier(body.max_dimensions.9) or else
                           earlier(body.dimensions.9)) / chunk_dimensions[index])
-                      10 => computed
-                          ceil((earlier(body.max_dimensions.10) or else
+                      10 => computed ceil((earlier(body.max_dimensions.10) or else
                           earlier(body.dimensions.10)) / chunk_dimensions[index])
-                      11 => computed
-                          ceil((earlier(body.max_dimensions.11) or else
+                      11 => computed ceil((earlier(body.max_dimensions.11) or else
                           earlier(body.dimensions.11)) / chunk_dimensions[index])
-                      12 => computed
-                          ceil((earlier(body.max_dimensions.12) or else
+                      12 => computed ceil((earlier(body.max_dimensions.12) or else
                           earlier(body.dimensions.12)) / chunk_dimensions[index])
-                      13 => computed
-                          ceil((earlier(body.max_dimensions.13) or else
+                      13 => computed ceil((earlier(body.max_dimensions.13) or else
                           earlier(body.dimensions.13)) / chunk_dimensions[index])
-                      14 => computed
-                          ceil((earlier(body.max_dimensions.14) or else
+                      14 => computed ceil((earlier(body.max_dimensions.14) or else
                           earlier(body.dimensions.14)) / chunk_dimensions[index])
-                      15 => computed
-                          ceil((earlier(body.max_dimensions.15) or else
+                      15 => computed ceil((earlier(body.max_dimensions.15) or else
                           earlier(body.dimensions.15)) / chunk_dimensions[index])
-                      16 => computed
-                          ceil((earlier(body.max_dimensions.16) or else
+                      16 => computed ceil((earlier(body.max_dimensions.16) or else
                           earlier(body.dimensions.16)) / chunk_dimensions[index])
-                      17 => computed
-                          ceil((earlier(body.max_dimensions.17) or else
+                      17 => computed ceil((earlier(body.max_dimensions.17) or else
                           earlier(body.dimensions.17)) / chunk_dimensions[index])
-                      18 => computed
-                          ceil((earlier(body.max_dimensions.18) or else
+                      18 => computed ceil((earlier(body.max_dimensions.18) or else
                           earlier(body.dimensions.18)) / chunk_dimensions[index])
-                      19 => computed
-                          ceil((earlier(body.max_dimensions.19) or else
+                      19 => computed ceil((earlier(body.max_dimensions.19) or else
                           earlier(body.dimensions.19)) / chunk_dimensions[index])
-                      20 => computed
-                          ceil((earlier(body.max_dimensions.20) or else
+                      20 => computed ceil((earlier(body.max_dimensions.20) or else
                           earlier(body.dimensions.20)) / chunk_dimensions[index])
-                      21 => computed
-                          ceil((earlier(body.max_dimensions.21) or else
+                      21 => computed ceil((earlier(body.max_dimensions.21) or else
                           earlier(body.dimensions.21)) / chunk_dimensions[index])
-                      22 => computed
-                          ceil((earlier(body.max_dimensions.22) or else
+                      22 => computed ceil((earlier(body.max_dimensions.22) or else
                           earlier(body.dimensions.22)) / chunk_dimensions[index])
-                      23 => computed
-                          ceil((earlier(body.max_dimensions.23) or else
+                      23 => computed ceil((earlier(body.max_dimensions.23) or else
                           earlier(body.dimensions.23)) / chunk_dimensions[index])
-                      24 => computed
-                          ceil((earlier(body.max_dimensions.24) or else
+                      24 => computed ceil((earlier(body.max_dimensions.24) or else
                           earlier(body.dimensions.24)) / chunk_dimensions[index])
-                      25 => computed
-                          ceil((earlier(body.max_dimensions.25) or else
+                      25 => computed ceil((earlier(body.max_dimensions.25) or else
                           earlier(body.dimensions.25)) / chunk_dimensions[index])
-                      26 => computed
-                          ceil((earlier(body.max_dimensions.26) or else
+                      26 => computed ceil((earlier(body.max_dimensions.26) or else
                           earlier(body.dimensions.26)) / chunk_dimensions[index])
-                      27 => computed
-                          ceil((earlier(body.max_dimensions.27) or else
+                      27 => computed ceil((earlier(body.max_dimensions.27) or else
                           earlier(body.dimensions.27)) / chunk_dimensions[index])
-                      28 => computed
-                          ceil((earlier(body.max_dimensions.28) or else
+                      28 => computed ceil((earlier(body.max_dimensions.28) or else
                           earlier(body.dimensions.28)) / chunk_dimensions[index])
-                      29 => computed
-                          ceil((earlier(body.max_dimensions.29) or else
+                      29 => computed ceil((earlier(body.max_dimensions.29) or else
                           earlier(body.dimensions.29)) / chunk_dimensions[index])
-                      30 => computed
-                          ceil((earlier(body.max_dimensions.30) or else
+                      30 => computed ceil((earlier(body.max_dimensions.30) or else
                           earlier(body.dimensions.30)) / chunk_dimensions[index])
-                      31 => computed
-                          ceil((earlier(body.max_dimensions.31) or else
+                      31 => computed ceil((earlier(body.max_dimensions.31) or else
                           earlier(body.dimensions.31)) / chunk_dimensions[index])
                       _ => computed 0
                     }[dimensionality - 1]
@@ -4653,8 +4525,8 @@ type Node = switch peek(u32be) {
                 elements: switch earlier(body.class) {
                   0 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]
@@ -4681,8 +4553,8 @@ type Node = switch peek(u32be) {
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
-                      earlier(body.size) * 2 +
-                      (earlier(body.bit_field) / 8 - earlier(body.bit_field) / 16 * 2) {
+                      earlier(body.size) * 2 + (earlier(body.bit_field) / 8 -
+                      earlier(body.bit_field) / 16 * 2) {
                     2 => u8be[run_bytes / element_size]
                     3 => i8le[run_bytes / element_size]
                     4 => u16le[run_bytes / element_size]

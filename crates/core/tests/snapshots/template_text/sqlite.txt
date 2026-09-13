@@ -1,7 +1,7 @@
 template sqlite
 
 root SQLite {
-  magic: magic 53 51 4C 69 74 65 20 66 6F 72 6D 61 74 20 33 00
+  magic: magic "SQLite format 3\0"
   page_size: u16be
   write_version: u8be enum WriteVersion {1 = legacy, 2 = wal}
   read_version: u8be enum ReadVersion {1 = legacy, 2 = wal}
@@ -26,8 +26,8 @@ root SQLite {
   sqlite_version: u32be
   page1: switch page_size {
     1 => sized(65536 - 100) switch peek(u8be) {
-      2 => IndexInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -37,7 +37,7 @@ root SQLite {
         fragmented_free_bytes: u8be
         right_most_page: u32be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           left_child_page: u32be
           payload_size: sqlite varint
           payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
@@ -166,15 +166,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -184,8 +182,8 @@ root SQLite {
           }
         }
       }
-      5 => TableInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -195,13 +193,13 @@ root SQLite {
         fragmented_free_bytes: u8be
         right_most_page: u32be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           left_child_page: u32be
           rowid: sqlite varint
         }
       }
-      10 => IndexLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -210,7 +208,7 @@ root SQLite {
         cell_content_start: u16be
         fragmented_free_bytes: u8be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           payload_size: sqlite varint
           payload: switch payload_size / ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
             0 => sized(payload_size) SchemaRecord (named by name) {
@@ -338,15 +336,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -356,8 +352,8 @@ root SQLite {
           }
         }
       }
-      13 => TableLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -366,7 +362,7 @@ root SQLite {
         cell_content_start: u16be
         fragmented_free_bytes: u8be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           payload_size: sqlite varint
           rowid: sqlite varint
           payload: switch payload_size / (65536 - reserved_space - 35 + 1) {
@@ -495,15 +491,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   (65536 - reserved_space - 35 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -522,8 +516,8 @@ root SQLite {
       }
     }
     _ => sized(page_size - 100) switch peek(u8be) {
-      2 => IndexInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -533,7 +527,7 @@ root SQLite {
         fragmented_free_bytes: u8be
         right_most_page: u32be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           left_child_page: u32be
           payload_size: sqlite varint
           payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
@@ -663,15 +657,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
@@ -681,8 +673,8 @@ root SQLite {
           }
         }
       }
-      5 => TableInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -692,13 +684,13 @@ root SQLite {
         fragmented_free_bytes: u8be
         right_most_page: u32be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           left_child_page: u32be
           rowid: sqlite varint
         }
       }
-      10 => IndexLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -707,7 +699,7 @@ root SQLite {
         cell_content_start: u16be
         fragmented_free_bytes: u8be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           payload_size: sqlite varint
           payload: switch payload_size / ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1)
               {
@@ -836,15 +828,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
@@ -854,8 +844,8 @@ root SQLite {
           }
         }
       }
-      13 => TableLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -864,7 +854,7 @@ root SQLite {
         cell_content_start: u16be
         fragmented_free_bytes: u8be
         cell_pointers: u16be[cell_count]
-        cells: pointers(at cell_pointers[] from window + -100) Cell {
+        cells: pointers(at cell_pointers[] from window - 100) Cell {
           payload_size: sqlite varint
           rowid: sqlite varint
           payload: switch payload_size / (page_size - reserved_space - 35 + 1) {
@@ -993,15 +983,13 @@ root SQLite {
               }
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   (page_size - reserved_space - 35 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
@@ -1022,8 +1010,8 @@ root SQLite {
   }
   pages: switch page_size {
     1 => repeat(until end) sized(65536) switch peek(u8be) {
-      2 => IndexInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1070,15 +1058,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -1088,8 +1074,8 @@ root SQLite {
           }
         }
       }
-      5 => TableInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1104,8 +1090,8 @@ root SQLite {
           rowid: sqlite varint
         }
       }
-      10 => IndexLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1150,15 +1136,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   ((65536 - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -1168,8 +1152,8 @@ root SQLite {
           }
         }
       }
-      13 => TableLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1215,15 +1199,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((65536 - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                  ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                   (65536 - reserved_space - 4) * (65536 - reserved_space - 4))) /
                   (65536 - reserved_space - 35 + 1) {
-                0 =>
-                    bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((65536 - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((65536 - reserved_space - 12) * 32 / 255 - 23)) /
                     (65536 - reserved_space - 4) * (65536 - reserved_space - 4))]
                 _ => bytes[(65536 - reserved_space - 12) * 32 / 255 - 23]
@@ -1242,8 +1224,8 @@ root SQLite {
       }
     }
     _ => repeat(until end) sized(page_size) switch peek(u8be) {
-      2 => IndexInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      2 => IndexInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1291,15 +1273,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
@@ -1309,8 +1289,8 @@ root SQLite {
           }
         }
       }
-      5 => TableInterior
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      5 => TableInterior (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1325,8 +1305,8 @@ root SQLite {
           rowid: sqlite varint
         }
       }
-      10 => IndexLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      10 => IndexLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1372,15 +1352,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   ((page_size - reserved_space - 12) * 64 / 255 - 23 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]
@@ -1390,8 +1368,8 @@ root SQLite {
           }
         }
       }
-      13 => TableLeaf
-          (machinery page_type first_freeblock cell_content_start fragmented_free_bytes) {
+      13 => TableLeaf (machinery page_type first_freeblock cell_content_start
+          fragmented_free_bytes) {
         page_type: u8be enum PageType {
           2 = index interior, 5 = table interior, 10 = index leaf, 13 = table leaf
         }
@@ -1437,15 +1415,13 @@ root SQLite {
               }[types]
             }
             _ => Spilled (inline, packed sqlite_overflow) {
-              on_page: switch
-                  ((page_size - reserved_space - 12) * 32 / 255 - 23 +
-                  (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+              on_page: switch ((page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size
+                  - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                   (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                   (page_size - reserved_space - 4) * (page_size - reserved_space - 4))) /
                   (page_size - reserved_space - 35 + 1) {
-                0 =>
-                    bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 +
-                    (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23) -
+                0 => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23 + (payload_size -
+                    ((page_size - reserved_space - 12) * 32 / 255 - 23) -
                     (payload_size - ((page_size - reserved_space - 12) * 32 / 255 - 23)) /
                     (page_size - reserved_space - 4) * (page_size - reserved_space - 4))]
                 _ => bytes[(page_size - reserved_space - 12) * 32 / 255 - 23]

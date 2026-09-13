@@ -167,9 +167,8 @@ type Chunk (named by id, contents body) {
         size: u32be
         flags: u16be
         body: switch version {
-          4 =>
-              sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384 +
-              (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
             'TIT2' => TextFrame {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -507,9 +506,8 @@ type Chunk (named by id, contents body) {
         size: u32be
         flags: u16be
         body: switch version {
-          4 =>
-              sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384 +
-              (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
             'TIT2' => TextFrame {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -866,8 +864,7 @@ type Chunk (named by id, contents body) {
     }
     _ => bytes[remaining]
   }
-  pad:
-      bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
+  pad: bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
       (((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) / 2 * 2) *
       (0 < remaining)]
 }
@@ -1029,9 +1026,8 @@ type ChunkBE = Chunk (named by id, contents body) {
         size: u32be
         flags: u16be
         body: switch version {
-          4 =>
-              sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384 +
-              (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
             'TIT2' => TextFrame {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1369,9 +1365,8 @@ type ChunkBE = Chunk (named by id, contents body) {
         size: u32be
         flags: u16be
         body: switch version {
-          4 =>
-              sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384 +
-              (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
+          4 => sized(size / 16777216 * 2097152 + (size / 65536 - size / 16777216 * 256) * 16384
+              + (size / 256 - size / 65536 * 256) * 128 + (size - size / 256 * 256)) switch id {
             'TIT2' => TextFrame {
               encoding: u8be enum TextEncoding {
                 0 = latin-1, 1 = utf-16 bom, 2 = utf-16 be, 3 = utf-8
@@ -1728,8 +1723,7 @@ type ChunkBE = Chunk (named by id, contents body) {
     }
     _ => bytes[remaining]
   }
-  pad:
-      bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
+  pad: bytes[(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 -
       (((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) / 2 * 2) *
       (0 < remaining)]
 }

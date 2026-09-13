@@ -34,9 +34,8 @@ root ELF {
         section_header_entry_size: u16le
         section_header_count: u16le
         section_name_table: u16le
-        section_name_base:
-            at(section_header_offset + section_name_table * section_header_entry_size + 16 from
-            file) u32le
+        section_name_base: at(section_header_offset + section_name_table *
+            section_header_entry_size + 16 from file) u32le
             aside
         program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
           type: u32le enum SegmentType {
@@ -253,9 +252,8 @@ root ELF {
         section_header_entry_size: u16be
         section_header_count: u16be
         section_name_table: u16be
-        section_name_base:
-            at(section_header_offset + section_name_table * section_header_entry_size + 16 from
-            file) u32be
+        section_name_base: at(section_header_offset + section_name_table *
+            section_header_entry_size + 16 from file) u32be
             aside
         program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
           type: u32be enum SegmentType {
@@ -475,9 +473,8 @@ root ELF {
         section_header_entry_size: u16le
         section_header_count: u16le
         section_name_table: u16le
-        section_name_base:
-            at(section_header_offset + section_name_table * section_header_entry_size + 24 from
-            file) u64le
+        section_name_base: at(section_header_offset + section_name_table *
+            section_header_entry_size + 24 from file) u64le
             aside
         program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
           type: u32le enum SegmentType {
@@ -702,9 +699,8 @@ root ELF {
         section_header_entry_size: u16be
         section_header_count: u16be
         section_name_table: u16be
-        section_name_base:
-            at(section_header_offset + section_name_table * section_header_entry_size + 24 from
-            file) u64be
+        section_name_base: at(section_header_offset + section_name_table *
+            section_header_entry_size + 24 from file) u64be
             aside
         program_headers: at(program_header_offset from file) ProgramHeader (unit segment) {
           type: u32be enum SegmentType {
