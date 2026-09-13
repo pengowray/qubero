@@ -170,7 +170,9 @@ pub enum TypeRef {
 	Int { signed: bool, width: u8, endian: Option<Endian> },
 	/// `f4`, `f8`.
 	Float { width: u8, endian: Option<Endian> },
-	/// `bN`, with `le`/`be` from the suffix, from `meta/bit-endian`, or big.
+	/// `bN`. `endian` is the `le`/`be` suffix, else `meta/bit-endian`, else
+	/// big. `meta/endian` plays no part in it, so this is always answered and
+	/// never left to the file the way [`TypeRef::Int`]'s can be.
 	Bits { width: u32, endian: Endian },
 	/// `str` or `strz`, with the encoding resolved.
 	Str { zero_terminated: bool, encoding: String, source: ByteSource },
@@ -183,6 +185,12 @@ pub enum TypeRef {
 	Switch(Box<SwitchSpec>),
 }
 
+/// `type: {switch-on: e, cases: {...}}`.
+///
+/// A `size`, a `pad-right` and a `process` written on the field apply to every
+/// case, and they stay on the [`AttrSpec`] rather than being copied onto each
+/// [`SwitchCase`]. The one thing a case carries of its own is the byte source
+/// its type string needed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchSpec {
 	pub on: Expr,
@@ -1162,12 +1170,20 @@ impl fmt::Display for TypeRef {
 
 /// What the null terminator of a `strz` is, which depends on the encoding: two
 /// zero bytes for UTF-16, four for UTF-32, one for everything else.
+///
+/// The name is matched loosely, on purpose. The compiler decides this from the
+/// *canonical* name, so `encoding: UTF-16` written without an end, and
+/// `utf-16le` written in lower case, are names it does not recognise and gives
+/// a single zero byte to. A UTF-16 string does not end at one zero byte, so
+/// that reading is wrong about the file, and this is the one place the reader
+/// deliberately does not copy it. No format in the corpus writes a `strz` with
+/// either of those names, so nothing here changes what the corpus reads as.
 fn default_terminator(encoding: &str) -> Vec<u8> {
 	let flat: String =
 		encoding.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
-	if flat.starts_with("utf16") {
+	if flat.contains("utf16") {
 		vec![0, 0]
-	} else if flat.starts_with("utf32") {
+	} else if flat.contains("utf32") {
 		vec![0, 0, 0, 0]
 	} else {
 		vec![0]
