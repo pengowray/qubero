@@ -1321,6 +1321,92 @@ fn two_to_a_negative_power_is_a_real_and_not_a_shift() {
     assert_eq!(real(E::pow10(E::lit(300))), Value::Float(1e300));
 }
 
+/// The relations panel writes a real formula the way it writes a whole one:
+/// as the template writes it, then with each field's value in its place, a
+/// float as its row shows it.
+#[test]
+fn a_real_relation_is_written_with_its_values_in_place() {
+    let worth = E::field("stored").mul(E::field("slope")).add(E::field("inter"));
+    let (d, mut ev) = scaled_voxel(11980, 0.0754, 3100.76, worth);
+    let rel = ev.relations(&d, &[3]).unwrap();
+    assert_eq!(rel.len(), 1, "{rel:?}");
+    assert_eq!(rel[0].role, Role::Value);
+    assert_eq!(rel[0].written, "stored * slope + inter");
+    assert_eq!(rel[0].substituted, "11980 * 0.0754 + 3100.76");
+    assert_eq!(rel[0].result, (11980.0 * 0.0754 + 3100.76f64).to_string());
+
+    // A scale read from text, with its default: the card's number in place of
+    // the card, and the literal keeping its point.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("text", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
+                ("stored", T::u8()),
+                ("worth", T::computed_real(E::real_text(E::field("text")).or(E::real(1.0)).mul(E::field("stored")))),
+            ],
+        ),
+    );
+    let d = doc(b" 2.5\x04");
+    let mut ev = Evaluator::new(t);
+    let rel = ev.relations(&d, &[2]).unwrap();
+    assert_eq!(rel[0].written, "(real(text) or else 1.0) * stored");
+    assert_eq!(rel[0].substituted, "(2.5 or else 1.0) * 4");
+    assert_eq!(rel[0].result, "10");
+
+    // And a float's whole part placing bytes, in a relation that is a whole
+    // number: the float is still written in as the float.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("off", T::F32(Little)), ("body", T::bytes(E::trunc(E::field("off")).sub(E::lit(4))))]),
+    );
+    let mut bytes = 6.9f32.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&[0, 0]);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let rel = ev.relations(&d, &[1]).unwrap();
+    assert_eq!((rel[0].written.as_str(), rel[0].substituted.as_str(), rel[0].result.as_str()), ("trunc(off) - 4", "trunc(6.9) - 4", "2"));
+}
+
+/// What a scaled number is worth is a reading of the stored integer, and the
+/// stored integer is what an edit writes.
+#[test]
+fn a_real_computed_field_is_not_editable() {
+    let (d, mut ev) = scaled_voxel(7, 2.0, 0.5, E::field("stored").mul(E::field("slope")).add(E::field("inter")));
+    assert!(!ev.node(&d, &[3]).unwrap().editable);
+    assert!(ev.node(&d, &[2]).unwrap().editable);
+    assert!(ev.prepare_write(&d, &[3], "15").is_err());
+}
+
+/// The origins of a worth are the fields its formula reads, with what each
+/// holds, and a float's whole part points at the float.
+#[test]
+fn a_real_field_names_the_fields_it_reads() {
+    let worth = E::field("stored").mul(E::pow2(E::field("stored").sub(E::lit(5)))).add(E::field("inter"));
+    let (d, mut ev) = scaled_voxel(3, 1.0, 0.25, worth);
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Float(1.0));
+    let seen: Vec<_> = ev.origins(&d, &[3]).unwrap().into_iter().map(|o| (o.role, o.label, o.value)).collect();
+    assert_eq!(
+        seen,
+        vec![
+            (Role::Value, "stored".to_string(), "3".to_string()),
+            (Role::Value, "stored".to_string(), "3".to_string()),
+            (Role::Value, "inter".to_string(), "0.25".to_string()),
+        ]
+    );
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("vox_offset", T::F32(Little)), ("voxel", T::at(E::trunc(E::field("vox_offset")), T::u8()))]),
+    );
+    let mut bytes = 4.0f32.to_le_bytes().to_vec();
+    bytes.push(9);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    let labels: Vec<_> = ev.origins(&d, &[1, 0]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert_eq!(labels, vec![(Role::Position, "vox_offset".to_string())]);
+}
+
 /// What a `computed` field was is what it is: a whole number, cached on the
 /// node, that reads a float field as a refusal and not as a nought.
 #[test]
