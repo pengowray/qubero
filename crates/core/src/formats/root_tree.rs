@@ -17,14 +17,25 @@
 //! directory's key list does not list and nothing in the file points at except
 //! `fBasketSeek`, an array of file offsets inside each streamed `TBranch`.
 //!
-//! Those offsets are not fields. They are numbers inside a compressed stream
-//! that the template hands to a decoder, and an expression can only name a
-//! field. `Ty::At`, `Ty::PointerList` and `Ty::Gather` can all place a record
-//! at an offset a field holds, and none of them can place one at an offset
-//! that only exists after a stream has been unpacked and a schema applied to
-//! what came out. That is gap S4 of the science formats handover, and it is
-//! what keeps the baskets out of the Listing. So they are listed here, with
-//! the offset and the length of each, and a reader can go to one.
+//! It is worth being exact about which part of that the IR cannot do, because
+//! it is not the part the handover's gap S4 names. An offset read inside a
+//! compressed stream that means a place in the file already works: `Ty::At`
+//! with `Anchor::File` resolves into space 0 whatever space the field naming
+//! it was read in (`eval/mod.rs`, the `space` match in `place_child`), which
+//! is how the same template already places an RNTuple's two envelopes from an
+//! anchor inside a compressed record.
+//!
+//! What is missing is one level above that. `fBasketSeek` is not a field of
+//! any kind. To make it one, the template would have to describe the streamed
+//! `TTree` object, and its layout is not a fact about the format: it is a
+//! schema written into another record of the same file, reached by
+//! `fSeekInfo`, itself compressed and itself streamed. A template is a fixed
+//! structure built in Rust, and no `Ty` takes its shape from bytes. So the IR
+//! need is not another kind of pointer list; it is a way for a template to say
+//! "read this run with the class description that record holds", which is a
+//! larger thing than S4 and is what [`root_streamer`](super::root_streamer)
+//! does here instead. The baskets are listed below, with the offset and the
+//! length of each, and a reader can go to one.
 //!
 //! ## What a basket holds
 //!
@@ -51,9 +62,12 @@ use super::root_streamer::{self, Obj, Schema, Val};
 /// that is a reason to stop rather than a reason to allocate.
 pub const TREE_LIMIT: usize = 64;
 pub const BRANCH_LIMIT: usize = 4096;
-/// How many baskets of one branch are listed. A branch of a real analysis file
-/// has thousands; the list says how many it left out.
+/// How many baskets of one branch are listed, and how many across a whole
+/// tree. A branch of a real analysis file has thousands and an experiment's
+/// tree has a thousand branches, so the second of these is what actually
+/// bounds the walk; each branch still says how many baskets it has.
 pub const BASKET_LIMIT: usize = 4096;
+pub const TREE_BASKET_LIMIT: usize = 100_000;
 
 /// How deep the directory walk goes, which matches the depth the template
 /// itself stops at.
@@ -260,12 +274,16 @@ struct TreeKey {
 /// The class descriptions, read out of the record the header's `fSeekInfo`
 /// points at.
 fn schema_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, out: &mut Contents) -> R<Option<Schema>> {
+    // Both of these sit alone on the panel's summary line, where the host
+    // adds what they cost (`trees not read`), so they say the fact and not
+    // the consequence. The second is the one a real file produces: the
+    // template places the record only where `fSeekInfo` is set.
     let Some(record) = ev.child_named(doc, &[], "streamer_info")? else {
-        out.trouble = Some("the file header names no StreamerInfo record".into());
+        out.trouble = Some("no StreamerInfo record".into());
         return Ok(None);
     };
     let Some(inside) = first_child(ev, doc, &record)? else {
-        out.trouble = Some("the file header names no StreamerInfo record".into());
+        out.trouble = Some("no StreamerInfo record (fSeekInfo is 0)".into());
         return Ok(None);
     };
     out.schema_path = inside.clone();
@@ -276,7 +294,7 @@ fn schema_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, out: &mut Content
         // fetches them and asks again. Anything else is this record being
         // unreadable, and is said rather than thrown.
         Err(EvalError::Failed(why)) => {
-            out.trouble = Some(format!("the StreamerInfo record could not be read: {why}"));
+            out.trouble = Some(format!("StreamerInfo record could not be read: {why}"));
             return Ok(None);
         }
         Err(other) => return Err(other),
@@ -284,7 +302,7 @@ fn schema_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, out: &mut Content
     let schema = match root_streamer::read_streamer_info(&record.body, record.key_len) {
         Ok(s) => s,
         Err(why) => {
-            out.trouble = Some(format!("the StreamerInfo record could not be read: {why}"));
+            out.trouble = Some(format!("StreamerInfo record could not be read: {why}"));
             return Ok(None);
         }
     };
@@ -407,8 +425,9 @@ fn read_tree<S: Source>(doc: &Document<S>, schema: &Schema, key: TreeKey) -> R<T
     }
     let mut branches = Vec::new();
     let mut total = 0usize;
+    let mut room = TREE_BASKET_LIMIT;
     if let Some(list) = object.obj("fBranches") {
-        walk_branches(list, "", 0, &mut branches, &mut total);
+        walk_branches(list, "", 0, &mut branches, &mut total, &mut room);
     }
     tree.branch_total = total;
     tree.branches = branches;
@@ -416,7 +435,14 @@ fn read_tree<S: Source>(doc: &Document<S>, schema: &Schema, key: TreeKey) -> R<T
 }
 
 /// Every branch of a `TObjArray` of them, and the branches under each.
-fn walk_branches(list: &Obj, prefix: &str, depth: usize, out: &mut Vec<Branch>, total: &mut usize) {
+fn walk_branches(
+    list: &Obj,
+    prefix: &str,
+    depth: usize,
+    out: &mut Vec<Branch>,
+    total: &mut usize,
+    room: &mut usize,
+) {
     for item in list.list("elements").iter().flatten() {
         *total += 1;
         if out.len() >= BRANCH_LIMIT || depth > MAX_BRANCH_DEPTH {
@@ -427,14 +453,14 @@ fn walk_branches(list: &Obj, prefix: &str, depth: usize, out: &mut Vec<Branch>, 
             true => name.to_string(),
             false => format!("{prefix}/{name}"),
         };
-        out.push(branch_of(item, &full, depth));
+        out.push(branch_of(item, &full, depth, room));
         if let Some(kids) = item.obj("fBranches") {
-            walk_branches(kids, &full, depth + 1, out, total);
+            walk_branches(kids, &full, depth + 1, out, total, room);
         }
     }
 }
 
-fn branch_of(obj: &Obj, name: &str, depth: usize) -> Branch {
+fn branch_of(obj: &Obj, name: &str, depth: usize, room: &mut usize) -> Branch {
     let leaves = leaves_of(obj);
     let entry_offset_len = obj.int("fEntryOffsetLen").unwrap_or(0);
     let split = obj.obj("fBranches").map(|b| b.list("elements").len()).unwrap_or(0);
@@ -460,7 +486,13 @@ fn branch_of(obj: &Obj, name: &str, depth: usize) -> Branch {
     let entry = obj.ints("fBasketEntry");
     let count = written.min(seeks.len());
     branch.basket_total = count;
-    for i in 0..count.min(BASKET_LIMIT) {
+    // Per branch and across the whole tree. A NanoAOD has a thousand branches
+    // of a few hundred baskets each, and a list of every one of them is a
+    // million rows nobody asked for; `basket_total` still says how many there
+    // are.
+    let listed = count.min(BASKET_LIMIT).min(*room);
+    *room -= listed;
+    for i in 0..listed {
         let first = entry.get(i).copied().unwrap_or(0);
         let next = entry.get(i + 1).copied().unwrap_or(branch.entries);
         branch.baskets.push(Basket {
@@ -499,32 +531,38 @@ fn leaves_of(obj: &Obj) -> Vec<Leaf> {
 /// impossible: `uproot-small-flat-tree.root` has a fixed array branch, a
 /// variable-length one and a string branch side by side, and a file from an
 /// experiment is mostly split `TBranchElement`s.
+///
+/// The sentence in a `Not` stands where `signed 32-bit × 10` would on the
+/// panel's branch row, and that row is cut off at the rail's width, so each
+/// says what the branch holds first and `not read here` last. A split branch
+/// says neither: its values are in the sub-branches listed under it, and
+/// nothing is withheld.
 fn how_to_read(obj: &Obj, leaves: &[Leaf], entry_offset_len: i64, split: usize) -> Reading {
     if split > 0 {
-        return Reading::Not(format!("split into {split} branches, whose baskets hold the values"));
+        return Reading::Not(format!("split into {split} sub-branches"));
     }
     if obj.class != "TBranch" {
-        return Reading::Not(format!("a {}, which writes a C++ object rather than numbers", obj.class));
+        return Reading::Not(format!("C++ objects in a {}, not read here", obj.class));
     }
     if leaves.len() != 1 {
-        return Reading::Not(format!("{} leaves, and only one is read here", leaves.len()));
+        return Reading::Not(format!("{} leaves, not read here", leaves.len()));
     }
     let leaf = &leaves[0];
     if !leaf.counted_by.is_empty() {
-        return Reading::Not(format!("as many values per entry as {} says", leaf.counted_by));
+        return Reading::Not(format!("{} values per entry, not read here", leaf.counted_by));
     }
     if entry_offset_len != 0 {
-        return Reading::Not("entries that vary in length".into());
+        return Reading::Not("variable-length entries, not read here".into());
     }
     if leaf.class == "TLeafC" {
-        return Reading::Not("text, one string per entry".into());
+        return Reading::Not("one string per entry, not read here".into());
     }
     if leaf.len <= 0 || leaf.width <= 0 {
-        return Reading::Not("a leaf that gives no width".into());
+        return Reading::Not("leaf with no width, not read here".into());
     }
     let floating = matches!(leaf.class.as_str(), "TLeafF" | "TLeafD" | "TLeafF16" | "TLeafD32");
     if !floating && !matches!(leaf.class.as_str(), "TLeafB" | "TLeafS" | "TLeafI" | "TLeafL" | "TLeafO" | "TLeafG") {
-        return Reading::Not(format!("a {}, which is not one of the fixed-width leaves", leaf.class));
+        return Reading::Not(format!("{} leaves, not read here", leaf.class));
     }
     Reading::Fixed { width: leaf.width, per_entry: leaf.len, floating, unsigned: leaf.unsigned }
 }
@@ -537,7 +575,7 @@ fn how_to_read(obj: &Obj, leaves: &[Leaf], entry_offset_len: i64, split: usize) 
 pub fn read_basket<S: Source>(doc: &Document<S>, at: u64, reading: &Reading) -> R<BasketData> {
     let record = read_record(doc, at)?;
     let Some(head) = record.basket else {
-        return Err(EvalError::Failed("the key at that offset is not a basket".into()));
+        return Err(EvalError::Failed(format!("key at @0x{at:x} is not a TBasket")));
     };
     let border = (head.last - record.key_len as i64).max(0) as usize;
     let border = border.min(record.body.len());
@@ -572,7 +610,7 @@ pub fn read_basket<S: Source>(doc: &Document<S>, at: u64, reading: &Reading) -> 
         Reading::Fixed { width, per_entry, floating, unsigned } => {
             let want = (*width as usize) * (*per_entry as usize) * head.entries.max(0) as usize;
             if want > border {
-                Values::None(format!("the basket holds {border} bytes of values and the leaf wants {want}"))
+                Values::None(format!("basket holds {border} bytes of values, leaf expects {want}"))
             } else {
                 read_values(&record.body[..want], *width as usize, *floating, *unsigned)
             }
@@ -588,7 +626,7 @@ fn read_values(data: &[u8], width: usize, floating: bool, unsigned: bool) -> Val
             out.push(match width {
                 4 => f64::from(f32::from_be_bytes([c[0], c[1], c[2], c[3]])),
                 8 => f64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]),
-                _ => return Values::None(format!("a floating point number {width} bytes wide")),
+                _ => return Values::None(format!("{width}-byte floats, not read here")),
             });
         }
         return Values::Floats(out);
@@ -603,7 +641,7 @@ fn read_values(data: &[u8], width: usize, floating: bool, unsigned: bool) -> Val
             (4, false) => i64::from(i32::from_be_bytes([c[0], c[1], c[2], c[3]])),
             (4, true) => i64::from(u32::from_be_bytes([c[0], c[1], c[2], c[3]])),
             (8, _) => i64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]),
-            _ => return Values::None(format!("a whole number {width} bytes wide")),
+            _ => return Values::None(format!("{width}-byte integers, not read here")),
         });
     }
     Values::Ints(out)
@@ -639,8 +677,11 @@ fn read_record<S: Source>(doc: &Document<S>, at: u64) -> R<Record> {
     // Enough for the fixed part of a key and the three strings, at their
     // longest in any file anyone writes.
     let head = read_at(doc, at, 512.min(doc.len_bytes().saturating_sub(at)) as usize)?;
+    // These reach the panel after `StreamerInfo record could not be read: `
+    // and at the front of a tree's own row, so each names the key by the
+    // address the rest of the app writes and then says what is wrong with it.
     if head.len() < 42 {
-        return Err(EvalError::Failed(format!("no room for a key at {at}")));
+        return Err(EvalError::Failed(format!("key at @0x{at:x}: fewer than 42 bytes left in the file")));
     }
     let nbytes = i32::from_be_bytes([head[0], head[1], head[2], head[3]]) as i64;
     let version = i16::from_be_bytes([head[4], head[5]]);
@@ -649,17 +690,17 @@ fn read_record<S: Source>(doc: &Document<S>, at: u64) -> R<Record> {
     let wide = version > 1000;
     let mut p = 18 + if wide { 16 } else { 8 };
     if key_len < p as i64 || key_len > 512 || nbytes < key_len || nbytes > MAX_RECORD as i64 || objlen < 0 {
-        return Err(EvalError::Failed(format!("the key at {at} gives lengths nothing can be read from")));
+        return Err(EvalError::Failed(format!("key at @0x{at:x}: lengths out of range")));
     }
     let mut strings = Vec::new();
     for _ in 0..3 {
         if p >= head.len() {
-            return Err(EvalError::Failed(format!("the key at {at} stops part way through its names")));
+            return Err(EvalError::Failed(format!("key at @0x{at:x}: name strings cut short")));
         }
         let n = head[p] as usize;
         p += 1;
         if p + n > head.len() {
-            return Err(EvalError::Failed(format!("the key at {at} stops part way through its names")));
+            return Err(EvalError::Failed(format!("key at @0x{at:x}: name strings cut short")));
         }
         strings.push(String::from_utf8_lossy(&head[p..p + n]).into_owned());
         p += n;
@@ -688,7 +729,10 @@ fn read_record<S: Source>(doc: &Document<S>, at: u64) -> R<Record> {
     };
     let packed = (nbytes - key_len) as usize;
     if objlen as usize > MAX_RECORD {
-        return Err(EvalError::Failed(format!("the key at {at} claims {objlen} bytes unpacked")));
+        return Err(EvalError::Failed(format!(
+            "key at @0x{at:x}: {objlen} bytes unpacked, over the {} MiB limit",
+            MAX_RECORD >> 20
+        )));
     }
     let raw = read_at(doc, at + key_len as u64, packed)?;
     let body = match packed == objlen as usize {
@@ -700,7 +744,7 @@ fn read_record<S: Source>(doc: &Document<S>, at: u64) -> R<Record> {
 
 fn read_at<S: Source>(doc: &Document<S>, at: u64, len: usize) -> R<Vec<u8>> {
     if at.saturating_add(len as u64) > doc.len_bytes() {
-        return Err(EvalError::Failed(format!("{len} bytes wanted at {at}, past the end of the file")));
+        return Err(EvalError::Failed(format!("{len} bytes at @0x{at:x} run past the end of the file")));
     }
     let mut out = vec![0u8; len];
     let missing = doc.read_bytes(at, &mut out);
@@ -724,7 +768,7 @@ fn unpack(data: &[u8], want: usize) -> Result<Vec<u8>, String> {
         let packed = head[3] as usize | (head[4] as usize) << 8 | (head[5] as usize) << 16;
         let block = &data[at + 9..];
         if packed > block.len() {
-            return Err(format!("a block claiming {packed} bytes with {} left", block.len()));
+            return Err(format!("a compressed block claims {packed} bytes with {} left", block.len()));
         }
         let block = &block[..packed];
         let (codec, block) = match &head[0..2] {
@@ -737,15 +781,15 @@ fn unpack(data: &[u8], want: usize) -> Result<Vec<u8>, String> {
             // The zlib of ROOT 3: raw deflate, with no two-byte header on it.
             b"CS" => (Codec::Deflate, block),
             other => {
-                return Err(format!("a block packed with {}, which is not read here", String::from_utf8_lossy(other)))
+                return Err(format!("a block compressed with {}, not read here", String::from_utf8_lossy(other)))
             }
         };
-        let piece = codec::decode(codec, block).map_err(|why| format!("a block would not unpack: {}", why.as_str()))?;
+        let piece = codec::decode(codec, block).map_err(|why| format!("a block failed to unpack: {}", why.as_str()))?;
         out.extend_from_slice(&piece);
         at += 9 + packed;
     }
     if out.len() != want {
-        return Err(format!("{} bytes came out of the blocks and the key said {want}", out.len()));
+        return Err(format!("blocks unpacked to {} bytes, key says {want}", out.len()));
     }
     Ok(out)
 }

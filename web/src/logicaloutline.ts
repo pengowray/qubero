@@ -894,38 +894,47 @@ function rootOutline(
 
   if (contents.classes.length > 0) {
     const schemaBits = null;
+    // `Class descriptions` in plain words, with `StreamerInfo`, the record's
+    // own name in ROOT, beside it in the where cell. The group row says the
+    // record once; the class and member rows under it leave the where cell
+    // empty, since the same word forty times down a 250px rail is not an
+    // address, and the width is better spent on the member comments.
     nodes.push({
       id: "/classes", parentId: null, label: "Class descriptions", fullName: "StreamerInfo",
       depth: 0, group: true, hasChildren: true,
       sourcePath: contents.schema_path, sourceBits: schemaBits, sourceText: "StreamerInfo",
       value: countText(contents.classes.length, "class"),
-      type: "StreamerInfo", logicalBytes: null, logicalApproximate: false,
-      title: "Every C++ class this file says how to read",
+      type: "", logicalBytes: null, logicalApproximate: false,
+      title: "StreamerInfo record: the members of every C++ class written to this file",
     });
     for (const cls of contents.classes) {
       const id = `/classes/${cls.name}`;
       nodes.push({
         id, parentId: "/classes", label: cls.name, fullName: cls.name, depth: 1,
         group: true, hasChildren: cls.members.length > 0,
-        sourcePath: contents.schema_path, sourceBits: null, sourceText: "StreamerInfo",
+        sourcePath: contents.schema_path, sourceBits: null, sourceText: "",
         value: [countText(cls.members.length, "member"), `checksum ${hex(cls.checksum)}`].join(" · "),
         type: `version ${cls.version}`, logicalBytes: null, logicalApproximate: false,
-        title: `${cls.name}, version ${cls.version}`,
+        title: `${cls.name} version ${cls.version}`,
       });
       if (!expanded.has(id)) continue;
       for (const [i, member] of cls.members.entries()) {
         const dims = member.dims.length === 0 ? "" : member.dims.map((d) => `[${d}]`).join("");
+        // A base class's type_name is the word `BASE`, which the type cell
+        // already says in full, so the line keeps the comment alone.
+        const shape = member.base ? "" : `${member.type_name}${dims}`;
         nodes.push({
           id: `${id}/${i}`, parentId: id, label: member.name, fullName: `${cls.name}::${member.name}`,
           depth: 2, group: false, hasChildren: false,
-          sourcePath: contents.schema_path, sourceBits: null, sourceText: "StreamerInfo",
-          value: [`${member.type_name}${dims}`, member.comment].filter(Boolean).join(" · "),
+          sourcePath: contents.schema_path, sourceBits: null, sourceText: "",
+          value: [shape, member.comment].filter(Boolean).join(" · "),
           type: member.base ? "base class" : "member",
           // The size column is the unpacked size of what is in the file, and a
           // member's fSize is the width of the C++ field in memory. Two
           // different things, and one column.
           logicalBytes: null, logicalApproximate: false,
-          title: member.comment || `${member.type_name} ${member.name}`,
+          // The line truncates in the rail; the hover carries the whole of it.
+          title: [`${cls.name}::${member.name}`, member.base ? "base class" : shape, member.comment].filter(Boolean).join(" · "),
         });
       }
     }
@@ -933,18 +942,25 @@ function rootOutline(
 
   for (const tree of contents.trees) {
     const treeId = `/trees/${tree.name}`;
+    // What stopped the tree being read goes first: it is the one thing on the
+    // line that is not normal, and the line is cut off at the rail's width.
+    // A tree that was not read at all has zero entries and zero branches
+    // because nothing counted them, so those two are left off rather than
+    // shown as counts; a partly read tree keeps its real numbers.
+    const unread = tree.trouble !== "" && tree.entries === 0 && tree.branch_total === 0;
+    const treeLine = [
+      tree.trouble,
+      unread ? "" : countText(tree.entries, "entry"),
+      unread ? "" : countText(tree.branch_total, "branch"),
+      tree.title,
+    ].filter(Boolean).join(" · ");
     nodes.push({
       id: treeId, parentId: null, label: tree.name, fullName: tree.name, depth: 0,
       group: true, hasChildren: tree.branches.length > 0,
       sourcePath: tree.path, sourceBits: tree.address * 8, sourceText: formatOffset(tree.address * 8),
-      value: [
-        `${tree.entries.toLocaleString()} entries`,
-        countText(tree.branch_total, "branch"),
-        tree.title,
-        tree.trouble,
-      ].filter(Boolean).join(" · "),
+      value: treeLine,
       type: "TTree", logicalBytes: null, logicalApproximate: false,
-      title: tree.title || tree.name,
+      title: `${tree.name} · ${treeLine}`,
     });
     for (const [i, branch] of tree.branches.entries()) {
       const branchId = `${treeId}/${i}`;
@@ -958,29 +974,50 @@ function rootOutline(
           break;
         }
       }
-      const leaf = branch.leaves[0];
+      // What one entry is, first: `signed 32-bit × 10`, or, where the core
+      // does not read the values, its sentence saying what the branch holds
+      // instead and that they are not read here. Both fill the same slot, so
+      // the eye lands in one place down a list of branches. The entry and
+      // basket counts follow; entries are the same for every branch of a tree.
+      // A TLeafO is a C++ bool written as one byte, and calling that
+      // `signed 8-bit` says the width and hides what it is.
+      const element = branch.leaves[0]?.class === "TLeafO"
+        ? "bool"
+        : `${branch.floating ? "float" : branch.unsigned ? "unsigned" : "signed"} ${branch.width * 8}-bit`;
       const shape = branch.unread !== ""
-        ? `values not read: ${branch.unread}`
-        : `${branch.floating ? "float" : branch.unsigned ? "unsigned" : "signed"} ${branch.width * 8}-bit` +
-          (branch.per_entry > 1 ? ` × ${branch.per_entry}` : "");
+        ? branch.unread
+        : element + (branch.per_entry > 1 ? ` × ${branch.per_entry}` : "");
+      const branchLine = [
+        shape,
+        countText(branch.entries, "entry"),
+        countText(branch.basket_total, "basket"),
+      ].join(" · ");
       nodes.push({
         id: branchId, parentId, label: branch.name.split("/").at(-1) ?? branch.name,
         fullName: branch.name, depth: branch.depth + 1,
         group: true, hasChildren: branch.baskets.length > 0,
+        // `multiple`: the bytes are spread over its baskets, the word the
+        // HDF5 outline uses for a chunked dataset in this same cell.
         sourcePath: tree.path, sourceBits: null, sourceText: "multiple",
-        value: [
-          `${branch.entries.toLocaleString()} entries`,
-          countText(branch.basket_total, "basket"),
-          shape,
-          leaf === undefined || leaf.counted_by === "" || branch.unread !== "" ? "" : `counted by ${leaf.counted_by}`,
-        ].filter(Boolean).join(" · "),
+        value: branchLine,
         type: branch.class,
         logicalBytes: branch.total_bytes > 0 ? branch.total_bytes : null, logicalApproximate: false,
-        title: branch.title || branch.name,
+        // The branch's fTitle is the leaf list as ROOT writes it, e.g.
+        // `ArrayInt32[10]/I`; the hover has room for it and the whole line.
+        title: [branch.name, branch.title, branchLine].filter(Boolean).join(" · "),
       });
       if (!expanded.has(branchId)) continue;
       const limit = Math.min(shown.get(branchId) ?? LOGICAL_PAGE, branch.baskets.length);
       for (const [k, basket] of branch.baskets.slice(0, limit).entries()) {
+        // `entries 0 to 99`, both ends included: `0 to 100` read two ways,
+        // and the branch row above has already said the count.
+        const first = basket.first_entry;
+        const range = basket.entries > 0
+          ? `entries ${first.toLocaleString()} to ${(first + basket.entries - 1).toLocaleString()}`
+          : "0 entries";
+        // `in the file` is fBasketBytes, the length on disk whether or not
+        // the basket was compressed, as against the unpacked size column.
+        const basketLine = [range, `${formatBytes(basket.bytes)} in the file`].join(" · ");
         nodes.push({
           id: `${branchId}/k${k}`, parentId: branchId, label: `Basket ${k}`,
           fullName: `${branch.name} basket ${k}`, depth: branch.depth + 2,
@@ -988,12 +1025,9 @@ function rootOutline(
           // No field places a basket, so there is nothing to open in the
           // Listing and only bytes to go to.
           sourcePath: [], sourceBits: basket.address * 8, sourceText: formatOffset(basket.address * 8),
-          value: [
-            `entries ${basket.first_entry.toLocaleString()} to ${(basket.first_entry + basket.entries).toLocaleString()}`,
-            `${formatBytes(basket.bytes)} in the file`,
-          ].join(" · "),
+          value: basketLine,
           type: "TBasket", logicalBytes: null, logicalApproximate: false,
-          title: `${branch.name} basket ${k} at ${formatOffset(basket.address * 8)}`,
+          title: `${branch.name} basket ${k} at ${formatOffset(basket.address * 8)} · ${basketLine}`,
         });
       }
       if (limit < branch.baskets.length) {
@@ -1008,18 +1042,26 @@ function rootOutline(
   }
 
   const entries = contents.trees.reduce((sum, tree) => sum + tree.entries, 0);
+  // Without the class descriptions the core walks no trees, so `0 trees`
+  // would be a count of nothing counted: the summary is then the trouble and
+  // what it cost.
+  const noSchema = contents.classes.length === 0 && contents.trouble !== "";
   return {
     status: "ok",
     node: {
       format: "root",
       title: "ROOT contents",
-      summary: [
-        countText(contents.tree_total, "tree"),
-        contents.trees.length === 0 ? "" : `${entries.toLocaleString()} entries`,
-        countText(contents.classes.length, "class"),
-        contents.trouble,
-      ].filter(Boolean).join(" · "),
+      summary: noSchema
+        ? `${contents.trouble} · trees not read`
+        : [
+            countText(contents.tree_total, "tree"),
+            contents.trees.length === 0 ? "" : countText(entries, "entry"),
+            countText(contents.classes.length, "class"),
+            contents.trouble,
+          ].filter(Boolean).join(" · "),
       nodes, total: nodes.length,
+      // fTotBytes: the branch's bytes before compression, in the app's own
+      // word for it (`Unpacked from`, `in the unpacked stream`).
       sizeLabel: "Unpacked size",
       ...(more.length === 0 ? {} : { more }),
     },

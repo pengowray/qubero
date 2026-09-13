@@ -408,7 +408,7 @@ fn the_zmumu_tree_reads_its_branches_baskets_and_values() {
     // The one branch of this tree whose entries vary in length says so rather
     // than handing back numbers, and its entry offsets are still read.
     let text = &tree.branches[0];
-    assert!(matches!(&text.reading, root_tree::Reading::Not(why) if why.contains("vary in length")));
+    assert!(matches!(&text.reading, root_tree::Reading::Not(why) if why.contains("variable-length")));
     let data = root_tree::branch_basket(&doc, text, 0).expect("Type basket");
     assert_eq!(data.offsets.len(), 2305, "one per entry and one for the end");
     assert!(matches!(data.values, root_tree::Values::None(_)));
@@ -500,11 +500,11 @@ fn a_flat_tree_reads_single_values_and_fixed_arrays_and_refuses_the_rest() {
     // neither is read.
     let text = by_name("Str");
     assert_eq!(text.baskets[0].at, 1848);
-    assert!(matches!(&text.reading, root_tree::Reading::Not(why) if why.contains("vary in length")));
+    assert!(matches!(&text.reading, root_tree::Reading::Not(why) if why.contains("variable-length")));
     let slice = by_name("SliceInt32");
     assert_eq!(slice.baskets[0].at, 5023);
     assert_eq!(slice.leaves[0].counted_by, "N");
-    assert!(matches!(&slice.reading, root_tree::Reading::Not(why) if why.contains('N')));
+    assert!(matches!(&slice.reading, root_tree::Reading::Not(why) if why.starts_with("N values per entry")));
 }
 
 /// A branch with more than one basket, which is the shape everything about
