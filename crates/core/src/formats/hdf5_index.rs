@@ -33,8 +33,8 @@
 //! chunk keeps its bytes, and [`hdf5_chunk`](super::hdf5_chunk) says what they
 //! hold.
 //!
-//! One thing here is not an index. [`datatype_copy`] is three numbers of the
-//! datatype message copied into the layout, so that a chunk asks a field above
+//! One thing here is not an index. [`datatype_copy`] is the datatype message
+//! placed a second time inside the layout, so that a chunk asks a field above
 //! it for its element size rather than searching back past every entry before
 //! it to the message beside the layout. That search is what
 //! `Expr::Sibling` does, and over a hundred thousand chunks it was the
@@ -44,9 +44,9 @@ use crate::template::{Endian::Little, Expr as E, Ty as T};
 
 use super::hdf5::{addr, at_address, bit, elements, length, when, Described};
 
-/// The three numbers of the datatype message that say what a chunk's elements
-/// are, read once by a chunked layout and kept there, so that a chunk asks a
-/// field above it rather than the message beside the layout.
+/// The datatype message, read a second time by a chunked layout and kept
+/// there, so that a chunk asks a field above it rather than the message beside
+/// the layout.
 ///
 /// That is the difference between opening a dataset of a hundred thousand
 /// chunks in a moment and in minutes. A sibling is looked for among the
@@ -54,11 +54,13 @@ use super::hdf5::{addr, at_address, bit, elements, length, when, Described};
 /// and a chunk an index points at sits in that index's list of entries: asked
 /// from there, the search passes every entry before this one on its way out
 /// to the messages, and does it again for the next chunk.
+///
+/// The whole message rather than the three numbers a chunk of plain numbers
+/// needs, because an element of a compound asks for its members and an
+/// element of an array for its base type, and those are lists inside the
+/// message. The bytes are the message's and counted there.
 fn datatype_copy() -> T {
-    T::structure(
-        "DatatypeCopy",
-        ["class", "bit_field", "size"].into_iter().map(|part| (part, T::computed(Described::Beside.part(part)))).collect(),
-    )
+    T::at_origin(Described::beside_address(), T::Named("Datatype".into()))
 }
 
 
@@ -150,6 +152,7 @@ pub(super) fn chunked_v4() -> T {
         ],
     )
     .machinery(&["datatype"])
+    .field_aside("datatype")
 }
 
 fn chunk_index_type() -> T {

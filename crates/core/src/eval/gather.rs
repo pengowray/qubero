@@ -176,7 +176,17 @@ impl Evaluator {
         // gather can be where it starts.
         if k == 0 {
             let Step::Field(name) = step else { return fail("a gather starts at a field declared before it") };
-            return Ok(if from == 0 { self.find_field(list, name).map(|p| (0, p)) } else { None });
+            if from > 0 {
+                return Ok(None);
+            }
+            let Some(mut p) = self.find_field(list, name) else { return Ok(None) };
+            // `find_field` steps through an `At` the declaration shows. One a
+            // switch or a `When` chose shows nothing until it is read, and an
+            // HDF5 dataset keeps the copy of its datatype that way, placed
+            // only for the classes whose elements ask it anything. The same
+            // rule `within_path` applies to the first name of a path.
+            self.through_at(doc, &mut p)?;
+            return Ok(Some((0, p)));
         }
         match step {
             Step::Field(name) => {

@@ -136,7 +136,8 @@ pub fn contents<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Contents>
 
 /// The object header of the root group, which every other object hangs under.
 pub(crate) fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
-    let Some(sb) = ev.child_named(doc, &[], "superblock")? else { return Ok(None) };
+    let Some(file) = file_root(ev, doc)? else { return Ok(None) };
+    let Some(sb) = ev.child_named(doc, &file, "superblock")? else { return Ok(None) };
     // Version 0 and 1 name the root group with a symbol table entry; the later
     // ones name its object header outright.
     let entry = ev.child_named(doc, &sb, "root_group")?;
@@ -146,6 +147,53 @@ pub(crate) fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R
         return Ok(inside(ev, doc, &object)?);
     }
     Ok(inside(ev, doc, &entry)?)
+}
+
+/// The structure holding the signature and the superblock, which is the whole
+/// HDF5 file: the root of the tree for a file that opens with the signature,
+/// and one or two fields down for one that does not.
+///
+/// A file behind a user block reads as the block and then the file, and a
+/// MATLAB 7.3 file as its MAT header and then the same two. Asking only the
+/// root for a superblock found none in either, so a user-block file answered
+/// "nothing in it" here and "no B-tree" to a cursor that had not moved.
+///
+/// Searched two levels down and only through a structure of a handful of
+/// fields, which is what a wrapper around one embedded file is. A list of
+/// elements is not opened on the way, so a template whose root is a long run
+/// of records costs a few questions here and not one per record.
+pub(crate) fn file_root<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
+    let mut level: Vec<Vec<usize>> = vec![Vec::new()];
+    for _ in 0..3 {
+        let mut below = Vec::new();
+        for at in level {
+            // A field that will not read is not the file, and the one beside
+            // it may be.
+            let named = |ev: &mut Evaluator, name: &str| match ev.child_named(doc, &at, name) {
+                Ok(found) => Ok(found.is_some()),
+                Err(e) if e.interrupted() => Err(e),
+                Err(_) => Ok(false),
+            };
+            if named(ev, "superblock")? && named(ev, "signature")? {
+                return Ok(Some(at));
+            }
+            let node = match ev.node(doc, &at) {
+                Ok(node) => node,
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => continue,
+            };
+            if !node.composite || node.child_count > 4 {
+                continue;
+            }
+            for i in 0..node.child_count as usize {
+                let mut one = at.clone();
+                one.push(i);
+                below.push(one);
+            }
+        }
+        level = below;
+    }
+    Ok(None)
 }
 
 /// What a field that reads its contents somewhere else points at, where it
