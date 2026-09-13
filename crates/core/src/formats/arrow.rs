@@ -45,6 +45,47 @@
 //! `offset`. The comment in `File.fbs` says the offset is past the message
 //! header, and every file written by pyarrow 25 disagrees with it: the offset
 //! is the `FF`s.
+//!
+//! ## Buffers
+//!
+//! A record batch's body is its columns' buffers back to back, and the
+//! batch's `buffers` say where each one is and how long, counted from the
+//! start of the body. Each is placed from there with a gather, so the body is
+//! a list of buffers with gaps of padding between them.
+//!
+//! What a buffer holds is the part a template has to work for, because
+//! nothing in the batch says. The batch lists a `FieldNode` for every field of
+//! the schema, children included, in the order a depth-first walk meets them,
+//! and a run of buffers per node whose count depends on the field's type: two
+//! for an integer, three for a string, one for a struct, none for a null. So
+//! each node walks the schema one step on from the node before it, and each
+//! buffer is matched to the node whose buffers start where it is. See
+//! [`node_walk`] and [`buffer_walk`]. The walk follows three levels of field,
+//! which is a list of structs or a map; a fourth level stops it, and every
+//! buffer from there to the end of the batch is placed and left as bytes.
+//!
+//! Then a buffer reads as what its column's layout says it is for. A validity
+//! bitmap stays bytes; offsets are 32 or 64-bit integers, one more than the
+//! rows; integers, floats, dates and timestamps are arrays of their type, the
+//! dates and timestamps with the moment each one is; booleans are bits; a
+//! decimal or a fixed-size binary is its bytes, one run per value; a string
+//! column's data is one run of text and a binary one's one run of bytes; a
+//! view is sixteen bytes that hold a short value or say where a long one is. A
+//! union's type ids are 8-bit integers and a dense union's offsets 32-bit
+//! ones. Only a batch's own rows are values: a buffer holding more than its
+//! node's `length` has the rest as `beyond_length`.
+//! Nested columns name their buffers and read them the same way, the list's
+//! offsets and then its values under the child's own name.
+//!
+//! A dictionary batch holds one column, the dictionary of the field whose
+//! `DictionaryEncoding.id` matches its own, and its buffers read as that
+//! field's value type; in a record batch the same column's data buffer is
+//! `indices`, of the index type.
+//!
+//! A compressed body compresses each buffer on its own behind an eight-byte
+//! uncompressed length, -1 for one left as it was. ZSTD buffers open and read
+//! as the plain ones do. LZ4 is the frame format, and the codec here reads the
+//! blocks inside a frame and not the frame, so those buffers keep their bytes.
 
 use crate::codec::Codec;
 use crate::formats::flatbuf::{self, Field, Of, Scalar::*, Struct, Table, What as W};
@@ -313,7 +354,7 @@ const SPARSE_UNION: i128 = 8;
 const DENSE_UNION: i128 = 9;
 const DICTIONARY_ENCODED: i128 = 10;
 const RUN_END_ENCODED: i128 = 11;
-const UNTRACED: i128 = 12;
+const UNPARSED: i128 = 12;
 
 const LAYOUT: &[(i128, &str)] = &[
     (NULL, "Null"),
@@ -328,7 +369,7 @@ const LAYOUT: &[(i128, &str)] = &[
     (DENSE_UNION, "Dense Union"),
     (DICTIONARY_ENCODED, "Dictionary-encoded"),
     (RUN_END_ENCODED, "Run-end encoded"),
-    (UNTRACED, "untraced"),
+    (UNPARSED, "unparsed"),
 ];
 
 // What one buffer is for, in the words of the same table.
@@ -341,7 +382,7 @@ const TYPE_IDS: i128 = 6;
 const INDICES: i128 = 7;
 
 const ROLE: &[(i128, &str)] = &[
-    (0, "untraced"),
+    (0, "unparsed"),
     (VALIDITY, "validity"),
     (DATA, "data"),
     (OFFSETS, "offsets"),
@@ -494,7 +535,7 @@ fn field_layout() -> T {
             (25, E::lit(LIST_VIEW)),
             (26, E::lit(LIST_VIEW)),
         ],
-        E::lit(UNTRACED),
+        E::lit(UNPARSED),
     );
     let time_unit = |table_name: &str| of(table_name, "unit", 0);
     let values = lookup(
@@ -622,7 +663,7 @@ fn of_field(name: &str) -> E {
 ///
 /// Three levels deep, which covers a list of structs, a map, and a list of
 /// lists. A fourth level ends the walk: that node and every node after it is
-/// `untraced`, and so is every buffer of theirs, and they still read as bytes
+/// `unparsed`, and so is every buffer of theirs, and they still read as bytes
 /// where their `Buffer` puts them. A walk that guessed past that point would
 /// put the wrong column's name on every buffer after it.
 ///
@@ -686,7 +727,7 @@ fn node_walk() -> Vec<(&'static str, T)> {
             E::cond(E::field("next_grandchild"), E::lit(3), E::cond(E::field("next_child"), E::lit(2), back_at_top)),
         ),
     );
-    let kind = E::field("kind");
+    let kind = E::field("layout");
     let buffers = {
         let variadic = E::elem_within(&["variadicBufferCounts", "vector", "elements"], E::field("views").sub(E::lit(1)), &[]);
         let variadic = E::cond(flatbuf::is_written(&[], &RECORD_BATCH, "variadicBufferCounts"), variadic, E::lit(0));
@@ -713,12 +754,12 @@ fn node_walk() -> Vec<(&'static str, T)> {
         ("summary", T::computed(E::cond(E::field("depth").greater_than(E::lit(0)), of_field("summary"), E::lit(0)))),
         ("own", T::computed(unpack(50, 32))),
         (
-            "kind",
+            "layout",
             T::enumeration(
                 "Layout",
                 T::computed(E::cond(
                     E::field("depth").equal_to(E::lit(0)),
-                    E::lit(UNTRACED),
+                    E::lit(UNPARSED),
                     E::cond(dictionary_encoded, E::lit(DICTIONARY_ENCODED), unpack(0, 4)),
                 )),
                 LAYOUT,
@@ -800,7 +841,7 @@ fn buffer_walk() -> Vec<(&'static str, T)> {
         ("found", T::computed(E::tagged_in_by(E::within(&nodes), &["starts_at"], E::Idx, &["number"]))),
         ("node", T::computed(E::cond(found.clone().not_equal(E::lit(0)), found.clone().sub(E::lit(1)), E::prev("node")))),
         ("slot", T::computed(E::cond(found.clone().not_equal(E::lit(0)), E::lit(0), E::prev("slot").add(E::lit(1))))),
-        ("kind", T::enumeration("Layout", T::computed(node("kind")), LAYOUT)),
+        ("kind", T::enumeration("Layout", T::computed(node("layout")), LAYOUT)),
         (
             "known",
             T::computed(E::cond(found.not_equal(E::lit(0)), E::lit(1), E::prev("known").mul(E::field("slot").less_than(node("buffers"))))),
@@ -819,7 +860,7 @@ fn buffer_walk() -> Vec<(&'static str, T)> {
 /// holds. A buffer may hold more than its batch uses: pyarrow writing a table
 /// in batches of three writes the first batch's buffers whole, five values
 /// and all, and only the node says that two of them belong to no row of this
-/// batch. Those bytes are `past_length` rather than values.
+/// batch. Those bytes are `beyond_length` rather than values.
 ///
 /// A validity bitmap is a bit per value, low bit first, and stays bytes: a
 /// row of noughts and ones says less than the byte it is packed in, and the
@@ -886,7 +927,7 @@ fn reading() -> T {
     let units = [("s", Time::unix()), ("ms", Time::unix_millis()), ("us", Time::unix_micros()), ("ns", Time::unix_nanos())];
     for (i, (unit, time)) in units.iter().enumerate() {
         let i = i as i128;
-        cases.push((INSTANT + i, timed(&format!("timestamp[{unit}, tz]"), i64le.clone(), 8, time.clone())));
+        cases.push((INSTANT + i, timed(&format!("timestamp[{unit}, UTC]"), i64le.clone(), 8, time.clone())));
         cases.push((WALL_CLOCK + i, timed(&format!("timestamp[{unit}]"), i64le.clone(), 8, time.clone().zone_unknown())));
     }
     T::switch(E::placer(E::field("reading")), cases, T::bytes(E::Remaining))
@@ -931,15 +972,15 @@ fn buffers(batch: &[&str]) -> T {
     let mut steps: Vec<Step> = path.iter().map(|s| Step::field(s)).collect();
     steps.extend([Step::field("buffers"), Step::field("vector"), Step::field("elements"), Step::each()]);
     let role = E::placer(E::field("role"));
-    let past_length = || T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining));
-    let plain = |name: &str| T::structure_named(name, "", "values", vec![("values", reading()), ("past_length", past_length())]);
+    let beyond_length = || T::when(E::Remaining.greater_than(E::lit(0)), T::bytes(E::Remaining));
+    let plain = |name: &str| T::structure_named(name, "", "values", vec![("values", reading()), ("beyond_length", beyond_length())]);
     let i64le = || T::Int { bits: 64, endian: Little };
     let packed = |name: &str| {
         let stored = T::structure_named(
             name,
             "",
             "values",
-            vec![("uncompressed_length", i64le()), ("values", reading()), ("past_length", past_length())],
+            vec![("uncompressed_length", i64le()), ("values", reading()), ("beyond_length", beyond_length())],
         );
         let opened = T::switch(codec.clone(), vec![(1, T::decoded(E::Remaining, Codec::Zstd, plain(name)))], T::bytes(E::Remaining));
         let packed = T::structure_named(name, "", "values", vec![("uncompressed_length", i64le()), ("values", opened)]);
@@ -1046,7 +1087,7 @@ fn with_types(mut t: Template) -> Template {
     for (name, mut ty) in flatbuf::types("arrow", TABLES, STRUCTS) {
         match name.as_str() {
             "arrow.Field" => splice(&mut ty, None, T::structure("", vec![("layout", field_layout())]).machinery(&["layout"])),
-            "arrow.FieldNode" => splice(&mut ty, None, added(node_walk(), &["column", "kind"])),
+            "arrow.FieldNode" => splice(&mut ty, None, added(node_walk(), &["column", "layout"])),
             "arrow.Buffer" => splice(&mut ty, None, added(buffer_walk(), &["column", "role"])),
             // Which column a dictionary belongs to, found by its id among the
             // schema's fields, and declared before `data` so that the batch

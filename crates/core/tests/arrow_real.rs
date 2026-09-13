@@ -316,7 +316,7 @@ fn values(ev: &mut Evaluator, doc: &Document<MemSource>, at: &[usize]) -> Vec<Va
 ///
 /// Only the batch's own rows are values. pyarrow writing batches of three
 /// writes the first batch's fixed-width buffers whole, all five rows of them,
-/// and the node says three: the other two are `past_length`.
+/// and the node says three: the other two are `beyond_length`.
 #[test]
 fn buffers_read_as_their_columns() {
     let Some(root) = arrow_samples() else {
@@ -327,7 +327,7 @@ fn buffers_read_as_their_columns() {
         let (doc, mut ev) = open(&root, name);
         // A buffer of a compressed body is its uncompressed length and the
         // stream, and the stream opens into the same structure a plain one
-        // is: [values, past_length].
+        // is: [values, beyond_length].
         let data = |buffer: usize| -> Vec<usize> {
             let mut p = vec![BATCHES, 1, 4, buffer];
             if name.contains("zstd") {
