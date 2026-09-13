@@ -991,9 +991,15 @@ impl Evaluator {
             | Ty::Gather { elem, .. } => elem.base(),
             _ => return None,
         };
+        // Through a name, and through an origin: saying where the addresses
+        // inside a thing count from says nothing about what the thing is, so
+        // a list of them still counts them by whatever they are called.
         for _ in 0..8 {
-            let Ty::Named(n) = elem else { break };
-            elem = self.template.types.get(&**n)?.base();
+            match elem {
+                Ty::Named(n) => elem = self.template.types.get(&**n)?.base(),
+                Ty::Origin { inner } => elem = inner.base(),
+                _ => break,
+            }
         }
         if let Ty::Struct(s) = elem {
             if let Some(unit) = &s.unit {
