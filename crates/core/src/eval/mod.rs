@@ -36,6 +36,7 @@ mod relate;
 mod shape;
 mod size;
 mod space;
+mod stitch;
 mod time;
 mod traced;
 mod walk;
@@ -358,6 +359,10 @@ struct ListState {
     /// because every other list leaves it empty, and a list state is kept for
     /// every list anything has been learned about.
     gather: Option<Box<GatherState>>,
+    /// For `Stitched`: the walk to its parts and what it has found, until the
+    /// walk is over and the parts become a space. Boxed for the reason
+    /// `gather` is.
+    stitch: Option<Box<stitch::StitchWalk>>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
@@ -379,6 +384,19 @@ struct GatherState {
     starts: Vec<u64>,
     /// The record that placed each child, by the same index.
     records: Vec<Vec<usize>>,
+    walk: Walk,
+    done: bool,
+    /// Every start with its child, sorted by where, once the walk is done:
+    /// what the search for the child under a bit halves. Shared, because that
+    /// search is made for every row of every screen.
+    sorted: Option<std::sync::Arc<Vec<(u64, usize)>>>,
+}
+
+/// Where a walk down a run of [`crate::template::Step`]s stands, for the two
+/// types that take one: a gather walking to its records and a stitched stream
+/// walking to its parts.
+#[derive(Debug, Default, Clone)]
+struct Walk {
     /// The walk's own stack: one frame per step taken, holding the node the
     /// step is taken from and the candidate it stands on. Kept rather than
     /// rebuilt, so that a go that runs out part way through carries on from
@@ -388,11 +406,6 @@ struct GatherState {
     /// Whether the frames have been set up. The walk is over when they have
     /// been and are empty again.
     started: bool,
-    done: bool,
-    /// Every start with its child, sorted by where, once the walk is done:
-    /// what the search for the child under a bit halves. Shared, because that
-    /// search is made for every row of every screen.
-    sorted: Option<std::sync::Arc<Vec<(u64, usize)>>>,
 }
 
 /// One step of a gather's walk that is under way: the node it was taken from,
@@ -701,6 +714,12 @@ impl Evaluator {
             // something is actually drawing is ever unpacked, and the row has
             // to say whether it opened.
             Ty::Decoded { .. } | Ty::Traced { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            // The same for a stream joined from parts, whose opening is a walk
+            // to every part and no unpacking.
+            Ty::Stitched { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -1111,6 +1130,10 @@ impl Evaluator {
         if matches!(pr.ty, Ty::Json(..)) {
             self.resolve_json_child(doc, path)?;
             return Ok(None);
+        }
+        // The one thing a stitched stream holds, in the space its parts make.
+        if let Ty::Stitched { inner, .. } = &pr.ty {
+            return self.place_stitched(doc, parent, &pr, idx, inner);
         }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
@@ -1936,6 +1959,12 @@ impl Evaluator {
         doc: &Document<S>,
         path: &[usize],
     ) -> R<Option<(std::sync::Arc<Vec<u8>>, crate::codec::Trace, crate::codec::Codec, Ty)>> {
+        // A stream joined from parts is never held in one buffer, so there is
+        // no document of its own to open it as.
+        self.resolve(doc, path)?;
+        if matches!(self.memo[path].ty, Ty::Stitched { .. }) {
+            return Ok(None);
+        }
         let id = match self.open_space_at(doc, path)? {
             space::Opened::Space(id) => id,
             space::Opened::Refused(_) => return Ok(None),
@@ -2114,6 +2143,14 @@ impl Evaluator {
                 if path.get(k) == Some(&1) {
                     return r.space;
                 }
+                return match self.spaces.get(&path[..k]) {
+                    Some(space::Opened::Space(id)) => id,
+                    _ => r.space,
+                };
+            }
+            // A stitched stream has no second child: everything below it is
+            // in the space its parts make.
+            if matches!(r.ty, Ty::Stitched { .. }) {
                 return match self.spaces.get(&path[..k]) {
                     Some(space::Opened::Space(id)) => id,
                     _ => r.space,

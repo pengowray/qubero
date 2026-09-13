@@ -63,6 +63,10 @@ pub enum Placed {
     Trace,
     /// The front of what a compressed run unpacked to.
     Stream,
+    /// The front of a stream joined from runs elsewhere: a PDB stream from its
+    /// blocks, a BAM from its BGZF members. What each byte of it came from is
+    /// a part, which [`crate::eval::Evaluator::part_of`] names.
+    Stitched,
     /// None of the above. Say nothing rather than guess.
     Unknown,
 }
@@ -82,6 +86,7 @@ impl Placed {
             Placed::Address => "address",
             Placed::Trace => "trace",
             Placed::Stream => "stream",
+            Placed::Stitched => "stitched",
             Placed::Unknown => "unknown",
         }
     }
@@ -238,6 +243,7 @@ impl Evaluator {
                     Placed::Trace
                 }
             }
+            Ty::Stitched { .. } => Placed::Stitched,
             Ty::Array { .. } | Ty::Repeat { .. } => Placed::Element,
             // A member of a JSON object is placed by the parse, but it is
             // placed after the member before it, which is what the reader is
@@ -277,6 +283,11 @@ impl Evaluator {
         // it a region, and then the window is what settled its length: a FITS
         // heap is as long as `PCOUNT` says, not as long as its arrays come to.
         if matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_none() {
+            return Sizing::Nothing;
+        }
+        // A stitched stream is no bytes where it is declared, like a gather
+        // with no region: its parts are fields of their own.
+        if matches!(r.ty, Ty::Stitched { .. }) && r.declared_size.is_none() {
             return Sizing::Nothing;
         }
         // A window around the field settles its length before the field's own

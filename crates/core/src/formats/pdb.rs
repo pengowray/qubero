@@ -14,21 +14,27 @@
 //! block map lists the blocks the *stream directory* is written across; the
 //! directory holds every stream's length and every stream's block numbers.
 //!
-//! **A stream is read where it lies, when it lies in one piece.** A template
-//! describes bytes where they sit, and a stream scattered over the file does
-//! not sit anywhere: joining its blocks is the one thing the IR cannot say,
-//! and it is all that would be needed, since the blocks are stored rather than
-//! compressed. But a compiler allocating a stream usually gets a run of blocks
-//! in one go, and a stream whose blocks are one ascending run *is* a run of
-//! bytes in the file, at the first block and as long as the stream says. So
-//! every stream is checked for that and read where it lies when it holds:
-//! [`runs_together`] is the check, and it is a proof rather than a guess.
+//! **A stream is read where it lies, when it lies in one piece.** A compiler
+//! allocating a stream usually gets a run of blocks in one go, and a stream
+//! whose blocks are one ascending run *is* a run of bytes in the file, at the
+//! first block and as long as the stream says. So every stream is checked for
+//! that and read where it lies when it holds: [`runs_together`] is the check,
+//! and it is a proof rather than a guess. A stream read that way is fields of
+//! the file, and a field of it can be edited like any other.
+//!
+//! **A stream in pieces is joined.** One that fails the check is its blocks,
+//! each read where it is, and a [`Ty::Stitched`](crate::template::Ty::Stitched)
+//! over them that reads the stream the blocks make end to end, in the order the
+//! block list gives and cut at the stream's length. The blocks are stored
+//! rather than compressed, so joining them is the whole of the work. Nothing
+//! inside a joined stream is editable yet.
 //!
 //! Of the 39 program databases on the machine this was written on, all 39 kept
 //! their stream directory in one run, 38 kept the info stream in one, 34 the
-//! type stream, and 13 the debug information stream. A stream that fails the
-//! check reads as its block list and nothing else, which is the honest answer
-//! until the IR can stitch the blocks.
+//! type stream, and 13 the debug information stream. The large type streams
+//! are the ones that end up in pieces. A directory in pieces is still its
+//! blocks and nothing more: the directory is what says where every stream is,
+//! and joining it needs the block map read as a list of places first.
 //!
 //! What reads inside a stream: the info stream's version, signature, age and
 //! GUID, which is what a debugger matches a PDB to an executable by, and the
@@ -56,7 +62,7 @@
 //! so nothing identifies one and no template guesses at it.
 
 use crate::formats::pe_tables::MACHINE;
-use crate::template::{Anchor, Endian::Little, Expr as E, Template, Until, Ty as T};
+use crate::template::{Anchor, Endian::Little, Expr as E, Step, Template, Until, Ty as T};
 
 /// What the current container opens with: 24 characters, the end-of-file byte
 /// a `type` of the file stops at, `DS`, and three zeroes.
@@ -260,7 +266,7 @@ fn stream() -> T {
                             1,
                             T::at(E::elem("blocks", E::lit(0)).mul(E::field("block_size")), T::sized(size(), body())),
                         )],
-                        nothing(),
+                        scattered_stream(count(), size()),
                     ),
                 ),
             ),
@@ -268,6 +274,36 @@ fn stream() -> T {
     )
     .counted_as("stream")
     .machinery(&["run"])
+}
+
+/// A stream whose blocks are not one run: each block, read where it is, and
+/// the stream they make when they are joined in the order the block list
+/// gives.
+///
+/// The blocks stay fields of the file, so the cursor on a byte of one lands on
+/// that block and a reader can see where each piece of the stream is kept.
+/// They are called `pages` here, as a scattered directory's are, so that one
+/// stream does not have two fields called `blocks` a level apart, one of
+/// numbers and one of bytes. The stream is what the pages hold, cut at the
+/// stream's length, since the last block is only as full as the stream needs.
+fn scattered_stream(count: E, size: E) -> T {
+    let size_of_block = || E::field("block_size");
+    T::structure(
+        "PdbScatteredStream",
+        vec![
+            (
+                "pages",
+                T::array(T::at(E::elem("blocks", E::idx()).mul(size_of_block()), T::bytes(size_of_block())), count),
+            ),
+            // Sized as well as cut, the way a stream in one run is: a type
+            // stream's records are placed from its header rather than after
+            // it, so the body would otherwise measure as the header alone.
+            (
+                "stream",
+                T::stitched(vec![Step::field("pages"), Step::each()], None, Some(size.clone()), T::sized(size, body())),
+            ),
+        ],
+    )
 }
 
 /// What a stream holds, by which stream it is. Everything above the fixed five
@@ -543,6 +579,29 @@ mod tests {
         v
     }
 
+    /// An id stream of two records, the first of them long enough to run out
+    /// of the stream's first block and on into its second. The first record's
+    /// bytes are 0x88 where they are in the first block and 0x99 where they
+    /// are in the second, so a reading can be checked against where it came
+    /// from.
+    fn ids() -> Vec<u8> {
+        let mut v = 20040203u32.to_le_bytes().to_vec();
+        v.extend_from_slice(&56u32.to_le_bytes());
+        v.extend_from_slice(&0x1000u32.to_le_bytes());
+        v.extend_from_slice(&0x1002u32.to_le_bytes());
+        v.extend_from_slice(&644u32.to_le_bytes());
+        v.resize(56, 0);
+        v.extend_from_slice(&498u16.to_le_bytes());
+        v.extend_from_slice(&0x1505u16.to_le_bytes());
+        v.resize(BLOCK, 0x88);
+        v.resize(56 + 500, 0x99);
+        v.extend_from_slice(&142u16.to_le_bytes());
+        v.extend_from_slice(&0x1203u16.to_le_bytes());
+        v.resize(700, 0x77);
+        assert_eq!(v.len() as u32, SIZES[4]);
+        v
+    }
+
     /// A PDB laid out the way a compiler lays one out: the superblock, the two
     /// free-block maps, the directory, the streams' blocks, and the block map.
     ///
@@ -574,6 +633,10 @@ mod tests {
         write(&mut v, 3, &directory);
         write(&mut v, 5, &info());
         write(&mut v, 6, &types());
+        // Stream 4 is written across block 8 and then block 7.
+        let ids = ids();
+        write(&mut v, 8, &ids[..BLOCK]);
+        write(&mut v, 7, &ids[BLOCK..]);
         for (i, block) in map.iter().enumerate() {
             v[BLOCK * 9 + i * 4..BLOCK * 9 + i * 4 + 4].copy_from_slice(&block.to_le_bytes());
         }
@@ -651,14 +714,32 @@ mod tests {
 
     /// A stream whose blocks hold the right blocks in the wrong order is not
     /// read where it lies, because it does not lie anywhere: the check is on
-    /// the order as well as the numbers.
+    /// the order as well as the numbers. It is joined instead, block 8 and
+    /// then block 7, and read as the id stream it is.
     #[test]
-    fn a_stream_out_of_order_is_its_block_list_and_nothing_else() {
+    fn a_stream_out_of_order_is_joined_from_its_blocks() {
         let d = Document::new(MemSource(pdb_file(None, &[3])));
         let mut e = Evaluator::new(pdb());
         let contents = e.node(&d, &[DIRECTORY, 0, 2, 4, 4]).unwrap();
-        assert_eq!(contents.size_bits, 0);
-        assert_eq!(contents.child_count, 0);
+        assert_eq!((contents.type_name.as_str(), contents.child_count), ("PdbScatteredStream", 2));
+        // Each block where it is, in the order the stream goes.
+        let second = e.node(&d, &[DIRECTORY, 0, 2, 4, 4, 0, 1, 0]).unwrap();
+        assert_eq!((second.space, second.offset_bits), (0, BLOCK as u64 * 7 * 8));
+        let ipi = [DIRECTORY, 0, 2, 4, 4, 1, 0];
+        let body = e.node(&d, &ipi).unwrap();
+        assert_eq!(body.type_name, "IpiStream");
+        assert_ne!(body.space, 0);
+        assert_eq!(body.size_bits, u64::from(SIZES[4]) * 8, "the stream is cut at its length, not at the end of block 7");
+        // The first record runs from block 8 into block 7, and the second is
+        // wholly in block 7; both read, and they fill the space exactly.
+        let records = [ipi.as_slice(), &[15, 0]].concat();
+        assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
+        assert_eq!(e.node(&d, &records).unwrap().size_bits, (700 - 56) * 8);
+        let kind = |e: &mut Evaluator, i: usize| e.node(&d, &[records.as_slice(), &[i, 1]].concat()).unwrap().value.as_int();
+        assert_eq!((kind(&mut e, 0), kind(&mut e, 1)), (Some(0x1505), Some(0x1203)));
+        let data = e.field_bytes(&d, &[records.as_slice(), &[0, 2]].concat(), 1024).unwrap().0;
+        assert_eq!(data.len(), 496);
+        assert!(data[..452].iter().all(|b| *b == 0x88) && data[452..].iter().all(|b| *b == 0x99), "the record's bytes are block 8's and then block 7's");
     }
 
     /// A directory spread over blocks that are not one run stays those blocks:

@@ -139,6 +139,12 @@ impl Memo {
             self.lists.remove(&p);
             self.json.remove(&p);
         }
+        // A stitched stream's node is a field of the file and stays, but the
+        // parts its walk found were read from bytes that may be what changed,
+        // and the space they made is going. So the walk starts again.
+        for l in self.lists.values_mut() {
+            l.stitch = None;
+        }
         // What a search learned about a list inside a stream goes with the
         // stream: the offsets it is keyed by count in that space, and the
         // space is about to be opened again.
@@ -249,6 +255,7 @@ impl Memo {
             chain_starts: Vec::new(),
             chain_done: false,
             gather: None,
+            stitch: None,
             seq_end: 0,
         };
         self.lists.get(path).unwrap_or(&NOTHING)
@@ -332,6 +339,9 @@ impl Memo {
             // the edit even when the children do not, and a Parquet footer
             // sits after every page it places. So the walk starts again.
             l.gather = None;
+            // The same for the walk to a stitched stream's parts: its runs
+            // may be anywhere, and the space it opened is gone already.
+            l.stitch = None;
             let empty = l.checkpoints.is_empty()
                 && l.walk_at.is_none()
                 && l.repeat_len == 0

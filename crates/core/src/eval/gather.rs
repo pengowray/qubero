@@ -25,6 +25,20 @@ use std::sync::Arc;
 use super::*;
 use crate::template::{Step, CHAIN_CAP};
 
+/// What a walk down a run of steps may stop on, which is the one thing the two
+/// walks that share this code disagree about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Landing {
+    /// A record with fields to read an offset from, for a gather. A list of
+    /// plain numbers holds none, and fanning out over one is passed over in
+    /// one step rather than element by element.
+    Records,
+    /// Any node at all, for a stitched stream: the parts it walks to are runs
+    /// of bytes, and a list of those is exactly what it wants. Through an `At`,
+    /// the way a path always goes, since the field of no bits is not the run.
+    Runs,
+}
+
 impl Evaluator {
     /// What the gather at `list` has found so far, to change. Made the first
     /// time anything asks.
@@ -44,15 +58,6 @@ impl Evaluator {
         if self.list(list).gather.as_deref().is_some_and(|g| g.done || g.starts.len() > want) {
             return Ok(());
         }
-        // The walk starts where the gather is declared: the first step names a
-        // field before it, the way the first name of a path does.
-        {
-            let g = self.gather_mut(list);
-            if !g.started {
-                g.frames = vec![GatherFrame { node: list.to_vec(), next: 0 }];
-                g.started = true;
-            }
-        }
         // Worked out once per go rather than once per record: neither asks
         // anything of a record.
         let base = self.anchor_base(list, lr.offset, anchor);
@@ -71,7 +76,7 @@ impl Evaluator {
                 self.gather_mut(list).done = true;
                 return Ok(());
             }
-            let Some(record) = self.gather_record(doc, list, &from)? else {
+            let Some(record) = self.walk_next(doc, list, &from, Landing::Records)? else {
                 self.gather_mut(list).done = true;
                 return Ok(());
             };
@@ -97,9 +102,7 @@ impl Evaluator {
                 g.starts.push(bits as u64);
                 g.records.push(record);
             }
-            if let Some(top) = g.frames.last_mut() {
-                top.next += 1;
-            }
+            self.walk_past(list, Landing::Records);
         }
     }
 
@@ -117,42 +120,69 @@ impl Evaluator {
         }
     }
 
-    /// The record the walk stands on, or the next one after the frames have
-    /// moved past everything that holds none. Nothing when the walk is over.
+    /// The walk the node at `at` is taking, kept in whichever slot of its list
+    /// state belongs to the kind of walk it is. Made the first time, standing
+    /// where the node is declared: the first step names a field before it, the
+    /// way the first name of a path does.
+    fn walk_mut(&mut self, at: &[usize], landing: Landing) -> &mut Walk {
+        let state = self.list_mut(at);
+        let walk = match landing {
+            Landing::Records => &mut state.gather.get_or_insert_with(Default::default).walk,
+            Landing::Runs => &mut state.stitch.get_or_insert_with(Default::default).walk,
+        };
+        if !walk.started {
+            walk.frames = vec![GatherFrame { node: at.to_vec(), next: 0 }];
+            walk.started = true;
+        }
+        walk
+    }
+
+    /// Step the walk off the landing it stands on, once the caller has read
+    /// what it wanted from it.
+    pub(super) fn walk_past(&mut self, at: &[usize], landing: Landing) {
+        if let Some(top) = self.walk_mut(at, landing).frames.last_mut() {
+            top.next += 1;
+        }
+    }
+
+    /// The landing the walk from `at` stands on, or the next one after the
+    /// frames have moved past everything that holds none. Nothing when the
+    /// walk is over.
     ///
-    /// Moving the frames on is not moving past a record: the walk stands on a
-    /// record until the caller has read it, so a read that has to wait for
-    /// bytes asks this again and is handed the same one.
-    fn gather_record<S: Source>(&mut self, doc: &Document<S>, list: &[usize], from: &[Step]) -> R<Option<Vec<usize>>> {
+    /// Moving the frames on is not moving past a landing: the walk stands on
+    /// one until the caller has read it and said so with [`Self::walk_past`],
+    /// so a read that has to wait for bytes asks this again and is handed the
+    /// same one.
+    pub(super) fn walk_next<S: Source>(&mut self, doc: &Document<S>, at: &[usize], from: &[Step], landing: Landing) -> R<Option<Vec<usize>>> {
         loop {
             let (k, node, next) = {
-                let Some(g) = self.list(list).gather.as_deref() else { return Ok(None) };
-                let Some(top) = g.frames.last() else { return Ok(None) };
-                (g.frames.len() - 1, top.node.clone(), top.next)
+                let w = self.walk_mut(at, landing);
+                let Some(top) = w.frames.last() else { return Ok(None) };
+                (w.frames.len() - 1, top.node.clone(), top.next)
             };
             let Some(step) = from.get(k) else { return Ok(None) };
-            let got = match self.gather_step(doc, list, step, k, &node, next) {
+            let got = match self.walk_step(doc, at, step, k, &node, next, landing) {
                 Err(e) if !e.interrupted() => None,
                 other => other?,
             };
-            let g = self.gather_mut(list);
+            let w = self.walk_mut(at, landing);
             // Reading a step can put nodes back and take nodes away, and a walk
             // whose own frames went with them has nothing left to stand on.
-            if g.frames.len() != k + 1 {
+            if w.frames.len() != k + 1 {
                 return fail("the gathered walk lost its place");
             }
             match got {
                 Some((j, child)) => {
-                    g.frames[k].next = j;
+                    w.frames[k].next = j;
                     if k + 1 == from.len() {
                         return Ok(Some(child));
                     }
-                    g.frames.push(GatherFrame { node: child, next: 0 });
+                    w.frames.push(GatherFrame { node: child, next: 0 });
                 }
                 // Nothing more down this way, so the step above moves on.
                 None => {
-                    g.frames.pop();
-                    if let Some(up) = g.frames.last_mut() {
+                    w.frames.pop();
+                    if let Some(up) = w.frames.last_mut() {
                         up.next += 1;
                     }
                 }
@@ -163,7 +193,8 @@ impl Evaluator {
     /// Where step `k` goes from `node`, trying its candidates from `from` on:
     /// the index of the child it takes, and the path it lands on. Nothing when
     /// it has no candidate there.
-    fn gather_step<S: Source>(
+    #[allow(clippy::too_many_arguments)]
+    fn walk_step<S: Source>(
         &mut self,
         doc: &Document<S>,
         list: &[usize],
@@ -171,6 +202,7 @@ impl Evaluator {
         k: usize,
         node: &[usize],
         from: usize,
+        landing: Landing,
     ) -> R<Option<(usize, Vec<usize>)>> {
         // The first step starts the walk, and only a field declared before the
         // gather can be where it starts.
@@ -225,9 +257,10 @@ impl Evaluator {
                 // A list of plain numbers holds no record: nothing in one has a
                 // field to read an offset from. Asked of the type rather than
                 // of every element, so a column of a million floats is passed
-                // in one step.
+                // in one step. A list of runs is what a stitched stream is
+                // looking for, so it is not passed at all.
                 if let Ty::Array { elem, .. } | Ty::Repeat { elem, .. } = &self.memo[node].ty {
-                    if self.holds_no_fields(elem) {
+                    if landing == Landing::Records && self.holds_no_fields(elem) {
                         return Ok(None);
                     }
                 }
@@ -282,7 +315,7 @@ impl Evaluator {
 
     /// A field whose contents are elsewhere is its contents, here as in every
     /// path: naming it means what it points at.
-    fn through_at<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>) -> R<()> {
+    pub(super) fn through_at<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>) -> R<()> {
         self.resolve(doc, path)?;
         if matches!(self.memo[path.as_slice()].ty, Ty::At { .. }) {
             path.push(0);

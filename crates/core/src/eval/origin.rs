@@ -407,6 +407,7 @@ impl Evaluator {
             // what an `At` points at, is an error rather than an answer.
             Some(Ty::Decoded { .. }) if idx == 1 => Ok(Ty::Traced { part: crate::template::TracedPart::Blocks }),
             Some(Ty::At { inner, .. } | Ty::Decoded { inner, .. }) => Ok((**inner).clone()),
+            Some(Ty::Stitched { inner, .. }) => Ok((**inner).clone()),
             // A node laid out from a trace has no declaration to give back:
             // the decoder made it, and what it is, is what it turned out to
             // be. So the answer is the node itself.
