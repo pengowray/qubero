@@ -15,11 +15,15 @@
 //! here, naming the same path.
 
 pub mod expr;
+pub mod imports;
+pub mod lower;
 pub mod report;
 pub mod spec;
 pub mod yaml;
 
 pub use expr::Expr;
+pub use imports::{Imports, MapImports, NoImports};
+pub use lower::{convert, Converted};
 pub use report::{Became, Gap, Note, Report};
 pub use spec::ClassSpec;
 pub use yaml::KsyError;
