@@ -131,6 +131,31 @@ export type ByteSource = {
   slice(start: number, end: number): { arrayBuffer(): Promise<ArrayBuffer> } | Blob;
 };
 
+/** One line of a `.ksy` conversion report: where in the `.ksy` it is, the text
+ *  written there, and what became of it. `path` is the YAML path the Kaitai
+ *  compiler would name in an error, e.g. `/types/chunk/seq/2/size`. */
+export type KsyLine = {
+  readonly path: string;
+  readonly source: string;
+  readonly message: string;
+};
+
+/** What converting a `.ksy` had to say.
+ *
+ *  `fields` is one line per field, in the order the `.ksy` writes them.
+ *  `gaps` is everything the template IR could not express: the field was left
+ *  as bytes, or the instance dropped, rather than approximated. `notes` is
+ *  everything expressed exactly but not the way the `.ksy` wrote it, such as a
+ *  string compared as its bytes read as one big-endian number.
+ *
+ *  A conversion with gaps still produced a template, and reading the file with
+ *  it is still right about everything the gaps do not cover. */
+export type KsyReport = {
+  readonly fields: readonly KsyLine[];
+  readonly gaps: readonly KsyLine[];
+  readonly notes: readonly KsyLine[];
+};
+
 /** A field picked in one of the structure views: which node, and the bits
  *  it covers. Every view that lists fields hands one out and the rest of
  *  the app follows it, so it belongs beside the tree the views read rather
@@ -1892,6 +1917,37 @@ export class Doc {
    */
   templateText(): string {
     return this.editor.template_text();
+  }
+
+  /**
+   * Read the file with a Kaitai Struct `.ksy`, converted to a template.
+   *
+   * `imports` maps an import name to the text of that `.ksy`, for a format
+   * whose `meta/imports` names others. What comes back is the conversion
+   * report, or an error naming the path in the `.ksy` that was wrong.
+   *
+   * A clean conversion is not the same as an empty report: a `.ksy` says
+   * things the IR cannot, and each of those is a gap saying where it was, what
+   * it said and why, with the field left as bytes rather than guessed at.
+   */
+  setKsyTemplate(text: string, imports: Record<string, string> = {}): KsyReport {
+    if (this.space !== 0) throw new Error("a .ksy reads the file, not an unpacked stream");
+    const reply = JSON.parse(this.editor.set_ksy_template(text, JSON.stringify(imports))) as
+      | { status: "ok"; node: KsyReport }
+      | { status: "error"; message: string };
+    if (reply.status === "error") throw new Error(reply.message);
+    this.template = null;
+    this.notify();
+    return reply.node;
+  }
+
+  /**
+   * The report from the last `.ksy` read into this space, or null when the
+   * template in use did not come from one.
+   */
+  ksyReport(): KsyReport | null {
+    const json = this.editor.ksy_report(this.space);
+    return json === "" ? null : (JSON.parse(json) as KsyReport);
   }
 
   private handleReply<T>(json: string): TemplateReply<T> {
