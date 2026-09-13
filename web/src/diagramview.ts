@@ -51,11 +51,41 @@ const RANK_SEP = 90;
 /** How far under the boxes a backwards arrow runs before it turns back. */
 const BACK_LANE = 22;
 
+/** How the vertical runs between two layers of boxes are shared out.
+ *
+ *  `LANE_STUB` is how far clear of a box a line turns; `LANE_STEP` is the gap
+ *  between one edge's vertical run and the next, wide enough to tell two lines
+ *  apart at life size and narrow enough that ten of them fit in a rank gap.
+ *  `LANE_BUCKET` is how close two boxes' right edges have to be for their
+ *  arrows to be shared out together, since a rank is boxes of several widths
+ *  rather than one column. `MIN_GAP` is the room an edge needs before it is
+ *  worth routing forwards at all; anything tighter goes round. */
+const LANE_STUB = 10;
+const LANE_STEP = 9;
+const LANE_BUCKET = 24;
+const MIN_GAP = 28;
+
+/** A point in stage units. */
+type Pt = { x: number; y: number };
+
 /** How far the pointer may travel and still count as a click rather than a pan,
  *  in CSS pixels of total movement. */
 const PAN_SLOP = 4;
 
-type Placed = { box: DiagramBox; el: HTMLElement; rows: HTMLElement[]; x: number; y: number; w: number; h: number };
+type Placed = {
+  box: DiagramBox;
+  el: HTMLElement;
+  rows: HTMLElement[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** The vertical middle of each row, in stage units, measured off the page
+   *  rather than added up from heights. See `DiagramView.measure`. */
+  rowMid: number[];
+  /** The same for the title bar, where an arrow about the whole type lands. */
+  headMid: number;
+};
 
 /** One drawn arrow: the path, and where its role word goes. `end` puts the word
  *  before the point rather than centred on it, for a run of arrows that all
@@ -97,6 +127,11 @@ export class DiagramView {
   private dragged = false;
   /** The whole drawing's extent in stage units, for `fit`. */
   private extent = { w: 0, h: 0 };
+  /** Whether the one rebuild that waits for the real fonts has been booked. */
+  private fontsSettled = false;
+  /** A pending re-measure, so a wheel spun through twenty notches redraws the
+   *  arrows once rather than twenty times. */
+  private pending = 0;
 
   /** The reader clicked a field. `main.ts` puts the cursor on it where the open
    *  file has one. */
@@ -180,8 +215,34 @@ export class DiagramView {
     }
     for (const [i, box] of d.types.entries()) this.placed.push(this.buildBox(i, box));
     this.place(d);
-    this.drawEdges(d);
+    // The transform first, then the measuring, then the arrows: `measure`
+    // divides out the scale that is in force, and the scale in force is
+    // whatever `apply` last wrote.
     this.apply();
+    this.measure();
+    this.drawEdges(d);
+    // A box measured in a fallback font is the wrong height, and every arrow
+    // into it lands on the wrong row. Once, when the real fonts arrive.
+    if (!this.fontsSettled) {
+      this.fontsSettled = true;
+      void document.fonts.ready.then(() => {
+        if (this.diagram !== null) this.build();
+      });
+    }
+  }
+
+  /** Measure and draw the arrows again, without moving a box.
+   *
+   *  What changes them is the zoom, which is divided out of every measurement
+   *  and so should change nothing, and does not quite: a row measured at a
+   *  tenth of life size rounds differently from one measured at life size.
+   *  Cheap enough to do rather than reason about. */
+  private redrawEdges(): void {
+    const d = this.diagram;
+    if (d === null || this.placed.length === 0) return;
+    this.lines.replaceChildren();
+    this.measure();
+    this.drawEdges(d);
   }
 
   /** One type as a table. The rows carry the listing's field colours, so a
@@ -274,7 +335,7 @@ export class DiagramView {
     table.append(body);
     el.append(head, table);
     this.stage.append(el);
-    return { box, el, rows, x: 0, y: 0, w: el.offsetWidth, h: el.offsetHeight };
+    return { box, el, rows, x: 0, y: 0, w: el.offsetWidth, h: el.offsetHeight, rowMid: [], headMid: 0 };
   }
 
   /** Where each box goes: dagre in layers, left to right. */
@@ -320,19 +381,47 @@ export class DiagramView {
     this.lines.setAttribute("viewBox", `0 0 ${this.extent.w} ${this.extent.h}`);
   }
 
-  /** Where one end of an arrow sits: the middle of a row's edge, or the top of
-   *  a box for an arrow that is about the whole type. */
+  /**
+   * Where every row actually is, measured off the page.
+   *
+   * Not added up from row heights and not `offsetTop`: an arrow that leaves two
+   * rows above the row it is about is worse than no arrow, because it says a
+   * connection the format does not have, and any arithmetic over heights is one
+   * unexamined assumption away from that. `getBoundingClientRect` is what the
+   * browser actually laid out. It comes back in screen pixels with the stage's
+   * own transform applied, so it is taken relative to the stage's origin and
+   * divided by the scale to get back to the units the boxes are placed in.
+   *
+   * Called after the transform is applied, so the scale divided out is the one
+   * in force, and again whenever the scale changes or the fonts arrive.
+   */
+  private measure(): void {
+    const stage = this.stage.getBoundingClientRect();
+    const k = this.scale === 0 ? 1 : this.scale;
+    const mid = (el: Element): number => {
+      const r = el.getBoundingClientRect();
+      return (r.top + r.height / 2 - stage.top) / k;
+    };
+    for (const p of this.placed) {
+      p.rowMid = p.rows.map(mid);
+      const head = p.el.querySelector(".dv-box-name");
+      p.headMid = head === null ? p.y + Math.min(18, p.h / 2) : mid(head);
+    }
+  }
+
+  /** Where one end of an arrow sits: the middle of a row's edge, or the title
+   *  bar for an arrow that is about the whole type. */
   private port(box: number, row: number | undefined, side: "left" | "right"): { x: number; y: number } | null {
     const p = this.placed[box];
     if (p === undefined) return null;
     const x = side === "right" ? p.x + p.w : p.x;
-    if (row === undefined) return { x, y: p.y + Math.min(18, p.h / 2) };
-    const tr = p.rows[row];
-    // A row behind a fold has no place of its own yet, so the arrow lands on
-    // the box. Better a true arrow to the type than a false one to a row that
-    // is not being shown.
-    if (tr === undefined) return { x, y: p.y + Math.min(18, p.h / 2) };
-    return { x, y: p.y + tr.offsetTop + tr.offsetHeight / 2 };
+    // A row behind a fold has no place of its own, so the arrow lands on the
+    // box. Better a true arrow to the type than a false one to a row that is
+    // not being shown.
+    if (row === undefined) return { x, y: p.headMid };
+    const y = p.rowMid[row];
+    if (y === undefined) return { x, y: p.headMid };
+    return { x, y };
   }
 
   private drawEdges(d: TemplateDiagram): void {
@@ -349,21 +438,73 @@ export class DiagramView {
     marker.append(svg("path", { d: "M 0 0 L 10 5 L 0 10 z", class: "dv-arrowhead" }));
     defs.append(marker);
     this.lines.append(defs);
-    // How many arrows have already left this gap, so the vertical runs fan out
-    // instead of lying on top of one another.
-    const lanes = new Map<string, number>();
+
+    // Both ends of every edge first, so the vertical runs can be shared out
+    // before any of them is drawn. Drawn one at a time, each edge knows only
+    // about itself and they all take the same channel.
+    type Plan = { e: DiagramEdge; from: Pt; to: Pt; lane: number };
+    const forward: Plan[] = [];
+    const other: Plan[] = [];
     for (const e of d.edges) {
-      const from = this.port(e.from[0], e.from[1], "right");
+      const from = this.port(e.from[0], e.from[1], e.from[0] === e.to && e.to_row !== undefined ? "left" : "right");
       const to = this.port(e.to, e.to_row, "left");
       if (from === null || to === null) continue;
-      const lane = lanes.get(`${e.from[0]}>${e.to}`) ?? 0;
-      lanes.set(`${e.from[0]}>${e.to}`, lane + 1);
+      const plan = { e, from, to, lane: 0 };
+      if (e.from[0] !== e.to && to.x > from.x + MIN_GAP) forward.push(plan);
+      else other.push(plan);
+    }
+
+    // One lane per edge across the gap it crosses, so ten arrows out of one box
+    // are ten lines a reader can follow rather than one bundle. Edges leaving
+    // at about the same x share a channel, and within it they are ordered by
+    // where they land: taking the lanes in target order means two arrows only
+    // cross where the format itself crosses.
+    const channels = new Map<number, Plan[]>();
+    for (const p of forward) {
+      const key = Math.round(p.from.x / LANE_BUCKET);
+      const list = channels.get(key);
+      if (list === undefined) channels.set(key, [p]);
+      else list.push(p);
+    }
+    const laneX = new Map<Plan, number>();
+    for (const list of channels.values()) {
+      list.sort((a, b) => a.to.y - b.to.y || a.from.y - b.from.y);
+      const start = Math.max(...list.map((p) => p.from.x)) + LANE_STUB;
+      // Never past the nearest box the channel feeds: a lane inside a box is a
+      // line drawn through somebody's field names.
+      const limit = Math.min(...list.map((p) => p.to.x)) - LANE_STUB;
+      const room = Math.max(1, Math.floor((limit - start) / LANE_STEP) + 1);
+      for (const [i, p] of list.entries()) laneX.set(p, start + (i % room) * LANE_STEP);
+    }
+
+    // The same for the ones that do not go forwards. A bracket down the left of
+    // a box, a loop round a type that holds itself and an arrow that turns back
+    // under everything all leave from one edge, so without lanes of their own a
+    // box with eight of them draws eight lines on one x. Numbered per box, in
+    // the order they land, for the reason the forward lanes are.
+    const byBox = new Map<number, Plan[]>();
+    for (const p of other) {
+      const list = byBox.get(p.e.from[0]);
+      if (list === undefined) byBox.set(p.e.from[0], [p]);
+      else list.push(p);
+    }
+    for (const list of byBox.values()) {
+      list.sort((a, b) => a.to.y - b.to.y || a.from.y - b.from.y);
+      for (const [i, p] of list.entries()) p.lane = i;
+    }
+
+    // Every label that has been placed, so a word is moved rather than printed
+    // over one already there, and every one waiting to be placed.
+    const labels: { x1: number; y1: number; x2: number; y2: number }[] = [];
+    const words: { text: SVGTextElement; ly: number }[] = [];
+    for (const p of [...forward, ...other]) {
+      const { e, from, to } = p;
       const path =
         e.from[0] !== e.to
-          ? this.route(from, to, e, lane)
+          ? this.route(from, to, e, laneX.get(p), p.lane)
           : e.to_row === undefined
-            ? this.loop(e, lane)
-            : this.inside(e, lane);
+            ? this.loop(e, p.lane)
+            : this.inside(e, p.lane);
       if (path === null) continue;
       const group = svg("g", { class: `dv-edge dv-role-${e.role}` });
       const line = svg("path", { d: path.d, "marker-end": "url(#dv-arrow)" });
@@ -381,7 +522,30 @@ export class DiagramView {
       });
       text.textContent = roleLabel(e.role).toLowerCase();
       group.append(text);
+      words.push({ text, ly: path.ly });
       this.lines.append(group);
+    }
+
+    // Where every role word goes, once they are all on the page and can be
+    // measured rather than guessed at.
+    //
+    // Moved a line at a time upwards, which runs along its own arrow rather
+    // than across it, and dropped where nothing near is clear. A word printed
+    // over another is less readable than no word, and an arrow whose word was
+    // dropped still says what it is when the pointer is on it.
+    for (const w of words) {
+      const b = w.text.getBBox();
+      let put = false;
+      for (let step = 0; step < 6; step++) {
+        const dy = -step * 10;
+        const r = { x1: b.x - 1, y1: b.y + dy - 1, x2: b.x + b.width + 1, y2: b.y + b.height + dy + 1 };
+        if (labels.some((l) => l.x1 < r.x2 && r.x1 < l.x2 && l.y1 < r.y2 && r.y1 < l.y2)) continue;
+        labels.push(r);
+        w.text.setAttribute("y", String(w.ly + dy));
+        put = true;
+        break;
+      }
+      if (!put) w.text.remove();
     }
   }
 
@@ -389,28 +553,27 @@ export class DiagramView {
    *  and into the left of the row it decides about. A target to the left of the
    *  source turns round under both boxes rather than running back through
    *  them. */
-  private route(
-    from: { x: number; y: number },
-    to: { x: number; y: number },
-    e: DiagramEdge,
-    lane: number,
-  ): Route | null {
-    const stub = 10 + (lane % 4) * 5;
-    if (to.x > from.x + stub * 2) {
-      // Forwards: one turn out, one turn in, both in the gap between the boxes.
-      const mid = from.x + stub + (to.x - from.x - stub * 2) * ((lane % 5) + 1) / 6;
+  private route(from: Pt, to: Pt, e: DiagramEdge, mid: number | undefined, lane: number): Route | null {
+    if (mid !== undefined) {
+      // Forwards: out of the row, down its own lane, and in along the row it is
+      // about. The label goes on the last run, beside where the arrow lands,
+      // because that is the row the reader is looking at when they follow it
+      // back.
       return {
         d: `M ${from.x} ${from.y} H ${mid} V ${to.y} H ${to.x}`,
-        lx: mid,
-        ly: (from.y + to.y) / 2,
+        lx: (mid + to.x) / 2,
+        ly: to.y - 3,
       };
     }
     const a = this.placed[e.from[0]];
     const b = this.placed[e.to];
     if (a === undefined || b === undefined) return null;
-    const under = Math.max(a.y + a.h, b.y + b.h) + BACK_LANE + (lane % 3) * 8;
-    const out = from.x + stub;
-    const back = to.x - stub;
+    // Backwards, or two boxes too close together to get a lane between them:
+    // round the outside rather than through whatever is in the way, each on its
+    // own line out, its own line under and its own line back.
+    const under = Math.max(a.y + a.h, b.y + b.h) + BACK_LANE + lane * LANE_STEP;
+    const out = from.x + LANE_STUB + lane * LANE_STEP;
+    const back = to.x - LANE_STUB - lane * LANE_STEP;
     return {
       d: `M ${from.x} ${from.y} H ${out} V ${under} H ${back} V ${to.y} H ${to.x}`,
       lx: (out + back) / 2,
@@ -433,7 +596,7 @@ export class DiagramView {
     const to = this.port(e.to, e.to_row, "left");
     if (p === undefined || from === null || to === null) return null;
     if (from.y === to.y) return null;
-    const out = p.x - 8 - (lane % 4) * 6;
+    const out = p.x - LANE_STUB - lane * 6;
     return {
       d: `M ${from.x} ${from.y} H ${out} V ${to.y} H ${to.x}`,
       // At the end the arrow leaves from, not at its middle: a box with eight
@@ -452,14 +615,24 @@ export class DiagramView {
     const from = this.port(e.from[0], e.from[1], "right");
     const to = this.port(e.to, e.to_row, "left");
     if (p === undefined || from === null || to === null) return null;
-    const out = p.x + p.w + 16 + (lane % 3) * 8;
-    const under = p.y + p.h + 10 + (lane % 3) * 8;
-    const back = p.x - 16 - (lane % 3) * 8;
+    const out = p.x + p.w + 16 + lane * LANE_STEP;
+    const under = p.y + p.h + 10 + lane * LANE_STEP;
+    const back = p.x - 16 - lane * LANE_STEP;
     return {
       d: `M ${from.x} ${from.y} H ${out} V ${under} H ${back} V ${to.y} H ${to.x}`,
       lx: (out + back) / 2,
       ly: under - 4,
     };
+  }
+
+  /** Redraw the arrows on the next frame, at most once however many times this
+   *  is asked for in between. */
+  private later(): void {
+    if (this.pending !== 0) return;
+    this.pending = requestAnimationFrame(() => {
+      this.pending = 0;
+      this.redrawEdges();
+    });
   }
 
   /**
@@ -560,8 +733,12 @@ export class DiagramView {
         this.ty = py - ((py - this.ty) / this.scale) * next;
         this.scale = next;
         this.apply();
+        this.later();
       },
       { passive: false },
     );
+    // The board changing size moves nothing in stage units, but the rows are
+    // measured off the page and a reflow is where a measurement goes stale.
+    new ResizeObserver(() => this.later()).observe(this.board);
   }
 }
