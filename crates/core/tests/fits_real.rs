@@ -33,6 +33,11 @@ fn named(file: &str) -> Option<PathBuf> {
     roots.into_iter().map(|r| r.join(file)).find(|p| p.exists())
 }
 
+/// Where a compressed image keeps its rows and its heap: after what the image
+/// and a tile are, and the columns.
+const ROWS: usize = 4;
+const HEAP: usize = 5;
+
 /// `comp.fits` is a tile-compressed image, which FITS writes as a binary table:
 /// one row per tile, and in each row a `1PB` cell, a descriptor pointing at
 /// that tile's compressed bytes in the heap after the rows. Three hundred rows
@@ -48,7 +53,23 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     let table = [0usize, 1, 3];
     let at = |tail: &[usize]| -> Vec<usize> { table.iter().chain(tail).copied().collect() };
 
-    let heap = ev.node(&doc, &at(&[2])).unwrap();
+    // The table says it is an image, what shape, and how it was cut up: 440
+    // pixels by 300, a tile a row of 440 pixels, each one Rice coded.
+    assert_eq!(ev.node(&doc, &table).unwrap().type_name, "Compressed image");
+    let text = |v: Value| match v {
+        Value::Str(s) => s.trim().to_string(),
+        other => panic!("not text: {other:?}"),
+    };
+    assert_eq!(text(ev.node(&doc, &at(&[0])).unwrap().value), "RICE_1");
+    let mut shape = |field: usize| -> Vec<i128> {
+        (0..2).map(|i| ev.node(&doc, &at(&[field, i])).unwrap().value.as_int().unwrap()).collect()
+    };
+    assert_eq!((shape(1), shape(2)), (vec![440, 300], vec![440, 1]));
+    let rows = ev.node(&doc, &at(&[ROWS])).unwrap();
+    assert_eq!(rows.child_count, 300);
+    assert_eq!(ev.node(&doc, &at(&[ROWS, 0])).unwrap().type_name, "Tile");
+
+    let heap = ev.node(&doc, &at(&[HEAP])).unwrap();
     assert_eq!(heap.size_bits, 66_896 * 8);
     // One array per row, since every row has one descriptor.
     assert_eq!(heap.child_count, 300);
@@ -57,9 +78,9 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     // holds bytes, as the `B` after the `P` says.
     let mut claimed = 0u64;
     for row in 0..300usize {
-        let count = ev.node(&doc, &at(&[1, row, 0, 0, 1, 0, 0])).unwrap().value.as_int().unwrap() as u64;
-        let offset = ev.node(&doc, &at(&[1, row, 0, 0, 1, 0, 1])).unwrap().value.as_int().unwrap() as u64;
-        let array = ev.node(&doc, &at(&[2, row])).unwrap();
+        let count = ev.node(&doc, &at(&[ROWS, row, 0, 0, 1, 0, 0])).unwrap().value.as_int().unwrap() as u64;
+        let offset = ev.node(&doc, &at(&[ROWS, row, 0, 0, 1, 0, 1])).unwrap().value.as_int().unwrap() as u64;
+        let array = ev.node(&doc, &at(&[HEAP, row])).unwrap();
         assert_eq!(array.type_name, "u8[]");
         assert_eq!((array.offset_bits, array.child_count), (heap.offset_bits + offset * 8, count), "row {row}");
         claimed += count;
@@ -71,7 +92,7 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     // there.
     let middle = heap.offset_bits + 40_000 * 8;
     let found = ev.locate(&doc, middle).unwrap();
-    assert_eq!(&found[..4], &at(&[2])[..]);
+    assert_eq!(&found[..4], &at(&[HEAP])[..]);
     let origins = ev.origins(&doc, &found[..5]).unwrap();
     let row = found[4];
     assert_eq!(origins[0].label, format!("rows[{row}].cells[0].descriptors[0]"));
