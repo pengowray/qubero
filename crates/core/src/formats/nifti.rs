@@ -21,7 +21,7 @@
 //! grew from, which SPM wrote for a decade before it and which is still
 //! around as `.hdr` and `.img` pairs. That header has no magic, so a 348-byte
 //! header without one reads as Analyze here, and the `analyze` template reads
-//! any 348-byte header that way. [`analyze_header`] lists what differs.
+//! any 348-byte header that way. `analyze_header` lists what differs.
 //!
 //! Nothing says which way round the numbers are. `sizeof_hdr` is 348 or 540
 //! in the file's own order, and those read the wrong way round are
@@ -71,10 +71,12 @@
 //!
 //! What is not read here:
 //!
-//! - A slope or an intercept with a fraction in it, which is what most
-//!   scanners write: an expression here is an integer, so the sum cannot be
-//!   made, and the voxels read as stored with the two floats in the header for
-//!   the reader to apply. Float voxels are never scaled, for the same reason.
+//! - A slope or an intercept with a fraction in it, as SPM's `functional.nii`
+//!   among nibabel's samples has: an expression here is an integer, so the
+//!   sum cannot be made, and the voxels read as stored with the two floats in
+//!   the header for the reader to apply. Float voxels are never scaled, for
+//!   the same reason. What it would take is an expression that answers a
+//!   float, which the FITS template is waiting on as well.
 //! - 128-bit floats and the complex numbers made of them, which have no type
 //!   here and keep their bytes, 16 and 32 to a voxel.
 //! - `DT_BINARY`, a bit a voxel, which `nifti1.h` defines and never says the
@@ -83,7 +85,7 @@
 //!   opened from here.
 //! - A `vox_offset` below the end of the header in a `.nii`, which is
 //!   invalid: the voxels are placed straight after the four extension bytes,
-//!   where a writer that left it at 0 put them.
+//!   the lowest offset a `.nii` can have, rather than over the header.
 //! - Anything past the voxels the dimensions account for, which is left
 //!   uncovered.
 //!
@@ -512,9 +514,9 @@ fn analyze_header(e: Endian) -> T {
 /// A NIfTI file: the header, the four bytes that say whether extensions
 /// follow, the extensions, and in a `.nii` the voxels.
 fn file(e: Endian, v: Version, single: bool) -> T {
-    let (header, size, offset, name) = match (v, single) {
-        (Version::One, _) => (header_1(e), HEADER_1, "data_offset", ["NIfTI-1", "NIfTI-1 header"]),
-        (Version::Two, _) => (header_2(e), HEADER_2, "vox_offset", ["NIfTI-2", "NIfTI-2 header"]),
+    let (header, size, offset, name) = match v {
+        Version::One => (header_1(e), HEADER_1, "data_offset", ["NIfTI-1", "NIfTI-1 header"]),
+        Version::Two => (header_2(e), HEADER_2, "vox_offset", ["NIfTI-2", "NIfTI-2 header"]),
     };
     // In a `.nii` the extensions stop where the voxels start; in a `.hdr`
     // there is nothing after them but the end of the file.
