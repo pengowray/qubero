@@ -17,9 +17,10 @@
 //! What is read here is the chain of blocks and every descriptor in it, with
 //! each descriptor's bytes placed where it says and named by its tag and ref,
 //! and then the data itself: a table's rows with its columns named, a
-//! scientific dataset's values in the shape its dimension record gives them, a
-//! raster image as rows of pixels, a palette as colours, and a vgroup's members
-//! as the places they point at.
+//! scientific dataset's values in the shape its dimension record gives them
+//! and its labels, units and formats one per dimension, a raster image as rows
+//! of pixels, a palette as colours, and a vgroup's members and attributes as
+//! the places they point at.
 //!
 //! None of that can be read from one descriptor alone. A raster image's own
 //! bytes say nothing about how wide a row is; the image dimension record with
@@ -644,18 +645,31 @@ fn special_element() -> T {
 
 /// The label, unit and format records of a scientific dataset: one string for
 /// the dataset and then one for each of its dimensions, run together and each
-/// ended with a nul.
+/// ended with a nul. An empty string is a nul on its own, so a dataset with
+/// labelled dimensions and no label of its own starts with one.
+///
+/// How many dimensions there are is in the dimension record with the same
+/// reference number, which is how the library writes these beside it, so the
+/// first string is read as the dataset's and the rest as the dimensions', one
+/// each in the order the dimension record lists them. Without that record the
+/// strings are still read, as a list whose first entry is the dataset's.
 fn sd_strings() -> T {
-    T::structure(
+    let dims = || key(701, own_ref());
+    let text = || T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii);
+    let rank = E::within(&["dimension_record", "rank"]).at_least(E::lit(0));
+    let known = T::structure(
         "Hdf4SdStrings",
-        vec![(
-            "strings",
-            T::repeat(
-                T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii),
-                crate::template::Until::End,
-            ),
-        )],
+        vec![
+            ("dimension_record", record_at(dims(), sd_dimensions())),
+            ("dataset", text()),
+            ("dimensions", T::array(text(), rank)),
+        ],
     )
+    .machinery(&["dimension_record"])
+    .field_aside("dimension_record");
+    let unknown =
+        T::structure("Hdf4SdStringList", vec![("strings", T::repeat(text(), crate::template::Until::End))]);
+    T::switch(found(dims()), vec![(1, known)], unknown)
 }
 
 /// One column of a table: what its values are, how wide one is, where in a
@@ -1384,12 +1398,13 @@ mod tests {
 
     /// A file of three blocks. The first holds the version record, a table's
     /// rows and then the header that describes them, a vgroup, and a second
-    /// table's rows whose header is the last thing in the file but one; the
-    /// second holds an image before the dimension record that says how wide
-    /// it is, and a scientific dataset with the group that names its parts; the
-    /// third holds a second group whose members are all a block back, an image
-    /// whose dimension record is here but whose number type record is nowhere,
-    /// an empty slot, that header, and a special element. Both orders are on
+    /// table's rows whose header is in the third block; the second holds an
+    /// image before the dimension record that says how wide it is, and a
+    /// scientific dataset with the group that names its parts and its labels;
+    /// the third holds a second group whose members are all a block back, an
+    /// image whose dimension record is here but whose number type record is
+    /// nowhere, an empty slot, that header, a special element, and units for a
+    /// dataset the file has no dimension record for. Both orders are on
     /// purpose: an HDF4 writer puts a thing before the thing that describes it
     /// as often as after, and in whatever block has room.
     fn file() -> Vec<u8> {
@@ -1397,10 +1412,13 @@ mod tests {
         let (image, ntype, dims) = (vec![10u8, 11, 12, 13, 14, 15], nt(21, 8, 1), id(7));
         let (values, shape, kind, grp) = (sd(), sdd(), nt(22, 16, 4), ndg());
         let (far, special) = (id(60), linked());
+        // Labels for the two by three dataset, and units for a dataset the
+        // file has no dimension record for.
+        let (labels, units) = (b"values\0row\0column\0".to_vec(), b"\0m\0s\0".to_vec());
         let none = Vec::new();
         let first: [(u16, u16, &Vec<u8>); 5] =
             [(30, 1, &v), (1963, 4, &r), (1962, 4, &h), (1965, 2, &g), (1963, 12, &r)];
-        let second: [(u16, u16, &Vec<u8>); 7] = [
+        let second: [(u16, u16, &Vec<u8>); 8] = [
             (302, 7, &image),
             (106, 7, &ntype),
             (300, 7, &dims),
@@ -1408,14 +1426,16 @@ mod tests {
             (701, 9, &shape),
             (106, 8, &kind),
             (720, 9, &grp),
+            (704, 9, &labels),
         ];
-        let third: [(u16, u16, &Vec<u8>); 6] = [
+        let third: [(u16, u16, &Vec<u8>); 7] = [
             (720, 11, &grp),
             (302, 50, &image),
             (300, 50, &far),
             (1, 0, &none),
             (1962, 12, &h),
             (0x4000 + 702, 13, &special),
+            (705, 77, &units),
         ];
         let block_at = |n: usize, from: usize| from + 6 + 12 * n;
         let b1 = block_at(first.len(), 4);
@@ -1464,7 +1484,7 @@ mod tests {
         // The last block, found by following the chain, with its own slots. It
         // has no next of its own, so the walk stops rather than pointing back
         // at the signature.
-        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 6);
+        assert_eq!(e.node(&d, &[3, 2, 2]).unwrap().child_count, 7);
     }
 
     #[test]
@@ -1554,6 +1574,29 @@ mod tests {
         assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 0]).child_count, 3);
         assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 0, 1]).value, Value::Int(1));
         assert_eq!(read(&[3, 1, 2, 6, 4, 0, 1, 2, 0, 1, 2]).value, Value::Int(5));
+    }
+
+    /// A dataset's labels are its own and then one per dimension, and the
+    /// dimension record with the same reference number says how many that is.
+    #[test]
+    fn labels_are_the_datasets_own_and_then_one_per_dimension() {
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0]).type_name, "Hdf4SdStrings");
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 1]).value, Value::Str("values".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2]).child_count, 2);
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 0]).value, Value::Str("row".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 1]).value, Value::Str("column".into()));
+        assert_eq!(read(&[3, 1, 2, 7, 4, 0, 2, 1]).size_bits, 7 * 8, "the nul is part of each");
+    }
+
+    /// Units whose dimension record the file never wrote are still every
+    /// string in the record, the first of them the dataset's own, which here
+    /// is empty.
+    #[test]
+    fn units_with_no_dimension_record_are_a_list_of_strings() {
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0]).type_name, "Hdf4SdStringList");
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0]).child_count, 3);
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0, 0]).value, Value::Str("".into()));
+        assert_eq!(read(&[3, 2, 2, 6, 4, 0, 0, 2]).value, Value::Str("s".into()));
     }
 
     /// The same group again in the next block, with every member it names a
@@ -1650,7 +1693,7 @@ mod tests {
     fn the_index_is_one_list_over_every_block_and_owns_no_bytes() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(hdf4());
-        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 7 + 6);
+        assert_eq!(e.node(&d, &[2]).unwrap().child_count, 5 + 8 + 7);
         // The sixth entry is the first descriptor of the second block, and sits
         // on its bytes without covering them.
         let entry = e.node(&d, &[2, 5]).unwrap();

@@ -179,6 +179,7 @@ fn every_reference_is_followed_whichever_block_holds_what_it_names() {
             // no descriptor can have, and that member points nowhere.
             "grtdfui83.hdf" => Reached { datasets: (0, 0), members: (11, 12), attributes: (0, 0), by_ref: (4, 4) },
             "litend.hdf" => Reached { datasets: (8, 8), members: (16, 16), attributes: (0, 0), by_ref: (0, 0) },
+            "swf32.hdf" => Reached { datasets: (2, 2), members: (18, 18), attributes: (0, 0), by_ref: (2, 2) },
             "ntcheck.hdf" => Reached { datasets: (8, 8), members: (36, 36), attributes: (0, 0), by_ref: (14, 14) },
             // Every dataset's values are in linked blocks, so no dataset
             // opens. The six members naming those values name the plain tag
@@ -342,9 +343,29 @@ fn the_data_behind_the_descriptors_is_opened() {
                 assert_eq!(ev.node(&doc, &planes).unwrap().child_count, 3);
                 assert_eq!(ev.node(&doc, &[planes, vec![0]].concat()).unwrap().child_count, 15);
             }
+            // One dataset of two by three by four, named by both kinds of
+            // group, with a label, a unit and a format for each dimension and
+            // none of its own. The strings are the ones pyhdf gives each
+            // dimension as `long_name`, `units` and `format`.
+            "swf32.hdf" => {
+                assert_eq!(of("Hdf4ScientificDataset"), 2);
+                let values = [found["Hdf4ScientificDataset"][0].clone(), vec![2, 0]].concat();
+                assert_eq!(ev.node(&doc, &values).unwrap().child_count, 2);
+                assert_eq!(number(value(&mut ev, &doc, &[values.clone(), vec![0, 1, 2]].concat())), 12.0);
+                assert_eq!(number(value(&mut ev, &doc, &[values, vec![1, 2, 3]].concat())), 123.0);
+                let strings = found["Hdf4SdStrings"].clone();
+                let expected = [["Time", "Line", "Column"], ["Second", "Inch", "Cm"], ["Int32", "Int16", "Int32"]];
+                assert_eq!(strings.len(), 3, "labels, units and formats");
+                for (at, want) in strings.into_iter().zip(expected) {
+                    assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1]].concat()), Value::Str("".into()));
+                    for (i, s) in want.iter().enumerate() {
+                        assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![2, i]].concat()), Value::Str((*s).into()));
+                    }
+                }
+            }
             other => panic!("{other} is in the collection with nothing checked of it"),
         }
         checked += 1;
     }
-    assert_eq!(checked, 6);
+    assert_eq!(checked, 7);
 }
