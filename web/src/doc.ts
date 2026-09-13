@@ -906,6 +906,88 @@ export type Contents = {
   readonly columns: number;
 };
 
+/** One member of a C++ class, as a ROOT file's own description of that class
+ *  gives it. A base class is a member of the list too, marked as one. */
+export type RootMember = {
+  readonly name: string;
+  /** The C++ type as the file spells it: `double`, `TObjArray`. */
+  readonly type_name: string;
+  /** ROOT's type code, which says how the member is written. */
+  readonly code: number;
+  readonly size: number;
+  /** The dimensions of a fixed array, empty for a single value. */
+  readonly dims: readonly number[];
+  readonly base: boolean;
+  readonly comment: string;
+};
+
+export type RootClass = {
+  readonly name: string;
+  readonly version: number;
+  readonly checksum: number;
+  readonly members: readonly RootMember[];
+};
+
+/** One basket: a record the directory never lists, reached only through a
+ *  branch's fBasketSeek. No field places it, so a row for one has bytes to go
+ *  to and nothing to open. */
+export type RootBasket = {
+  readonly address: number;
+  readonly bytes: number;
+  readonly first_entry: number;
+  readonly entries: number;
+};
+
+export type RootLeaf = {
+  readonly name: string;
+  readonly class: string;
+  readonly len: number;
+  readonly width: number;
+  readonly unsigned: boolean;
+  /** The leaf that counts this one, empty where the count is fixed. */
+  readonly counted_by: string;
+};
+
+export type RootBranch = {
+  readonly name: string;
+  readonly title: string;
+  readonly class: string;
+  readonly depth: number;
+  readonly entries: number;
+  readonly total_bytes: number;
+  readonly zip_bytes: number;
+  readonly basket_total: number;
+  /** One value's width in bytes and how many an entry holds, both zero where
+   *  the values are not read. */
+  readonly width: number;
+  readonly per_entry: number;
+  readonly floating: boolean;
+  readonly unsigned: boolean;
+  /** Why the values are not read, empty where they are. */
+  readonly unread: string;
+  readonly leaves: readonly RootLeaf[];
+  readonly baskets: readonly RootBasket[];
+};
+
+export type RootTree = {
+  readonly path: readonly number[];
+  readonly name: string;
+  readonly title: string;
+  readonly entries: number;
+  readonly address: number;
+  readonly branches: readonly RootBranch[];
+  readonly branch_total: number;
+  readonly trouble: string;
+};
+
+export type RootContents = {
+  readonly classes: readonly RootClass[];
+  readonly schema_path: readonly number[];
+  readonly trees: readonly RootTree[];
+  readonly tree_total: number;
+  readonly trouble: string;
+};
+
 export type ElfContents = {
   readonly sections: readonly {
     readonly path: readonly number[];
@@ -1755,6 +1837,15 @@ export class Doc {
   /** Named ELF sections and at most `symbolLimit` symbols. */
   elfContents(symbolLimit: number): TemplateReply<ElfContents> {
     return this.handleReply(this.editor.elf_contents(this.space, symbolLimit));
+  }
+
+  /**
+   * What a ROOT file holds: the class descriptions out of its StreamerInfo
+   * record, and every tree with its branches, leaves and baskets. Empty for
+   * every other format.
+   */
+  rootContents(): TemplateReply<RootContents> {
+    return this.handleReply(this.editor.root_contents(this.space));
   }
 
   isoVolume(): TemplateReply<IsoVolume> {

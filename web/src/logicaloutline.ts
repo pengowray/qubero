@@ -868,6 +868,164 @@ function archiveOutline(
     : plainZipOutline(entries, total, shown);
 }
 
+/**
+ * A ROOT file as physics reads it: the class descriptions the file carries,
+ * and every tree with its branches and the baskets the events are written in.
+ *
+ * Two things make this outline worth having rather than the template's own
+ * tree. The class descriptions are a schema the template cannot apply, so the
+ * Listing shows the StreamerInfo record as one unpacked run of bytes and this
+ * shows the eighteen classes inside it. And a basket is a record nothing
+ * places: its offset lives inside a compressed stream, so a basket row has
+ * bytes to go to and no field to open, the same case an HDF5 B-tree node below
+ * the root already has.
+ */
+function rootOutline(
+  doc: Doc,
+  expanded: ReadonlySet<string>,
+  shown: ReadonlyMap<string, number>,
+): TemplateReply<LogicalOutline> {
+  const reply = doc.rootContents();
+  if (reply.status !== "ok") return reply;
+  const contents = reply.node;
+  const nodes: LogicalNode[] = [];
+  const more: LogicalMore[] = [];
+  const hex = (n: number): string => `0x${(n >>> 0).toString(16).padStart(8, "0")}`;
+
+  if (contents.classes.length > 0) {
+    const schemaBits = null;
+    nodes.push({
+      id: "/classes", parentId: null, label: "Class descriptions", fullName: "StreamerInfo",
+      depth: 0, group: true, hasChildren: true,
+      sourcePath: contents.schema_path, sourceBits: schemaBits, sourceText: "StreamerInfo",
+      value: countText(contents.classes.length, "class"),
+      type: "StreamerInfo", logicalBytes: null, logicalApproximate: false,
+      title: "Every C++ class this file says how to read",
+    });
+    for (const cls of contents.classes) {
+      const id = `/classes/${cls.name}`;
+      nodes.push({
+        id, parentId: "/classes", label: cls.name, fullName: cls.name, depth: 1,
+        group: true, hasChildren: cls.members.length > 0,
+        sourcePath: contents.schema_path, sourceBits: null, sourceText: "StreamerInfo",
+        value: [countText(cls.members.length, "member"), `checksum ${hex(cls.checksum)}`].join(" · "),
+        type: `version ${cls.version}`, logicalBytes: null, logicalApproximate: false,
+        title: `${cls.name}, version ${cls.version}`,
+      });
+      if (!expanded.has(id)) continue;
+      for (const [i, member] of cls.members.entries()) {
+        const dims = member.dims.length === 0 ? "" : member.dims.map((d) => `[${d}]`).join("");
+        nodes.push({
+          id: `${id}/${i}`, parentId: id, label: member.name, fullName: `${cls.name}::${member.name}`,
+          depth: 2, group: false, hasChildren: false,
+          sourcePath: contents.schema_path, sourceBits: null, sourceText: "StreamerInfo",
+          value: [`${member.type_name}${dims}`, member.comment].filter(Boolean).join(" · "),
+          type: member.base ? "base class" : "member",
+          // The size column is the unpacked size of what is in the file, and a
+          // member's fSize is the width of the C++ field in memory. Two
+          // different things, and one column.
+          logicalBytes: null, logicalApproximate: false,
+          title: member.comment || `${member.type_name} ${member.name}`,
+        });
+      }
+    }
+  }
+
+  for (const tree of contents.trees) {
+    const treeId = `/trees/${tree.name}`;
+    nodes.push({
+      id: treeId, parentId: null, label: tree.name, fullName: tree.name, depth: 0,
+      group: true, hasChildren: tree.branches.length > 0,
+      sourcePath: tree.path, sourceBits: tree.address * 8, sourceText: formatOffset(tree.address * 8),
+      value: [
+        `${tree.entries.toLocaleString()} entries`,
+        countText(tree.branch_total, "branch"),
+        tree.title,
+        tree.trouble,
+      ].filter(Boolean).join(" · "),
+      type: "TTree", logicalBytes: null, logicalApproximate: false,
+      title: tree.title || tree.name,
+    });
+    for (const [i, branch] of tree.branches.entries()) {
+      const branchId = `${treeId}/${i}`;
+      // A sub-branch hangs under the branch above it, which is the branch
+      // nearest it in the list with a smaller depth.
+      let parentId = treeId;
+      for (let j = i - 1; j >= 0; j--) {
+        const above = tree.branches[j];
+        if (above !== undefined && above.depth < branch.depth) {
+          parentId = `${treeId}/${j}`;
+          break;
+        }
+      }
+      const leaf = branch.leaves[0];
+      const shape = branch.unread !== ""
+        ? `values not read: ${branch.unread}`
+        : `${branch.floating ? "float" : branch.unsigned ? "unsigned" : "signed"} ${branch.width * 8}-bit` +
+          (branch.per_entry > 1 ? ` × ${branch.per_entry}` : "");
+      nodes.push({
+        id: branchId, parentId, label: branch.name.split("/").at(-1) ?? branch.name,
+        fullName: branch.name, depth: branch.depth + 1,
+        group: true, hasChildren: branch.baskets.length > 0,
+        sourcePath: tree.path, sourceBits: null, sourceText: "multiple",
+        value: [
+          `${branch.entries.toLocaleString()} entries`,
+          countText(branch.basket_total, "basket"),
+          shape,
+          leaf === undefined || leaf.counted_by === "" || branch.unread !== "" ? "" : `counted by ${leaf.counted_by}`,
+        ].filter(Boolean).join(" · "),
+        type: branch.class,
+        logicalBytes: branch.total_bytes > 0 ? branch.total_bytes : null, logicalApproximate: false,
+        title: branch.title || branch.name,
+      });
+      if (!expanded.has(branchId)) continue;
+      const limit = Math.min(shown.get(branchId) ?? LOGICAL_PAGE, branch.baskets.length);
+      for (const [k, basket] of branch.baskets.slice(0, limit).entries()) {
+        nodes.push({
+          id: `${branchId}/k${k}`, parentId: branchId, label: `Basket ${k}`,
+          fullName: `${branch.name} basket ${k}`, depth: branch.depth + 2,
+          group: false, hasChildren: false,
+          // No field places a basket, so there is nothing to open in the
+          // Listing and only bytes to go to.
+          sourcePath: [], sourceBits: basket.address * 8, sourceText: formatOffset(basket.address * 8),
+          value: [
+            `entries ${basket.first_entry.toLocaleString()} to ${(basket.first_entry + basket.entries).toLocaleString()}`,
+            `${formatBytes(basket.bytes)} in the file`,
+          ].join(" · "),
+          type: "TBasket", logicalBytes: null, logicalApproximate: false,
+          title: `${branch.name} basket ${k} at ${formatOffset(basket.address * 8)}`,
+        });
+      }
+      if (limit < branch.baskets.length) {
+        more.push({
+          sectionId: branchId,
+          afterId: limit === 0 ? branchId : `${branchId}/k${limit - 1}`,
+          count: branch.baskets.length - limit,
+          label: "baskets",
+        });
+      }
+    }
+  }
+
+  const entries = contents.trees.reduce((sum, tree) => sum + tree.entries, 0);
+  return {
+    status: "ok",
+    node: {
+      format: "root",
+      title: "ROOT contents",
+      summary: [
+        countText(contents.tree_total, "tree"),
+        contents.trees.length === 0 ? "" : `${entries.toLocaleString()} entries`,
+        countText(contents.classes.length, "class"),
+        contents.trouble,
+      ].filter(Boolean).join(" · "),
+      nodes, total: nodes.length,
+      sizeLabel: "Unpacked size",
+      ...(more.length === 0 ? {} : { more }),
+    },
+  };
+}
+
 function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
   const schemaReply = doc.templateNode([23, 6]);
   if (schemaReply.status !== "ok") return schemaReply;
@@ -1294,6 +1452,7 @@ function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
   { matches: (doc) => doc.template === "hdf5", read: (doc) => hdf5Outline(doc) },
+  { matches: (doc) => doc.template === "root", read: rootOutline },
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
   { matches: (doc) => doc.isZip, read: archiveOutline },
   { matches: (doc) => doc.template === "sqlite" || doc.template === "self", read: (doc) => sqliteOutline(doc) },
