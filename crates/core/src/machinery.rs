@@ -119,6 +119,15 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
             expr_refs(first, out);
             ty_refs(elem, out, selectors);
         }
+        // Not the field a gather's walk starts from. That is where its records
+        // are, and the records are a table of their own with a reading of
+        // their own: a FITS heap walks the rows, and folding the rows away as
+        // machinery for the heap would hide the table under what it points at.
+        // What only places the children, the adjustment, is machinery.
+        Ty::Gather { adjust, elem, .. } => {
+            expr_refs(adjust, out);
+            ty_refs(elem, out, selectors);
+        }
         Ty::At { at, inner, .. } => {
             expr_refs(at, out);
             ty_refs(inner, out, selectors);
@@ -224,6 +233,9 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
         Expr::Bit(a, _) => expr_refs(a, out),
+        // What a record says, and a record is somewhere else entirely: the
+        // names inside are its fields, not siblings of this one.
+        Expr::Placer(_) => {}
         _ => {}
     }
 }

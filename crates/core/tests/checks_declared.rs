@@ -64,7 +64,7 @@ fn every_name<'a>(
                 every_name(&f.ty, types, seen, out);
             }
         }
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => every_name(elem, types, seen, out),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => every_name(elem, types, seen, out),
         Ty::PointerList { elem, .. } => every_name(elem, types, seen, out),
         Ty::Nullable { inner, .. }
         | Ty::At { inner, .. }
@@ -97,7 +97,7 @@ fn every_name<'a>(
 fn any_check<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<&'a str>) -> bool {
     match ty {
         Ty::Struct(s) => s.fields.iter().any(|f| !f.checks.is_empty() || any_check(&f.ty, types, seen)),
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => any_check(elem, types, seen),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => any_check(elem, types, seen),
         Ty::PointerList { elem, .. } => any_check(elem, types, seen),
         Ty::Nullable { inner, .. }
         | Ty::At { inner, .. }
@@ -166,7 +166,7 @@ impl<'a> Walk<'a> {
                 }
                 self.scope.pop();
             }
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => self.ty(elem, types),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => self.ty(elem, types),
             Ty::PointerList { elem, .. } => self.ty(elem, types),
             Ty::Nullable { inner, .. }
             | Ty::At { inner, .. }

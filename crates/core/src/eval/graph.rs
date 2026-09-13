@@ -350,6 +350,8 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         // arrows out of a pointer list go across the file, not down it.
         Ty::PointerList { .. } => "pointers".to_string(),
         Ty::Chain { .. } => "chain".to_string(),
+        // Across the file too, from records that may be anywhere in it.
+        Ty::Gather { .. } => "gathered".to_string(),
         Ty::At { .. } => "at".to_string(),
         Ty::Decoded { .. } => "stream".to_string(),
         // The parts of a decoder's trace are one kind here, the codes in a
@@ -436,6 +438,7 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         | Ty::Repeat { .. }
         | Ty::PointerList { .. }
         | Ty::Chain { .. }
+        | Ty::Gather { .. }
         | Ty::At { .. }
         | Ty::Decoded { .. }
         | Ty::Traced { .. } => "composite",

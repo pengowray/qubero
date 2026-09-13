@@ -261,8 +261,24 @@ impl Evaluator {
                 self.from_expr(doc, parent, &at, Role::Position, out)
             }
             Ty::Chain { .. } => self.placed_in_chain(doc, path, out),
+            Ty::Gather { .. } => self.placed_in_gather(doc, path, out),
             _ => Ok(()),
         }
+    }
+
+    /// Where one element of a gather came from: the record the walk found, and
+    /// then the fields of it the offset was read from. The record first,
+    /// because it is the answer to "which of the three hundred descriptors put
+    /// this here", and the fields second, for the arithmetic.
+    fn placed_in_gather<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
+        let Some((&idx, list)) = path.split_last() else { return Ok(()) };
+        let Some(Ty::Gather { offset, .. }) = self.memo.get(list).map(|r| r.ty.clone()) else { return Ok(()) };
+        let record = self.gathered_record(doc, list, idx)?;
+        let label = self.gathered_label(doc, list, &record)?;
+        let o = self.origin(doc, out.values, Role::Position, label, record.clone());
+        out.push(o);
+        let (end, _) = self.record_frame(doc, &record)?;
+        self.from_expr(doc, &end, &offset, Role::Position, out)
     }
 
     /// Where one element of a chain came from: the expression that found the
@@ -354,9 +370,13 @@ impl Evaluator {
                 Some(f) => Ok(f.ty.clone()),
                 None => fail("no such field"),
             },
-            Some(Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. }) => {
-                Ok((**elem).clone())
-            }
+            Some(
+                Ty::Array { elem, .. }
+                | Ty::Repeat { elem, .. }
+                | Ty::PointerList { elem, .. }
+                | Ty::Chain { elem, .. }
+                | Ty::Gather { elem, .. },
+            ) => Ok((**elem).clone()),
             // The one thing these hold, which is what the child was declared
             // as. Without this, asking what shaped a stream's contents, or
             // what an `At` points at, is an error rather than an answer.
@@ -555,6 +575,14 @@ impl Evaluator {
                 self.from_expr(doc, at, b, role, out)?;
             }
             Expr::Log2(a) => self.from_expr(doc, at, a, role, out)?,
+            // The fields of the record that placed this element, read from
+            // where that record's offset was: a heap array's length is the
+            // `count` of its own descriptor, which is a field a reader can go
+            // to, and not a field anywhere near the array.
+            Expr::Placer(inner) => {
+                let (end, _) = self.placer_frame(doc, at)?;
+                self.from_expr(doc, &end, &inner.clone(), role, out)?
+            }
             // Padding is decided by whatever said how long the run before it
             // was, which is the field worth pointing at.
             Expr::PadTo { n, .. } => self.from_expr(doc, at, n, role, out)?,

@@ -149,7 +149,7 @@ impl Evaluator {
         let Some((&pidx, grand)) = parent.split_last() else { return Ok(None) };
         if !matches!(
             self.memo.get(parent).map(|r| &r.ty),
-            Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::PointerList { .. })
+            Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. })
         ) {
             return Ok(None);
         }

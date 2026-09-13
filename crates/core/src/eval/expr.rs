@@ -58,6 +58,12 @@ impl Evaluator {
                     None => 0,
                 }
             }
+            // Asked of the record that placed the gathered element this sits
+            // in, from the frame that record's offset was worked out in.
+            Expr::Placer(e) => {
+                let (end, frame) = self.placer_frame(doc, at)?;
+                self.eval_expr_at(doc, &end, &e.clone(), frame)?
+            }
             Expr::Product { array, index, field } => {
                 let p = self.elem_path(doc, at, array, index, field, here)?;
                 self.multiply(doc, &p, array)?
@@ -299,6 +305,12 @@ impl Evaluator {
         if let Expr::Deduced(what) = e {
             return self.deduced_text(doc, at, *what, here);
         }
+        // Text asked of a record is read from that record, which is how a
+        // gathered element is typed by a word its record holds.
+        if let Expr::Placer(inner) = e {
+            let (end, frame) = self.placer_frame(doc, at)?;
+            return self.text_at(doc, &end, &inner.clone(), frame);
+        }
         match self.text_path(doc, at, e, here)? {
             Some(p) => self.text_of(doc, &p),
             None => Ok(String::new()),
@@ -352,6 +364,11 @@ impl Evaluator {
                     Some((p, _)) => p,
                     None => return Ok(None),
                 }
+            }
+            // The field the expression names in the record that placed this.
+            Expr::Placer(inner) => {
+                let (end, frame) = self.placer_frame(doc, at)?;
+                return self.text_path(doc, &end, &inner.clone(), frame);
             }
             _ => return fail("text has to come from a field, not from arithmetic"),
         }))
@@ -562,7 +579,7 @@ impl Evaluator {
         while let Some(idx) = cur.pop() {
             let listy = matches!(
                 self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. })
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
             );
             if listy {
                 out.push((cur.clone(), idx));
@@ -575,7 +592,7 @@ impl Evaluator {
     /// search rather than once per element: a computed label reads a field of
     /// the record asking, and that answer is the same however many elements
     /// are tried against it.
-    fn tag_now<S: Source>(&mut self, doc: &Document<S>, at: &[usize], tag: &Tag, here: Option<(u64, u64)>) -> R<Tag> {
+    pub(super) fn tag_now<S: Source>(&mut self, doc: &Document<S>, at: &[usize], tag: &Tag, here: Option<(u64, u64)>) -> R<Tag> {
         Ok(match tag {
             Tag::Computed(e) => Tag::Int(self.eval_expr_at(doc, at, e, here)?),
             Tag::ComputedText(e) => Tag::Text(self.text_at(doc, at, &e.clone(), here)?),
@@ -651,7 +668,10 @@ impl Evaluator {
         // needs it is a format that wraps a value in a list of parts: a FITS
         // quoted string is a run of pieces, and the text of one is reached by
         // saying which piece.
-        if matches!(self.memo[path].ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. }) {
+        if matches!(
+            self.memo[path].ty,
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+        ) {
             let Ok(i) = name.parse::<usize>() else { return Ok(None) };
             let n = self.child_count(doc, path)?;
             return Ok(((i as u64) < n).then_some(i));

@@ -159,6 +159,22 @@ pub enum Expr {
     /// in every template as wide and as strictly aligned as this one variant.
     /// Two formats in ninety use it.
     Tagged(Arc<TaggedRef>),
+    /// This expression, worked out in the record that placed the element it
+    /// is asked from, rather than where it is asked.
+    ///
+    /// Every other expression looks backwards from the field asking, and the
+    /// child of a [`Ty::Gather`] has nothing behind it that knows about it: a
+    /// FITS heap array sits in the heap, and its count is in a descriptor in a
+    /// row of the table before the heap, one of three hundred. The gather
+    /// already walked to that descriptor to place the array, so this asks it
+    /// again: `placer(count)` is the count in the descriptor this array's
+    /// offset came from.
+    ///
+    /// Worked out as if it were that record's last field, the same frame the
+    /// offset was worked out in, so anything the offset could name, this can.
+    /// Asked from the nearest gathered element around the field; anywhere
+    /// else there is no such record, and it fails.
+    Placer(Box<Expr>),
     /// The numbers of one earlier array multiplied together: what a shape
     /// describes. A GGUF tensor says it is 2560 by 5120 and never says it is
     /// 13,107,200 numbers, and the room between one tensor and the next is not
@@ -590,6 +606,11 @@ impl Expr {
             field: field.iter().map(|s| s.to_string()).collect(),
         }))
     }
+    /// `e`, worked out in the record whose offset placed this element of a
+    /// gather. See [`Expr::Placer`].
+    pub fn placer(e: Expr) -> Expr {
+        Expr::Placer(Box::new(e))
+    }
     /// The numbers of the array at `field` inside `array[index]`, multiplied
     /// together.
     pub fn product(array: &str, index: Expr, field: &[&str]) -> Expr {
@@ -1005,7 +1026,8 @@ impl StrLen {
     }
 }
 
-/// How many elements of a [`Ty::Chain`] are followed before the walk gives up.
+/// How many elements of a [`Ty::Chain`] are followed before the walk gives up,
+/// and how many children a [`Ty::Gather`] places.
 ///
 /// Far past any real chain: the largest thing anyone keeps in one is a CDF's
 /// variable records, and a file with a million of those is a file nobody wrote.
@@ -1040,6 +1062,62 @@ pub enum Anchor {
     /// something else places its tensors quietly wrong here, since nothing
     /// generic can read a metadata value by key.
     SelfAligned(u32),
+}
+
+/// One step of the walk a [`Ty::Gather`] takes to the records that place its
+/// children.
+///
+/// A path in the IR elsewhere is a list of names, because it lands on one
+/// field. This one lands on every record of a kind, wherever the template put
+/// them, and the records a format keeps its offsets in are rarely one list
+/// deep: a FITS table's heap arrays are named by descriptors inside the columns
+/// inside every row, and a Parquet file's pages by column chunks inside the
+/// row groups inside a list the footer tags with a number. So a step either
+/// goes down one way or fans out, and the walk is every way through.
+///
+/// The first step is always a [`Step::Field`], found the way
+/// [`Expr::Within`] finds its first name: a field declared before the gather,
+/// in its own structure or one it sits inside. Every step after it starts from
+/// wherever the one before it landed.
+#[derive(Debug, Clone)]
+pub enum Step {
+    /// Into the field of this name, stepping through an `At` the way a path
+    /// does everywhere else: naming a field whose contents are elsewhere means
+    /// the contents.
+    Field(Arc<str>),
+    /// The first element of the list here whose `key` holds `tag`, the same
+    /// search [`Expr::Tagged`] makes. `shown` is what the step is called in a
+    /// label, since `fields[id = 4]` is a question and `row_groups` is the
+    /// answer a reader can find in the listing.
+    Tagged { key: Arc<[String]>, tag: Tag, shown: Arc<str> },
+    /// Every element of the list here, in order. Nothing when what is here is
+    /// not a list, and nothing when its elements are plain numbers or bytes:
+    /// a record is something with fields in it, and a column of a thousand
+    /// floats has no field to read an offset from, so walking into it would be
+    /// a thousand failures to find one.
+    Each,
+    /// Every field of the structure here whose name is one of these, in the
+    /// order the structure declares them. What a format that numbers its
+    /// columns in their names needs: FITS calls them `col1` to `col32`, and
+    /// any of them may hold descriptors.
+    Fields(Arc<[String]>),
+}
+
+impl Step {
+    pub fn field(name: &str) -> Step {
+        Step::Field(name.into())
+    }
+    /// The first element of the list here whose `key` holds the number `tag`,
+    /// called `shown` in a label.
+    pub fn tagged(key: &[&str], tag: i128, shown: &str) -> Step {
+        Step::Tagged { key: key.iter().map(|s| s.to_string()).collect(), tag: Tag::Int(tag), shown: shown.into() }
+    }
+    pub fn each() -> Step {
+        Step::Each
+    }
+    pub fn fields(names: &[&str]) -> Step {
+        Step::Fields(names.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1731,6 +1809,45 @@ pub enum Ty {
     /// The list itself covers no bytes where it is declared, like an `At`: what
     /// covers bytes is its elements, wherever they turned out to be.
     Chain { first: Expr, next: Arc<[String]>, elem: Box<Ty>, anchor: Anchor },
+    /// A flat list of elements placed at offsets read from records the
+    /// template walks to, wherever those records are.
+    ///
+    /// `PointerList` reads its offsets from one list declared beside it, and
+    /// `Chain` from the element before. Neither reaches a format whose offsets
+    /// are spread through a structure several lists deep. A FITS binary table
+    /// keeps a variable-length array in a heap after its rows, and what places
+    /// one is a descriptor, a count and an offset, in a column, in a row: every
+    /// row has one per such column, and all of them point into the one heap.
+    /// Parquet places its pages the same way from inside the footer, from a
+    /// column chunk inside a row group inside a list. An `At` under every
+    /// descriptor puts each array somewhere, but under the descriptor, four
+    /// levels into a row, where the heap as a region has no children and every
+    /// byte of it reads as a gap. The heap is a list, and this is what says so.
+    ///
+    /// `from` is the walk to the records, one [`Step`] at a time. Child `i`
+    /// starts `anchor + adjust + offset` bytes in, with `offset` worked out in
+    /// record `i` as if it were that record's last field, so it may name any
+    /// field of the record and anything the record could name. Children are
+    /// numbered in the order the walk found their records, and placed like an
+    /// `At`'s child, so they need not be in order in the file and need not
+    /// fill it. Anything between them is a gap.
+    ///
+    /// What a child is read as may ask its own record too, with
+    /// [`Expr::Placer`]: a heap array is as long as its descriptor's count
+    /// says, and nothing in the heap says it.
+    ///
+    /// A record whose offset does not read, or reads as somewhere outside the
+    /// room the list has, is passed over rather than taking the list with it:
+    /// a table cell with no descriptor in it is a cell, not a broken file. With
+    /// `skip_zero`, an offset of zero is passed over too, which is how a format
+    /// writes an optional pointer it has nothing for.
+    ///
+    /// The list covers no bytes where it is declared, as a `Chain` does, unless
+    /// a `Sized` round it gives it a region: a FITS heap is `PCOUNT` bytes
+    /// whether or not every one of them belongs to an array. The walk stops at
+    /// [`CHAIN_CAP`] children and carries on across goes, the way a chain's
+    /// does.
+    Gather { from: Arc<[Step]>, offset: Expr, anchor: Anchor, adjust: Expr, elem: Box<Ty>, skip_zero: bool },
     /// SQLite's variable-length integer: seven bits per byte, most significant
     /// group first, up to nine bytes, where a ninth byte contributes all eight
     /// of its bits. `Vlq` stops at four bytes and never does that, so it
@@ -2464,12 +2581,21 @@ impl Ty {
             anchor,
         }
     }
-    /// A pointer list where an offset of zero points at nothing rather than at
-    /// the anchor. See [`Ty::PointerList::skip_zero`].
+    /// A list whose children are placed from records the template walks to:
+    /// child `i` is `offset` bytes, worked out in record `i`, past `adjust`
+    /// bytes from `anchor`. See [`Ty::Gather`].
+    pub fn gather(from: Vec<Step>, offset: Expr, anchor: Anchor, adjust: Expr, elem: Ty) -> Ty {
+        Ty::Gather { from: from.into(), offset, anchor, adjust, elem: Box::new(elem), skip_zero: false }
+    }
+    /// A pointer list, or a gather, where an offset of zero points at nothing
+    /// rather than at the anchor. See [`Ty::PointerList::skip_zero`].
     pub fn skipping_zero(self) -> Ty {
         match self {
             Ty::PointerList { offsets, field, anchor, adjust, elem, to_next, skip_missing, .. } => {
                 Ty::PointerList { offsets, field, anchor, adjust, elem, to_next, skip_missing, skip_zero: true }
+            }
+            Ty::Gather { from, offset, anchor, adjust, elem, .. } => {
+                Ty::Gather { from, offset, anchor, adjust, elem, skip_zero: true }
             }
             other => other,
         }
@@ -2702,6 +2828,9 @@ impl Ty {
             // Not `offsets → x`: those come from a table read before the
             // children, and these come one from each child.
             Ty::Chain { elem, .. } => format!("chain \u{2192} {}", elem.display_name()),
+            // Not `offsets → x` either: there is no one table, and the offsets
+            // are gathered from records wherever the template found them.
+            Ty::Gather { elem, .. } => format!("gathered \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),

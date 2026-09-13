@@ -293,7 +293,7 @@ impl Evaluator {
         let (&idx, parent) = path.split_last()?;
         match self.memo.get(parent)?.ty.base() {
             Ty::Struct(s) => s.fields.get(idx)?.name_from.clone(),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
                 let (&list, grand) = parent.split_last()?;
                 let Ty::Struct(s) = self.memo.get(grand)?.ty.base() else { return None };
                 s.fields.get(list)?.elem_name_from.clone()
@@ -836,7 +836,7 @@ impl Evaluator {
         // not a reading of the table: it is the table with the reader left to
         // do the work. The field tree opens it for anyone who wants them.
         let ty = self.memo[path].ty.clone();
-        if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. }) {
+        if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
             let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
             out.push(count_text(info.child_count, &unit));
             return Ok(());
@@ -993,8 +993,9 @@ impl Evaluator {
         // for every row of every screen, is what this is instead of.
         // A chain's children are scattered the same way, and are found the
         // same way once the walk has followed it: sorted by where they start,
-        // which is not the order they are numbered in.
-        if matches!(r.ty, Ty::Chain { .. } | Ty::PointerList { .. }) {
+        // which is not the order they are numbered in. So are a gather's, once
+        // its walk has reached every record.
+        if matches!(r.ty, Ty::Chain { .. } | Ty::PointerList { .. } | Ty::Gather { .. }) {
             let starts = self.scattered_starts(doc, path, &r)?;
             let k = starts.partition_point(|(s, _)| *s <= bit);
             if k > 0 {
@@ -1023,7 +1024,7 @@ impl Evaluator {
         // are not in the order they sit in, the same as a pointer list, so
         // every one has to be looked at rather than stopping at the first that
         // starts past the bit.
-        let scattered = matches!(r.ty, Ty::PointerList { .. } | Ty::Chain { .. })
+        let scattered = matches!(r.ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
             || self.has_pointing_field(&r.ty)
             || self.has_low_bit_first_field(&r.ty);
         let mut p = path.to_vec();
@@ -1034,8 +1035,13 @@ impl Evaluator {
             // covers bytes is the elements the walk found, wherever they are.
             // Asking the chain itself is the same halving `child_at` does for
             // any list of scattered children.
+            // A gather with no region of its own is the same. One a `Sized`
+            // made a region covers its bytes, and is asked the ordinary way.
             let chain = match self.resolve(doc, &p) {
-                Ok(()) => matches!(self.memo[&p].ty, Ty::Chain { .. }),
+                Ok(()) => {
+                    let r = &self.memo[&p];
+                    matches!(r.ty, Ty::Chain { .. }) || (matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_none())
+                }
                 Err(e) if scattered && !e.interrupted() => {
                     p.pop();
                     continue;
@@ -1093,7 +1099,7 @@ impl Evaluator {
     /// Whether a structure has a field whose contents are somewhere else in
     /// the file, which is what stops its children from being in order.
     fn has_pointing_field(&self, ty: &Ty) -> bool {
-        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. } | Ty::Chain { .. })))
+        matches!(ty.base(), Ty::Struct(s) if s.fields.iter().any(|f| matches!(f.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. })))
     }
 
     /// Whether a structure packs any of its fields from the bottom of a byte.
@@ -1114,7 +1120,7 @@ impl Evaluator {
     /// all of them.
     pub(super) fn next_child_start<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
         // The starts are in order, so the first one past the bit is a halving.
-        if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. }) {
+        if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
             let r = self.memo[path].clone();
             let starts = self.scattered_starts(doc, path, &r)?;
             return Ok(starts.get(starts.partition_point(|(s, _)| *s <= bit)).map(|(s, _)| *s));
@@ -1145,7 +1151,7 @@ impl Evaluator {
     /// the one that does runs past `bit`, which means `bit` is inside it.
     pub(super) fn prev_child_end<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<u64>> {
         let mut p = path.to_vec();
-        let last: Option<usize> = if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. }) {
+        let last: Option<usize> = if matches!(self.memo[path].ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
             let r = self.memo[path].clone();
             let starts = self.scattered_starts(doc, path, &r)?;
             let n = starts.partition_point(|(s, _)| *s <= bit);
