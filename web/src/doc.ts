@@ -151,6 +151,9 @@ export type KsyLine = {
  *  A conversion with gaps still produced a template, and reading the file with
  *  it is still right about everything the gaps do not cover. */
 export type KsyReport = {
+  /** The format's own id, `meta/id`: the name the template goes by once it is
+   *  in use, in place of a built-in's name. */
+  readonly name: string;
   readonly fields: readonly KsyLine[];
   readonly gaps: readonly KsyLine[];
   readonly notes: readonly KsyLine[];
@@ -1978,9 +1981,32 @@ export class Doc {
       | { status: "ok"; node: KsyReport }
       | { status: "error"; message: string };
     if (reply.status === "error") throw new Error(reply.message);
-    this.template = null;
+    // The format's own id, the way a built-in's name is its id. Everything
+    // that asks whether a file is being read at all asks this, so a `.ksy`
+    // template that left it null would read the file and then be told there
+    // was no template: no fields in the hex grid, no field under the cursor.
+    this.template = reply.node.name;
     this.notify();
     return reply.node;
+  }
+
+  /**
+   * Convert a `.ksy` and say what it became, without reading anything with it.
+   *
+   * The same report `setKsyTemplate` gives, plus the template it produced
+   * written out as text, and the document left on whatever template it had.
+   * This is what the converter panel calls as the text is edited; applying is
+   * `setKsyTemplate`.
+   */
+  previewKsyTemplate(
+    text: string,
+    imports: Record<string, string> = {},
+  ): { readonly status: "ok"; readonly report: KsyReport; readonly text: string } | { readonly status: "error"; readonly message: string } {
+    const reply = JSON.parse(this.editor.preview_ksy_template(text, JSON.stringify(imports))) as
+      | { status: "ok"; node: { report: KsyReport; text: string } }
+      | { status: "error"; message: string };
+    if (reply.status === "error") return { status: "error", message: reply.message };
+    return { status: "ok", report: reply.node.report, text: reply.node.text };
   }
 
   /**
