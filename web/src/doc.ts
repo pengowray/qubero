@@ -631,17 +631,29 @@ export type FieldCheck = {
  * the point: this is what the number means, not a replacement for it.
  */
 export type FieldTime = {
-  /** `at` is a moment. `unset` is the value this format writes when it has no
-   *  time to record, which gzip's `mtime` of 0 is: not the first second of
-   *  1970. `impossible` is a number that names no moment at all, either a year
-   *  outside 1 to 9999 or a packed date that is not a date. */
-  readonly state: "at" | "unset" | "impossible";
-  /** Seconds from 1970-01-01T00:00:00Z, negative before it. Only for `at`. */
+  /** `at` is a moment. `leap` is a moment inside a leap second, second 60 of
+   *  a minute, which a CDF_TIME_TT2000 can hold and a Unix count cannot.
+   *  `unset` is the value this format writes when it has no time to record,
+   *  which gzip's `mtime` of 0 is: not the first second of 1970. `impossible`
+   *  is a number that names no moment at all, either a year outside 1 to 9999
+   *  or a packed date that is not a date. */
+  readonly state: "at" | "leap" | "unset" | "impossible";
+  /** Seconds from 1970-01-01T00:00:00Z, negative before it. Only for `at` and
+   *  `leap`; for `leap` it is second 59 of the minute, and the moment is the
+   *  second after it. */
   readonly unix_seconds: number | null;
   /** The sub-second part in nanoseconds, 0 to 999,999,999 and never negative,
    *  so the pair reads as one number whichever side of 1970 it falls. Only for
-   *  `at`. */
+   *  `at` and `leap`. */
   readonly nanos: number | null;
+  /** What has to be shown beside a moment that is right as far as it goes, or
+   *  null. Only a count on a clock with leap seconds has one: past the last
+   *  day the table of leap seconds vouches for, or before 1972, when UTC had
+   *  none and the conversion is the NASA CDF library's. */
+  readonly note: "past_leap_second_table" | "before_leap_seconds" | null;
+  /** The first day the leap-second table does not vouch for, as seconds from
+   *  1970-01-01T00:00:00Z. Only with `past_leap_second_table`. */
+  readonly leap_table_expires: number | null;
   /** For `local` and `unknown` the seconds above are the digits the file wrote
    *  laid on the UTC line. Print them as they are and say which this was: a
    *  ZIP's MS-DOS time records no zone, and shifting it into the reader's own
