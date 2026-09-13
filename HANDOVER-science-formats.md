@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| ROOT: a reader beside the template (`root_streamer.rs`, `root_tree.rs`) decodes `StreamerInfo` and every `TTree`: classes, branches, leaves, every basket's offset and entry range, and simple leaves' values, listed in the Logical tab as `ROOT contents`. Checked against uproot on all eight samples. The template still cannot place the baskets (see S4's correction). | 8ab3571 |
 | NetCDF classic: a file with exactly one record variable writes its records unpadded, and the template stepped by the padded `vsize`. `recsize` is now the unpadded width in that case. Also fixed on the way: a record variable narrower than four bytes read values that belonged to later records. Four generated samples pin both cases. | 82c8c9d |
 | miniSEED 3: a new template (`mseed3.rs`) recognised by `MS\x03`, records sized from their three lengths, extra headers as JSON, Steim frames shared with `mseed.rs`. Three libmseed samples. | 14e413d |
 | S6, NPZ half: members already open as NPY through the ZIP entry's decoded space being sniffed; a test pins it and the stale doc is gone. Zarr ZipStore chunks remain (a reader, not an IR change). | d6b864a |
@@ -133,9 +134,25 @@ HDF5 files.
 
 ### Further shared gaps, not started
 
-- **S4. Offsets into the file from inside unpacked data.** Compressed RNTuple
-  envelopes (ROOT's page lists), 7z's compressed header. Already written up in
-  `formats/sevenzip.rs` and memory `check-ir-structural-gaps`.
+- **S4. Offsets into the file from inside unpacked data.** 7z's compressed
+  header, written up in `formats/sevenzip.rs`.
+
+  **Correction (2026-09-13, from building the ROOT reader).** For ROOT this
+  is not the blocker. `Ty::At { anchor: Anchor::File }` already resolves into
+  space 0 whatever space the field naming it was read in (`place_child` in
+  `eval/mod.rs`), and `rntuple_record` relies on it to place both RNTuple
+  envelopes from inside a compressed record; `tests/root_real.rs`'s `anchor`
+  test asserts `placed.space == 0`. What blocks the TTree baskets is a level
+  up: `fBasketSeek` is a member of a streamed `TBranch`, and a streamed
+  object's layout is not a fact about the format but a schema written into
+  another record of the same file (`StreamerInfo`), itself compressed and
+  streamed. No `Ty` takes its shape from bytes. The IR need is a type whose
+  inner shape is looked up at evaluation time from a table the file supplies,
+  keyed by a class name and a version read from the prelude, with the
+  class-tag back-reference map as evaluator state. Given that, a `Gather`
+  with `Anchor::File` and `placer(fBasketBytes)` over
+  `fBranches[*].fBasketSeek[*]` places the baskets with nothing else new.
+  Whether 7z's case is the same shape or the original S4 is still to check.
 - **S5. The Nth element of a list whose elements vary in size.** HDF5
   variable-length strings and every other global-heap object. `h5ad.rs` does
   the walk as a reader because a field cannot.
@@ -198,18 +215,26 @@ HDF5 files.
 
 ### ROOT
 
-Nearly the whole file is unplaced. In `uproot-Zmumu-lz4.root` (213 KB) about
-208 KB lies after the top directory record in bytes nothing reads: the TTree's
-baskets, which are TKey records that the directory's key list does not list.
-Their offsets are in `fBasketSeek` inside each streamed TBranch. RNTuple: the
-anchor and both envelopes are placed; the schema, page lists and the pages
-themselves are bytes.
+A reader beside the template (see Closed) now decodes the `StreamerInfo`
+record and every `TTree` at every directory depth: class descriptions,
+branches, leaves, every basket with its offset, size and entry range, and the
+values of simple leaves. It shows in the Logical tab as `ROOT contents`. In
+`uproot-Zmumu-lz4.root` the baskets it lists are 206,455 of 212,813 bytes.
 
-- TTree: needs a StreamerInfo reader beside the template, as `h5ad.rs` is
-  beside HDF5.
-- RNTuple: the spec needs no streamers, so this is template work, except that a
-  compressed envelope's page list names offsets in the file (S4).
-  `rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root` avoids that.
+What the *template* names is unchanged (about 2% of that file), because the
+baskets can only be placed by the template once it can read a streamed
+object, which is the corrected S4 above. Until then the hex view shows them
+as a gap while the Logical tab lists them.
+
+- Split `TBranchElement` branches (C++ objects) are reasoned about, not
+  proven: no tree in the corpus uses one. Worth a sample.
+- Not read: variable-length entries, multi-leaf branches, strings, 2-byte
+  floats, 3-byte integers, `CS` compressed blocks.
+- RNTuple: the anchor and both envelopes are placed; the schema, page lists
+  and pages are bytes. The spec needs no streamers, so this is template work,
+  and `Anchor::File` from inside the unpacked envelope already works.
+- The panel's classes group row says `StreamerInfo` where an `@0x…` would do,
+  and an unsplit `TBranchElement` could name its class.
 
 ### Parquet
 
