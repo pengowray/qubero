@@ -2621,7 +2621,7 @@ export const DIAGRAM = {
   regionLabel: "The format as boxes and arrows",
   /** Under the title, once, so a reader knows what they are looking at before
    *  they look for their file in it. */
-  about: (format: string): string => `How a ${format} file is structured: every part the format can have, not what this file holds.`,
+  about: (format: string): string => `${format} file structure: every part the format can have, not what this file holds.`,
   noTemplate: "No format chosen. Pick one above to draw its structure.",
   /**
    * Types the picture leaves out.
