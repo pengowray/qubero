@@ -32,6 +32,7 @@ cases only.
 |---|---|
 | S2: HDF5 fractal-heap indirect blocks, for a heap grown past its largest direct block | `4308a8f` |
 | S2: children of a version 2 B-tree node below the root (`HANDOVER-open-hazards.md` 4) | `4308a8f` |
+| Kind totals counted an HDF5 object once per hard link to it, so `fractal-heap-deep.h5` covered 9.1 Mbit of a 4.9 Mbit file. What an `At` reaches now counts once. | `0d0ac8f` |
 | S3. Field names taken from a sibling list. Now `Field::elem_name_from`: an expression worked out per element of a list, with `Idx` as that element's index, labelling it `[1] y` while the path stays `[1]`. | a47f1ed |
 | NPY structured dtype field names: `[0] channel_0000` | ec4812d |
 | MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
