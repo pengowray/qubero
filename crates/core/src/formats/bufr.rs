@@ -443,6 +443,7 @@ fn replication_name() -> T {
 fn data() -> T {
     T::structure("Data", vec![("length", u24be()), ("reserved", T::u8()), ("bits", T::bytes(rest(4)))])
         .machinery(&["reserved"])
+        .packed_as(super::bufr_data::PACKING)
 }
 
 #[cfg(test)]

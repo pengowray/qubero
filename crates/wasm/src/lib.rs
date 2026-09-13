@@ -433,7 +433,7 @@ struct MseedFrameDto {
 /// What a type permits. `kind` picks which of the rest is filled in.
 #[derive(Serialize)]
 struct ExplainDto {
-    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "plain"
+    /// "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "bufr" | "plain"
     kind: &'static str,
     /// The type's own name, for an enum or a flags field.
     name: String,
@@ -602,6 +602,89 @@ struct ExplainDto {
     /// them, and which one the cursor is inside (-1 for none).
     weights: Vec<WeightDto>,
     at: f64,
+    /// Bufr: a BUFR message's section 4 read through the tables, or null for
+    /// every other kind. Its own object rather than more fields beside the
+    /// rest, since it is a dozen of them and only this panel reads them.
+    bufr: Option<BufrDto>,
+}
+
+/// A BUFR message's section 4, as the panel shows it. See
+/// `qubero_core::formats::bufr_data::Panel`.
+#[derive(Serialize)]
+struct BufrDto {
+    edition: f64,
+    /// The version section 1 names, and the version that was used.
+    master_table_version: f64,
+    tables_version: f64,
+    subsets: f64,
+    compressed: bool,
+    steps: Vec<String>,
+    /// Section 3's descriptors expanded through Table D, the first thousand
+    /// or so, and how many there are.
+    descriptors: Vec<BufrDescriptorDto>,
+    descriptors_total: f64,
+    /// Which subset `values` belong to, counted from 0, where in that
+    /// subset's values the list starts, and how many values the subset has.
+    subset: f64,
+    values: Vec<BufrValueDto>,
+    values_start: f64,
+    values_total: f64,
+    /// The value under the cursor, or null where the cursor is on none.
+    cursor: Option<BufrCursorDto>,
+}
+
+#[derive(Serialize)]
+struct BufrDescriptorDto {
+    code: f64,
+    depth: f64,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct BufrValueDto {
+    code: f64,
+    /// "element" | "count" | "quality" | "associated" | "reference" | "local" | "characters" | "marker"
+    role: &'static str,
+    name: String,
+    text: String,
+    unit: String,
+    missing: bool,
+    /// The element an associated field, a marker or quality information is
+    /// about, as its descriptor and name. Empty otherwise.
+    about: String,
+}
+
+#[derive(Serialize)]
+struct BufrCursorDto {
+    /// Its place in `values`, or -1 where it is not among those listed.
+    index: f64,
+    value: BufrValueDto,
+    bit: f64,
+    width: f64,
+    scale: f64,
+    reference: f64,
+    numeric: bool,
+    /// Null where there is no packed number: text, or a missing value.
+    packed: Option<f64>,
+    /// A compressed value's smallest packed number and difference width, or
+    /// null for an uncompressed message.
+    base: Option<f64>,
+    increment_width: Option<f64>,
+    /// Every subset's value, the first few dozen, for a compressed message.
+    /// An empty string is a missing value.
+    across: Vec<String>,
+}
+
+fn bufr_value_dto(v: qubero_core::formats::bufr_data::PanelValue) -> BufrValueDto {
+    BufrValueDto {
+        code: f64::from(v.code),
+        role: v.role,
+        name: v.name,
+        text: v.text,
+        unit: v.unit,
+        missing: v.missing,
+        about: v.about.unwrap_or_default(),
+    }
 }
 
 /// One run of weights inside a block that share a scale of their own.
@@ -1121,9 +1204,46 @@ fn explain_dto(e: Explain) -> ExplainDto {
         signed: false,
         weights: Vec::new(),
         at: -1.0,
+        bufr: None,
     };
     match e {
         Explain::Plain => {}
+        Explain::BufrData(p) => {
+            let p = *p;
+            dto.kind = "bufr";
+            dto.problem = p.problem.unwrap_or_default();
+            dto.bufr = Some(BufrDto {
+                edition: f64::from(p.edition),
+                master_table_version: f64::from(p.master_table_version),
+                tables_version: f64::from(p.tables_version),
+                subsets: f64::from(p.subsets),
+                compressed: p.compressed,
+                steps: p.steps,
+                descriptors: p
+                    .descriptors
+                    .into_iter()
+                    .map(|d| BufrDescriptorDto { code: f64::from(d.code), depth: f64::from(d.depth), name: d.name })
+                    .collect(),
+                descriptors_total: p.descriptors_total as f64,
+                subset: f64::from(p.subset),
+                values: p.values.into_iter().map(bufr_value_dto).collect(),
+                values_start: p.values_start as f64,
+                values_total: p.values_total as f64,
+                cursor: p.cursor.map(|c| BufrCursorDto {
+                    index: c.index.map_or(-1.0, |i| i as f64),
+                    value: bufr_value_dto(c.value),
+                    bit: c.bit as f64,
+                    width: f64::from(c.width),
+                    scale: f64::from(c.scale),
+                    reference: c.reference as f64,
+                    numeric: c.numeric,
+                    packed: c.packed.map(|v| v as f64),
+                    base: c.base.map(|v| v as f64),
+                    increment_width: c.increment_width.map(f64::from),
+                    across: c.across,
+                }),
+            });
+        }
         Explain::Magic { expected, actual } => {
             dto.kind = "magic";
             dto.expected = expected;

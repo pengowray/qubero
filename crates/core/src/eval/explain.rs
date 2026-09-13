@@ -5,6 +5,7 @@
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
 use crate::formats::{fits_tile, gwf_vect, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::bufr_data;
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -247,6 +248,12 @@ pub enum Explain {
         /// Why fewer pixels than the tile has came out, or none.
         problem: Option<String>,
     },
+    /// A BUFR message's section 4, read through the tables: the steps, the
+    /// descriptors expanded, a subset's values, and the value under the
+    /// cursor taken apart. Shown for the cursor anywhere in the section,
+    /// because the values have no boundaries in the bits and only the walk
+    /// through the descriptors finds them. See [`bufr_data`].
+    BufrData(Box<bufr_data::Panel>),
     /// The type has nothing to add: its value already says everything.
     Plain,
 }
@@ -402,6 +409,9 @@ impl Evaluator {
             if &*packing == fits_tile::PACKING {
                 return self.explain_fits_tile(doc, path);
             }
+            if &*packing == bufr_data::PACKING {
+                return self.explain_bufr(doc, at, at_bits);
+            }
             if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
                 return self.explain_mseed(doc, at, &r, encoding, big);
             }
@@ -479,6 +489,35 @@ impl Evaluator {
             check,
             problem: record.problem,
         })
+    }
+
+    /// The BUFR message whose section 4 is at `at`, read through the tables.
+    ///
+    /// The message is found by walking up to the node the template calls
+    /// `Message`, and handed to [`bufr_data`] as bytes: every section it
+    /// needs is inside it, and the reader finds them again itself. Where the
+    /// cursor is, counted from the first bit of section 4's data, says which
+    /// value to take apart.
+    fn explain_bufr<S: Source>(&mut self, doc: &Document<S>, at: &[usize], at_bits: Option<u64>) -> R<Explain> {
+        let mut message = at.to_vec();
+        while self.node(doc, &message)?.type_name != "Message" {
+            if message.pop().is_none() {
+                return Ok(Explain::Plain);
+            }
+        }
+        self.resolve(doc, &message)?;
+        let r = self.memo.get(&message).expect("resolved").clone();
+        let bits = self.size_of(doc, &message)?;
+        if bits / 8 > bufr_data::MESSAGE_LIMIT as u64 {
+            let mb = bufr_data::MESSAGE_LIMIT >> 20;
+            let panel = bufr_data::Panel { problem: Some(format!("Not read: the message is over this viewer's {mb} MB limit.")), ..Default::default() };
+            return Ok(Explain::BufrData(Box::new(panel)));
+        }
+        let bytes = self.read(doc, &r, r.offset, bits)?;
+        let reading = bufr_data::read(&bytes);
+        let data_start = r.offset + reading.header.data_offset as u64 * 8;
+        let cursor = at_bits.and_then(|b| b.checked_sub(data_start));
+        Ok(Explain::BufrData(Box::new(bufr_data::panel(&reading, cursor))))
     }
 
     /// The tile of a FITS compressed image that `path` is in, as a panel

@@ -62,16 +62,23 @@ pub struct Element {
 
 impl Element {
     pub fn kind(&self) -> Kind {
-        let u = self.unit.to_ascii_lowercase();
-        if u.contains("code table") {
-            Kind::CodeTable
-        } else if u.contains("flag table") {
-            Kind::FlagTable
-        } else if u == "ccitt ia5" {
-            Kind::Text
-        } else {
-            Kind::Numeric
-        }
+        kind_of(self.unit)
+    }
+}
+
+/// What kind of value a Table B unit says an element is. Both copies of the
+/// tables write words around a code table's unit, `Common Code table C-1`, so
+/// it is looked for rather than matched.
+pub fn kind_of(unit: &str) -> Kind {
+    let u = unit.to_ascii_lowercase();
+    if u.contains("code table") {
+        Kind::CodeTable
+    } else if u.contains("flag table") {
+        Kind::FlagTable
+    } else if u == "ccitt ia5" {
+        Kind::Text
+    } else {
+        Kind::Numeric
     }
 }
 

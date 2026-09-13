@@ -1182,7 +1182,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "bufr" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1345,6 +1345,69 @@ export type TypeInfo = {
   readonly tile_total: number;
   readonly tile_pixels: number;
   readonly tile_element_type: string;
+  /** Bufr: a BUFR message's section 4 read through the tables, or null for
+   *  every other kind. */
+  readonly bufr: BufrInfo | null;
+};
+
+/** A BUFR message's section 4, as the panel shows it. */
+export type BufrInfo = {
+  readonly edition: number;
+  /** The tables version section 1 names, and the one that was used. */
+  readonly master_table_version: number;
+  readonly tables_version: number;
+  readonly subsets: number;
+  readonly compressed: boolean;
+  readonly steps: readonly string[];
+  /** Section 3's descriptors expanded through Table D, how deep each is, and
+   *  how many there are altogether. */
+  readonly descriptors: readonly BufrDescriptor[];
+  readonly descriptors_total: number;
+  /** Which subset the values are, counted from 0; where in that subset's
+   *  values the list starts; and how many values the subset has. */
+  readonly subset: number;
+  readonly values: readonly BufrValue[];
+  readonly values_start: number;
+  readonly values_total: number;
+  /** The value under the cursor, or null where the cursor is on none. */
+  readonly cursor: BufrCursor | null;
+};
+
+export type BufrDescriptor = {
+  readonly code: number;
+  readonly depth: number;
+  readonly name: string;
+};
+
+export type BufrValue = {
+  readonly code: number;
+  readonly role: "element" | "count" | "quality" | "associated" | "reference" | "local" | "characters" | "marker";
+  readonly name: string;
+  readonly text: string;
+  readonly unit: string;
+  readonly missing: boolean;
+  /** The element an associated field, a marker or quality information is
+   *  about, as its descriptor and name. Empty otherwise. */
+  readonly about: string;
+};
+
+export type BufrCursor = {
+  /** Its place in the listed values, or -1 where it is not among them. */
+  readonly index: number;
+  readonly value: BufrValue;
+  /** Where its bits start in section 4's data, and how wide the value is. */
+  readonly bit: number;
+  readonly width: number;
+  readonly scale: number;
+  readonly reference: number;
+  readonly numeric: boolean;
+  /** This subset's packed number, or null for text or a missing value. */
+  readonly packed: number | null;
+  /** A compressed value's smallest packed number and difference width. */
+  readonly base: number | null;
+  readonly increment_width: number | null;
+  /** Every subset's value, the first few dozen; an empty string is missing. */
+  readonly across: readonly string[];
 };
 
 /** One Steim frame: the differences its codes name, and how many samples they

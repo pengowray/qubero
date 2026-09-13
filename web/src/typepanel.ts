@@ -11,6 +11,7 @@ import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
 import { pageBody, pageNote } from "./pagepanel.ts";
 import { tileBody, tileNote } from "./tilepanel.ts";
+import { bufrBody, bufrNote } from "./bufrpanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
 import { rowBody, rowNote } from "./rowpanel.ts";
 import { samplesBody, samplesNote } from "./samplespanel.ts";
@@ -46,6 +47,7 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "samples") return "Samples in this record";
   if (info.kind === "page") return "Inside this page";
   if (info.kind === "tile") return "Inside this tile";
+  if (info.kind === "bufr") return "Values in this message";
   return `Defined values (${info.cases.length})`;
 }
 
@@ -60,6 +62,7 @@ function headingNote(info: TypeInfo): string {
   if (info.kind === "samples") return samplesNote(info);
   if (info.kind === "page") return pageNote(info);
   if (info.kind === "tile") return tileNote(info);
+  if (info.kind === "bufr") return bufrNote(info);
   return "";
 }
 
@@ -437,6 +440,7 @@ export function typePanel(
   else if (info.kind === "samples") frag.append(samplesBody(info));
   else if (info.kind === "page") frag.append(pageBody(info));
   else if (info.kind === "tile") frag.append(tileBody(info));
+  else if (info.kind === "bufr") frag.append(bufrBody(info));
   else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));
