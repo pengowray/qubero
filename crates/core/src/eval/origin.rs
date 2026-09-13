@@ -474,7 +474,9 @@ impl Evaluator {
             // Which field decided how many bits this number is.
             Ty::UIntExpr { bits, .. } => self.from_expr(doc, path, &(**bits).clone(), Role::Width, out),
             Ty::Array { count, .. } => self.from_expr(doc, path, &count.clone(), Role::Count, out),
-            Ty::Computed(e) | Ty::ComputedText(e) => self.from_expr(doc, path, &e.clone(), Role::Value, out),
+            Ty::Computed(e) | Ty::ComputedText(e) | Ty::ComputedReal(e) => {
+                self.from_expr(doc, path, &e.clone(), Role::Value, out)
+            }
             _ => Ok(()),
         }
     }
@@ -652,6 +654,13 @@ impl Evaluator {
             // nothing at all, and the flag word is exactly the field a reader
             // asking why the row is there wants to go to.
             Expr::Bit(a, _) => self.from_expr(doc, at, a, role, out)?,
+            // The field a real is read from, the power a scale is raised to,
+            // and the float whose whole part places bytes: each is the field
+            // under it. A NIfTI's voxels start where `vox_offset` says, and
+            // the row a reader wants is that one, not the truncation.
+            Expr::RealText(a) | Expr::Pow2(a) | Expr::Pow10(a) | Expr::Trunc(a) => {
+                self.from_expr(doc, at, a, role, out)?
+            }
             _ => {}
         }
         Ok(())

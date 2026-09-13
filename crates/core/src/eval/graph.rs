@@ -342,7 +342,7 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         // Worked out rather than read. Text or number, it has no bytes of its
         // own and a view showing where the file's weight is should not colour
         // it as though it had.
-        Ty::Computed(_) | Ty::ComputedText(_) => "computed".to_string(),
+        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => "computed".to_string(),
         Ty::Insn { .. } => "insn".to_string(),
         Ty::Json(..) => "json".to_string(),
         Ty::Struct(_) => "struct".to_string(),
@@ -408,7 +408,9 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::Zigzag | Ty::SqliteVarint | Ty::TextInt { .. } | Ty::Computed(_) => "int",
         // A fixed-point number reads as the fraction it stands for, not as the
         // integer it is stored as.
-        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::IbmF32(_) | Ty::F8 { .. } | Ty::Fixed { .. } => "float",
+        // A real worked out from others is carried as the same `Value::Float`
+        // a float read from the file is.
+        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::IbmF32(_) | Ty::F8 { .. } | Ty::Fixed { .. } | Ty::ComputedReal(_) => "float",
         Ty::Magic(_) => "magic",
         Ty::Enum { .. } => "enum",
         Ty::Flags { .. } => "flags",

@@ -525,6 +525,54 @@ pub enum Expr {
     /// Zero or a negative number has no logarithm and fails rather than
     /// answering with something a file did not say.
     Log2(Box<Expr>),
+    /// A number with a fraction, as the template writes it: `0.5`.
+    ///
+    /// Every other expression here is a whole number, and that is the right
+    /// answer for nearly everything a template asks: a length, a count, an
+    /// address, which case a switch takes. It is the wrong answer for what a
+    /// stored number is worth. A NIfTI voxel is `scl_slope * stored +
+    /// scl_inter` with a slope of 0.0754, a FITS column is `TZEROn + TSCALn *
+    /// stored` with a scale of 2.5, and a GRIB value is a float plus an
+    /// integer times a power of two, over a power of ten.
+    ///
+    /// So a real is worked out only where a field says its value is one: in a
+    /// [`Ty::ComputedReal`], which reads its expression as reals from the top.
+    /// Anywhere a whole number is wanted it fails, with a sentence saying so,
+    /// rather than being rounded quietly into a size nobody wrote; a real
+    /// reaches a whole number through [`Expr::Trunc`] and nowhere else.
+    Real(f64),
+    /// The real number a run of text spells, `2.0E+01` and Fortran's `1.0D-3`
+    /// included, which is how a FITS card writes a scale.
+    ///
+    /// The expression inside has to land on a field, the way text is found
+    /// anywhere else (see [`Expr::StartOf`]). Nothing found reads as 0, the way
+    /// a search for a label answers when no record carries it, so `Or` can say
+    /// what to do without one: a column with no `TSCALn` card is scaled by
+    /// one. Text that is there and is not a number fails.
+    ///
+    /// Explicit rather than a second reading every text field gets, because a
+    /// short text field already has one: its bytes as a big-endian number,
+    /// which is what lets a switch key on `IHDR`.
+    RealText(Box<Expr>),
+    /// Two to an integer power, which is as often negative as not: a GRIB
+    /// value's binary scale factor is -5 as readily as 5. A real, and not a
+    /// shift, since two to the minus five is a fraction. In a whole number it
+    /// is the shift it would be, and fails for a power that is negative or
+    /// past what 128 bits hold.
+    Pow2(Box<Expr>),
+    /// Ten to an integer power, for a decimal scale factor. Exact up to ten
+    /// to the twenty-second, which is as far as a double holds every power of
+    /// ten; past that the answer is the nearest double to it.
+    Pow10(Box<Expr>),
+    /// The whole part of a real, rounded towards nought: the one way a real
+    /// enters a size, a count or an address.
+    ///
+    /// A NIfTI-1 header says where its voxels start in a float, because the
+    /// Analyze header it grew from had a float there, and `trunc(vox_offset)`
+    /// is the byte they start at. Not a number, infinity, and anything past
+    /// what 128 bits hold fail rather than answering with a place nobody
+    /// wrote.
+    Trunc(Box<Expr>),
     /// One bit of a number, as one or zero.
     ///
     /// What a switch needs to key on a flag. A section of a program says it
@@ -884,6 +932,26 @@ impl Expr {
     /// The base-2 logarithm of this, rounded down.
     pub fn log2(self) -> Expr {
         Expr::Log2(Box::new(self))
+    }
+    /// A number with a fraction. See [`Expr::Real`].
+    pub fn real(v: f64) -> Expr {
+        Expr::Real(v)
+    }
+    /// The real number the text `e` lands on spells. See [`Expr::RealText`].
+    pub fn real_text(e: Expr) -> Expr {
+        Expr::RealText(Box::new(e))
+    }
+    /// Two to the power `e`. See [`Expr::Pow2`].
+    pub fn pow2(e: Expr) -> Expr {
+        Expr::Pow2(Box::new(e))
+    }
+    /// Ten to the power `e`. See [`Expr::Pow10`].
+    pub fn pow10(e: Expr) -> Expr {
+        Expr::Pow10(Box::new(e))
+    }
+    /// The whole part of the real `e`. See [`Expr::Trunc`].
+    pub fn trunc(e: Expr) -> Expr {
+        Expr::Trunc(Box::new(e))
     }
     /// One when this is less than `rhs`, and zero otherwise.
     /// This shifted left by `rhs` bits.
@@ -2064,6 +2132,20 @@ pub enum Ty {
     /// Zero bits, so it covers none of the file and moves nothing along. It is
     /// a reading of what is already there, not a claim that a byte exists.
     ComputedText(Expr),
+    /// The same, for a value that is a real number: a field of no bits whose
+    /// expression is worked out as reals rather than as whole numbers, and
+    /// whose value is a float.
+    ///
+    /// What a stored number is worth, when the format says so with a fraction.
+    /// A NIfTI voxel of 11980 with a slope of 0.0754 and an intercept of
+    /// 3100.76 is worth 4004.052, and before this the voxel read as 11980 with
+    /// the two floats left in the header for the reader to apply.
+    ///
+    /// Only the value is real. Whatever inside it decides something, which
+    /// branch a condition takes or what power of two to scale by, is still a
+    /// whole number, and a field named in it may be a float or an integer.
+    /// See [`Expr::Real`].
+    ComputedReal(Expr),
     /// Unsigned LEB128 (as used by wasm). Signed variant reads sign-extended.
     Leb128 { signed: bool },
     /// LEB128 groups holding a zigzagged number: the sign is in the bottom bit
@@ -2663,6 +2745,11 @@ impl Ty {
     /// See [`Ty::ComputedText`].
     pub fn computed_text(e: Expr) -> Ty {
         Ty::ComputedText(e)
+    }
+    /// A field of no bits whose value is a real number worked out from
+    /// others. See [`Ty::ComputedReal`].
+    pub fn computed_real(e: Expr) -> Ty {
+        Ty::ComputedReal(e)
     }
     pub fn vlq() -> Ty {
         Ty::Vlq
@@ -3277,6 +3364,10 @@ impl Ty {
             // word rather than a number, and a reader checking a row against
             // the bytes needs to know there are none to check against.
             Ty::ComputedText(_) => "computed text".into(),
+            // Told apart from `computed` for the same reason: the value column
+            // holds a number with a fraction worked out from others, and a
+            // reader needs to know it is not an integer the file wrote.
+            Ty::ComputedReal(_) => "computed real".into(),
             Ty::SqliteVarint => "varint".into(),
             // Not `varint`: four of those are already in here and they read
             // the same bytes as different numbers, so the column has to say

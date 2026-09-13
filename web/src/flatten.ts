@@ -328,6 +328,14 @@ function sameSection(breaks: readonly number[], a: number, b: number): boolean {
   return !breaks.some((i) => i > lo && i <= hi);
 }
 
+/** Whether a field's value is worked out by the template rather than read from
+ *  bytes of its own. The type column says `computed` for a whole number,
+ *  `computed text` for a word found elsewhere and `computed real` for a number
+ *  with a fraction, and all three are the same kind of row. */
+export function isComputed(node: TemplateNode): boolean {
+  return node.type === "computed" || node.type.startsWith("computed ");
+}
+
 /** Whether a field is this structure's machinery. What it places is the
  *  template's own answer; whether that counts as this structure's plumbing
  *  is this view's, and depends on where the two of them land. */
@@ -337,7 +345,7 @@ function isMachinery(node: TemplateNode, index: number, breaks: readonly number[
   // template working something out in the open: ZIP's `data_size` is the
   // answer to whether the size in the header or the one in the ZIP64 extra
   // field is the real one.
-  if (node.type === "computed") return false;
+  if (isComputed(node)) return false;
   if (node.machinery !== null) return node.machinery;
   return node.consumed_by !== null && sameSection(breaks, index, node.consumed_by);
 }

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { TemplateNode, TemplateReply } from "../src/doc.ts";
-import { emptyState, flatten, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
+import { emptyState, flatten, isComputed, pathKey, refold, sectionBreaks } from "../src/flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource } from "../src/flatten.ts";
 
 type Spec = {
@@ -723,6 +723,17 @@ test("a value the template works out is never folded away", () => {
     ["extra_length", "extra"],
     ["data_size", "data"],
   ]);
+});
+
+test("a real or a word the template works out is a computed row too", () => {
+  const retyped = (k: Spec): Spec => (k.name === "data_size" ? { ...k, type: "computed real" } : k.name === "unpacked_size" ? { ...k, type: "computed text" } : k);
+  const tail: Spec = { ...ZIP_TAIL, kids: (ZIP_TAIL.kids ?? []).map(retyped) };
+  const { items } = run(tail);
+  const names = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node.name : ""));
+  assert.ok(names.includes("data_size"), names.join(", "));
+  assert.ok(names.includes("unpacked_size"), names.join(", "));
+  const rows = items.filter((i) => i.kind === "row").map((i) => (i.kind === "row" ? i.node : null));
+  assert.deepEqual(rows.filter((n) => n !== null && isComputed(n)).map((n) => n?.name), ["data_size", "unpacked_size"]);
 });
 
 test("a field that places another says what reads it", () => {
