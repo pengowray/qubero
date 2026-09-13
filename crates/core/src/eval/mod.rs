@@ -20,6 +20,7 @@ mod cells;
 mod check;
 mod deduced;
 mod explain;
+mod gather;
 mod go;
 mod graph;
 mod jsontree;
@@ -333,9 +334,53 @@ struct ListState {
     /// on rather than started again per element.
     chain_starts: Vec<u64>,
     chain_done: bool,
+    /// For `Gather`: what its walk has found and where the walk stands. Boxed
+    /// because every other list leaves it empty, and a list state is kept for
+    /// every list anything has been learned about.
+    gather: Option<Box<GatherState>>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
+}
+
+/// What the walk of a [`Ty::Gather`] has found, and where it has got to.
+///
+/// A gather cannot say how many children it has without walking to every
+/// record, and a child's type may ask its record a question long after the
+/// walk has moved on. So both are kept: where each child starts, and the path
+/// of the record that placed it. A path per child rather than the design's
+/// one index per fanning step: `Placer`, the origins and the relations all
+/// want the record itself, re-walking the steps to find it again would put a
+/// search back into every one of those, and the formats that have one of
+/// these hold hundreds or thousands of records, not millions.
+#[derive(Debug, Default, Clone)]
+struct GatherState {
+    /// Where each child starts, in the order the walk found its record.
+    starts: Vec<u64>,
+    /// The record that placed each child, by the same index.
+    records: Vec<Vec<usize>>,
+    /// The walk's own stack: one frame per step taken, holding the node the
+    /// step is taken from and the candidate it stands on. Kept rather than
+    /// rebuilt, so that a go that runs out part way through carries on from
+    /// the record it stopped at, and a go that comes back to a list it has
+    /// finished pays nothing to be told so.
+    frames: Vec<GatherFrame>,
+    /// Whether the frames have been set up. The walk is over when they have
+    /// been and are empty again.
+    started: bool,
+    done: bool,
+    /// Every start with its child, sorted by where, once the walk is done:
+    /// what the search for the child under a bit halves. Shared, because that
+    /// search is made for every row of every screen.
+    sorted: Option<std::sync::Arc<Vec<(u64, usize)>>>,
+}
+
+/// One step of a gather's walk that is under way: the node it was taken from,
+/// and which of that node's children it stands on.
+#[derive(Debug, Clone)]
+struct GatherFrame {
+    node: Vec<usize>,
+    next: usize,
 }
 
 /// What to call a node: the name of the field it is, or where it sits in the
@@ -617,7 +662,7 @@ impl Evaluator {
         let r = self.memo.get(path).expect("resolved").clone();
         let (value, child_count, composite) = match &r.ty {
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::At { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -939,7 +984,11 @@ impl Evaluator {
             };
         }
         let mut elem = match ty {
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => elem.base(),
+            Ty::Array { elem, .. }
+            | Ty::Repeat { elem, .. }
+            | Ty::PointerList { elem, .. }
+            | Ty::Chain { elem, .. }
+            | Ty::Gather { elem, .. } => elem.base(),
             _ => return None,
         };
         for _ in 0..8 {
@@ -1015,9 +1064,11 @@ impl Evaluator {
                 Some(f) => (Name::Field(f.name.clone()), f.ty.clone()),
                 None => return fail("no such field"),
             },
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } | Ty::Chain { elem, .. } => {
-                (Name::Index(idx), (**elem).clone())
-            }
+            Ty::Array { elem, .. }
+            | Ty::Repeat { elem, .. }
+            | Ty::PointerList { elem, .. }
+            | Ty::Chain { elem, .. }
+            | Ty::Gather { elem, .. } => (Name::Index(idx), (**elem).clone()),
             // The one thing it points at keeps the field's own name: a row
             // saying `directory` twice says nothing the once did not.
             Ty::At { inner, .. } => (pr.name.clone(), (**inner).clone()),
@@ -1112,6 +1163,16 @@ impl Evaluator {
                 escapes = Some(doc.len_bits());
             }
             at
+        } else if let Ty::Gather { anchor, .. } = &pr.ty {
+            // Where the walk found this child's record said it was. Placed like
+            // a chain's element: anywhere the room lets it be, in any order.
+            let anchor = *anchor;
+            self.extend_gather_to(doc, parent, idx)?;
+            let Some(&at) = self.list(parent).gather.as_ref().and_then(|g| g.starts.get(idx)) else {
+                return fail("past the last element its descriptors place");
+            };
+            escapes = Some(self.gather_room(doc, parent, &pr, anchor));
+            at
         } else if let Ty::At { anchor, at, inner } = &pr.ty {
             // Bytes from the anchor, which is how a header names the place it
             // keeps a table: from the start of the file, or from the start of
@@ -1163,7 +1224,9 @@ impl Evaluator {
         // needs: the anchor is inside a compressed record and its two envelopes
         // are at file offsets it names.
         let space = match &pr.ty {
-            Ty::At { anchor: Anchor::File, .. } | Ty::PointerList { anchor: Anchor::File, .. } => 0,
+            Ty::At { anchor: Anchor::File, .. }
+            | Ty::PointerList { anchor: Anchor::File, .. }
+            | Ty::Gather { anchor: Anchor::File, .. } => 0,
             _ => pr.space,
         };
         if space != pr.space {
@@ -1407,23 +1470,31 @@ impl Evaluator {
     }
 
     /// Where every child of a list whose children are not laid out one after
-    /// another starts, sorted, with the child it belongs to. Both kinds answer
-    /// it: a pointer list from its table of offsets, a chain by following it.
-    /// What asks is the search for the child covering a bit, which for a list
-    /// in this shape is a halving rather than a walk through all of them.
+    /// another starts, sorted, with the child it belongs to. All three kinds
+    /// answer it: a pointer list from its table of offsets, a chain by
+    /// following it, a gather by walking to its records. What asks is the
+    /// search for the child covering a bit, which for a list in this shape is
+    /// a halving rather than a walk through all of them.
+    ///
+    /// Shared rather than copied. A gather keeps its sorted starts once its
+    /// walk is done and hands out the same ones every time; the other two are
+    /// still worked out per call.
     fn scattered_starts<S: Source>(
         &mut self,
         doc: &Document<S>,
         list: &[usize],
         lr: &Resolved,
-    ) -> R<Vec<(u64, usize)>> {
+    ) -> R<std::sync::Arc<Vec<(u64, usize)>>> {
         if matches!(lr.ty, Ty::Chain { .. }) {
             let mut starts: Vec<(u64, usize)> =
                 self.chain_starts(doc, list)?.into_iter().enumerate().map(|(i, s)| (s, i)).collect();
             starts.sort_unstable();
-            return Ok(starts);
+            return Ok(std::sync::Arc::new(starts));
         }
-        self.pointer_starts(doc, list, lr)
+        if matches!(lr.ty, Ty::Gather { .. }) {
+            return self.gather_sorted(doc, list);
+        }
+        Ok(std::sync::Arc::new(self.pointer_starts(doc, list, lr)?))
     }
 
     /// Resolve and size children `0..idx` of `parent`, in order, without recursion.
@@ -1938,7 +2009,9 @@ impl Evaluator {
             }
             if matches!(
                 r.ty,
-                Ty::At { anchor: Anchor::File, .. } | Ty::PointerList { anchor: Anchor::File, .. }
+                Ty::At { anchor: Anchor::File, .. }
+                    | Ty::PointerList { anchor: Anchor::File, .. }
+                    | Ty::Gather { anchor: Anchor::File, .. }
             ) {
                 return 0;
             }

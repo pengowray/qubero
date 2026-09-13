@@ -19,13 +19,62 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample() -> Option<PathBuf> {
+    named("fits/tb.fits")
+}
+
+/// A file of the sample collection, wherever the collection is.
+fn named(file: &str) -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
         roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
     }
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("fits/tb.fits")).find(|p| p.exists())
+    roots.into_iter().map(|r| r.join(file)).find(|p| p.exists())
+}
+
+/// `comp.fits` is a tile-compressed image, which FITS writes as a binary table:
+/// one row per tile, and in each row a `1PB` cell, a descriptor pointing at
+/// that tile's compressed bytes in the heap after the rows. Three hundred rows
+/// and a heap of 66,896 bytes.
+#[test]
+fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
+    let Some(path) = named("fits/comp.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("fits").unwrap());
+    let table = [0usize, 1, 2];
+    let at = |tail: &[usize]| -> Vec<usize> { table.iter().chain(tail).copied().collect() };
+
+    let heap = ev.node(&doc, &at(&[1])).unwrap();
+    assert_eq!(heap.size_bits, 66_896 * 8);
+    // One array per row, since every row has one descriptor.
+    assert_eq!(heap.child_count, 300);
+
+    // Every array is where its descriptor says and as long as it counts, and
+    // holds bytes, as the `B` after the `P` says.
+    let mut claimed = 0u64;
+    for row in 0..300usize {
+        let count = ev.node(&doc, &at(&[0, row, 0, 0, 0])).unwrap().value.as_int().unwrap() as u64;
+        let offset = ev.node(&doc, &at(&[0, row, 0, 0, 1])).unwrap().value.as_int().unwrap() as u64;
+        let array = ev.node(&doc, &at(&[1, row])).unwrap();
+        assert_eq!(array.type_name, "u8[]");
+        assert_eq!((array.offset_bits, array.child_count), (heap.offset_bits + offset * 8, count), "row {row}");
+        claimed += count;
+    }
+    // The tiles fill the heap: nothing in it is left over.
+    assert_eq!(claimed, 66_896);
+
+    // The cursor on a byte of a tile finds the tile, and says which row put it
+    // there.
+    let middle = heap.offset_bits + 40_000 * 8;
+    let found = ev.locate(&doc, middle).unwrap();
+    assert_eq!(&found[..4], &at(&[1])[..]);
+    let origins = ev.origins(&doc, &found[..5]).unwrap();
+    let row = found[4];
+    assert_eq!(origins[0].label, format!("rows[{row}].col1[0]"));
 }
 
 #[test]

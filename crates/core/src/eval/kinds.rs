@@ -148,6 +148,13 @@ struct Frame {
     /// the same size, so element 0 stands for all of them. See
     /// [`Evaluator::exact_stride`].
     uniform: Option<u64>,
+    /// For a node that is a region of its own and whose children an offset
+    /// puts somewhere inside it, which is a gather a `Sized` gave a length: how
+    /// many of its bits its children have covered. A FITS heap is `PCOUNT`
+    /// bytes and what no array claims is a gap, but its arrays move no cursor,
+    /// so what they leave over is the region less what they came to. None for
+    /// every other node.
+    tiled: Option<u64>,
 }
 
 /// What opening a composite turned out to say about it, before the walk has
@@ -186,6 +193,7 @@ impl Opening {
             prev: None,
             guarded: self.guarded,
             uniform: self.uniform,
+            tiled: region(r).then_some(0),
         }
     }
 }
@@ -193,7 +201,15 @@ impl Opening {
 /// Whether this node's children are wherever an offset read from the file put
 /// them, rather than one after another.
 fn places(ty: &Ty) -> bool {
-    matches!(ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::At { .. })
+    matches!(ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. })
+}
+
+/// Whether this node places its children by offset inside a region of its own,
+/// which is a gather a `Sized` gave a length. Such a node is laid out in order
+/// like any other field, since it covers its region where it is declared, and
+/// it is only its children that are scattered.
+fn region(r: &Resolved) -> bool {
+    matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_some()
 }
 
 /// The walk, kept between goes. Held beside the evaluator rather than inside
@@ -427,7 +443,7 @@ impl Evaluator {
         // A field that puts its own children somewhere waits until the ones
         // laid out in order are done, so that where they landed can be judged
         // against what those cover. See `deferred`.
-        if in_order && places(&r.ty) {
+        if in_order && places(&r.ty) && !region(&r) {
             let f = &mut walk.stack[top];
             f.deferred.push(idx);
             f.next += 1;
@@ -485,6 +501,14 @@ impl Evaluator {
             }
         } else {
             walk.reach(r.offset + size);
+            // What a region's scattered children cover, counted once for each
+            // time the region itself is: only the part inside the region, so a
+            // child that runs out of it cannot make the gap come out negative.
+            let f = &mut walk.stack[top];
+            if let Some(tiled) = f.tiled.as_mut() {
+                let (from, to) = (r.offset.max(f.offset), (r.offset + size).min(f.end));
+                *tiled = tiled.saturating_add(to.saturating_sub(from));
+            }
         }
         // A run of same-sized elements of the same shape: element 0 is walked
         // and counted as many times as there are elements, and the rest of the
@@ -585,7 +609,15 @@ impl Evaluator {
         // and so leaves nothing over. The stretch it was declared across is
         // the enclosing run's to account for; calling it a gap here would
         // count the same bytes as missing and as covered at once.
-        let leftover = if f.sequential { f.end.saturating_sub(f.cursor) } else { 0 };
+        // A region whose children are scattered inside it leaves over what they
+        // did not cover. Two children over the same bytes count those bytes
+        // twice here, which can only make the gap smaller than it is, never
+        // larger than the region.
+        let leftover = match f.tiled {
+            Some(tiled) => f.end.saturating_sub(f.offset).saturating_sub(tiled),
+            None if f.sequential => f.end.saturating_sub(f.cursor),
+            None => 0,
+        };
         if leftover > 0 {
             let bits = leftover.saturating_mul(f.scale);
             if f.framed {
@@ -658,6 +690,7 @@ fn descends(ty: &Ty) -> bool {
         | Ty::Repeat { .. }
         | Ty::PointerList { .. }
         | Ty::Chain { .. }
+        | Ty::Gather { .. }
         | Ty::At { .. } => true,
         Ty::Json(shape, _) => shape.composite(),
         _ => false,

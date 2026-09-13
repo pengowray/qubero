@@ -26,7 +26,13 @@
 //! puts it. What is left of the data unit after the rows is the heap, which is
 //! `PCOUNT` bytes and is where a variable-length column's arrays live.
 //!
-//! What is not read here:
+//! The heap reads as those arrays. A `P` or `Q` column's cell is a descriptor,
+//! a count and an offset into the heap, and the heap is a
+//! [`Ty::Gather`](crate::template::Ty::Gather) over every descriptor in every
+//! row: one element per descriptor, where it points, as many values as it
+//! counts, of the type the letter after the `P` names. What no array claims is
+//! a gap. A tile-compressed image is the common case, one row per tile and
+//! each tile's compressed bytes an array in the heap.
 //!
 //! A column is `col3` in every path and reads as `col3 flux` on the row: the
 //! declared name is what an expression and an edit are written with, and the
@@ -43,9 +49,9 @@
 //!   than from `XTENSION`, which says so in text.
 //! - A `TTYPEn` with an escaped quote in it reads as far as the quote. Nothing
 //!   names a column that way.
-//! - What is in the heap. The descriptors say how long each array is and where
-//!   it starts, and placing the arrays those point at needs a pointer list
-//!   whose offsets are read from inside every row of a table.
+//! - Heap arrays are found by walking every cell of every row, and every cell
+//!   asks the header for its `TFORMn` (see below), so a table of millions of
+//!   rows takes that long before its heap has any children.
 //! - `TSCALn` and `TZEROn`, which say what a column's numbers mean. An
 //!   unsigned 16-bit column is written as a signed one with a zero point of
 //!   32768, and reads here as the signed numbers it is written as.
@@ -65,9 +71,10 @@
 //! - A quoted value with no closing quote runs to the end of its card rather
 //!   than being called out as the unterminated string it is.
 //! - A tile-compressed image is a binary table and reads as one: the rows are
-//!   the compressed tiles, and nothing here inflates them.
+//!   the tiles' descriptors and the heap is their compressed bytes, and
+//!   nothing here inflates a tile with Rice or gzip into pixels.
 
-use crate::template::{Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, Step, StrLen, Template, Ty as T, Until};
 
 /// The block every part of a FITS file is padded out to.
 const BLOCK: u32 = 2880;
@@ -277,11 +284,22 @@ fn digit_peek(n: i128) -> E {
 /// `most` is where the walk stops: a repeat count longer than that reads as
 /// that many digits, and the letter after it is read as part of the number.
 fn digits_then(d: i128, most: i128) -> T {
+    // A variable-length column writes the type of what its arrays hold as a
+    // second letter, `1PB`: `P` says the cell is a descriptor and `B` says the
+    // heap array it points at is bytes. Every other column has no second
+    // letter, and this is nothing there.
+    let letter = T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii);
+    let elem_code = T::switch(
+        E::field("code"),
+        vec![(b'P' as i128, letter.clone()), (b'Q' as i128, letter)],
+        T::bytes(E::lit(0)),
+    );
     let form = T::structure(
         "Binary column",
         vec![
             ("repeat", T::decimal(StrLen::Fixed(E::lit(d)))),
             ("code", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
+            ("elem_code", elem_code),
             ("tail", T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)),
         ],
     );
@@ -368,8 +386,56 @@ fn table(row: T) -> T {
         "Table",
         vec![
             ("rows", T::array(T::sized(width, row).counted_as("row"), rows)),
-            ("heap", T::bytes(E::Remaining)),
+            ("heap", T::sized(E::Remaining, heap())),
         ],
+    )
+}
+
+/// The heap a binary table keeps its variable-length arrays in: every array
+/// some descriptor points at, each where its descriptor says.
+///
+/// The descriptors are in the rows, one in every cell of a `P` or `Q` column,
+/// so the walk to them goes into every row and every column. A column of
+/// anything else holds no descriptor: its cells are numbers, which the walk
+/// passes without stepping into, or text, which is not a list at all. An
+/// offset counts from the start of the heap, and the heap starts `THEAP` bytes
+/// into the data, which is right after the rows unless a writer left room.
+///
+/// What no array claims is a gap. A heap is often exactly the arrays in it,
+/// and a writer is free to leave room, or to have two descriptors share one
+/// array, which reads as two elements over the same bytes.
+fn heap() -> T {
+    let from = vec![Step::field("rows"), Step::each(), Step::fields(&COL_NAMES), Step::each()];
+    let starts = card_value("THEAP").or(card_value("NAXIS1").mul(card_value("NAXIS2")));
+    T::gather(from, E::field("offset"), Anchor::Window, starts, heap_array())
+}
+
+/// One heap array: as many elements as its descriptor counts, of the type its
+/// column's `TFORMn` names after the `P`. Never more than the heap has room
+/// for, so a count that runs off the end of it shows what is there.
+fn heap_array() -> T {
+    let count = E::placer(E::field("count"));
+    let of = |ty: T, width: i128| T::array(ty, count.clone().at_most(E::Remaining.div(E::lit(width))));
+    let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
+    let text = T::text(StrLen::Fixed(count.clone().at_most(E::Remaining)), Encoding::Ascii);
+    T::matches(
+        E::placer(E::field("elem_code")),
+        vec![
+            ("L", text.clone()),
+            ("X", T::bytes(count.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
+            ("B", of(T::UInt { bits: 8, endian: Big }, 1)),
+            ("I", of(T::Int { bits: 16, endian: Big }, 2)),
+            ("J", of(T::Int { bits: 32, endian: Big }, 4)),
+            ("K", of(T::Int { bits: 64, endian: Big }, 8)),
+            ("A", text),
+            ("E", of(T::F32(Big), 4)),
+            ("D", of(T::F64(Big), 8)),
+            ("C", of(pair("Complex", T::F32(Big)), 8)),
+            ("M", of(pair("Complex", T::F64(Big)), 16)),
+        ],
+        // A letter nobody defined: the array is somewhere, and what is in it
+        // is not something this can say.
+        T::bytes(E::lit(0)),
     )
 }
 
@@ -413,7 +479,14 @@ fn binary_column(n: usize) -> T {
     // to `NAXIS1` shows the ones that fit rather than failing.
     let of = |ty: T, width: i128| T::array(ty, r.clone().at_most(E::Remaining.div(E::lit(width))));
     let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
-    let descriptor = |name: &str, ty: T| T::inline_structure(name, vec![("count", ty.clone()), ("offset", ty)]);
+    // A descriptor also says what its heap array holds, read from this
+    // column's `TFORMn`. The array is in the heap, which is not inside the
+    // column and cannot find the card for it: the letter is asked here, where
+    // the column number is known, and the heap asks the descriptor.
+    let elem_code = T::computed_text(card_part(&key, "elem_code"));
+    let descriptor = |name: &str, ty: T| {
+        T::inline_structure(name, vec![("count", ty.clone()), ("offset", ty), ("elem_code", elem_code.clone())])
+    };
     let text = T::text(StrLen::Fixed(r.clone().at_most(E::Remaining)), Encoding::Ascii);
     T::matches(
         code,
@@ -769,7 +842,94 @@ mod tests {
         let desc = ev.node(&d, &[0, 1, 2, 0, 0, 0, 0]).unwrap();
         assert_eq!(desc.type_name, "Descriptor");
         assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 0, 0, 0]).unwrap().value, Value::Int(3));
+        // The letter after the `P` says what the array holds, and the
+        // descriptor carries it so the heap can ask.
+        assert_eq!(ev.node(&d, &[0, 1, 2, 0, 0, 0, 0, 2]).unwrap().value, Value::Str("J".into()));
         assert_eq!(ev.node(&d, &[0, 1, 2, 1]).unwrap().size_bits, 12 * 8);
+        // And the heap is that array: three 32-bit integers where the
+        // descriptor pointed, which is the front of the heap.
+        let heap = ev.node(&d, &[0, 1, 2, 1]).unwrap();
+        assert_eq!(heap.child_count, 1);
+        let array = ev.node(&d, &[0, 1, 2, 1, 0]).unwrap();
+        assert_eq!((array.type_name.as_str(), array.child_count), ("i32 be[]", 3));
+        assert_eq!((array.offset_bits, array.size_bits), (heap.offset_bits, 12 * 8));
+        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 2]).unwrap().value, Value::Int(0x0909_0909));
+    }
+
+    /// A table of `rows` rows of the columns `forms` names, whose cells are
+    /// the descriptors `cells` gives row by row, and whose heap is `heap`.
+    fn heap_table(forms: &[&str], cells: &[&[(i32, i32)]], heap: &[u8]) -> Vec<u8> {
+        let mut cards = vec![format!("TFIELDS = {:20}", forms.len())];
+        for (i, f) in forms.iter().enumerate() {
+            cards.push(format!("TFORM{}  = '{f:<8}'", i + 1));
+        }
+        let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+        let mut b = primary();
+        b.extend_from_slice(&table_header(&refs, cells.len(), 8 * forms.len(), heap.len()));
+        let mut data = Vec::new();
+        for row in cells {
+            for (count, offset) in row.iter() {
+                data.extend_from_slice(&count.to_be_bytes());
+                data.extend_from_slice(&offset.to_be_bytes());
+            }
+        }
+        data.extend_from_slice(heap);
+        b.extend_from_slice(&padded(data));
+        b
+    }
+
+    #[test]
+    fn an_empty_cell_covers_no_heap() {
+        let b = heap_table(&["1PB"], &[&[(0, 0)], &[(2, 0)]], &[5, 6]);
+        let (d, mut ev) = eval(b);
+        let heap = [0, 1, 2, 1];
+        assert_eq!(ev.node(&d, &heap).unwrap().child_count, 2);
+        // The first row's array is there, and has nothing in it.
+        let empty = ev.node(&d, &[0, 1, 2, 1, 0]).unwrap();
+        assert_eq!((empty.child_count, empty.size_bits), (0, 0));
+        let full = ev.node(&d, &[0, 1, 2, 1, 1]).unwrap();
+        assert_eq!((full.child_count, full.size_bits), (2, 16));
+        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 1, 1]).unwrap().value, Value::UInt(6));
+    }
+
+    #[test]
+    fn two_variable_columns_in_one_row_both_reach_the_heap() {
+        // Three bytes for the first column and two 16-bit numbers for the
+        // second, one after the other in the heap.
+        let b = heap_table(&["1PB", "1PI"], &[&[(3, 0), (2, 3)]], &[1, 2, 3, 0x12, 0x34, 0xff, 0xfe]);
+        let (d, mut ev) = eval(b);
+        assert_eq!(ev.node(&d, &[0, 1, 2, 1]).unwrap().child_count, 2);
+        let bytes = ev.node(&d, &[0, 1, 2, 1, 0]).unwrap();
+        let words = ev.node(&d, &[0, 1, 2, 1, 1]).unwrap();
+        assert_eq!((bytes.type_name.as_str(), bytes.child_count), ("u8[]", 3));
+        assert_eq!((words.type_name.as_str(), words.child_count), ("i16 be[]", 2));
+        assert_eq!(words.offset_bits, bytes.offset_bits + 3 * 8);
+        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 1, 1]).unwrap().value, Value::Int(-2));
+        // Each says which cell put it there: the second column of the only row.
+        let placed = ev.origins(&d, &[0, 1, 2, 1, 1]).unwrap();
+        assert_eq!(placed[0].label, "rows[0].col2[0]");
+        assert_eq!(placed[0].path, vec![0, 1, 2, 0, 0, 1, 0]);
+    }
+
+    #[test]
+    fn heap_bytes_no_array_claims_are_a_gap() {
+        // Ten bytes of heap; the arrays take the first three and two more
+        // after a gap, and leave the end over.
+        let b = heap_table(&["1PB"], &[&[(3, 0)], &[(2, 6)]], &[1, 2, 3, 0, 0, 0, 7, 8, 0, 0]);
+        let (d, mut ev) = eval(b);
+        let heap = ev.node(&d, &[0, 1, 2, 1]).unwrap();
+        let start = heap.offset_bits;
+        let spans = ev.spans(&d, start, start + heap.size_bits, 100).unwrap();
+        // A short array is a row per value, as a short run always is, so what
+        // is compared is which bytes are covered and which are gaps.
+        let gaps: Vec<(u64, u64)> =
+            spans.iter().filter(|s| s.gap).map(|s| ((s.offset_bits - start) / 8, s.size_bits / 8)).collect();
+        assert_eq!(gaps, vec![(3, 3), (8, 2)]);
+        let covered: Vec<u64> = spans.iter().filter(|s| !s.gap).map(|s| (s.offset_bits - start) / 8).collect();
+        assert_eq!(covered, vec![0, 1, 2, 6, 7]);
+        // And the cursor in a gap stands on the heap itself.
+        assert_eq!(ev.locate(&d, start + 4 * 8).unwrap(), vec![0, 1, 2, 1]);
+        assert_eq!(ev.locate(&d, start + 7 * 8).unwrap(), vec![0, 1, 2, 1, 1, 1]);
     }
 
     #[test]

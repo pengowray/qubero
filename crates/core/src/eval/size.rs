@@ -310,6 +310,9 @@ impl Evaluator {
             // As long as the chain turns out to be, which is only knowable by
             // following it to the end. See [`Ty::Chain`].
             Ty::Chain { .. } => Ok(self.chain_starts(doc, path)?.len() as u64),
+            // The same for a gather: as many as the walk to its records finds.
+            // See [`Ty::Gather`].
+            Ty::Gather { .. } => self.gather_count(doc, path),
             // As many children as the array of offsets has entries.
             Ty::PointerList { offsets, .. } => {
                 let n = self.eval_expr(doc, path, &Expr::Ref(offsets.clone()))?;

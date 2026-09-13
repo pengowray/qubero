@@ -74,6 +74,12 @@ pub(super) struct Frame {
     /// is hardly ever placed by the element itself: a column chunk points at
     /// its pages from four levels inside it.
     pending: Option<usize>,
+    /// True for a list whose elements are themselves the placements: a
+    /// chain's, or a gather's. Those are never given up on for adding nothing
+    /// in a row, since an element that adds nothing is one that covers no
+    /// bytes, and a table whose first sixty-four cells are empty still has
+    /// arrays in the sixty-fifth.
+    scattered: bool,
 }
 
 /// How many nodes one go of the walk may open. Enough that a file of a few
@@ -188,7 +194,7 @@ impl Evaluator {
             }
             let i = top.next;
             top.next += 1;
-            let listy = top.fields.is_none();
+            let listy = top.fields.is_none() && !top.scattered;
             let depth = top.path.len();
             if top.fields.as_ref().is_some_and(|keep| !keep.contains(&(i as usize))) {
                 continue;
@@ -238,7 +244,10 @@ impl Evaluator {
         // each element is a stretch of its own here: without them a chain of
         // two hundred records would be two hundred stretches of file the
         // cursor could not name.
-        if path.len() > 1 && matches!(self.memo.get(&path[..path.len() - 1]).map(|r| &r.ty), Some(Ty::Chain { .. })) {
+        // A gather's children are the same, wherever its records were.
+        if path.len() > 1
+            && matches!(self.memo.get(&path[..path.len() - 1]).map(|r| &r.ty), Some(Ty::Chain { .. } | Ty::Gather { .. }))
+        {
             return self.record(doc, path.clone(), path);
         }
         let ty = self.memo[&path].ty.clone();
@@ -295,7 +304,8 @@ impl Evaluator {
         // What one element of a list turns out to be settles the whole run.
         // Not for a chain: its elements are the placements, so what they hold
         // says nothing about whether they are worth walking.
-        if fields.is_none() && !matches!(ty, Ty::At { .. } | Ty::Chain { .. }) {
+        let scattered = matches!(ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. });
+        if fields.is_none() && !scattered {
             let mut first = path.clone();
             first.push(0);
             self.resolve(doc, &first)?;
@@ -304,7 +314,7 @@ impl Evaluator {
                 return Ok(None);
             }
         }
-        Ok(Some(Frame { path, count, next: 0, fields, stale: 0, pending: None }))
+        Ok(Some(Frame { path, count, next: 0, fields, stale: 0, pending: None, scattered }))
     }
 
     /// Whether anything inside this type places its contents elsewhere. False
@@ -330,9 +340,10 @@ impl Evaluator {
 
     fn places(ty: &Ty, named: &rustc_hash::FxHashSet<String>) -> bool {
         match ty {
-            // Both types that put something somewhere other than where it was
-            // declared. A chain's elements are all elsewhere.
-            Ty::At { .. } | Ty::Chain { .. } => true,
+            // The types that put something somewhere other than where it was
+            // declared. A chain's elements are all elsewhere, and so are a
+            // gather's.
+            Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } => true,
             Ty::Named(name) => named.contains(&**name),
             Ty::Struct(s) => s.fields.iter().any(|f| Self::places(&f.ty, named)),
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {

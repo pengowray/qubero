@@ -47,6 +47,11 @@ pub enum Placed {
     Pointer,
     /// Where the element before it said the next one would be.
     Chain,
+    /// Where an offset in a record the template walked to put it: a heap array
+    /// where a descriptor in some row said. The record is an origin of role
+    /// [`Role::Position`](super::origin::Role::Position), and so are the fields
+    /// the offset was read from.
+    Gathered,
     /// At an address the file gave, which a header pointing at a table is. The
     /// expression is an origin of role
     /// [`Role::Position`](super::origin::Role::Position), so the panel can name
@@ -73,6 +78,7 @@ impl Placed {
             Placed::Element => "element",
             Placed::Pointer => "pointer",
             Placed::Chain => "chain",
+            Placed::Gathered => "gathered",
             Placed::Address => "address",
             Placed::Trace => "trace",
             Placed::Stream => "stream",
@@ -196,6 +202,7 @@ impl Evaluator {
         match &pr.ty {
             Ty::PointerList { .. } => Placed::Pointer,
             Ty::Chain { .. } => Placed::Chain,
+            Ty::Gather { .. } => Placed::Gathered,
             // The one thing an `At` holds is what its address points at, and it
             // carries the field's own name: this is the node the cursor lands
             // on, since the `At` itself covers no bytes.
@@ -265,6 +272,12 @@ impl Evaluator {
         // where it starts and ends.
         if matches!(r.ty, Ty::At { .. } | Ty::Chain { .. } | Ty::Computed(_) | Ty::ComputedText(_)) {
             return if size == 0 { Sizing::Nothing } else { Sizing::Trace };
+        }
+        // A gather is a place and no bytes too, unless a window round it made
+        // it a region, and then the window is what settled its length: a FITS
+        // heap is as long as `PCOUNT` says, not as long as its arrays come to.
+        if matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_none() {
+            return Sizing::Nothing;
         }
         // A window around the field settles its length before the field's own
         // type gets to measure itself. How that window's size was arrived at

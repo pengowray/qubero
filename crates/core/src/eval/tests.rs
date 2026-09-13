@@ -1,6 +1,6 @@
 use super::*;
 use crate::source::MemSource;
-use crate::template::{Anchor, Endian::*, Expr as E, Ty as T};
+use crate::template::{Anchor, Endian::*, Expr as E, Step, Ty as T};
 
 fn doc(bytes: &[u8]) -> Document<MemSource> {
     Document::new(MemSource(bytes.to_vec()))
@@ -2256,6 +2256,239 @@ fn a_chain_stops_rather_than_going_round_for_ever() {
     assert_eq!(count(&[0, 2, 0, 99, 0xaa], E::field("head")), 1);
     // A chain that starts nowhere is a list of nothing rather than an error.
     assert_eq!(count(&[0, 0, 0, 0, 0], E::field("head")), 0);
+}
+
+/// A record that places one gathered element: where it is, and how long.
+fn placing() -> T {
+    T::structure("Rec", vec![("off", T::u8()), ("len", T::u8())])
+}
+
+/// Two groups of records, then a region the records place their elements in.
+/// Each element is as long as the record that placed it says.
+fn gathered(elem: T) -> T {
+    let group = T::structure("Group", vec![("n", T::u8()), ("recs", T::array(placing(), E::field("n")))]);
+    let from = vec![Step::field("groups"), Step::each(), Step::field("recs"), Step::each()];
+    T::structure(
+        "Root",
+        vec![
+            ("groups", T::array(group, E::lit(2))),
+            ("region", T::sized(E::Remaining, T::gather(from, E::field("off"), Anchor::File, E::lit(0), elem))),
+        ],
+    )
+}
+
+/// Group 0 holds two records and group 1 one; the region runs from byte 8 to
+/// byte 20, and the three elements sit in it out of order, with gaps between.
+fn gathered_bytes() -> Vec<u8> {
+    let mut b = vec![2, 14, 3, 10, 2, /* group 1 */ 1, 18, 1];
+    //        8  9     10    11    12 13    14    15    16    17    18    19
+    b.extend([0, 0, 0xa0, 0xa1, 0, 0, 0xb0, 0xb1, 0xb2, 0, 0xc0, 0]);
+    b
+}
+
+#[test]
+fn a_gather_places_elements_from_records_two_lists_deep() {
+    let t = gathered(T::bytes(E::placer(E::field("len"))));
+    let d = doc(&gathered_bytes());
+    let mut ev = Evaluator::new(Template::new("t", t));
+    let list = ev.node(&d, &[1]).unwrap();
+    // Flat: one element per record, however deep the records were.
+    assert_eq!(list.child_count, 3);
+    assert_eq!(list.type_name, "descriptors \u{2192} bytes[]");
+    // The region is what the window gave it, not what its elements come to.
+    assert_eq!(list.size_bits, 12 * 8);
+    // Numbered in the order the walk found the records, and placed where each
+    // record said, which is not that order.
+    let at = |ev: &mut Evaluator, i: usize| {
+        let n = ev.node(&d, &[1, i]).unwrap();
+        (n.offset_bits / 8, n.size_bits / 8)
+    };
+    assert_eq!((at(&mut ev, 0), at(&mut ev, 1), at(&mut ev, 2)), ((14, 3), (10, 2), (18, 1)));
+    // The cursor finds each element where it is, and a byte of the region no
+    // element claims is the region itself.
+    assert_eq!(ev.locate(&d, 15 * 8).unwrap(), vec![1, 0]);
+    assert_eq!(ev.locate(&d, 10 * 8).unwrap(), vec![1, 1]);
+    assert_eq!(ev.locate(&d, 18 * 8).unwrap(), vec![1, 2]);
+    assert_eq!(ev.locate(&d, 12 * 8).unwrap(), vec![1]);
+    // A record is still where it was, and still a record.
+    assert_eq!(ev.locate(&d, 3 * 8).unwrap(), vec![0, 0, 1, 1, 0]);
+    assert_eq!(ev.shape(&d, &[1, 0]).unwrap().placed, Placed::Gathered);
+    // The listing reads the region as the elements and the gaps between them.
+    let spans = ev.spans(&d, 8 * 8, 20 * 8, 100).unwrap();
+    let seen: Vec<(u64, u64, bool)> = spans.iter().map(|s| (s.offset_bits / 8, s.size_bits / 8, s.gap)).collect();
+    assert_eq!(
+        seen,
+        vec![(8, 2, true), (10, 2, false), (12, 2, true), (14, 3, false), (17, 1, true), (18, 1, false), (19, 1, true)]
+    );
+}
+
+#[test]
+fn a_gathered_element_says_which_record_placed_it() {
+    let t = gathered(T::bytes(E::placer(E::field("len"))));
+    let d = doc(&gathered_bytes());
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // The record first, named the way the walk reached it, and then the field
+    // of it the offset was read from.
+    let origins = ev.origins(&d, &[1, 1]).unwrap();
+    let seen: Vec<(Role, &str, &[usize])> = origins.iter().map(|o| (o.role, o.label.as_str(), o.path.as_slice())).collect();
+    assert_eq!(seen[0], (Role::Position, "groups[0].recs[1]", &[0, 0, 1, 1][..]));
+    assert_eq!(seen[1], (Role::Position, "off", &[0, 0, 1, 1, 0][..]));
+    assert_eq!(origins[1].value, "10");
+    // And the length names the record's field too, not a field beside the
+    // element, since the element has none.
+    assert!(origins.iter().any(|o| o.role == Role::Length && o.path == vec![0, 0, 1, 1, 1]), "{origins:?}");
+}
+
+#[test]
+fn a_placer_reads_the_record_that_placed_its_element() {
+    // Each element is a structure asking its record two things: how long its
+    // bytes are, and where the record said it was.
+    let elem = T::structure(
+        "Piece",
+        vec![("bytes", T::bytes(E::placer(E::field("len")))), ("was_at", T::computed(E::placer(E::field("off"))))],
+    );
+    let d = doc(&gathered_bytes());
+    let mut ev = Evaluator::new(Template::new("t", gathered(elem)));
+    assert_eq!(ev.node(&d, &[1, 2, 1]).unwrap().value.as_int(), Some(18));
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().size_bits, 3 * 8);
+    // Asked anywhere that no gather placed, there is no record to ask.
+    let t = T::structure("Root", vec![("n", T::u8()), ("v", T::computed(E::placer(E::field("n"))))]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert!(ev.node(&d, &[1]).is_err());
+}
+
+#[test]
+fn a_gather_finds_a_tagged_list_wherever_it_is_written() {
+    // Two tables, each a number saying what it is and records. Only the
+    // records of table 7 place anything, whichever of the two comes first.
+    let table = T::structure(
+        "Table",
+        vec![("id", T::u8()), ("n", T::u8()), ("recs", T::array(placing(), E::field("n")))],
+    );
+    let from = vec![Step::field("tables"), Step::tagged(&["id"], 7, "sevens"), Step::field("recs"), Step::each()];
+    let t = T::structure(
+        "Root",
+        vec![
+            ("tables", T::array(table, E::lit(2))),
+            ("region", T::sized(E::Remaining, T::gather(from, E::field("off"), Anchor::File, E::lit(0), T::bytes(E::placer(E::field("len")))))),
+        ],
+    );
+    //                  table 3 at 0: one record    table 7 at 4: two records
+    let first_three = [3, 1, 12, 1, 7, 2, 13, 2, 15, 1, 0, 0, 0xee, 0xaa, 0xaa, 0xbb];
+    let first_seven = [7, 2, 13, 2, 15, 1, 3, 1, 12, 1, 0, 0, 0xee, 0xaa, 0xaa, 0xbb];
+    for bytes in [first_three, first_seven] {
+        let d = doc(&bytes);
+        let mut ev = Evaluator::new(Template::new("t", t.clone()));
+        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().offset_bits, 13 * 8);
+        assert_eq!(ev.node(&d, &[1, 1]).unwrap().offset_bits, 15 * 8);
+        // The byte table 3 pointed at belongs to nothing.
+        assert_eq!(ev.locate(&d, 12 * 8).unwrap(), vec![1]);
+        // Named by the step, not by the question it asked.
+        let label = ev.origins(&d, &[1, 1]).unwrap()[0].label.clone();
+        assert_eq!(label, "tables.sevens.recs[1]");
+    }
+}
+
+#[test]
+fn a_record_that_places_nothing_is_passed_over() {
+    // A record holds an offset only when its kind says so. One of kind 1
+    // points outside the region, which is passed over too, and so is an
+    // offset of zero once the gather is told zero means nothing.
+    let rec = T::structure(
+        "Rec",
+        vec![
+            ("kind", T::u8()),
+            ("body", T::switch(E::field("kind"), vec![(1, T::structure("Placed", vec![("off", T::u8())]))], T::bytes(E::lit(1)))),
+        ],
+    );
+    let from = vec![Step::field("recs"), Step::each()];
+    let region = |skip_zero: bool| {
+        let g = T::gather(from.clone(), E::within(&["body", "off"]), Anchor::File, E::lit(0), T::u8());
+        let g = if skip_zero { g.skipping_zero() } else { g };
+        T::structure("Root", vec![("recs", T::array(rec.clone(), E::lit(5))), ("region", T::sized(E::Remaining, g))])
+    };
+    //          no offset   at 11     no offset  outside   at 0
+    let bytes = [0, 9, 1, 11, 2, 9, 1, 99, 1, 0, 0xaa, 0xbb];
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", region(false)));
+    // Zero is a place in the file, though not one inside this region.
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 1);
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().value.as_int(), Some(0xbb));
+    let mut ev = Evaluator::new(Template::new("t", region(true)));
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 1);
+}
+
+/// Forty records, each placing a byte of the region after them, the last
+/// record's first.
+fn many_gathered() -> (T, Vec<u8>) {
+    let from = vec![Step::field("recs"), Step::each()];
+    let t = T::structure(
+        "Root",
+        vec![
+            ("recs", T::array(placing(), E::lit(40))),
+            ("region", T::sized(E::Remaining, T::gather(from, E::field("off"), Anchor::File, E::lit(0), T::bytes(E::placer(E::field("len")))))),
+        ],
+    );
+    let mut b = Vec::new();
+    for i in 0..40u8 {
+        b.extend([80 + 2 * (39 - i), 1]);
+    }
+    b.extend((0..80u8).map(|i| if i % 2 == 0 { i } else { 0 }));
+    (t, b)
+}
+
+#[test]
+fn a_gather_carries_on_across_goes() {
+    let (t, bytes) = many_gathered();
+    let d = doc(&bytes);
+    let mut whole = Evaluator::new(Template::new("t", t.clone()));
+    let want: Vec<u64> = (0..40).map(|i| whole.node(&d, &[1, i]).unwrap().offset_bits).collect();
+    let mut ev = Evaluator::new(Template::new("t", t));
+    ev.set_slice(Some(8));
+    let mut goes = 0;
+    let n = loop {
+        goes += 1;
+        assert!(goes < 50, "the walk is not getting any further");
+        ev.begin_slice();
+        match ev.node(&d, &[1]) {
+            Ok(info) => break info.child_count,
+            Err(EvalError::Busy { .. }) => {}
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    // It did stop part way, and what it found in goes is what it finds in one.
+    assert!(goes > 2, "{goes}");
+    assert_eq!(n, 40);
+    let got: Vec<u64> = (0..40).map(|i| ev.node(&d, &[1, i]).unwrap().offset_bits).collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_whole_window_of_spans_over_a_gather_finishes_in_goes() {
+    // `spans` starts again from the top of its window every go. A walk that
+    // charged for going back over the records the last go reached would spend
+    // each new go doing that, and never reach the end: bug B1, for a list walk.
+    let (t, bytes) = many_gathered();
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    ev.set_slice(Some(8));
+    let mut goes = 0;
+    let spans = loop {
+        goes += 1;
+        assert!(goes < 200, "spans over the gather never settled");
+        ev.begin_slice();
+        match ev.spans(&d, 0, d.len_bits(), 1000) {
+            Ok(spans) => break spans,
+            Err(EvalError::Busy { .. }) => {}
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    let region: Vec<&Span> = spans.iter().filter(|s| s.offset_bits >= 80 * 8).collect();
+    // Forty bytes placed and forty between them, each its own entry.
+    assert_eq!(region.iter().filter(|s| !s.gap).count(), 40);
+    assert_eq!(region.iter().filter(|s| s.gap).count(), 40);
+    assert_eq!(region.first().map(|s| s.path.clone()), Some(vec![1, 39]));
 }
 
 #[test]

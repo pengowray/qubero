@@ -648,9 +648,22 @@ export type Shape = {
   /** `root` the whole file; `first` the first field of what holds it; `follows`
    *  after the field before it; `element` one element of a run; `pointer` a
    *  table of offsets placed it; `chain` the element before it named it;
-   *  `address` an address the file gave; `trace` where a decoder had got to;
-   *  `stream` the front of what a compressed run unpacked to. */
-  readonly placed: "root" | "first" | "follows" | "element" | "pointer" | "chain" | "address" | "trace" | "stream" | "unknown";
+   *  `gathered` a descriptor the template walked to, somewhere else in the
+   *  file, placed it; `address` an address the file gave; `trace` where a
+   *  decoder had got to; `stream` the front of what a compressed run unpacked
+   *  to. */
+  readonly placed:
+    | "root"
+    | "first"
+    | "follows"
+    | "element"
+    | "pointer"
+    | "chain"
+    | "gathered"
+    | "address"
+    | "trace"
+    | "stream"
+    | "unknown";
   /** `type` the type's own width, which the type's name already carries and
    *  which the panel therefore says nothing about; `fixed` a length the format
    *  fixes that the type does not carry, such as 116 bytes of `ascii[]`;

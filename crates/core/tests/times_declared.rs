@@ -54,7 +54,7 @@ fn every_declared_time_is_readable() {
 fn any_time<'a>(ty: &'a Ty, types: &'a HashMap<String, Ty>, seen: &mut HashSet<&'a str>) -> bool {
     match ty {
         Ty::Struct(s) => s.fields.iter().any(|f| f.time.is_some() || any_time(&f.ty, types, seen)),
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => any_time(elem, types, seen),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => any_time(elem, types, seen),
         Ty::PointerList { elem, .. } => any_time(elem, types, seen),
         Ty::Nullable { inner, .. }
         | Ty::At { inner, .. }
@@ -108,7 +108,7 @@ impl<'a> Walk<'a> {
                 }
                 self.scope.pop();
             }
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => self.ty(elem, types),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => self.ty(elem, types),
             Ty::PointerList { elem, .. } => self.ty(elem, types),
             Ty::Nullable { inner, .. }
             | Ty::At { inner, .. }
@@ -174,7 +174,7 @@ fn reads_as_a_number(ty: &Ty) -> bool {
         Ty::Leb128 { .. } | Ty::Vlq | Ty::Zigzag | Ty::SqliteVarint | Ty::EbmlVint { .. } => true,
         Ty::Computed(_) => true,
         // A list of them, which is what a declaration on an array means.
-        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } => reads_as_a_number(elem),
+        Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::Chain { elem, .. } | Ty::Gather { elem, .. } => reads_as_a_number(elem),
         Ty::PointerList { elem, .. } => reads_as_a_number(elem),
         Ty::Nullable { inner, .. }
         | Ty::At { inner, .. }

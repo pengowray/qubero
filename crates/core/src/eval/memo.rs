@@ -131,6 +131,7 @@ impl Memo {
             pointer_starts: None,
             chain_starts: Vec::new(),
             chain_done: false,
+            gather: None,
             seq_end: 0,
         };
         self.lists.get(path).unwrap_or(&NOTHING)
@@ -202,6 +203,10 @@ impl Memo {
             // children some of which have just gone. Both are cheap to redo.
             l.pointer_starts = None;
             l.seq_end = 0;
+            // What a gather found was read from records that may sit after
+            // the edit even when the children do not, and a Parquet footer
+            // sits after every page it places. So the walk starts again.
+            l.gather = None;
             let empty = l.checkpoints.is_empty()
                 && l.walk_at.is_none()
                 && l.repeat_len == 0

@@ -2311,6 +2311,18 @@ export const PROPERTIES = {
       c.index === undefined ? `an element of ${c.parent ?? "its parent"}` : `index ${c.index.toLocaleString()} in ${c.parent ?? "its parent"}`,
     pointer: (c: HowContext): string => (c.field === undefined ? "where an offset table points" : `where ${c.field} points`),
     chain: (c: HowContext): string => (c.field === undefined ? "an element of a linked list" : `linked from ${c.field}`),
+    /**
+     * An element of a list whose every element was placed by a descriptor of
+     * its own: a FITS heap array by the count and offset in some row's cell.
+     * The same shape as `pointer`, so it reads at a glance once that one is
+     * known, with the role noun in front, since the label is a path into the
+     * table (`rows[3].col1[0]`) and on its own reads as a field like any
+     * other. "Descriptor" is the one word for such a record everywhere it
+     * appears: the type column's `descriptors → u8[]` and the formula rows'
+     * `descriptor.count`. The panel names the descriptor itself, the first of
+     * the fields the core names, rather than counting them.
+     */
+    gathered: (c: HowContext): string => (c.field === undefined ? "where a descriptor points" : `where descriptor ${c.field} points`),
     address: fromFields,
     /**
      * A step of a decoder's trace, which is now the fallback rather than the

@@ -65,10 +65,20 @@ impl Evaluator {
         // frame the address was worked out in: `e_shoff` is a field of the
         // header, and reading it from inside the table it places would find
         // nothing of that name.
-        if let Some((_, parent)) = path.split_last() {
-            if let Some(Ty::At { at, .. }) = self.memo.get(parent).map(|r| &r.ty) {
-                let at = at.clone();
-                self.relation(doc, parent, &at, Role::Position, None, &mut out);
+        if let Some((&idx, parent)) = path.split_last() {
+            match self.memo.get(parent).map(|r| r.ty.clone()) {
+                Some(Ty::At { at, .. }) => self.relation(doc, parent, &at, Role::Position, None, &mut out),
+                // The same for a gathered element, against the record that
+                // placed it: `offset` is a field of a descriptor in some row,
+                // and only from there does the name mean anything.
+                Some(Ty::Gather { offset, .. }) => {
+                    if let Ok(record) = self.gathered_record(doc, parent, idx) {
+                        if let Ok((end, frame)) = self.record_frame(doc, &record) {
+                            self.relation(doc, &end, &offset, Role::Position, frame, &mut out);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         if let Some(from) = self.name_from(path) {
@@ -317,6 +327,17 @@ fn write_at(e: &Expr, outer: u32) -> Option<String> {
         Expr::PopCount(n) => format!("set bits in {n}"),
         Expr::Prev(n) => format!("previous {n}"),
         Expr::Sibling(f) | Expr::Within(f) => f.join("."),
+        // A question for another record, so it says whose: the names inside
+        // are that record's fields, and written bare they would read as fields
+        // beside this one. A name or a path reads as a path into the
+        // descriptor, `descriptor.count`; anything longer is bracketed whole,
+        // since qualifying only its first name would claim the rest were
+        // fields beside this one.
+        Expr::Placer(e) => match &**e {
+            Expr::Ref(n) => format!("descriptor.{n}"),
+            Expr::Within(f) => format!("descriptor.{}", f.join(".")),
+            other => format!("descriptor.({})", write_at(other, 0)?),
+        },
         // The list, the question asked of each element, and what is read from
         // the one that answers. A search over the elements before this one has
         // no field to name, so it is named for what it searches: `earlier`.
@@ -377,6 +398,19 @@ mod tests {
         // to be reached by.
         let earlier = E::sibling_tagged(&["class_num"], E::field("class"), &["name"]);
         assert_eq!(write_expr(&earlier).as_deref(), Some("earlier[class_num = class].name"));
+    }
+
+    #[test]
+    fn a_question_for_the_descriptor_says_whose_fields_it_names() {
+        let count = E::placer(E::field("count"));
+        assert_eq!(write_expr(&count).as_deref(), Some("descriptor.count"));
+        // Inside something larger it is still one term.
+        let at_most = count.at_most(E::Remaining);
+        assert_eq!(write_expr(&at_most).as_deref(), Some("min(descriptor.count, remaining)"));
+        // And a longer question is bracketed whole, so the second name is not
+        // read as a field beside the element.
+        let product = E::placer(E::field("count").mul(E::field("width")));
+        assert_eq!(write_expr(&product).as_deref(), Some("descriptor.(count * width)"));
     }
 
     #[test]
