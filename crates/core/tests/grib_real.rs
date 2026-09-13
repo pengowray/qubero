@@ -552,8 +552,8 @@ fn a_simply_packed_value_agrees_with_the_panel() {
 /// that does, out of a real one: `regular_ll_complex.grib2` unpacked by the
 /// side reader, whose values ecCodes agrees with, and packed again as simple
 /// packing with the same reference value and scale factors, every packed
-/// number whole and eleven bits wide. The template then has to land on the
-/// values ecCodes read from the original.
+/// number whole and as many bits wide as the widest of them needs. The
+/// template then has to land on the values ecCodes read from the original.
 #[test]
 fn a_real_field_packed_again_simply_is_worth_what_eccodes_read() {
     use qubero_core::eval::Value;
