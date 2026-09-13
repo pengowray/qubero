@@ -7,10 +7,13 @@
 //! `bgzf_boundaries3.bam` cut a record across two blocks and across
 //! seventeen. The records the side reader finds were checked field by field
 //! against bamnostic 1.3 (pysam does not build on Windows); the counts, names
-//! and one whole record are pinned here.
+//! and one whole record are pinned here. The template reads every record out
+//! of the blocks joined, and is checked against the side reader record by
+//! record.
 //!
 //! Two BAIs, checked against bamnostic and against the records their BAMs
-//! hold, and two CSIs, which are BGZF files and read inside their block.
+//! hold, and two CSIs, which are BGZF files and read out of their joined
+//! stream.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -50,9 +53,9 @@ fn at(ev: &mut Evaluator, d: &Document<MemSource>, from: &[usize], names: &[&str
     p
 }
 
-/// What block `i` unpacks to, as the template reads it.
-fn payload(ev: &mut Evaluator, d: &Document<MemSource>, i: usize) -> Vec<usize> {
-    [at(ev, d, &[0, i], &["compressed"]), vec![0]].concat()
+/// What the blocks join to, as the template reads it.
+fn stream(ev: &mut Evaluator, d: &Document<MemSource>) -> Vec<usize> {
+    [at(ev, d, &[], &["stream"]), vec![0]].concat()
 }
 
 fn blocks(ev: &mut Evaluator, d: &Document<MemSource>) -> Vec<Block> {
@@ -97,24 +100,31 @@ fn every_block_is_as_long_as_its_bc_number_and_checks_out() {
     }
 }
 
+/// `range.bam` keeps its header in the first block and its 112 records in the
+/// second, and every one of them is a field of the joined stream. The last one
+/// ends where the stream does.
 #[test]
-fn the_first_block_reads_the_header_and_the_records_that_fit() {
+fn every_record_of_range_bam_is_a_field() {
     let (d, mut ev) = skip_without!(read("range.bam", "bgzf"));
-    let p = payload(&mut ev, &d, 0);
+    let p = stream(&mut ev, &d);
     assert_eq!(ev.node(&d, &p).unwrap().type_name, "Bam");
     let n_ref = at(&mut ev, &d, &p, &["n_ref"]);
     assert_eq!(ev.node(&d, &n_ref).unwrap().value.as_int(), Some(7));
     let refs = at(&mut ev, &d, &p, &["references"]);
     let name = at(&mut ev, &d, &[refs.clone(), vec![6]].concat(), &["name"]);
     assert_eq!(ev.node(&d, &name).unwrap().value, Value::Str("CHROMOSOME_MtDNA".into()));
-    // htslib ends the block where the header ends, so no record is in it.
     let records = at(&mut ev, &d, &p, &["records"]);
-    assert_eq!(ev.node(&d, &records).unwrap().child_count, 0);
+    assert_eq!(ev.node(&d, &records).unwrap().child_count, 112);
+    let last = [records.clone(), vec![111]].concat();
+    let name = at(&mut ev, &d, &last, &["read_name"]);
+    assert_eq!(ev.node(&d, &name).unwrap().value, Value::Str("HS18_09653:4:2302:14941:52811".into()));
+    let (node, whole) = (ev.node(&d, &last).unwrap(), ev.node(&d, &p).unwrap());
+    assert_eq!(node.offset_bits + node.size_bits, whole.size_bits);
 
     // A file written another way keeps all six of its records in the first
-    // block, and they read as fields.
+    // block, and they read as fields just the same.
     let (d, mut ev) = skip_without!(read("no_hdr_sq_1.bam", "bgzf"));
-    let p = payload(&mut ev, &d, 0);
+    let p = stream(&mut ev, &d);
     let records = at(&mut ev, &d, &p, &["records"]);
     assert_eq!(ev.node(&d, &records).unwrap().child_count, 6);
     let cigar = at(&mut ev, &d, &[records, vec![1]].concat(), &["cigar"]);
@@ -122,22 +132,24 @@ fn the_first_block_reads_the_header_and_the_records_that_fit() {
 }
 
 /// `mpileup.1.bam` writes 119,396 bytes of header text, and its first block
-/// unpacks to 65,280 bytes. The text is read as far as the block goes, the
-/// reference count is not taken from the middle of the text, and the next
-/// block, which is the rest of the text, reads as text.
+/// unpacks to 65,280 bytes. Joined, the text is as long as `l_text` says, and
+/// the 86 references after it are read from the second block.
 #[test]
-fn a_header_longer_than_a_block_is_read_as_far_as_the_block_goes() {
+fn mpileup_header_reads_past_its_first_block() {
     let (d, mut ev) = skip_without!(read("mpileup.1.bam", "bgzf"));
-    let p = payload(&mut ev, &d, 0);
+    let p = stream(&mut ev, &d);
     let l_text = at(&mut ev, &d, &p, &["l_text"]);
     assert_eq!(ev.node(&d, &l_text).unwrap().value.as_int(), Some(119_396));
     let text = at(&mut ev, &d, &p, &["text"]);
-    assert_eq!(ev.node(&d, &text).unwrap().size_bits, (65_280 - 8) * 8);
+    assert_eq!(ev.node(&d, &text).unwrap().size_bits, 119_396 * 8);
     let n_ref = at(&mut ev, &d, &p, &["n_ref"]);
-    assert_eq!(ev.node(&d, &n_ref).unwrap().size_bits, 0);
-    let next = payload(&mut ev, &d, 1);
-    let text = at(&mut ev, &d, &next, &["text"]);
-    assert!(matches!(ev.node(&d, &text).unwrap().value, Value::Str(s) if s.starts_with("ariate\n@PG")));
+    assert_eq!(ev.node(&d, &n_ref).unwrap().value.as_int(), Some(86));
+    let refs = at(&mut ev, &d, &p, &["references"]);
+    let name = at(&mut ev, &d, &[refs, vec![16]].concat(), &["name"]);
+    assert_eq!(ev.node(&d, &name).unwrap().value, Value::Str("17".into()));
+    let records = at(&mut ev, &d, &p, &["records"]);
+    let first = at(&mut ev, &d, &[records, vec![0]].concat(), &["read_name"]);
+    assert_eq!(ev.node(&d, &first).unwrap().value, Value::Str("ERR013140.3521432".into()));
 
     // The side reader follows the header into the second block and finds no
     // record in either; the first records are in the third.
@@ -186,6 +198,97 @@ fn a_record_cut_across_seventeen_blocks_is_read_from_the_block_it_starts_in() {
     assert_eq!(found[1].records.len(), 1);
     assert_eq!(found[1].records[0].blocks, 2);
     assert_eq!(found[2].carried, found[2].decoded_bytes);
+}
+
+/// The same record, read by the template: one field of the joined stream,
+/// whole, from seventeen blocks, with the fields bamnostic reads.
+#[test]
+fn a_record_cut_across_seventeen_blocks_reads_whole() {
+    let (d, mut ev) = skip_without!(read("bgzf_boundaries3.bam", "bgzf"));
+    let p = stream(&mut ev, &d);
+    let records = at(&mut ev, &d, &p, &["records"]);
+    assert_eq!(ev.node(&d, &records).unwrap().child_count, 1);
+    let r = [records, vec![0]].concat();
+    let name = at(&mut ev, &d, &r, &["read_name"]);
+    assert_eq!(ev.node(&d, &name).unwrap().value, Value::Str("SRR065390.14978392".into()));
+    assert_eq!(int(&mut ev, &d, &r, &["pos"]), 1);
+    assert_eq!(int(&mut ev, &d, &r, &["bin"]), 4681);
+    let cigar = at(&mut ev, &d, &r, &["cigar"]);
+    assert_eq!(ev.node(&d, &cigar).unwrap().child_count, 3);
+    assert_eq!(int(&mut ev, &d, &[cigar, vec![1]].concat(), &["op_len"]), 1);
+    let tags = at(&mut ev, &d, &r, &["tags"]);
+    assert_eq!(ev.node(&d, &tags).unwrap().child_count, 7);
+    let yt = at(&mut ev, &d, &[tags, vec![6]].concat(), &["value"]);
+    assert_eq!(ev.node(&d, &yt).unwrap().value, Value::Str("UU".into()));
+}
+
+/// Every record of every BAM here, read by the template out of the joined
+/// stream and by the side reader walking the blocks with no template at all,
+/// agrees field by field. The side reader was checked against bamnostic, so
+/// this ties the template to it without a Python in the loop.
+///
+/// Both halves of a record are compared: the fields the template places, and
+/// the record's bytes as the template's field covers them, decoded the side
+/// reader's way. The first says the fields are in the right places; the
+/// second says the join put the right bytes under them.
+#[test]
+fn the_template_and_the_side_reader_agree_on_every_record() {
+    use qubero_core::formats::bam_records::decode_record;
+    for name in ["range.bam", "mpileup.1.bam", "no_hdr_sq_1.bam", "bgzf_boundaries1.bam", "bgzf_boundaries3.bam"] {
+        let (d, mut ev) = skip_without!(read(name, "bgzf"));
+        let oracle: Vec<_> = blocks(&mut ev, &d).into_iter().flat_map(|b| b.records).collect();
+        let p = stream(&mut ev, &d);
+        let records = at(&mut ev, &d, &p, &["records"]);
+        assert_eq!(ev.node(&d, &records).unwrap().child_count as usize, oracle.len(), "{name}");
+        for (i, want) in oracle.iter().enumerate() {
+            let r = [records.clone(), vec![i]].concat();
+            let fixed = [
+                ("refID", want.ref_id as i128),
+                ("pos", want.pos as i128),
+                ("mapq", want.mapq as i128),
+                ("bin", want.bin as i128),
+                ("flag", want.flag as i128),
+                ("l_seq", want.l_seq as i128),
+                ("next_refID", want.next_ref_id as i128),
+                ("next_pos", want.next_pos as i128),
+                ("tlen", want.tlen as i128),
+            ];
+            for (field, value) in fixed {
+                assert_eq!(int(&mut ev, &d, &r, &[field]), value, "{name} record {i} {field}");
+            }
+            let read_name = at(&mut ev, &d, &r, &["read_name"]);
+            let read_name = ev.node(&d, &read_name).unwrap().value;
+            assert_eq!(read_name, Value::Str(want.read_name.clone()), "{name} record {i}");
+            let cigar = at(&mut ev, &d, &r, &["cigar"]);
+            let mut written = String::new();
+            for k in 0..ev.node(&d, &cigar).unwrap().child_count as usize {
+                let op = [cigar.clone(), vec![k]].concat();
+                let len = int(&mut ev, &d, &op, &["op_len"]);
+                let code = int(&mut ev, &d, &op, &["op"]) as usize;
+                written.push_str(&format!("{len}{}", b"MIDNSHP=X"[code] as char));
+            }
+            assert_eq!(if written.is_empty() { "*".to_string() } else { written }, want.cigar, "{name} record {i}");
+            let qual = at(&mut ev, &d, &r, &["qual"]);
+            assert_eq!(ev.field_bytes(&d, &qual, 1 << 20).unwrap().0, want.qual, "{name} record {i}");
+            let tags = at(&mut ev, &d, &r, &["tags"]);
+            let mut letters: Vec<String> = Vec::new();
+            for k in 0..ev.node(&d, &tags).unwrap().child_count as usize {
+                let tag = at(&mut ev, &d, &[tags.clone(), vec![k]].concat(), &["tag"]);
+                match ev.node(&d, &tag).unwrap().value {
+                    Value::Str(s) => letters.push(s),
+                    other => panic!("{name} record {i}: a tag's letters are {other:?}"),
+                }
+            }
+            assert_eq!(letters, want.tags.iter().map(|t| t.tag.clone()).collect::<Vec<_>>(), "{name} record {i}");
+            // And the bytes: the whole record as the template's field covers
+            // it, decoded the way the side reader decodes one.
+            let (bytes, cut) = ev.field_bytes(&d, &r, 1 << 20).unwrap();
+            assert!(!cut);
+            let mut again = decode_record(&bytes[4..]);
+            (again.block_offset, again.in_block, again.blocks) = (want.block_offset, want.in_block, want.blocks);
+            assert_eq!(&again, want, "{name} record {i}");
+        }
+    }
 }
 
 /// Every record the side reader finds, over every block, against the count
@@ -304,7 +407,7 @@ fn every_offset_a_bai_gives_is_where_a_record_starts() {
 #[test]
 fn a_csi_reads_inside_its_bgzf_block() {
     let (d, mut ev) = skip_without!(read("no_hdr_sq_1.bam.csi", "bgzf"));
-    let p = payload(&mut ev, &d, 0);
+    let p = stream(&mut ev, &d);
     assert_eq!(ev.node(&d, &p).unwrap().type_name, "Csi");
     assert_eq!((int(&mut ev, &d, &p, &["min_shift"]), int(&mut ev, &d, &p, &["depth"])), (14, 2));
     let refs = at(&mut ev, &d, &p, &["references"]);
@@ -324,7 +427,7 @@ fn a_csi_reads_inside_its_bgzf_block() {
     assert_eq!(int(&mut ev, &d, &p, &["n_no_coor"]), 0);
 
     let (d, mut ev) = skip_without!(read("index.bam.csi", "bgzf"));
-    let p = payload(&mut ev, &d, 0);
+    let p = stream(&mut ev, &d);
     let refs = at(&mut ev, &d, &p, &["references"]);
     let bins_per_ref: Vec<u64> = (0..7)
         .map(|i| {

@@ -34,7 +34,7 @@ mod aiff;
 mod ar;
 mod aseprite;
 mod assimp;
-mod bam;
+pub(crate) mod bam;
 pub mod bam_records;
 mod appledouble;
 mod au;

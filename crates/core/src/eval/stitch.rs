@@ -454,6 +454,220 @@ mod tests {
         assert!(e.node(&d, &[PAGES, 0, 0]).unwrap().space == 0);
     }
 
+    /// A BGZF file of `pieces`, one block each, and the block every BGZF file
+    /// ends with.
+    fn bgzf_of(pieces: &[&[u8]]) -> Vec<u8> {
+        use crate::formats::bam::tests::{bgzf_block, EOF_BLOCK};
+        let mut file: Vec<u8> = pieces.iter().flat_map(|p| bgzf_block(p)).collect();
+        file.extend_from_slice(&EOF_BLOCK);
+        file
+    }
+
+    /// The joined stream of a `bgzf` reading, and its space.
+    const JOINED: [usize; 2] = [1, 0];
+
+    fn stitch_of(e: &Evaluator, space: u32) -> &super::Stitch {
+        e.spaces.stitch(space).expect("a stitched space")
+    }
+
+    #[test]
+    fn blocks_of_one_stream_read_as_the_stream() {
+        let text = b"one line of a vcf\nand another that the writer cut\nand a third\n";
+        let d = Document::new(MemSource(bgzf_of(&[&text[..20], &text[20..41], &text[41..]])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let node = e.node(&d, &JOINED).unwrap();
+        assert_eq!(node.size_bits, text.len() as u64 * 8);
+        assert_eq!(e.field_bytes(&d, &JOINED, 1024).unwrap().0, text);
+        let stitch = stitch_of(&e, node.space);
+        // Three blocks and the end block, which joins nothing on.
+        let end = text.len() as u64;
+        assert_eq!(stitch.parts.iter().map(|p| (p.start, p.len)).collect::<Vec<_>>(), [(0, 20), (20, 21), (41, end - 41), (end, 0)]);
+    }
+
+    #[test]
+    fn a_member_is_measured_from_its_trailer_and_not_inflated() {
+        let pieces: Vec<Vec<u8>> = (0..5).map(|i| vec![b'a' + i; 3000]).collect();
+        let d = Document::new(MemSource(bgzf_of(&pieces.iter().map(|p| p.as_slice()).collect::<Vec<_>>())));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        // Opening the stream is enough to know how long it is, and nothing is
+        // unpacked to find out: no block's run is open and the cache is empty.
+        assert_eq!(e.node(&d, &[1]).unwrap().child_count, 1);
+        let space = match e.spaces.get(&[1]) {
+            Some(super::Opened::Space(id)) => id,
+            other => panic!("the stream did not open: {other:?}"),
+        };
+        assert_eq!(e.spaces.len_bits(space), 15000 * 8);
+        for part in &stitch_of(&e, space).parts {
+            assert_eq!(e.spaces.get(&part.path), None, "block run {:?} was opened", part.path);
+        }
+        assert_eq!(stitch_of(&e, space).cache.borrow().peak, 0);
+        // A read in the fourth block unpacks that block and no other.
+        assert_eq!(e.read_in(&d, space, 9500 * 8, 8).unwrap(), [b'd']);
+        assert_eq!(stitch_of(&e, space).cache.borrow().held(), (vec![3], 3000));
+    }
+
+    /// A BAM of a header block and two blocks of records, the second of which
+    /// is changed by `spoil` after it is written.
+    fn bam_in_blocks(spoil: impl Fn(&mut Vec<u8>)) -> Vec<u8> {
+        use crate::formats::bam::tests::{bam_header, bgzf_block, two_records, EOF_BLOCK};
+        let (odd, even) = two_records();
+        let mut file = bgzf_block(&bam_header("@HD\tVN:1.6\n", &[("chr1", 1000)]));
+        let records = [odd.as_slice(), even.as_slice()].concat();
+        file.extend_from_slice(&bgzf_block(&records));
+        let mut last = bgzf_block(&records);
+        spoil(&mut last);
+        file.extend_from_slice(&last);
+        file.extend_from_slice(&EOF_BLOCK);
+        file
+    }
+
+    /// The records of the joined stream, and the evaluator reading it.
+    fn records_of(d: &Document<MemSource>) -> (Evaluator, Vec<usize>) {
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let records = e.child_named(d, &JOINED, "records").unwrap().expect("a BAM");
+        (e, records)
+    }
+
+    #[test]
+    fn a_part_that_will_not_unpack_ends_the_stream_there_and_says_which() {
+        // The first byte of the last block's deflate, made a block type that
+        // does not exist.
+        let file = bam_in_blocks(|b| b[18] = 0xff);
+        let d = Document::new(MemSource(file));
+        let (mut e, records) = records_of(&d);
+        // The two records of the good block read, and the run stops where the
+        // bad block begins, saying which part it was.
+        assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
+        let why = e.list(&records).repeat_trouble.clone().expect("the run says why it stopped");
+        assert!(why.contains("part 2 would not unpack"), "{why}");
+        // The blocks themselves are still what they are.
+        assert_eq!(e.node(&d, &[0]).unwrap().child_count, 4);
+    }
+
+    #[test]
+    fn a_part_that_comes_to_another_length_than_claimed_is_refused() {
+        // The last block's trailer claims five bytes more than it unpacks to.
+        let file = bam_in_blocks(|b| {
+            let at = b.len() - 4;
+            let size = u32::from_le_bytes(b[at..].try_into().unwrap()) + 5;
+            b[at..].copy_from_slice(&size.to_le_bytes());
+        });
+        let d = Document::new(MemSource(file));
+        let (mut e, records) = records_of(&d);
+        assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
+        let why = e.list(&records).repeat_trouble.clone().expect("the run says why it stopped");
+        assert!(why.contains("part 2 unpacks to") && why.contains("not the"), "{why}");
+    }
+
+    #[test]
+    fn parts_inflate_when_read_and_go_when_the_cache_is_full() {
+        let pieces: Vec<Vec<u8>> = (0..4).map(|i| vec![b'a' + i; 1000]).collect();
+        let d = Document::new(MemSource(bgzf_of(&pieces.iter().map(|p| p.as_slice()).collect::<Vec<_>>())));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        // Room for two blocks and a half.
+        e.spaces.set_cache_cap(2500);
+        let space = e.node(&d, &JOINED).unwrap().space;
+        let byte = |e: &Evaluator, part: u64| e.read_in(&d, space, (part * 1000 + 7) * 8, 8).unwrap()[0];
+        let held = |e: &Evaluator| {
+            let (mut parts, bytes) = stitch_of(e, space).cache.borrow().held();
+            parts.sort();
+            (parts, bytes)
+        };
+        assert_eq!(byte(&e, 0), b'a');
+        assert_eq!(byte(&e, 1), b'b');
+        assert_eq!(held(&e), (vec![0, 1], 2000));
+        // A third goes past the cap, and the part read longest ago makes room.
+        assert_eq!(byte(&e, 2), b'c');
+        assert_eq!(held(&e), (vec![1, 2], 2000));
+        // Reading part 1 again makes part 2 the oldest, so part 0 coming back
+        // puts part 2 out.
+        assert_eq!(byte(&e, 1), b'b');
+        assert_eq!(byte(&e, 0), b'a');
+        assert_eq!(held(&e), (vec![0, 1], 2000));
+        assert_eq!(stitch_of(&e, space).cache.borrow().peak, 2000);
+        // A read across the edge of two parts takes a byte of each.
+        assert_eq!(e.read_in(&d, space, 2999 * 8, 16).unwrap(), [b'c', b'd']);
+    }
+
+    #[test]
+    fn a_walk_that_runs_out_carries_on_from_the_part_it_stood_on() {
+        let pieces: Vec<Vec<u8>> = (0..60).map(|i| vec![i as u8; 100]).collect();
+        let d = Document::new(MemSource(bgzf_of(&pieces.iter().map(|p| p.as_slice()).collect::<Vec<_>>())));
+        let parts = |e: &Evaluator| {
+            let Some(super::Opened::Space(id)) = e.spaces.get(&[1]) else { panic!("not open") };
+            stitch_of(e, id).parts.iter().map(|p| (p.start, p.len, p.path.clone())).collect::<Vec<_>>()
+        };
+        let mut whole = Evaluator::new(crate::formats::bgzf());
+        whole.node(&d, &[1]).unwrap();
+
+        // Ten elements a go. A walk that went back over the parts an earlier
+        // go had found would never get further than ten of the sixty-one.
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        e.set_slice(Some(10));
+        let mut goes = 0;
+        loop {
+            e.begin_slice();
+            match e.node(&d, &[1]) {
+                Ok(_) => break,
+                Err(crate::eval::EvalError::Busy { .. }) => goes += 1,
+                Err(other) => panic!("{other:?}"),
+            }
+            assert!(goes < 40, "the walk is not getting anywhere");
+        }
+        assert!(goes >= 6, "sixty-one parts in goes of ten took {goes} goes");
+        assert_eq!(parts(&e), parts(&whole));
+    }
+
+    /// The memory a long stream costs, which is the point of reading it a part
+    /// at a time: the last record of three hundred blocks read with the cache
+    /// capped at four blocks' worth, and never more than that held.
+    #[test]
+    fn the_last_record_of_a_long_stream_is_read_with_at_most_the_cap_unpacked() {
+        use crate::formats::bam::tests::{bam_header, bgzf_block, record_bytes, Rec, EOF_BLOCK};
+        const BLOCKS: usize = 300;
+        const PER_BLOCK: usize = 40;
+        let mut file = bgzf_block(&bam_header("@HD\tVN:1.6\n", &[("chr1", 1_000_000)]));
+        let (mut unpacked, mut block_bytes) = (0usize, 0usize);
+        let mut last_name = String::new();
+        for b in 0..BLOCKS {
+            let mut data = Vec::new();
+            for r in 0..PER_BLOCK {
+                last_name = format!("read{b}.{r}");
+                let rec = Rec {
+                    name: &last_name,
+                    ref_id: 0,
+                    pos: (b * PER_BLOCK + r) as i32,
+                    mapq: 60,
+                    flag: 0,
+                    cigar: &[(50, b'M')],
+                    seq: &"ACGT".repeat(13)[..50],
+                    qual: &[30; 50],
+                    tags: b"NMC\x01",
+                };
+                data.extend_from_slice(&record_bytes(&rec));
+            }
+            block_bytes = block_bytes.max(data.len());
+            unpacked += data.len();
+            file.extend_from_slice(&bgzf_block(&data));
+        }
+        file.extend_from_slice(&EOF_BLOCK);
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let cap = 4 * block_bytes;
+        e.spaces.set_cache_cap(cap);
+        let records = e.child_named(&d, &JOINED, "records").unwrap().unwrap();
+        let n = e.node(&d, &records).unwrap().child_count as usize;
+        assert_eq!(n, BLOCKS * PER_BLOCK);
+        let name = e.child_named(&d, &[records.clone(), vec![n - 1]].concat(), "read_name").unwrap().unwrap();
+        assert_eq!(e.node(&d, &name).unwrap().value, Value::Str(last_name));
+        let space = e.node(&d, &records).unwrap().space;
+        let peak = stitch_of(&e, space).cache.borrow().peak;
+        eprintln!("{unpacked} bytes unpacked across {BLOCKS} blocks of at most {block_bytes}; cap {cap}, most held at once {peak}");
+        assert!(peak <= cap, "held {peak} bytes with a cap of {cap}");
+        assert!(peak >= block_bytes, "nothing was held at all");
+        assert!(unpacked > 50 * cap, "the stream is not long enough for the cap to be what bounds it");
+    }
+
     #[test]
     fn an_edit_to_the_file_closes_a_stitched_space() {
         let mut d = Document::new(MemSource(file(20)));

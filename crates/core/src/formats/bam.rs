@@ -19,26 +19,24 @@
 //! the blocks were cut. A record can start near the end of one block and
 //! finish in the next, and a long header can fill several.
 //!
-//! That is the one thing the template cannot follow. Each block opens as a
-//! space of its own, and no space is the blocks joined together (see
-//! `eval/space.rs`: one `Decoded` node, one buffer), so a field has nowhere to
-//! stand that covers bytes of two blocks. What the template does read is what
-//! lies inside the first block: the header, the references, and every record
-//! that fits whole, with whatever is left at the end of the block read as the
-//! start of something that continues. That is the whole header in nearly
-//! every file, since htslib ends a block where the header ends. The records in
-//! later blocks are read by [`super::bam_records`], which inflates from the
-//! front of the file and walks the record lengths to find the records that
-//! start in a given block.
+//! So the stream is read joined. After the blocks comes `stream`, a
+//! [`Ty::Stitched`](crate::template::Ty::Stitched) over every block's
+//! compressed run in order, each part as long as the block's `original_size`
+//! says, which is what lets the whole stream be measured from the blocks'
+//! headers and trailers without inflating one. What it holds is read by its
+//! first four bytes: a BAM, a CSI index, or text for anything else, so a
+//! `.vcf.gz` shows its lines. Every record of a BAM is a field, wherever the
+//! blocks were cut, and a block is unpacked only when a record in it is read.
 //!
-//! htslib also ends a block before a record that would not fit in it, so a
-//! BAM it wrote has no record crossing blocks unless the record is longer
-//! than a block. Other writers cut wherever 64 KB falls, and htslib's own
-//! `bgzf_boundaries` test files do it on purpose.
+//! htslib ends a block before a record that would not fit in it, so a BAM it
+//! wrote has no record crossing blocks unless the record is longer than a
+//! block. Other writers cut wherever 64 KB falls, and htslib's own
+//! `bgzf_boundaries` test files do it on purpose. [`super::bam_records`] reads
+//! the same records by walking the stream from the front with no template at
+//! all, and is kept as the reading the template is checked against.
 //!
-//! An uncompressed BAM stream, which is what the blocks unpack to when joined,
-//! opens as `bam` and reads every record as fields, because there the stream
-//! is one run.
+//! An uncompressed BAM stream opens as `bam` and reads the same fields, over
+//! the file rather than over a joined stream.
 //!
 //! **BAI** is the index beside a BAM: for each reference, the bins of the
 //! binning scheme with the runs of records in each, and a linear index of the
@@ -52,7 +50,7 @@
 //! The SAM/BAM specification (samtools/hts-specs, `SAMv1.tex` and
 //! `CSIv1.tex`) is what this follows.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Until, Ty as T};
+use crate::template::{Encoding, Endian::*, Expr as E, Step, StrLen, Template, Until, Ty as T};
 
 /// The subfield identifier BGZF writes into every member's extra field.
 const BC: &[u8; 2] = b"BC";
@@ -65,7 +63,26 @@ const BC: &[u8; 2] = b"BC";
 const BSIZE_AT: i128 = 16;
 
 pub fn bgzf() -> Template {
-    Template::new("bgzf", T::structure("BGZF", vec![("blocks", T::repeat(block(), Until::End))]))
+    Template::new(
+        "bgzf",
+        T::structure(
+            "BGZF",
+            vec![
+                ("blocks", T::repeat(block(), Until::End)),
+                // Every block's compressed run, joined in order into the one
+                // stream they were cut from, each as long as its trailer says.
+                (
+                    "stream",
+                    T::stitched(
+                        vec![Step::field("blocks"), Step::each(), Step::field("compressed")],
+                        Some(E::field("original_size")),
+                        None,
+                        stream_contents(),
+                    ),
+                ),
+            ],
+        ),
+    )
 }
 
 /// One block: a gzip member, as long as its `BC` number says.
@@ -84,9 +101,12 @@ fn block() -> T {
         .both(peek16(BSIZE_AT - 4, Big).equal_to(E::lit(u16::from_be_bytes(*BC) as i128)))
         .both(peek16(BSIZE_AT - 2, Little).equal_to(E::lit(2)));
     let size = E::cond(is_bc, peek16(BSIZE_AT, Little).add(E::lit(1)), E::Remaining);
-    // Marked as a packing so that the records starting in the block, which
-    // no field can hold, can be found from the block under the cursor.
-    let member = super::gzip::member("BgzfBlock", extra(), payload()).packed_as(super::bam_records::PACKING);
+    // What one block unpacks to is a cut through the middle of the stream,
+    // and reads as nothing in particular: the stream is read joined, below
+    // the blocks. Still marked as a packing, so the records that start in the
+    // block under the cursor can be found from it.
+    let member =
+        super::gzip::member("BgzfBlock", extra(), T::bytes(E::Remaining)).packed_as(super::bam_records::PACKING);
     T::sized(size, member.counted_as("block"))
 }
 
@@ -122,38 +142,19 @@ fn extra() -> T {
     )
 }
 
-/// What a block unpacks to.
+/// What the joined stream holds, by its first four bytes: a BAM, a CSI index,
+/// or text, which is what a `.vcf.gz` or a `.bed.gz` is.
 ///
-/// The first block of a BAM opens as the start of its stream, which is where
-/// the header is, and the first block of a CSI as the index. Only the first:
-/// a later block that happened to unpack to the same four bytes is in the
-/// middle of somebody's read. Anything else is read as text, so a `.vcf.gz`
-/// shows its lines, and the later blocks of a BAM read as text that is not
-/// valid, with the note that says so.
-///
-/// Those later blocks cannot be told they belong to a BAM. The one expression
-/// that reaches back into earlier elements of the same list, `Expr::Sibling`,
-/// searches every block before this one, and each of those would be inflated
-/// to be searched; the block asking about the first block by index has no
-/// name to ask it by.
-///
-/// The peek is guarded because the last block of every BGZF file unpacks to
-/// nothing, and four bytes cannot be looked at in none.
-fn payload() -> T {
-    let first_with_room = E::idx().equal_to(E::lit(0)).both(E::lit(3).less_than(E::Remaining));
+/// The peek is guarded because a BGZF file of nothing but its end block joins
+/// to no bytes at all, and four cannot be looked at in none.
+fn stream_contents() -> T {
     let magic = |m: &[u8]| u32::from_be_bytes(m.try_into().expect("four bytes")) as i128;
-    T::switch(
-        first_with_room,
-        vec![(
-            1,
-            T::switch(
-                E::peek(32, Big),
-                vec![(magic(BAM_MAGIC), bam_stream()), (magic(CSI_MAGIC), csi_stream())],
-                super::decoded_text(),
-            ),
-        )],
+    let by_magic = T::switch(
+        E::peek(32, Big),
+        vec![(magic(BAM_MAGIC), bam_stream()), (magic(CSI_MAGIC), csi_stream())],
         super::decoded_text(),
-    )
+    );
+    T::switch(E::lit(3).less_than(E::Remaining), vec![(1, by_magic)], super::decoded_text())
 }
 
 /// What a BAM stream opens with.
@@ -164,14 +165,11 @@ pub fn bam() -> Template {
     Template::new("bam", bam_stream())
 }
 
-/// A BAM stream from its first byte, read as far as its window reaches.
+/// A BAM stream from its first byte: the header text, the references, and
+/// every record to the end.
 ///
-/// Every field after the text asks whether there is room for it, because the
-/// window is often one block and a header may not fit in one. `mpileup.1.bam`
-/// in samtools' tests writes 119 KB of header text and its first block holds
-/// 64 KB of it, so there the text is cut short and nothing follows it. The
-/// references are read one at a time for the same reason, and stop at the
-/// count or at the end of the window, whichever comes first.
+/// `mpileup.1.bam` in samtools' tests writes 119 KB of header text, which is
+/// most of two blocks; joined, it is one field like any other.
 fn bam_stream() -> T {
     T::structure(
         "Bam",
@@ -180,43 +178,12 @@ fn bam_stream() -> T {
             // How long the header text is, which may include NUL padding after
             // it: some writers leave room to rewrite the header in place.
             ("l_text", T::u32(Little)),
-            ("text", T::text(StrLen::Fixed(min(E::field("l_text"), E::Remaining)), Encoding::Utf8)),
-            ("n_ref", T::if_room(T::u32(Little))),
-            (
-                "references",
-                T::when(
-                    E::field("n_ref").greater_than(E::lit(0)),
-                    T::repeat(
-                        whole_or_cut(reference(), E::peek(32, Little).add(E::lit(8))),
-                        Until::Cond(E::idx().add(E::lit(1)).greater_or_equal(E::field("n_ref"))),
-                    ),
-                ),
-            ),
-            ("records", T::repeat(whole_or_cut(record(), E::peek(32, Little).add(E::lit(4))), Until::End)),
+            ("text", T::text(StrLen::Fixed(E::field("l_text")), Encoding::Utf8)),
+            ("n_ref", T::u32(Little)),
+            ("references", T::array(reference(), E::field("n_ref"))),
+            ("records", T::repeat(record(), Until::End)),
         ],
     )
-}
-
-/// The smaller of two numbers.
-fn min(a: E, b: E) -> E {
-    E::Min(Box::new(a), Box::new(b))
-}
-
-/// `whole` where the window still holds all `size` bytes of it, which is
-/// worked out from a length at its front, and otherwise the bytes that are
-/// left, read as the start of something the next block finishes.
-///
-/// Four bytes are needed to read the length at all, so a window with fewer
-/// left is cut short without looking.
-fn whole_or_cut(whole: T, size: E) -> T {
-    let fits = E::lit(3).less_than(E::Remaining).both(size.less_or_equal(E::Remaining));
-    T::switch(fits, vec![(1, whole)], continued())
-}
-
-/// The last bytes of a block, where what they start carries on into the next
-/// block and is not read here.
-fn continued() -> T {
-    T::structure("ContinuesInNextBlock", vec![("bytes", T::bytes(E::Remaining))])
 }
 
 /// One reference sequence: its name, with the NUL counted in the length, and
@@ -424,7 +391,7 @@ pub fn csi() -> Template {
     Template::new("csi", csi_stream())
 }
 
-/// A CSI index, read as far as its window reaches.
+/// A CSI index.
 ///
 /// The same index as a BAI with the binning made settings: `min_shift` is how
 /// many bits the smallest bin spans and `depth` how many levels there are
@@ -432,10 +399,8 @@ pub fn csi() -> Template {
 /// can index still has bins. Each bin also says where the first record
 /// overlapping it is, which a BAI keeps in its linear index instead.
 ///
-/// A CSI is written through BGZF and a large one fills several blocks, so the
-/// bins are read one at a time and stop where the block does, the way a BAM's
-/// records do: each is sixteen bytes and sixteen more a chunk, and the chunk
-/// count is twelve bytes in.
+/// A CSI is written through BGZF and a large one fills several blocks, which
+/// the joined stream reads through as it does a BAM's.
 fn csi_stream() -> T {
     let bin_limit = E::lit(1).shl(E::field("depth").add(E::lit(1)).mul(E::lit(3))).sub(E::lit(1)).div(E::lit(7));
     let bin = T::structure_named(
@@ -449,23 +414,9 @@ fn csi_stream() -> T {
             ("chunks", chunks_or_metadata(bin_limit.add(E::lit(1)))),
         ],
     );
-    let bin_size = E::lit(16).add(E::peek_at(E::lit(12 * 8), 32, Little).mul(E::lit(16)));
-    let fits = E::lit(15).less_than(E::Remaining).both(bin_size.less_or_equal(E::Remaining));
     let reference = T::structure(
         "ReferenceIndex",
-        vec![
-            ("n_bin", T::if_room(T::Int { bits: 32, endian: Little })),
-            (
-                "bins",
-                T::when(
-                    E::field("n_bin").greater_than(E::lit(0)),
-                    T::repeat(
-                        T::switch(fits, vec![(1, bin)], continued()),
-                        Until::Cond(E::idx().add(E::lit(1)).greater_or_equal(E::field("n_bin"))),
-                    ),
-                ),
-            ),
-        ],
+        vec![("n_bin", T::Int { bits: 32, endian: Little }), ("bins", T::array(bin, E::field("n_bin")))],
     );
     T::structure(
         "Csi",
@@ -479,16 +430,7 @@ fn csi_stream() -> T {
             ("l_aux", T::Int { bits: 32, endian: Little }),
             ("aux", T::bytes(E::field("l_aux"))),
             ("n_ref", T::Int { bits: 32, endian: Little }),
-            (
-                "references",
-                T::when(
-                    E::field("n_ref").greater_than(E::lit(0)),
-                    T::repeat(
-                        reference.counted_as("reference"),
-                        Until::Cond(E::idx().add(E::lit(1)).greater_or_equal(E::field("n_ref"))),
-                    ),
-                ),
-            ),
+            ("references", T::array(reference.counted_as("reference"), E::field("n_ref"))),
             ("n_no_coor", T::if_room(T::u64(Little))),
         ],
     )
@@ -739,8 +681,16 @@ pub(crate) mod tests {
         assert_eq!(node.offset_bits + node.size_bits, d.len_bits());
     }
 
+    /// What the blocks of a BGZF file join to, as the template reads it.
+    fn joined(ev: &mut Evaluator, d: &Document<MemSource>) -> Vec<usize> {
+        [at_named(ev, d, &[], &["stream"]), vec![0]].concat()
+    }
+
+    /// A record the writer cut across two blocks is one record of the joined
+    /// stream, read whole, and the block it starts in and the one it finishes
+    /// in are each the gzip member they are.
     #[test]
-    fn the_first_block_of_a_bam_reads_the_header_and_the_records_that_fit_in_it() {
+    fn a_record_cut_by_a_block_reads_whole_from_the_joined_stream() {
         let (odd, even) = two_records();
         let mut first = bam_header("@HD\tVN:1.6\n", &[("chr1", 1000)]);
         first.extend_from_slice(&odd);
@@ -750,27 +700,29 @@ pub(crate) mod tests {
         file.extend_from_slice(&EOF_BLOCK);
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(bgzf());
-        let payload = [at_named(&mut ev, &d, &[0, 0], &["compressed"]), vec![0]].concat();
-        assert_eq!(ev.node(&d, &payload).unwrap().type_name, "Bam");
-        let records = at_named(&mut ev, &d, &payload, &["records"]);
+        let stream = joined(&mut ev, &d);
+        assert_eq!(ev.node(&d, &stream).unwrap().type_name, "Bam");
+        let records = at_named(&mut ev, &d, &stream, &["records"]);
         assert_eq!(ev.node(&d, &records).unwrap().child_count, 2);
-        assert_eq!(ev.node(&d, &[records.clone(), vec![0]].concat()).unwrap().type_name, "AlignmentRecord");
-        let cut = ev.node(&d, &[records, vec![1]].concat()).unwrap();
-        assert_eq!((cut.type_name.as_str(), cut.size_bits), ("ContinuesInNextBlock", 80));
+        let second = [records, vec![1]].concat();
+        assert_eq!(ev.node(&d, &second).unwrap().type_name, "AlignmentRecord");
+        let name = at_named(&mut ev, &d, &second, &["read_name"]);
+        assert_eq!(ev.node(&d, &name).unwrap().value, Value::Str("r2".into()));
+        let cigar = at_named(&mut ev, &d, &second, &["cigar"]);
+        assert_eq!(ev.node(&d, &cigar).unwrap().child_count, 3);
 
-        // The second block is the rest of that record, and reads as its bytes.
-        let later = [at_named(&mut ev, &d, &[0, 1], &["compressed"]), vec![0]].concat();
-        assert_ne!(ev.node(&d, &later).unwrap().type_name, "Bam");
-        // And the last block unpacks to nothing without a peek failing on it.
+        // Each block is still the member it is, and the last unpacks to
+        // nothing without anything failing on it.
+        assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 3);
         let eof = at_named(&mut ev, &d, &[0, 2], &["compressed"]);
         assert!(ev.node(&d, &eof).is_ok());
     }
 
-    /// A header longer than the first block: the text runs to the end of the
-    /// block and nothing after it is read, rather than the next four bytes of
-    /// text being taken for the reference count.
+    /// A header longer than the first block reads whole: the text is as long
+    /// as `l_text` says, and the reference count after it is the one the
+    /// second block holds.
     #[test]
-    fn a_header_longer_than_the_first_block_stops_where_the_block_does() {
+    fn a_header_longer_than_a_block_reads_whole() {
         let text = "@CO\t".to_string() + &"x".repeat(200) + "\n";
         let header = bam_header(&text, &[("chr1", 1000)]);
         let mut file = bgzf_block(&header[..100]);
@@ -778,12 +730,14 @@ pub(crate) mod tests {
         file.extend_from_slice(&EOF_BLOCK);
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(bgzf());
-        let payload = [at_named(&mut ev, &d, &[0, 0], &["compressed"]), vec![0]].concat();
-        let text = at_named(&mut ev, &d, &payload, &["text"]);
-        assert_eq!(ev.node(&d, &text).unwrap().size_bits, 92 * 8);
-        let n_ref = at_named(&mut ev, &d, &payload, &["n_ref"]);
-        assert_eq!(ev.node(&d, &n_ref).unwrap().size_bits, 0);
-        let records = at_named(&mut ev, &d, &payload, &["records"]);
+        let stream = joined(&mut ev, &d);
+        let text = at_named(&mut ev, &d, &stream, &["text"]);
+        assert_eq!(ev.node(&d, &text).unwrap().size_bits, 205 * 8);
+        let n_ref = at_named(&mut ev, &d, &stream, &["n_ref"]);
+        assert_eq!(ev.node(&d, &n_ref).unwrap().value.as_int(), Some(1));
+        let refs = at_named(&mut ev, &d, &stream, &["references"]);
+        assert_eq!(ev.node(&d, &[refs, vec![0, 1]].concat()).unwrap().value, Value::Str("chr1".into()));
+        let records = at_named(&mut ev, &d, &stream, &["records"]);
         assert_eq!(ev.node(&d, &records).unwrap().child_count, 0);
     }
 
@@ -879,7 +833,7 @@ pub(crate) mod tests {
         file.extend_from_slice(&EOF_BLOCK);
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(bgzf());
-        let payload = [at_named(&mut ev, &d, &[0, 0], &["compressed"]), vec![0]].concat();
+        let payload = joined(&mut ev, &d);
         assert_eq!(ev.node(&d, &payload).unwrap().type_name, "Csi");
         let refs = at_named(&mut ev, &d, &payload, &["references"]);
         let bins = at_named(&mut ev, &d, &[refs, vec![0]].concat(), &["bins"]);
@@ -890,11 +844,11 @@ pub(crate) mod tests {
         assert_eq!(ev.node(&d, &summary).unwrap().type_name, "ReferenceSummary");
     }
 
-    /// A CSI too large for its first block: the bins read up to the one the
-    /// block cuts, which reads as the start of something continued, rather
-    /// than the chunk count of a cut bin being trusted.
+    /// A CSI too large for its first block: the block cuts a bin 26 bytes
+    /// in, and every bin of every reference reads all the same, the cut one
+    /// included.
     #[test]
-    fn a_csi_cut_by_its_block_reads_the_bins_that_fit() {
+    fn a_csi_across_two_blocks_reads_every_bin() {
         let stream = csi_stream_bytes(5, 3);
         // The header, one whole reference, and 30 bytes of the next: its bin
         // count and 26 bytes of its first bin.
@@ -904,13 +858,18 @@ pub(crate) mod tests {
         file.extend_from_slice(&EOF_BLOCK);
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(bgzf());
-        let payload = [at_named(&mut ev, &d, &[0, 0], &["compressed"]), vec![0]].concat();
+        let payload = joined(&mut ev, &d);
         let refs = at_named(&mut ev, &d, &payload, &["references"]);
-        assert_eq!(ev.node(&d, &refs).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &refs).unwrap().child_count, 3);
         let bins = at_named(&mut ev, &d, &[refs, vec![1]].concat(), &["bins"]);
-        assert_eq!(ev.node(&d, &bins).unwrap().child_count, 1);
-        let cut_bin = ev.node(&d, &[bins, vec![0]].concat()).unwrap();
-        assert_eq!((cut_bin.type_name.as_str(), cut_bin.size_bits), ("ContinuesInNextBlock", 26 * 8));
+        assert_eq!(ev.node(&d, &bins).unwrap().child_count, 2);
+        let cut_bin = [bins, vec![0]].concat();
+        assert_eq!(ev.node(&d, &cut_bin).unwrap().type_name, "Bin");
+        let end = at_named(&mut ev, &d, &cut_bin, &["chunks"]);
+        let end = at_named(&mut ev, &d, &[end, vec![1]].concat(), &["chunk_end", "in_block"]);
+        assert_eq!(ev.node(&d, &end).unwrap().value.as_int(), Some(30));
+        let node = ev.node(&d, &payload).unwrap();
+        assert_eq!(node.size_bits, stream.len() as u64 * 8);
     }
 
     /// One BGZF block holding `data`, compressed at the default level, the way

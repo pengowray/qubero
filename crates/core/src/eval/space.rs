@@ -216,6 +216,12 @@ impl PartCache {
         PartCache { entries: FxHashMap::default(), bytes: 0, peak: 0, clock: 0, cap }
     }
 
+    /// Which parts are being kept, in no order, and how many bytes they hold.
+    #[cfg(test)]
+    pub(super) fn held(&self) -> (Vec<usize>, usize) {
+        (self.entries.keys().copied().collect(), self.bytes)
+    }
+
     /// Part `i`, if it is being kept, marked as read now.
     pub(super) fn get(&mut self, i: usize) -> Option<Arc<Vec<u8>>> {
         self.clock += 1;

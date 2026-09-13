@@ -220,19 +220,26 @@ impl Evaluator {
             self.through_at(doc, &mut p)?;
             return Ok(Some((0, p)));
         }
+        // A step with one candidate stands on it until the walk has moved past
+        // it, and the frame holds the candidate's own index rather than a
+        // count: a field is child 10 of its structure, not the first of one.
+        // So "moved past" is past that index. Asking whether anything has been
+        // taken at all was the same answer while only the step above a record
+        // was ever asked again, and the wrong one once a go could run out on
+        // the record itself: the walk skipped it.
         match step {
             Step::Field(name) => {
-                if from > 0 {
+                let Some(j) = self.child_index(doc, node, name)? else { return Ok(None) };
+                if from > j {
                     return Ok(None);
                 }
-                let Some(j) = self.child_index(doc, node, name)? else { return Ok(None) };
                 let mut p = node.to_vec();
                 p.push(j);
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
             }
             Step::Tagged { key, tag, .. } => {
-                if from > 0 || !self.is_list(doc, node)? {
+                if !self.is_list(doc, node)? {
                     return Ok(None);
                 }
                 // A label worked out rather than written down is worked out
@@ -244,7 +251,7 @@ impl Evaluator {
                 for i in 0..n as usize {
                     p.push(i);
                     if self.tag_matches(doc, &p, &key, &tag)? {
-                        return Ok(Some((i, p)));
+                        return Ok((from <= i).then_some((i, p)));
                     }
                     p.pop();
                 }
