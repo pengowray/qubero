@@ -1020,21 +1020,48 @@ and are none of `PE`, `NE`, `LE` or `LX`: a Windows 3.x program is left to the
 rule database, which can name it, rather than to a template that would describe
 its stub.
 
-### What Wikidata lists
-A third source is the weakest and the widest. Wikidata's "file format
-identification pattern" property (P4152) carries around 9,400 patterns on as
-many items, most of them imported from TrID and PRONOM, and it knows formats
-neither `file(1)` nor a template does: Parquet, UF2, Godot resources. It also
-knows hundreds of formats that are ZIP or XML underneath, whose pattern is the
-container's, and 140 whose whole pattern is a `<`. So a match is ranked by the
-bytes it pinned down, with the file's extension worth a few more when the
+### The signature database
+A third source is the weakest and the widest: one database of 11,800 formats
+that a file's first bytes are checked against directly, without a magic engine.
+
+Two lists go into it. Wikidata's "file format identification pattern" property
+(P4152) carries around 9,400 patterns on as many items, most of them imported
+from TrID and PRONOM, and it knows formats neither `file(1)` nor a template
+does: Parquet, UF2, Godot resources. The other list is the `file(1)` magic
+rules themselves, the 2,400 top-level ones that pin a run of bytes at a fixed
+offset. The compiled database in the wasm module reads the same rules but
+answers with only its single strongest match; here every rule that matches is a
+row, so a file the strongest rule called a ZIP still shows what else it could
+be. Between them the two lists overlap heavily, which is the point: two
+independent lists saying the same four bytes mean PNG is worth more than one
+list saying it twice.
+
+Both know hundreds of formats that are ZIP or XML underneath, whose pattern is
+the container's, and 140 whose whole pattern is a `<`. So a match is ranked by
+the bytes it pinned down, with the file's extension worth a few more when the
 format lists it, and names the file only when nothing else could and the best
 match stands alone with either the extension behind it or eight bytes of its
 own. The dialog shows them all, best first, with a crowd that matched the same
-bytes folded into one line, and links each to its Wikidata item and, where
-there is one, its English Wikipedia article. `tools/wikidata/fetch.mjs` asks
-the query service and `build.mjs` writes what the page reads plus a report of
-every value it had to read some other way than as written, or could not read.
+bytes folded into one line, says which list each came from, and links a
+Wikidata row to its item and, where there is one, its English Wikipedia
+article. A `file(1)` row's name is the sentence the rule prints, cut at the
+first value the rule would have filled in from the file, with an ellipsis when
+something was cut.
+
+A signature is stored once however many formats claim it, and the file is
+columnar: 9,900 signatures and 11,800 formats in 991 KiB, which is smaller than
+the Wikidata half alone used to be. `tools/wikidata/fetch.mjs` asks the query
+service and `build.mjs` writes `tools/wikidata/formats.json` plus a report of
+every value it had to read some other way than as written, or could not read;
+`tools/signatures.mjs` merges that with the magic rules into the file the page
+reads.
+
+Matching probes an index rather than running every pattern. A pattern that is
+one run of literal bytes at a fixed offset from the start, which nearly all of
+them are, is filed by offset, then length, then those bytes; a probe is one
+slice of the file and one map lookup. What is left, the patterns with a gap,
+alternatives or a byte range and the fourteen measured back from the end of the
+file, is still run one at a time.
 
 ### What made a file
 A second database answers a different question. Where `file(1)` says what
