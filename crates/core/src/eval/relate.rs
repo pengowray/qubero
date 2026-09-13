@@ -91,11 +91,12 @@ impl Evaluator {
                 // the `At` parent handled above.
                 Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
-                // Whether the field is here, written out like the question a
-                // switch asks: `flags & 8` reading as `12 & 8 = 8` is the
-                // whole of why a row is there or is not.
+                // Whether the field is here: `flags & 8` reading as `12 & 8 =
+                // 8` is the whole of why a row is there or is not. Its own
+                // question, not the one a switch asks, and the panel says so.
+                // See [`Role::Condition`].
                 Ty::When { cond, inner } => {
-                    self.relation(doc, path, &cond, Role::Type, None, &mut out);
+                    self.relation(doc, path, &cond, Role::Condition, None, &mut out);
                     ty = *inner;
                 }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
