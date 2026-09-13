@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| Decoder panels: one `Unpacker` table picks the side reader for the cursor (near or any ancestor), `ExplainDto` is a tagged enum mirrored as a TypeScript union, GWF vectors have their own panel, and GRIB values reach a panel that says which value the cursor is on and how it decodes. | 63806d1, d803c1e, f2ac9b4, 0685d12 |
 | BGZF, BAM, BAI and CSI: new templates. BGZF sniffs apart from gzip (which fixed false CRC mismatches on every `.bam`), the first block's header and records as fields, later records through a side reader, indexes with split virtual offsets. Matches bamnostic. | 1830e4a, 3b48b16, 8f47af1 |
 | NIfTI-1, NIfTI-2 and Analyze 7.5: a new template, headers in either byte order, extensions, voxels shaped by `dim` with `dim[1]` innermost, whole-number scaling. Matches nibabel. `.nii.gz` opens through gzip. | 44d98c4, 12cf556, 8f63c5b |
 | SEG-Y: a new template, EBCDIC 037 text, binary header, trace headers and samples for rev 0 to 2.1 in either byte order, and a new `ibm32` float type. Matches segyio on 13 files. | 1cadde4, 7254613, 11c297b |
@@ -382,9 +383,7 @@ Seven samples. Left:
   HDU 1's heap no longer resolves). Also true on main before the tile work.
   `fits_real` works round it with a fresh evaluator; a task was filed.
 - `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
-  code would each make a module. `explain.rs` grows by one decoder a time;
-  a small trait (which ancestor, where the data is, how to decode) would let
-  miniSEED, Parquet pages, FITS tiles and GWF vectors share the dispatch.
+  code would each make a module.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
   its piece, and nothing in the IR reads text out of several runs at once.
   A text-joining `Ty` is the missing piece.
@@ -412,13 +411,12 @@ Seven samples. Left:
 Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
 (see Closed). Left:
 
-- **What a value is worth is computed and not shown.** `grib_values.rs`
-  undoes group references, the smallest difference and spatial
-  differencing, and matches ecCodes on every GFS value, but nothing reaches
-  a panel: it needs an `Explain` variant and wasm and web wiring, the way
-  Parquet's page reader was wired. `explain_packed` also looks only one
-  level up from the cursor. Its step strings need a `ui-text` pass when they
-  are wired.
+- The values panel rounds a decoded value to the decimal places of the
+  reference value's shortest float form (or the `2^E` step, if finer),
+  shifted by D, to drop digits that come only from R being a 32-bit float:
+  GFS reads `101124.03` where ecCodes prints `101124.03125`. The arithmetic
+  matches ecCodes; showing the full double is a one-function change
+  (`Packing::text`). Needs the user's call.
 - JPEG 2000 (5.40) names its codestream and stays bytes; there is no JPEG
   2000 template.
 - Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
@@ -468,23 +466,12 @@ Samples decode (see Closed), for 2.4 and 3, with a samples panel. Left:
   from libmseed were checked once and are not in the collection; copying them
   in would make those checks permanent.
 - miniSEED 3's CRC-32C is placed and not verified.
-- `ExplainDto` is one flat struct carrying every panel's fields, about 20
-  more per panel; a tagged enum mirrored as a TypeScript union on `kind`
-  would stop that. `explain_packed`'s chain of packing-name checks is the
-  Rust half of the same problem.
-- `chunkpanel.ts` puts its row of values in the 4em label column, so they
-  stack one per line; the samples panel has an `.is-values` fix the chunk
-  panel does not use yet.
 
 ### GWF
 
 All 18 classes checked against file dictionaries, version 6 read, compressed
 vectors unpacked (see Closed). Five samples. Left:
 
-- **The vector panel uses HDF5's words.** `explain_gwf_vect` returns
-  `Explain::Hdf5Chunk`, so a GWF vector's panel says "Inside this chunk" and
-  "Filters, in the order they were undone". Give it its own variant, or make
-  the chunk panel's headings neutral.
 - Zero-suppressed vectors unpack only in the panel; a packing that carries a
   count expression would open them as a space like gzip ones.
 - Unchecked against bytes: FrStatData and the static-data table-of-contents
