@@ -115,7 +115,7 @@ fn list_frame(item: T) -> T {
     T::sized(
         frame_len(),
         T::structure_named(
-            "ListFrame",
+            "RNTupleListFrame",
             "",
             "items",
             vec![("size", i64le()), ("count", T::u32(Little)), ("items", T::array(item, E::field("count")))],
