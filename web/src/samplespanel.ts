@@ -63,26 +63,29 @@ export function showingLine(info: TypeInfo): string | null {
 /** One step of the walk: a short label, what it says, and a note to the right. */
 export type StepRow = { readonly label: string; readonly text: string; readonly note: string };
 
-/** Frame rows, with the samples each frame made. Frame 0's count includes the
- *  skipped first difference, which is where sample 0 stands, so adding the
- *  counts up gives sample numbers. */
+/** The heading row over the frames, whose columns the frame rows fill. */
+export const FRAME_COLUMNS: StepRow = { label: "frame", text: "differences", note: "samples" };
+
+/** Frame rows, under [`FRAME_COLUMNS`]: the frame's number, the differences it
+ *  held (and how many were used, where not all were), and the samples they
+ *  made. Frame 0's count includes the skipped first difference, which is where
+ *  sample 0 stands, so adding the counts up gives sample numbers. */
 export function frameRows(info: TypeInfo): StepRow[] {
   let next = 0;
   return info.mseed_frames.map((frame, f) => {
     const from = next;
     next += frame.used;
     const text =
-      frame.used === frame.held
-        ? countText(frame.held, "difference")
-        : `${frame.used.toLocaleString()} of ${countText(frame.held, "difference")} used`;
-    const note = frame.used === 0 ? "" : frame.used === 1 ? `sample ${from}` : `samples ${from} to ${next - 1}`;
-    return { label: `frame ${f}`, text, note };
+      frame.used === frame.held ? frame.held.toLocaleString() : `${frame.used.toLocaleString()} of ${frame.held.toLocaleString()}`;
+    const note =
+      frame.used === 0 ? "" : frame.used === 1 ? from.toLocaleString() : `${from.toLocaleString()} to ${(next - 1).toLocaleString()}`;
+    return { label: f.toLocaleString(), text, note };
   });
 }
 
-function stepLine(row: StepRow): HTMLElement {
+function stepLine(row: StepRow, cls = "insp-orow is-step"): HTMLElement {
   const e = document.createElement("div");
-  e.className = "insp-orow is-step";
+  e.className = cls;
   e.append(span("insp-orow-object", row.label), span("insp-orow-text", row.text), span("insp-orow-size", row.note));
   return e;
 }
@@ -108,7 +111,7 @@ export function samplesBody(info: TypeInfo): DocumentFragment {
     const all = info.mseed_values.length >= info.mseed_total;
     frag.append(span("insp-qsubhead", all ? "Samples" : "First samples"));
     const values = document.createElement("div");
-    values.className = "insp-orow";
+    values.className = "insp-orow is-values";
     values.append(span("insp-orow-text", info.mseed_values.join("  ")));
     frag.append(values);
     const showing = showingLine(info);
@@ -128,8 +131,11 @@ export function samplesBody(info: TypeInfo): DocumentFragment {
       frag.append(stepLine({ label: "skipped", text, note: "" }));
     }
     if (info.mseed_frames.length > 0) {
+      // A table rather than a sentence a frame: sixty rows of the same words
+      // hide the one number that changes.
       const list = document.createElement("div");
       list.className = "insp-orows";
+      list.append(stepLine(FRAME_COLUMNS, "insp-orow is-step is-head"));
       for (const row of frameRows(info)) list.append(stepLine(row));
       frag.append(list);
     }

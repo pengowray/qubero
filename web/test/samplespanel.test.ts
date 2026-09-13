@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { TypeInfo } from "../src/doc.ts";
-import { checkLine, encodingLine, frameRows, samplesNote, showingLine } from "../src/samplespanel.ts";
+import { checkLine, encodingLine, FRAME_COLUMNS, frameRows, samplesNote, showingLine } from "../src/samplespanel.ts";
 
 /** A Steim2 record of 5,980 samples in 62 frames, of which two are listed. */
 function info(over: Partial<TypeInfo> = {}): TypeInfo {
@@ -40,13 +40,14 @@ function info(over: Partial<TypeInfo> = {}): TypeInfo {
 }
 
 test("a frame's row says which samples it made, counting from sample 0", () => {
+  assert.deepEqual(FRAME_COLUMNS, { label: "frame", text: "differences", note: "samples" });
   const rows = frameRows(info());
-  assert.deepEqual(rows[0], { label: "frame 0", text: "97 differences", note: "samples 0 to 96" });
-  assert.deepEqual(rows[1], { label: "frame 1", text: "52 of 105 differences used", note: "samples 97 to 148" });
+  assert.deepEqual(rows[0], { label: "0", text: "97", note: "0 to 96" });
+  assert.deepEqual(rows[1], { label: "1", text: "52 of 105", note: "97 to 148" });
   // One sample is one sample, and a frame that made none says nothing to the right.
   const odd = frameRows(info({ mseed_frames: [{ held: 1, used: 1 }, { held: 4, used: 0 }] }));
-  assert.deepEqual(odd[0], { label: "frame 0", text: "1 difference", note: "sample 0" });
-  assert.deepEqual(odd[1], { label: "frame 1", text: "0 of 4 differences used", note: "" });
+  assert.deepEqual(odd[0], { label: "0", text: "1", note: "0" });
+  assert.deepEqual(odd[1], { label: "1", text: "0 of 4", note: "" });
 });
 
 test("the last sample is only called that when every sample was decoded", () => {
