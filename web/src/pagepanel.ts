@@ -8,13 +8,7 @@
 
 import type { PageStep, TypeInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
-
-function span(cls: string, text: string): HTMLElement {
-  const e = document.createElement("span");
-  e.className = cls;
-  e.textContent = text;
-  return e;
-}
+import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many values came out, for the note beside the heading. */
 export function pageNote(info: TypeInfo): string {
@@ -23,26 +17,17 @@ export function pageNote(info: TypeInfo): string {
 }
 
 /**
- * One step: what it was, and what it did. A step that produced bytes says how
- * many went in and how many came out; one that produced values says how many
- * in its note. BYTE_STREAM_SPLIT does both, putting bytes back together and
- * then reading them, so both are shown.
+ * What one step did. A step that produced bytes says how many went in and how
+ * many came out; one that produced values says how many in its note.
+ * BYTE_STREAM_SPLIT does both, putting bytes back together and then reading
+ * them, so both are shown.
  */
-function stepLine(step: PageStep): HTMLElement {
-  const line = document.createElement("div");
-  line.className = "insp-orow";
-  line.append(span("insp-orow-object", step.what));
-  let text: string;
-  if (step.skipped) {
-    text = "not applied to this page (is_compressed = false)";
-  } else {
-    const parts: string[] = [];
-    if (step.out_bytes > 0) parts.push(`${step.in_bytes.toLocaleString()} → ${step.out_bytes.toLocaleString()} bytes`);
-    if (step.note !== "") parts.push(step.note);
-    text = parts.length > 0 ? parts.join(", ") : `${step.in_bytes.toLocaleString()} bytes`;
-  }
-  line.append(span("insp-orow-text", text));
-  return line;
+function stepText(step: PageStep): string {
+  if (step.skipped) return "not applied to this page (is_compressed = false)";
+  const parts: string[] = [];
+  if (step.out_bytes > 0) parts.push(bytesChange(step.in_bytes, step.out_bytes));
+  if (step.note !== "") parts.push(step.note);
+  return parts.length > 0 ? parts.join(", ") : `${step.in_bytes.toLocaleString()} bytes`;
 }
 
 /**
@@ -56,51 +41,25 @@ function stepLine(step: PageStep): HTMLElement {
 export function pageBody(info: TypeInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  const sizes = document.createElement("div");
-  sizes.className = "insp-qcount";
   const packed = `${info.page_packed.toLocaleString()} bytes in the file`;
   const unpacked =
     info.page_decoded > 0 && info.page_decoded !== info.page_packed
       ? `, ${info.page_decoded.toLocaleString()} bytes unpacked`
       : "";
-  sizes.textContent = packed + unpacked;
-  frag.append(sizes);
+  frag.append(line("insp-qcount", packed + unpacked));
 
-  if (info.page_steps.length > 0) {
-    frag.append(span("insp-qsubhead", "Steps, in the order they were done"));
-    const list = document.createElement("div");
-    list.className = "insp-orows";
-    for (const s of info.page_steps) list.append(stepLine(s));
-    frag.append(list);
-  }
+  const rows = info.page_steps.map((s) => ({ label: s.what, text: stepText(s) }));
+  frag.append(stepList("Steps, in the order they were done", rows));
 
   if (info.problem !== "") {
-    const p = document.createElement("div");
-    p.className = "insp-xproblem";
-    p.textContent = info.problem;
-    frag.append(p);
+    frag.append(problemLine(info.problem));
     return frag;
   }
 
-  if (info.page_values.length > 0) {
-    // Indices into the dictionary page are not the column's values, and a
-    // heading saying "as dictionary index" would read as a type.
-    const indices = info.page_element_type === "dictionary index";
-    const head = indices ? "First dictionary indices" : `First values, as ${info.page_element_type}`;
-    frag.append(span("insp-qsubhead", head));
-    const values = document.createElement("div");
-    values.className = "insp-orow";
-    values.append(span("insp-orow-text", info.page_values.join("  ")));
-    frag.append(values);
-    if (info.page_values.length < info.page_total) {
-      const noun = indices ? "indices" : "values";
-      frag.append(
-        span(
-          "insp-qcount",
-          `Showing the first ${info.page_values.length.toLocaleString()} of ${info.page_total.toLocaleString()} ${noun}.`,
-        ),
-      );
-    }
-  }
+  // Indices into the dictionary page are not the column's values, and a
+  // heading saying "as dictionary index" would read as a type.
+  const indices = info.page_element_type === "dictionary index";
+  const head = indices ? "First dictionary indices" : `First values, as ${info.page_element_type}`;
+  frag.append(firstValues(head, info.page_values, info.page_total, indices ? "indices" : "values"));
   return frag;
 }

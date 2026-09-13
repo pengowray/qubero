@@ -3028,6 +3028,24 @@ button.insp-xrow-where:hover {
 .insp-orow.is-step {
   grid-template-columns: 5em minmax(0, 1fr) auto;
 }
+/* Steps whose labels run long and whose notes are sentences, a FITS tile's
+   SUBTRACTIVE_DITHER_2 and its formula: each label on a line of its own, and
+   what the step did under it, indented so the labels read down the left.
+   There are a handful of them, so the list does not scroll inside the panel. */
+.insp-orows.is-stacked {
+  max-height: none;
+}
+.insp-orows.is-stacked > .insp-orow {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 2px 0;
+}
+.insp-orows.is-stacked .insp-orow-object {
+  text-align: left;
+}
+.insp-orows.is-stacked .insp-orow-text {
+  padding-left: 1.5em;
+}
 /* A run of sample values, which is one line of text across the whole row
    rather than something to squeeze into the label column. */
 .insp-orow.is-values > .insp-orow-text {

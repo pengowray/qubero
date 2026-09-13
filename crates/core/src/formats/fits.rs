@@ -40,6 +40,14 @@
 //! a gap. A tile-compressed image is the common case, one row per tile and
 //! each tile's compressed bytes an array in the heap.
 //!
+//! A binary table whose header says `ZIMAGE = T` is that case, and reads as a
+//! compressed image: the algorithm `ZCMPTYPE` names, how many pixels along
+//! each axis of the image (`ZNAXISn`) and of a tile (`ZTILEn`), and then the
+//! same columns, rows and heap as any table, with each row counted as the tile
+//! it is. None of that changes what a byte reads as, since the file is a
+//! table; it says what the table is for. `ZIMAGE` is read as the letter it
+//! holds so that a match on it can say `T`.
+//!
 //! What the header says about each column is on one row per column, in
 //! `columns`. That list covers no bytes and nothing depends on it: it is the
 //! cards a column is described by, which are scattered through the header,
@@ -128,9 +136,15 @@
 //!   shape for; `Ty::Gather` places children and does not join them.
 //! - A quoted value with no closing quote runs to the end of its card rather
 //!   than being called out as the unterminated string it is.
-//! - A tile-compressed image is a binary table and reads as one: the rows are
-//!   the tiles' descriptors and the heap is their compressed bytes, and
-//!   nothing here inflates a tile with Rice or gzip into pixels.
+//! - A tile's pixels. A compressed image's rows and heap read as the table
+//!   they are, the rows the tiles' descriptors and the heap their compressed
+//!   bytes, and no field here holds a pixel: undoing Rice, gzip and the
+//!   quantization of a float image is a running sum, a deflate stream and a
+//!   sequence of random numbers, none of which an expression can carry.
+//!   [`fits_tile`](super::fits_tile) does it beside the template, for the
+//!   tile under the cursor. The compression parameters in `ZNAMEi` and
+//!   `ZVALi` are cards like any other here, since which `ZVALi` is the block
+//!   size is a search by the text of another card.
 
 use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, Step, StrLen, Template, Ty as T, Until};
 
@@ -146,7 +160,15 @@ const CARD: i128 = 80;
 /// logical, and `T` is not a number. The cards that hold a real have a shape
 /// of their own, since a whole number written with a point after it is still a
 /// whole number. See [`REAL`] and [`real_value`].
-const NUMERIC: &[&str] = &["BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL"];
+const NUMERIC: &[&str] = &["BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL", "ZBITPIX", "ZDITHER0"];
+
+/// The logicals that decide how the data is read, which are read as the one
+/// letter they hold rather than as the run of blanks and a letter a text
+/// value is. `ZIMAGE = T` is what says a binary table is a compressed image,
+/// and a [`T::Match`] compares whole text, so twenty blanks in front of the
+/// `T` would match nothing. `SIMPLE` and `EXTEND` decide nothing here and are
+/// left as the text they were.
+const LOGICAL: &[&str] = &["ZIMAGE"];
 
 /// The keywords that say what a stored number is worth rather than holding a
 /// number of their own. The standard makes every one of them a real, so a
@@ -173,6 +195,13 @@ const NUMBERED: &[(&str, fn() -> T)] = &[
     // a row: numbers like any other.
     ("NAXIS", numeric_body),
     ("TBCOL", numeric_body),
+    // The same two things said of a compressed image: how many pixels along
+    // each of its axes, and how many along each axis of a tile. `ZNAXIS`
+    // is six letters, so it is told apart by the five it opens with, and
+    // every keyword that opens with those five is a whole number: `ZNAXIS`
+    // itself and `ZNAXIS1` onwards.
+    ("ZNAXI", numeric_body),
+    ("ZTILE", numeric_body),
     // What a column holds, which is not a number.
     ("TFORM", tform_body),
     // What the numbers in a column are worth, which the standard lets a
@@ -215,17 +244,30 @@ fn card_value(name: &str) -> E {
 /// number of columns a table could have; this is the way past that, and it
 /// costs an integer compare a card instead of a run of bytes compared a card.
 ///
-/// Every prefix here is five bytes long, which leaves the three bytes a
+/// Nearly every prefix here is five bytes long, which leaves the three bytes a
 /// keyword has left over for up to three digits. The digits are the number
 /// picked apart with division, since the IR has no way to write a number as
 /// text: `7` is `'7'`, a space and a space, `71` is `'7'`, `'1'` and a space.
+///
+/// `ZNAXIS` is the one of six, which leaves two bytes and so two digits. That
+/// is 99 axes, and no compressed image has more than a handful.
 fn numbered_key(prefix: &str, n: E) -> E {
-    assert_eq!(prefix.len(), 5, "a numbered FITS keyword is five letters and up to three digits");
+    let digit = |v: E| v.add(E::lit(i128::from(b'0')));
+    let blank = i128::from(b' ');
+    if prefix.len() == 6 {
+        let head = (keynum(prefix) >> 16) << 16;
+        let tens = n.clone().div(E::lit(10));
+        let units = n.clone().sub(tens.clone().mul(E::lit(10)));
+        let one = n.clone().less_than(E::lit(10));
+        let two = E::lit(9).less_than(n.clone()).mul(n.clone().less_than(E::lit(100)));
+        let short = one.mul(digit(n).mul(E::lit(1 << 8)).add(E::lit(blank)));
+        let medium = two.mul(digit(tens).mul(E::lit(1 << 8)).add(digit(units)));
+        return E::lit(head).add(short).add(medium);
+    }
+    assert_eq!(prefix.len(), 5, "a numbered FITS keyword is five or six letters and the digits that fit after them");
     // The five letters where a keyword writes them, with the three spaces it
     // is padded with taken off: the digits go where that padding was.
     let head = (keynum(prefix) >> 24) << 24;
-    let digit = |v: E| v.add(E::lit(i128::from(b'0')));
-    let blank = i128::from(b' ');
     let tens = n.clone().div(E::lit(10));
     let hundreds = n.clone().div(E::lit(100));
     let units = n.clone().sub(tens.clone().mul(E::lit(10)));
@@ -285,6 +327,7 @@ fn card_of(body: T) -> T {
 fn named_body() -> T {
     let mut cases: Vec<(String, T)> = NUMERIC.iter().map(|k| ((*k).to_string(), numeric_body())).collect();
     cases.extend(REAL.iter().map(|k| ((*k).to_string(), real_body())));
+    cases.extend(LOGICAL.iter().map(|k| ((*k).to_string(), logical_body())));
     cases.push(("CONTINUE".to_string(), continue_body()));
     T::Match { on: E::field("key"), cases: cases.into(), default: std::sync::Arc::new(text_body()) }
 }
@@ -302,6 +345,12 @@ fn real_body() -> T {
 /// and the rest of the line is the comment.
 fn numeric_body() -> T {
     valued(T::decimal(StrLen::token(&[b' '], &[b' ', b'/'])))
+}
+
+/// A card whose value is a logical: the `T` or `F` after any blanks, read as
+/// that one letter, and the rest of the line as the comment. See [`LOGICAL`].
+fn logical_body() -> T {
+    valued(T::text(StrLen::token(&[b' '], &[b' ', b'/']), Encoding::Ascii))
 }
 
 /// A card whose value is a real number: the digits before the point, and the
@@ -713,22 +762,66 @@ fn table_kind() -> E {
 /// variable-length arrays in. `PCOUNT` is how many bytes that heap is, and it
 /// is what is left of the data unit once the rows are placed.
 fn table(row: T) -> T {
+    T::structure("Table", table_fields(row, "row"))
+}
+
+/// The fields every binary table has, whatever it holds: what the header says
+/// of each column, the rows, each of them counted as a `unit`, and the heap.
+fn table_fields(row: T, unit: &str) -> Vec<(&'static str, T)> {
     let width = card_value("NAXIS1").at_least(E::lit(1));
     // A row of no width is no row at all: without the check, a table that
     // says so would lay a row over every byte of its heap.
     let any = E::lit(0).less_than(card_value("NAXIS1"));
     let rows = card_value("NAXIS2").mul(any).at_most(E::Remaining.div(width.clone()));
-    T::structure(
-        "Table",
-        vec![
-            // What the header said about each column, read once here rather
-            // than again in every cell of every row. It covers no bytes; see
-            // [`columns`].
-            ("columns", columns()),
-            ("rows", T::array(T::sized(width, row).counted_as("row"), rows)),
-            ("heap", T::sized(E::Remaining, heap())),
-        ],
-    )
+    vec![
+        // What the header said about each column, read once here rather
+        // than again in every cell of every row. It covers no bytes; see
+        // [`columns`].
+        ("columns", columns()),
+        ("rows", T::array(T::sized(width, row).counted_as(unit), rows)),
+        ("heap", T::sized(E::Remaining, heap())),
+    ]
+}
+
+/// A binary table, which is a compressed image when its header says
+/// `ZIMAGE = T` and a table like any other when it does not.
+fn binary_table() -> T {
+    T::matches(card_at("ZIMAGE", &["body", "value"]), vec![("T", compressed_image())], table(binary_row()))
+}
+
+/// A tile-compressed image: a binary table with a row per tile, as FITS
+/// writes an image too large to keep whole.
+///
+/// The image is cut into tiles of `ZTILEn` pixels along each axis, the last
+/// tile along an axis taking what is left, and each tile is compressed on its
+/// own with the algorithm `ZCMPTYPE` names. A row holds a descriptor for that
+/// tile's compressed bytes, which are an array in the heap, and for an image
+/// of floats the `ZSCALE` and `ZZERO` its integers were quantized with. The
+/// rows are counted in tiles, and tile `n` is row `n`: the first tile along
+/// the first axis is the first row, and the first axis is the one that runs
+/// fastest.
+///
+/// What the image is, and what a tile is, are said first: the algorithm, and
+/// how many pixels along each axis of the image and of a tile. They cover no
+/// bytes, and the rows and the heap read as they would in any table, since
+/// what is in the file is a table. What a tile holds once it is decompressed
+/// is not in the file at all, and is worked out beside the template by
+/// [`fits_tile`](super::fits_tile), which the inspector shows for the cursor
+/// anywhere in the image's data.
+fn compressed_image() -> T {
+    let axes = card_value("ZNAXIS").at_most(E::lit(99));
+    let along = |prefix: &str| numbered_at(prefix, E::Idx.add(E::lit(1)), &["body", "value"]);
+    // A tile the header gives no size for along an axis is the whole image
+    // along the first axis and one pixel along every other, which is what the
+    // convention says a missing `ZTILEn` means: a row of pixels at a time.
+    let tile = along("ZTILE").or(E::Idx.less_than(E::lit(1)).mul(card_value("ZNAXIS1"))).or(E::lit(1));
+    let mut fields = vec![
+        ("algorithm", T::computed_text(card_at("ZCMPTYPE", &["body", "value", "parts", "0", "text"]))),
+        ("image_shape", T::array(T::computed(along("ZNAXIS")), axes.clone())),
+        ("tile_shape", T::array(T::computed(tile), axes)),
+    ];
+    fields.extend(table_fields(tile_row(), "tile"));
+    T::structure("Compressed image", fields).packed_as(super::fits_tile::PACKING)
 }
 
 /// The heap a binary table keeps its variable-length arrays in: every array
@@ -803,14 +896,25 @@ fn binary_row() -> T {
     row_of(binary_cell())
 }
 
+/// One row of a compressed image, which is one tile: the same cells as any
+/// binary table's row, under the name of what the row is.
+fn tile_row() -> T {
+    row_named("Tile", binary_cell())
+}
+
 /// A row as a list of cells, each named by its `TTYPEn` card. The index stays
 /// the path name, so `rows[0].cells[2]` is what an expression and an edit are
 /// written with, and the row reads `[2] flux`.
 fn row_of(cell: T) -> T {
-    let name = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
-    T::structure("Row", vec![("cells", T::array(cell, table_columns()))])
+    row_named("Row", cell)
+}
+
+/// The same, under a name of its own.
+fn row_named(name: &str, cell: T) -> T {
+    let label = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
+    T::structure(name, vec![("cells", T::array(cell, table_columns()))])
         .payload(&["cells"])
-        .field_elem_named_from("cells", name)
+        .field_elem_named_from("cells", label)
 }
 
 /// Which column a cell is: where it sits in the row, counted from one, since
@@ -993,7 +1097,7 @@ fn hdu() -> T {
                 "data",
                 T::sized(
                     element_bytes().mul(element_count()).at_most(E::Remaining),
-                    T::switch(table_kind(), vec![(1, table(ascii_row())), (2, table(binary_row()))], data_array()),
+                    T::switch(table_kind(), vec![(1, table(ascii_row())), (2, binary_table())], data_array()),
                 ),
             ),
             ("data_pad", T::bytes(E::size_of("data").pad_to(BLOCK).at_most(E::Remaining))),
@@ -1675,5 +1779,90 @@ mod tests {
         let axis = ev.origins(&d, &[0, 0, 2, 0]).unwrap();
         let from: Vec<_> = axis.iter().map(|x| (x.label.clone(), x.value.clone())).collect();
         assert!(from.iter().any(|(l, v)| l.starts_with("cards[3]") && v == "3"), "{from:?}");
+    }
+
+    /// A 5 by 3 image cut into tiles of one row each, written as a table of
+    /// three rows whose heap is the three tiles' bytes. `ZTILE2` is left out,
+    /// which means a tile is one pixel deep along that axis.
+    fn compressed(zimage: &str) -> Vec<u8> {
+        let mut b = primary();
+        let cards = [
+            "TFIELDS =                    1",
+            "TTYPE1  = 'COMPRESSED_DATA'",
+            "TFORM1  = '1PB(4)  '",
+            &format!("ZIMAGE  = {zimage:>20} / extension contains compressed image"),
+            "ZBITPIX =                   16",
+            "ZNAXIS  =                    2",
+            "ZNAXIS1 =                    5",
+            "ZNAXIS2 =                    3",
+            "ZTILE1  =                    5",
+            "ZCMPTYPE= 'RICE_1  '           / compression algorithm",
+        ];
+        b.extend_from_slice(&table_header(&cards, 3, 8, 9));
+        let mut data = Vec::new();
+        for (count, offset) in [(4i32, 0i32), (2, 4), (3, 6)] {
+            data.extend_from_slice(&count.to_be_bytes());
+            data.extend_from_slice(&offset.to_be_bytes());
+        }
+        data.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        b.extend_from_slice(&padded(data));
+        b
+    }
+
+    #[test]
+    fn a_table_that_says_zimage_is_a_compressed_image_of_tiles() {
+        let (d, mut ev) = eval(compressed("T"));
+        let data = [0usize, 1, 3];
+        let at = |tail: &[usize]| -> Vec<usize> { data.iter().chain(tail).copied().collect() };
+        assert_eq!(ev.node(&d, &data).unwrap().type_name, "Compressed image");
+        // What the image is, before the table it is written as.
+        assert_eq!(text(&ev.node(&d, &at(&[0])).unwrap().value), "RICE_1");
+        let axes = |ev: &mut Evaluator, field: usize| -> Vec<i128> {
+            let n = ev.node(&d, &at(&[field])).unwrap().child_count as usize;
+            (0..n).map(|i| ev.node(&d, &at(&[field, i])).unwrap().value.as_int().unwrap()).collect()
+        };
+        assert_eq!(axes(&mut ev, 1), vec![5, 3]);
+        // The missing `ZTILE2` is one.
+        assert_eq!(axes(&mut ev, 2), vec![5, 1]);
+        // None of that covers a byte: the rows start where the data does.
+        let rows = ev.node(&d, &at(&[4])).unwrap();
+        assert_eq!(rows.offset_bits, ev.node(&d, &data).unwrap().offset_bits);
+        // A row is a tile, and reads as the table's row would.
+        assert_eq!(rows.child_count, 3);
+        let tile = ev.node(&d, &at(&[4, 1])).unwrap();
+        assert_eq!(tile.type_name, "Tile");
+        assert_eq!(ev.node(&d, &at(&[4, 1, 0, 0])).unwrap().name, "[0] COMPRESSED_DATA");
+        assert_eq!(ev.node(&d, &at(&[4, 1, 0, 0, 1, 0, 0])).unwrap().value, Value::Int(2));
+        // And the heap is the tiles' bytes, where the rows point.
+        let heap = ev.node(&d, &at(&[5])).unwrap();
+        assert_eq!(heap.child_count, 3);
+        let third = ev.node(&d, &at(&[5, 2])).unwrap();
+        assert_eq!((third.type_name.as_str(), third.child_count), ("u8[]", 3));
+        assert_eq!(third.offset_bits, heap.offset_bits + 6 * 8);
+    }
+
+    #[test]
+    fn a_table_that_says_zimage_is_false_is_a_table() {
+        let (d, mut ev) = eval(compressed("F"));
+        assert_eq!(ev.node(&d, &[0, 1, 3]).unwrap().type_name, "Table");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2]).unwrap().child_count, 3);
+    }
+
+    /// `ZNAXIS` is six letters, so its number has two bytes to be written in
+    /// rather than three, and the keyword a tenth axis is found by is worked
+    /// out that way.
+    #[test]
+    fn a_six_letter_keyword_takes_two_digits() {
+        let worked_out = |prefix: &str, n: i128| -> i128 {
+            let t = Template::new("key", T::structure("Key", vec![("key", T::computed(numbered_key(prefix, E::lit(n))))]));
+            let doc = Document::new(MemSource(Vec::new()));
+            Evaluator::new(t).node(&doc, &[0]).unwrap().value.as_int().unwrap()
+        };
+        for (n, name) in [(1, "ZNAXIS1"), (9, "ZNAXIS9"), (10, "ZNAXIS10"), (42, "ZNAXIS42")] {
+            assert_eq!(worked_out("ZNAXIS", n), keynum(name), "{name}");
+        }
+        for (n, name) in [(1, "ZTILE1"), (10, "ZTILE10"), (100, "ZTILE100")] {
+            assert_eq!(worked_out("ZTILE", n), keynum(name), "{name}");
+        }
     }
 }

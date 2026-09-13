@@ -14,8 +14,8 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
-use qubero_core::formats;
+use qubero_core::eval::{Evaluator, Explain, Value};
+use qubero_core::formats::{self, fits_tile};
 use qubero_core::source::MemSource;
 
 fn sample() -> Option<PathBuf> {
@@ -33,6 +33,11 @@ fn named(file: &str) -> Option<PathBuf> {
     roots.into_iter().map(|r| r.join(file)).find(|p| p.exists())
 }
 
+/// Where a compressed image keeps its rows and its heap: after what the image
+/// and a tile are, and the columns.
+const ROWS: usize = 4;
+const HEAP: usize = 5;
+
 /// `comp.fits` is a tile-compressed image, which FITS writes as a binary table:
 /// one row per tile, and in each row a `1PB` cell, a descriptor pointing at
 /// that tile's compressed bytes in the heap after the rows. Three hundred rows
@@ -48,7 +53,23 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     let table = [0usize, 1, 3];
     let at = |tail: &[usize]| -> Vec<usize> { table.iter().chain(tail).copied().collect() };
 
-    let heap = ev.node(&doc, &at(&[2])).unwrap();
+    // The table says it is an image, what shape, and how it was cut up: 440
+    // pixels by 300, a tile a row of 440 pixels, each one Rice coded.
+    assert_eq!(ev.node(&doc, &table).unwrap().type_name, "Compressed image");
+    let text = |v: Value| match v {
+        Value::Str(s) => s.trim().to_string(),
+        other => panic!("not text: {other:?}"),
+    };
+    assert_eq!(text(ev.node(&doc, &at(&[0])).unwrap().value), "RICE_1");
+    let mut shape = |field: usize| -> Vec<i128> {
+        (0..2).map(|i| ev.node(&doc, &at(&[field, i])).unwrap().value.as_int().unwrap()).collect()
+    };
+    assert_eq!((shape(1), shape(2)), (vec![440, 300], vec![440, 1]));
+    let rows = ev.node(&doc, &at(&[ROWS])).unwrap();
+    assert_eq!(rows.child_count, 300);
+    assert_eq!(ev.node(&doc, &at(&[ROWS, 0])).unwrap().type_name, "Tile");
+
+    let heap = ev.node(&doc, &at(&[HEAP])).unwrap();
     assert_eq!(heap.size_bits, 66_896 * 8);
     // One array per row, since every row has one descriptor.
     assert_eq!(heap.child_count, 300);
@@ -57,9 +78,9 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     // holds bytes, as the `B` after the `P` says.
     let mut claimed = 0u64;
     for row in 0..300usize {
-        let count = ev.node(&doc, &at(&[1, row, 0, 0, 1, 0, 0])).unwrap().value.as_int().unwrap() as u64;
-        let offset = ev.node(&doc, &at(&[1, row, 0, 0, 1, 0, 1])).unwrap().value.as_int().unwrap() as u64;
-        let array = ev.node(&doc, &at(&[2, row])).unwrap();
+        let count = ev.node(&doc, &at(&[ROWS, row, 0, 0, 1, 0, 0])).unwrap().value.as_int().unwrap() as u64;
+        let offset = ev.node(&doc, &at(&[ROWS, row, 0, 0, 1, 0, 1])).unwrap().value.as_int().unwrap() as u64;
+        let array = ev.node(&doc, &at(&[HEAP, row])).unwrap();
         assert_eq!(array.type_name, "u8[]");
         assert_eq!((array.offset_bits, array.child_count), (heap.offset_bits + offset * 8, count), "row {row}");
         claimed += count;
@@ -71,7 +92,7 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     // there.
     let middle = heap.offset_bits + 40_000 * 8;
     let found = ev.locate(&doc, middle).unwrap();
-    assert_eq!(&found[..4], &at(&[2])[..]);
+    assert_eq!(&found[..4], &at(&[HEAP])[..]);
     let origins = ev.origins(&doc, &found[..5]).unwrap();
     let row = found[4];
     assert_eq!(origins[0].label, format!("rows[{row}].cells[0].descriptors[0]"));
@@ -196,4 +217,184 @@ fn a_real_long_string_reads_as_the_pieces_the_cards_hold() {
     // was one undifferentiated run of text before, holds the next piece.
     assert!(piece(4).ends_with('&'), "{:?}", piece(4));
     assert_eq!(piece(5), "astropy writes it across CONTINUE cards&");
+}
+
+/// Every tile of a compressed image decompressed and put where it goes in the
+/// image, the first axis fastest, and the whole image hashed: FNV-1a over each
+/// pixel as a big-endian 64-bit float, with every NaN written as the one quiet
+/// NaN. Also what each tile's first step was, and how many tiles came from
+/// each column.
+fn every_tile(doc: &Document<MemSource>, ev: &mut Evaluator, hdu: usize) -> (u64, Vec<f64>, Vec<String>) {
+    let rows = ev.node(doc, &[0, hdu, 3, ROWS]).unwrap().child_count;
+    let mut image: Vec<f64> = Vec::new();
+    let mut shape: Vec<u64> = Vec::new();
+    let mut firsts = Vec::new();
+    for t in 0..rows as usize {
+        let tile = ev.fits_tile(doc, &[0, hdu, 3, ROWS, t]).unwrap().expect("a tile");
+        assert_eq!(tile.problem, None, "hdu {hdu} tile {t}: {:?}", tile.steps);
+        assert_eq!(tile.pixels.len() as u64, tile.pixel_count(), "hdu {hdu} tile {t}");
+        if image.is_empty() {
+            let n = ev.node(doc, &[0, hdu, 3, 1]).unwrap().child_count as usize;
+            shape = (0..n).map(|i| ev.node(doc, &[0, hdu, 3, 1, i]).unwrap().value.as_int().unwrap() as u64).collect();
+            image = vec![f64::INFINITY; shape.iter().product::<u64>() as usize];
+        }
+        firsts.push(tile.steps.first().map_or(String::new(), |s| s.what.clone()));
+        // Every pixel of the tile, by its place along each axis.
+        let mut at = vec![0u64; shape.len()];
+        for v in &tile.pixels {
+            let mut flat = 0u64;
+            let mut stride = 1u64;
+            for k in 0..shape.len() {
+                flat += (tile.start[k] + at[k]) * stride;
+                stride *= shape[k];
+            }
+            assert!(image[flat as usize].is_infinite(), "hdu {hdu} tile {t} overlaps another at {flat}");
+            image[flat as usize] = *v;
+            for k in 0..shape.len() {
+                at[k] += 1;
+                if at[k] < tile.shape[k] {
+                    break;
+                }
+                at[k] = 0;
+            }
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for v in &image {
+        let bits = if v.is_nan() { f64::NAN.to_bits() } else { v.to_bits() };
+        for b in bits.to_be_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    (h, image, firsts)
+}
+
+/// The tiles of every compressed image in the collection against what astropy
+/// reads the same file as. The hashes are astropy's `.data` for each unit, as
+/// `tools/make_fits_samples.py`'s files and `comp.fits` were read by astropy
+/// 8.0.1, hashed the way [`every_tile`] hashes. A hash that matches is every
+/// pixel of every tile the same float to the bit, NaNs in the same places.
+#[test]
+fn every_tile_of_every_compressed_sample_matches_astropy() {
+    let samples: &[(&str, usize, u64, &str, &[f64])] = &[
+        ("fits/comp.fits", 1, 0xdebc_8305_21f1_52aa, "RICE_1", &[7.0, 7.0, 7.0]),
+        ("fits/rice.fits", 1, 0x0c66_fb6d_5905_b465, "RICE_1", &[1200.0, 1265.0, 1311.0]),
+        ("fits/rice.fits", 2, 0x0272_bb36_2f98_ce1a, "RICE_1", &[154.0, 161.0, 171.0]),
+        ("fits/dithered.fits", 1, 0x0fc2_644e_9d2c_2f52, "RICE_1", &[-1.744675, 11.033096, 22.59725]),
+        ("fits/dithered.fits", 2, 0xd529_2601_e47a_dd53, "gzip", &[-1.80230097, 10.99756288, 22.59584548]),
+        ("fits/gzip2.fits", 1, 0x6459_9677_2adb_8e88, "gzip", &[1183.0, 1264.0, 1283.0]),
+        ("fits/gzip2.fits", 2, 0x45ad_6018_d883_80eb, "gzip", &[21.033499, 36.869576, 44.493217]),
+        ("fits/gzip2.fits", 3, 0x9899_bb47_c761_aabf, "stored", &[1183.0, 1264.0, 1283.0]),
+    ];
+    let mut ran = 0;
+    for (file, hdu, want, first_step, first_pixels) in samples {
+        let Some((doc, mut ev)) = read(file) else {
+            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            return;
+        };
+        let (hash, image, firsts) = every_tile(&doc, &mut ev, *hdu);
+        for (got, want) in image.iter().zip(first_pixels.iter()) {
+            assert!((got - want).abs() < 1e-5, "{file} hdu {hdu}: {got} against {want}");
+        }
+        assert_eq!(firsts[0], *first_step, "{file} hdu {hdu}");
+        assert_eq!(hash, *want, "{file} hdu {hdu}: 0x{hash:016x}");
+        ran += 1;
+    }
+    assert_eq!(ran, samples.len());
+}
+
+/// The steps a tile reports are the ones its bytes took: which kinds of Rice
+/// block, a tile that fell back to gzip, the blank and the zero a dithered
+/// tile kept, and the unshuffle GZIP_2 needs.
+#[test]
+fn a_real_tile_reports_the_steps_its_bytes_took() {
+    let Some((doc, mut ev)) = read("fits/rice.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let steps = |ev: &mut Evaluator, doc: &Document<MemSource>, hdu: usize, tile: usize| -> Vec<(String, String)> {
+        let t = ev.fits_tile(doc, &[0, hdu, 3, ROWS, tile]).unwrap().unwrap();
+        t.steps.into_iter().map(|s| (s.what, s.note)).collect()
+    };
+    // One tile of the 32-bit image is a single value: every block is zero.
+    let flat = steps(&mut ev, &doc, 1, 1);
+    assert_eq!(flat[0].0, "RICE_1");
+    assert!(flat[0].1.contains("10 blocks of 32 pixels: 0 Rice-coded, 10 all-zero, 0 uncoded at 32 bits"), "{flat:?}");
+    // One is noise across the whole range: every block is written uncoded.
+    let noise = steps(&mut ev, &doc, 1, 3);
+    assert!(noise[0].1.contains("0 Rice-coded, 0 all-zero, 10 uncoded"), "{noise:?}");
+    // And the last tile along the first axis is cut short, 10 by 16.
+    let edge = ev.fits_tile(&doc, &[0, 1, 3, ROWS, 2]).unwrap().unwrap();
+    assert_eq!((edge.start, edge.shape), (vec![40, 0], vec![10, 16]));
+    // The 8-bit image is Rice at one byte a pixel.
+    assert!(steps(&mut ev, &doc, 2, 0)[0].1.starts_with("1 byte per pixel; "));
+
+    let Some((doc, mut ev)) = read("fits/dithered.fits") else { return };
+    let first = steps(&mut ev, &doc, 1, 0);
+    let whats: Vec<&str> = first.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(whats, ["RICE_1", "SUBTRACTIVE_DITHER_2", "dither", "blank", "zero"]);
+    // ZDITHER0 is 1234, so tile 0 starts at seed 1233, and at the random
+    // number 500 times that one says.
+    assert!(first[2].1.ends_with("ZDITHER0 = 1234, this tile starting at r[312]"), "{first:?}");
+    assert_eq!(first[4].1, "1 pixel stored as -2147483646, which SUBTRACTIVE_DITHER_2 reserves for exactly 0.0");
+    // The tile of one value would not quantize, and was gzipped as floats.
+    let fallback = ev.fits_tile(&doc, &[0, 1, 3, ROWS, 5]).unwrap().unwrap();
+    assert_eq!(fallback.stored, Some(fits_tile::Stored::Gzip));
+    let whats: Vec<&str> = fallback.steps.iter().map(|s| s.what.as_str()).collect();
+    assert_eq!(whats, ["gzip", "read"]);
+    assert_eq!(fallback.steps[1].note, "500 pixels, as big-endian f32");
+    assert!(fallback.pixels.iter().all(|p| *p == 2.5));
+
+    let Some((doc, mut ev)) = read("fits/gzip2.fits") else { return };
+    let shuffled = steps(&mut ev, &doc, 1, 0);
+    let whats: Vec<&str> = shuffled.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(whats, ["gzip", "unshuffle", "read"]);
+    assert_eq!(shuffled[2].1, "50 pixels, as big-endian i16");
+    let stored = steps(&mut ev, &doc, 3, 0);
+    assert_eq!(stored[0], ("stored".to_string(), "taken as they are (ZCMPTYPE = NOCOMPRESS)".to_string()));
+
+    // The cursor on a tile's compressed bytes in the heap finds that tile
+    // through the descriptor that placed them. A fresh evaluator: one that
+    // has read the rows of a later unit fails to place this unit's heap,
+    // which is a fault in the evaluator's memo and not in the tiles.
+    let Some((doc, mut ev)) = read("fits/gzip2.fits") else { return };
+    let heap = ev.node(&doc, &[0, 1, 3, HEAP]).unwrap();
+    let tile_7 = ev.node(&doc, &[0, 1, 3, HEAP, 7]).unwrap();
+    let found = ev.locate(&doc, tile_7.offset_bits + 8).unwrap();
+    assert!(found.starts_with(&[0, 1, 3, HEAP]) && tile_7.offset_bits > heap.offset_bits);
+    assert_eq!(ev.fits_tile(&doc, &found).unwrap().unwrap().index, 7);
+}
+
+/// What the inspector is handed for the cursor on a compressed image: from a
+/// byte of a tile in the heap, and from a descriptor four levels into its row.
+#[test]
+fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
+    let Some((doc, mut ev)) = read("fits/dithered.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // Each row has two descriptors, COMPRESSED_DATA and GZIP_COMPRESSED_DATA,
+    // so the heap's third array is the second tile's compressed bytes.
+    let tile_1 = ev.node(&doc, &[0, 1, 3, HEAP, 2]).unwrap();
+    assert!(tile_1.child_count > 0);
+    let on_byte = ev.locate(&doc, tile_1.offset_bits + 3 * 8).unwrap();
+    let on_count = vec![0, 1, 3, ROWS, 1, 0, 0, 1, 0, 0];
+    for path in [on_byte, on_count] {
+        let Explain::FitsTile { index, tiles, start, shape, image_shape, algorithm, column, steps, values, total, pixels, element_type, problem, .. } =
+            ev.explain(&doc, &path, None).unwrap()
+        else {
+            panic!("not a tile at {path:?}");
+        };
+        assert_eq!((index, tiles, start, shape, image_shape), (1, 6, vec![25, 0], vec![25, 20], vec![50, 60]));
+        assert_eq!((algorithm.as_str(), column, element_type.as_str(), problem), ("RICE_1", Some("COMPRESSED_DATA"), "f32", None));
+        assert_eq!((values.len(), total, pixels), (32, 500, 500));
+        assert_eq!(steps.len(), 3);
+        // The pixels are written as the 32-bit floats they are, the way
+        // astropy prints them.
+        assert_eq!(values[..3], ["-1.9223341", "10.630576", "22.740988"]);
+    }
+    // A cell of the row that is a float, the tile's ZSCALE, still explains
+    // the float it is.
+    assert!(matches!(ev.explain(&doc, &[0, 1, 3, ROWS, 1, 0, 2, 0], None).unwrap(), Explain::Float { .. }));
 }

@@ -1182,7 +1182,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "page" | "samples" | "tile" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1320,6 +1320,31 @@ export type TypeInfo = {
   /** Samples: whether the last sample equals the reverse integration constant,
    *  or null where there is no check to make. */
   readonly mseed_check: boolean | null;
+  /** Tile: which tile of a FITS compressed image, counted from 0 as its row
+   *  is, and how many the image has. Zero tiles is an image whose header
+   *  would not read. */
+  readonly tile_index: number;
+  readonly tile_count: number;
+  /** Tile: where it starts, from 0 along each axis with axis 1 first; how
+   *  many pixels along each; and the image's shape. */
+  readonly tile_start: readonly number[];
+  readonly tile_shape: readonly number[];
+  readonly tile_image_shape: readonly number[];
+  /** Tile: ZCMPTYPE, and the column its bytes came from: COMPRESSED_DATA,
+   *  GZIP_COMPRESSED_DATA, UNCOMPRESSED_DATA, or empty. */
+  readonly tile_algorithm: string;
+  readonly tile_column: string;
+  /** Tile: bytes in the heap, and bytes once decompressed. */
+  readonly tile_packed: number;
+  readonly tile_decoded: number;
+  /** Tile: every step, in the order it was done. */
+  readonly tile_steps: readonly PageStep[];
+  /** Tile: the first pixels, how many were decoded, how many the tile has,
+   *  and what one pixel is. */
+  readonly tile_values: readonly string[];
+  readonly tile_total: number;
+  readonly tile_pixels: number;
+  readonly tile_element_type: string;
 };
 
 /** One Steim frame: the differences its codes name, and how many samples they

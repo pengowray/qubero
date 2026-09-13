@@ -5,32 +5,14 @@
 // Nothing here can be clicked through to, because none of these bytes are in
 // the file.
 
-import type { ChunkStep, TypeInfo } from "./doc.ts";
+import type { TypeInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
-
-function span(cls: string, text: string): HTMLElement {
-  const e = document.createElement("span");
-  e.className = cls;
-  e.textContent = text;
-  return e;
-}
+import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many elements came out, for the note beside the heading. */
 export function chunkNote(info: TypeInfo): string {
   if (info.chunk_total === 0) return "";
   return countText(info.chunk_total, "element");
-}
-
-/** One filter: what it was, and what it did to the size. */
-function stepLine(step: ChunkStep): HTMLElement {
-  const line = document.createElement("div");
-  line.className = "insp-orow";
-  line.append(span("insp-orow-object", step.filter));
-  const change = step.skipped
-    ? "not applied to this chunk"
-    : `${step.in_bytes.toLocaleString()} → ${step.out_bytes.toLocaleString()} bytes`;
-  line.append(span("insp-orow-text", change));
-  return line;
 }
 
 /**
@@ -44,43 +26,21 @@ function stepLine(step: ChunkStep): HTMLElement {
 export function chunkBody(info: TypeInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
-  const sizes = document.createElement("div");
-  sizes.className = "insp-qcount";
   const packed = `${info.chunk_packed.toLocaleString()} bytes in the file`;
   const unpacked = info.chunk_decoded > 0 ? `, ${info.chunk_decoded.toLocaleString()} bytes unpacked` : "";
-  sizes.textContent = packed + unpacked;
-  frag.append(sizes);
+  frag.append(line("insp-qcount", packed + unpacked));
 
-  if (info.chunk_steps.length > 0) {
-    frag.append(span("insp-qsubhead", "Filters, in the order they were undone"));
-    const list = document.createElement("div");
-    list.className = "insp-orows";
-    for (const s of info.chunk_steps) list.append(stepLine(s));
-    frag.append(list);
-  }
+  const rows = info.chunk_steps.map((s) => ({
+    label: s.filter,
+    text: s.skipped ? "not applied to this chunk" : bytesChange(s.in_bytes, s.out_bytes),
+  }));
+  frag.append(stepList("Filters, in the order they were undone", rows));
 
   if (info.problem !== "") {
-    const p = document.createElement("div");
-    p.className = "insp-xproblem";
-    p.textContent = info.problem;
-    frag.append(p);
+    frag.append(problemLine(info.problem));
     return frag;
   }
 
-  if (info.chunk_values.length > 0) {
-    frag.append(span("insp-qsubhead", `First elements, as ${info.chunk_element_type}`));
-    const values = document.createElement("div");
-    values.className = "insp-orow";
-    values.append(span("insp-orow-text", info.chunk_values.join("  ")));
-    frag.append(values);
-    if (info.chunk_values.length < info.chunk_total) {
-      frag.append(
-        span(
-          "insp-qcount",
-          `Showing the first ${info.chunk_values.length.toLocaleString()} of ${info.chunk_total.toLocaleString()} elements.`,
-        ),
-      );
-    }
-  }
+  frag.append(firstValues(`First elements, as ${info.chunk_element_type}`, info.chunk_values, info.chunk_total, "elements"));
   return frag;
 }
