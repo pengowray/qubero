@@ -17,10 +17,18 @@
 //!
 //! Everything between the opening magic and the footer is the row groups: the
 //! pages of every column, each with its own header and its own encoding. The
-//! footer is what places them, and placing them is not done here yet, so this
-//! reads as one region. What is written down already is [`PAGE_SCHEMA`], the
-//! structs a page header is made of, since they are the other Thrift in the
-//! file and the same schema reads them.
+//! footer is what places them. Every column chunk in it reaches, with an `At`,
+//! the run its `dictionary_page_offset` or `data_page_offset` starts and its
+//! `total_compressed_size` measures, and that run reads as pages: a header in
+//! the same Thrift, read with [`PAGE_SCHEMA`], and the payload it counts. The
+//! chunk's offset index, column index and bloom filter are placed the same way.
+//! So a page sits under the column chunk that placed it, deep in the footer's
+//! tree, and there is no node for the region between the magic and the footer
+//! as a whole.
+//!
+//! A payload keeps its bytes. Undoing its codec (snappy, zstd, brotli, lz4,
+//! gzip) and then its encoding (plain, dictionary, the RLE and bit-packed
+//! hybrid, delta) is what is left before a page reads as its values.
 //!
 //! A sequential walk of that region would be wrong, which is why it is not
 //! here: a writer may put a column index, an offset index and a bloom filter
@@ -383,12 +391,9 @@ pub const SCHEMA: &[Struct] = &[
     },
 ];
 
-/// The structs a page header is made of.
-///
-/// Nothing places one yet, so nothing reads one yet either. They are here
-/// because they are the same schema and the same reader, and because what is
-/// missing for the pages is arithmetic over the footer rather than any of
-/// this.
+/// The structs a page header is made of, and the offset index, column index
+/// and bloom filter header a column chunk points at beside its pages. The same
+/// schema and the same reader as the footer's.
 pub const PAGE_SCHEMA: &[Struct] = &[
     Struct { name: "BloomFilterHeader", fields: &[
         f(1, "numBytes", Plain),

@@ -1247,6 +1247,50 @@ fn counting_a_long_run_a_bit_at_a_time_costs_no_more_than_counting_it_at_once() 
 }
 
 #[test]
+fn a_listing_asked_again_in_goes_gets_further_every_go() {
+    // The shape of a Thrift footer: runs that end on a stop record, inside
+    // runs, so every row of the listing sits two walks deep. `spans` starts
+    // again from the top of its window each time it is asked, and going back
+    // over the rows the last go reached used to be charged as if they were
+    // being read for the first time. Once that cost more than a go allows,
+    // every go ran out in the same place: a Parquet file of 73 KB never
+    // finished at 5,000 a go and finished in one at 12,000.
+    let item = T::structure("Item", vec![("kind", T::u8()), ("v", T::u8())]);
+    let group = T::structure("Group", vec![("items", T::repeat(item, Until::FieldValue { field: "kind".into(), value: 0 }))]);
+    let t = Template::new("t", T::repeat(group, Until::End));
+    let mut bytes = Vec::new();
+    for _ in 0..30 {
+        for f in 1..=20u8 {
+            bytes.extend_from_slice(&[1, f]);
+        }
+        bytes.extend_from_slice(&[0, 0]);
+    }
+    let d = doc(&bytes);
+    let len = d.len_bits();
+    let want = Evaluator::new(t.clone()).spans(&d, 0, len, 4000).unwrap();
+    assert!(want.len() > 1000, "one row per field, not one per run: {}", want.len());
+
+    let mut ev = Evaluator::new(t);
+    ev.set_slice(Some(200));
+    let mut goes = 0;
+    let got = loop {
+        goes += 1;
+        assert!(goes <= 50, "asking again is not getting anywhere");
+        ev.begin_slice();
+        match ev.spans(&d, 0, len, 4000) {
+            Ok(v) => break v,
+            Err(e) if e.interrupted() => continue,
+            Err(e) => panic!("{e:?}"),
+        }
+    };
+    assert!(goes > 1, "the listing was not interrupted, so this proves nothing");
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!((g.offset_bits, g.size_bits, &g.name), (w.offset_bits, w.size_bits, &w.name));
+    }
+}
+
+#[test]
 fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
     // Strings of growing length, so every element sits at an offset only the
     // walk can find, and one the test can work out for itself.
@@ -2346,6 +2390,34 @@ fn a_field_can_take_its_displayed_name_from_the_file() {
 }
 
 #[test]
+fn the_elements_of_a_list_can_take_their_displayed_names_from_the_file() {
+    // Two names in a table, and a list of three numbers named by position in
+    // it: the third has no name written for it.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("labels", T::array(T::utf8(E::lit(4)), E::lit(2))),
+            ("vals", T::array(T::u8(), E::lit(3))),
+            ("after", T::computed(E::elem_field("vals", E::lit(1), &[]))),
+        ],
+    )
+    .field_elem_named_from("vals", E::elem_field("labels", E::idx(), &[]));
+    let d = doc(b"fluxtime\x07\x09\x0b");
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().name, "[0] flux");
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().name, "[1] time");
+    // Nothing to read for the third, so it keeps its index and nothing fails.
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().name, "[2]");
+    // The list itself is not renamed: the declaration is about its elements.
+    assert_eq!(ev.node(&d, &[1]).unwrap().name, "vals");
+    // The index is still the name an expression reaches an element by.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value.as_int(), Some(9));
+    // And the connection is exposed, as a name rather than as a value.
+    let seen: Vec<_> = ev.origins(&d, &[1, 1]).unwrap().into_iter().map(|o| (o.role, o.label)).collect();
+    assert_eq!(seen, vec![(Role::Name, "labels[1]".to_string())]);
+}
+
+#[test]
 fn a_bit_field_of_a_number_is_a_shift_and_a_mask() {
     // A word packing six-bit differences, the way a Steim2 word does, read as
     // fields of the number rather than as bits of the bytes.
@@ -3211,6 +3283,37 @@ fn a_view_over_bytes_the_fields_describe_is_not_counted_twice() {
     assert_eq!(spent(&out, "bytes", "bytes[]"), (32, 1));
     assert_eq!(out.covered_bits, 64);
     assert_eq!(out.unmapped_bits, 0);
+}
+
+/// Two addresses naming the same thing reach it twice and count it once. An
+/// HDF5 group can hold any number of links to one object, and the template
+/// follows every one, since each is a way a reader gets there; counted every
+/// time, a group of two thousand links to one dataset covers more bits than
+/// its file has.
+///
+/// Something else at the same place is not the same thing: an address to the
+/// same start with a different length still counts.
+#[test]
+fn a_thing_two_addresses_name_is_counted_once() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("first", T::u8()),
+                ("second", T::u8()),
+                ("one", T::at(E::field("first"), T::structure("Thing", vec![("a", T::u16(Big))]))),
+                ("two", T::at(E::field("second"), T::structure("Thing", vec![("a", T::u16(Big))]))),
+                ("wider", T::at(E::field("first"), T::bytes(E::lit(4)))),
+            ],
+        ),
+    );
+    let d = doc(&[4, 4, 0, 0, 1, 2, 3, 4]);
+    let mut ev = Evaluator::new(t);
+    let (out, _) = kinds_to_the_end(&mut ev, &d);
+    assert_eq!(spent(&out, "uint", "u16 be"), (16, 1));
+    assert_eq!(spent(&out, "bytes", "bytes[]"), (32, 1));
+    assert!(out.covered_bits <= d.len_bits(), "{out:?}");
 }
 
 /// Bytes a structure does not cover are a gap. Nothing but the gap is

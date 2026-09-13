@@ -19,6 +19,7 @@ break while fixing it.
 | 6. A box never says what its width means | `5ed2006`, `01b7e27` |
 | 10. ELF segment virtual addresses do not carry the mark | `a0b51ac` |
 | 12. `.claude/launch.json` lies to a worktree, in the port half of it | `b681f5a` |
+| Version 2 nodes below the root cannot be opened in the Listing (was "Still open" 4) | `4308a8f` |
 
 Number 10 was the small one on the list and it was sitting on a real defect.
 The line about `busybox-x86_64` reporting 0 mapped regions was not a quirk of
@@ -30,6 +31,15 @@ wrong tables, and a section's flags column showed its type. A second insertion,
 a `name` field inside every section header, did the same one level down. Both
 are read by name now. What follows in "Still open" number 2 is the general form
 of that.
+
+The version 2 nodes closed when the template gained `Expr::Log2`: it places
+every node of a version 2 tree now, working the pointer widths out level by
+level, and `hdf5_tree.rs` looks each node's path up from its parent's, keeping
+it only where the template lands on the address the walk read. One loose end is
+text: `BTREES.notInListing` and the `rootOnly` form of `BTREES.hint` still give
+"only the root is placed" as their reason. The panel shows them only when some
+node has no path, which a well-formed file never gives, so what is out of date
+is the reason they state, not when they appear.
 
 ## The two scroll rules, which everything in the hex view is held to
 
@@ -110,20 +120,6 @@ prediction `write()` used for the row before the browser laid it out.
 wraps it, or the reverse. The prediction is otherwise exact, row for row,
 across 870 rows of 30 draws on three sample files, so this is a narrow bug and
 not a general looseness.
-
-### 4. Version 2 nodes below the root cannot be opened in the Listing
-
-The template places only the version 2 root node, so nodes below it have no
-path. Clicking still goes to their bytes; double-click opens nothing, and
-`BTREES.notInListing` says so.
-
-**Why it is not a small fix:** a `BTIN`'s child pointers are
-`T::bytes(E::Remaining)` in the template because a pointer's two counts are as
-wide as an iteration over the tree's levels with a base-two logarithm in it
-says, and the expression language has no logarithm. `hdf5_tree.rs` does that
-arithmetic in Rust and reads the nodes directly. Closing the gap means giving
-the template that capability, which is real format work in a declarative
-language, not another walk.
 
 ### 5. "The number on a box is what is in the band below it" is not true of v2
 

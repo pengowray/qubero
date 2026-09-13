@@ -292,15 +292,16 @@ impl Evaluator {
     ) -> R<u64> {
         let parent = p.clone();
         while *j < idx {
-            self.spend(*at)?;
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
             // The element may already be here, from the walk that sized the
-            // list or from the caller looking at it.
+            // list or from the caller looking at it. Only placing one is
+            // charged: see `scan_from` for why stepping over one is not.
             let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| r.cursor + s));
             let end = match known {
                 Some(end) => end,
                 None => {
+                    self.spend(*at)?;
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
                     self.memo[p.as_slice()].cursor + size
@@ -405,15 +406,26 @@ impl Evaluator {
     ) -> R<Option<usize>> {
         let parent = p.clone();
         while (*j as u64) < n {
-            self.spend(*at)?;
             let before = self.journals.last().map_or(0, |w| w.added.len());
             p.push(*j);
             // Where the element covers bytes, and where the count after it
             // resumes: the same for every element but an LSB-first one.
             let known = self.memo.get(p.as_slice()).and_then(|r| r.size.map(|s| (r.offset, r.cursor, s)));
             let (start, cursor, size) = match known {
+                // Stepping over an element already placed is a lookup, and it
+                // is not charged. The allowance is there so a go that has real
+                // reading to do hands the screen back part way, and a go only
+                // carries on where the last one stopped if going back over what
+                // that one did is free. `spans` starts again from the top of
+                // its window every time it is asked, and in a Parquet footer a
+                // row sits inside the field list of a struct inside the field
+                // list of another, four deep. Listing one 73 KB file stepped
+                // over nearly 8,000 known elements that way. Charged, that was
+                // more than a go of 5,000 allows, so every go ran out in the
+                // same place and the listing never arrived.
                 Some(v) => v,
                 None => {
+                    self.spend(*at)?;
                     self.place(doc, p, pr, *j, *at)?;
                     let size = self.size_of(doc, p)?;
                     let r = &self.memo[p.as_slice()];

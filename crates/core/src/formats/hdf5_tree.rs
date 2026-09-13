@@ -152,10 +152,11 @@ pub enum Records {
 pub struct Node {
     /// Where it is in the template, so that picking it can move the cursor.
     ///
-    /// Empty for every version 2 node below the root, which the template does
-    /// not place: see the `v2` module. A box with no path still goes to its bytes,
-    /// because the address is its own fact; what it cannot do is open in the
-    /// Listing, since there is no field there to open.
+    /// Empty for a version 2 node the template does not place at the address
+    /// this walk read it from, which in a well-formed tree is none of them: see
+    /// the `v2` module. A box with no path still goes to its bytes, because the
+    /// address is its own fact; what it cannot do is open in the Listing, since
+    /// there is no field there to open.
     pub path: Vec<usize>,
     /// Index into [`Tree::nodes`], or [`NO_PARENT`] for the root. Every node
     /// but the root comes after its parent in the list.
@@ -305,9 +306,9 @@ pub struct Tree {
 ///    all the way would answer with the root group's tree wherever the reader
 ///    stood. It climbs only while each step up is an entry's child of the node
 ///    above, which is what being in the same tree means. A version 2 tree needs
-///    no climb of that sort: the template places only its root node, and that
-///    root node sits inside the `BTHD` header, so the header found above the
-///    cursor is the whole answer.
+///    no climb of that sort: the template places every node of one inside the
+///    `BTHD` header, under the root node, so the header found above the cursor
+///    is the whole answer.
 /// 2. Is the cursor inside an object header? Then the tree that header names:
 ///    its symbol table message's or its link info message's for a group, its
 ///    data layout message's for a chunked dataset. This is what makes picking a
@@ -370,8 +371,7 @@ fn find_root<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -
 /// The top of the tree the node at `from` is in.
 ///
 /// A version 1 node climbs to its own root; a version 2 header is already the
-/// top of one, since the only node of one of those the template places is the
-/// root and that root is inside the header.
+/// top of one, since the template places every node of one inside its header.
 fn rooted<S: Source>(ev: &mut Evaluator, doc: &Document<S>, from: Vec<usize>, spot: Spot) -> R<Vec<usize>> {
     match spot {
         Spot::V2Header => Ok(from),
@@ -607,9 +607,10 @@ fn kind_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> 
 /// `path`, where it is the top of a tree or a node of one.
 ///
 /// A version 2 header and not a version 2 node, because the template places
-/// only the root node of one of those and places it inside the header. So a
-/// cursor anywhere in a version 2 tree that the Listing can reach is a cursor
-/// inside the header, and the header is what a walk starts from anyway.
+/// every node of one of those inside the header: the root node is a field of
+/// it, and each node below is a field of the pointer above it. So a cursor
+/// anywhere in a version 2 tree is a cursor inside the header, and the header
+/// is what a walk starts from anyway.
 fn spot_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<Option<Spot>> {
     if let Some(kind) = kind_of(ev, doc, path)? {
         return Ok(Some(Spot::V1(kind)));
@@ -940,30 +941,33 @@ fn ranges(out: &mut Tree) {
 
 /// The version 2 walk.
 ///
-/// The template reads a `BTHD` header and places the one node it names, and
-/// stops there. What it cannot do is place the nodes below that one, and the
-/// reason is worth stating because it is the reason this module exists.
-///
 /// A `BTIN` writes, after its records, one pointer per child: the child's
 /// address, how many records are in it, and, where the child is itself a
 /// `BTIN`, how many records are in it and everything below it. The widths of
 /// the last two are nowhere in the file. They are worked out from the node
 /// size, the record size and the tree's depth, by an iteration over the levels
-/// with a base-two logarithm in it, which is the one arithmetic the template's
-/// expressions cannot do. So the child pointers stay a run of bytes in the
-/// Listing, and the shape of a tree of fifty nodes would be one box.
+/// with a base-two logarithm in it.
 ///
 /// This does that arithmetic in Rust (`Shape`) and then reads the nodes as
-/// bytes, straight from the document, the way `h5ad`'s heap reader does. Three
-/// things follow from reading bytes rather than fields, and all three are
-/// deliberate:
+/// bytes, straight from the document, the way `h5ad`'s heap reader does. It was
+/// written that way when the template's expressions had no logarithm and could
+/// place nothing below the root. They have one now, and the template places
+/// every node, with the same arithmetic written as the header's `levels`. The
+/// walk still reads bytes, for what that buys and because two readings of the
+/// same widths that agree on every real file are worth more than one: a width
+/// out by a byte in either puts every child after the first somewhere else.
+/// Three things follow from reading bytes rather than fields:
 ///
-/// - **No template path below the root.** A node the template did not place is
-///   not at any path, so [`Node::path`] is empty for every node but the root.
-///   A box with no path can still go to its bytes and still say everything the
-///   readout says; what it cannot do is open in the Listing.
-/// - **No slice accounting.** `Evaluator::begin_slice` charges a walk for the
-///   fields it reads, and a raw read is charged nothing. What bounds this
+/// - **Paths are looked up, not walked.** Each node's [`Node::path`] is the
+///   template's `node` under the pointer this walk followed, and is kept only
+///   where that field lands on the address the walk read. A node the template
+///   places somewhere else, or not at all, has an empty path: it can still go
+///   to its bytes and still say everything the readout says, and what it
+///   cannot do is open in the Listing. That is never a node of a well-formed
+///   tree.
+/// - **Little slice accounting.** `Evaluator::begin_slice` charges a walk for
+///   the fields it reads, and a raw read is charged nothing; only the path
+///   lookups are charged. What bounds this
 ///   instead is the node cap the caller passes and `MAX_BYTES`, and both are
 ///   reported as omitted nodes rather than silently applied.
 /// - **Every number is checked.** These are files nobody vouched for. A node
@@ -1151,8 +1155,8 @@ mod v2 {
                 out.records = Records::Unread;
             }
         }
-        // The root node's path, which is the one path the template has: it
-        // places the root and nothing under it.
+        // The root node's path. Every node under it is found from its parent's
+        // path when it is reached; see `placed`.
         let root_path = match ev.child_named(doc, header, "root_node")? {
             Some(field) => crate::formats::h5ad::inside(ev, doc, &field)?.unwrap_or_default(),
             None => Vec::new(),
@@ -1161,7 +1165,14 @@ mod v2 {
         let mut queue: VecDeque<Waiting> = VecDeque::new();
         let mut seen: HashSet<u64> = HashSet::new();
         let mut spent: u64 = 0;
-        queue.push_back(Waiting { at: root_at, level: depth, records: root_records, parent: NO_PARENT, depth: 0 });
+        queue.push_back(Waiting {
+            at: root_at,
+            level: depth,
+            records: root_records,
+            parent: NO_PARENT,
+            index: 0,
+            depth: 0,
+        });
         while let Some(next) = queue.pop_front() {
             if out.nodes.len() >= limit.max(1) || spent >= MAX_BYTES {
                 out.omitted += queue.len() as u64 + 1;
@@ -1179,7 +1190,13 @@ mod v2 {
                 }
                 continue;
             }
-            let path = if next.parent == NO_PARENT { root_path.clone() } else { Vec::new() };
+            let path = match out.nodes.get(next.parent) {
+                None => root_path.clone(),
+                Some(parent) => {
+                    let above = parent.path.clone();
+                    placed(ev, doc, &above, next.index, next.at)?
+                }
+            };
             match add(doc, &next, &path, &shape, &mut out, &mut queue, limit, &mut spent) {
                 Ok(()) => {}
                 Err(e) if e.interrupted() => return Err(e),
@@ -1214,7 +1231,37 @@ mod v2 {
         level: u64,
         records: u64,
         parent: usize,
+        /// Which of the parent's pointers named it, which is also which of the
+        /// template's `children` holds it.
+        index: u64,
         depth: usize,
+    }
+
+    /// Where the template places the child that pointer `index` of the node at
+    /// `parent` names, or an empty path where it places none there.
+    ///
+    /// Checked against the address the walk read before it is handed back. A
+    /// path is what a double-click opens, and a path to the wrong node would
+    /// open a plausible node that is not the one the reader pressed, which is
+    /// worse than opening nothing. So a parent with no path, a node the
+    /// template cannot read, and one it reads at another address all come back
+    /// empty, and only a read interrupted for want of bytes is passed on.
+    fn placed<S: Source>(ev: &mut Evaluator, doc: &Document<S>, parent: &[usize], index: u64, at: u64) -> R<Vec<usize>> {
+        if parent.is_empty() {
+            return Ok(Vec::new());
+        }
+        let found = (|| -> R<Option<Vec<usize>>> {
+            let Some(mut child) = ev.child_named(doc, parent, "children")? else { return Ok(None) };
+            child.push(usize::try_from(index).unwrap_or(usize::MAX));
+            let Some(node) = ev.child_named(doc, &child, "node")? else { return Ok(None) };
+            let Some(node) = crate::formats::h5ad::inside(ev, doc, &node)? else { return Ok(None) };
+            Ok((ev.node(doc, &node)?.offset_bits == at * 8).then_some(node))
+        })();
+        match found {
+            Ok(path) => Ok(path.unwrap_or_default()),
+            Err(e) if e.interrupted() => Err(e),
+            Err(_) => Ok(Vec::new()),
+        }
     }
 
     /// One node: what it holds, and its children queued behind it.
@@ -1312,6 +1359,7 @@ mod v2 {
                 level: next.level - 1,
                 records: le(&bytes, at + ADDR, shape.count),
                 parent: here,
+                index: i,
                 depth: next.depth + 1,
             });
         }
