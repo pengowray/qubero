@@ -612,8 +612,9 @@ export function readoutLines(tree: Tree, box: Box): string[] {
   if (tree.job === "chunk" && node.first_key !== "" && tree.coords > 0) {
     lines.push(tree.coords_pad ? BTREES.chunkRangeNote(tree.coords) : BTREES.chunkRangeNoteV2(tree.coords));
   }
-  // A node the template never placed has nowhere in the Listing to open, and
-  // the reader has just read a hint that says double-click opens one.
+  // A node the template does not place where the walk read it has nowhere in
+  // the Listing to open, and the reader has just read a hint that says
+  // double-click opens one.
   if (node.path.length === 0) lines.push(BTREES.notInListing);
   return lines;
 }

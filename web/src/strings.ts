@@ -1389,12 +1389,32 @@ export const BTREES = {
    *  `recordsUnread` already accounts for the missing range, and two notes
    *  about one absence read as two problems. */
   nodeLinkHashes: "records hold name hashes and fractal heap ids; the link names are in the heap",
-  /** In the readout of a version 2 node below the root. Fact, reason,
-   *  consequence, and the consequence stays: the readout comes up on the first
-   *  press, so this line is what stops the second one, and a reader who has
-   *  just read the hint under the picture is owed the contradiction spelled
-   *  out rather than left to find it. */
-  notInListing: "Not in the Listing: only the root of a version 2 tree is placed there, so double-click does nothing here.",
+  /** In the readout of a node with no template path: one the template does
+   *  not place at the address the walk read it from, whether it places it
+   *  somewhere else or not at all (`hdf5_tree.rs`, `placed`). Every node of
+   *  a well-formed tree has a path. The one real case so far is an HDF5 file
+   *  with a user block, such as a MATLAB 7.3 `.mat` file, where the walk
+   *  ignores the base address; a malformed file can do it too.
+   *
+   *  Fact, reason, consequence, and the consequence stays: the readout comes
+   *  up on the first press, so this line is what stops the second one, and a
+   *  reader who has just read the hint under the picture is owed the
+   *  contradiction spelled out rather than left to find it.
+   *
+   *  The reason is "does not show this node at this address" and not "has no
+   *  node at this address": `placed` checks the address of the template's
+   *  node under the pointer the walk followed, and never whether anything
+   *  else in the Listing sits at the walk's address. It names neither side as
+   *  wrong, because on the user-block file it is the walk that is.
+   *
+   *  The second sentence lists the files it happens in, in `none`'s shape, so
+   *  a programmer whose file plainly has this node does not take the line for
+   *  a bug in the picture: "user block" is the specification's term and a
+   *  MATLAB 7.3 file is where most people meet one. "In the Listing" and not
+   *  "placed", the template's word: `stripCaption` says "placed by file
+   *  address" of the strip, and one word with two meanings on one screen is
+   *  an ambiguity. */
+  notInListing: "Not in the Listing: the Listing does not show this node at this address, so double-click does nothing here. This happens for a file with a user block, such as a MATLAB 7.3 .mat file, and for a malformed file.",
   /** On a node whose children were not all read, in a tree that shows no key
    *  ranges at all: a version 2 group tree, one indexing something else, and
    *  any tree whose records were not read. `truncated`'s "first and last link
@@ -1419,16 +1439,24 @@ export const BTREES = {
    *  double-click puts the node in the Listing, so the destination is named
    *  the way the minimap names its Block section.
    *
-   *  The clause after the semicolon is there because this line is written into
-   *  the panel once, before any tree has been walked, so the one string has to
-   *  be true of both versions. Without it the sentence is a promise that fails
-   *  on every box of a version 2 tree but one. */
-  hint: (noun: string, rootOnly: boolean): string => {
+   *  The third sentence comes when `someUnplaced`: the panel writes this line
+   *  per tree, from whether any of the tree's nodes has no template path, and
+   *  without it the second sentence is a promise that fails on those nodes.
+   *  `notInListing` says which files have them. Which nodes they are is not
+   *  said, because the hint speaks for the whole tree and cannot point at a
+   *  box; the readout says it on the node itself at the first press. "Some"
+   *  and not "all but the root": the root's path comes from the tree header
+   *  and is usually kept when the rest are lost, but a header the template
+   *  could not read loses it too. Not a count, which would sit under
+   *  `omitted`'s "At least N more nodes not drawn" and invite a reader to
+   *  reconcile the two. "Not in the Listing" and not "not placed", for the
+   *  reason `notInListing` gives. */
+  hint: (noun: string, someUnplaced: boolean): string => {
     // "An entry", "a record": the noun is the tree's, so the article has to be
     // worked out rather than written into the sentence.
     const one = `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
-    return rootOnly
-      ? `Click a node or ${one} to go to its bytes. Double-click the root to open it in the Listing; the other nodes are not placed there.`
+    return someUnplaced
+      ? `Click a node or ${one} to go to its bytes. Double-click a node to open it in the Listing. Some nodes of this tree are not in the Listing, and double-click does nothing on those.`
       : `Click a node or ${one} to go to its bytes. Double-click a node to open it in the Listing.`;
   },
   /** On a node whose children the walk did not all reach, in its tooltip and
