@@ -757,7 +757,9 @@ fn datatype() -> T {
 enum Described {
     /// By a datatype message among the same object's messages.
     Beside,
-    /// By the datatype written inside the attribute holding the elements.
+    /// By a field called `datatype` in a structure around the elements: the
+    /// datatype an attribute writes before its value, or the copy a chunked
+    /// layout keeps above its chunks (see [`datatype_copy`]).
     Inside,
 }
 
@@ -768,6 +770,23 @@ impl Described {
             Described::Inside => E::within(&["datatype", name]),
         }
     }
+}
+
+/// The three numbers of the datatype message that say what a chunk's elements
+/// are, read once by a chunked layout and kept there, so that a chunk asks a
+/// field above it rather than the message beside the layout.
+///
+/// That is the difference between opening a dataset of a hundred thousand
+/// chunks in a moment and in minutes. A sibling is looked for among the
+/// earlier elements of every list the asking field sits in, innermost first,
+/// and a chunk an index points at sits in that index's list of entries: asked
+/// from there, the search passes every entry before this one on its way out
+/// to the messages, and does it again for the next chunk.
+fn datatype_copy() -> T {
+    T::structure(
+        "DatatypeCopy",
+        ["class", "bit_field", "size"].into_iter().map(|part| (part, T::computed(Described::Beside.part(part)))).collect(),
+    )
 }
 
 fn element_size(by: Described) -> E {
@@ -1654,6 +1673,7 @@ fn chunked_v4() -> T {
                 ),
             ),
             ("address", addr()),
+            ("datatype", datatype_copy()),
             (
                 "chunks",
                 T::switch(
@@ -1670,6 +1690,7 @@ fn chunked_v4() -> T {
             ),
         ],
     )
+    .machinery(&["datatype"])
 }
 
 fn chunk_index_type() -> T {
@@ -1707,7 +1728,7 @@ fn single_chunk() -> T {
     T::switch(
         bit("flags", 1),
         vec![(1, filtered_chunk(E::within(&["index", "chunk_size"])))],
-        elements(Described::Beside, E::product_of("chunk_dimensions")),
+        elements(Described::Inside, E::product_of("chunk_dimensions")),
     )
 }
 
@@ -1743,7 +1764,7 @@ fn implicit_chunks() -> T {
             (
                 "chunks",
                 T::array(
-                    T::sized(E::field("chunk_bytes"), elements(Described::Beside, E::field("chunk_bytes"))),
+                    T::sized(E::field("chunk_bytes"), elements(Described::Inside, E::field("chunk_bytes"))),
                     E::product_of("chunks_across"),
                 ),
             ),
@@ -2135,7 +2156,7 @@ fn array_entry() -> T {
                 T::switch(
                     E::field("client_id"),
                     vec![(1, at_address("chunk_address", filtered_chunk(E::within(&["filtered", "chunk_size"]))))],
-                    at_address("chunk_address", elements(Described::Beside, E::product_of("chunk_dimensions"))),
+                    at_address("chunk_address", elements(Described::Inside, E::product_of("chunk_dimensions"))),
                 ),
             ),
         ],
@@ -2905,7 +2926,7 @@ mod tests {
     /// The path from the layout message's body down to the elements of the one
     /// chunk: the layout, its storage, the chunks the address places, and the
     /// run inside them.
-    const SINGLE_CHUNK: &[usize] = &[6, 0, 6, 2, 4, 1, 1, 7, 0, 2];
+    const SINGLE_CHUNK: &[usize] = &[6, 0, 6, 2, 4, 1, 1, 8, 0, 2];
 
     /// A version 4 layout message places the same bytes a version 3 one did,
     /// and nothing in it writes down how many there are: the chunk dimensions
@@ -2945,7 +2966,7 @@ mod tests {
         let body = ALPHA_HEADER + 16 + 24 + 24 + 8;
         put(&mut f, body + 7, &[9]);
         let mut chunks = LINK.to_vec();
-        chunks.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 7]);
+        chunks.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 8]);
         let (_, value) = read(&f, &chunks);
         assert!(matches!(value, Value::Bytes { len: 0, .. }), "{value:?}");
     }
