@@ -17,6 +17,12 @@
 //! out separately, from `nifti2.h` for the second, and share everything after
 //! the header.
 //!
+//! NIfTI-1 kept the size and much of the shape of the Analyze 7.5 header it
+//! grew from, which SPM wrote for a decade before it and which is still
+//! around as `.hdr` and `.img` pairs. That header has no magic, so a 348-byte
+//! header without one reads as Analyze here, and the `analyze` template reads
+//! any 348-byte header that way. [`analyze_header`] lists what differs.
+//!
 //! Nothing says which way round the numbers are. `sizeof_hdr` is 348 or 540
 //! in the file's own order, and those read the wrong way round are
 //! 1,543,569,408 and 469,893,120, so the template peeks at that word both ways
@@ -389,11 +395,118 @@ fn version(e: Endian, v: Version) -> T {
         Version::One => (HEADER_1, E::peek_at(E::lit(MAGIC_1_AT as i128 * 8), 32, Big), SINGLE_1, PAIR_1),
         Version::Two => (HEADER_2, E::peek_at(E::lit(MAGIC_2_AT as i128 * 8), 32, Big), SINGLE_2, PAIR_2),
     };
+    // A 348-byte header with no magic is the Analyze header NIfTI-1 grew
+    // from, and reads as that. A 540-byte one with no magic is nothing known.
+    let otherwise = match v {
+        Version::One => analyze_file(e),
+        Version::Two => T::bytes(E::Remaining),
+    };
     T::switch(
         E::Remaining.less_than(E::lit(size)),
         vec![(1, T::bytes(E::Remaining))],
-        T::switch(magic, vec![(single, file(e, v, true)), (pair, file(e, v, false))], T::bytes(E::Remaining)),
+        T::switch(magic, vec![(single, file(e, v, true)), (pair, file(e, v, false))], otherwise),
     )
+}
+
+/// An Analyze 7.5 header, in either byte order, whatever its last four bytes
+/// hold: the template to pick for a `.hdr` from before NIfTI, or to read a
+/// NIfTI-1 header the way a program that predates it would.
+pub fn analyze() -> Template {
+    let by_size = |e: Endian, otherwise: T| T::switch(E::peek(32, e), vec![(HEADER_1, analyze_file(e))], otherwise);
+    let root = T::switch(
+        E::Remaining.less_than(E::lit(HEADER_1)),
+        vec![(1, T::bytes(E::Remaining))],
+        by_size(Little, by_size(Big, T::bytes(E::Remaining))),
+    );
+    Template::new("analyze", root)
+}
+
+/// An Analyze file is its header and nothing else: the voxels are always in
+/// the `.img` beside it, starting `vox_offset` bytes in.
+fn analyze_file(e: Endian) -> T {
+    T::structure("Analyze 7.5", vec![("header", analyze_header(e))])
+}
+
+/// The 348 bytes of Analyze 7.5's `dsr`, as the Mayo Clinic's `dbh.h` has
+/// them and nibabel names them: `header_key`, `image_dimension` and
+/// `data_history` one after another.
+///
+/// Where NIfTI-1 differs is most of the point of reading this one:
+///
+/// - No magic. The last four bytes are `smin`, and nothing but `sizeof_hdr`
+///   and fields that agree with each other says a file is this format.
+/// - `hkey_un0` is where NIfTI put `dim_info`, and `vox_units`, `cal_units`
+///   and `unused1` are where it put the three intent parameters and
+///   `intent_code`: Analyze named the units in text, NIfTI in two bit fields.
+/// - `dim_un0` became `slice_start`, `funused1` and `funused2` became
+///   `scl_slope` and `scl_inter` (SPM2 had already used `funused1` as a
+///   scale), `funused3` became `slice_end`, `slice_code` and `xyzt_units`, and
+///   `compressed` and `verified` became `slice_duration` and `toffset`.
+/// - Everything after `aux_file` is different. Analyze describes orientation
+///   with one `orient` code and a scanner's bookkeeping in short strings;
+///   NIfTI replaced all of it with two affine transforms, `intent_name` and
+///   the magic.
+/// - No extensions, and no voxels in the same file.
+///
+/// `compressed` and `verified` are floats in Mayo's own listing and 32-bit
+/// integers in nibabel; they are read as nibabel reads them, and are 0 in
+/// every file seen.
+fn analyze_header(e: Endian) -> T {
+    let i16_ = || T::Int { bits: 16, endian: e };
+    let text = |n: i128| T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii);
+    T::structure(
+        "AnalyzeHeader",
+        vec![
+            ("sizeof_hdr", T::i32(e)),
+            ("data_type", text(10)),
+            ("db_name", text(18)),
+            ("extents", T::i32(e)),
+            ("session_error", i16_()),
+            ("regular", text(1)),
+            ("hkey_un0", T::u8()),
+            ("dim", T::array(i16_(), E::lit(8))),
+            ("vox_units", text(4)),
+            ("cal_units", text(8)),
+            ("unused1", i16_()),
+            ("datatype", T::enumeration("VoxelType", i16_(), VOXEL_TYPES)),
+            ("bitpix", i16_()),
+            ("dim_un0", i16_()),
+            ("pixdim", T::array(T::F32(e), E::lit(8))),
+            ("vox_offset", T::F32(e)),
+            ("funused1", T::F32(e)),
+            ("funused2", T::F32(e)),
+            ("funused3", T::F32(e)),
+            ("cal_max", T::F32(e)),
+            ("cal_min", T::F32(e)),
+            ("compressed", T::i32(e)),
+            ("verified", T::i32(e)),
+            ("glmax", T::i32(e)),
+            ("glmin", T::i32(e)),
+            ("descrip", text(80)),
+            ("aux_file", text(24)),
+            ("orient", T::u8()),
+            // Text in Analyze's own listing; SPM99 wrote the origin here as
+            // five 16-bit numbers, which is most of the files there are, so
+            // the bytes are shown rather than a string they do not make.
+            ("originator", T::bytes(E::lit(10))),
+            ("generated", text(10)),
+            ("scannum", text(10)),
+            ("patient_id", text(10)),
+            ("exp_date", text(10)),
+            ("exp_time", text(10)),
+            ("hist_un0", T::bytes(E::lit(3))),
+            ("views", T::i32(e)),
+            ("vols_added", T::i32(e)),
+            ("start_field", T::i32(e)),
+            ("field_skip", T::i32(e)),
+            ("omax", T::i32(e)),
+            ("omin", T::i32(e)),
+            ("smax", T::i32(e)),
+            ("smin", T::i32(e)),
+        ],
+    )
+    .machinery(&["hkey_un0", "unused1", "dim_un0", "hist_un0"])
+    .payload(&["dim", "datatype", "pixdim"])
 }
 
 /// A NIfTI file: the header, the four bytes that say whether extensions
@@ -697,6 +810,37 @@ pub fn is_nifti(head: &[u8], _len: u64) -> bool {
     let magic = |at: usize| head.get(at..at + 4);
     (sized(348) && matches!(magic(MAGIC_1_AT), Some(b"n+1\0" | b"ni1\0")))
         || (sized(540) && matches!(magic(MAGIC_2_AT), Some(b"n+2\0" | b"ni2\0")))
+}
+
+/// An Analyze 7.5 header, which has no magic. `sizeof_hdr` is 348 one way
+/// round or the other and the NIfTI-1 magic is not where it would be, and
+/// then the fields that describe the voxels have to agree: `dim[0]` a number
+/// of dimensions from 1 to 7, each of those dimensions at least 1, and a
+/// `datatype` Analyze defined with the `bitpix` that goes with it.
+///
+/// Four bytes of size and a handful of small numbers that have to make sense
+/// together, which is weaker than a signature, so this is asked after every
+/// format that has one.
+pub fn is_analyze(head: &[u8], len: u64) -> bool {
+    if len < HEADER_1 as u64 || head.len() < HEADER_1 as usize || is_nifti(head, len) {
+        return false;
+    }
+    let big = match head[..4] {
+        [0x5c, 1, 0, 0] => false,
+        [0, 0, 1, 0x5c] => true,
+        _ => return false,
+    };
+    let short = |at: usize| {
+        let b = [head[at], head[at + 1]];
+        if big { i16::from_be_bytes(b) } else { i16::from_le_bytes(b) }
+    };
+    let rank = short(40);
+    if !(1..=7).contains(&rank) || (1..=rank as usize).any(|k| short(40 + 2 * k) < 1) {
+        return false;
+    }
+    // Analyze's types, each with the only width it can be.
+    let widths = [(1, 1), (2, 8), (4, 16), (8, 32), (16, 32), (32, 64), (64, 64), (128, 24)];
+    widths.contains(&(short(70), short(72)))
 }
 
 #[cfg(test)]
@@ -1076,6 +1220,60 @@ mod tests {
         assert_eq!(named(&mut ev, &d, &["header", "scale"]).size_bits, 0);
         let voxels = at(&mut ev, &d, &["voxels"]);
         assert_eq!(ev.node(&d, &[voxels, vec![0, 0]].concat()).unwrap().type_name, "u16 le[]");
+    }
+
+    /// An Analyze header: the NIfTI-1 test header with its magic taken away,
+    /// and units written where Analyze writes them.
+    fn analyze_bytes(big: bool) -> Vec<u8> {
+        let mut h = Header::new(big);
+        h.magic = &[0; 4];
+        let mut v = h.bytes();
+        v[56..58].copy_from_slice(b"mm");
+        let smin: i32 = -7;
+        v[344..348].copy_from_slice(&if big { smin.to_be_bytes() } else { smin.to_le_bytes() });
+        v
+    }
+
+    #[test]
+    fn an_analyze_header_reads_as_analyze_from_either_template() {
+        for big in [false, true] {
+            for template in [analyze(), nifti()] {
+                let d = Document::new(MemSource(analyze_bytes(big)));
+                let mut ev = Evaluator::new(template);
+                assert_eq!(ev.node(&d, &[]).unwrap().type_name, "Analyze 7.5", "big={big}");
+                assert_eq!(named(&mut ev, &d, &["header"]).type_name, "AnalyzeHeader");
+                assert_eq!(named(&mut ev, &d, &["header"]).size_bits, 348 * 8);
+                assert_eq!(value(&mut ev, &d, &["header", "vox_units"]), Value::Str("mm".into()));
+                assert_eq!(value(&mut ev, &d, &["header", "datatype"]).as_int(), Some(4));
+                assert_eq!(value(&mut ev, &d, &["header", "regular"]), Value::Str("r".into()));
+                assert_eq!(value(&mut ev, &d, &["header", "descrip"]), Value::Str("hand-built".into()));
+                assert_eq!(value(&mut ev, &d, &["header", "smin"]).as_int(), Some(-7));
+            }
+        }
+        // And the `analyze` template reads a NIfTI-1 header as Analyze too,
+        // the way a program from before NIfTI would.
+        let d = Document::new(MemSource(Header::new(false).bytes()));
+        let mut ev = Evaluator::new(analyze());
+        assert_eq!(value(&mut ev, &d, &["header", "funused1"]), Value::Float(0.0));
+    }
+
+    #[test]
+    fn analyze_is_recognised_only_when_its_fields_agree() {
+        assert!(is_analyze(&analyze_bytes(false), 348));
+        assert!(is_analyze(&analyze_bytes(true), 348));
+        // A NIfTI-1 header is NIfTI, not Analyze.
+        assert!(!is_analyze(&Header::new(false).bytes(), 348));
+        let broken = |f: &dyn Fn(&mut Vec<u8>)| {
+            let mut v = analyze_bytes(false);
+            f(&mut v);
+            is_analyze(&v, 348)
+        };
+        assert!(!broken(&|v| v[72] = 8), "int16 is 16 bits, not 8");
+        assert!(!broken(&|v| v[40] = 0), "no dimensions");
+        assert!(!broken(&|v| v[40] = 8), "more than 7");
+        assert!(!broken(&|v| v[44..46].copy_from_slice(&0i16.to_le_bytes())), "a dimension of nothing");
+        assert!(!broken(&|v| v[70] = 3), "no such datatype");
+        assert!(!is_analyze(&analyze_bytes(false)[..300], 300));
     }
 
     #[test]
