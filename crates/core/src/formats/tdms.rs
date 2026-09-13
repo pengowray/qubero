@@ -26,7 +26,9 @@
 //! segments keep the data file's offsets and each one ends where its metadata
 //! does.
 
-use crate::template::{Endian, Endian::*, Expr as E, Template, Time, Ty as T, Until};
+use std::sync::Arc;
+
+use crate::template::{Anchor, Endian, Endian::*, Expr as E, Step, Tag, TaggedRef, Template, Time, Ty as T, Until};
 
 /// The bits of the table of contents that mean something, by NI's names less
 /// the `kToc`. Bit 0 and bit 4 are unused.
@@ -104,10 +106,236 @@ fn contents(e: Endian) -> T {
                     T::when(E::field("toc").bit(1), metadata(e)),
                 ),
             ),
-            ("raw_data", T::when(is_data().both(E::lit(0).less_than(raw_size())), T::sized(raw_size(), T::bytes(E::Remaining)))),
+            ("raw_data_layout", T::enumeration("RawDataLayout", T::computed(raw_data_layout()), LAYOUT)),
+            (
+                "raw_data",
+                T::when(
+                    is_data().both(E::lit(0).less_than(raw_size())),
+                    T::sized(
+                        raw_size(),
+                        T::switch(
+                            E::field("raw_data_layout"),
+                            vec![
+                                (CONTIGUOUS, contiguous(e, Here)),
+                                (INTERLEAVED, interleaved(e, Here)),
+                                (CONTIGUOUS_EARLIER, contiguous(e, Earlier)),
+                                (INTERLEAVED_EARLIER, interleaved(e, Earlier)),
+                            ],
+                            T::bytes(E::Remaining),
+                        ),
+                    ),
+                ),
+            ),
         ],
     )
-    .machinery(&["next_segment_offset", "raw_data_offset"])
+    .machinery(&["next_segment_offset", "raw_data_offset", "raw_data_layout"])
+}
+
+/// How a segment's raw data is laid out, and what says so.
+const UNKNOWN: i128 = 0;
+const CONTIGUOUS: i128 = 1;
+const INTERLEAVED: i128 = 2;
+const CONTIGUOUS_EARLIER: i128 = 3;
+const INTERLEAVED_EARLIER: i128 = 4;
+const DAQMX: i128 = 5;
+
+const LAYOUT: &[(i128, &str)] = &[
+    (UNKNOWN, "not known"),
+    (CONTIGUOUS, "contiguous"),
+    (INTERLEAVED, "interleaved"),
+    (CONTIGUOUS_EARLIER, "contiguous, laid out by an earlier segment"),
+    (INTERLEAVED_EARLIER, "interleaved, laid out by an earlier segment"),
+    (DAQMX, "DAQmx"),
+];
+
+/// Where the channel list a segment's raw data is laid out by comes from.
+#[derive(Clone, Copy)]
+enum LaidOut {
+    /// This segment's own metadata.
+    Here,
+    /// The metadata of the nearest segment before this one that has any,
+    /// which is what a segment without the metadata flag reuses whole.
+    Earlier,
+}
+
+use LaidOut::{Earlier, Here};
+
+/// A field of the metadata the raw data is laid out by.
+fn laid_out_by(from: LaidOut, field: &str) -> E {
+    match from {
+        Here => E::within(&["metadata", field]),
+        Earlier => E::sibling(&["contents", "metadata", field]),
+    }
+}
+
+/// Which of the layouts this segment's raw data has, or that none of them can
+/// be placed.
+///
+/// DAQmx data is left as bytes: its values are interleaved by acquisition card
+/// and cut out by scaler, which the index describes and the raw data does not
+/// repeat.
+///
+/// The data is placed when the channel list is one the template holds whole.
+/// That is a segment with metadata that starts a new list, or a segment with
+/// no metadata after one of those, which reuses it. A segment with metadata
+/// that adds to the list before it is not placed: the list it adds to is the
+/// sum of every segment since the last new one, and a field can hold a number
+/// or some text but not a list carried from one segment to the next.
+///
+/// Interleaved data needs every channel to have a width, since a sample is one
+/// value of each. npTDMS reads a segment flagged interleaved that holds a
+/// single string channel as contiguous, and so does this.
+fn raw_data_layout() -> E {
+    let toc = || E::field("toc");
+    let kind = |from: LaidOut, contiguous: i128, interleaved: i128| {
+        let flagged = toc().bit(5);
+        E::cond(
+            flagged.clone().both(laid_out_by(from, "no_width_count").equal_to(E::lit(0))),
+            E::lit(interleaved),
+            E::cond(
+                flagged
+                    .negate()
+                    .either(laid_out_by(from, "channel_count").equal_to(E::lit(1)))
+                    .both(laid_out_by(from, "unknown_layout_count").equal_to(E::lit(0))),
+                E::lit(contiguous),
+                E::lit(UNKNOWN),
+            ),
+        )
+    };
+    E::cond(
+        toc().bit(7),
+        E::lit(DAQMX),
+        E::cond(
+            toc().bit(1),
+            E::cond(laid_out_by(Here, "new_list"), kind(Here, CONTIGUOUS, INTERLEAVED), E::lit(UNKNOWN)),
+            E::cond(
+                laid_out_by(Earlier, "new_list"),
+                kind(Earlier, CONTIGUOUS_EARLIER, INTERLEAVED_EARLIER),
+                E::lit(UNKNOWN),
+            ),
+        ),
+    )
+}
+
+/// A field of one channel of the list the raw data is laid out by, for the
+/// channel at the index this is asked from.
+fn of_channel(from: LaidOut, field: &str) -> E {
+    match from {
+        Here => E::elem_within(&["metadata", "channels"], E::idx(), &[field]),
+        Earlier => E::elem_field("channels", E::idx(), &[field]),
+    }
+}
+
+/// The channels a segment with no metadata reads its data by, copied out of
+/// the earlier segment that has them. Asking the earlier segment once per
+/// channel here is what saves asking it once per chunk below.
+fn copied_channels(from: LaidOut) -> Option<(&'static str, T)> {
+    let Earlier = from else { return None };
+    let found = |field: &str| {
+        E::Tagged(Arc::new(TaggedRef {
+            array: Some(E::sibling(&["contents", "metadata", "channels"])),
+            key: path(&["number"]),
+            tag: Tag::Computed(Arc::new(E::idx())),
+            field: path(&[field]),
+        }))
+    };
+    let copy = T::structure_named(
+        "Channel",
+        "path",
+        "",
+        vec![
+            ("path", T::computed_text(found("path"))),
+            ("data_type", T::enumeration_hex("DataType", T::computed(found("data_type")), DATA_TYPE)),
+            ("value_count", T::computed(found("value_count"))),
+            ("data_size", T::computed(found("data_size"))),
+        ],
+    );
+    Some(("channels", T::array(copy, E::field("channel_count"))))
+}
+
+/// Contiguous raw data: chunk after chunk, each holding every channel's values
+/// one channel after another. The chunk repeats as many times as fit, and a
+/// writer that stopped partway through one leaves the rest as bytes.
+fn contiguous(e: Endian, from: LaidOut) -> T {
+    let chunk = T::structure_named(
+        "Chunk",
+        "",
+        "values",
+        vec![("values", T::array(channel_values(e, from), E::field("channel_count")))],
+    )
+    .field_elem_named_from("values", of_channel(from, "path"));
+    let mut fields = vec![
+        ("channel_count", T::computed(laid_out_by(from, "channel_count"))),
+        ("chunk_size", T::computed(laid_out_by(from, "chunk_size"))),
+        ("chunk_count", T::computed(whole(E::field("chunk_size")))),
+    ];
+    fields.extend(copied_channels(from));
+    fields.extend([
+        ("chunks", T::array(T::sized(E::field("chunk_size"), chunk), E::field("chunk_count"))),
+        ("unfinished_chunk", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
+    ]);
+    T::structure("ContiguousData", fields).machinery(&["channel_count", "chunk_size", "chunk_count", "channels"])
+}
+
+/// How many whole runs of `size` bytes fit in what is left, and none of a run
+/// of nothing.
+fn whole(size: E) -> E {
+    E::cond(E::lit(0).less_than(size.clone()), E::Remaining.div(size), E::lit(0))
+}
+
+/// Interleaved raw data: sample after sample, each one value of every
+/// channel. How many samples a channel's index says a chunk holds does not
+/// matter to the layout, since chunk after chunk of samples is only more
+/// samples.
+fn interleaved(e: Endian, from: LaidOut) -> T {
+    let sample = T::structure_named(
+        "Sample",
+        "",
+        "values",
+        vec![("values", T::array(T::switch(of_channel(from, "data_type"), scalars(e), T::bytes(E::lit(0))), E::field("channel_count")))],
+    )
+    .field_elem_named_from("values", of_channel(from, "path"));
+    let mut fields = vec![
+        ("channel_count", T::computed(laid_out_by(from, "channel_count"))),
+        ("sample_size", T::computed(laid_out_by(from, "frame_size"))),
+        ("sample_count", T::computed(whole(E::field("sample_size")))),
+    ];
+    fields.extend(copied_channels(from));
+    fields.extend([
+        ("samples", T::array(T::sized(E::field("sample_size"), sample), E::field("sample_count"))),
+        ("unfinished_sample", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
+    ]);
+    T::structure("InterleavedData", fields).machinery(&["channel_count", "sample_size", "sample_count", "channels"])
+}
+
+/// One channel's values in one chunk, as its type says.
+fn channel_values(e: Endian, from: LaidOut) -> T {
+    let count = || of_channel(from, "value_count");
+    let mut cases: Vec<(i128, T)> = scalars(e).into_iter().map(|(k, t)| (k, T::array(t, count()))).collect();
+    cases.push((STRING, strings(e, count(), of_channel(from, "data_size"))));
+    T::switch(of_channel(from, "data_type"), cases, T::bytes(of_channel(from, "data_size").at_least(E::lit(0))))
+}
+
+/// A string channel's values: where each string ends, and then all of them
+/// written together. NI's document calls the numbers offsets and says they
+/// are where each string starts; every writer puts where each one ends, the
+/// first string starting at nothing, and npTDMS reads them that way.
+fn strings(e: Endian, count: E, size: E) -> T {
+    let end = E::elem("offsets", E::idx());
+    let start = E::cond(E::idx().equal_to(E::lit(0)), E::lit(0), E::elem("offsets", E::idx().sub(E::lit(1))));
+    T::structure(
+        "Strings",
+        vec![
+            ("offsets", T::array(T::u32(e), count.clone())),
+            (
+                "text",
+                T::sized(
+                    size.sub(E::size_of("offsets")).at_least(E::lit(0)).at_most(E::Remaining),
+                    T::array(T::utf8(end.sub(start)), count),
+                ),
+            ),
+        ],
+    )
 }
 
 /// A length and that many bytes of UTF-8. Every name, path and text value in
@@ -122,13 +350,85 @@ fn string(e: Endian) -> T {
 /// The first segment of npTDMS's `raw1.tdms`, which DAQmx wrote, ends its
 /// objects 2,341 bytes into a metadata section of 4,068, and what is after
 /// them reads as the padding it is.
+///
+/// The fields after that are not in the file. `channels` is the objects that
+/// have raw data in this segment, in the order their data is written, which
+/// is what the raw data is a run of; the counts and sizes below it are what
+/// that list adds up to. They are here rather than beside the raw data so that
+/// a later segment with no metadata of its own can ask for them.
 fn metadata(e: Endian) -> T {
+    // One number per channel, for the sums below. There is no way to add up a
+    // field of a list of records, so each channel's share is copied out first,
+    // the way NetCDF's `record_bytes` is.
+    let per_channel = |value: E| T::array(T::computed(value), E::field("channel_count"));
+    let of_channel = |field: &str| E::elem_field("channels", E::idx(), &[field]);
     T::structure(
         "Metadata",
         vec![
             ("object_count", T::u32(e)),
             ("objects", T::array(object(e), E::field("object_count"))),
             ("padding", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
+            // Every object with raw data, and none without. An object with
+            // none gives an offset before the list's own start, which is what
+            // passes a record over; the channels take no bytes, so the offset
+            // of every other one is nothing.
+            (
+                "channels",
+                T::gather(
+                    vec![Step::field("objects"), Step::each()],
+                    E::cond(E::field("has_data"), E::lit(0), E::lit(-1)),
+                    Anchor::Window,
+                    E::lit(0),
+                    channel(),
+                ),
+            ),
+            ("channel_count", T::computed(E::len_of("channels"))),
+            ("data_sizes", per_channel(of_channel("data_size"))),
+            ("chunk_size", T::computed(E::sum_of("data_sizes"))),
+            ("widths", per_channel(of_channel("width"))),
+            ("frame_size", T::computed(E::sum_of("widths"))),
+            ("unknown_layouts", per_channel(E::lit(1).sub(of_channel("layout_known")))),
+            ("unknown_layout_count", T::computed(E::sum_of("unknown_layouts"))),
+            ("no_widths", per_channel(of_channel("width").equal_to(E::lit(0)))),
+            ("no_width_count", T::computed(E::sum_of("no_widths"))),
+            // Whether this list is all there is: the flag says a new list
+            // starts here, and the first segment has nothing to add to.
+            // Without it, the objects are added to the list the segment
+            // before ended with, which is not something a field can hold.
+            ("new_list", T::computed(E::field("toc").bit(2).either(E::idx().equal_to(E::lit(0))))),
+        ],
+    )
+    .machinery(&[
+        "channel_count",
+        "data_sizes",
+        "chunk_size",
+        "widths",
+        "frame_size",
+        "unknown_layouts",
+        "unknown_layout_count",
+        "no_widths",
+        "no_width_count",
+        "new_list",
+    ])
+}
+
+/// One channel with raw data in this segment: the object's layout, read again
+/// from the object that placed it. `number` is where it is in the list, which
+/// is what a later segment finds it by.
+fn channel() -> T {
+    let placer = |field: &str| E::placer(E::field(field));
+    T::structure_named(
+        "Channel",
+        "path",
+        "",
+        vec![
+            ("path", T::computed_text(E::placer(E::within(&["path", "text"])))),
+            ("data_type", T::enumeration_hex("DataType", T::computed(placer("data_type")), DATA_TYPE)),
+            ("value_count", T::computed(placer("value_count"))),
+            ("width", T::computed(placer("width"))),
+            ("data_size", T::computed(placer("data_size"))),
+            ("layout_known", T::computed(placer("layout_known"))),
+            ("number", T::computed(E::idx())),
         ],
     )
 }
@@ -163,9 +463,35 @@ const RAW_DATA_INDEX: &[(i128, &str)] = &[
 /// of a string channel's index and then writes the 28 bytes a string's index
 /// takes, and a reader that trusted the 20 would read the properties eight
 /// bytes early. npTDMS reads it by type too.
+///
+/// After the fields the file writes come six it does not: the layout this
+/// object's raw data has in this segment, worked out once here so that the raw
+/// data and later segments can ask for it by name. See [`layout_of`].
 fn object(e: Endian) -> T {
     let index = E::field("raw_data_index");
-    let has_index = index.clone().not_equal(E::lit(NO_DATA)).both(index.clone().not_equal(E::lit(SAME_AS_BEFORE)));
+    let has_index = || index.clone().not_equal(E::lit(NO_DATA)).both(index.clone().not_equal(E::lit(SAME_AS_BEFORE)));
+    let is_daqmx = || {
+        index.clone().equal_to(E::lit(FORMAT_CHANGING))
+            .either(index.clone().equal_to(E::lit(DIGITAL_LINE)))
+            .either(index.clone().equal_to(E::lit(DIGITAL_LINE_AS_DOCUMENTED)))
+    };
+    // Written here, or carried from the last segment that wrote it.
+    let own_or_before = |own: E, field: &str| E::cond(has_index(), own, layout_of(field));
+    let kind = E::field("data_type");
+    let count = E::field("value_count");
+    let width = E::field("width");
+    // A string channel says how many bytes it takes; every other type is its
+    // width times its count. DAQmx data is laid out by its scalers and not by
+    // anything a template can add up.
+    let own_size = E::cond(
+        is_daqmx(),
+        E::lit(0),
+        E::cond(kind.clone().equal_to(E::lit(STRING)), E::within(&["index", "total_size"]), width.clone().mul(count.clone())),
+    );
+    let own_known = is_daqmx()
+        .negate()
+        .both(kind.equal_to(E::lit(STRING)).either(E::lit(0).less_than(width)).either(count.equal_to(E::lit(0))));
+    let widths = WIDTH.iter().map(|(k, w)| (*k, T::computed(E::lit(*w)))).collect();
     T::structure_named(
         "Object",
         "path",
@@ -179,9 +505,9 @@ fn object(e: Endian) -> T {
             (
                 "index",
                 T::when(
-                    has_index,
+                    has_index(),
                     T::switch(
-                        index,
+                        index.clone(),
                         vec![
                             (FORMAT_CHANGING, daqmx_index(e, false)),
                             (DIGITAL_LINE, daqmx_index(e, true)),
@@ -193,8 +519,50 @@ fn object(e: Endian) -> T {
             ),
             ("property_count", T::u32(e)),
             ("properties", T::array(property(e), E::field("property_count"))),
+            ("has_data", T::computed(index.clone().not_equal(E::lit(NO_DATA)))),
+            (
+                "data_type",
+                T::enumeration_hex("DataType", T::computed(own_or_before(E::within(&["index", "data_type"]), "data_type")), DATA_TYPE),
+            ),
+            ("value_count", T::computed(own_or_before(E::within(&["index", "value_count"]), "value_count"))),
+            ("width", T::switch(E::field("data_type"), widths, T::computed(E::lit(0)))),
+            ("data_size", T::computed(own_or_before(own_size, "data_size"))),
+            ("layout_known", T::computed(own_or_before(own_known, "layout_known"))),
         ],
     )
+    .machinery(&["has_data", "data_type", "value_count", "width", "data_size", "layout_known"])
+}
+
+/// `field` of this object as the most recent earlier segment with metadata
+/// has it, found by path. Nothing when that segment does not list the path.
+///
+/// What a raw data index of 0 means, and what one of all ones leaves standing:
+/// the layout is whatever it was last time. npTDMS keeps the last layout of
+/// every path it has seen, from however far back. A template cannot keep a
+/// table, so this asks the one place it can reach, the object list of the
+/// nearest segment behind this one that has metadata, and asks that object's
+/// own `field` in turn, which asks the segment before that if it too said
+/// "same as before". LabVIEW lists every channel again in each segment it
+/// writes with metadata, so the chain is unbroken in the files it writes. A
+/// path the nearest such segment left out is where the chain stops, and the
+/// layout is not known.
+///
+/// Each link is a question asked inside the one before, so a channel that has
+/// said "same as before" for thousands of segments running is thousands of
+/// questions deep when its last segment is read first. Reading the segments in
+/// order answers each from the one before it; reading the last one cold may
+/// run out of room and say so.
+fn layout_of(field: &str) -> E {
+    E::Tagged(Arc::new(TaggedRef {
+        array: Some(E::sibling(&["contents", "metadata", "objects"])),
+        key: path(&["path", "text"]),
+        tag: Tag::ComputedText(Arc::new(E::within(&["path", "text"]))),
+        field: path(&[field]),
+    }))
+}
+
+fn path(names: &[&str]) -> Arc<[String]> {
+    names.iter().map(|s| s.to_string()).collect()
 }
 
 /// How an ordinary channel's values are laid out in this segment's raw data:
@@ -441,7 +809,7 @@ mod tests {
         assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[0, 2, 0]).unwrap().value, Value::Enum { raw: 4713, name: Some("TDMS 2.0".into()), hex: false });
         assert_eq!(ev.node(&d, &[0, 2, 3]).unwrap().size_bits, 12 * 8);
-        assert_eq!(ev.node(&d, &[0, 2, 4]).unwrap().size_bits, 16 * 8);
+        assert_eq!(ev.node(&d, &[0, 2, 5]).unwrap().size_bits, 16 * 8);
         // The second is big-endian after its mask, and reads the same.
         assert_eq!(ev.node(&d, &[1, 2, 1]).unwrap().value.as_int(), Some(8));
         let last = ev.node(&d, &[1]).unwrap();
@@ -457,7 +825,7 @@ mod tests {
             ev.node(&d, &[0, 2, 1]).unwrap().value,
             Value::Enum { raw: UNFINISHED, name: Some("unfinished".into()), hex: false }
         );
-        assert_eq!(ev.node(&d, &[0, 2, 4]).unwrap().size_bits, 40 * 8);
+        assert_eq!(ev.node(&d, &[0, 2, 5]).unwrap().size_bits, 40 * 8);
     }
 
     #[test]
@@ -472,7 +840,7 @@ mod tests {
         let d = Document::new(MemSource(file));
         let mut ev = Evaluator::new(tdms());
         assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
-        assert!(ev.node(&d, &[0, 2, 4]).unwrap().absent);
+        assert!(ev.node(&d, &[0, 2, 5]).unwrap().absent);
         let last = ev.node(&d, &[1]).unwrap();
         assert_eq!(last.offset_bits + last.size_bits, n as u64 * 8);
     }
