@@ -475,7 +475,7 @@ fn metadata(e: Endian) -> T {
             (
                 "carried_count",
                 T::computed(E::cond(
-                    prior_new_list(),
+                    new_list().negate().both(prior_new_list()),
                     E::sibling(&["contents", "metadata", "channel_count"]),
                     E::lit(0),
                 )),
@@ -1354,6 +1354,10 @@ mod tests {
             segment(META | RAW, false, &second, &[doubles(&[3.0, 4.0, 5.0]), vec![6, 7, 8]].concat(), None),
         ]);
         assert_eq!(layout(&mut ev, &d, 1), "contiguous");
+        // Two kept from the list before; the first segment, which started
+        // its own, kept none.
+        assert_eq!(ev.node(&d, &[1, 2, 3, 4]).unwrap().value.as_int(), Some(2));
+        assert_eq!(ev.node(&d, &[0, 2, 3, 4]).unwrap().value.as_int(), Some(0));
         let channels = [1, 2, 3, 7];
         let names: Vec<String> = (0..3).map(|i| ev.node(&d, &[&channels[..], &[i]].concat()).unwrap().name).collect();
         assert_eq!(names, ["[0] /'g'/'a'", "[1] /'g'/'b'", "[2] /'g'/'c'"]);
