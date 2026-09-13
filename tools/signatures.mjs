@@ -135,6 +135,16 @@ function ruleMessage(raw, hasChildren) {
   let text = (cut < 0 ? raw : raw.slice(0, cut)).trim();
   const comma = text.endsWith(",");
   if (comma) text = text.slice(0, -1).trim();
+  // A cut placeholder leaves the word that introduced it: `Matlab v` for
+  // `Matlab v%d`, `checksum` for `checksum %s`. Those words say nothing
+  // without the value, so they go too.
+  if (cut >= 0) {
+    for (;;) {
+      const m = /(?:^|\s)(v|version|checksum|with|for|of|at|by|and|or|type|id|from|in|to|size|level|revision|rev|release|number|no\.?|#|:|-|,)\s*$/i.exec(text);
+      if (m === null) break;
+      text = text.slice(0, m.index).trim();
+    }
+  }
   return { message: text, unfinished: cut >= 0 || comma || hasChildren };
 }
 
@@ -167,14 +177,17 @@ function readMagicFile(name, text, count) {
     // The value runs to the first unescaped space; `\ ` and `\040` are spaces
     // inside it. What follows is the message.
     const split = /^((?:\\.|\S)*)[ \t]*(.*)$/.exec(rest);
-    const value = split[1];
-    if (value === "") {
+    if (split[1] === "") {
       count.skip("no value to match against", `${name}:${i + 1}`);
       continue;
     }
     // `x` is file(1)'s match-anything test only when it stands alone, so a
     // string value of `xar!` is four literal bytes.
-    if (value === "x" || /^[<>=!&^~]/.test(value)) {
+    // A leading `=` is the default relation written out, which a rule does to
+    // protect a value that starts with a character that would otherwise be
+    // read as one: `=!<arch>` is the `ar` archive, `=BLENDER` is Blender.
+    const value = split[1].startsWith("=") && split[1].length > 1 ? split[1].slice(1) : split[1];
+    if (value === "x" || /^[<>!&^~]/.test(value)) {
       count.skip(`value is a comparison, not a constant: ${value === "x" ? "x" : value[0]}`, `${name}:${i + 1}`);
       continue;
     }
