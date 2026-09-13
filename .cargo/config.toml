@@ -2,5 +2,6 @@
 # (FITS, HDF4) and the vendored pure-magic rule tables: the build exits 101
 # with STATUS_STACK_OVERFLOW or STATUS_STACK_BUFFER_OVERRUN and no test named.
 # rustc runs its compile on a thread whose size it takes from this variable.
+# 64 MiB was not enough for magic-db and qubero-core together on 2026-09-14.
 [env]
-RUST_MIN_STACK = "67108864"
+RUST_MIN_STACK = "268435456"
