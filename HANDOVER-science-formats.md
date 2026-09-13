@@ -321,12 +321,11 @@ only; anything else is bytes.
 ### NetCDF classic
 
 Reads correctly, the one-record-variable case included (see Closed). Corpus:
-seven small generated files. The generator's `surface()` builds `sst` with
-`np.arange(..., dtype=">f4") / 4 + 270`, and the arithmetic drops the byte
-order, so the three `sst-cdf*.nc` files hold little-endian floats that read
-back as values near 1e-38 in every library; the files were kept byte-identical
-rather than churned. Fix the generator and regenerate when nothing else is
-pinned to those bytes. NetCDF-4 is HDF5 and reads as `hdf5`.
+seven small generated files. The three `sst-cdf*.nc` files were regenerated
+on 2026-09-13: the generator's `surface()` had done its arithmetic on a `">f4"`
+array, which drops the byte order, so the floats were little-endian and read
+back near 1e-38; they now read as 270 K upwards in scipy and netCDF4 both.
+NetCDF-4 is HDF5 and reads as `hdf5`.
 
 ### Zarr
 
