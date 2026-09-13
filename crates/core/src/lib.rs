@@ -21,6 +21,7 @@ pub mod formats;
 pub mod gather;
 pub mod hexdump;
 pub mod json;
+pub mod ksy;
 pub mod machinery;
 pub mod magicrule;
 pub mod overview;
