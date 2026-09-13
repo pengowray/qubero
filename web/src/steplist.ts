@@ -28,15 +28,17 @@ export function bytesChange(inBytes: number, outBytes: number): string {
 
 /**
  * The steps under a subhead, in a list that scrolls on its own when there are
- * many. `aligned` lines the labels up in one column as wide as the longest,
- * for labels that run past the few characters the ordinary column holds.
+ * many. `stacked` puts each label on a line of its own above what the step
+ * did, for a few steps whose labels run past the narrow column beside the
+ * text and whose notes are sentences: side by side in a sidebar, the two
+ * columns leave the note a word a line.
  */
-export function stepList(subhead: string, rows: readonly StepRow[], aligned = false): DocumentFragment {
+export function stepList(subhead: string, rows: readonly StepRow[], stacked = false): DocumentFragment {
   const frag = document.createDocumentFragment();
   if (rows.length === 0) return frag;
   frag.append(span("insp-qsubhead", subhead));
   const list = document.createElement("div");
-  list.className = aligned ? "insp-orows is-aligned" : "insp-orows";
+  list.className = stacked ? "insp-orows is-stacked" : "insp-orows";
   for (const row of rows) {
     const e = document.createElement("div");
     e.className = "insp-orow";
@@ -62,8 +64,10 @@ export function firstValues(subhead: string, values: readonly string[], total: n
   const frag = document.createDocumentFragment();
   if (values.length === 0) return frag;
   frag.append(span("insp-qsubhead", subhead));
+  // Across the whole row: without `is-values` the run of values sat in the
+  // label column, a value or two a line.
   const row = document.createElement("div");
-  row.className = "insp-orow";
+  row.className = "insp-orow is-values";
   row.append(span("insp-orow-text", values.join("  ")));
   frag.append(row);
   if (values.length < total) {
