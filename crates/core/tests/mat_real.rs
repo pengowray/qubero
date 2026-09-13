@@ -244,7 +244,36 @@ fn a_sparse_array_writes_its_positions_before_its_values() {
     let starts = ev.node(&d, &[IN_ZLIB, &[3, 1, 2]].concat()).unwrap();
     assert_eq!(rows.type_name, "i32 le[]");
     assert_eq!(starts.type_name, "i32 le[]");
-    assert_eq!(ev.node(&d, &[IN_ZLIB, &[3, 3, 2]].concat()).unwrap().type_name, "f64 le[]");
+    assert_eq!(ev.node(&d, &[IN_ZLIB, &[3, 3, 2]].concat()).unwrap().type_name, "Column[]");
+}
+
+/// The values of a sparse array read a column at a time, each beside its row,
+/// and put back where they belong they are the matrix scipy's `loadmat` reads:
+///
+/// ```text
+/// [[1+1j, 2, 3, 4, 5],
+///  [2,    0, 0, 0, 0],
+///  [3,    0, 0, 0, 0]]
+/// ```
+#[test]
+fn a_sparse_array_is_the_matrix_scipy_reads() {
+    let (d, mut ev) = open!("testsparsecomplex_7.4_GLNX86.mat");
+    let dense = |ev: &mut Evaluator, part: usize| {
+        let mut m = [[0.0f64; 5]; 3];
+        let columns = [IN_ZLIB, &[3, part, 2]].concat();
+        assert_eq!(ev.node(&d, &columns).unwrap().child_count, 5);
+        for k in 0..5 {
+            let entries = [columns.as_slice(), &[k, 1]].concat();
+            for i in 0..ev.node(&d, &entries).unwrap().child_count as usize {
+                let row = number(&d, ev, &[entries.as_slice(), &[i, 0]].concat()) as usize;
+                let Value::Float(v) = at(&d, ev, &[entries.as_slice(), &[i, 1]].concat()).1 else { panic!("not a float") };
+                m[row][k] = v;
+            }
+        }
+        m
+    };
+    assert_eq!(dense(&mut ev, 2), [[1.0, 2.0, 3.0, 4.0, 5.0], [2.0, 0.0, 0.0, 0.0, 0.0], [3.0, 0.0, 0.0, 0.0, 0.0]]);
+    assert_eq!(dense(&mut ev, 3), [[1.0, 0.0, 0.0, 0.0, 0.0], [0.0; 5], [0.0; 5]]);
 }
 
 /// A MATLAB string is an opaque array: no dimensions after its flags, and two

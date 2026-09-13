@@ -36,6 +36,14 @@
 //! labelled with its name, `[0] stringfield`, while its path stays
 //! `fields[0]`.
 //!
+//! A sparse array writes a row index for each value it stores, then where
+//! each column's values start in that list, then the values. The first two
+//! read as the numbers they are written as, and the values are read by them:
+//! a list of columns, each a list of entries, each a value with its row beside
+//! it. Column `k` is entries `column_start[k]` up to `column_start[k + 1]`,
+//! and an entry's row is the row index at the same place, counted from nought
+//! as it is written. The imaginary part of a complex one is read the same way.
+//!
 //! Level 4, which is what `save -v4` still writes and what a `.mat` from
 //! before MATLAB 5 is, has no header and no magic number. A file is a run of
 //! matrices, each opening with five 32-bit integers: a packed description, the
@@ -88,8 +96,6 @@
 //! - A table of a version before 4. Only version 4 has been seen, and an
 //!   older table keeps every cell after the second as a plain value.
 //! - The subsystem of a level 7.3 file, which is HDF5 and read as that.
-//! - A sparse array's row indices and column starts read as the numbers they
-//!   are, not as the positions they describe.
 //! - Level 4 on a VAX or a Cray, whose floating point is neither of the two
 //!   IEEE layouts. The machine digit is read and named; the numbers under it
 //!   are read as IEEE and are wrong. No file like that has been seen this
@@ -193,12 +199,19 @@ pub fn mat() -> Template {
     // A level 7.3 file is an HDF5 one behind the header, and an HDF5 file is
     // nothing but names: every object in it is reached by address, through a
     // type that refers to itself. So the vocabulary travels with the type.
-    let mut t = Template::new("mat", root()).with_part(&super::hdf5::hdf5_part());
+    //
+    // Built once and named, since which of its shapes a level 5 file takes is
+    // decided in more than one place and the HDF5 reading is most of the
+    // cost of building this template.
+    let hdf5 = super::hdf5::hdf5_part();
+    let mut t = Template::new("mat", root()).with_part(&hdf5).with_type(HDF5_BODY, hdf5_body(hdf5.root.clone()));
     for e in [Little, Big] {
         t = t.with_type(element_name(e), element(e, false));
         t = t.with_type(text_element_name(e), element(e, true));
         t = t.with_type(file_wrapper_name(e), file_wrapper(e));
         t = t.with_type(object_reference_name(e), object_reference(e));
+        t = t.with_type(array_name(e), matrix(e));
+        t = t.with_type(sparse_values_name(e), by_column(e));
     }
     t
 }
@@ -299,7 +312,7 @@ fn level5_file(e: Endian, subsystem: Subsystem) -> T {
     match subsystem {
         Subsystem::None => fields.push((
             "body",
-            T::switch(E::within(&["header", "version"]), vec![(V73, hdf5_body())], elements()),
+            T::switch(E::within(&["header", "version"]), vec![(V73, T::Named(HDF5_BODY.into()))], elements()),
         )),
         Subsystem::Last | Subsystem::Followed => {
             let before = E::within(&["header", "subsystem_offset"]).sub(E::lit(HEADER_LEN));
@@ -337,15 +350,17 @@ fn header(e: Endian) -> T {
 /// 512 here and nought in a file that is only HDF5; the one layout serves both
 /// because the addresses are counted from the origin rather than from the
 /// front of whatever holds it.
-fn hdf5_body() -> T {
+fn hdf5_body(hdf5: T) -> T {
     T::structure(
         "MAT-file",
         vec![
             ("user_block", T::bytes(E::lit(USER_BLOCK as i128 - HEADER_LEN).at_most(E::Remaining))),
-            ("hdf5", T::origin(super::hdf5::hdf5_part().root)),
+            ("hdf5", T::origin(hdf5)),
         ],
     )
 }
+
+const HDF5_BODY: &str = "mat.HDF5";
 
 /// One element: a tag and what it counts.
 ///
@@ -439,7 +454,7 @@ fn body(e: Endian, size: E, as_text: bool) -> T {
             (9, run(T::F64(e), 8)),
             (12, run(T::Int { bits: 64, endian: e }, 8)),
             (13, run(T::u64(e), 8)),
-            (MI_MATRIX, nonempty(size.clone(), matrix(e))),
+            (MI_MATRIX, nonempty(size.clone(), T::Named(array_name(e).into()))),
             // A zlib stream holding one element, which is where MATLAB 7 puts
             // every variable a file has.
             (MI_COMPRESSED, T::decoded(size.clone(), Codec::Zlib, T::Named(element_name(e).into()))),
@@ -639,16 +654,75 @@ fn field_names(e: Endian) -> T {
 /// A sparse array. `row_index` holds a row for each stored value and
 /// `column_start` where each column's values begin in it, which is the
 /// compressed-column layout MATLAB keeps sparse matrices in.
+///
+/// The values are read a column at a time, the way the two lists before them
+/// divide them up: column `k` is entries `column_start[k]` up to
+/// `column_start[k + 1]`, and each entry is its value with its row beside it,
+/// read out of `row_index` at the same place. A row is counted from nought,
+/// as it is written. There is one more column start than there are columns,
+/// and the number of columns is the array's second dimension.
 fn sparse(e: Endian) -> T {
     T::structure(
         "Sparse",
         vec![
             ("row_index", T::Named(element_name(e).into())),
             ("column_start", T::Named(element_name(e).into())),
-            ("real", T::Named(element_name(e).into())),
-            ("imaginary", imaginary(e)),
+            ("real", T::Named(sparse_values_name(e).into())),
+            (
+                "imaginary",
+                T::switch(
+                    E::within(&["array_flags", "flags"]).shr(E::lit(3)).and(E::lit(1)),
+                    vec![(1, T::Named(sparse_values_name(e).into()))],
+                    T::bytes(E::lit(0)),
+                ),
+            ),
         ],
     )
+}
+
+/// The element types a value can be written as, and what each reads as.
+fn number_types(e: Endian) -> Vec<(i128, T)> {
+    vec![
+        (1, T::Int { bits: 8, endian: e }),
+        (2, T::u8()),
+        (3, T::Int { bits: 16, endian: e }),
+        (4, T::u16(e)),
+        (5, T::i32(e)),
+        (6, T::u32(e)),
+        (7, T::F32(e)),
+        (9, T::F64(e)),
+        (12, T::Int { bits: 64, endian: e }),
+        (13, T::u64(e)),
+    ]
+}
+
+/// A sparse array's values, as columns of entries. An element of a type that
+/// is not a number, which no writer produces, is bytes: reading it as an
+/// element would build an array, which builds this again. Values left over
+/// past the last column's end stay unread in the element.
+fn by_column(e: Endian) -> T {
+    let start = |k: E| E::elem_within(&["column_start", "data"], k, &[]);
+    let columns = |value: T| {
+        let entry = T::structure(
+            "Entry",
+            vec![
+                ("row", T::computed(E::elem_within(&["row_index", "data"], E::field("first_entry").add(E::idx()), &[]))),
+                ("value", value),
+            ],
+        );
+        let column = T::structure(
+            "Column",
+            vec![
+                ("first_entry", T::computed(start(E::idx()))),
+                ("entries", T::array(entry, start(E::idx().add(E::lit(1))).sub(E::field("first_entry")))),
+            ],
+        );
+        T::array(column, E::elem_within(&["dimensions", "sizes"], E::lit(1), &[]))
+    };
+    tagged(e, &|size: E| {
+        let cases = number_types(e).into_iter().map(|(code, value)| (code, T::sized(size.clone(), columns(value)))).collect();
+        T::switch(E::field("type"), cases, T::bytes(size))
+    })
 }
 
 /// A function handle, which holds one array: the structure MATLAB keeps the
@@ -704,6 +778,26 @@ fn file_wrapper_name(e: Endian) -> &'static str {
     match e {
         Little => "mat.FileWrapper.le",
         Big => "mat.FileWrapper.be",
+    }
+}
+
+/// An array, which is what every `miMATRIX` element holds. Named rather than
+/// spelt out where it is used: an element reads its bytes one of two ways by
+/// the form of its tag, an array holds elements, and spelling the array out in
+/// each place builds it over and over before a byte has been read.
+fn array_name(e: Endian) -> &'static str {
+    match e {
+        Little => "mat.Array.le",
+        Big => "mat.Array.be",
+    }
+}
+
+/// A sparse array's values read a column at a time, named for the same
+/// reason, and because the real and imaginary parts are the same reading.
+fn sparse_values_name(e: Endian) -> &'static str {
+    match e {
+        Little => "mat.SparseValues.le",
+        Big => "mat.SparseValues.be",
     }
 }
 
@@ -1210,6 +1304,11 @@ mod tests {
     /// One little-endian array element: its flags, a 1 by 1 size, a name, and
     /// whatever `contents` holds.
     fn array_bytes(class: u8, name: &[u8], contents: &[u8]) -> Vec<u8> {
+        array_bytes_sized(class, [1, 1], name, contents)
+    }
+
+    /// The same, `rows` by `columns`.
+    fn array_bytes_sized(class: u8, [rows, columns]: [i32; 2], name: &[u8], contents: &[u8]) -> Vec<u8> {
         let mut a = Vec::new();
         a.extend(6u32.to_le_bytes());
         a.extend(8u32.to_le_bytes());
@@ -1217,8 +1316,8 @@ mod tests {
         a.extend(0u32.to_le_bytes());
         a.extend(5u32.to_le_bytes());
         a.extend(8u32.to_le_bytes());
-        a.extend(1i32.to_le_bytes());
-        a.extend(1i32.to_le_bytes());
+        a.extend(rows.to_le_bytes());
+        a.extend(columns.to_le_bytes());
         // A short name element, four bytes of room.
         a.extend(1u16.to_le_bytes());
         a.extend((name.len() as u16).to_le_bytes());
@@ -1258,6 +1357,36 @@ mod tests {
         assert_eq!(read(&v, &[fields.as_slice(), &[1]].concat()).0, "[1] bb");
         // The names are read one at a time, not as `a\0\0\0bb`.
         assert_eq!(read(&v, &[1, 0, 2, 3, 1, 2, 1]).1, "Str(\"bb\")");
+    }
+
+    #[test]
+    fn a_sparse_array_reads_its_values_a_column_at_a_time() {
+        // 3 by 2, with 1.5 and 2.5 in rows 0 and 2 of the first column and
+        // 4 in row 1 of the second.
+        let element = |kind: u32, bytes: Vec<u8>| {
+            let mut v = kind.to_le_bytes().to_vec();
+            v.extend((bytes.len() as u32).to_le_bytes());
+            let padded = bytes.len().div_ceil(8) * 8;
+            v.extend(&bytes);
+            v.resize(8 + padded, 0);
+            v
+        };
+        let ints = |ns: &[i32]| ns.iter().flat_map(|n| n.to_le_bytes()).collect::<Vec<u8>>();
+        let mut s = element(5, ints(&[0, 2, 1]));
+        s.extend(element(5, ints(&[0, 2, 3])));
+        s.extend(element(9, [1.5f64, 2.5, 4.0].iter().flat_map(|f| f.to_le_bytes()).collect()));
+        let mut v = header_bytes(b"IM", [0, 1]);
+        v.extend(array_bytes_sized(5, [3, 2], b"s", &s));
+        let real = [1, 0, 2, 3, 2, 2];
+        let at = |rest: &[usize]| read(&v, &[real.as_slice(), rest].concat());
+        assert_eq!(at(&[]).1, "Composite { count: 2 }", "two columns");
+        assert_eq!(at(&[0, 1]).1, "Composite { count: 2 }", "two entries in the first");
+        assert_eq!(at(&[0, 1, 1, 0]).1, "Int(2)", "the second entry is in row 2");
+        assert_eq!(at(&[0, 1, 1, 1]).1, "Float(2.5)");
+        assert_eq!(at(&[1, 0]).1, "Int(2)", "the second column starts at entry 2");
+        assert_eq!(at(&[1, 1]).1, "Composite { count: 1 }");
+        assert_eq!(at(&[1, 1, 0, 0]).1, "Int(1)");
+        assert_eq!(at(&[1, 1, 0, 1]).1, "Float(4.0)");
     }
 
     /// A long-form `miINT32` element of one number, padded to sixteen bytes.
