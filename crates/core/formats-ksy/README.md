@@ -44,10 +44,12 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `android_nanoapp_header` | executable | Apache-2.0 | yes | 0 | no magic |  |
 | `android_super` | filesystem | CC0-1.0 | yes | 3 | no magic | three bit fields, all of them reserved padding, are read most-significant-bit first instead of least |
 | `apm_partition_table` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
+| `asn1_der` | serialization | CC0-1.0 | yes | 0 | no magic |  |
 | `avantes_roh60` | scientific | CC0-1.0 | yes | 0 | no magic |  |
 | `avi` | media | CC0-1.0 | yes | 0 | 8 bytes |  |
 | `bcd` | common | CC0-1.0 | import | 0 | no magic | a root type with 3 parameters: nothing can open a file as it, and it is here to be imported |
 | `bitcoin_transaction` | network | MIT | yes | 0 | no magic |  |
+| `bson` | serialization | CC0-1.0 | yes | 1 | no magic | the one instance that unpacks a three-byte integer needs a bitwise or; every element is placed |
 | `btrfs_stream` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
 | `bytes_with_io` | common | MIT | import | 0 | no magic | imported by six formats that need a sub-stream; on its own it says the file is bytes, which is what no template says already |
 | `chrome_pak` | serialization | CC0-1.0 | yes | 0 | no magic |  |
@@ -98,13 +100,15 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `mifare_classic` | hardware | BSD-2-Clause | yes | 7 | no magic | seven instances: access-condition arithmetic and the value-block checks, all of which need bitwise operators |
 | `minecraft_nbt` | game | CC0-1.0 | yes | 0 | no magic |  |
 | `mozilla_mar` | archive | CC0-1.0 | yes | 0 | 4 bytes |  |
+| `msgpack` | serialization | CC0-1.0 | yes | 0 | no magic |  |
 | `nt_mdt_pal` | scientific | Unlicense | yes | 0 | 26 bytes |  |
 | `openpgp_message` | security | MIT | yes | 0 | no magic |  |
+| `packet_ppi` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `pcf_font` | font | CC0-1.0 | yes | 3 | 4 bytes | three instances reading the string table as its own stream; every table is placed |
 | `pcx` | image | CC0-1.0 | import | 0 | no magic | imported by pcx_dcx; Qubero reads a PCX with its own template |
 | `pcx_dcx` | image | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `phar_without_stub` | archive | CC0-1.0 | yes | 4 | no magic | four instances read a decimal count out of text; the manifest and every entry are placed |
-| `php_serialized_value` | serialization | CC0-1.0 | import | 6 | no magic | imported by phar_without_stub; on its own, a mapping entry is another php_serialized_value, which the converter cannot say |
+| `php_serialized_value` | serialization | CC0-1.0 | import | 4 | no magic | imported by phar_without_stub; on its own, every string's length is a decimal count read out of text, which a template does only where the field is declared as digits |
 | `protocol_body` | network | CC0-1.0 | import | 0 | no magic | a root type with 1 parameter: nothing can open a file as it, and it is here to be imported |
 | `psx_tim` | image | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `python_pyc_27` | executable | CC0-1.0 | yes | 0 | no magic |  |
@@ -154,13 +158,9 @@ copied into this repository.
 | Format | Licence | Why not |
 | --- | --- | --- |
 | `android_sparse` | CC0-1.0 | the size of a chunk's header reads `_root.header`, which a field of the same name hides, so no chunk body is placed |
-| `asn1_der` | CC0-1.0 | a sequence's body is another `asn1_der`, and the converter does not register a root type under its own name |
-| `bson` | CC0-1.0 | an element's value is another `bson` document, and the converter does not register a root type under its own name |
 | `dbf` | CC0-1.0 | a record's field widths come from `.length` over the header's field list, which the IR cannot take |
 | `gettext_mo` | BSD-2-Clause | the whole file's endianness is chosen from its first word, and the IR has no form for that |
-| `msgpack` | CC0-1.0 | the root holds another `msgpack`, and the converter does not register a root type under its own name |
 | `nitf` | MIT | every sub-header's count is text read as a number, so twenty-one fields on the path through the file are left as bytes |
-| `packet_ppi` | CC0-1.0 | the packet body switches to `packet_ppi` for PPI inside PPI, and the converter does not register a root type under its own name |
 | `pcap` | CC0-1.0 | the whole file's endianness is chosen from its magic, and the IR has no form for that |
 | `windows_resource_file` | CC0-1.0 | a resource's name is a `repeat-until` over `_`, which the IR cannot say, so everything after the name misplaces |
 
@@ -179,7 +179,7 @@ From the gap list. These are not copied into this repository at all.
 
 ## Notes
 
-* 19 of the 108 files carry no `meta/title`. Nothing invents one: the
+* 21 of the 112 files carry no `meta/title`. Nothing invents one: the
   chooser shows those by their id.
 * 22 formats declare a magic and 20 of them sniff. None was dropped for
   having a one-byte magic, because none has one; 2 were dropped for sharing

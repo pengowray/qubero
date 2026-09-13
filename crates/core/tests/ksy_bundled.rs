@@ -145,6 +145,53 @@ fn no_two_bundled_formats_claim_the_same_file() {
     }
 }
 
+/// A format made of itself: five of the bundled files hold another whole one
+/// of the format inside a type of it, written as the file's own `meta/id`.
+/// That name used to reach nothing, which cost each of them the field the rest
+/// of the file hangs off.
+#[test]
+fn a_format_that_holds_another_one_of_itself_finds_its_own_root() {
+    const RECURSIVE: &[&str] =
+        &["asn1_der", "bson", "msgpack", "packet_ppi", "php_serialized_value"];
+    for id in RECURSIVE {
+        let text = std::fs::read_to_string(ksy_path(id)).expect("a bundled .ksy");
+        let converted = qubero_core::ksy::convert(&text, &bundled::BundledImports)
+            .unwrap_or_else(|e| panic!("{id} does not convert: {e}"));
+        for gap in &converted.report.gaps {
+            assert!(
+                !gap.reason.contains("no type named"),
+                "{id} {}: {}",
+                gap.path,
+                gap.reason
+            );
+        }
+    }
+}
+
+/// Where a bundled `.ksy` sits, by its id. The directory mirrors the Kaitai
+/// library's own, so the id alone does not say the path.
+fn ksy_path(id: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("formats-ksy");
+    let mut found = Vec::new();
+    walk_ksy(&dir, &mut found);
+    found
+        .into_iter()
+        .find(|p| p.file_stem().map(|s| s == id).unwrap_or(false))
+        .unwrap_or_else(|| panic!("no {id}.ksy under formats-ksy"))
+}
+
+fn walk_ksy(dir: &PathBuf, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_ksy(&path, out);
+        } else if path.extension().map(|e| e == "ksy").unwrap_or(false) {
+            out.push(path);
+        }
+    }
+}
+
 /// A `.ksy` a reader pastes in can say `imports: [/common/vlq_base128_le]` and
 /// find the shipped copy, which is what makes the bundled `common/` worth
 /// having beyond the formats that use it here.
