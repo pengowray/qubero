@@ -134,6 +134,37 @@ pub enum Expr {
     StartOf(Box<Expr>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
+    /// How many bytes into its window this field starts.
+    ///
+    /// The window is the nearest [`Ty::Sized`] (or [`Ty::SizedBits`]) around
+    /// the field, and where there is none it is the whole space the field is
+    /// read in: the file at the top level, and the bytes a compressed run came
+    /// to for anything inside one. That is the same stretch a Kaitai `_io`
+    /// names, so `_io.pos` is this.
+    ///
+    /// In bytes, as [`Expr::Remaining`] and [`Expr::SizeOf`] are, and rounded
+    /// down: a field that starts partway through a byte is in that byte, and
+    /// this says which byte. [`Expr::BitsOf`] is the one that counts in bits,
+    /// for a field whose width no count of bytes can say; there is no
+    /// bit-counting form of this and none of the formats asking wants one.
+    Pos,
+    /// How many bytes the window holds: the size the nearest [`Ty::Sized`]
+    /// set, or the length of the whole space where there is none. A Kaitai
+    /// `_io.size` is this. In bytes and rounded down, for the reason
+    /// [`Expr::Pos`] is.
+    WindowSize,
+    /// How many elements the earlier list field `name` holds.
+    ///
+    /// [`Expr::SizeOf`] measures a field in bytes, which for a list of records
+    /// says how much room they took and not how many there are, and the two
+    /// are the same number only for a list of single bytes. A format that
+    /// sizes one run by the length of another needs the count: a table with
+    /// one row per entry of a list read earlier is as long as that list.
+    ///
+    /// Only a list has an element count. A field that is not one fails rather
+    /// than answering with its byte length, which would be a different number
+    /// wearing the same name.
+    LenOf(Arc<str>),
     /// The value of one element of an earlier array, by index. `Ref` names a
     /// field; this reaches inside one, which is what a list of pointers or a
     /// list of column types needs. When the elements are structures, `field`
@@ -340,6 +371,22 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    /// What is left over after dividing, taking the sign of the *divisor*:
+    /// `-5 % 3` is 1, not -2.
+    ///
+    /// Which of the two rules this is decides answers, so it is written down
+    /// rather than left to whatever the machine does. This is Python's and
+    /// Ruby's rule, and Kaitai Struct's, which says outright that its `%` is
+    /// a modulo and not a remainder. C's `%` and Rust's are the other rule,
+    /// and the two disagree for every negative dividend.
+    ///
+    /// Dividing by zero fails, as [`Expr::Div`] does.
+    ///
+    /// The same answer can be written as the quotient multiplied back out and
+    /// taken away, which is how three templates here say it. That reads as
+    /// arithmetic nobody meant, and a panel showing the working shows the
+    /// idiom rather than the question.
+    Mod(Box<Expr>, Box<Expr>),
     /// One when the first is less than the second, and zero otherwise.
     ///
     /// There is no `if` here and this is not one. It is a number like any
@@ -355,6 +402,57 @@ pub enum Expr {
     /// read in exactly the cases it was put there to avoid, and what comes
     /// back is whatever was at an offset nothing checked.
     Less(Box<Expr>, Box<Expr>),
+    /// One when the two are the same number, and zero otherwise. The four
+    /// below are the rest of the set: not equal, at most, greater than, at
+    /// least.
+    ///
+    /// Each answers one or zero, as [`Expr::Less`] does, so a comparison is a
+    /// number like any other and can be multiplied by, added to or switched
+    /// on. [`Expr::equals`] says the same thing as a pair of `Less`
+    /// comparisons and six terms, which is how a template asked before these
+    /// existed; it stays as it is, so that the templates using it keep the
+    /// working they already show.
+    Eq(Box<Expr>, Box<Expr>),
+    Ne(Box<Expr>, Box<Expr>),
+    Le(Box<Expr>, Box<Expr>),
+    Gt(Box<Expr>, Box<Expr>),
+    Ge(Box<Expr>, Box<Expr>),
+    /// One when both sides are nonzero, and zero otherwise. Nonzero is true
+    /// and zero is false, which is what the comparisons above answer.
+    ///
+    /// The right side is not worked out at all when the left is zero, so a
+    /// guard may stand in front of the thing it guards: `4 <= remaining and
+    /// header.flags == 3` is what a record with an optional trailer needs,
+    /// and reading past the end to find out is exactly what the guard was
+    /// written to stop.
+    Both(Box<Expr>, Box<Expr>),
+    /// One when either side is nonzero, and zero otherwise. The right side is
+    /// left alone when the left is nonzero, for the reason [`Expr::Both`]'s
+    /// is.
+    ///
+    /// Not the same operator as [`Expr::Or`], and both are here because a
+    /// template has to be able to say which it meant. `Or` answers a *value*:
+    /// the left side, or the right side when the left comes to zero, which is
+    /// how a format says "this length, or the last record that had one". This
+    /// answers a *truth*: one or zero, whatever the sides hold. For
+    /// `flags or 4` with `flags` at 12, one of them is 12 and the other is 1.
+    Either(Box<Expr>, Box<Expr>),
+    /// One when what is under it is zero, and zero when it is nonzero. The
+    /// other half of the boolean set.
+    Not(Box<Expr>),
+    /// `then` when `when` is nonzero, `otherwise` when it is zero.
+    ///
+    /// Only the branch taken is worked out, so the other may be something
+    /// that cannot be read here at all: a field of a record that is only
+    /// present in the other case, an element of a list that may be empty. A
+    /// question that fails in the branch nobody took is not a failure, and
+    /// that is the point rather than a convenience.
+    ///
+    /// [`Expr::Less`] and [`Expr::Or`] together nearly say this and get one
+    /// case wrong: `Or` takes its right side whenever the left comes to zero,
+    /// so a `then` that is legitimately zero falls through to the answer for
+    /// the other branch.
+    Cond { when: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     /// This shifted left by that many bits.
     ///
     /// A format that stores a shift count rather than a size needs it: a
@@ -680,6 +778,11 @@ impl Expr {
     pub fn pop_count(name: &str) -> Expr {
         Expr::PopCount(name.into())
     }
+    /// How many elements the earlier list field `name` holds. See
+    /// [`Expr::LenOf`].
+    pub fn len_of(name: &str) -> Expr {
+        Expr::LenOf(name.into())
+    }
     /// The next `bits` bits without consuming them, read the given way round.
     pub fn deduced(what: Deduce) -> Expr {
         Expr::Deduced(what)
@@ -745,6 +848,56 @@ impl Expr {
     /// This divided by `rhs`, rounded up.
     pub fn div_ceil(self, rhs: Expr) -> Expr {
         Expr::DivCeil(Box::new(self), Box::new(rhs))
+    }
+    /// What is left of this after taking out whole `rhs`es, with the sign of
+    /// `rhs`. See [`Expr::Mod`].
+    pub fn modulo(self, rhs: Expr) -> Expr {
+        Expr::Mod(Box::new(self), Box::new(rhs))
+    }
+    /// One when the two are the same number, and zero otherwise. See
+    /// [`Expr::Eq`], and [`Expr::equals`] for the older spelling this does not
+    /// replace.
+    pub fn equal_to(self, rhs: Expr) -> Expr {
+        Expr::Eq(Box::new(self), Box::new(rhs))
+    }
+    /// One when the two are different numbers, and zero otherwise.
+    pub fn not_equal(self, rhs: Expr) -> Expr {
+        Expr::Ne(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is `rhs` or less, and zero otherwise. Not
+    /// [`Expr::at_most`], which answers one of the two numbers rather than
+    /// whether it is the smaller.
+    pub fn less_or_equal(self, rhs: Expr) -> Expr {
+        Expr::Le(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is more than `rhs`, and zero otherwise.
+    pub fn greater_than(self, rhs: Expr) -> Expr {
+        Expr::Gt(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is `rhs` or more, and zero otherwise. Not
+    /// [`Expr::at_least`], which answers one of the two numbers.
+    pub fn greater_or_equal(self, rhs: Expr) -> Expr {
+        Expr::Ge(Box::new(self), Box::new(rhs))
+    }
+    /// One when both this and `rhs` are nonzero. `rhs` is left alone when this
+    /// is zero. See [`Expr::Both`].
+    pub fn both(self, rhs: Expr) -> Expr {
+        Expr::Both(Box::new(self), Box::new(rhs))
+    }
+    /// One when either this or `rhs` is nonzero. `rhs` is left alone when this
+    /// is nonzero. Not [`Expr::or`], which answers a value; see
+    /// [`Expr::Either`].
+    pub fn either(self, rhs: Expr) -> Expr {
+        Expr::Either(Box::new(self), Box::new(rhs))
+    }
+    /// One when this is zero, and zero when it is not.
+    pub fn negate(self) -> Expr {
+        Expr::Not(Box::new(self))
+    }
+    /// `then` when `when` is nonzero, `otherwise` when it is zero, and only
+    /// the one taken is worked out. See [`Expr::Cond`].
+    pub fn cond(when: Expr, then: Expr, otherwise: Expr) -> Expr {
+        Expr::Cond { when: Box::new(when), then: Box::new(then), otherwise: Box::new(otherwise) }
     }
     /// The base-2 logarithm of this, rounded down.
     pub fn log2(self) -> Expr {
@@ -842,6 +995,28 @@ pub enum Until {
     /// from the header rather than read, and there are no bytes of its own to
     /// compare.
     FieldValue { field: String, value: i128 },
+    /// Repeat until an element for which this expression comes to something
+    /// other than zero (that element is included).
+    ///
+    /// The two above compare one field against one fixed thing, which is what
+    /// most formats end a run with. The rest do not: a run may end at the
+    /// element whose length is zero, at the one whose index reaches a count
+    /// held elsewhere, or at the last one that fits in what is left. None of
+    /// those is a field against a literal.
+    ///
+    /// Worked out inside the element, as if it were that element's last field:
+    /// [`Expr::Ref`] names the element's own fields (and, climbing out, the
+    /// structures the list sits in, as a name anywhere else does),
+    /// [`Expr::Idx`] is this element's index in the run, and
+    /// [`Expr::Remaining`] is what is left of the *list's* container once this
+    /// element has been read, which is what "stop at the last one that fits"
+    /// asks about.
+    ///
+    /// Stops at the end of the container as well, exactly as [`Until::End`]
+    /// does. A file cut off before the element that would have ended the run
+    /// still has the elements it wrote, and refusing to place them would hide
+    /// the very thing that went wrong.
+    Cond(Expr),
 }
 
 /// What a format knows about the values inside a JSON field, laid over the
@@ -920,10 +1095,19 @@ impl FlagsDef {
 /// Names for the values an integer field is expected to take: `color_type` 6
 /// reads as "rgba". The underlying integer is untouched, so expressions and
 /// switches still see the number, and a value with no name is still shown.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
     pub cases: Vec<(i128, String)>,
+    /// What one of the named values means, beyond its name, by value.
+    ///
+    /// Beside `cases` rather than a third element of it, so that every
+    /// template that writes a list of (number, name) pairs goes on doing so
+    /// and only the ones with prose to add say anything here. Values with no
+    /// entry have no prose, which is nearly all of them; a value named in a
+    /// span rather than in `cases` cannot have one, since there is no one
+    /// value to hang it on.
+    pub docs: Vec<(i128, Arc<str>)>,
     /// Names for whole runs of values, where a format stops naming them one at
     /// a time and starts counting. Tried after `cases`, in order.
     pub spans: Vec<EnumSpan>,
@@ -935,7 +1119,7 @@ pub struct EnumDef {
 /// A run of values that mean the same thing and differ only by a number: every
 /// even value from 12 up is a SQLite blob, and how far up it is says how many
 /// bytes long. `label` is written with `{n}` where that number goes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumSpan {
     pub from: i128,
     /// How far apart the values of the run are. One for a solid run, two for
@@ -966,6 +1150,11 @@ impl EnumDef {
         self.label(v)
             .map(str::to_string)
             .or_else(|| self.spans.iter().find_map(|s| s.label(v)))
+    }
+    /// What the format says about the value `v`, beyond its name. Nothing for
+    /// a value nobody wrote prose for. See [`EnumDef::docs`].
+    pub fn doc_of(&self, v: i128) -> Option<&str> {
+        self.docs.iter().find(|(k, _)| *k == v).map(|(_, d)| &**d)
     }
     pub fn value_of(&self, name: &str) -> Option<i128> {
         self.cases.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(k, _)| *k)
@@ -1166,6 +1355,22 @@ impl Step {
 pub struct Field {
     pub name: Arc<str>,
     pub ty: Ty,
+    /// What this field is, in the words of whoever wrote the format down.
+    ///
+    /// A name is all a template says about a field, and a name is four
+    /// characters: `ihdr`, `e_shoff`, `bits_per_value`. The prose that goes
+    /// with it lives in a specification the reader does not have open, and a
+    /// format description that carries it is throwing it away at the point
+    /// where a reader is looking straight at the field.
+    ///
+    /// Whatever the source says, unchanged and not reworded, so nothing here
+    /// invents a meaning the format did not claim. A URL belongs on a line of
+    /// its own at the end, which is where a Kaitai `doc-ref` goes.
+    ///
+    /// `Arc<str>` for the reason [`Expr::Ref`] is one: a type is cloned every
+    /// time an element of a list is placed, and a paragraph per field copied
+    /// per element is a copy per element of a paragraph nobody changed.
+    pub doc: Option<Arc<str>>,
     /// Where this field's *displayed* name is written in the file, when the
     /// format writes it somewhere rather than fixing it.
     ///
@@ -1980,6 +2185,29 @@ pub enum Ty {
     /// a switch with thirteen cases is cloned once per element of a list
     /// that may run to millions.
     Switch { on: Expr, cases: Arc<[(i128, Ty)]>, default: Arc<Ty> },
+    /// A field that is there only while `cond` comes to something other than
+    /// zero, and is not there at all when it comes to zero.
+    ///
+    /// Not there means not there: no bytes, no children, no value, and a row
+    /// that says the field is absent rather than one that says it is empty.
+    /// Nothing after it moves, because a field of no bytes moves nothing.
+    ///
+    /// A [`Ty::Switch`] on the same expression with one case and a default of
+    /// no bytes reads the same bytes and says something else. It puts a switch
+    /// in the type column where the format says "if", it leaves an empty run
+    /// of bytes where the format has nothing at all, and a reader counting the
+    /// fields of a record gets a row for every field that is not in it. That
+    /// is the idiom this replaces.
+    ///
+    /// `cond` is worked out where the field was declared and in the frame the
+    /// field would have been read in, the same as a switch's expression is: it
+    /// may name any earlier sibling, look at the bytes about to be read, and
+    /// ask what room is left.
+    ///
+    /// Room is not part of the question. [`Ty::if_room`] and
+    /// [`Ty::present_if`] are the ones that ask whether a container still has
+    /// space, which is a different thing a format does and still theirs.
+    When { cond: Expr, inner: Box<Ty> },
     /// An integer type whose values have names.
     Enum { inner: Box<Ty>, def: Arc<EnumDef> },
     /// An integer type whose bits have names.
@@ -2193,6 +2421,10 @@ pub struct LinePart {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
+    /// What this structure is, in the words of whoever wrote the format down.
+    /// The same slot [`Field::doc`] is, one level up: a Kaitai type's `doc`
+    /// describes the record, and a field's describes one thing in it.
+    pub doc: Option<Arc<str>>,
     /// Which of this structure's fields names it. A RIFF chunk is identified
     /// by its `id`, not by the name of the field holding its contents, and
     /// nothing generic can work out which sibling that is: guessing at the
@@ -2366,6 +2598,7 @@ impl Ty {
                 .map(|(n, ty)| Field {
                     name: n.into(),
                     ty,
+                    doc: None,
                     name_from: None,
                     elem_name_from: None,
                     aside: false,
@@ -2374,6 +2607,7 @@ impl Ty {
                     time: None,
                 })
                 .collect(),
+            doc: None,
             named_by: None,
             contents: None,
             unit: None,
@@ -2422,6 +2656,52 @@ impl Ty {
                     f.elem_name_from = Some(from);
                 }
                 Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say what the field called `field` is, in the words of the format's own
+    /// description. See [`Field::doc`].
+    ///
+    /// A builder rather than an argument to [`Ty::structure`], so that the
+    /// hundred templates that have no prose to add go on reading as a list of
+    /// names and types. Silently does nothing to anything but a structure, and
+    /// to a name no field of it has, the way the builders below do.
+    pub fn field_doc(self, field: &str, text: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.doc = Some(text.into());
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say what this structure is, in the words of the format's own
+    /// description. See [`StructDef::doc`].
+    pub fn doc(self, text: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { doc: Some(text.into()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// Say what the enum value `value` means, beyond the name it goes by. See
+    /// [`EnumDef::docs`].
+    ///
+    /// Applies to the enumeration this type is, so it is written straight
+    /// after [`Ty::enumeration`] and before anything wraps the result.
+    pub fn enum_doc(self, value: i128, text: &str) -> Ty {
+        match self {
+            Ty::Enum { inner, def } => {
+                let mut def = (*def).clone();
+                def.docs.retain(|(v, _)| *v != value);
+                def.docs.push((value, text.into()));
+                Ty::Enum { inner, def: Arc::new(def) }
             }
             other => other,
         }
@@ -2721,6 +3001,11 @@ impl Ty {
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
+    /// A field that is there only when `cond` comes to something other than
+    /// zero, and absent when it does not. See [`Ty::When`].
+    pub fn when(cond: Expr, inner: Ty) -> Ty {
+        Ty::When { cond, inner: Box::new(inner) }
+    }
     /// A field that is there only while its container still has room for it.
     ///
     /// What a format that grew a field at a time needs. A systemd journal
@@ -2763,6 +3048,7 @@ impl Ty {
             def: Arc::new(EnumDef {
                 name: name.to_string(),
                 cases: cases.iter().map(|(v, n)| (*v, n.to_string())).collect(),
+                docs: Vec::new(),
                 spans: spans
                     .iter()
                     .map(|(from, step, label)| EnumSpan { from: *from, step: *step, label: label.to_string() })
@@ -2906,6 +3192,12 @@ impl Ty {
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             Ty::Switch { .. } => "switch".into(),
             Ty::Match { .. } => "switch".into(),
+            // The word first, then what it would have been: a reader looking
+            // at the column wants to know the field may not be here before
+            // they want to know what it would have held. A node that resolved
+            // to this is one the file left out, since a field that is there
+            // resolves to the type inside.
+            Ty::When { inner, .. } => format!("optional {}", inner.display_name()),
             Ty::Json(shape, schema) => match schema.as_ref().and_then(|s| s.type_name.clone()) {
                 Some(name) => name,
                 None => shape.name().to_string(),

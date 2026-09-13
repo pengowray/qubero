@@ -386,16 +386,32 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Mod(a, b)
         | Expr::DivCeil(a, b)
         | Expr::Or(a, b)
+        | Expr::Either(a, b)
+        | Expr::Both(a, b)
         | Expr::And(a, b)
         | Expr::Less(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b)
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => two(a, b),
+        // Whichever branch is taken, the length was worked out rather than
+        // written down if any of the three reads anything: this says how a
+        // size was arrived at, and that does not change with the file.
+        Expr::Cond { when, then, otherwise } => {
+            let (rc, nc) = expr_reads(when);
+            let (rt, nt) = two(then, otherwise);
+            (rc || rt, nc || nt)
+        }
         Expr::PadTo { n, .. } => expr_reads(n),
-        Expr::Log2(a) => expr_reads(a),
+        Expr::Log2(a) | Expr::Not(a) => expr_reads(a),
         Expr::Bit(a, _) => expr_reads(a),
         // Everything left reads something: a field, an element of a list, a
         // peek at bytes ahead, a number the decoder deduced.

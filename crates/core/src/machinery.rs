@@ -105,7 +105,13 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
             ty_refs(elem, out, selectors);
         }
         // `Until::FieldBytes` names a field of the element, not a sibling of
-        // the list, so there is nothing here to collect.
+        // the list, so there is nothing here to collect. `Until::Cond` is
+        // asked from inside the element too, and a name in it is the
+        // element's until it is not: the climb out of an element reaches the
+        // list's siblings, and a sibling with the same name as a field of the
+        // element would be marked as machinery for a run it has nothing to do
+        // with. Leaving it unmarked shows it as an ordinary row, which is the
+        // safe way to be wrong.
         Ty::Repeat { elem, .. } => ty_refs(elem, out, selectors),
         Ty::PointerList { offsets, adjust, elem, .. } => {
             out.push(offsets.clone());
@@ -137,6 +143,16 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
             ty_refs(inner, out, selectors);
         }
         Ty::Origin { inner } => ty_refs(inner, out, selectors),
+        // Whether a field is there at all is the same kind of answer a switch
+        // gives, so the field that decides it counts as a selector and not as
+        // a measurer: a flag word that says which optional fields a record
+        // carries is usually the word the record is about.
+        Ty::When { cond, inner } => {
+            if selectors {
+                expr_refs(cond, out);
+            }
+            ty_refs(inner, out, selectors);
+        }
         Ty::Switch { on, cases, default } => {
             if selectors {
                 expr_refs(on, out);
@@ -181,7 +197,7 @@ fn strlen_refs(len: &StrLen, out: &mut Vec<Arc<str>>) {
 
 fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
     match e {
-        Expr::Ref(n) | Expr::SizeOf(n) | Expr::BitsOf(n) | Expr::ProductOf(n) | Expr::SumOf(n) | Expr::MaxOf(n) | Expr::PopCount(n) | Expr::Prev(n) => {
+        Expr::Ref(n) | Expr::SizeOf(n) | Expr::BitsOf(n) | Expr::ProductOf(n) | Expr::SumOf(n) | Expr::MaxOf(n) | Expr::PopCount(n) | Expr::LenOf(n) | Expr::Prev(n) => {
             out.push(n.clone())
         }
         Expr::Elem { array, index, .. } | Expr::Product { array, index, .. } => {
@@ -215,12 +231,20 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(index, out);
         }
         Expr::Or(a, b)
+        | Expr::Either(a, b)
+        | Expr::Both(a, b)
         | Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Mod(a, b)
         | Expr::DivCeil(a, b)
         | Expr::Less(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b)
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
@@ -229,7 +253,15 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(a, out);
             expr_refs(b, out);
         }
-        Expr::Log2(a) => expr_refs(a, out),
+        // Every branch, not only the one this file takes: which field is
+        // machinery for which is a fact about the template, and the template
+        // reads all three.
+        Expr::Cond { when, then, otherwise } => {
+            expr_refs(when, out);
+            expr_refs(then, out);
+            expr_refs(otherwise, out);
+        }
+        Expr::Log2(a) | Expr::Not(a) => expr_refs(a, out),
         // Where a field is rather than what it says, but the field is named
         // the same way, and a field something is placed from is plumbing the
         // same as one something is sized from.

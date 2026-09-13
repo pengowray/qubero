@@ -101,6 +101,10 @@ pub fn fixed_bits(ty: &Ty) -> Option<u64> {
         // is the same: it is a run of places, and the places are elsewhere. So
         // is a gather, unless a `Sized` round it gives it a region to cover.
         Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } => 0,
+        // A field that may not be there is nought bytes or the width of what
+        // is inside it, and which it is, is what the file says. Nothing fixed
+        // about that, so a structure holding one has no fixed size either.
+        Ty::When { .. } => return None,
         // A named type could be anything, including itself.
         Ty::Named(_) => return None,
         _ => return None,
