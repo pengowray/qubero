@@ -74,16 +74,37 @@ impl Cdf {
         p
     }
 
-    /// The descriptor of the zVariable of this name.
-    fn variable(&mut self, want: &str) -> Vec<usize> {
-        let list = self.under(&self.gdr.clone(), &[15]);
-        for i in 0..self.count(&list) {
-            let vdr = self.under(&list, &[i, 2]);
-            if self.text(&self.under(&vdr, &[14])) == want {
-                return vdr;
+    /// The field of this name under `at`.
+    ///
+    /// By name rather than by number, because the number moves: a version 2
+    /// variable descriptor has a field a version 3 one does not, and an
+    /// rVariable has two fewer than a zVariable.
+    fn field(&mut self, at: &[usize], want: &str) -> Vec<usize> {
+        for i in 0..self.count(at) {
+            let p = self.under(at, &[i]);
+            if self.ev.node(&self.doc, &p).unwrap().name == want {
+                return p;
             }
         }
-        panic!("no zVariable called {want}");
+        panic!("{at:?} has no field called {want}");
+    }
+
+    /// The descriptor of the variable of this name, in whichever of the two
+    /// lists it is in.
+    fn variable(&mut self, want: &str) -> Vec<usize> {
+        for which in [15, 14] {
+            let list = self.under(&self.gdr.clone(), &[which]);
+            for i in 0..self.count(&list) {
+                let vdr = self.under(&list, &[i, 2]);
+                let name = self.field(&vdr, "name");
+                // A version 2 file pads its names out with spaces, so the name
+                // in the file is `SST     ` and the variable is called SST.
+                if self.text(&name).trim_end() == want {
+                    return vdr;
+                }
+            }
+        }
+        panic!("no variable called {want}");
     }
 
     /// Every value of a variable, in the order the file writes them: the index
@@ -91,17 +112,19 @@ impl Cdf {
     /// the values in a record.
     fn values(&mut self, name: &str) -> Vec<Value> {
         let vdr = self.variable(name);
-        let index = self.under(&vdr, &[19]);
+        let index = self.field(&vdr, "values_index");
         let mut out = Vec::new();
         for i in 0..self.count(&index) {
             let blocks = self.under(&index, &[i, 2, 6]);
             for b in 0..self.count(&blocks) {
                 let record = self.under(&blocks, &[b, 3, 0]);
                 // A compressed block keeps its values inside the stream; an
-                // uncompressed one is the values and nothing else.
+                // uncompressed one is the values and nothing else. Either way
+                // the records are the second field of the block, after the
+                // count of values a record holds.
                 let values = match self.value(&self.under(&record, &[1])) {
-                    Value::Enum { raw: 13, .. } => self.under(&record, &[2, 2, 0]),
-                    _ => self.under(&record, &[2]),
+                    Value::Enum { raw: 13, .. } => self.under(&record, &[2, 2, 0, 1]),
+                    _ => self.under(&record, &[2, 1]),
                 };
                 for r in 0..self.count(&values) {
                     let row = self.under(&values, &[r]);
@@ -119,10 +142,15 @@ impl Cdf {
         let list = self.under(&self.gdr.clone(), &[16]);
         for i in 0..self.count(&list) {
             let adr = self.under(&list, &[i, 2]);
-            if self.text(&self.under(&adr, &[11])) != want {
+            let name = self.field(&adr, "name");
+            if self.text(&name).trim_end() != want {
                 continue;
             }
-            return self.text(&self.under(&adr, &[12, 0, 2, 10]));
+            let entries = self.field(&adr, "g_entries");
+            let entry = self.under(&entries, &[0, 2]);
+            let value = self.field(&entry, "value");
+            // Padded out with spaces in a version 2 file, the way a name is.
+            return self.text(&value).trim_end().to_string();
         }
         panic!("no attribute called {want}");
     }
@@ -252,4 +280,105 @@ fn the_fast_analyser_reads_through_two_layers_of_packing() {
 
     assert_eq!(cdf.global_attribute("Logical_source"), "fa_esa_l2_eeb");
     assert_eq!(cdf.global_attribute("PI_name"), "J. P. McFadden");
+}
+
+/// One file, or a note that it is not there. The three files below ship with
+/// NASA's own CDF distribution rather than with cdflib, so a collection that
+/// has the two above may not have these.
+fn sample(name: &str) -> Option<PathBuf> {
+    let path = cdf_samples()?.join(name);
+    match path.is_file() {
+        true => Some(path),
+        false => {
+            eprintln!("skipped: {} is not there", path.display());
+            None
+        }
+    }
+}
+
+/// A version 2.5 file whose variables do not vary along every dimension they
+/// declare, which is what says a block holds fewer values than the shape
+/// multiplies out to.
+///
+/// The numbers are `cdflib`'s again: it reads a version 2 file as happily as a
+/// version 3 one, and `varinq` is what says which dimensions vary.
+#[test]
+fn a_version_two_file_reads_its_values_by_the_dimensions_that_vary() {
+    let Some(path) = sample("cacsst2.cdf") else { return };
+    let mut cdf = Cdf::open(&path);
+    // Two dimensions, 180 by 91, declared once in the global descriptor and
+    // shared by all four rVariables.
+    let dims = cdf.field(&cdf.gdr.clone(), "dim_sizes");
+    assert_eq!(ints(&[cdf.value(&cdf.under(&dims, &[0])), cdf.value(&cdf.under(&dims, &[1]))]), vec![180, 91]);
+
+    // Latitude varies along the second dimension only, so a record of it is 91
+    // numbers and not 16,380.
+    let latitude = ints(&cdf.values("LATITUDE"));
+    assert_eq!(latitude.len(), 91);
+    assert_eq!(&latitude[..4], &[-90, -88, -86, -84]);
+    assert_eq!(&latitude[89..], &[88, 90]);
+
+    // Longitude varies along the first, so 180.
+    let longitude = ints(&cdf.values("LONGITUD"));
+    assert_eq!(longitude.len(), 180);
+    assert_eq!(&longitude[..4], &[-178, -176, -174, -172]);
+    assert_eq!(&longitude[178..], &[178, 180]);
+
+    // The temperatures vary along both.
+    //
+    // In the order the file writes them, which for a column-major file is the
+    // first dimension fastest: `cdflib` hands back an array of 180 by 91 and
+    // the same run of numbers is its transpose flattened.
+    let sst = singles(&cdf.values("SST"));
+    assert_eq!(sst.len(), 180 * 91);
+    assert_eq!(&sst[..3], &[-1e9; 3]);
+    assert_eq!(&sst[sst.len() - 3..], &[-1.7999999523162842; 3]);
+
+    // And the time varies along neither, so one value for the whole grid. It
+    // is a CDF_EPOCH, which is a count of milliseconds in a float and reads
+    // here as that number rather than as a date.
+    assert_eq!(floats(&cdf.values("EPOCH")), vec![62545910400000.0]);
+
+    assert_eq!(cdf.global_attribute("TITLE"), "Climate Analysis Center SST blended analysis");
+}
+
+/// A version 2.6 file, the first release with a signature of its own: the same
+/// walk again at half the width, down to compressed blocks of values.
+#[test]
+fn a_version_two_point_six_file_reads_its_z_variables() {
+    let Some(path) = sample("geocpi0.cdf") else { return };
+    let mut cdf = Cdf::open(&path);
+    let density = singles(&cdf.values("SW_P_Den"));
+    assert_eq!(density.len(), 50, "fifty records of one number");
+    assert_eq!(&density[..4], &[4.254288196563721, 5.111618518829346, 4.48162317276001, 5.032914638519287]);
+    assert_eq!(&density[48..], &[3.2359378337860107, 2.1136810779571533]);
+
+    // Two components a record, in a block written in two pieces: the index has
+    // two entries, forty records and then ten.
+    let velocity = singles(&cdf.values("SW_V"));
+    assert_eq!(velocity.len(), 100);
+    assert_eq!(&velocity[..4], &[-421.58056640625, 43.2878532409668, -425.0941467285156, 49.079673767089844]);
+    assert_eq!(&velocity[98..], &[-422.4188537597656, 47.61986541748047]);
+
+    assert_eq!(cdf.global_attribute("Source_name"), "GEOTAIL>Geomagnetic Tail");
+}
+
+/// A file from before version 2.5, which leaves 128 bytes of nothing in the
+/// middle of every variable descriptor. Without reading past that, the name of
+/// a variable is 128 bytes further on than the template looks and comes back
+/// empty.
+///
+/// Not cross-checked against `cdflib`, which refuses the file: it is a
+/// multi-file CDF, so its values are in `.v0` to `.v3` beside it and not in
+/// here at all. What is checked is the descriptors.
+#[test]
+fn a_file_older_than_version_two_point_five_reads_past_its_unused_space() {
+    let Some(path) = sample("example1.cdf") else { return };
+    let mut cdf = Cdf::open(&path);
+    for want in ["Time", "Longitude", "Latitude", "Temperature"] {
+        let vdr = cdf.variable(want);
+        let wasted = cdf.field(&vdr, "wasted");
+        assert_eq!(cdf.ev.node(&cdf.doc, &wasted).unwrap().size_bits, 128 * 8, "{want}");
+    }
+    assert_eq!(cdf.global_attribute("TITLE"), "An example CDF (1).");
 }
