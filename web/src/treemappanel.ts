@@ -35,6 +35,11 @@ const SCAN_MS = 10;
  *  everything else. Full screen it takes what it is given. */
 const RAIL_HEIGHT = 168;
 
+/** Whether the reader left the treemap unfolded. Folded until they open it:
+ *  it sits at the foot of the rail while it is rough, and a folded map reads
+ *  nothing and draws nothing. */
+const OPEN_KEY = "qubero.treemap.open";
+
 /** One step of the way in. `path` is the template node the step stands for,
  *  where the mode has one; `key` is the box's identity in the drawn tree,
  *  which every mode has. */
@@ -57,6 +62,9 @@ export class TreemapPanel {
    *  redraw puts the mark back where it was. */
   private selected: string | null = null;
   private big = false;
+  private open = false;
+  private readonly fold: HTMLButtonElement;
+  private readonly chevron: HTMLElement;
   private pumping = false;
   private frame = 0;
 
@@ -73,7 +81,15 @@ export class TreemapPanel {
     const bar = document.createElement("div");
     bar.className = "tmp-bar";
     const head = document.createElement("h3");
-    head.textContent = TREEMAP.title;
+    this.chevron = document.createElement("span");
+    this.chevron.className = "panel-chevron";
+    this.chevron.setAttribute("aria-hidden", "true");
+    this.fold = document.createElement("button");
+    this.fold.type = "button";
+    this.fold.className = "tmp-fold";
+    this.fold.append(this.chevron, TREEMAP.title);
+    this.fold.addEventListener("click", () => this.setOpen(!this.open));
+    head.append(this.fold);
     // The minimap's heading carries the question it answers, so this one does
     // too. Two pictures of one file where only one says what it is for is two
     // pictures a reader has to work out the difference between.
@@ -156,6 +172,7 @@ export class TreemapPanel {
     const saved = localStorage.getItem(MODE_KEY);
     if (saved !== null && (TREEMAP_MODES as readonly string[]).includes(saved)) this.mode = saved as TreemapMode;
     this.pick.value = this.mode;
+    this.setOpen(localStorage.getItem(OPEN_KEY) === "open", false);
     this.setBig(false);
     doc.onChange(() => this.draw());
   }
@@ -208,6 +225,18 @@ export class TreemapPanel {
     return this.big;
   }
 
+  private setOpen(open: boolean, remember = true): void {
+    this.open = open;
+    if (remember) localStorage.setItem(OPEN_KEY, open ? "open" : "folded");
+    this.el.classList.toggle("is-folded", !open);
+    this.chevron.textContent = open ? "▾" : "▸";
+    this.fold.setAttribute("aria-expanded", String(open));
+    if (!open && this.big) this.setBig(false);
+    // The rail runs the scan, and only for a panel it can see.
+    this.onResize();
+    this.draw();
+  }
+
   private setBig(big: boolean): void {
     this.big = big;
     this.el.classList.toggle("tmp-big", big);
@@ -227,7 +256,7 @@ export class TreemapPanel {
    * costs nothing and the two never disagree about how far it has got.
    */
   pump(): void {
-    if (this.el.offsetParent === null || this.mode === "structure") return;
+    if (!this.open || this.el.offsetParent === null || this.mode === "structure") return;
     if (this.pumping) return;
     this.pumping = true;
     const until = performance.now() + SCAN_MS;
@@ -261,6 +290,7 @@ export class TreemapPanel {
   }
 
   private paint(): void {
+    if (!this.open) return;
     const width = Math.floor(this.plot.clientWidth || this.el.clientWidth);
     const height = this.big ? Math.floor(this.plot.clientHeight) : RAIL_HEIGHT;
     const t = this.zoomed(this.build(width * Math.max(height, 1)));

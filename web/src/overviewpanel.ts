@@ -298,17 +298,17 @@ export class OverviewPanel {
 
     this.body = document.createElement("div");
     this.body.className = "ov-body";
-    // Two pictures of one file, each with its heading, and in the order the
-    // questions come: what it is, where the bytes of each kind are, then how
-    // much of the file each part is, then the parts by name.
+    // In the order the questions come: what it is, where the bytes of each
+    // kind are, then the parts by name. The treemap, how much of the file each
+    // part is, waits folded at the foot while it is rough.
     this.body.append(
       this.facts,
       this.minimap.el,
-      this.treemap.el,
       this.tabs,
       this.contentsEl,
       this.logicalEl,
       this.btrees.el,
+      this.treemap.el,
     );
     this.el.append(header, this.body);
 

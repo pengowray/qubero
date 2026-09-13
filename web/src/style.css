@@ -4683,6 +4683,23 @@ table.rec tr.is-on td {
   margin: 0;
   margin-right: auto;
 }
+/* The heading is the fold. Folded, the bar is all there is: no picker, no
+   corner button, no map. */
+.tmp-fold {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tmp.is-folded > :not(.tmp-bar),
+.tmp.is-folded .tmp-bar > :not(h3) {
+  display: none;
+}
 .tmp-grow {
   flex: 0 0 auto;
   width: 22px;
