@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
-use qubero_core::formats::root;
+use qubero_core::formats::{root, root_tree};
 use qubero_core::source::MemSource;
 
 /// The header's fields, and the record each of the last three places.
@@ -285,8 +285,6 @@ fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         }
     }
 }
-
-use qubero_core::formats::root_tree;
 
 fn root_samples() -> Option<PathBuf> {
     let mut roots = Vec::new();
