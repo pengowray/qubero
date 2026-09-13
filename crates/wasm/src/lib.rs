@@ -2679,6 +2679,16 @@ impl Editor {
         self.at(space).ksy_report.clone()
     }
 
+    /// A bundled format's `.ksy`, byte for byte, by its `meta/id` (the part of
+    /// `ksy:png` after the colon). Empty for an id nothing here has.
+    ///
+    /// This is the file as it was copied from the Kaitai Struct library, which
+    /// is what the converter panel shows a reader who asks to see the
+    /// description behind a shipped format.
+    pub fn bundled_ksy_text(&self, id: &str) -> String {
+        qubero_core::ksy::bundled::find(id).map(|b| b.text.to_string()).unwrap_or_default()
+    }
+
     /// Convert a `.ksy` and say what it became, without reading anything with
     /// it. The document keeps the template it had.
     ///

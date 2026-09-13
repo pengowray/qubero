@@ -691,9 +691,7 @@ function build(tab: Tab): Page {
     // a count when its description holds things the template does not: those
     // fields are missing or read another way, and a reader who is not told
     // has no way to know which.
-    if (tmpl.value.startsWith(KAITAI_PREFIX)) {
-      overview.setNote(KAITAI_TEMPLATE.note(doc.ksyReport()?.gaps.length ?? 0));
-    }
+    if (tmpl.value.startsWith(KAITAI_PREFIX)) showKaitaiNote(tmpl.value);
     // Picking a template is asking to read fields, so the panel goes back to
     // them. It is left on the raw reading only for a file that has none.
     if (tmpl.value !== "") inspector.setMode("structure");
@@ -716,6 +714,9 @@ function build(tab: Tab): Page {
       tmpl.value = name;
       tmplWas = name;
       doc.setTemplate(name);
+      // A file recognised as a bundled Kaitai format says so as much as one
+      // picked from the menu does, and offers the same way to the description.
+      if (name.startsWith(KAITAI_PREFIX)) showKaitaiNote(name);
       // The template's answer goes up at once: it is the one source that
       // has read the file, and the one that answers before anything else.
       kind.setTemplate({ name, label: templateTypeName(name), sentence: templateSentence(doc, name) });
@@ -1279,23 +1280,42 @@ function build(tab: Tab): Page {
    * tool: it converts as it is typed into, on a scratch basis, and only "Use
    * this template" reaches the document.
    */
-  const openKsyPanel = (text?: string, name?: string): void => {
+  const openKsyPanel = (load?: { text: string; name: string | null } | { bundled: string }): void => {
     if (ksyPanel === null) {
       const panel = new KsyPanel(doc);
       ksyPanel = panel;
       panel.onMessage = (message, warn) => say(message, warn);
       panel.onClose = () => setView(ksyCameFrom === "ksy" ? "hex" : ksyCameFrom);
-      panel.onApply = (id) => {
-        // The menu names whatever is reading the file, and that is now this.
-        if (ksyOption === null) {
-          ksyOption = el("option", { value: KSY_VALUE, textContent: KSY.menuApplied(id) });
-          // In front of the entry that opens the converter, which stays last.
-          if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(ksyOption, ksyEntry);
-          else tmpl.append(ksyOption);
-        } else ksyOption.textContent = KSY.menuApplied(id);
-        tmpl.value = KSY_VALUE;
-        tmplWas = KSY_VALUE;
-        overview.setNote("");
+      panel.onApply = (id, bundled) => {
+        if (bundled) {
+          // A shipped description the reader did not change is the format the
+          // menu already lists, so it is applied by name and the menu goes on
+          // showing its title.
+          const name = `${KAITAI_PREFIX}${id}`;
+          if (doc.setTemplate(name)) {
+            tmpl.value = name;
+            tmplWas = name;
+            // The entry for a pasted `.ksy` named a template that is no longer
+            // what the converter holds, and picking it would have applied this
+            // one under that name. It goes, and comes back with the next
+            // pasted template.
+            ksyOption?.remove();
+            ksyOption = null;
+            say(KSY.applied(id));
+            showKaitaiNote(name);
+          } else say(KSY.cannotApply(id), true);
+        } else {
+          // The menu names whatever is reading the file, and that is now this.
+          if (ksyOption === null) {
+            ksyOption = el("option", { value: KSY_VALUE, textContent: KSY.menuApplied(id) });
+            // In front of the entry that opens the converter, which stays last.
+            if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(ksyOption, ksyEntry);
+            else tmpl.append(ksyOption);
+          } else ksyOption.textContent = KSY.menuApplied(id);
+          tmpl.value = KSY_VALUE;
+          tmplWas = KSY_VALUE;
+          overview.setNote("");
+        }
         structure.setMatched(true);
         inspector.setMode("structure");
         // The diagram is a picture of the template, and the template is a new
@@ -1307,9 +1327,29 @@ function build(tab: Tab): Page {
       workspaceLeft.append(panel.el);
       tab.release.push(() => panel.dispose());
     }
-    if (text !== undefined) ksyPanel.load(text, name ?? null);
+    if (load !== undefined && "bundled" in load) {
+      const text = doc.bundledKsyText(load.bundled);
+      if (text !== "") ksyPanel.loadBundled(load.bundled, text);
+    } else if (load !== undefined) ksyPanel.load(load.text, load.name);
     if (showingView !== "ksy") ksyCameFrom = showingView;
     setView("ksy");
+  };
+
+  /**
+   * The note under a bundled Kaitai format: where the description came from,
+   * how much of it the template leaves out, and the way to read it.
+   *
+   * The count is only useful next to the description it counts, so the note
+   * carries the way there: the converter opens with the shipped `.ksy` in it
+   * and lists each part beside the line it is written on.
+   */
+  const showKaitaiNote = (name: string): void => {
+    const id = name.slice(KAITAI_PREFIX.length);
+    overview.setNote(KAITAI_TEMPLATE.note(doc.ksyReport()?.gaps.length ?? 0), {
+      label: KAITAI_TEMPLATE.source,
+      title: KAITAI_TEMPLATE.sourceTitle,
+      run: () => openKsyPanel({ bundled: id }),
+    });
   };
 
   const setView = (which: View): void => {
@@ -1651,7 +1691,7 @@ function build(tab: Tab): Page {
       saveMsg.classList.toggle("warn", warn === true);
     };
     // So does a dropped `.ksy`.
-    dropKsy = doc.isFile ? (text, name) => openKsyPanel(text, name) : () => say(KSY.notHere, true);
+    dropKsy = doc.isFile ? (text, name) => openKsyPanel({ text, name }) : () => say(KSY.notHere, true);
     if (!started) {
       started = true;
       // A saved "graph" from a browser where it was once unlocked is not a

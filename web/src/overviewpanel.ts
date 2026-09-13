@@ -29,6 +29,14 @@ import type { OutlineHeading, Viewport } from "./outline.ts";
 import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.ts";
 import type { LogicalNode, LogicalOutline } from "./logicaloutline.ts";
 
+/** What a note offers to do about what it says: one button after the words.
+ *  A note that only reports something has none. */
+export type NoteAction = {
+  readonly label: string;
+  readonly title?: string;
+  readonly run: () => void;
+};
+
 /** Top-level parts listed before the list says how many more there are. A
  *  SQLite file of a hundred thousand pages is not a hundred thousand buttons;
  *  the part the view is in is always listed, wherever it falls. */
@@ -206,6 +214,9 @@ export class OverviewPanel {
   private seeded = false;
   /** A standing note about the template, shown above the parts. */
   private note = "";
+  /** What the note offers to do about itself, or null for a note that only
+   *  says something. */
+  private noteAction: NoteAction | null = null;
   private tab: Tab = "contents";
 
   // ----- the logical outline -----
@@ -373,9 +384,13 @@ export class OverviewPanel {
    * explanation reads as a format Qubero supports badly rather than one it
    * only names.
    */
-  setNote(text: string): void {
-    if (text === this.note) return;
+  setNote(text: string, action: NoteAction | null = null): void {
+    // Same words and no button: nothing to redraw. With a button there is: two
+    // formats can leave out the same number of parts, so the same sentence
+    // with the same label can still lead somewhere else.
+    if (text === this.note && action === null && this.noteAction === null) return;
     this.note = text;
+    this.noteAction = text === "" ? null : action;
     this.drawContents();
   }
 
@@ -608,7 +623,20 @@ export class OverviewPanel {
     this.partRows = new Map();
     this.subRowsByPart = new Map();
     const out: HTMLElement[] = [];
-    if (this.note !== "") out.push(noteLine(this.note));
+    if (this.note !== "") {
+      const line = noteLine(this.note);
+      const action = this.noteAction;
+      if (action !== null) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ov-note-action";
+        button.textContent = action.label;
+        if (action.title !== undefined) button.title = action.title;
+        button.addEventListener("click", () => action.run());
+        line.append(" ", button);
+      }
+      out.push(line);
+    }
     if (this.doc.template === null) {
       out.push(noneLine(NO_TEMPLATE));
       this.contentsEl.replaceChildren(...out);

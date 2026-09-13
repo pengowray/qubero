@@ -2029,6 +2029,17 @@ export class Doc {
    * The report from the last `.ksy` read into this space, or null when the
    * template in use did not come from one.
    */
+  /**
+   * A bundled Kaitai format's `.ksy`, byte for byte, by its id: `png` for the
+   * template named `ksy:png`. Empty for an id nothing is bundled under.
+   *
+   * The shipped file rather than anything rebuilt from the template, so what
+   * the converter panel shows is what the conversion read.
+   */
+  bundledKsyText(id: string): string {
+    return this.editor.bundled_ksy_text(id);
+  }
+
   ksyReport(): KsyReport | null {
     const json = this.editor.ksy_report(this.space);
     return json === "" ? null : (JSON.parse(json) as KsyReport);

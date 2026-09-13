@@ -15,6 +15,10 @@ import type { Doc, KsyLine, KsyReport } from "./doc.ts";
 import { el } from "./dom.ts";
 import { KSY } from "./strings.ts";
 
+/** What a bundled format's template name starts with: `ksy:png` is the format
+ *  whose `.ksy` id is `png`. */
+const KSY_PREFIX = "ksy:";
+
 /** How long after the last keystroke the text is converted. Long enough that
  *  typing a type name does not convert it five times, short enough that a
  *  pause reads as an answer to what was typed. */
@@ -31,9 +35,15 @@ type Converted =
 
 export class KsyPanel {
   readonly el: HTMLElement;
-  /** Called when the reader applies the template, with the format's id. The
-   *  page closes the panel, goes back to the listing and updates the menu. */
-  onApply: ((id: string) => void) | null = null;
+  /**
+   * Called when the reader applies the template, with the format's id.
+   *
+   * `bundled` is true when the text is a shipped description the reader has not
+   * changed: the file is then read as that bundled format, `ksy:<id>`, so the
+   * chooser goes on naming it. The page closes the panel, goes back to the
+   * listing and updates the menu either way.
+   */
+  onApply: ((id: string, bundled: boolean) => void) | null = null;
   /** Called when the reader closes the panel without applying anything. */
   onClose: (() => void) | null = null;
   /** Where a message about the document itself goes: the status slot the rest
@@ -43,6 +53,12 @@ export class KsyPanel {
   private readonly doc: Doc;
   private readonly source: HTMLTextAreaElement;
   private readonly fileName: HTMLElement;
+  private readonly bundledList: HTMLSelectElement;
+  /** The shipped description in the box and the text it arrived as, or null
+   *  for text from anywhere else. Applying it reads the file as that bundled
+   *  format rather than as a one-off; an edit to a single character makes it a
+   *  one-off again, which is why the text it came as is kept. */
+  private bundled: { readonly id: string; readonly text: string } | null = null;
   private readonly report: HTMLElement;
   private readonly out: HTMLElement;
   private readonly applyBtn: HTMLButtonElement;
@@ -63,10 +79,29 @@ export class KsyPanel {
     openBtn.addEventListener("click", () => this.picker.click());
     this.fileName = el("span", { className: "kp-name" });
 
+    // The descriptions that ship with Qubero, to read or to start from. The
+    // ones that are here only to be imported are not in the chooser's list and
+    // are not in this one either.
+    this.bundledList = el("select", { className: "kp-bundled", title: KSY.bundledTitle });
+    this.bundledList.setAttribute("aria-label", KSY.bundledLabel);
+    this.bundledList.append(el("option", { value: "", textContent: KSY.bundledPlaceholder }));
+    for (const c of doc.templateChoices) {
+      if (c.source !== "kaitai") continue;
+      const id = c.name.startsWith(KSY_PREFIX) ? c.name.slice(KSY_PREFIX.length) : c.name;
+      this.bundledList.append(el("option", { value: id, textContent: KSY.bundledOption(id, c.title) }));
+    }
+    this.bundledList.addEventListener("change", () => {
+      const id = this.bundledList.value;
+      if (id === "") return;
+      const text = this.doc.bundledKsyText(id);
+      if (text === "") return;
+      this.loadBundled(id, text);
+    });
+
     this.source = el("textarea", { className: "kp-source", spellcheck: false, placeholder: KSY.placeholder });
     this.source.setAttribute("wrap", "off");
     this.source.setAttribute("aria-label", KSY.sourceLabel);
-    this.source.addEventListener("input", () => this.schedule());
+    this.source.addEventListener("input", () => this.edited());
     this.source.addEventListener("keydown", (e) => this.onKeyInText(e));
 
     this.report = el("div", { className: "kp-report" });
@@ -89,7 +124,7 @@ export class KsyPanel {
         el(
           "div",
           { className: "kp-col kp-col-source" },
-          el("div", { className: "kp-bar" }, openBtn, this.fileName, this.picker),
+          el("div", { className: "kp-bar" }, openBtn, this.bundledList, this.fileName, this.picker),
           this.source,
         ),
         el(
@@ -120,8 +155,32 @@ export class KsyPanel {
   /** Put a `.ksy` in the box and convert it at once: a file picked here, one
    *  dropped on the window, or the text the panel was left with. */
   load(text: string, name: string | null): void {
+    this.bundled = null;
+    this.bundledList.value = "";
+    this.put(text, name);
+  }
+
+  /**
+   * Put a shipped description in the box, and remember that it is one.
+   *
+   * Applying it unedited reads the file as `ksy:<id>`, the same template the
+   * chooser offers, rather than as a one-off conversion of this text. Editing a
+   * character makes it a one-off again.
+   */
+  loadBundled(id: string, text: string): void {
+    this.bundled = { id, text };
+    this.bundledList.value = id;
+    // The list is the one place the shipped description is named, so the name
+    // beside it stays empty rather than saying it twice in a toolbar that has
+    // room for one. A description the list does not offer, which is one that
+    // exists only to be imported, is named there instead.
+    this.put(text, this.bundledList.value === id ? null : KSY.bundledName(id));
+  }
+
+  private put(text: string, name: string | null): void {
     this.source.value = text;
     this.fileName.textContent = name ?? "";
+    this.fileName.title = name ?? "";
     // At the top of the file it just opened, not wherever the last one was
     // left.
     this.source.setSelectionRange(0, 0);
@@ -156,6 +215,16 @@ export class KsyPanel {
 
   // ----- converting -----
 
+  /** A keystroke in the box. Text that no longer matches the shipped
+   *  description is the reader's own, and the list stops claiming otherwise. */
+  private edited(): void {
+    if (this.bundled !== null && this.bundled.text !== this.source.value) {
+      this.bundled = null;
+      this.bundledList.value = "";
+    }
+    this.schedule();
+  }
+
   private schedule(): void {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
@@ -178,9 +247,9 @@ export class KsyPanel {
       this.draw();
       return;
     }
-    // TODO: pass the bundled formats as imports once `ksy::bundled` exists.
-    // Until then a `.ksy` whose `meta/imports` names another is a gap, which
-    // the report says in its own words.
+    // No imports of the reader's own: a `meta/imports` name is resolved against
+    // the shipped collection by the wasm layer, which is where `common/riff`
+    // and the rest of what the Kaitai library leans on already are.
     const reply = this.doc.previewKsyTemplate(text, {});
     this.last = reply.status === "ok" ? { ok: true, report: reply.report, text: reply.text } : { ok: false, message: reply.message };
     this.draw();
@@ -191,10 +260,19 @@ export class KsyPanel {
   apply(): void {
     const last = this.last;
     if (last === null || !last.ok) return;
+    const shipped = this.bundled;
+    // A shipped description nobody has touched is the format the chooser
+    // already offers, so it is applied by name: the menu goes on showing the
+    // format's title, and the page does not gain a second entry for the same
+    // thing. The page says so once it has done it.
+    if (shipped !== null && shipped.text === this.source.value) {
+      this.onApply?.(shipped.id, true);
+      return;
+    }
     try {
       const report = this.doc.setKsyTemplate(this.source.value, {});
       this.onMessage?.(KSY.applied(report.name));
-      this.onApply?.(report.name);
+      this.onApply?.(report.name, false);
     } catch (e) {
       this.onMessage?.(e instanceof Error ? e.message : String(e), true);
     }

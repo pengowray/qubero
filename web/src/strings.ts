@@ -743,6 +743,10 @@ export const KAITAI_TEMPLATE = {
     gaps === 0
       ? "Format description from Kaitai Struct, converted in full."
       : `Format description from Kaitai Struct. ${gaps === 1 ? "1 part" : `${gaps} parts`} of it could not be converted and read as plain bytes.`,
+  /** On the note, after it. It opens the converter with the shipped
+   *  description in it, which is where the parts left out are listed. */
+  source: "Show the .ksy",
+  sourceTitle: "Open the format description this template was converted from",
 };
 
 /** The Logical tab for an ELF, when the parsed header has no field of a name
@@ -2896,6 +2900,17 @@ export const KSY = {
 
   openButton: "Open .ksy…",
   openTitle: "Open a .ksy file from this computer",
+  /** The list of shipped descriptions, beside the file picker. Picking one puts
+   *  it in the box to read, edit and apply. */
+  bundledPlaceholder: "Bundled .ksy…",
+  bundledLabel: "Bundled .ksy",
+  bundledTitle: "One of the format descriptions Qubero ships with",
+  /** One entry of that list: the id the format is opened by, then what it
+   *  calls itself. The id alone for the ones that carry no title. */
+  bundledOption: (id: string, title: string): string => (title === "" ? id : `${id} · ${title}`),
+  /** The name slot, for a shipped description the list beside it does not
+   *  offer: one that is there only for another format to import. */
+  bundledName: (id: string): string => `${id}.ksy (bundled)`,
   /** In the text box while it is empty. */
   placeholder: "Paste a .ksy here, or drop one on the window.",
   sourceLabel: "Kaitai .ksy",
@@ -2930,6 +2945,10 @@ export const KSY = {
   closeTitle: "Close the converter (Escape)",
   /** After applying, where the other status messages go. */
   applied: (id: string): string => `Reading the file as ${id}.`,
+  /** A bundled description that the panel converted but the template chooser
+   *  would not take. It means the build disagrees with itself, so it names the
+   *  format and says where the refusal came from rather than advising. */
+  cannotApply: (id: string): string => `Could not read the file as ${id}: the bundled description was refused.`,
   /** A .ksy dropped with no file open. It describes how to read a file, so
    *  there has to be one. */
   needsFile: "Open a file first. A .ksy says how to read one.",

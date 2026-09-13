@@ -158,6 +158,84 @@ try {
   await page.keyboard.press("Escape");
   await page.waitForSelector(".kp", { state: "hidden", timeout: 5000 });
 
+  // A .ksy whose meta/imports names another format: the shipped collection is
+  // what the import resolves against, so nothing has to be supplied alongside
+  // it and the imported types are in the template.
+  await page.selectOption(".tb-tmpl", { label: "Convert a .ksy…" });
+  await page.waitForSelector(".kp:not([hidden])", { timeout: 10000 });
+  await paste(await readFile(join(formats, "media/wav.ksy"), "utf8"));
+  const imported = await page.evaluate(() => ({
+    failed: document.querySelectorAll(".kp-error").length,
+    out: document.querySelector(".kp-out").textContent,
+    gaps: document.querySelector(".kp-gaps > .kp-group-heading")?.textContent ?? "",
+  }));
+  console.log("wav.ksy", JSON.stringify({ ...imported, out: imported.out.slice(0, 80) }));
+  assert.equal(imported.failed, 0, "wav.ksy, which imports /common/riff, did not convert");
+  assert.match(imported.out, /riff/, "the template does not name anything from the imported riff");
+
+  // A shipped description, read and applied from the panel. Applying one
+  // nobody has edited reads the file as that bundled format, so the chooser
+  // goes on naming it rather than gaining a second entry.
+  const bundledId = await page.evaluate(() => {
+    const list = document.querySelector(".kp-bundled");
+    return { count: list.options.length, first: list.options[1]?.value ?? "", label: list.options[1]?.textContent ?? "" };
+  });
+  console.log("bundled list", JSON.stringify(bundledId));
+  assert(bundledId.count > 10, "the panel offers no bundled descriptions");
+  assert.match(bundledId.label, new RegExp(`^${bundledId.first}`), "a bundled entry does not lead with its id");
+  await page.selectOption(".kp-bundled", bundledId.first);
+  await page.waitForTimeout(600);
+  const shipped = await page.evaluate(() => ({
+    // The list is what names a shipped description; the slot beside it names a
+    // file, and there is no file here.
+    picked: document.querySelector(".kp-bundled").value,
+    name: document.querySelector(".kp-name").textContent,
+    length: document.querySelector(".kp-source").value.length,
+    failed: document.querySelectorAll(".kp-error").length,
+    out: document.querySelector(".kp-out").textContent.slice(0, 40),
+  }));
+  console.log("bundled in the box", JSON.stringify(shipped));
+  assert.equal(shipped.picked, bundledId.first, "the list does not hold the description that was picked");
+  assert.equal(shipped.name, "", "the toolbar named the shipped description twice");
+  assert(shipped.length > 0, "the shipped description came back empty");
+  assert.equal(shipped.failed, 0, "a shipped description did not convert");
+  await page.screenshot({ path: join(outDir, "ksy-bundled.png") });
+
+  await page.getByRole("button", { name: "Use this template", exact: true }).click();
+  await page.waitForTimeout(500);
+  const asBundled = await page.evaluate(() => ({
+    value: document.querySelector(".tb-tmpl").value,
+    note: document.querySelector(".ov-note")?.textContent ?? "",
+    action: document.querySelector(".ov-note-action")?.textContent ?? "",
+    // The entry for the .ksy that was pasted earlier named a template the
+    // converter no longer holds, so it is gone rather than left to apply this
+    // one under that name.
+    pastedEntry: document.querySelectorAll('.tb-tmpl option[value="converted-ksy"]').length,
+  }));
+  console.log("applied bundled", JSON.stringify(asBundled));
+  assert.equal(asBundled.pastedEntry, 0, "the menu kept an entry for a pasted .ksy that is no longer in the converter");
+  assert.equal(asBundled.value, `ksy:${bundledId.first}`, "applying a shipped description did not select it in the chooser");
+  assert.match(asBundled.note, /Kaitai Struct/, "the note does not say where the description came from");
+  assert.equal(asBundled.action, "Show the .ksy", "the note does not offer the description");
+
+  // The note in place, which is where a reader meets the offer.
+  await page.getByRole("button", { name: /Overview/ }).first().click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(outDir, "ksy-note.png") });
+
+  // And back the other way: the note opens the converter on the shipped text.
+  await page.evaluate(() => document.querySelector(".ov-note-action").click());
+  await page.waitForSelector(".kp:not([hidden])", { timeout: 10000 });
+  const reopened = await page.evaluate(() => ({
+    picked: document.querySelector(".kp-bundled").value,
+    length: document.querySelector(".kp-source").value.length,
+  }));
+  console.log("from the note", JSON.stringify(reopened));
+  assert.equal(reopened.picked, bundledId.first, "the note opened the converter on the wrong description");
+  assert(reopened.length > 0, "the note opened the converter on nothing");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".kp", { state: "hidden", timeout: 5000 });
+
   // The other way in: a .ksy dropped on the window opens the converter with the
   // text in it, rather than opening the .ksy as the document.
   await page.evaluate((text) => {
