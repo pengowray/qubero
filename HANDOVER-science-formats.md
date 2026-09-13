@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| Arrow IPC files and streams: a new template and a FlatBuffers reader in the IR (`flatbuf.rs`), the footer read from the back, batches placed from their blocks, buffers typed by schema field to three levels, ZSTD bodies decoded. Matches pyarrow on six samples. | 92aa7cc, 24ca3b6, 5c596ad |
 | Decoder panels: one `Unpacker` table picks the side reader for the cursor (near or any ancestor), `ExplainDto` is a tagged enum mirrored as a TypeScript union, GWF vectors have their own panel, and GRIB values reach a panel that says which value the cursor is on and how it decodes. | 63806d1, d803c1e, f2ac9b4, 0685d12 |
 | BGZF, BAM, BAI and CSI: new templates. BGZF sniffs apart from gzip (which fixed false CRC mismatches on every `.bam`), the first block's header and records as fields, later records through a side reader, indexes with split virtual offsets. Matches bamnostic. | 1830e4a, 3b48b16, 8f47af1 |
 | NIfTI-1, NIfTI-2 and Analyze 7.5: a new template, headers in either byte order, extensions, voxels shaped by `dim` with `dim[1]` innermost, whole-number scaling. Matches nibabel. `.nii.gz` opens through gzip. | 44d98c4, 12cf556, 8f63c5b |
@@ -505,9 +506,37 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-BUFR, ADIOS2 BP, TDMS. Arrow IPC / Feather was being built on 2026-09-14.
-DICOM is read by the bundled Kaitai description (`dicom.ksy`) rather than a
-native template.
+ADIOS2 BP. BUFR and TDMS were being built on 2026-09-14. DICOM is read by the
+bundled Kaitai description (`dicom.ksy`) rather than a native template.
+
+### Arrow IPC files and streams (built 2026-09-14)
+
+FlatBuffers read through their vtables in the IR (no engine change: `StartOf`
+gives a table its own position), the file footer read from the back, every
+batch placed from its block, and every buffer placed and typed by the schema
+field its node stands for (see Closed). Six pyarrow samples; every block,
+buffer and value matches pyarrow. Left:
+
+- Nested types are followed three levels; from the fourth, nodes are
+  `unparsed` and their buffers are named bytes. A lookup by position in a
+  flattened pre-order field tree would remove the limit and most of the walk.
+- LZ4-compressed bodies stay named bytes: Arrow uses the LZ4 *frame* format and
+  the codec layer has only `Lz4Block`. ZSTD bodies decode.
+- Dictionary batches find their field only when it is a top-level column.
+- Legacy streams without the continuation marker are not recognised.
+- Text columns' character data reads as one run, not one value per row.
+- **Stack depth:** reading one late buffer from a cold start needs about 2 MB
+  of stack in a debug build (under 256 KB in release, and the wasm build is
+  release). Tests run with the 64 MB stack from `.cargo/config.toml`, so they
+  would never catch a regression. The engine guards depth when sizing a type
+  but not in nested computed values; a guard there would turn an overflow
+  into a readable error.
+- `File.fbs`'s comment on `Block` disagrees with what pyarrow writes: the
+  offset points at the continuation marker and the body starts at `offset +
+  metaDataLength`.
+- `arrow.rs` is about 1,200 lines: the transcribed schema, the node and buffer
+  walk (which packs a field's layout into one number to stay inside the
+  stack), and the buffer readings would each make a file.
 
 ### BGZF, BAM, BAI and CSI (built 2026-09-14)
 
