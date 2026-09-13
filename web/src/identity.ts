@@ -120,6 +120,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   mseed3: ["mseed3", "ms3"],
   sac: ["sac"],
   segy: ["sgy", "segy"],
+  tdms: ["tdms", "tdms_index"],
   nifti: ["nii", "hdr"],
   analyze: ["hdr", "img"],
   mat: ["mat"],

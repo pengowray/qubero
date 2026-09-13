@@ -53,6 +53,10 @@ const MAGIC: &[(&[u8], &str)] = &[
     // A gravitational wave frame file, whose fifth byte is the nul that ends
     // the four letters.
     (b"IGWD\0", "gwf"),
+    // A National Instruments measurement file, and the index file written
+    // beside one, whose segments open with `TDSh` instead.
+    (b"TDSm", "tdms"),
+    (b"TDSh", "tdms"),
     // A weather field, of either edition: the template reads the edition byte
     // and picks the layout, so one name serves both.
     (b"GRIB", "grib"),

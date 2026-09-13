@@ -160,6 +160,7 @@ mod sevenzip;
 mod swf;
 mod tap;
 mod tar;
+mod tdms;
 mod tga;
 mod tiff;
 mod thumbsdb;
@@ -286,6 +287,7 @@ pub use sevenzip::sevenzip;
 pub use swf::swf;
 pub use tap::tap;
 pub use tar::tar;
+pub use tdms::tdms;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
@@ -419,6 +421,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("rar4", |_| rar4()),
     ("rar5", |_| rar5()),
     ("gwf", |_| gwf()),
+    ("tdms", |_| tdms()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),
