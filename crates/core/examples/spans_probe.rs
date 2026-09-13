@@ -19,7 +19,7 @@ fn template_of(bytes: &[u8]) -> Option<&'static str> {
 
 fn spans_of(bytes: Vec<u8>, name: &str, start: u64, count: u64, max: usize) -> Result<Vec<qubero_core::eval::Span>, String> {
     let d = Document::new(MemSource(bytes));
-    let Some(t) = qubero_core::formats::builtin(name) else { return Err("no builtin".into()) };
+    let Some(t) = qubero_core::formats::template(name) else { return Err("no template".into()) };
     let mut ev = Evaluator::new(t);
     ev.set_slice(Some(5_000));
     for _ in 0..200 {

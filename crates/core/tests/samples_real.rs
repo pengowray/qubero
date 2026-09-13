@@ -45,7 +45,7 @@ fn every_sample_still_reads() {
                 None => panic!("nothing reads {}", path.display()),
             },
         };
-        let template = formats::builtin(name).unwrap_or_else(|| panic!("no template {name}"));
+        let template = formats::template(name).unwrap_or_else(|| panic!("no template {name}"));
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         eprintln!("--- {} as {name}", path.display());

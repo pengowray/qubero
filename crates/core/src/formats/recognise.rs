@@ -340,6 +340,12 @@ const PROBES: &[Probe] = &[
     // Last of all, because it is the weakest evidence there is: a zlib
     // stream has no signature, only two bytes that agree with each other.
     Probe::Is("zlib", |h, _| zlib::is_zlib(h)),
+    // After everything above, the bundled Kaitai formats. A built-in template
+    // is one this project wrote and knows the corners of, so a builtin's
+    // answer always wins; these only ever speak for a file nothing above
+    // claimed. What they claim it on is the magic their first `seq` field
+    // declares and nothing else. See `ksy::bundled::sniff`.
+    Probe::Which(|h, _| crate::ksy::bundled::sniff(h)),
 ];
 
 /// Pick a built-in template from the first bytes of a file. `len` is the
@@ -1208,6 +1214,21 @@ mod tests {
         for (_, name) in MAGIC {
             assert!(builtin(name).is_some(), "no template named {name}");
             assert!(builtin_names().contains(name), "{name} is not in the list of built-ins");
+        }
+    }
+
+    /// The same for the bundled Kaitai formats, which answer last in `PROBES`:
+    /// the name one of them gives has to open something, and it has to be in
+    /// the list a chooser shows.
+    #[test]
+    fn every_name_a_bundled_format_gives_has_a_template_and_is_listed() {
+        let listed = kaitai_names();
+        for entry in crate::ksy::bundled::all() {
+            if !entry.sniffs {
+                continue;
+            }
+            assert!(super::template(entry.name).is_some(), "no template named {}", entry.name);
+            assert!(listed.contains(&entry.name.to_string()), "{} is not listed", entry.name);
         }
     }
 

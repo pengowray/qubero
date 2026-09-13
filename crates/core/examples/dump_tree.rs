@@ -16,7 +16,7 @@ fn main() {
     let depth: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(4);
     println!("template: {name}");
     let doc = Document::new(MemSource(bytes));
-    let mut ev = Evaluator::new(formats::builtin(name).unwrap());
+    let mut ev = Evaluator::new(formats::template(name).unwrap());
     walk(&mut ev, &doc, &[], 0, depth);
 }
 
