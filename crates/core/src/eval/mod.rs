@@ -1960,7 +1960,7 @@ impl Evaluator {
         if says_only_bytes(inner) {
             let head = &bytes[..bytes.len().min(0x9000)];
             if let Some(found) = crate::formats::sniff(head, bytes.len() as u64) {
-                if let Some(t) = crate::formats::builtin(found) {
+                if let Some(t) = crate::formats::template(found) {
                     return (t, true);
                 }
             }

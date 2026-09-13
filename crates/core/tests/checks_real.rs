@@ -57,7 +57,7 @@ fn no_valid_sample_reports_a_mismatch() {
         let bytes = std::fs::read(&path).unwrap();
         let head = &bytes[..bytes.len().min(0x9000)];
         let Some(name) = formats::sniff(head, bytes.len() as u64) else { continue };
-        let Some(template) = formats::builtin(name) else { continue };
+        let Some(template) = formats::template(name) else { continue };
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(template);
         let mut w = Walk { visited: 0, seen: 0, passed: 0, refused: 0, bad: Vec::new() };

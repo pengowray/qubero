@@ -14,6 +14,7 @@
 //! This is the strict tier. A `.ksy` the compiler would reject is rejected
 //! here, naming the same path.
 
+pub mod bundled;
 pub mod expr;
 pub mod imports;
 pub mod lower;
@@ -21,6 +22,7 @@ pub mod report;
 pub mod spec;
 pub mod yaml;
 
+pub use bundled::{Bundled, BundledImports};
 pub use expr::Expr;
 pub use imports::{Imports, MapImports, NoImports};
 pub use lower::{convert, Converted};

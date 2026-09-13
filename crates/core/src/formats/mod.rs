@@ -485,3 +485,27 @@ pub fn builtin(name: &str) -> Option<Template> {
     }
     assimp::template(name)
 }
+
+/// The names of the bundled Kaitai Struct formats, each with the `ksy:` on the
+/// front that [`template`] opens it by. After the builtins, because a builtin
+/// is the format this project wrote and knows the corners of.
+pub fn kaitai_names() -> Vec<String> {
+    crate::ksy::bundled::names()
+        .into_iter()
+        .map(|id| format!("{}{id}", crate::ksy::bundled::PREFIX))
+        .collect()
+}
+
+/// The template any name opens: a builtin by its own name, a bundled Kaitai
+/// format by `ksy:` and its `meta/id`.
+///
+/// This is what a name from [`sniff`] should be handed to, since `sniff`
+/// answers with either kind. The conversion report a `.ksy` comes with is
+/// dropped here; a caller that wants it, and the panel does, asks
+/// [`crate::ksy::bundled::template`] instead.
+pub fn template(name: &str) -> Option<Template> {
+    if let Some(id) = name.strip_prefix(crate::ksy::bundled::PREFIX) {
+        return crate::ksy::bundled::template(id)?.ok().map(|c| c.template);
+    }
+    builtin(name)
+}
