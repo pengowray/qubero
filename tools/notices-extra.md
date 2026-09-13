@@ -10,6 +10,11 @@ The rules also carry per-format credit inside the rule files themselves, naming
 whoever worked out each format. Those lines are kept intact in the copy that
 ships.
 
+The signature database below carries a second extract of the same rules: the
+pattern, media type, extensions and printed sentence of every top-level rule
+that pins bytes at a fixed offset, taken from `magic-db` by
+`node tools/signatures.mjs` and used under the same terms.
+
 Upstream: https://github.com/file/file
 
 ```
@@ -51,6 +56,11 @@ publish no licence file inside the package they upload to crates.io, so the
 text below is reproduced from their repository.
 
 Upstream: https://github.com/qjerome/magic-rs
+
+`pure-magic` is built from a copy in `crates/vendor/pure-magic` with one
+change, marked "Qubero:" in `src/parser.rs`: a `\0` at the end of a rule's
+string is kept, as `file` keeps it, rather than dropped. The BSD terms are
+the same.
 
 ```
 BSD 2-Clause License
@@ -125,6 +135,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## The signature database
+
+The file type dialog also lists every format whose signature the file matches,
+from `web/public/signatures.json`. That file merges two sources, and says which
+of them each row came from.
+
+One is Wikidata's "file format identification pattern" property. Those
+patterns, names, extensions and media types come from Wikidata, whose data is
+released under the Creative Commons CC0 1.0 Universal public domain dedication;
+the extensions that only English Wikipedia's infoboxes give are facts, not
+text, and are used on the same footing. They are fetched by
+`node tools/wikidata/fetch.mjs` into `tools/wikidata/formats.json`, which
+records the date. The other is the `file(1)` magic rules, covered above.
+
+Upstream: https://www.wikidata.org/wiki/Property:P4152
 
 ## The RAR 5 decompressor
 

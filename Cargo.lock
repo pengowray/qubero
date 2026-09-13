@@ -610,8 +610,6 @@ dependencies = [
 [[package]]
 name = "pure-magic"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39fdb7df818545a0f4b17905d25746314261eab73d995cb33502910386dd553a"
 dependencies = [
  "bincode",
  "chrono",

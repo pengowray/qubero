@@ -1992,6 +1992,50 @@ button.insp-prop-head:hover {
 .dlg-tool {
   font-family: var(--mono);
 }
+/* The answers that were not chosen: name, then how each knows. */
+.dlg-others {
+  margin: 0 0 6px;
+  padding-left: 1.2em;
+}
+.dlg-others li {
+  margin-bottom: 2px;
+}
+.dlg-others li > * + * {
+  margin-left: 0.6em;
+}
+/* A source that names a different format from the chosen one. */
+.dlg-disagrees {
+  color: var(--warn);
+}
+/* The formats Wikidata lists, one to a line: name, extensions, what matched, links. */
+.dlg-wiki {
+  margin: 0 0 6px;
+  padding-left: 1.2em;
+}
+.dlg-more .dlg-wiki {
+  margin-top: 4px;
+}
+.dlg-wiki li {
+  margin-bottom: 2px;
+}
+.dlg-wiki li > * + * {
+  margin-left: 0.6em;
+}
+.dlg-wiki-ext {
+  font-family: var(--mono);
+  color: var(--muted);
+}
+/* The file's own extension is among these, which is why the row is up here. */
+.dlg-wiki-ext-agrees .dlg-wiki-ext {
+  color: var(--fg);
+}
+.dlg-more {
+  margin: 0 0 6px;
+}
+.dlg-more > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
 
 /* ---- the overview sidebar ---- */
 .overview {

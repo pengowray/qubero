@@ -10,7 +10,9 @@
     "wasm": "npm run wasm:core && npm run wasm:magic && npm run magdir",
     "wasm:core": "cd ../crates/wasm && wasm-pack build --target web --out-dir ../../web/src/pkg --release",
     "wasm:magic": "cd ../crates/magic && wasm-pack build --target web --out-dir ../../web/src/pkg-magic --release",
-    "magdir": "node ../tools/magdir.mjs"
+    "magdir": "node ../tools/magdir.mjs",
+    "signatures": "node ../tools/signatures.mjs",
+    "wikidata": "node ../tools/wikidata/fetch.mjs"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.9",
