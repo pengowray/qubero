@@ -168,7 +168,9 @@ pub struct Node {
     /// address is what this walk actually checked for there.
     pub sign: &'static str,
     /// Where the node starts in the file, in bytes. This is the address the
-    /// entry above it pointed at.
+    /// entry above it pointed at, counted from the front of the document: in a
+    /// file behind a user block that is the address written plus the size of
+    /// the block, so that going to it lands on the node.
     pub address: u64,
     /// How many bits of the file the node occupies. An index node is read to
     /// the length of the entries it actually uses, not to the length HDF5
@@ -787,6 +789,35 @@ fn add<S: Source>(
     Ok(())
 }
 
+/// Where the copy of HDF5 that `path` is inside begins, in bytes from the front
+/// of the document.
+///
+/// Every address an HDF5 file writes counts from there. That is the front of
+/// the file for a file that is only HDF5, 512 bytes in for one behind a user
+/// block, and every MATLAB 7.3 file is the second kind. The template counts
+/// its addresses from an [`Anchor::Origin`](crate::template::Anchor::Origin)
+/// placed where the signature is, and a walk that reads bytes rather than
+/// fields has to count from the same place or it reads every node from the
+/// wrong bytes.
+///
+/// Found by climbing to the structure the signature and the superblock are
+/// fields of, rather than by reading `base_address` out of the superblock. The
+/// two agree in every file a library wrote, and where they did not, the
+/// template's answer is the one a path handed back from here has to match.
+fn origin_of<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize]) -> R<u64> {
+    let mut at = path.to_vec();
+    for _ in 0..MAX_CLIMB {
+        if has_field(ev, doc, &at, "signature")? && has_field(ev, doc, &at, "superblock")? {
+            return Ok(ev.node(doc, &at)?.offset_bits / 8);
+        }
+        if at.is_empty() {
+            break;
+        }
+        at.pop();
+    }
+    Ok(0)
+}
+
 /// A named field of a structure, read as a number.
 fn field_int<S: Source>(ev: &mut Evaluator, doc: &Document<S>, at: &[usize], name: &str) -> R<Option<u64>> {
     let Some(field) = ev.child_named(doc, at, name)? else { return Ok(None) };
@@ -976,6 +1007,13 @@ fn ranges(out: &mut Tree) {
 ///   outside the document refuses rather than reading, because reading past the
 ///   end comes back as bytes still on their way and the view would then ask
 ///   again forever.
+/// - **Addresses count from the base.** The template counts every address from
+///   an origin where the signature is, and a field read never has to think
+///   about it. A byte read does: behind a 512-byte user block, which is every
+///   MATLAB 7.3 file, a pointer read as a place in the document lands 512
+///   bytes short, finds no `BTIN` or `BTLF` there, and the walk refused the
+///   whole tree. So the walk finds where the copy of HDF5 it is in begins (see
+///   `origin_of`), reads each node that far on, and reports that address.
 mod v2 {
     use super::{Job, Kind, Node, Records, Tree, NO_PARENT};
     use crate::document::Document;
@@ -1157,8 +1195,23 @@ mod v2 {
         }
         // The root node's path. Every node under it is found from its parent's
         // path when it is reached; see `placed`.
+        // Every address below is one the file wrote, and counts from where
+        // this copy of HDF5 begins rather than from the front of the document.
+        // See `origin_of`. Kept apart from the addresses rather than added in
+        // as they are read, so that a ring is still a ring of the file's own
+        // numbers.
+        let base = super::origin_of(ev, doc, header)?;
+        // Held to the rule a child's path is: kept only where the template
+        // lands on the address this walk reads. See `placed`.
         let root_path = match ev.child_named(doc, header, "root_node")? {
-            Some(field) => crate::formats::h5ad::inside(ev, doc, &field)?.unwrap_or_default(),
+            Some(field) => match crate::formats::h5ad::inside(ev, doc, &field)? {
+                Some(node) => match ev.node(doc, &node) {
+                    Ok(info) if info.offset_bits == base.saturating_add(root_at).saturating_mul(8) => node,
+                    Err(e) if e.interrupted() => return Err(e),
+                    _ => Vec::new(),
+                },
+                None => Vec::new(),
+            },
             None => Vec::new(),
         };
 
@@ -1194,10 +1247,10 @@ mod v2 {
                 None => root_path.clone(),
                 Some(parent) => {
                     let above = parent.path.clone();
-                    placed(ev, doc, &above, next.index, next.at)?
+                    placed(ev, doc, &above, next.index, base.saturating_add(next.at))?
                 }
             };
-            match add(doc, &next, &path, &shape, &mut out, &mut queue, limit, &mut spent) {
+            match add(doc, &next, base, &path, &shape, &mut out, &mut queue, limit, &mut spent) {
                 Ok(()) => {}
                 Err(e) if e.interrupted() => return Err(e),
                 // One node this could not read. Its siblings still read, and a
@@ -1269,6 +1322,7 @@ mod v2 {
     fn add<S: Source>(
         doc: &Document<S>,
         next: &Waiting,
+        base: u64,
         path: &[usize],
         shape: &Shape,
         out: &mut Tree,
@@ -1292,7 +1346,10 @@ mod v2 {
         if used > shape.node_size {
             return Err(EvalError::Failed("b-tree node is longer than the node size its header declares".into()));
         }
-        let bytes = read_at(doc, next.at, used)?;
+        // The pointer's address counts from the base, and the document from
+        // its front. Behind a user block those are 512 bytes apart.
+        let at = base.saturating_add(next.at);
+        let bytes = read_at(doc, at, used)?;
         *spent += used;
         let sign = match &bytes[..4] {
             b"BTLF" if leaf => "BTLF",
@@ -1309,7 +1366,9 @@ mod v2 {
             parent: next.parent,
             kind: if leaf { Kind::Leaf } else { Kind::Index },
             sign,
-            address: next.at,
+            // In the document, as a version 1 node's is, since this is what a
+            // view goes to. The number written in the pointer is `base` less.
+            address: at,
             // What is written, not what is reserved. A version 2 node is
             // allocated at its full node size and only the front of it is
             // written, so measuring one to the node size would draw every node

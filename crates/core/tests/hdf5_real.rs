@@ -556,13 +556,21 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
         collect(dir, 3, &mut found);
     }
     found.sort();
-    let mut walked = 0usize;
+    let (mut walked, mut behind_a_block) = (0usize, 0usize);
     for path in &found {
         let Ok(file) = File::open(path) else { continue };
         let Ok(len) = file.metadata().map(|m| m.len()) else { continue };
         let doc = Document::new(FileSource { file: RefCell::new(file), len });
         let mut ev = Evaluator::new(hdf5());
-        if !matches!(ev.node(&doc, &[0]).map(|n| n.value), Ok(Value::Magic { ok: true, .. })) {
+        // A file behind a user block as well as one that opens with its
+        // signature. The walk reads the nodes as bytes and every pointer it
+        // follows counts from the base address, so the files where that is
+        // not the front of the file are the ones that say it was counted.
+        let signed = |ev: &mut Evaluator, at: &[usize]| {
+            matches!(ev.node(&doc, at).map(|n| n.value), Ok(Value::Magic { ok: true, .. }))
+        };
+        let blocked = !signed(&mut ev, &[0]);
+        if blocked && !signed(&mut ev, &[1, 0]) {
             continue;
         }
         let mut headers = Vec::new();
@@ -591,6 +599,7 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
             };
             assert_eq!(tree.version, 2, "{}: {header:?} walked as a version 1 tree", path.display());
             walked += 1;
+            behind_a_block += usize::from(blocked);
             let depth = tree.nodes.iter().map(|n| n.depth).max().unwrap_or(0);
             let leaves = tree.nodes.iter().filter(|n| n.kind == Kind::Leaf).count();
             let records: u64 = tree.nodes.iter().map(|n| n.entries).sum();
@@ -719,6 +728,103 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
     if walked == 0 {
         eprintln!("skipped: no version 2 B-tree in {dirs:?}. Put an HDF5 file written with libver=latest there.");
     }
+    eprintln!("--- version 2 trees walked: {walked}, {behind_a_block} of them behind a user block");
+    if sample_dir().is_some_and(|d| d.join("hdf5").join("btree-v2-userblock.h5").exists()) {
+        assert!(behind_a_block > 0, "the collection has a version 2 tree behind a user block and the sweep did not reach it");
+    }
+}
+
+/// A tree behind a user block is the same tree as in the file without one,
+/// 512 bytes further on, and is found from a cursor that has not moved.
+///
+/// Three pairs, one per way of reading a tree: the version 1 trees of
+/// `groups-and-datasets.h5` and `vlen-strings.h5`, which the walk reads as
+/// fields, and the version 2 trees of `btree-v2-internal.h5`, which it reads
+/// as bytes. Every node of the twin behind the block is at the address the
+/// plain file's node is at, plus the block, and has a template path that lands
+/// there. A MATLAB 7.3 file is then the same question asked through the MAT
+/// template, whose HDF5 file is two fields down rather than one.
+///
+/// A cursor at rest is asked as well as a cursor on the tree. The root group is
+/// found by looking for the superblock, and looking only at the root of the
+/// field tree found none behind a block, so the answer was no tree at all.
+#[test]
+fn a_tree_behind_a_user_block_is_the_same_tree_further_on() {
+    use qubero_core::formats::hdf5_tree::Tree;
+
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let open = |path: &Path| {
+        let file = File::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let len = file.metadata().unwrap().len();
+        Document::new(FileSource { file: RefCell::new(file), len })
+    };
+    // Every tree in a file, found the way the template places them, and each
+    // walked from its own header or node.
+    let trees = |path: &Path, template: qubero_core::template::Template| -> Vec<Tree> {
+        let doc = open(path);
+        let mut ev = Evaluator::new(template);
+        let (mut at, mut seen) = (Vec::new(), 0usize);
+        trees1(&mut ev, &doc, &[], &mut seen, &mut at);
+        let mut seen = 0usize;
+        headers2(&mut ev, &doc, &[], &mut seen, &mut at);
+        let resting = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, &[], 4096);
+        assert!(matches!(resting, Ok(Some(_))), "{}: a cursor at rest answered {resting:?}", path.display());
+        let mut out: Vec<Tree> = Vec::new();
+        for p in &at {
+            let tree = qubero_core::formats::hdf5_tree::tree(&mut ev, &doc, p, 4096)
+                .unwrap_or_else(|e| panic!("{}: the tree at {p:?} does not walk: {e:?}", path.display()))
+                .unwrap_or_else(|| panic!("{}: no tree at {p:?}", path.display()));
+            for node in &tree.nodes {
+                assert!(!node.path.is_empty(), "{}: the node at {:#x} has no template path", path.display(), node.address);
+                let placed = ev.node(&doc, &node.path).map(|n| n.offset_bits / 8).ok();
+                assert_eq!(placed, Some(node.address), "{}: a node walked at {:#x}", path.display(), node.address);
+            }
+            // The nodes under a version 1 root answer with the same tree, so
+            // one copy of each is kept.
+            if !out.iter().any(|t| t.nodes.first().map(|n| n.address) == tree.nodes.first().map(|n| n.address)) {
+                out.push(tree);
+            }
+        }
+        out
+    };
+    let mut pairs = 0usize;
+    for (plain, blocked) in [
+        ("groups-and-datasets.h5", "userblock-512.h5"),
+        ("vlen-strings.h5", "vlen-strings-userblock.h5"),
+        ("btree-v2-internal.h5", "btree-v2-userblock.h5"),
+    ] {
+        let (plain, blocked) = (dir.join("hdf5").join(plain), dir.join("hdf5").join(blocked));
+        if !blocked.exists() {
+            continue;
+        }
+        let a = trees(&plain, hdf5());
+        let b = trees(&blocked, hdf5());
+        assert!(!a.is_empty(), "{}: no tree", plain.display());
+        assert_eq!(a.len(), b.len(), "{} and {}", plain.display(), blocked.display());
+        for (a, b) in a.iter().zip(&b) {
+            assert_eq!((a.version, a.nodes.len(), a.omitted), (b.version, b.nodes.len(), b.omitted), "{}", blocked.display());
+            for (x, y) in a.nodes.iter().zip(&b.nodes) {
+                assert_eq!(x.address + 512, y.address, "{}", blocked.display());
+                assert_eq!((x.entries, &x.first_key, &x.last_key), (y.entries, &y.first_key, &y.last_key));
+                assert_eq!((x.first_entry_bits, x.entry_bits, x.size_bits), (y.first_entry_bits, y.entry_bits, y.size_bits));
+            }
+        }
+        eprintln!("--- {}: {} trees, the same as its twin 512 bytes on", blocked.display(), b.len());
+        pairs += 1;
+    }
+    let mat = dir.join("mat").join("testhdf5_7.4_GLNX86.mat");
+    if mat.exists() {
+        let through_hdf5 = trees(&mat, hdf5());
+        let through_mat = trees(&mat, qubero_core::formats::mat());
+        assert!(!through_mat.is_empty(), "{}: no tree", mat.display());
+        let addresses = |t: &[Tree]| t.iter().map(|t| t.nodes.iter().map(|n| n.address).collect::<Vec<_>>()).collect::<Vec<_>>();
+        assert_eq!(addresses(&through_hdf5), addresses(&through_mat), "{}", mat.display());
+        assert!(through_mat[0].nodes[0].address >= 512);
+    }
+    assert!(pairs > 0, "no user-block pair in the collection");
 }
 
 /// Every version 2 B-tree header under `path`. The template names one `BTree2`
