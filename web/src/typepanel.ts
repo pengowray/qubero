@@ -11,6 +11,7 @@ import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
 import { rowBody, rowNote } from "./rowpanel.ts";
+import { samplesBody, samplesNote } from "./samplespanel.ts";
 
 /** Write a value the reader picked here rather than typed. */
 export type Apply = (path: readonly number[], text: string) => void;
@@ -40,6 +41,7 @@ function headingFor(info: TypeInfo): string {
   if (info.kind === "objstm") return "Objects in this stream";
   if (info.kind === "sqliterow") return "Columns in this row";
   if (info.kind === "chunk") return "Inside this chunk";
+  if (info.kind === "samples") return "Samples in this record";
   return `Defined values (${info.cases.length})`;
 }
 
@@ -51,6 +53,7 @@ function headingNote(info: TypeInfo): string {
   if (info.kind === "objstm") return objstmNote(info);
   if (info.kind === "sqliterow") return rowNote(info);
   if (info.kind === "chunk") return chunkNote(info);
+  if (info.kind === "samples") return samplesNote(info);
   return "";
 }
 
@@ -425,6 +428,7 @@ export function typePanel(
   else if (info.kind === "objstm") frag.append(objstmBody(info));
   else if (info.kind === "sqliterow") frag.append(rowBody(info));
   else if (info.kind === "chunk") frag.append(chunkBody(info));
+  else if (info.kind === "samples") frag.append(samplesBody(info));
   else if (info.kind === "float") frag.append(floatBody(info));
   else if (info.kind === "magic") frag.append(magicBody(info));
   else if (info.kind === "enum") frag.append(enumBody(info, path, apply));

@@ -133,6 +133,12 @@ const ENCODING: &[(i128, &str)] = &[
     (33, "RSTN 16-bit gain"),
 ];
 
+/// The name above for an encoding number, for the panel `mseed_steim` fills.
+/// Every encoding the templates mark for it is in the list.
+pub(super) fn encoding_name(encoding: u8) -> Option<&'static str> {
+    ENCODING.iter().find(|(n, _)| *n == i128::from(encoding)).map(|(_, name)| *name)
+}
+
 const WORD_ORDER: &[(i128, &str)] = &[(0, "little-endian"), (1, "big-endian")];
 
 /// What the record says was happening while it was recorded.

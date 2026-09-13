@@ -94,8 +94,12 @@ pub fn parse_packing(packing: &str) -> Option<(u8, bool)> {
 }
 
 /// What one frame gave: how many differences its codes named, and how many of
-/// those became samples. The two differ in the last frame a record needs, and
-/// `used` is zero for a frame whose only difference was the skipped first one.
+/// those became samples. The two differ in the last frame a record needs.
+///
+/// `used` counts samples, so that adding it up frame by frame says which
+/// samples each frame made. That makes the record's first difference count in
+/// frame 0 even though its value is skipped: it is where sample 0 stands, and
+/// sample 0 is the forward integration constant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub held: usize,
@@ -190,8 +194,8 @@ impl Record {
 /// is not gain-ranged or has no rule here.
 pub fn rule(encoding: u8) -> Option<&'static str> {
     Some(match encoding {
-        16 => "(low 14 bits − 8191) × 1, 4, 16 or 128, by the top 2 bits",
-        30 => "low 12 bits as a signed number × 2^(10 − top 4 bits)",
+        16 => "each 16-bit word: (low 14 bits - 8191) × 1, 4, 16 or 128, chosen by its top 2 bits",
+        30 => "each 16-bit word: (low 12 bits, two's complement) × 2^(10 - top 4 bits)",
         _ => return None,
     })
 }
@@ -200,6 +204,9 @@ pub fn rule(encoding: u8) -> Option<&'static str> {
 /// data, `big` the byte order it laid them out in, and `declared` the sample
 /// count from the header.
 pub fn decode(payload: &[u8], encoding: u8, big: bool, declared: usize) -> Record {
+    if payload.len() > PAYLOAD_LIMIT {
+        return refused(payload.len(), encoding, big, declared);
+    }
     let mut record = Record {
         encoding,
         big,
@@ -210,11 +217,6 @@ pub fn decode(payload: &[u8], encoding: u8, big: bool, declared: usize) -> Recor
         samples: Vec::new(),
         problem: None,
     };
-    if payload.len() > PAYLOAD_LIMIT {
-        let mb = PAYLOAD_LIMIT / (1 << 20);
-        record.problem = Some(format!("Not decoded: the data is over this viewer's {mb} MB limit."));
-        return record;
-    }
     match encoding {
         10 | 11 => steim(&mut record, payload, encoding == 11),
         1 | 32 => fixed(&mut record, payload, 2, |b| f64::from(int(b, big) as i16)),
@@ -244,10 +246,42 @@ pub fn decode(payload: &[u8], encoding: u8, big: bool, declared: usize) -> Recor
             f64::from(mantissa) * 2f64.powi(exponent)
         }),
         _ => {
-            record.problem = Some("Not decoded: this encoding has no documented rule for turning its words into samples.".into());
+            record.problem = Some(format!(
+                "Not decoded: there is no documented rule for turning {} words into samples.",
+                encoding_name(encoding)
+            ));
         }
     }
     record
+}
+
+/// The answer for data over [`PAYLOAD_LIMIT`], which says so without the bytes
+/// having been read: a caller that knows the length can ask for this instead
+/// of reading a gigabyte to be told no.
+pub fn refused(payload_bytes: usize, encoding: u8, big: bool, declared: usize) -> Record {
+    let mb = PAYLOAD_LIMIT / (1 << 20);
+    Record {
+        encoding,
+        big,
+        declared,
+        payload_bytes,
+        steim: None,
+        kind: Kind::Int,
+        samples: Vec::new(),
+        problem: Some(format!("Not decoded: the data is over the {mb} MB limit for decoding.")),
+    }
+}
+
+/// What an encoding is called, as the 2.4 template names it. miniSEED 3 kept
+/// the numbers, and the names of every encoding this decodes are the same in
+/// both.
+pub fn encoding_name(encoding: u8) -> String {
+    super::mseed::encoding_name(encoding).map_or_else(|| format!("unknown encoding {encoding}"), str::to_string)
+}
+
+/// A count as people read one: 5980 as `5,980`.
+fn commas(n: usize) -> String {
+    crate::encode::commas(n as u64)
 }
 
 /// A run of samples each `width` bytes wide, as many as the header gave and
@@ -257,7 +291,11 @@ fn fixed(record: &mut Record, payload: &[u8], width: usize, read: impl Fn(&[u8])
     let n = record.declared.min(room);
     record.samples = payload.chunks_exact(width).take(n).map(read).collect();
     if room < record.declared {
-        record.problem = Some(format!("The data has room for {room} of the {} samples the header gives.", record.declared));
+        record.problem = Some(format!(
+            "The data has room for only {} samples; the header says {}.",
+            commas(room),
+            commas(record.declared)
+        ));
     }
 }
 
@@ -280,9 +318,8 @@ fn steim(record: &mut Record, payload: &[u8], two: bool) {
     if frames_in_record == 0 {
         if record.declared > 0 {
             record.problem = Some(format!(
-                "The data is {} bytes, too short for one {FRAME}-byte frame, so none of the {} samples could be decoded.",
-                payload.len(),
-                record.declared
+                "Not decoded: only {} bytes of data, less than one {FRAME}-byte frame.",
+                payload.len()
             ));
         }
         return;
@@ -311,9 +348,9 @@ fn steim(record: &mut Record, payload: &[u8], two: bool) {
                 // some writers leave whatever was in the buffer there.
                 if seen < record.declared {
                     record.problem = Some(format!(
-                        "Stopped at frame {f}, word {w}: Steim2 code {code} with sub-code {sub} isn't defined, so only {} of the {} samples were decoded.",
-                        record.samples.len(),
-                        record.declared
+                        "Decoding stopped at frame {f}, word {w}: Steim2 code {code} with sub-code {sub} is not defined. {} of {} samples decoded.",
+                        commas(record.samples.len()),
+                        commas(record.declared)
                     ));
                     s.frames.push(frame);
                     break 'frames;
@@ -339,9 +376,9 @@ fn steim(record: &mut Record, payload: &[u8], two: bool) {
     }
     if record.problem.is_none() && record.samples.len() < record.declared {
         record.problem = Some(format!(
-            "The frames run out after {} of the {} samples the header gives.",
-            record.samples.len(),
-            record.declared
+            "The frames ran out after {} samples; the header says {}.",
+            commas(record.samples.len()),
+            commas(record.declared)
         ));
     }
     record.steim = Some(s);
@@ -651,7 +688,7 @@ mod tests {
         let data = frames(&[w8([0, 1, 1, 1])], 1, 9, true, true);
         let r = decode(&data, 11, true, 9);
         assert_eq!(r.samples.len(), 4);
-        assert!(r.problem.unwrap().contains("4 of the 9"));
+        assert!(r.problem.unwrap().contains("after 4 samples; the header says 9"));
         // And a payload with no frame at all.
         let r = decode(&[0; 10], 11, true, 3);
         assert!(r.steim.is_none() && r.samples.is_empty());
@@ -675,7 +712,7 @@ mod tests {
         // Less room than the header claims.
         let r = decode(&[0, 1, 0, 2, 0], 1, true, 5);
         assert_eq!(r.samples, vec![1.0, 2.0]);
-        assert!(r.problem.unwrap().contains("room for 2 of the 5"));
+        assert!(r.problem.unwrap().contains("room for only 2 samples; the header says 5"));
     }
 
     /// The two gain-ranged rules, from the SEED manual's own descriptions.

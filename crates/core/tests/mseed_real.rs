@@ -456,6 +456,18 @@ fn the_reader_takes_each_word_apart_as_the_template_does() {
     }
 }
 
+/// A count grouped the way the messages write one.
+fn commas(n: usize) -> String {
+    let d = n.to_string();
+    d.chars().enumerate().fold(String::new(), |mut out, (i, c)| {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+        out
+    })
+}
+
 /// A record the file stops in the middle of has fewer frames than its header
 /// has samples. What the frames hold is decoded, the rest is said to be
 /// missing, and there is no check, since there is no last sample to make one.
@@ -476,7 +488,7 @@ fn a_record_cut_short_decodes_what_its_frames_hold_and_says_how_far_that_went() 
     assert!(r.samples.len() > 1000 && r.samples.len() < 5980, "{} samples", r.samples.len());
     assert_eq!(&r.samples[..2], &[2787.0, 2776.0]);
     let problem = r.problem.clone().expect("a problem");
-    assert!(problem.contains(&format!("{} of the 5980", r.samples.len())), "{problem}");
+    assert!(problem.contains(&format!("after {} samples; the header says 5,980", commas(r.samples.len()))), "{problem}");
     assert_eq!(r.check(), None);
 }
 
@@ -533,4 +545,76 @@ fn a_miniseed_3_record_decodes_to_the_series_its_2_4_twin_holds() {
         let close = |a: f64, b: f64| (a - b).abs() <= b.abs() * 1e-9;
         assert!(close(got.sum, sum) && close(got.weighted, weighted), "{file}: {got:?}");
     }
+}
+
+/// The deepest field under `path`, found by always taking the last child.
+fn deepest(d: &Document<MemSource>, ev: &mut Evaluator, path: &[usize]) -> Vec<usize> {
+    let mut p = path.to_vec();
+    loop {
+        let n = ev.node(d, &p).unwrap().child_count;
+        if n == 0 {
+            return p;
+        }
+        p.push(n as usize - 1);
+    }
+}
+
+/// What the inspector asks for, end to end: `explain` on a field somewhere in
+/// a record's data answers with the samples, whether the cursor is on a
+/// difference four levels down, an integration constant, a code word, or a
+/// sample of a fixed-width run. This is the packing name the template sets,
+/// the ancestor walk that finds it, and the sample count looked up beside the
+/// data, which the byte-level tests above do not reach.
+#[test]
+fn the_samples_panel_answers_from_anywhere_in_a_records_data() {
+    use qubero_core::eval::Explain;
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // file, template, where the data is, a field inside it, the encoding name,
+    // the count, the first sample and the last
+    let (d24, ms3d) = (DATA, ms3::DATA);
+    let cases: Vec<(&str, &str, Vec<usize>, Vec<usize>, &str, u64, &str, &str)> = vec![
+        ("steim2.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 1, 40, 9], "Steim2", 5980, "2787", "2863"),
+        ("steim2.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 1], "Steim2", 5980, "2787", "2863"),
+        ("int32_Steim1_littleEndian.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 0], "Steim1", 50, "1", "50"),
+        ("CDSN_encoding.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 7], "CDSN 16-bit gain", 100, "294", "-124"),
+        ("reference-testdata-steim2.mseed3", "mseed3", vec![0, 1, ms3d], vec![0, 1, ms3d, 1, 2, 7], "Steim2", 104, "-90282", "1718317"),
+        ("reference-testdata-nsec.mseed3", "mseed3", vec![0, 0, ms3d], vec![0, 0, ms3d, 0], "32-bit integers", 45, "0", ""),
+    ];
+    for (file, template, data, inside, name, count, first, last) in cases {
+        let (d, mut ev) = open_as(&root, file, template);
+        let at = deepest(&d, &mut ev, &inside);
+        assert!(at.starts_with(&data), "{file}: {at:?} is not inside the data");
+        let got = ev.explain(&d, &at, None).unwrap();
+        let Explain::MseedSamples { encoding_name, declared, total, values, last: got_last, steim, check, problem, .. } = got
+        else {
+            panic!("{file} at {at:?}: {got:?}");
+        };
+        assert_eq!((encoding_name.as_str(), declared, total), (name, count, count), "{file}");
+        assert_eq!(problem, None, "{file}");
+        assert_eq!(values[0], first, "{file}");
+        assert!(values.len() <= 32, "{file}: {} values handed over", values.len());
+        if !last.is_empty() {
+            assert_eq!(got_last.as_deref(), Some(last), "{file}");
+        }
+        // A Steim record carries its steps and its check, and nothing else does.
+        assert_eq!(steim.is_some(), name.starts_with("Steim"), "{file}");
+        if let Some(s) = steim {
+            assert_eq!(s.frames.iter().map(|f| f.used).sum::<usize>(), count as usize, "{file}: every sample from a frame");
+            assert!(check.unwrap().passed(), "{file}");
+        } else {
+            assert_eq!(check, None, "{file}");
+        }
+    }
+    // A float sample is the one place in the data the samples do not answer
+    // from: the float's own bit layout does, which is what a reader standing
+    // on one float wants. The run the float is in still answers.
+    let (d, mut ev) = open_as(&root, "reference-testdata-float32.mseed3", "mseed3");
+    assert!(matches!(ev.explain(&d, &[0, 0, ms3::DATA, 0, 5], None).unwrap(), Explain::Float { .. }));
+    assert!(matches!(ev.explain(&d, &[0, 0, ms3::DATA, 0], None).unwrap(), Explain::MseedSamples { total: 113, .. }));
+    // A field that is not in the data has no samples to show.
+    let (d, mut ev) = open(&root, "steim2.mseed");
+    assert_eq!(ev.explain(&d, &[0, 0, 8], None).unwrap(), Explain::Plain);
 }

@@ -1054,7 +1054,7 @@ export type XrefRow = {
 };
 
 export type TypeInfo = {
-  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "plain";
+  readonly kind: "magic" | "enum" | "flags" | "float" | "quant" | "xref" | "objstm" | "sqliterow" | "chunk" | "samples" | "plain";
   /** The type's own name, for an enum or a flags field. */
   readonly name: string;
   /** Magic: what the format requires, and what is there. */
@@ -1152,6 +1152,43 @@ export type TypeInfo = {
   readonly chunk_element_type: string;
   readonly chunk_values: readonly string[];
   readonly chunk_total: number;
+  /** Samples: a miniSEED record's encoding by name and number, and whether its
+   *  data was laid out big-endian. */
+  readonly mseed_encoding: string;
+  readonly mseed_encoding_number: number;
+  readonly mseed_big_endian: boolean;
+  /** Samples: how many the header gives, and the bytes of data they come from. */
+  readonly mseed_declared: number;
+  readonly mseed_bytes: number;
+  /** Samples: whether the record is Steim, and the steps if it is. The
+   *  constants are null otherwise; the first difference is null for a record
+   *  with no samples. */
+  readonly mseed_steim: boolean;
+  readonly mseed_x0: number | null;
+  readonly mseed_xn: number | null;
+  readonly mseed_first_difference: number | null;
+  /** Samples: what each frame held and gave (the first few hundred frames),
+   *  how many frames were walked, and how many the data has room for. */
+  readonly mseed_frames: readonly MseedFrame[];
+  readonly mseed_frames_walked: number;
+  readonly mseed_frames_in_record: number;
+  /** Samples: the rule a gain-ranged encoding is decoded by, or empty. */
+  readonly mseed_rule: string;
+  /** Samples: the first few, the last, and how many were decoded. */
+  readonly mseed_values: readonly string[];
+  readonly mseed_last: string;
+  readonly mseed_total: number;
+  /** Samples: whether the last sample equals the reverse integration constant,
+   *  or null where there is no check to make. */
+  readonly mseed_check: boolean | null;
+};
+
+/** One Steim frame: the differences its codes name, and how many samples they
+ *  made. Frame 0's count includes the skipped first difference, which stands
+ *  for sample 0, so the counts add up to sample numbers. */
+export type MseedFrame = {
+  readonly held: number;
+  readonly used: number;
 };
 
 /** One run of weights inside a block that share a scale of their own. */
