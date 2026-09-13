@@ -95,6 +95,89 @@ fn every_node_of_every_sample_reads_and_stays_inside_the_file() {
     }
 }
 
+/// How many of a file's references were followed, of how many it writes.
+#[derive(Debug, Default, PartialEq)]
+struct Reached {
+    /// Scientific data groups whose dataset opened, and all of them.
+    datasets: (usize, usize),
+    /// Members of groups and vgroups that were found, and all of them.
+    members: (usize, usize),
+    /// Descriptors read through another with the same reference number (a
+    /// table's rows, an image, scales, a maximum and minimum) that were read
+    /// that way, and all of them.
+    by_ref: (usize, usize),
+}
+
+fn reached(ev: &mut Evaluator, doc: &Document<MemSource>, found: &BTreeMap<String, Vec<Vec<usize>>>) -> Reached {
+    let mut out = Reached::default();
+    for at in found.get("Hdf4ScientificDataGroup").cloned().unwrap_or_default() {
+        out.datasets.1 += 1;
+        if ev.node(doc, &[at, vec![1]].concat()).unwrap().type_name == "Hdf4ScientificDataset" {
+            out.datasets.0 += 1;
+        }
+    }
+    for kind in ["Hdf4GroupMember", "Hdf4VgroupMember"] {
+        for at in found.get(kind).cloned().unwrap_or_default() {
+            out.members.1 += 1;
+            if value(ev, doc, &[at, vec![2]].concat()) != Value::Int(0) {
+                out.members.0 += 1;
+            }
+        }
+    }
+    let reads_as = [(1963, "Hdf4VdataRecords"), (302, "Hdf4RasterImage"), (703, "Hdf4SdScales"), (707, "Hdf4MaxAndMin")];
+    for at in found.get("Hdf4Descriptor").cloned().unwrap_or_default() {
+        let tag = match value(ev, doc, &[at.clone(), vec![0]].concat()) {
+            Value::Enum { raw, .. } => raw,
+            _ => continue,
+        };
+        let Some((_, name)) = reads_as.iter().find(|(t, _)| *t == tag) else { continue };
+        if ev.node(doc, &[at.clone(), vec![4]].concat()).unwrap().child_count == 0 {
+            continue;
+        }
+        out.by_ref.1 += 1;
+        if ev.node(doc, &[at, vec![4, 0]].concat()).unwrap().type_name == *name {
+            out.by_ref.0 += 1;
+        }
+    }
+    out
+}
+
+/// Every reference a sample writes is followed, whichever block holds the
+/// thing it names. Before the index covered every block, `ntcheck.hdf` opened
+/// 7 of its 8 datasets, `litend.hdf` 6 of 8, and `tvattr.hdf` the rows of 15
+/// of its 17 tables; the counts here are what a walk of the descriptor tables
+/// says each file holds.
+#[test]
+fn every_reference_is_followed_whichever_block_holds_what_it_names() {
+    let files = samples();
+    if files.is_empty() {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    }
+    for (name, bytes) in &files {
+        let doc = Document::new(MemSource(bytes.clone()));
+        let mut ev = Evaluator::new(formats::builtin("hdf4").unwrap());
+        let found = walk(&mut ev, &doc, name);
+        let got = reached(&mut ev, &doc, &found);
+        eprintln!("{name}: {got:?}");
+        let want = match name.as_str() {
+            "Image_with_Palette.hdf" => Reached { datasets: (0, 0), members: (5, 5), by_ref: (1, 1) },
+            // The last vgroup names a vgroup with reference number 0, which
+            // no descriptor can have, and that member points nowhere.
+            "grtdfui83.hdf" => Reached { datasets: (0, 0), members: (11, 12), by_ref: (4, 4) },
+            "litend.hdf" => Reached { datasets: (8, 8), members: (16, 16), by_ref: (0, 0) },
+            "ntcheck.hdf" => Reached { datasets: (8, 8), members: (36, 36), by_ref: (14, 14) },
+            // Every dataset's values are in linked blocks, so no dataset
+            // opens, and the six members naming those values name the plain
+            // tag while the file holds only the special element's.
+            "tdata.hdf" => Reached { datasets: (0, 3), members: (30, 36), by_ref: (3, 3) },
+            "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), by_ref: (17, 17) },
+            other => panic!("{other} is in the collection with nothing counted of it"),
+        };
+        assert_eq!(got, want, "{name}");
+    }
+}
+
 /// Each sample was chosen for one thing the template has to get right, and
 /// this is that thing, file by file.
 #[test]
@@ -111,12 +194,13 @@ fn the_data_behind_the_descriptors_is_opened() {
         let found = walk(&mut ev, &doc, name);
         let of = |what: &str| found.get(what).map_or(0, |v| v.len());
         match name.as_str() {
-            // Twelve datasets, one per number type, under thirteen groups,
-            // and the seven whose members are in the same block open. Each is
-            // ten by ten counting up along the second dimension, which is
+            // Seven datasets under eight groups, since the first is named by
+            // both the old scientific data group and the numeric data group,
+            // and the group of the sixth is a block on from its members. Each
+            // is ten by ten counting up along the second dimension, which is
             // what pyhdf reads out of them.
             "ntcheck.hdf" => {
-                assert_eq!(of("Hdf4ScientificDataset"), 7);
+                assert_eq!(of("Hdf4ScientificDataset"), 8);
                 let mut ten_by_ten = 0;
                 for at in found["Hdf4ScientificDataset"].clone() {
                     let rows = [at, vec![2, 0]].concat();
@@ -133,7 +217,7 @@ fn the_data_behind_the_descriptors_is_opened() {
                     assert_ne!(next_row, next_column, "the first dimension is the slowest to change");
                     ten_by_ten += 1;
                 }
-                assert_eq!(ten_by_ten, 7);
+                assert_eq!(ten_by_ten, 8);
                 // The class byte is read for what the type makes it: 1 is
                 // IEEE where the type is a float and Motorola byte order
                 // where it is a whole number, and naming it one way for both
@@ -143,23 +227,24 @@ fn the_data_behind_the_descriptors_is_opened() {
                 // Every dataset has a scale along its first dimension and
                 // none along its second, and the flag bytes are the only
                 // thing that says so.
-                assert_eq!(of("Hdf4SdScales"), 7, "the rest name a dimension record a block away");
+                assert_eq!(of("Hdf4SdScales"), 7, "one scales record per dataset");
                 for at in found["Hdf4SdScales"].clone() {
                     assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 0]].concat()), Value::UInt(1));
                     assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 1]].concat()), Value::UInt(0));
                     assert_eq!(ev.node(&doc, &[at.clone(), vec![2, 0, 2]].concat()).unwrap().child_count, 10);
                     assert_eq!(ev.node(&doc, &[at, vec![2, 1, 2]].concat()).unwrap().size_bits, 0);
                 }
-                // A maximum and a minimum in the dataset's own number type.
-                assert_eq!(of("Hdf4MaxAndMin"), 6);
+                // A maximum and a minimum in the dataset's own number type,
+                // for every dataset, including the one whose number type
+                // record is in the block before.
+                assert_eq!(of("Hdf4MaxAndMin"), 7);
             }
             // The same datasets the other way round. A value of 1 is written
             // `01 00` and reads as 1, not as 256.
             "litend.hdf" => {
-                // Eight groups, and six of them name a descriptor this
-                // block's index reaches. The other two are the gap a
-                // per-block index leaves.
-                assert_eq!(of("Hdf4ScientificDataset"), 6);
+                // Eight groups, and two of them name members in the block
+                // before their own.
+                assert_eq!(of("Hdf4ScientificDataset"), 8);
                 let mut little = 0;
                 for at in found["Hdf4ScientificDataset"].clone() {
                     let first = [at, vec![2, 0, 0, 1]].concat();
@@ -212,13 +297,16 @@ fn the_data_behind_the_descriptors_is_opened() {
                     assert!(blocks > 0.0, "a chain of no blocks holds nothing");
                 }
             }
-            // Twenty tables, and the rows of each take their columns from the
-            // header with the same reference number, which in this file is
-            // always the descriptor after them.
+            // Seventeen tables, and the rows of each take their columns from
+            // the header with the same reference number. That is usually the
+            // descriptor after them, twice it is the first slot of the next
+            // block, and once it is seven slots on.
             "tvattr.hdf" => {
-                assert!(of("Hdf4VdataRecords") >= 15);
+                assert_eq!(of("Hdf4VdataRecords"), 17);
                 let fields = found["Hdf4VdataField"].clone();
-                assert_eq!(fields.len(), 25, "one per column per record, over every table with rows");
+                // What pyhdf counts too: records times fields, summed over
+                // every vdata `VS.inquire` reports.
+                assert_eq!(fields.len(), 27, "one per column per record, over every table with rows");
                 for at in fields {
                     let name = ev.node(&doc, &at).unwrap().name;
                     let (index, column) = name.split_once(' ').unwrap_or((&name, ""));
