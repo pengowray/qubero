@@ -953,6 +953,28 @@ pub enum Until {
     /// from the header rather than read, and there are no bytes of its own to
     /// compare.
     FieldValue { field: String, value: i128 },
+    /// Repeat until an element for which this expression comes to something
+    /// other than zero (that element is included).
+    ///
+    /// The two above compare one field against one fixed thing, which is what
+    /// most formats end a run with. The rest do not: a run may end at the
+    /// element whose length is zero, at the one whose index reaches a count
+    /// held elsewhere, or at the last one that fits in what is left. None of
+    /// those is a field against a literal.
+    ///
+    /// Worked out inside the element, as if it were that element's last field:
+    /// [`Expr::Ref`] names the element's own fields (and, climbing out, the
+    /// structures the list sits in, as a name anywhere else does),
+    /// [`Expr::Idx`] is this element's index in the run, and
+    /// [`Expr::Remaining`] is what is left of the *list's* container once this
+    /// element has been read, which is what "stop at the last one that fits"
+    /// asks about.
+    ///
+    /// Stops at the end of the container as well, exactly as [`Until::End`]
+    /// does. A file cut off before the element that would have ended the run
+    /// still has the elements it wrote, and refusing to place them would hide
+    /// the very thing that went wrong.
+    Cond(Expr),
 }
 
 /// What a format knows about the values inside a JSON field, laid over the

@@ -2945,6 +2945,51 @@ fn a_count_of_elements_is_not_a_count_of_bytes() {
     assert!(Evaluator::new(Template::new("t", t4)).node(&doc(&[3]), &[1]).is_err());
 }
 
+/// A run that ends on a question rather than on one field holding one fixed
+/// thing. The element that answers is part of the run.
+#[test]
+fn a_run_can_stop_on_a_question_about_its_element() {
+    let rec = || T::structure("Rec", vec![("tag", T::u8()), ("len", T::u8())]);
+    let ends_empty = || Until::Cond(E::field("len").equal_to(E::lit(0)));
+
+    // Three records, the last of them empty, and two bytes after the run that
+    // belong to nothing.
+    let t = T::structure("Root", vec![("items", T::repeat(rec(), ends_empty()))]);
+    let d = doc(&[1, 3, 2, 4, 3, 0, 9, 9]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 3);
+    assert_eq!(ev.node(&d, &[0]).unwrap().size_bits, 6 * 8);
+
+    // A file that stops before the element that would have ended the run is
+    // read as far as it goes, the same as a run told to read to the end.
+    let t2 = T::structure("Root", vec![("items", T::repeat(rec(), ends_empty()))]);
+    let mut ev2 = Evaluator::new(Template::new("t", t2));
+    assert_eq!(ev2.node(&doc(&[1, 3, 2, 4]), &[0]).unwrap().child_count, 2);
+}
+
+/// The index in the question is the element's place in the run, and what is
+/// left over is measured in the list's own container once the element has
+/// been read.
+#[test]
+fn a_stopping_question_knows_the_index_and_the_room_left() {
+    // Stop after the element at index 1, which is two of them.
+    let t = T::structure("Root", vec![("items", T::repeat(T::u8(), Until::Cond(E::Idx.equal_to(E::lit(1)))))]);
+    let d = doc(&[7, 7, 7, 7]);
+    assert_eq!(Evaluator::new(Template::new("t", t)).node(&d, &[0]).unwrap().child_count, 2);
+
+    // Stop once there is no room for another two-byte element: a window of
+    // five bytes holds two of them and a byte nobody reads.
+    let run = T::repeat(T::u16(Big), Until::Cond(E::Remaining.less_than(E::lit(2))));
+    let t2 = T::structure("Root", vec![("body", T::sized(E::lit(5), run))]);
+    let mut ev = Evaluator::new(Template::new("t", t2));
+    assert_eq!(ev.node(&d5(), &[0]).unwrap().child_count, 2);
+    assert_eq!(ev.node(&d5(), &[0, 1]).unwrap().offset_bits, 2 * 8);
+}
+
+fn d5() -> Document<MemSource> {
+    doc(&[0, 1, 0, 2, 0])
+}
+
 #[test]
 fn a_shift_of_more_than_a_word_is_refused_either_way() {
     let t = T::structure("Root", vec![("n", T::u32(Big)), ("after", T::u8())]);

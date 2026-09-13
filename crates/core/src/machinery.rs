@@ -105,7 +105,13 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
             ty_refs(elem, out, selectors);
         }
         // `Until::FieldBytes` names a field of the element, not a sibling of
-        // the list, so there is nothing here to collect.
+        // the list, so there is nothing here to collect. `Until::Cond` is
+        // asked from inside the element too, and a name in it is the
+        // element's until it is not: the climb out of an element reaches the
+        // list's siblings, and a sibling with the same name as a field of the
+        // element would be marked as machinery for a run it has nothing to do
+        // with. Leaving it unmarked shows it as an ordinary row, which is the
+        // safe way to be wrong.
         Ty::Repeat { elem, .. } => ty_refs(elem, out, selectors),
         Ty::PointerList { offsets, adjust, elem, .. } => {
             out.push(offsets.clone());
