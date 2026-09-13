@@ -27,6 +27,7 @@
 //!
 //! wrapper     := "sized(" expr ")"                  parsed inside an N-byte window
 //!              | "sizedbits(" expr ")"              the same, counted in bits
+//!              | "optional(when" expr ")"           absent when the expression is zero
 //!              | "at(" expr "from" anchor ")"       placed there, not here
 //!              | "origin"                           offsets inside count from here
 //!              | "decoded(" codec ")"               unpacked, and read from that
@@ -40,6 +41,7 @@
 //!              | "unset" number                     that value means "nothing here"
 //! anchor      := "file" | "window" | "origin" | "own start aligned to" int
 //! until       := "until end" | "until element." NAME ("is" bytes | "==" int)
+//!              | "until" expr                       asked inside each element
 //!
 //! A count binds to the word in front of it, so an element written in more
 //! than one word is bracketed first: `(text[4] utf8)[3]` is three of them,
@@ -115,19 +117,26 @@
 //! loosest to tightest:
 //!
 //! ```text
+//!   c ? a : b               a when c is nonzero, else b
 //!   or else                 the left side, or the right when the left is zero
-//!   <                       comparison
+//!   or                      boolean or
+//!   and                     boolean and
+//!   not                     boolean not
+//!   < == != <= > >=         comparison
 //!   &                       mask
 //!   << >>                   shifts
 //!   + -
-//!   * /
+//!   * / %
 //!   name  literal  call()   everything else
 //! ```
 //!
 //! A name is a field declared earlier, in this structure or in one it sits
 //! inside. `a.b` is a path down into an earlier field. `index` is this
 //! element's place in the list it sits in. `remaining` is from here to the end
-//! of the container. Then the calls: `sizeof(f)` `bitsof(f)` `sum(f)`
+//! of the container, `pos` is from the start of the window to here, `size of
+//! window` is the window, all in bytes; `count of f` is how many elements an
+//! earlier list has and `start of x` where an element found by expression
+//! begins. Then the calls: `sizeof(f)` `bitsof(f)` `sum(f)`
 //! `product(f)` `largest(f)` `setbits(f)` `min(a, b)` `max(a, b)`
 //! `ceil(a / b)` `log2(a)` `bit(x, 3)` `padding(n, 4)` (the padding *after* n
 //! bytes, to the next multiple of 4), `peek(u8be)` and
@@ -342,10 +351,9 @@ fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) 
 /// that a new wrapper is one arm here.
 fn wrapper<'a>(head: &str, ty: &'a Ty) -> Option<(String, &'a Ty)> {
     let with = |word: String, inner: &'a Ty| Some((format!("{head}{word} "), inner));
-    // `Ty::When { cond, inner }` is one arm here, in the shape the others
-    // have: `optional(when <cond>) <inner>`.
     match ty {
         Ty::Sized { size, inner } => with(format!("sized({})", expr(size)), inner),
+        Ty::When { cond, inner } => with(format!("optional(when {})", expr(cond)), inner),
         Ty::SizedBits { bits, inner } => with(format!("sizedbits({})", expr(bits)), inner),
         Ty::At { anchor, at, inner } => with(format!("at({} from {})", expr(at), anchor_text(*anchor)), inner),
         Ty::Origin { inner } => with("origin".to_string(), inner),
@@ -628,14 +636,13 @@ fn anchor_text(a: Anchor) -> String {
 }
 
 fn until_text(u: &Until) -> String {
-    // `Until::Cond(e)` is one arm here: `until` and then the expression, which
-    // names the element's own fields.
     match u {
         Until::End => "until end".to_string(),
         // `is` compares the bytes as they are written; `==` compares the value
         // the field reads as. Two questions, two words.
         Until::FieldBytes { field, bytes } => format!("until element.{field} is {}", bytes_lit(bytes)),
         Until::FieldValue { field, value } => format!("until element.{field} == {}", tag_lit(*value)),
+        Until::Cond(e) => format!("until {}", expr(e)),
     }
 }
 
@@ -750,6 +757,7 @@ fn inline(ty: &Ty) -> Option<String> {
         Ty::SevenZipNumber => "7z number".to_string(),
         Ty::At { anchor, at, inner } => format!("at({} from {}) {}", expr(at), anchor_text(*anchor), inline(inner)?),
         Ty::Sized { size, inner } => format!("sized({}) {}", expr(size), inline(inner)?),
+        Ty::When { cond, inner } => format!("optional(when {}) {}", expr(cond), inline(inner)?),
         Ty::Origin { inner } => format!("origin {}", inline(inner)?),
         Ty::SizedBits { bits, inner } => format!("sizedbits({}) {}", expr(bits), inline(inner)?),
         Ty::Switch { on, cases, default } => {
@@ -965,12 +973,16 @@ fn as_ascii(v: i128) -> Option<String> {
 /// comparisons beside `<` at 40, and `%` beside `*` at 80.
 fn prec(e: &Expr) -> u32 {
     match e {
+        Expr::Cond { .. } => 5,
         Expr::Or(..) => 10,
-        Expr::Less(..) => 40,
+        Expr::Either(..) => 20,
+        Expr::Both(..) => 25,
+        Expr::Not(..) => 30,
+        Expr::Less(..) | Expr::Eq(..) | Expr::Ne(..) | Expr::Le(..) | Expr::Gt(..) | Expr::Ge(..) => 40,
         Expr::And(..) => 50,
         Expr::Shl(..) | Expr::Shr(..) => 60,
         Expr::Add(..) | Expr::Sub(..) => 70,
-        Expr::Mul(..) | Expr::Div(..) => 80,
+        Expr::Mul(..) | Expr::Div(..) | Expr::Mod(..) => 80,
         _ => 100,
     }
 }
@@ -1000,13 +1012,8 @@ fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
         s
     };
     match e {
-        // Adding a variant is one arm here and one in `prec`. The words the
-        // ones being written now are to use: `%` for `Mod` (at the precedence
-        // of `*`), `== != <= >= >` for the comparisons (beside `<`), `and`,
-        // `or` and `not` for the booleans (looser than a comparison, and
-        // `Expr::Or` is written `or else` here so the word is free),
-        // `c ? a : b` for `Cond` (loosest of all), `pos` for `Pos`,
-        // `size of window` for `WindowSize`, and `count of x` for `LenOf(x)`.
+        // Adding a variant is one arm here and one in `prec`. `Expr::Or` is
+        // written `or else` so that `or` is free for the boolean `Either`.
         Expr::Lit(v) => {
             if mask && *v > 9 {
                 hex_lit(*v)
@@ -1080,6 +1087,28 @@ fn write_expr(e: &Expr, outer: u32, mask: bool) -> String {
         Expr::DivCeil(a, b) => format!("ceil({} / {})", write_expr(a, 80, false), write_expr(b, 81, false)),
         Expr::Log2(a) => format!("log2({})", expr(a)),
         Expr::Bit(a, i) => format!("bit({}, {i})", expr(a)),
+        Expr::Mod(a, b) => two(a, b, "%"),
+        Expr::Eq(a, b) => two(a, b, "=="),
+        Expr::Ne(a, b) => two(a, b, "!="),
+        Expr::Le(a, b) => two(a, b, "<="),
+        Expr::Gt(a, b) => two(a, b, ">"),
+        Expr::Ge(a, b) => two(a, b, ">="),
+        Expr::Either(a, b) => two(a, b, "or"),
+        Expr::Both(a, b) => two(a, b, "and"),
+        Expr::Not(a) => wrap(format!("not {}", write_expr(a, here + 1, false))),
+        // Right-nested: `a ? b : c ? d : e` reads as `a ? b : (c ? d : e)`,
+        // so only the condition and the middle need bracketing when they are
+        // themselves ternaries.
+        Expr::Cond { when, then, otherwise } => wrap(format!(
+            "{} ? {} : {}",
+            write_expr(when, here + 1, false),
+            write_expr(then, here + 1, false),
+            write_expr(otherwise, here, false)
+        )),
+        Expr::Pos => "pos".to_string(),
+        Expr::WindowSize => "size of window".to_string(),
+        Expr::LenOf(n) => format!("count of {n}"),
+        Expr::StartOf(a) => format!("start of {}", write_expr(a, 100, false)),
     }
 }
 
