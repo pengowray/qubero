@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{fits_tile, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -228,6 +228,11 @@ pub const MSEED_VALUES_SHOWN: usize = 32;
 /// rather than a list to read.
 pub const MSEED_FRAMES_SHOWN: usize = 256;
 
+/// How much of a FITS header is read for the keywords a compressed image's
+/// tile needs. A header is a few hundred cards; a megabyte is twelve thousand,
+/// and the keywords that describe the compression come near the top.
+const FITS_CARDS_LIMIT: u64 = 1 << 20;
+
 /// How many objects of an object stream are handed to a reader at once.
 pub const OBJSTM_SHOWN: usize = 256;
 
@@ -430,6 +435,95 @@ impl Evaluator {
             check,
             problem: record.problem,
         })
+    }
+
+    /// The tile of a FITS compressed image that `path` is in, decompressed.
+    /// `None` when `path` is not inside a compressed image's data.
+    ///
+    /// Which tile is read from where the path goes: a row is its own tile, and
+    /// an array in the heap is the tile of the row whose descriptor placed it,
+    /// which the gather knows. Anywhere else in the image, which is the fields
+    /// that say what it is and cover no bytes, is the first tile.
+    ///
+    /// The header's cards, the row and the tile's bytes are handed to
+    /// [`fits_tile`] as bytes, read from where the template put them. See that
+    /// module for why the cards are read again there.
+    pub fn fits_tile<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<fits_tile::Tile>> {
+        for len in (1..=path.len()).rev() {
+            let at = &path[..len];
+            self.resolve(doc, at)?;
+            let r = self.memo.get(at).expect("resolved").clone();
+            let Ty::Struct(def) = &r.ty else { continue };
+            if def.packed.as_deref() != Some(fits_tile::PACKING) {
+                continue;
+            }
+            let rows = def.fields.iter().position(|f| &*f.name == "rows");
+            let heap = def.fields.iter().position(|f| &*f.name == "heap");
+            return self.fits_tile_in(doc, at, &r, path, rows, heap).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// The tile `path` is in, of the compressed image at `at`.
+    fn fits_tile_in<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        r: &Resolved,
+        path: &[usize],
+        rows: Option<usize>,
+        heap: Option<usize>,
+    ) -> R<fits_tile::Tile> {
+        // The cards are the first field of the unit the data is in.
+        let mut cards_path = at[..at.len() - 1].to_vec();
+        cards_path.push(0);
+        self.resolve(doc, &cards_path)?;
+        let rc = self.memo.get(&cards_path).expect("resolved").clone();
+        let cards_bits = self.size_of(doc, &cards_path)?.min(FITS_CARDS_LIMIT * 8);
+        let cards = fits_tile::Cards::parse(&self.read(doc, &rc, rc.offset, cards_bits)?);
+        let image = match fits_tile::Image::from_cards(&cards) {
+            Ok(image) => image,
+            Err(why) => return Ok(fits_tile::unreadable(why)),
+        };
+
+        let below = path.get(at.len()).copied();
+        let next = path.get(at.len() + 1).copied();
+        let mut index = match (below, next) {
+            (Some(k), Some(i)) if Some(k) == rows => i as u64,
+            (Some(k), Some(i)) if Some(k) == heap => {
+                let mut list = at.to_vec();
+                list.push(k);
+                let record = self.gathered_record(doc, &list, i)?;
+                record.get(at.len() + 1).copied().unwrap_or(0) as u64
+            }
+            _ => 0,
+        };
+        index = index.min(image.rows.saturating_sub(1));
+
+        let row_bits = image.row_bytes as u64 * 8;
+        let row_bytes = self.read(doc, r, r.offset + index * row_bits, row_bits)?;
+        let row = image.row(&row_bytes);
+        let Some(place) = row.place else { return Ok(fits_tile::decode(&image, index, &row, &[])) };
+        let bytes = place.bytes();
+        if bytes > fits_tile::COMPRESSED_LIMIT as u64 {
+            let mb = fits_tile::COMPRESSED_LIMIT >> 20;
+            let problem = format!("Not unpacked: the tile is over this viewer's {mb} MB limit.");
+            return Ok(fits_tile::unread(&image, index, &row, bytes as usize, Some(problem)));
+        }
+        let from = r.offset + (image.heap_start + place.offset) * 8;
+        match self.read(doc, r, from, bytes * 8) {
+            Ok(data) => Ok(fits_tile::decode(&image, index, &row, &data)),
+            Err(_) => {
+                let heap_bytes = (self.size_of(doc, at)? / 8).saturating_sub(image.heap_start);
+                let problem = format!(
+                    "Not unpacked: the descriptor points past the end of the heap ({} bytes at offset {}; the heap is {} bytes).",
+                    crate::encode::commas(bytes),
+                    crate::encode::commas(place.offset),
+                    crate::encode::commas(heap_bytes)
+                );
+                Ok(fits_tile::unread(&image, index, &row, bytes as usize, Some(problem)))
+            }
+        }
     }
 
     /// The block at `path` taken apart into its numbers, if it is one of the

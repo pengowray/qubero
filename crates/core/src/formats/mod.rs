@@ -66,6 +66,7 @@ pub mod bpf_opcodes;
 pub mod elf_disasm;
 mod eps;
 mod fits;
+pub mod fits_tile;
 mod ggml;
 pub mod ggml_quant;
 mod gguf;

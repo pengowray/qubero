@@ -136,12 +136,15 @@
 //!   shape for; `Ty::Gather` places children and does not join them.
 //! - A quoted value with no closing quote runs to the end of its card rather
 //!   than being called out as the unterminated string it is.
-//! - A tile-compressed image is named as one, and its rows and heap read as
-//!   the table they are: the rows are the tiles' descriptors and the heap is
-//!   their compressed bytes, and nothing here inflates a tile with Rice or
-//!   gzip into pixels. The compression parameters in `ZNAMEi` and `ZVALi`
-//!   are cards like any other, since which `ZVALi` is the block size is a
-//!   search by the text of another card.
+//! - A tile's pixels. A compressed image's rows and heap read as the table
+//!   they are, the rows the tiles' descriptors and the heap their compressed
+//!   bytes, and no field here holds a pixel: undoing Rice, gzip and the
+//!   quantization of a float image is a running sum, a deflate stream and a
+//!   sequence of random numbers, none of which an expression can carry.
+//!   [`fits_tile`](super::fits_tile) does it beside the template, for the
+//!   tile under the cursor. The compression parameters in `ZNAMEi` and
+//!   `ZVALi` are cards like any other here, since which `ZVALi` is the block
+//!   size is a search by the text of another card.
 
 use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, Step, StrLen, Template, Ty as T, Until};
 
@@ -818,7 +821,7 @@ fn compressed_image() -> T {
         ("tile_shape", T::array(T::computed(tile), axes)),
     ];
     fields.extend(table_fields(tile_row(), "tile"));
-    T::structure("Compressed image", fields)
+    T::structure("Compressed image", fields).packed_as(super::fits_tile::PACKING)
 }
 
 /// The heap a binary table keeps its variable-length arrays in: every array
