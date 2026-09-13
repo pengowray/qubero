@@ -97,9 +97,11 @@
 //!   older table keeps every cell after the second as a plain value.
 //! - The subsystem of a level 7.3 file, which is HDF5 and read as that.
 //! - Level 4 on a VAX or a Cray, whose floating point is neither of the two
-//!   IEEE layouts. The machine digit is read and named; the numbers under it
-//!   are read as IEEE and are wrong. No file like that has been seen this
-//!   century.
+//!   IEEE layouts. The machine digit is read and named, and the integers are
+//!   read the way round that machine wrote them, little-endian for a VAX and
+//!   big-endian for a Cray; the numbers under them are read as IEEE and are
+//!   wrong. No file like that has been seen this century, so what says so is
+//!   a test with a header built by hand.
 
 use crate::codec::Codec;
 use crate::template::{
@@ -1127,9 +1129,11 @@ pub const MOPT_LIMIT: i128 = 4052;
 
 /// A level 4 file, whichever way round it is written. Nothing in one says,
 /// so what says it is the machine digit of the first description read
-/// big-endian: a file written on a big-endian machine has a digit of 1 to 4
-/// there, and one written little-endian has either a 0 or, once the bytes are
-/// the wrong way round, a number in the millions.
+/// big-endian: a file written on a big-endian machine, a Motorola or a Cray,
+/// has a 1 or a 4 there, and one written little-endian, on a PC or a VAX, has
+/// either a 0 or, once the bytes are the wrong way round, a number in the
+/// millions. A 2 or a 3 read this way is a VAX's digit written the wrong way
+/// round for a VAX, which no file is, and is read big-endian as it says.
 fn level4() -> T {
     let big = || T::repeat(matrix4(Big), Until::End).counted_as("matrix");
     T::switch(
@@ -1234,8 +1238,9 @@ pub fn is_mat4(head: &[u8], len: u64) -> bool {
             return false;
         }
         // A machine digit that disagrees with the way the word was read is
-        // the other endianness answering, not this one.
-        if (machine == 0) != (e == Little) {
+        // the other endianness answering, not this one. A VAX, 2 and 3, writes
+        // its integers little-endian like a PC; a Cray, 4, big-endian.
+        if matches!(machine, 0 | 2 | 3) != (e == Little) {
             return false;
         }
         if !(1..=64).contains(&namlen) || rows < 0 || cols < 0 || imag < 0 || imag > 1 {
@@ -1447,6 +1452,35 @@ mod tests {
         assert_eq!(crate::formats::sniff(&v, v.len() as u64), Some("mat"));
         // Truncated: the numbers no longer fit in what is there.
         assert!(!is_mat4(&v[..v.len() - 8], v.len() as u64 - 8));
+    }
+
+    /// A VAX writes its integers little-endian and a Cray big-endian, and the
+    /// machine digit says which of them wrote the file. Their numbers are read
+    /// as IEEE and are wrong; the file is still recognised, and the machine
+    /// named, so that a reader can see why.
+    #[test]
+    fn a_vax_or_cray_level_4_file_names_its_machine() {
+        let matrix = |e: Endian, description: u32| {
+            let word = |n: u32| match e {
+                Little => n.to_le_bytes(),
+                Big => n.to_be_bytes(),
+            };
+            let mut v = Vec::new();
+            for n in [description, 1, 1, 0, 2] {
+                v.extend(word(n));
+            }
+            v.extend(b"a\0");
+            v.extend([0u8; 8]);
+            v
+        };
+        for (e, description, machine) in [(Little, 2000, "vax d-float"), (Little, 3000, "vax g-float"), (Big, 4000, "cray")] {
+            let v = matrix(e, description);
+            assert!(is_mat4(&v, v.len() as u64), "{machine}");
+            assert_eq!(crate::formats::sniff(&v, v.len() as u64), Some("mat"), "{machine}");
+            let named = format!("Enum {{ raw: {}, name: Some({machine:?}), hex: false }}", description / 1000);
+            assert_eq!(read(&v, &[0, 1]).1, named);
+            assert_eq!(read(&v, &[0, 8]).1, "Str(\"a\")", "{machine}: the integers are read the right way round");
+        }
     }
 
     #[test]
