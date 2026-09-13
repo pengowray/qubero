@@ -162,7 +162,7 @@ export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin
 export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
-const WIKIDATA_INTRO = "Formats on Wikidata with a matching signature:";
+const WIKIDATA_INTRO = "Formats whose Wikidata signature this file matches:";
 const WIKIDATA_LINK = "Wikidata";
 const WIKIPEDIA_LINK = "Wikipedia";
 const WIKIDATA_CREDIT = (fetched: string): string => `Signatures from Wikidata property P4152, as of ${fetched}.`;
@@ -175,10 +175,10 @@ const WIKIDATA_CROWD = 4;
 const WIKIDATA_MORE = (n: number): string => `${n} more formats`;
 const WIKIDATA_SHARED = (n: number, where: string, hex: string): string => `${n} formats sharing ${where} (${hex})`;
 const WIKIDATA_SHARED_EXT = (n: number, where: string, hex: string, ext: string): string =>
-  `${n} formats sharing ${where} (${hex}), all listing .${ext}`;
+  `${n} formats sharing ${where} (${hex}), all with extension .${ext}`;
 const bytesAt = (m: WikiMatch): string => {
   const n = m.fixed === 1 ? "1 byte" : `${m.fixed} bytes`;
-  return m.fromEnd ? `${n} in the last ${m.offset}` : `${n} at offset ${m.offset}`;
+  return m.fromEnd ? `${n} within the last ${m.offset.toLocaleString("en")} bytes` : `${n} at offset ${m.offset}`;
 };
 
 /**
@@ -306,7 +306,13 @@ dialog.addEventListener("click", (e) => {
 // dialog shows them without asking again.
 let tools: ToolMatch[] | null = null;
 let wiki: WikiVerdict | null = null;
+// The last note the caller gave, so an answer that arrives later (the
+// Wikidata patterns are a slow fetch) redraws with it rather than with a note
+// worked out from what the caller knew when it asked. The signature template
+// is installed after that ask, and its row was lost this way.
+let lastNote: TemplateNote = null;
 const showDetails = (id: Identification | null, template: TemplateNote): void => {
+  lastNote = template;
   const rows: HTMLElement[] = [];
   const row = (label: string, value: Node | string): void => {
     rows.push(el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value));
@@ -432,7 +438,7 @@ const addOtherMatches = async (doc: Doc, id: Identification | null, template: st
     found = [];
   }
   tools = found;
-  const note = template === null ? null : builtinTemplate(template);
+  const note = template === null ? lastNote : builtinTemplate(template);
   showDetails(id, id === null && found.length > 0 ? null : note);
   const named = (line: string): void => {
     kindLabel.textContent = line;
@@ -456,7 +462,7 @@ const addOtherMatches = async (doc: Doc, id: Identification | null, template: st
     return;
   }
   if (wiki === null) return;
-  showDetails(id, id === null && found.length > 0 ? null : note);
+  showDetails(id, id === null && found.length > 0 ? null : template === null ? lastNote : note);
   if (id === null && template === null && found.length === 0) {
     const best = namingMatch(wiki.matches);
     if (best !== null) named(WIKIDATA_NAMED(best.format.label));
