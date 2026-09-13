@@ -19,6 +19,7 @@ import {
   matchFormats,
   matchFormatsSlowly,
   namingMatch,
+  pinnedWorth,
   type SigData,
   type SigFormat,
 } from "../src/signatures.ts";
@@ -145,6 +146,19 @@ test("one byte is not a match unless the extension agrees", () => {
   const ids = (name: string): string[] => matchFormats(index, { head: hdf5, tail: hdf5, name }).map((m) => m.format.id);
   assert.deepEqual(ids("a.h5"), ["Q2"]);
   assert.deepEqual(ids("sky.atm"), ["Q2", "Q105854027"]);
+});
+
+test("a zero byte counts for half", () => {
+  assert.equal(pinnedWorth(compile("4D4D002A0000000800")), 6.5);
+  assert.equal(pinnedWorth(compile("00(FF|0000)")), 1.5);
+  const index = indexOf({
+    fetched: "",
+    formats: [fmt("Q1", "Delta RPM", [["EDABEEDB0300000000", 0]], ["drpm"]), fmt("Q2", "RPM", [["EDABEEDB", 0]], ["rpm"])],
+  });
+  const rpm = hex("EDABEEDB030000000001626173657379");
+  const found = matchFormats(index, { head: rpm, tail: rpm, name: "basesystem.rpm" });
+  assert.deepEqual(found.map((m) => [m.format.id, m.fixed, m.worth]), [["Q2", 4, 4], ["Q1", 9, 7]]);
+  assert.equal(namingMatch(found)?.format.id, "Q2");
 });
 
 test("the extension is what follows the last dot", () => {

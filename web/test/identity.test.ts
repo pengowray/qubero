@@ -17,6 +17,7 @@ const sig = (label: string, fixed: number, extensionAgrees: boolean, source: Sig
   offset: 0,
   fromEnd: false,
   fixed,
+  worth: fixed,
   extensionAgrees,
   score: fixed + (extensionAgrees ? 4 : 0),
 });
