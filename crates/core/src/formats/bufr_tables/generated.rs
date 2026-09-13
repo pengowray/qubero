@@ -14,4 +14,5 @@ pub const OLDER: &[u32] = &[13, 15];
 pub const ELEMENTS: &str = include_str!("element.tsv");
 pub const SEQUENCES: &str = include_str!("sequence.tsv");
 pub const OPERATORS: &str = include_str!("operator.tsv");
+pub const CATEGORIES: &str = include_str!("category.tsv");
 pub const OLDER_TSV: &str = include_str!("older.tsv");

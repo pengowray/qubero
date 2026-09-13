@@ -39,6 +39,7 @@ pub mod bam_records;
 mod appledouble;
 mod au;
 mod bmp;
+mod bufr;
 pub mod bufr_tables;
 mod bzip2;
 mod bdb;
@@ -219,6 +220,7 @@ pub use godot_pck::godot_pck;
 pub use godot_text::godot_text;
 pub use gif::gif;
 pub use grib::grib;
+pub use bufr::bufr;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
 pub use gwf::gwf;
@@ -396,6 +398,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("p64png", |_| p64png()),
     ("netcdf", |_| netcdf()),
     ("grib", |_| grib()),
+    ("bufr", |_| bufr()),
     ("npy", |_| npy()),
     ("ogg", |_| ogg()),
     ("fits", |_| fits()),

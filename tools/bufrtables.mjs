@@ -143,6 +143,7 @@ const sentence = (s) => (s.length === 0 ? s : s[0] + s.slice(1).toLowerCase());
 
 // The current version, from the WMO.
 const tableB = csv(await text(`${WMO}/BUFRCREX_TableB_en.txt`));
+const tableA = csv(await text(`${WMO}/BUFR_TableA_en.txt`));
 const tableC = csv(await text(`${WMO}/BUFR_TableC_en.txt`));
 const tableD = csv(await text(`${WMO}/BUFR_TableD_en.txt`));
 
@@ -194,6 +195,10 @@ let c = "code\tname\n";
 for (const r of tableC) c += [r.FXY, cell(r.OperatorName_en)].join("\t") + "\n";
 writeFileSync(join(OUT, "operator.tsv"), c, "utf8");
 
+let a = "code\tname\n";
+for (const r of tableA) a += [r.CodeFigure, cell(r.Meaning_en)].join("\t") + "\n";
+writeFileSync(join(OUT, "category.tsv"), a, "utf8");
+
 // The older versions, as what each says differently.
 let older = "version\ttable\tcode\tscale\treference\twidth\tunit\tname\tmembers\n";
 const counts = [];
@@ -238,11 +243,13 @@ pub const OLDER: &[u32] = &[${OLDER.join(", ")}];
 pub const ELEMENTS: &str = include_str!("element.tsv");
 pub const SEQUENCES: &str = include_str!("sequence.tsv");
 pub const OPERATORS: &str = include_str!("operator.tsv");
+pub const CATEGORIES: &str = include_str!("category.tsv");
 pub const OLDER_TSV: &str = include_str!("older.tsv");
 `;
 writeFileSync(join(OUT, "generated.rs"), rs, "utf8");
 
 console.log(`Table B: ${elements.size} elements, ${b.length} bytes`);
 console.log(`Table D: ${sequences.size} sequences, ${d.length} bytes`);
+console.log(`Table A: ${tableA.length} data categories, ${a.length} bytes`);
 console.log(`Table C: ${tableC.length} operators, ${c.length} bytes`);
 console.log(`Older versions, ${older.length} bytes:\n  ${counts.join("\n  ")}`);

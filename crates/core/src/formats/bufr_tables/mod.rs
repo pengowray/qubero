@@ -139,6 +139,13 @@ pub fn operator_name(code: u32) -> Option<&'static str> {
     ops.iter().find(|(c, _)| *c == exact).or_else(|| ops.iter().find(|(c, _)| *c == pattern)).map(|(_, n)| *n)
 }
 
+/// Table A: what kind of data a message holds, by the number section 1 gives.
+/// The table's ranges of reserved numbers are left out, since a range is not a
+/// value a message can hold and a reserved number is better shown as itself.
+pub fn categories() -> Vec<(i128, &'static str)> {
+    rows(generated::CATEGORIES).filter_map(|r| Some((r.first()?.parse().ok()?, *r.get(1)?))).collect()
+}
+
 /// The rows of one of the files, header left out, fields split on tabs.
 fn rows(tsv: &'static str) -> impl Iterator<Item = Vec<&'static str>> {
     tsv.lines().skip(1).filter(|l| !l.is_empty()).map(|l| l.split('\t').collect())
