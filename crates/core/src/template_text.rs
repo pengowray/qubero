@@ -430,10 +430,29 @@ fn write_struct(out: &mut Vec<String>, ind: usize, head: &str, def: &StructDef, 
         return;
     }
     out.push(format!("{}{open}{{", pad(ind)));
+    write_doc(out, ind + 1, def.doc.as_deref());
     for f in &def.fields {
+        write_doc(out, ind + 1, f.doc.as_deref());
         write_field(out, ind + 1, f);
     }
     out.push(format!("{}}}{tail}", pad(ind)));
+}
+
+/// Prose about whatever comes next, as a comment line above it.
+///
+/// Not a clause on the field's own line: a sentence and a notation on one row
+/// would be two readings of the same row. A doc written across several lines
+/// keeps its lines.
+fn write_doc(out: &mut Vec<String>, ind: usize, doc: Option<&str>) {
+    let Some(doc) = doc else { return };
+    for line in doc.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            out.push(format!("{}//", pad(ind)));
+        } else {
+            out.push(format!("{}// {line}", pad(ind)));
+        }
+    }
 }
 
 fn struct_attrs(def: &StructDef) -> Vec<String> {
