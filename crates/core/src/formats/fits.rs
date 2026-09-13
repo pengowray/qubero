@@ -91,8 +91,13 @@
 //! - Which keywords hold a number is a list here rather than something read
 //!   from the file, since only a number can be read as one. A file that
 //!   writes `NAXIS1  = '3'` fails that card and reads on.
-//! - `CONTINUE`, the convention for a string too long for one card, is read as
-//!   the separate cards it is written as.
+//! - A long string joined into one value. `CONTINUE` cards read as the string
+//!   each one holds, with the `&` that says more follows left where the file
+//!   put it, and that is as far as it goes: a text field here is a run of
+//!   bytes, and the string a long keyword means is spread over several cards
+//!   with a keyword and two quotes between each pair. Joining them would need
+//!   a type that reads text out of several runs at once, which the IR has no
+//!   shape for; `Ty::Gather` places children and does not join them.
 //! - A quoted value with no closing quote runs to the end of its card rather
 //!   than being called out as the unterminated string it is.
 //! - A tile-compressed image is a binary table and reads as one: the rows are
@@ -223,6 +228,7 @@ fn card() -> T {
     for k in REAL {
         cases.push(((*k).to_string(), valued(real_value())));
     }
+    cases.push(("CONTINUE".to_string(), continue_body()));
     for n in 1..=COLUMNS {
         // Where a column starts in a row of an ASCII table, which is a number
         // like any other, and what type it holds, which is not.
@@ -343,6 +349,33 @@ fn text_body() -> T {
     let plain = T::structure("Note", vec![("value", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii))]);
     let value = T::switch(E::peek(8, Big), vec![(0x27, quoted_value())], text_value());
     T::switch(E::peek(16, Big), vec![(0x3d20, valued(value))], plain)
+}
+
+/// A `CONTINUE` card: the rest of a string too long for one card.
+///
+/// A string value that ends in `&` is not finished. The card after it writes
+/// `CONTINUE` where a keyword goes, leaves out the `= ` that says a value
+/// follows, and holds the next piece of the string as a quoted value of its
+/// own, with its own `&` when a third card follows. The file keeps a long
+/// value in pieces because a card is eighty columns and a filename is not.
+///
+/// So a `CONTINUE` card reads as the string it holds, with the `&` left where
+/// the file put it and the comment after it read as one. Without this it read
+/// as one undifferentiated run of text, quotes and all.
+///
+/// A card that says `CONTINUE` and holds no string is left as the text it is.
+fn continue_body() -> T {
+    let quoted = T::structure(
+        "Continued",
+        vec![
+            ("lead", T::text(StrLen::Fixed(E::to_bytes(b"'")), Encoding::Ascii)),
+            ("value", quoted_value()),
+            ("comment", T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii)),
+        ],
+    )
+    .machinery(&["lead"])
+    .payload(&["value"]);
+    T::switch(E::to_bytes(b"'").less_than(E::Remaining), vec![(1, quoted)], text_body())
 }
 
 /// The text of a value, up to the comment that may follow it.
@@ -1175,6 +1208,32 @@ mod tests {
         // And the cursor in a gap stands on the heap itself.
         assert_eq!(ev.locate(&d, start + 4 * 8).unwrap(), vec![0, 1, 2, 2]);
         assert_eq!(ev.locate(&d, start + 7 * 8).unwrap(), vec![0, 1, 2, 2, 1, 1]);
+    }
+
+    /// A string too long for one card ends in `&` and goes on in the cards
+    /// after it, each of which reads as the piece it holds.
+    #[test]
+    fn a_continue_card_reads_as_the_piece_of_the_string_it_holds() {
+        let b = header(&[
+            "SIMPLE  =                    T",
+            "BITPIX  =                    8",
+            "NAXIS   =                    0",
+            "FILENAME= 'a name too long for one card, so it &'",
+            "CONTINUE  'goes on here&'",
+            "CONTINUE  '.' / and the comment is on the last one",
+            "END",
+        ]);
+        let (d, mut ev) = eval(b);
+        // The first card is an ordinary quoted value, `&` and all.
+        let first = text(&ev.node(&d, &[0, 0, 0, 3, 2, 1, 1, 0, 0]).unwrap().value);
+        assert_eq!(first, "a name too long for one card, so it &");
+        // The cards after it have no `= ` and were one run of text before:
+        // each reads as the string it holds.
+        assert_eq!(text(&ev.node(&d, &[0, 0, 0, 4, 2, 1, 1, 0, 0]).unwrap().value), "goes on here&");
+        assert_eq!(text(&ev.node(&d, &[0, 0, 0, 5, 2, 1, 1, 0, 0]).unwrap().value), ".");
+        // And what follows the string on the last one is its comment.
+        let comment = text(&ev.node(&d, &[0, 0, 0, 5, 2, 2]).unwrap().value);
+        assert_eq!(comment, "/ and the comment is on the last one");
     }
 
     /// A column's keywords are worked out where they are asked rather than
