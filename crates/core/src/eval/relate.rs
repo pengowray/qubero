@@ -21,6 +21,7 @@
 
 use super::origin::Role;
 use super::*;
+use crate::template_text;
 
 /// One relationship, written both ways.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,37 +35,6 @@ pub struct Relation {
     /// What it comes to.
     pub result: String,
 }
-
-/// How tightly an operator binds, so that only the brackets a reader needs are
-/// written. Zero is a leaf or a call, which never needs any.
-fn prec(e: &Expr) -> u32 {
-    match e {
-        // A question about a question, so everything in it binds tighter.
-        Expr::Cond { .. } => 1,
-        // The value-or, which takes its right side only when the left comes to
-        // nothing. Loosest of the binary operators, which is where it was
-        // before the boolean set arrived beside it.
-        Expr::Or(..) => 2,
-        Expr::Either(..) => 3,
-        Expr::Both(..) => 4,
-        Expr::Not(..) => 5,
-        // Between the booleans and a comparison, as it is in every language
-        // that writes these: `a & b < c` is the comparison of `a & b`, and a
-        // mask written beside an addition binds looser than the addition.
-        Expr::And(..) => 6,
-        Expr::Less(..) | Expr::Eq(..) | Expr::Ne(..) | Expr::Le(..) | Expr::Gt(..) | Expr::Ge(..) => 7,
-        Expr::Shl(..) | Expr::Shr(..) => 8,
-        Expr::Add(..) | Expr::Sub(..) => 9,
-        Expr::Mul(..) | Expr::Div(..) | Expr::Mod(..) => 10,
-        _ => 0,
-    }
-}
-
-/// An outer precedence no operator reaches, so that whatever is written at it
-/// is bracketed unless it is a leaf. What `not` writes its operand at: `not a
-/// == b` has two readings and only one of them is this one, and a bracket is
-/// cheaper than being right for the wrong reason.
-const ALWAYS: u32 = u32::MAX;
 
 impl Evaluator {
     /// The relationships behind the field at `path`: what decided its length,
@@ -188,7 +158,7 @@ impl Evaluator {
         let Some(written) = write_expr(e) else { return };
         let mut named = false;
         let here = here.or_else(|| self.memo.get(at).map(|r| (r.offset, r.limit)));
-        let Ok(Some(substituted)) = self.substitute(doc, at, e, 0, here, &mut named) else { return };
+        let Ok(Some(substituted)) = self.substitute(doc, at, e, here, &mut named) else { return };
         if !named || substituted == written {
             return;
         }
@@ -203,134 +173,81 @@ impl Evaluator {
 
     /// The same expression with every leaf that reads the file replaced by
     /// what it reads. `named` comes back true when at least one was.
+    ///
+    /// Everything between the leaves is written by the writer that writes the
+    /// IR text, so the two forms of one relationship differ in the leaves and
+    /// nowhere else: the same words, the same brackets, the same reading. See
+    /// [`crate::template_text::with_leaves`].
     fn substitute<S: Source>(
         &mut self,
         doc: &Document<S>,
         at: &[usize],
         e: &Expr,
-        outer: u32,
         here: Option<(u64, u64)>,
         named: &mut bool,
     ) -> R<Option<String>> {
-        let here_prec = prec(e);
-        let wrap = |s: String| if here_prec > 0 && here_prec < outer { format!("({s})") } else { s };
-        let two = |a: &Expr, b: &Expr, op: &str, ev: &mut Self, named: &mut bool| -> R<Option<String>> {
-            let (Some(l), Some(r)) = (ev.substitute(doc, at, a, here_prec, here, named)?, ev.substitute(doc, at, b, here_prec + 1, here, named)?)
-            else {
-                return Ok(None);
-            };
-            Ok(Some(format!("{l} {op} {r}")))
-        };
-        let s = match e {
-            Expr::Lit(_) => write_at(e, outer),
-            Expr::Or(a, b) => two(a, b, "or else", self, named)?.map(wrap),
-            Expr::Either(a, b) => two(a, b, "or", self, named)?.map(wrap),
-            Expr::Both(a, b) => two(a, b, "and", self, named)?.map(wrap),
-            Expr::Less(a, b) => two(a, b, "<", self, named)?.map(wrap),
-            Expr::Eq(a, b) => two(a, b, "==", self, named)?.map(wrap),
-            Expr::Ne(a, b) => two(a, b, "!=", self, named)?.map(wrap),
-            Expr::Le(a, b) => two(a, b, "<=", self, named)?.map(wrap),
-            Expr::Gt(a, b) => two(a, b, ">", self, named)?.map(wrap),
-            Expr::Ge(a, b) => two(a, b, ">=", self, named)?.map(wrap),
-            Expr::Mod(a, b) => two(a, b, "%", self, named)?.map(wrap),
-            Expr::Not(a) => match self.substitute(doc, at, a, ALWAYS, here, named)? {
-                Some(inner) => Some(wrap(format!("not {inner}"))),
-                None => return Ok(None),
-            },
-            // Both branches, whichever one was taken. Writing out only the
-            // branch the condition chose would say the reader was shown the
-            // whole question, and leave them unable to check the answer
-            // against the case that did not come up.
-            Expr::Cond { when, then, otherwise } => {
-                let (Some(c), Some(t), Some(f)) = (
-                    self.substitute(doc, at, when, here_prec + 1, here, named)?,
-                    self.substitute(doc, at, then, here_prec + 1, here, named)?,
-                    self.substitute(doc, at, otherwise, here_prec + 1, here, named)?,
-                ) else {
-                    return Ok(None);
-                };
-                Some(wrap(format!("{c} ? {t} : {f}")))
+        // A leaf the writer cannot write and a read that failed both stop the
+        // writer, and they are not the same answer: the first is a
+        // relationship not worth showing, the second is a file that would not
+        // answer. So the error is held here and raised once the writer is
+        // done with it.
+        let mut failed = None;
+        let written = template_text::with_leaves(e, &mut |leaf| match self.leaf_value(doc, at, leaf, here, named) {
+            Ok(s) => s,
+            Err(e) => {
+                failed = Some(e);
+                None
             }
-            Expr::Shl(a, b) => two(a, b, "<<", self, named)?.map(wrap),
-            Expr::Shr(a, b) => two(a, b, ">>", self, named)?.map(wrap),
-            Expr::And(a, b) => two(a, b, "&", self, named)?.map(wrap),
-            Expr::Add(a, b) => two(a, b, "+", self, named)?.map(wrap),
-            Expr::Sub(a, b) => two(a, b, "-", self, named)?.map(wrap),
-            Expr::Mul(a, b) => two(a, b, "*", self, named)?.map(wrap),
-            Expr::Div(a, b) => two(a, b, "/", self, named)?.map(wrap),
-            Expr::Min(a, b) | Expr::Max(a, b) => {
-                let name = if matches!(e, Expr::Min(..)) { "min" } else { "max" };
-                let (Some(l), Some(r)) =
-                    (self.substitute(doc, at, a, 0, here, named)?, self.substitute(doc, at, b, 0, here, named)?)
-                else {
-                    return Ok(None);
-                };
-                Some(format!("{name}({l}, {r})"))
-            }
-            Expr::DivCeil(a, b) => {
-                let (Some(l), Some(r)) =
-                    (self.substitute(doc, at, a, 0, here, named)?, self.substitute(doc, at, b, 0, here, named)?)
-                else {
-                    return Ok(None);
-                };
-                Some(format!("ceil({l} / {r})"))
-            }
-            Expr::Log2(a) => {
-                let Some(inner) = self.substitute(doc, at, a, 0, here, named)? else { return Ok(None) };
-                Some(format!("log2({inner})"))
-            }
-            Expr::PadTo { n, align } => {
-                let Some(inner) = self.substitute(doc, at, n, 0, here, named)? else { return Ok(None) };
-                Some(format!("align({inner}, {align})"))
-            }
-            Expr::Bit(a, i) => {
-                let Some(inner) = self.substitute(doc, at, a, 0, here, named)? else { return Ok(None) };
-                Some(format!("bit({inner}, {i})"))
-            }
-            // Where a field is, so the field has to stay visible: a number on
-            // its own would say an address and not which of a heap's objects
-            // the address belongs to, which is the half of it this record
-            // decided.
-            Expr::StartOf(inner) => {
-                let Some(s) = self.substitute(doc, at, inner, 0, here, named)? else { return Ok(None) };
-                Some(format!("start of {s}"))
-            }
-            // A search over a list, where the value alone would hide the half
-            // of it this record contributed. `earlier[class_num = 9].name`
-            // says what was looked for and where; `"trce"` says only what came
-            // back, and leaves the reader to guess which element answered.
-            Expr::Tagged(t) => {
-                let tag = match &t.tag {
-                    Tag::Computed(e) => self.substitute(doc, at, &e.clone(), 0, here, named)?,
-                    // A label that is text: substituting the expression that
-                    // works it out means the text it came to, since that is
-                    // what the search was actually given. Leaving it as
-                    // written would make the two forms the same and the whole
-                    // relationship would be dropped as saying nothing.
-                    Tag::ComputedText(e) => {
-                        *named = true;
-                        Some(format!("{:?}", self.text_at(doc, at, &e.clone(), here)?))
-                    }
-                    other => other.written(),
-                };
-                let Some(tag) = tag else { return Ok(None) };
-                let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
-                *named = true;
-                let array = t.array.as_ref().and_then(write_expr).unwrap_or_else(|| "earlier".into());
-                Some(format!("{array}[{} = {tag}]{field}", t.key.join(".")))
-            }
-            // Everything left that this can write at all is a leaf that reads
-            // the file. What it reads is the whole of what substituting it
-            // means, so one evaluation covers all of them.
-            _ => {
-                if write_expr(e).is_none() {
-                    return Ok(None);
+        });
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(written),
+        }
+    }
+
+    /// One leaf with what it read in its place.
+    fn leaf_value<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+        named: &mut bool,
+    ) -> R<Option<String>> {
+        // A search over a list, where the value alone would hide the half
+        // of it this record contributed. `earlier[class_num = 9].name`
+        // says what was looked for and where; `"trce"` says only what came
+        // back, and leaves the reader to guess which element answered.
+        if let Expr::Tagged(t) = e {
+            let tag = match &t.tag {
+                Tag::Computed(e) => self.substitute(doc, at, &e.clone(), here, named)?,
+                // A label that is text: substituting the expression that
+                // works it out means the text it came to, since that is
+                // what the search was actually given. Leaving it as
+                // written would make the two forms the same and the whole
+                // relationship would be dropped as saying nothing.
+                Tag::ComputedText(e) => {
+                    *named = true;
+                    Some(format!("{:?}", self.text_at(doc, at, &e.clone(), here)?))
                 }
-                *named = true;
-                Some(self.eval_expr_at(doc, at, e, here)?.to_string())
-            }
-        };
-        Ok(s)
+                // A constant the template fixed, which reads the same in both
+                // forms and is written the same way in both.
+                other => template_text::tag_text(other, false),
+            };
+            let Some(tag) = tag else { return Ok(None) };
+            let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
+            *named = true;
+            let array = t.array.as_ref().and_then(write_expr).unwrap_or_else(|| "earlier".into());
+            return Ok(Some(format!("{array}[{} = {tag}]{field}", t.key.join("."))));
+        }
+        // Everything else this can write at all reads the file. What it reads
+        // is the whole of what substituting it means, so one evaluation covers
+        // all of them.
+        if write_expr(e).is_none() {
+            return Ok(None);
+        }
+        *named = true;
+        Ok(Some(self.eval_expr_at(doc, at, e, here)?.to_string()))
     }
 }
 
@@ -338,119 +255,17 @@ impl Evaluator {
 /// reading in this notation: a search for a byte pattern, or a peek at bits
 /// that are not a field.
 ///
+/// The IR text, this panel and the diagram's labels are one writer, so an
+/// expression reads one way wherever the reader meets it. The words and the
+/// brackets are settled in [`crate::template_text`], beside the grammar the
+/// rest of the IR is written in.
+///
 /// Public because a type can hold an expression too: a field as wide as
 /// another field says names that field in the type column, and the notation it
 /// is named in should be the one every other connection is written in. See
 /// [`crate::template::Ty::UIntExpr`].
 pub fn write_expr(e: &Expr) -> Option<String> {
-    write_at(e, 0)
-}
-
-fn write_at(e: &Expr, outer: u32) -> Option<String> {
-    let here = prec(e);
-    let wrap = |s: String| if here > 0 && here < outer { format!("({s})") } else { s };
-    let two = |a: &Expr, b: &Expr, op: &str| -> Option<String> {
-        Some(wrap(format!("{} {op} {}", write_at(a, here)?, write_at(b, here + 1)?)))
-    };
-    let path = |array: &str, index: &Expr, field: &[String]| -> Option<String> {
-        let mut s = format!("{array}[{}]", write_at(index, 0)?);
-        for f in field {
-            s.push('.');
-            s.push_str(f);
-        }
-        Some(s)
-    };
-    Some(match e {
-        Expr::Lit(n) => n.to_string(),
-        Expr::Ref(n) => n.to_string(),
-        Expr::Remaining => "remaining".to_string(),
-        Expr::SizeOf(n) => format!("sizeof({n})"),
-        Expr::BitsOf(n) => format!("bitsof({n})"),
-        Expr::Idx => "index".to_string(),
-        // Where this field starts, counted in the window around it rather than
-        // in the file, which is what the two words say: `pos` is a position
-        // and `size of window` names what it is a position in.
-        Expr::Pos => "pos".to_string(),
-        Expr::WindowSize => "size of window".to_string(),
-        // Not `sizeof(x)`, which is the same list measured in bytes. A reader
-        // seeing both beside each other has to be able to tell them apart.
-        Expr::LenOf(n) => format!("count of {n}"),
-        // Nothing to point at: the answer comes from running the file, not
-        // from a field a reader could go and look at.
-        Expr::Deduced(_) => return None,
-        Expr::Elem { array, index, field } => path(array, index, field)?,
-        Expr::ElemWithin { path: into, index, field } => path(&into.join("."), index, field)?,
-        Expr::Product { array, index, field } => format!("product({})", path(array, index, field)?),
-        Expr::ProductOf(n) => format!("product({n})"),
-        Expr::SumOf(n) => format!("sum({n})"),
-        Expr::MaxOf(n) => format!("max({n})"),
-        // "set bits" rather than "popcount": the panel writes this beside a
-        // length, where a reader wants what was counted and not the name of
-        // the machine instruction that counts it.
-        Expr::PopCount(n) => format!("set bits in {n}"),
-        Expr::Prev(n) => format!("previous {n}"),
-        Expr::Sibling(f) | Expr::Within(f) => f.join("."),
-        // A question for another record, so it says whose: the names inside
-        // are that record's fields, and written bare they would read as fields
-        // beside this one. A name or a path reads as a path into the
-        // descriptor, `descriptor.count`; anything longer is bracketed whole,
-        // since qualifying only its first name would claim the rest were
-        // fields beside this one.
-        Expr::Placer(e) => match &**e {
-            Expr::Ref(n) => format!("descriptor.{n}"),
-            Expr::Within(f) => format!("descriptor.{}", f.join(".")),
-            other => format!("descriptor.({})", write_at(other, 0)?),
-        },
-        // The list, the question asked of each element, and what is read from
-        // the one that answers. A search over the elements before this one has
-        // no field to name, so it is named for what it searches: `earlier`.
-        Expr::Tagged(t) => {
-            let key = t.key.join(".");
-            let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
-            let array = match &t.array { Some(array) => write_expr(array)?, None => "earlier".into() };
-            format!("{array}[{key} = {}]{field}", t.tag.written()?)
-        }
-        // "or else" rather than "or", which the boolean one below is. The two
-        // answer different things and there is one English word between them:
-        // `flags or 4` is 12 under this and 1 under the other, and a reader
-        // shown the same word for both cannot tell which they are looking at.
-        // This is the fallback: "the length in this record, or else the last
-        // record that had one".
-        Expr::Or(a, b) => two(a, b, "or else")?,
-        Expr::Either(a, b) => two(a, b, "or")?,
-        Expr::Both(a, b) => two(a, b, "and")?,
-        Expr::Less(a, b) => two(a, b, "<")?,
-        Expr::Eq(a, b) => two(a, b, "==")?,
-        Expr::Ne(a, b) => two(a, b, "!=")?,
-        Expr::Le(a, b) => two(a, b, "<=")?,
-        Expr::Gt(a, b) => two(a, b, ">")?,
-        Expr::Ge(a, b) => two(a, b, ">=")?,
-        Expr::Mod(a, b) => two(a, b, "%")?,
-        // Bracketed unless what it negates is a leaf: `not a == b` reads two
-        // ways and only one of them is what this means.
-        Expr::Not(a) => wrap(format!("not {}", write_at(a, ALWAYS)?)),
-        Expr::Cond { when, then, otherwise } => wrap(format!(
-            "{} ? {} : {}",
-            write_at(when, here + 1)?,
-            write_at(then, here + 1)?,
-            write_at(otherwise, here + 1)?
-        )),
-        Expr::Shl(a, b) => two(a, b, "<<")?,
-        Expr::Shr(a, b) => two(a, b, ">>")?,
-        Expr::And(a, b) => two(a, b, "&")?,
-        Expr::Add(a, b) => two(a, b, "+")?,
-        Expr::Sub(a, b) => two(a, b, "-")?,
-        Expr::Mul(a, b) => two(a, b, "*")?,
-        Expr::Div(a, b) => two(a, b, "/")?,
-        Expr::Min(a, b) => format!("min({}, {})", write_at(a, 0)?, write_at(b, 0)?),
-        Expr::Max(a, b) => format!("max({}, {})", write_at(a, 0)?, write_at(b, 0)?),
-        Expr::DivCeil(a, b) => format!("ceil({} / {})", write_at(a, 10)?, write_at(b, 11)?),
-        Expr::Log2(a) => format!("log2({})", write_at(a, 0)?),
-        Expr::StartOf(a) => format!("start of {}", write_at(a, 0)?),
-        Expr::PadTo { n, align } => format!("align({}, {align})", write_at(n, 0)?),
-        Expr::Bit(a, i) => format!("bit({}, {i})", write_at(a, 0)?),
-        _ => return None,
-    })
+    template_text::readable(e)
 }
 
 #[cfg(test)]
@@ -572,6 +387,59 @@ mod tests {
         assert_eq!(write_expr(&nested).as_deref(), Some("a ? (wide ? long : short) : 0"));
         let tail = E::cond(E::field("a"), E::lit(0), e);
         assert_eq!(write_expr(&tail).as_deref(), Some("a ? 0 : (wide ? long : short)"));
+    }
+
+    /// One expression, one reading. The panel, the diagram's labels and the IR
+    /// text are one writer, and this is what says so: anything it catches is
+    /// two writers that have drifted apart again.
+    #[test]
+    fn the_panel_writes_what_the_ir_text_writes() {
+        let a = || E::field("a");
+        let each = [
+            E::field("n").pad_to(4),
+            E::max_of("rows"),
+            E::pop_count("mask"),
+            E::prev("length"),
+            E::sibling(&["head", "count"]),
+            E::within(&["head", "count"]),
+            // A mask beside a comparison, which is the case the two writers
+            // used to read two ways.
+            a().and(E::lit(8)).less_than(E::lit(4)),
+            a().and(a().less_than(E::lit(4))),
+            a().shr(E::lit(3)).and(E::lit(0x3f)),
+            a().equal_to(E::lit(0x4948_4452)).negate(),
+            E::cond(a(), E::lit(1), E::cond(a(), E::lit(2), E::lit(3))),
+            E::tagged_by_expr("structures", &["class_num"], E::field("class"), &["name"]),
+            E::field("n").at_most(E::Remaining).add(E::lit(1)),
+        ];
+        for e in each {
+            assert_eq!(write_expr(&e), Some(crate::template_text::expr(&e)), "{e:?}");
+        }
+    }
+
+    /// The words themselves, so that changing one changes this line too.
+    #[test]
+    fn a_call_is_named_the_way_the_ir_names_it() {
+        assert_eq!(write_expr(&E::field("n").pad_to(4)).as_deref(), Some("padding(n, 4)"));
+        assert_eq!(write_expr(&E::max_of("rows")).as_deref(), Some("largest(rows)"));
+        assert_eq!(write_expr(&E::pop_count("mask")).as_deref(), Some("setbits(mask)"));
+        assert_eq!(write_expr(&E::prev("length")).as_deref(), Some("previous(length)"));
+        // A field of the element before this one, told apart from a field of
+        // this one: `count` is here and `earlier(count)` is in the last record.
+        assert_eq!(write_expr(&E::sibling(&["count"])).as_deref(), Some("earlier(count)"));
+        assert_eq!(write_expr(&E::within(&["head", "count"])).as_deref(), Some("head.count"));
+    }
+
+    /// A mask binds tighter than the comparison it is written beside, as it
+    /// does in the IR text and in Kaitai, so a bit field beside a number needs
+    /// no brackets and a comparison inside a mask keeps them.
+    #[test]
+    fn a_mask_binds_tighter_than_a_comparison() {
+        let a = || E::field("a");
+        assert_eq!(write_expr(&a().and(E::lit(8)).less_than(E::lit(4))).as_deref(), Some("a & 8 < 4"));
+        assert_eq!(write_expr(&a().and(a().less_than(E::lit(4)))).as_deref(), Some("a & (a < 4)"));
+        // And a mask is written in hex, which is the form the bits are read in.
+        assert_eq!(write_expr(&a().shr(E::lit(3)).and(E::lit(0x3f))).as_deref(), Some("a >> 3 & 0x3f"));
     }
 
     #[test]
