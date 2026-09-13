@@ -30,6 +30,9 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| S3. Field names taken from a sibling list. Now `Field::elem_name_from`: an expression worked out per element of a list, with `Idx` as that element's index, labelling it `[1] y` while the path stays `[1]`. | a47f1ed |
+| NPY structured dtype field names: `[0] channel_0000` | ec4812d |
+| MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
 
 ## Bugs
 
@@ -141,17 +144,6 @@ unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
 Every HDF5 gap here also applies to NetCDF-4, MATLAB 7.3 and `.h5ad`, which are
 HDF5 files.
 
-### S3. Field names taken from a sibling list
-
-**Unblocks:** MAT struct fields (the names are a run of fixed-width text in a
-sibling element), NPY structured dtypes (the names are in the header's list of
-`('name', 'format')` pairs, so a record's values are numbered), and possibly
-FITS columns, which are `col3` in every path with `TTYPE3` shown beside.
-
-A structure's field names are fixed when the template is built. What is needed
-is a display name for element or field `i` read from element `i` of another
-list, without changing the path an expression or an edit uses.
-
 ### Further shared gaps, not started
 
 - **S4. Offsets into the file from inside unpacked data.** Compressed RNTuple
@@ -228,6 +220,12 @@ Reads further than any other scientific format. Left:
 - Every cell asks the header for its `TFORMn` again, so large tables are slow.
   Worth timing once S1 lands.
 - Columns past 32, axes past 9, `CONTINUE` cards.
+- Columns keep `Field::name_from`, one per column, rather than moving to
+  `elem_name_from` (S3). A row is 32 fields and not a list because each
+  column's type comes from a `TFORMn` card found by its keyword, and a list
+  would need that keyword built from `Idx` (`TFORM` and a number, as text),
+  which no expression can do. Worth revisiting only if that is added, and it
+  would lift the 32-column cap too.
 
 ### GRIB
 
@@ -239,14 +237,12 @@ only; anything else is bytes.
 ### NPY / NPZ
 
 - NPZ reads as a plain ZIP (S6).
-- Structured dtype field names (S3), nested and shaped fields, explicit
-  `offsets`.
+- Structured dtype nested and shaped fields, explicit `offsets`.
 - More than 4 dimensions read as one run.
 - Header keys in a non-numpy order read as one run of text.
 
 ### MAT
 
-- Struct fields are not labelled with their names (S3).
 - Subsystem data (objects, and so MATLAB `string` and `table`) is bytes.
 - Sparse row indices and column starts read as numbers, not positions.
 

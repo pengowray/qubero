@@ -84,4 +84,10 @@ fn a_real_structured_dtype_lists_the_fields_it_names() {
     assert_eq!(ev.node(&d, &[5, 0, 0]).unwrap().child_count, n);
     assert_eq!(ev.node(&d, &[5, 0, 0, 0]).unwrap().type_name, "f32 le");
     assert_eq!(ev.node(&d, &[5, 0]).unwrap().size_bits, n * 4 * 8);
+    // Each value is labelled with the name its entry gives it, in every record
+    // and to the last of the list, as numpy reads the dtype.
+    assert_eq!(ev.node(&d, &[5, 0, 0, 0]).unwrap().name, "[0] channel_0000");
+    assert_eq!(ev.node(&d, &[5, 2, 0, 1]).unwrap().name, "[1] channel_0001");
+    let last = n as usize - 1;
+    assert_eq!(ev.node(&d, &[5, 1, 0, last]).unwrap().name, format!("[{last}] channel_{last:04}"));
 }
