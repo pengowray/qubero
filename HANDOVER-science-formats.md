@@ -136,8 +136,61 @@ HDF5 files.
 - **S5. The Nth element of a list whose elements vary in size.** HDF5
   variable-length strings and every other global-heap object. `h5ad.rs` does
   the walk as a reader because a field cannot.
+
+  **Design (Fable, 2026-09-13), not built.** Mostly there already:
+  `Expr::Tagged` with `array: Some(within(["collection","objects"]))` and
+  `Tag::Computed(field("object_index"))` finds the object today, since
+  `descend` steps through an `At`. What is missing is (a) a child that
+  *covers* the found object's bytes rather than a number read out of it, and
+  (b) a cost fix: every referrer's `collection` is a distinct path to the
+  same bytes, nothing dedups the search, so a column of N strings is O(N^2).
+
+  Recommended: one `Expr::StartOf(expr)`, the byte offset at which the field
+  the expression names begins (counted from the nearest `Origin`, so it pairs
+  with `at_origin` like every HDF5 address), then in `vlen_reference` an
+  `object` field: `T::at_origin(E::start_of(find(["data","payload"])),
+  T::sized(find(["size"]), text of `length` bytes or bytes))` marked
+  `field_aside` (required: without it `kinds_real` counts every string
+  twice, as ELF's `name` shows) and `named_by("object")`. Split
+  `heap_object.data` into `payload: bytes(size)` and `padding`. Add a
+  builder `E::tagged_in_by(array: Expr, key, tag: Expr, field)`. Plus a key
+  index in `tagged_path` for `array: Some(..)` searches: a map key -> element
+  index per list keyed by the list node's `(space, offset, limit)`, dropped by
+  range in `forget_after`, bounded; excludes `array: None` (GWF's
+  nearest-earlier semantics). That index also closes the FITS "every cell
+  asks the header for its `TFORMn` card again" note.
+
+  Build order: (1) template-only `payload`/`padding` split and
+  `tagged_in_by`, `h5ad::attribute` reads the field and `h5ad::vlen_string`
+  goes; (2) the key index, with a test that two referrers walk one
+  collection once; (3) `StartOf` (arms in `expr.rs` eval and `text_path`,
+  `relate.rs`, `origin.rs`, `machinery.rs`, builder; `uniform()` false) and
+  the `object` field; (4) a generated `vlen-strings.h5` (h5py: thousands of
+  strings over two collections, VL attributes, a 512-byte user block
+  variant, indices out of order) checked in `hdf5_real.rs`; (5) DESIGN.md
+  lines on the global heap rewritten. Rejected: a `Ty::Pick` type (every
+  `At`/`Chain` arm would need a twin; only HDF5 wants the bytes). Risks: the
+  `StartOf` base convention is silent on plain files and off by 512 on
+  MATLAB 7.3 if wrong; the placed index walks one stretch per string; a VL
+  string inside a VL sequence must not read as a ring.
+
 - **S6. A ZIP entry takes a template by its name.** NPZ members as NPY, the
   chunks of a Zarr ZipStore.
+
+  **Note (Fable, 2026-09-13).** Probably half done by accident: a ZIP
+  entry's data is `T::decoded(.., decoded_text())`, a one-field text struct,
+  so `says_only_bytes` holds and `template_for` sniffs the unpacked bytes,
+  and `npy::MAGIC` is in the sniff table. So a stored or deflated NPZ member
+  should already open as NPY in its own space; nothing tests it
+  (`npy/two-arrays.npz`) and `npy.rs` still says it cannot be done. First
+  step: that test, then the doc. `Match` on the entry name over another
+  template's `Named` types is possible mechanically but buys nothing here
+  (`Match` is an exact compare and `Expr` has no suffix or concatenation).
+  Zarr chunks are not a name-to-template problem: dtype, shape, order and
+  compressor live in a sibling entry's `.zarray`/`zarr.json` in another
+  decoded space, and the codec would come from a JSON value. Three IR
+  additions for one format; do it as a reader beside the template, like
+  `h5ad.rs`.
 
 ## Per format, most unread first
 
