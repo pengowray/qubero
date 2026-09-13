@@ -18,6 +18,12 @@
 //! keeps past its rows, `GCOUNT` the number of groups; both default to what an
 //! image has, no heap and one group.
 //!
+//! The axes are a list of as many as `NAXIS` says, read from the cards that
+//! number them, so a tenth axis is read like the nine before it. An axis of
+//! zero is read as a zero, which says there is no data; the first axis is the
+//! exception, since `NAXIS1 = 0` is how a random-groups file says the group
+//! parameters are all there is.
+//!
 //! A table's data is its rows rather than one run of bytes. `NAXIS1` is how
 //! wide a row is and `NAXIS2` how many there are; `TFIELDS` how many columns,
 //! and `TFORMn` what one column holds. A binary table's column is an array of
@@ -41,53 +47,74 @@
 //!
 //! `TSCALn` and `TZEROn` say what the numbers in a column are worth: a stored
 //! value `x` means `TZEROn + TSCALn * x`, and `BZERO` and `BSCALE` say the
-//! same of an image's pixels. That sum is not worked out here and cannot be,
-//! for the reason GRIB's packed values are not: both cards are reals and an
-//! expression in this IR is an integer. So the two are shown beside the column
-//! and the reader is told what they mean, and the bytes stay the integers they
-//! are, editable as themselves.
+//! same of an image's pixels. When both cards are whole numbers that sum is
+//! worked out, and each number reads as the integer on disk with what it is
+//! worth beside it. The integer on disk is what an edit writes; the worth
+//! takes no bits, the way a Steim word's differences hang off the word in
+//! `mseed`.
 //!
-//! The one case where the standard means a type rather than a scaling is the
-//! unsigned convention, and that is read. A column written signed with a zero
-//! point of exactly half its range and no scaling *is* unsigned: `I` with
-//! `TZERO` 32768 reads as `u16`, `J` with 2^31 as `u32`, `K` with 2^63 as
-//! `u64`. `B` goes the other way, since FITS writes that one unsigned to begin
-//! with: `TZERO` -128 reads it as `i8`. An image's pixels read the same way
-//! from `BZERO` and `BITPIX`.
+//! The commonest case by far is the unsigned convention: an unsigned 16-bit
+//! column is written as a signed one with a zero point of 32768, so 65535 is
+//! on disk as the signed 32767. That is a bias and not a reinterpretation, and
+//! reading those bytes as a 16-bit unsigned number would answer 32767, which
+//! is a number nobody wrote. The sum is the reading.
 //!
-//! A column is `col3` in every path and reads as `col3 flux` on the row: the
-//! declared name is what an expression and an edit are written with, and the
-//! word beside it is whatever the `TTYPE3` card says. A column's type comes
-//! from the letter in its `TFORMn` as a letter, which is what a `Match` reading
-//! its `on` as text from anywhere an expression reaches is for.
+//! A scale or a zero point with a fraction in it is not worked out and cannot
+//! be, for the reason GRIB's packed values are not: an expression in this IR
+//! is an integer. Those are shown beside the column, as the cards wrote them,
+//! and the sum is the reader's to make.
+//!
+//! A row is a list of cells rather than a field per column, so a table may
+//! have as many columns as the standard allows, which is 999: a keyword is
+//! eight bytes and `TFORM` spends five of them. A cell is `cells[2]` in every
+//! path and reads as `[2] flux`: the index is what an expression and an edit
+//! are written with, and the word beside it is whatever the `TTYPE3` card
+//! says. A cell works its own keywords out from where it sits, so nothing
+//! here writes `TFORM1` through `TFORM999` down; the keyword is built as the
+//! number a card's eight bytes read as, and a card carries that number beside
+//! its keyword so a search can compare against it.
+//!
+//! A column's type comes from the letter in its `TFORMn` as a letter, which is
+//! what a `Match` reading its `on` as text from anywhere an expression reaches
+//! is for.
 //!
 //! What is not read here:
 //!
-//! - `TFORM1` through `TFORM32`, and `TBCOL1` through `TBCOL32`, since a
-//!   keyword is looked up by the name written out here. A table with more
-//!   columns than that reads the first 32 and says so in the row's last field.
+//! - A table of more than 999 columns, which no keyword could describe: a
+//!   `TFIELDS` past that reads the 999 columns the header could name.
+//! - Every cell of every row still walks the header for its own `TFORMn`, and
+//!   for the `TZEROn` that says whether it is unsigned. Reading the header
+//!   once into a list and having the cells read the answers out of that was
+//!   tried and is slower, not faster: the evaluator keeps what a node *is*
+//!   and not what it *reads as*, so a field worked out from an expression is
+//!   worked out again every time it is asked, and a cell reading one pays for
+//!   the walk it was meant to save and for the walk to the list on top. The
+//!   `columns` list is kept for what it says to a reader, not to save work.
+//!   Hoisting the walk needs the evaluator to keep a value beside a shape.
 //! - Which kind of table it is, is read from `TBCOL1` and `TFIELDS` rather
 //!   than from `XTENSION`, which says so in text.
 //! - A `TTYPEn` with an escaped quote in it reads as far as the quote. Nothing
 //!   names a column that way.
 //! - Heap arrays are found by walking every cell of every row, so a table of
 //!   millions of rows takes that long before its heap has any children.
-//! - A scaling that is not the unsigned convention. `TSCALn` and `TZEROn` are
-//!   shown beside the column and the sum is left to the reader, since the two
-//!   are reals and this IR's arithmetic is not. The same for `BSCALE` and
-//!   `BZERO` on an image, and for a variable-length column, whose heap arrays
-//!   are typed by the letter after the `P` and not scaled at all.
+//! - A scale or a zero point with a fraction in it, which the integers here
+//!   cannot add: the cards are shown beside the column and the sum is left to
+//!   the reader. A variable-length column is not scaled at all, since its heap
+//!   arrays are typed by the letter after the `P` and nothing carries the
+//!   cards that far.
+//! - A scaled image walks the header for `BZERO` and `BSCALE` once a pixel,
+//!   so a scaled image of a million pixels is a million walks. An image that
+//!   says nothing about its pixels pays none of it.
 //! - A real written with no digits before the point, `TZERO1 = .5`, fails its
 //!   card: the digits are read as a run that ends at the point, and a run with
 //!   nothing in it is not a number. An exponent, `1.0E2`, reads as the 1 and
 //!   leaves `E2` in the text after it, which is a value this declines to call
 //!   a whole number rather than one it reads wrong.
-//! - `NAXIS1` through `NAXIS9`. A tenth axis is legal and nothing writes one.
-//! - A missing keyword and a keyword whose value is zero both answer 0, so an
-//!   axis genuinely declared `NAXIS3 = 0` is read as if it were not there.
-//!   That is only wrong for a file whose data is empty anyway, except for
-//!   random groups, where `NAXIS1 = 0` is how the format says the group
-//!   parameters are all there is.
+//! - An axis the header says is there and does not give a length for. A
+//!   missing keyword and a keyword whose value is zero both answer 0, and an
+//!   axis of zero says there is no data, so a header that declares `NAXIS = 3`
+//!   and writes no `NAXIS2` reads as an empty data unit rather than guessing
+//!   what the missing card meant.
 //! - Which keywords hold a number is a list here rather than something read
 //!   from the file, since only a number can be read as one. A file that
 //!   writes `NAXIS1  = '3'` fails that card and reads on.
@@ -118,10 +145,7 @@ const CARD: i128 = 80;
 /// logical, and `T` is not a number. The cards that hold a real have a shape
 /// of their own, since a whole number written with a point after it is still a
 /// whole number. See [`REAL`] and [`real_value`].
-const NUMERIC: &[&str] = &[
-    "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "NAXIS4", "NAXIS5", "NAXIS6", "NAXIS7", "NAXIS8", "NAXIS9",
-    "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL",
-];
+const NUMERIC: &[&str] = &["BITPIX", "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTVER", "EXTLEVEL"];
 
 /// The keywords that say what a stored number is worth rather than holding a
 /// number of their own. The standard makes every one of them a real, so a
@@ -129,19 +153,31 @@ const NUMERIC: &[&str] = &[
 /// and not a card to fail. See [`real_value`].
 const REAL: &[&str] = &["BSCALE", "BZERO"];
 
-/// How many columns of a table are read. The keywords a column is described
-/// by carry its number in their names, so every one of them has to be written
-/// out here; a table with more columns than this reads the ones it has and
-/// says so, in the row's last field.
-const COLUMNS: usize = 32;
+/// How many columns of a table are read, which is the standard's own limit:
+/// a keyword is eight bytes, five of them spent on `TFORM`, so the number
+/// after it has three digits and 999 is as high as it goes. A `TFIELDS` that
+/// says more than that is a header nothing could describe.
+const COLUMNS: i128 = 999;
 
-/// What the columns of a row are called. A column's own name is its `TTYPEn`
-/// card, which is in the file rather than in the template, and a structure's
-/// field names are fixed when the template is built. See the module note.
-const COL_NAMES: [&str; COLUMNS] = [
-    "col1", "col2", "col3", "col4", "col5", "col6", "col7", "col8", "col9", "col10", "col11", "col12", "col13",
-    "col14", "col15", "col16", "col17", "col18", "col19", "col20", "col21", "col22", "col23", "col24", "col25",
-    "col26", "col27", "col28", "col29", "col30", "col31", "col32",
+/// How many axes a data unit may have, for the same reason: `NAXIS` spends
+/// five of a keyword's eight bytes and leaves three digits.
+const AXES: i128 = 999;
+
+/// The five-letter keywords a column or an axis carries its number in. Each
+/// of them takes a body of its own, chosen by the five bytes the keyword opens
+/// with rather than by the whole keyword, which is what lets a table have as
+/// many columns as the standard allows. See [`numbered_key`].
+const NUMBERED: &[(&str, fn() -> T)] = &[
+    // How many along an axis, and where a column of an ASCII table starts in
+    // a row: numbers like any other.
+    ("NAXIS", numeric_body),
+    ("TBCOL", numeric_body),
+    // What a column holds, which is not a number.
+    ("TFORM", tform_body),
+    // What the numbers in a column are worth, which the standard lets a
+    // writer put a decimal point in.
+    ("TSCAL", real_body),
+    ("TZERO", real_body),
 ];
 
 /// A keyword as it is written in a card: eight bytes, padded with spaces.
@@ -209,57 +245,55 @@ fn numbered_at(prefix: &str, n: E, field: &[&str]) -> E {
     E::tagged_by_expr("cards", &["keynum"], numbered_key(prefix, n), field)
 }
 
-/// The text of the quoted value of the card whose keyword is `name`.
-///
-/// A quoted FITS value is a list of parts, because a `''` inside one is a
-/// quote of the value rather than the end of it. A name with an escaped quote
-/// in it is not a thing anyone writes, so this reads the first part, which for
-/// every real card is the whole of the value.
-fn card_text(name: &str) -> E {
-    E::tagged_bytes("cards", &["key"], &keyword(name), &["body", "value", "parts", "0", "text"])
-}
-
 /// One card: its keyword, the `= ` that says it has a value, and the rest.
 ///
 /// The card is a window of exactly eighty bytes, so the value's search for a
 /// `/` stops at the end of the line rather than running into the next card.
 fn card() -> T {
-    let mut cases: Vec<(String, T)> = NUMERIC.iter().map(|k| ((*k).to_string(), numeric_body())).collect();
-    for k in REAL {
-        cases.push(((*k).to_string(), valued(real_value())));
-    }
-    cases.push(("CONTINUE".to_string(), continue_body()));
-    for n in 1..=COLUMNS {
-        // Where a column starts in a row of an ASCII table, which is a number
-        // like any other, and what type it holds, which is not.
-        cases.push((format!("TBCOL{n}"), numeric_body()));
-        cases.push((format!("TFORM{n}"), valued(tform_value())));
-        // What the numbers in a column are worth, which the standard lets a
-        // writer put a decimal point in.
-        cases.push((format!("TSCAL{n}"), valued(real_value())));
-        cases.push((format!("TZERO{n}"), valued(real_value())));
-    }
-    let body = T::Match { on: E::field("key"), cases: cases.into(), default: std::sync::Arc::new(text_body()) };
-    T::sized(
-        E::lit(CARD),
-        T::structure_named(
-            "Card",
-            "key",
-            "body",
-            vec![
-                // The keyword as one number, so that a lookup may work out the
-                // keyword it is after. It takes none of the card: the eight
-                // bytes it reads are the ones `key` reads. See [`numbered_key`].
-                ("keynum", T::computed(E::peek(64, Big))),
-                ("key", T::text(StrLen::Padded { size: E::lit(8), pad: b' ' }, Encoding::Ascii)),
-                // Not every card has one: `END` and the comment keywords
-                // leave these two bytes as part of the text.
-                ("body", body),
-            ],
-        )
-        .machinery(&["keynum"])
-        .counted_as("card"),
+    // A keyword that carries a number is told from the five letters it opens
+    // with, before the digits. Writing `TFORM1` through `TFORM999` out as
+    // cases is what fixed how many columns a table could have.
+    let by_prefix: Vec<(i128, T)> =
+        NUMBERED.iter().map(|(prefix, body)| (keynum(prefix) >> 24, card_of(body()))).collect();
+    T::sized(E::lit(CARD), T::switch(E::peek(64, Big).div(E::lit(1 << 24)), by_prefix, card_of(named_body())))
+}
+
+/// A card with this body: the keyword, the keyword as a number, and the rest.
+fn card_of(body: T) -> T {
+    T::structure_named(
+        "Card",
+        "key",
+        "body",
+        vec![
+            // The keyword as one number, so that a lookup may work out the
+            // keyword it is after. It takes none of the card: the eight
+            // bytes it reads are the ones `key` reads. See [`numbered_key`].
+            ("keynum", T::computed(E::peek(64, Big))),
+            ("key", T::text(StrLen::Padded { size: E::lit(8), pad: b' ' }, Encoding::Ascii)),
+            // Not every card has one: `END` and the comment keywords
+            // leave these two bytes as part of the text.
+            ("body", body),
+        ],
     )
+    .machinery(&["keynum"])
+    .counted_as("card")
+}
+
+/// The body of a card whose whole keyword the standard fixed, picked by that
+/// keyword. Everything else in a header is text.
+fn named_body() -> T {
+    let mut cases: Vec<(String, T)> = NUMERIC.iter().map(|k| ((*k).to_string(), numeric_body())).collect();
+    cases.extend(REAL.iter().map(|k| ((*k).to_string(), real_body())));
+    cases.push(("CONTINUE".to_string(), continue_body()));
+    T::Match { on: E::field("key"), cases: cases.into(), default: std::sync::Arc::new(text_body()) }
+}
+
+/// A card whose value is a `TFORMn`, and one whose value is a real.
+fn tform_body() -> T {
+    valued(tform_value())
+}
+fn real_body() -> T {
+    valued(real_value())
 }
 
 /// A card whose value is a number: the digits, read as one. The value is the
@@ -515,19 +549,20 @@ fn ascii_form() -> T {
     )
 }
 
-/// What the header says about each column of a table, read once for the whole
-/// data unit rather than once per cell.
+/// What the header says about each column of a table, on one row per column.
 ///
-/// A column is described by a handful of cards with its number in their names,
-/// and before this every cell of every row walked the header for each of them:
-/// a table of three thousand rows and twenty columns asked sixty thousand
-/// questions of forty cards. This asks them once a column, and a cell reads
-/// the answer out of this list by where it sits.
+/// A column is described by a handful of cards whose keywords carry its
+/// number, scattered through a header of any length in any order, and a reader
+/// asking why a column reads as it does had to find all five. This is those
+/// cards gathered into the shape the rows are read through.
 ///
-/// It covers no bytes. What it says is already in the file, a card at a time;
-/// this is those cards gathered into the shape the rows are read through, and
-/// a reader looking for why a column reads as it does can see the whole of the
-/// answer on one row rather than hunting the header for five keywords.
+/// It covers no bytes and nothing depends on it: the cells read their own
+/// cards. Having them read this instead was tried, and it is slower rather
+/// than faster, because the evaluator keeps what a node is and not what it
+/// reads as: a field worked out from an expression is worked out again every
+/// time it is asked, so a cell reading one pays for the walk it meant to save
+/// and for the walk to this list on top. So this is here for what it says to a
+/// reader, which is the whole of it.
 fn columns() -> T {
     T::array(column(), card_value("TFIELDS").at_most(E::lit(COLUMNS as i128)))
 }
@@ -543,34 +578,15 @@ fn columns() -> T {
 /// on disk, and stays editable as the integer it is.
 ///
 /// The one case where the standard means something a type can say outright is
-/// the unsigned convention: a column written as a signed integer with a zero
-/// point of exactly half its range, and no scaling, *is* an unsigned column,
-/// and an eight-bit column written unsigned with a zero point of -128 is a
-/// signed one. `unsigned` is the answer to that, and a column it holds for is
-/// read as the type the convention means rather than as the one the letter
-/// names on its own.
+/// the unsigned convention, and that is read in the cell rather than here: a
+/// column written as a signed integer with a zero point of exactly half its
+/// range, and no scaling, *is* an unsigned column, and an eight-bit column
+/// written unsigned with a zero point of -128 is a signed one. See
+/// [`binary_cell`].
 fn column() -> T {
     let n = E::Idx.add(E::lit(1));
     let form = |part: &str| numbered_at("TFORM", n.clone(), &["body", "value", "form", part]);
-    let real = |prefix: &str, part: &str| numbered_at(prefix, n.clone(), &["body", "value", "parts", part]);
     let written = |prefix: &str| numbered_at(prefix, n.clone(), &["body", "value", "text"]);
-    // A zero point the convention gives a meaning to, by the letter the column
-    // is written as: half the range of a signed type, or -128 for the one type
-    // FITS writes unsigned to begin with.
-    let want = |v: i128| T::computed(E::lit(v));
-    let zero_want = T::matches(
-        E::field("code"),
-        vec![("B", want(-128)), ("I", want(32768)), ("J", want(2_147_483_648)), ("K", want(9_223_372_036_854_775_808))],
-        want(0),
-    );
-    // Both worth-cards whole numbers and the scale exactly one: anything else
-    // is a scaling, and a scaling is not a type.
-    let whole = |prefix: &str| real(prefix, "frac").equals(E::lit(0));
-    let unsigned = whole("TSCAL")
-        .mul(whole("TZERO"))
-        .mul(real("TSCAL", "int").or(E::lit(1)).equals(E::lit(1)))
-        .mul(real("TZERO", "int").equals(E::field("zero_want")))
-        .mul(E::lit(1).sub(E::field("zero_want").equals(E::lit(0))));
     T::inline_structure(
         "Column",
         vec![
@@ -587,16 +603,9 @@ fn column() -> T {
             // What an ASCII table's column is: how wide, and where in the row.
             ("width", T::computed(form("width"))),
             ("start", T::computed(numbered_at("TBCOL", n.clone(), &["body", "value"]))),
-            ("zero_want", zero_want),
-            ("unsigned", T::computed(unsigned)),
         ],
     )
-    .machinery(&["elem_code", "width", "start", "zero_want", "unsigned"])
-}
-
-/// What column `n` of the table says about itself, from [`columns`].
-fn column_says(n: usize, field: &str) -> E {
-    E::elem_field("columns", E::lit(n as i128 - 1), &[field])
+    .machinery(&["elem_code", "width", "start"])
 }
 
 /// How wide one element of the data is, in bytes: `|BITPIX|/8`. A float image
@@ -606,14 +615,35 @@ fn element_bytes() -> E {
     E::lit(0).sub(bitpix.clone()).at_least(bitpix).div(E::lit(8))
 }
 
+/// How many along each axis, as a list of as many as `NAXIS` says there are.
+///
+/// A list rather than a run of fields, for the reason a row's cells are one:
+/// the keyword carries the number, so `NAXIS1` through `NAXIS9` written out
+/// here stopped at nine, and `NAXIS10` is a legal keyword. It covers no bytes.
+///
+/// A zero is read as a zero, which it was not before: a missing keyword and a
+/// keyword whose value is zero both answer 0, and every axis used to read a
+/// zero as a one. An axis genuinely declared `NAXIS3 = 0` says there is no
+/// data, and now the data unit is that long.
+///
+/// The first axis is the exception, and it is the one the standard makes an
+/// exception of. `NAXIS1 = 0` in a random-groups file is how the format says
+/// the group parameters are all there is, and the size it wants is
+/// `GCOUNT * (PCOUNT + NAXIS2 * ... * NAXISm)`, which is this product with
+/// that zero read as a one. So a zero on the first axis is a one and a zero
+/// anywhere else is a zero, which is the same arithmetic either way.
+fn axes() -> T {
+    let along = numbered_at("NAXIS", E::Idx.add(E::lit(1)), &["body", "value"]).or(E::Idx.equals(E::lit(0)));
+    T::array(T::computed(along), card_value("NAXIS").at_most(E::lit(AXES)))
+}
+
 /// How many elements the data holds: the axes multiplied together, plus the
 /// heap, times the number of groups. Nothing at all when `NAXIS` is zero,
 /// which is the header-only unit every file with extensions opens with.
 fn element_count() -> E {
-    let axes = (1..=9).fold(E::lit(1), |acc, n| acc.mul(card_value(&format!("NAXIS{n}")).or(E::lit(1))));
     let any = E::lit(0).less_than(card_value("NAXIS"));
     let groups = card_value("GCOUNT").or(E::lit(1));
-    axes.add(card_value("PCOUNT")).mul(groups).mul(any)
+    E::product_of("axes").add(card_value("PCOUNT")).mul(groups).mul(any)
 }
 
 /// The data, read as the type BITPIX names. The switch is over the whole
@@ -621,25 +651,31 @@ fn element_count() -> E {
 /// leaving the reader with `switch[]`.
 fn data_array() -> T {
     let of = |ty: T| T::array(ty, placed_count());
-    // The unsigned convention, for an image: `BZERO` exactly half the range of
-    // the type `BITPIX` names and `BSCALE` one means the pixels are unsigned,
-    // and a `BZERO` of -128 on the one type FITS writes unsigned means signed.
-    // See [`column`] for the same reading of a table's columns.
+    // What the header says a pixel is worth: `BZERO + BSCALE * stored`, the
+    // same reading a table's columns get from `TZEROn` and `TSCALn`. The
+    // commonest case is the unsigned convention, an image written signed with
+    // a zero point of half its range. See [`worth_of`].
+    //
+    // The test sits outside the array, so it is made once for the whole image
+    // rather than once a pixel; the sum inside it is made per pixel, and it
+    // walks the header for both cards, so a scaled image of a million pixels
+    // is a million walks. Only an image that says it is scaled pays it.
     let real = |name: &str, part: &str| card_at(name, &["body", "value", "parts", part]);
-    let exact = real("BSCALE", "frac")
-        .equals(E::lit(0))
-        .mul(real("BZERO", "frac").equals(E::lit(0)))
-        .mul(real("BSCALE", "int").or(E::lit(1)).equals(E::lit(1)));
-    let swapped = |want: i128, ty: T, plain: T| {
-        T::switch(exact.clone().mul(real("BZERO", "int").equals(E::lit(want))), vec![(1, of(ty))], of(plain))
+    let scale = real("BSCALE", "int").or(E::lit(1));
+    let scaled = |ty: T| {
+        let plain = of(ty.clone());
+        let with = T::array(worth_of(ty, scale.clone(), real("BZERO", "int")), placed_count());
+        let whole = T::switch(real("BSCALE", "frac"), vec![(0, with)], plain.clone());
+        let both = T::switch(real("BZERO", "frac"), vec![(0, whole)], plain.clone());
+        T::switch(real("BZERO", "int").or(scale.clone().sub(E::lit(1))), vec![(0, plain)], both)
     };
     T::switch(
         card_value("BITPIX"),
         vec![
-            (8, swapped(-128, T::Int { bits: 8, endian: Big }, T::UInt { bits: 8, endian: Big })),
-            (16, swapped(32768, T::UInt { bits: 16, endian: Big }, T::Int { bits: 16, endian: Big })),
-            (32, swapped(2_147_483_648, T::UInt { bits: 32, endian: Big }, T::Int { bits: 32, endian: Big })),
-            (64, swapped(9_223_372_036_854_775_808, T::UInt { bits: 64, endian: Big }, T::Int { bits: 64, endian: Big })),
+            (8, scaled(T::UInt { bits: 8, endian: Big })),
+            (16, scaled(T::Int { bits: 16, endian: Big })),
+            (32, scaled(T::Int { bits: 32, endian: Big })),
+            (64, scaled(T::Int { bits: 64, endian: Big })),
             (-32, of(T::F32(Big))),
             (-64, of(T::F64(Big))),
         ],
@@ -698,7 +734,17 @@ fn table(row: T) -> T {
 /// and a writer is free to leave room, or to have two descriptors share one
 /// array, which reads as two elements over the same bytes.
 fn heap() -> T {
-    let from = vec![Step::field("rows"), Step::each(), Step::fields(&COL_NAMES), Step::each()];
+    // Into every row, every cell of it, and every descriptor in a cell that
+    // holds any. A cell that is not a variable-length column has no
+    // `descriptors` field, and the walk goes no further down that way.
+    let from = vec![
+        Step::field("rows"),
+        Step::each(),
+        Step::field("cells"),
+        Step::each(),
+        Step::field("descriptors"),
+        Step::each(),
+    ];
     let starts = card_value("THEAP").or(card_value("NAXIS1").mul(card_value("NAXIS2")));
     T::gather(from, E::field("offset"), Anchor::Window, starts, heap_array())
 }
@@ -732,72 +778,108 @@ fn heap_array() -> T {
     )
 }
 
-/// One row of a binary table: every column laid out one after another, each of
-/// them an array of as many values as its `TFORMn` says.
+/// One row of a binary table: a cell per column, laid out one after another,
+/// each of them an array of as many values as its `TFORMn` says.
+///
+/// A list rather than a field per column. The keywords a column is described
+/// by carry its number in their names, and a structure's field names are
+/// fixed when the template is built, so a field per column meant writing
+/// `col1` through `col32` out and stopping there. A list has no such limit:
+/// the cell knows which column it is from where it sits, and works its
+/// keywords out from that. See [`numbered_key`] and
+/// [`crate::template::Field::elem_name_from`].
 fn binary_row() -> T {
-    let mut fields: Vec<(&str, T)> = Vec::new();
-    for (i, name) in COL_NAMES.iter().enumerate() {
-        fields.push((name, T::present_if(has_column(i + 1), binary_column(i + 1))));
-    }
-    // A table with more columns than there are names here: the rest of the row
-    // is bytes, and the field says why.
-    fields.push(("columns_not_read", T::present_if(E::lit(COLUMNS as i128).less_than(card_value("TFIELDS")), T::bytes(E::Remaining))));
-    named_columns(T::structure("Row", fields))
+    row_of(binary_cell())
 }
 
-/// Give every column the name its `TTYPEn` card holds. The declared name stays
-/// `col3`, which is what a path and an expression are written with; the row
-/// reads `col3 flux`. See [`crate::template::Field::name_from`].
-fn named_columns(row: T) -> T {
-    (1..=COLUMNS).fold(row, |row, n| row.field_named_from(COL_NAMES[n - 1], card_text(&format!("TTYPE{n}"))))
+/// A row as a list of cells, each named by its `TTYPEn` card. The index stays
+/// the path name, so `rows[0].cells[2]` is what an expression and an edit are
+/// written with, and the row reads `[2] flux`.
+fn row_of(cell: T) -> T {
+    let name = numbered_at("TTYPE", column_number(), &["body", "value", "parts", "0", "text"]);
+    T::structure("Row", vec![("cells", T::array(cell, table_columns()))]).field_elem_named_from("cells", name)
 }
 
-/// One when the table has an `n`th column.
-fn has_column(n: usize) -> E {
-    E::lit(n as i128 - 1).less_than(card_value("TFIELDS"))
+/// Which column a cell is: where it sits in the row, counted from one, since
+/// that is how the keywords that describe it are numbered.
+fn column_number() -> E {
+    E::Idx.add(E::lit(1))
 }
 
-/// One column of a binary table, as the type its `TFORMn` names and as many of
-/// them as its repeat count says. A count is one when none is written.
+/// How many columns the table has, and never more than a keyword can number.
+fn table_columns() -> E {
+    card_value("TFIELDS").at_most(E::lit(COLUMNS))
+}
+
+/// One cell of a binary table's row, as the type its column's `TFORMn` names
+/// and as many of them as its repeat count says. A count is one when none is
+/// written.
 ///
 /// The type is picked by the letter as a letter. `TFORMn` is a value written in
 /// text and found by keyword, and a `Match` reads its `on` as text from
 /// wherever an expression reaches it, so nothing here has to turn `J` into 74
 /// and back.
-fn binary_column(n: usize) -> T {
-    let code = column_says(n, "code");
-    let r = column_says(n, "repeat");
+///
+/// The unsigned convention is read as a run of switches rather than as one
+/// test, because a switch reads its subject once and an equality reads it
+/// twice, and every one of these subjects is a walk of the header. A column
+/// with no `TZEROn` card pays for one walk and falls straight through.
+fn binary_cell() -> T {
+    let n = column_number();
+    let form = |part: &str| numbered_at("TFORM", n.clone(), &["body", "value", "form", part]);
+    let real = |prefix: &str, part: &str| numbered_at(prefix, n.clone(), &["body", "value", "parts", part]);
+    let r = form("repeat").or(E::lit(1));
     // Never more than the row has room for: a row whose columns do not add up
     // to `NAXIS1` shows the ones that fit rather than failing.
     let of = |ty: T, width: i128| T::array(ty, r.clone().at_most(E::Remaining.div(E::lit(width))));
     let pair = |name: &str, ty: T| T::inline_structure(name, vec![("re", ty.clone()), ("im", ty)]);
-    // A column the unsigned convention gives another type to is read as that
-    // type: the bytes are the same bytes and the numbers in them are what the
-    // header said they were. See [`column`].
-    let swapped = |want: T, plain: T, width: i128| {
-        T::switch(column_says(n, "unsigned"), vec![(1, of(want, width))], of(plain, width))
-    };
-    // A descriptor also says what its heap array holds, read from this
-    // column's `TFORMn`. The array is in the heap, which is not inside the
-    // column and cannot find the card for it: the letter is asked here, where
-    // the column number is known, and the heap asks the descriptor.
-    let elem_code = T::computed_text(column_says(n, "elem_code"));
-    let descriptor = |name: &str, ty: T| {
-        T::inline_structure(name, vec![("count", ty.clone()), ("offset", ty), ("elem_code", elem_code.clone())])
+    // A column whose cards say its numbers are worth something else. The
+    // integer on disk stays the integer on disk and stays editable as one;
+    // what the header says it means sits beside it. See [`worth_of`].
+    let scale = real("TSCAL", "int").or(E::lit(1));
+    let scaled = |ty: T, width: i128| {
+        let plain = of(ty.clone(), width);
+        // What the cards say, read on the cell rather than on each value in
+        // it: a value sits in a list of its own, and `Idx` answers for the
+        // nearest list around the field asking, which down there is the run
+        // of values and not the run of cells. The cell knows which column it
+        // is; the values reach its answer by looking outwards.
+        let values = T::array(
+            worth_of(ty, E::field("scale"), E::field("zero")),
+            r.clone().at_most(E::Remaining.div(E::lit(width))),
+        );
+        let with = T::structure(
+            "Scaled column",
+            vec![
+                ("scale", T::computed(scale.clone())),
+                ("zero", T::computed(real("TZERO", "int"))),
+                ("values", values),
+            ],
+        )
+        .machinery(&["scale", "zero"])
+        .payload(&["values"]);
+        // Both cards whole numbers, or this cannot say what a value means.
+        let whole = T::switch(real("TSCAL", "frac"), vec![(0, with)], plain.clone());
+        let both = T::switch(real("TZERO", "frac"), vec![(0, whole)], plain.clone());
+        // Nothing said, or nothing that changes a value: the plain type. The
+        // scale is only looked up when there is no zero point, since `Or`
+        // stops at the first answer and most columns have neither card.
+        let said = real("TZERO", "int").or(scale.clone().sub(E::lit(1)));
+        T::switch(said, vec![(0, plain)], both)
     };
     let text = T::text(StrLen::Fixed(r.clone().at_most(E::Remaining)), Encoding::Ascii);
     T::matches(
-        code,
+        form("code"),
         vec![
             // A logical is written as the letter `T` or `F`, or as a zero byte
             // for a value nobody set.
             ("L", text.clone()),
             // A bit column is that many bits, rounded up to whole bytes.
             ("X", T::bytes(r.clone().add(E::lit(7)).div(E::lit(8)).at_most(E::Remaining))),
-            ("B", swapped(T::Int { bits: 8, endian: Big }, T::UInt { bits: 8, endian: Big }, 1)),
-            ("I", swapped(T::UInt { bits: 16, endian: Big }, T::Int { bits: 16, endian: Big }, 2)),
-            ("J", swapped(T::UInt { bits: 32, endian: Big }, T::Int { bits: 32, endian: Big }, 4)),
-            ("K", swapped(T::UInt { bits: 64, endian: Big }, T::Int { bits: 64, endian: Big }, 8)),
+            ("B", scaled(T::UInt { bits: 8, endian: Big }, 1)),
+            ("I", scaled(T::Int { bits: 16, endian: Big }, 2)),
+            ("J", scaled(T::Int { bits: 32, endian: Big }, 4)),
+            ("K", scaled(T::Int { bits: 64, endian: Big }, 8)),
             ("A", text),
             ("E", of(T::F32(Big), 4)),
             ("D", of(T::F64(Big), 8)),
@@ -805,8 +887,8 @@ fn binary_column(n: usize) -> T {
             ("M", of(pair("Complex", T::F64(Big)), 16)),
             // A variable-length array is written as how many there are and
             // where in the heap they start.
-            ("P", of(descriptor("Descriptor", T::Int { bits: 32, endian: Big }), 8)),
-            ("Q", of(descriptor("Descriptor", T::Int { bits: 64, endian: Big }), 16)),
+            ("P", descriptors(T::Int { bits: 32, endian: Big }, 8, r.clone())),
+            ("Q", descriptors(T::Int { bits: 64, endian: Big }, 16, r)),
         ],
         // A type letter nobody defined, or a `TFORMn` written in a shape this
         // could not read: the row still has its width, and this column covers
@@ -815,20 +897,62 @@ fn binary_column(n: usize) -> T {
     )
 }
 
+/// One number of a column the header says is worth something else: the integer
+/// on disk, and beside it what `TSCALn` and `TZEROn` say it means.
+///
+/// `worth = TZEROn + TSCALn * stored`, which is what the standard says and
+/// what a reader is after. It is a field of no bits: the bytes are the stored
+/// integer's, it is those bytes that an edit writes, and this is a reading of
+/// them, the way a Steim word's differences hang off the word in `mseed`.
+///
+/// The commonest case by far is the unsigned convention, a column written
+/// signed with a zero point of half its range. That is a bias and not a
+/// reinterpretation: 65535 is written as the signed 32767, whose bytes read as
+/// a 16-bit unsigned number are 32767 and not 65535, so reading the column as
+/// unsigned would answer with a number nobody wrote. The sum is the reading,
+/// and the sum is exact whenever both cards are whole numbers.
+fn worth_of(stored: T, scale: E, zero: E) -> T {
+    let worth = E::field("stored").mul(scale).add(zero);
+    T::inline_structure("Scaled", vec![("stored", stored), ("worth", T::computed(worth))]).payload(&["stored"])
+}
+
+/// The cell of a variable-length column: the descriptors in it, and the letter
+/// that says what the heap arrays they point at hold.
+///
+/// The letter is a card of this column's, the `B` of `1PB`, and it is read
+/// here rather than in the heap because the heap has no way back to the card:
+/// an array in it is placed by a descriptor, and the array asks that
+/// descriptor with [`crate::template::Expr::Placer`]. It sits on the cell
+/// rather than on each descriptor because a cell knows which column it is and
+/// a descriptor inside one does not: [`crate::template::Expr::Idx`] answers
+/// for the nearest list around the field asking, which for a descriptor is the
+/// run of descriptors beside it. The descriptors reach it by looking outwards,
+/// the way any field reaches one declared around it.
+fn descriptors(ty: T, width: i128, repeat: E) -> T {
+    let elem_code = numbered_at("TFORM", column_number(), &["body", "value", "form", "elem_code"]);
+    let one = T::inline_structure("Descriptor", vec![("count", ty.clone()), ("offset", ty)]);
+    T::structure(
+        "Descriptors",
+        vec![
+            ("elem_code", T::computed_text(elem_code)),
+            ("descriptors", T::array(one, repeat.at_most(E::Remaining.div(E::lit(width))))),
+        ],
+    )
+    .machinery(&["elem_code"])
+    .payload(&["descriptors"])
+}
+
 /// One row of an ASCII table: its columns are text, each at the column
 /// `TBCOLn` gives and as wide as `TFORMn` says. They are placed rather than
 /// laid out one after another, since the standard lets them overlap and lets
 /// gaps sit between them.
 fn ascii_row() -> T {
-    let mut fields: Vec<(&str, T)> = Vec::new();
-    for (i, name) in COL_NAMES.iter().enumerate() {
-        let n = i + 1;
-        let width = column_says(n, "width").at_least(E::lit(1)).at_most(card_value("NAXIS1").at_least(E::lit(1)));
-        let at = column_says(n, "start").sub(E::lit(1)).at_least(E::lit(0));
-        let cell = T::at_in_window(at, T::text(StrLen::Fixed(width), Encoding::Ascii));
-        fields.push((name, T::present_if(has_column(n), cell)));
-    }
-    named_columns(T::structure("Row", fields))
+    let n = column_number();
+    let width = numbered_at("TFORM", n.clone(), &["body", "value", "form", "width"])
+        .at_least(E::lit(1))
+        .at_most(card_value("NAXIS1").at_least(E::lit(1)));
+    let at = numbered_at("TBCOL", n, &["body", "value"]).sub(E::lit(1)).at_least(E::lit(0));
+    row_of(T::at_in_window(at, T::text(StrLen::Fixed(width), Encoding::Ascii)))
 }
 
 /// How many elements to place: what the header says, and never more than the
@@ -846,6 +970,9 @@ fn hdu() -> T {
         vec![
             ("cards", T::repeat(card(), Until::FieldBytes { field: "key".into(), bytes: keyword("END") })),
             ("header_pad", T::bytes(E::size_of("cards").pad_to(BLOCK))),
+            // How long the data is along each axis, which is what sizes it.
+            // No bytes of its own: the cards it reads are where these live.
+            ("axes", axes()),
             (
                 "data",
                 T::sized(
@@ -948,12 +1075,12 @@ mod tests {
     #[test]
     fn the_data_is_sized_and_typed_by_cards_found_by_keyword() {
         let (d, mut ev) = eval(image());
-        let data = ev.node(&d, &[0, 0, 2]).unwrap();
+        let data = ev.node(&d, &[0, 0, 3]).unwrap();
         assert_eq!(data.size_bits, 12 * 8);
         assert_eq!((data.type_name.as_str(), data.child_count), ("i16 be[]", 6));
-        assert_eq!(ev.node(&d, &[0, 0, 2, 1]).unwrap().value, Value::Int(-2));
+        assert_eq!(ev.node(&d, &[0, 0, 3, 1]).unwrap().value, Value::Int(-2));
         // And the data is padded to a block of its own.
-        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().size_bits, (2880 - 12) * 8);
+        assert_eq!(ev.node(&d, &[0, 0, 4]).unwrap().size_bits, (2880 - 12) * 8);
     }
 
     #[test]
@@ -971,16 +1098,16 @@ mod tests {
         }
         b.extend_from_slice(&padded(data));
         let (d, mut ev) = eval(b);
-        let array = ev.node(&d, &[0, 0, 2]).unwrap();
+        let array = ev.node(&d, &[0, 0, 3]).unwrap();
         assert_eq!((array.type_name.as_str(), array.child_count), ("f32 be[]", 2));
-        assert_eq!(ev.node(&d, &[0, 0, 2, 0]).unwrap().value, Value::Float(1.5));
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0]).unwrap().value, Value::Float(1.5));
     }
 
     #[test]
     fn a_header_only_unit_has_no_data_at_all() {
         let b = header(&["SIMPLE  =                    T", "BITPIX  =                    8", "NAXIS   =                    0", "EXTEND  =                    T", "END"]);
         let (d, mut ev) = eval(b);
-        assert_eq!(ev.node(&d, &[0, 0, 2]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().size_bits, 0);
         // `EXTEND` says T, which is a logical and not a number: reading it as
         // one would fail the card, so it stays text.
         assert_eq!(text(&ev.node(&d, &[0, 0, 0, 3, 2, 1]).unwrap().value), "T");
@@ -1017,7 +1144,7 @@ mod tests {
         let hdus = ev.node(&d, &[0]).unwrap();
         assert_eq!(hdus.child_count, 2);
         // Twelve bytes of rows and six of heap.
-        let data = ev.node(&d, &[0, 1, 2]).unwrap();
+        let data = ev.node(&d, &[0, 1, 3]).unwrap();
         assert_eq!(data.size_bits, 18 * 8);
         // The extension starts on the block after the primary header.
         assert_eq!(ev.node(&d, &[0, 1]).unwrap().offset_bits, 2880 * 8);
@@ -1078,30 +1205,30 @@ mod tests {
         }
         b.extend_from_slice(&padded(data));
         let (d, mut ev) = eval(b);
-        let rows = ev.node(&d, &[0, 1, 2, 1]).unwrap();
+        let rows = ev.node(&d, &[0, 1, 3, 1]).unwrap();
         assert_eq!(rows.child_count, 2);
         // Row 1, column 1: one 32-bit integer.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 1, 0, 0]).unwrap().value, Value::Int(2));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 1, 0, 0, 0]).unwrap().value, Value::Int(2));
         // Column 2 is two floats, and the second of them is the second value.
-        let flux = ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap();
+        let flux = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
         assert_eq!((flux.type_name.as_str(), flux.child_count), ("f32 be[]", 2));
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 1, 1]).unwrap().value, Value::Float(-0.25));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 1, 1]).unwrap().value, Value::Float(-0.25));
         // Column 3 is five characters, read as one run of text.
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 1, 0, 2]).unwrap().value), "abcde");
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 1, 0, 0, 2]).unwrap().value), "abcde");
         // A `TFORMn` with no repeat count means one.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 3, 0]).unwrap().value, Value::Float(2.5));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 3, 0]).unwrap().value, Value::Float(2.5));
         // A row is as wide as `NAXIS1` says.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0]).unwrap().size_bits, 25 * 8);
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0]).unwrap().size_bits, 25 * 8);
         // Every column reads under the name its `TTYPEn` card gives it, with
-        // the declared name kept in front: that is the one a path is written
-        // with, and it does not move when the header is edited.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap().name, "col1 counts");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap().name, "col2 flux");
-        // A column with no `TTYPEn` keeps the name the template gave it.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 3]).unwrap().name, "col4");
+        // its place in the row kept in front: that is the one a path is
+        // written with, and it does not move when the header is edited.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().name, "[0] counts");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap().name, "[1] flux");
+        // A column with no `TTYPEn` keeps the bare index.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 3]).unwrap().name, "[3]");
         // And the row says which card the name came from.
         let seen: Vec<_> =
-            ev.origins(&d, &[0, 1, 2, 1, 0, 1]).unwrap().into_iter().map(|o| (o.role, o.value)).collect();
+            ev.origins(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap().into_iter().map(|o| (o.role, o.value)).collect();
         assert!(seen.iter().any(|(r, v)| *r == Role::Name && v.trim() == "flux"), "{seen:?}");
         // The type letter is a letter. It used to read as 74, the number `J`
         // is in ASCII, because the type was picked by a number.
@@ -1120,10 +1247,10 @@ mod tests {
         b.extend_from_slice(&table_header(&["TFIELDS =                    1", "TFORM1  = '1I      '"], 3, 2, 5));
         b.extend_from_slice(&padded(vec![0u8; 3 * 2 + 5]));
         let (d, mut ev) = eval(b);
-        let heap = ev.node(&d, &[0, 1, 2, 2]).unwrap();
+        let heap = ev.node(&d, &[0, 1, 3, 2]).unwrap();
         assert_eq!(heap.size_bits, 5 * 8);
-        // The second column is not there, and covers no bytes.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap().size_bits, 0);
+        // The row has one cell, since the header declared one column.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0]).unwrap().child_count, 1);
     }
 
     #[test]
@@ -1136,21 +1263,21 @@ mod tests {
         data.extend_from_slice(&[9u8; 12]);
         b.extend_from_slice(&padded(data));
         let (d, mut ev) = eval(b);
-        let desc = ev.node(&d, &[0, 1, 2, 1, 0, 0, 0]).unwrap();
+        let desc = ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 1, 0]).unwrap();
         assert_eq!(desc.type_name, "Descriptor");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0, 0, 0]).unwrap().value, Value::Int(3));
-        // The letter after the `P` says what the array holds, and the
-        // descriptor carries it so the heap can ask.
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0, 0, 2]).unwrap().value, Value::Str("J".into()));
-        assert_eq!(ev.node(&d, &[0, 1, 2, 2]).unwrap().size_bits, 12 * 8);
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 1, 0, 0]).unwrap().value, Value::Int(3));
+        // The letter after the `P` says what the arrays hold, and the cell
+        // carries it so the heap can ask the descriptor that placed one.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 0]).unwrap().value, Value::Str("J".into()));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2]).unwrap().size_bits, 12 * 8);
         // And the heap is that array: three 32-bit integers where the
         // descriptor pointed, which is the front of the heap.
-        let heap = ev.node(&d, &[0, 1, 2, 2]).unwrap();
+        let heap = ev.node(&d, &[0, 1, 3, 2]).unwrap();
         assert_eq!(heap.child_count, 1);
-        let array = ev.node(&d, &[0, 1, 2, 2, 0]).unwrap();
+        let array = ev.node(&d, &[0, 1, 3, 2, 0]).unwrap();
         assert_eq!((array.type_name.as_str(), array.child_count), ("i32 be[]", 3));
         assert_eq!((array.offset_bits, array.size_bits), (heap.offset_bits, 12 * 8));
-        assert_eq!(ev.node(&d, &[0, 1, 2, 2, 0, 2]).unwrap().value, Value::Int(0x0909_0909));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2, 0, 2]).unwrap().value, Value::Int(0x0909_0909));
     }
 
     /// A table of `rows` rows of the columns `forms` names, whose cells are
@@ -1179,14 +1306,14 @@ mod tests {
     fn an_empty_cell_covers_no_heap() {
         let b = heap_table(&["1PB"], &[&[(0, 0)], &[(2, 0)]], &[5, 6]);
         let (d, mut ev) = eval(b);
-        let heap = [0, 1, 2, 2];
+        let heap = [0, 1, 3, 2];
         assert_eq!(ev.node(&d, &heap).unwrap().child_count, 2);
         // The first row's array is there, and has nothing in it.
-        let empty = ev.node(&d, &[0, 1, 2, 2, 0]).unwrap();
+        let empty = ev.node(&d, &[0, 1, 3, 2, 0]).unwrap();
         assert_eq!((empty.child_count, empty.size_bits), (0, 0));
-        let full = ev.node(&d, &[0, 1, 2, 2, 1]).unwrap();
+        let full = ev.node(&d, &[0, 1, 3, 2, 1]).unwrap();
         assert_eq!((full.child_count, full.size_bits), (2, 16));
-        assert_eq!(ev.node(&d, &[0, 1, 2, 2, 1, 1]).unwrap().value, Value::UInt(6));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2, 1, 1]).unwrap().value, Value::UInt(6));
     }
 
     #[test]
@@ -1195,17 +1322,17 @@ mod tests {
         // second, one after the other in the heap.
         let b = heap_table(&["1PB", "1PI"], &[&[(3, 0), (2, 3)]], &[1, 2, 3, 0x12, 0x34, 0xff, 0xfe]);
         let (d, mut ev) = eval(b);
-        assert_eq!(ev.node(&d, &[0, 1, 2, 2]).unwrap().child_count, 2);
-        let bytes = ev.node(&d, &[0, 1, 2, 2, 0]).unwrap();
-        let words = ev.node(&d, &[0, 1, 2, 2, 1]).unwrap();
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2]).unwrap().child_count, 2);
+        let bytes = ev.node(&d, &[0, 1, 3, 2, 0]).unwrap();
+        let words = ev.node(&d, &[0, 1, 3, 2, 1]).unwrap();
         assert_eq!((bytes.type_name.as_str(), bytes.child_count), ("u8[]", 3));
         assert_eq!((words.type_name.as_str(), words.child_count), ("i16 be[]", 2));
         assert_eq!(words.offset_bits, bytes.offset_bits + 3 * 8);
-        assert_eq!(ev.node(&d, &[0, 1, 2, 2, 1, 1]).unwrap().value, Value::Int(-2));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 2, 1, 1]).unwrap().value, Value::Int(-2));
         // Each says which cell put it there: the second column of the only row.
-        let placed = ev.origins(&d, &[0, 1, 2, 2, 1]).unwrap();
-        assert_eq!(placed[0].label, "rows[0].col2[0]");
-        assert_eq!(placed[0].path, vec![0, 1, 2, 1, 0, 1, 0]);
+        let placed = ev.origins(&d, &[0, 1, 3, 2, 1]).unwrap();
+        assert_eq!(placed[0].label, "rows[0].cells[1].descriptors[0]");
+        assert_eq!(placed[0].path, vec![0, 1, 3, 1, 0, 0, 1, 1, 0]);
     }
 
     #[test]
@@ -1214,7 +1341,7 @@ mod tests {
         // after a gap, and leave the end over.
         let b = heap_table(&["1PB"], &[&[(3, 0)], &[(2, 6)]], &[1, 2, 3, 0, 0, 0, 7, 8, 0, 0]);
         let (d, mut ev) = eval(b);
-        let heap = ev.node(&d, &[0, 1, 2, 2]).unwrap();
+        let heap = ev.node(&d, &[0, 1, 3, 2]).unwrap();
         let start = heap.offset_bits;
         let spans = ev.spans(&d, start, start + heap.size_bits, 100).unwrap();
         // A short array is a row per value, as a short run always is, so what
@@ -1225,8 +1352,8 @@ mod tests {
         let covered: Vec<u64> = spans.iter().filter(|s| !s.gap).map(|s| (s.offset_bits - start) / 8).collect();
         assert_eq!(covered, vec![0, 1, 2, 6, 7]);
         // And the cursor in a gap stands on the heap itself.
-        assert_eq!(ev.locate(&d, start + 4 * 8).unwrap(), vec![0, 1, 2, 2]);
-        assert_eq!(ev.locate(&d, start + 7 * 8).unwrap(), vec![0, 1, 2, 2, 1, 1]);
+        assert_eq!(ev.locate(&d, start + 4 * 8).unwrap(), vec![0, 1, 3, 2]);
+        assert_eq!(ev.locate(&d, start + 7 * 8).unwrap(), vec![0, 1, 3, 2, 1, 1]);
     }
 
     /// A binary table may leave the repeat count out of a `TFORMn`, which is
@@ -1239,9 +1366,9 @@ mod tests {
         b.extend_from_slice(&table_header(&cards, 1, 6, 0));
         b.extend_from_slice(&padded(vec![0, 1, 0, 2, 0, 3]));
         let (d, mut ev) = eval(b);
-        let one = ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap();
+        let one = ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap();
         assert_eq!((one.type_name.as_str(), one.child_count, one.size_bits), ("i16 be[]", 1, 16));
-        let two = ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap();
+        let two = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
         assert_eq!((two.type_name.as_str(), two.child_count, two.size_bits), ("i16 be[]", 2, 32));
     }
 
@@ -1271,6 +1398,90 @@ mod tests {
         assert_eq!(comment, "/ and the comment is on the last one");
     }
 
+    /// An axis past the ninth is legal, and the axes are a list now, so it is
+    /// read. Ten axes of two are 1024 elements.
+    #[test]
+    fn a_tenth_axis_is_read_like_the_nine_before_it() {
+        let mut cards: Vec<String> = vec![
+            "SIMPLE  =                    T".into(),
+            "BITPIX  =                    8".into(),
+            "NAXIS   =                   10".into(),
+        ];
+        for n in 1..=10 {
+            cards.push(format!("{:<8}=                    2", format!("NAXIS{n}")));
+        }
+        cards.push("END".into());
+        let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+        let mut b = header(&refs);
+        b.extend_from_slice(&padded(vec![7u8; 1024]));
+        let (d, mut ev) = eval(b);
+        let axes = ev.node(&d, &[0, 0, 2]).unwrap();
+        assert_eq!(axes.child_count, 10);
+        let data = ev.node(&d, &[0, 0, 3]).unwrap();
+        assert_eq!((data.size_bits, data.child_count), (1024 * 8, 1024));
+    }
+
+    /// An axis declared zero says there is no data, and is read as saying it.
+    /// The first axis is the exception the standard makes: `NAXIS1 = 0` is how
+    /// a random-groups file says the group parameters are all there is.
+    #[test]
+    fn an_axis_of_zero_is_no_data_unless_it_is_the_first_one() {
+        let unit = |axes: &[(&str, i64)], pcount: i64, gcount: i64, bytes: usize| {
+            let mut cards: Vec<String> = vec![
+                "SIMPLE  =                    T".into(),
+                "BITPIX  =                    8".into(),
+                format!("NAXIS   = {:20}", axes.len()),
+            ];
+            cards.extend(axes.iter().map(|(k, v)| format!("{k:<8}= {v:20}")));
+            cards.push(format!("PCOUNT  = {pcount:20}"));
+            cards.push(format!("GCOUNT  = {gcount:20}"));
+            cards.push("END".into());
+            let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+            let mut b = header(&refs);
+            b.extend_from_slice(&padded(vec![7u8; bytes]));
+            b
+        };
+        // A middle axis of zero: no elements, and the data unit is empty.
+        let (d, mut ev) = eval(unit(&[("NAXIS1", 4), ("NAXIS2", 0), ("NAXIS3", 5)], 0, 1, 0));
+        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().size_bits, 0);
+        // Random groups: `NAXIS1 = 0`, and the size is the group parameters
+        // and the group data, once per group.
+        let (d, mut ev) = eval(unit(&[("NAXIS1", 0), ("NAXIS2", 3)], 2, 4, 20));
+        let data = ev.node(&d, &[0, 0, 3]).unwrap();
+        assert_eq!((data.size_bits, data.child_count), (20 * 8, 20));
+    }
+
+    /// A row is a list of cells rather than a field per column, so a table may
+    /// have as many columns as the standard allows rather than as many as
+    /// there were names written out here. Forty is past the old cap of 32.
+    #[test]
+    fn a_table_of_more_columns_than_a_name_was_written_for_reads_all_of_them() {
+        let columns = 40usize;
+        let mut cards = vec![format!("TFIELDS = {columns:20}")];
+        for n in 1..=columns {
+            cards.push(format!("{:<8}= '1J      '", format!("TFORM{n}")));
+            cards.push(format!("{:<8}= 'c{n}'", format!("TTYPE{n}")));
+        }
+        let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+        let mut b = primary();
+        b.extend_from_slice(&table_header(&refs, 1, columns * 4, 0));
+        let mut data = Vec::new();
+        for n in 1..=columns {
+            data.extend_from_slice(&(n as i32).to_be_bytes());
+        }
+        b.extend_from_slice(&padded(data));
+        let (d, mut ev) = eval(b);
+        let cells = ev.node(&d, &[0, 1, 3, 1, 0, 0]).unwrap();
+        assert_eq!(cells.child_count, columns as u64);
+        // The last column, which nothing before this could name.
+        let last = ev.node(&d, &[0, 1, 3, 1, 0, 0, columns - 1]).unwrap();
+        assert_eq!(last.type_name, "i32 be[]");
+        assert_eq!(last.name, "[39] c40");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, columns - 1, 0]).unwrap().value, Value::Int(columns as i128));
+        // And the row is still exactly as wide as `NAXIS1` said.
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0]).unwrap().size_bits, (columns * 4 * 8) as u64);
+    }
+
     /// A column's keywords are worked out where they are asked rather than
     /// written out here, so a column past the ninth is found by the same
     /// arithmetic: `TZERO12` is a number this builds, not a name in the
@@ -1287,16 +1498,16 @@ mod tests {
         b.extend_from_slice(&table_header(&refs, 1, 24, 0));
         b.extend_from_slice(&padded(vec![0xff; 24]));
         let (d, mut ev) = eval(b);
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 11]).unwrap().type_name, "u16 be[]");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 10]).unwrap().type_name, "i16 be[]");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap().type_name, "i16 be[]");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 11]).unwrap().type_name, "Scaled column");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 10]).unwrap().type_name, "i16 be[]");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "i16 be[]");
     }
 
-    /// A column of signed 16-bit integers with a zero point of exactly 32768
-    /// is an unsigned 16-bit column: that is what the convention means, so
-    /// that is what it reads as. The bytes are the bytes either way.
+    /// A column with a zero point reads as the integer on disk and what that
+    /// integer is worth. The unsigned convention is the common case: 65535 is
+    /// written as the signed 32767, and 32767 is what is on disk.
     #[test]
-    fn a_zero_point_of_half_the_range_reads_the_column_as_unsigned() {
+    fn a_zero_point_says_what_the_integer_on_disk_is_worth() {
         let cards = [
             "TFIELDS =                    2",
             "TFORM1  = '1I      '",
@@ -1306,27 +1517,29 @@ mod tests {
         ];
         let mut b = primary();
         b.extend_from_slice(&table_header(&cards, 1, 4, 0));
-        // 0xffff: 65535 read as the unsigned column it is, -1 read as the
-        // signed one the letter alone would name.
+        // 0xffff is -1 either way; the first column says it means 32767.
         b.extend_from_slice(&padded(vec![0xff, 0xff, 0xff, 0xff]));
         let (d, mut ev) = eval(b);
-        let unsigned = ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap();
-        assert_eq!(unsigned.type_name, "u16 be[]");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0, 0]).unwrap().value, Value::UInt(65535));
-        let signed = ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap();
+        let scaled = ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap();
+        assert_eq!(scaled.type_name, "Scaled column");
+        // The bytes are two, and what the header said takes none of them.
+        assert_eq!(scaled.size_bits, 16);
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 2, 0, 0]).unwrap().value, Value::Int(-1));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 2, 0, 1]).unwrap().value, Value::Int(32767));
+        let signed = ev.node(&d, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
         assert_eq!(signed.type_name, "i16 be[]");
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 1, 0]).unwrap().value, Value::Int(-1));
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 1, 0]).unwrap().value, Value::Int(-1));
         // And what the header said the numbers are worth is on one row beside
         // the column rather than spread over the cards.
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 0, 0, 2]).unwrap().value), "1");
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 0, 0, 3]).unwrap().value), "32768");
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 0, 0, 2]).unwrap().value), "1");
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 0, 0, 3]).unwrap().value), "32768");
     }
 
-    /// A zero point written with a point after it is the same whole number;
-    /// one with a fraction after the point is a scaling, and a scaling is not
-    /// a type.
+    /// A zero point written with a point after it is the same whole number,
+    /// and a whole number is one this can add. One with a fraction after the
+    /// point is not, and the column says what the card said instead.
     #[test]
-    fn a_zero_point_that_is_not_a_whole_number_is_a_scaling_and_not_a_type() {
+    fn a_zero_point_is_only_added_when_it_is_a_whole_number() {
         let table = |zero: &str| {
             let card = format!("TZERO1  = {zero:>20}");
             let cards = ["TFIELDS =                    1", "TFORM1  = '1I      '", card.as_str()];
@@ -1335,21 +1548,20 @@ mod tests {
             b.extend_from_slice(&padded(vec![0xff, 0xff]));
             b
         };
-        for written in ["32768", "32768.", "32768.0", "32768.00"] {
+        for written in ["32768", "32768.", "32768.0", "32768.00", "-32768", "1"] {
             let (d, mut ev) = eval(table(written));
-            assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap().type_name, "u16 be[]", "{written}");
+            assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "Scaled column", "{written}");
         }
-        for written in ["32768.5", "32767", "-32768"] {
+        // A fraction, and a zero point of zero, which changes nothing.
+        for written in ["32768.5", "0.5", "0"] {
             let (d, mut ev) = eval(table(written));
-            assert_eq!(ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap().type_name, "i16 be[]", "{written}");
+            assert_eq!(ev.node(&d, &[0, 1, 3, 1, 0, 0, 0]).unwrap().type_name, "i16 be[]", "{written}");
         }
     }
 
-    /// An image says the same thing with `BZERO`, and `BITPIX` 8 says it the
-    /// other way round: FITS writes that one unsigned, so a zero point of
-    /// -128 is how a file writes signed bytes.
+    /// An image says the same thing with `BZERO`, over its pixels.
     #[test]
-    fn an_images_zero_point_reads_its_pixels_as_the_type_the_convention_means() {
+    fn an_images_zero_point_says_what_its_pixels_are_worth() {
         let pixels = |bitpix: i32, zero: &str, bytes: Vec<u8>| {
             let mut b = header(&[
                 "SIMPLE  =                    T",
@@ -1362,16 +1574,19 @@ mod tests {
             b.extend_from_slice(&padded(bytes));
             b
         };
+        // Unsigned 16-bit pixels: -1 on disk, and 32767 is what it means.
         let (d, mut ev) = eval(pixels(16, "32768", vec![0xff, 0xff]));
-        assert_eq!(ev.node(&d, &[0, 0, 2]).unwrap().type_name, "u16 be[]");
-        assert_eq!(ev.node(&d, &[0, 0, 2, 0]).unwrap().value, Value::UInt(65535));
+        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().type_name, "Scaled[]");
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 0]).unwrap().value, Value::Int(-1));
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 1]).unwrap().value, Value::Int(32767));
+        // The other way round, on the one type FITS writes unsigned: 255 on
+        // disk, and 127 is what it means.
         let (d, mut ev) = eval(pixels(8, "-128", vec![0xff]));
-        assert_eq!(ev.node(&d, &[0, 0, 2]).unwrap().type_name, "i8[]");
-        assert_eq!(ev.node(&d, &[0, 0, 2, 0]).unwrap().value, Value::Int(-1));
-        // And a zero point that is not the convention's leaves the pixels as
-        // the type BITPIX names.
-        let (d, mut ev) = eval(pixels(16, "100", vec![0xff, 0xff]));
-        assert_eq!(ev.node(&d, &[0, 0, 2]).unwrap().type_name, "i16 be[]");
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 0]).unwrap().value, Value::UInt(255));
+        assert_eq!(ev.node(&d, &[0, 0, 3, 0, 1]).unwrap().value, Value::Int(127));
+        // A zero point of nothing leaves the pixels as the type BITPIX names.
+        let (d, mut ev) = eval(pixels(16, "0", vec![0xff, 0xff]));
+        assert_eq!(ev.node(&d, &[0, 0, 3]).unwrap().type_name, "i16 be[]");
     }
 
     #[test]
@@ -1401,10 +1616,10 @@ mod tests {
         data.push(b' ');
         b.extend_from_slice(&padded(data));
         let (d, mut ev) = eval(b);
-        assert_eq!(ev.node(&d, &[0, 1, 2, 1]).unwrap().child_count, 2);
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 1, 0, 0, 0]).unwrap().value), "12");
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 1, 0, 1, 0]).unwrap().value), "1.500");
-        assert_eq!(text(&ev.node(&d, &[0, 1, 2, 1, 1, 0, 0]).unwrap().value), "-7");
+        assert_eq!(ev.node(&d, &[0, 1, 3, 1]).unwrap().child_count, 2);
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 1, 0, 0, 0, 0]).unwrap().value), "12");
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 1, 0, 0, 1, 0]).unwrap().value), "1.500");
+        assert_eq!(text(&ev.node(&d, &[0, 1, 3, 1, 1, 0, 0, 0]).unwrap().value), "-7");
     }
 
     #[test]
@@ -1432,9 +1647,15 @@ mod tests {
     fn a_card_says_which_cards_sized_the_data() {
         use crate::eval::Role;
         let (d, mut ev) = eval(image());
-        let o = ev.origins(&d, &[0, 0, 2]).unwrap();
+        let o = ev.origins(&d, &[0, 0, 3]).unwrap();
         let seen: Vec<_> = o.iter().map(|x| (x.role, x.label.clone(), x.value.clone())).collect();
         assert!(seen.iter().any(|(r, l, v)| *r == Role::Length && l.starts_with("cards[1]") && v == "16"), "{seen:?}");
-        assert!(seen.iter().any(|(_, l, v)| l.starts_with("cards[3]") && v == "3"), "{seen:?}");
+        // How many elements comes from the axes, and an axis says which card
+        // it read: one hop further than it used to be, and the hop is a row
+        // the reader can see.
+        assert!(seen.iter().any(|(r, l, v)| *r == Role::Count && l == "axes" && v == "6"), "{seen:?}");
+        let axis = ev.origins(&d, &[0, 0, 2, 0]).unwrap();
+        let from: Vec<_> = axis.iter().map(|x| (x.label.clone(), x.value.clone())).collect();
+        assert!(from.iter().any(|(l, v)| l.starts_with("cards[3]") && v == "3"), "{from:?}");
     }
 }
