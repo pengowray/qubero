@@ -294,7 +294,7 @@ fn copied_channels(from: LaidOut) -> Option<(&'static str, T)> {
         }))
     };
     let copy = T::structure_named(
-        "Channel",
+        "ChannelLayout",
         "path",
         "",
         vec![
@@ -708,7 +708,7 @@ fn object(e: Endian) -> T {
             ("path", string(e)),
             (
                 "raw_data_index",
-                T::enum_ranged("RawDataIndex", T::u32(e), RAW_DATA_INDEX, &[(0, 1, "{n}-byte index")]),
+                T::enum_ranged("RawDataIndexHeader", T::u32(e), RAW_DATA_INDEX, &[(0, 1, "{n}-byte index")]),
             ),
             (
                 "index",
