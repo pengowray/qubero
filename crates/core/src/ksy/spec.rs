@@ -945,6 +945,15 @@ impl AttrSpec {
 		// filled in while the type string was read.
 		let terminator = args.terminator.clone();
 
+		// `valid: {in-enum: true}` says the value has to be one of the enum's,
+		// so there has to be an enum.
+		if matches!(valid, Some(ValidSpec::InEnum)) && enum_ref.is_none() {
+			return Err(KsyError::new(
+				format!("{path}/valid/in-enum"),
+				"`valid/in-enum` requires the `enum` key",
+			));
+		}
+
 		let (repeat, repeat_keys) = RepeatSpec::from_yaml(node)?;
 
 		let mut legal: Vec<&str> = vec![

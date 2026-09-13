@@ -43,11 +43,10 @@ pub fn parse_type_ref(src: &str) -> Result<(TypeId, Vec<Expr>), ParseError> {
 	let name = p.type_name()?;
 	let mut args = Vec::new();
 	if p.eat(&Tok::LParen) {
+		// No trailing comma: `my_str(2 + 3, )` is what the compiler rejects in
+		// its own tests/formats_err/params_call_malformed.ksy.
 		args.push(p.test()?);
 		while p.eat(&Tok::Comma) {
-			if p.peek_is(&Tok::RParen) {
-				break;
-			}
 			args.push(p.test()?);
 		}
 		p.expect(&Tok::RParen)?;
@@ -455,7 +454,18 @@ impl Parser {
 			match self.peek().cloned() {
 				Some(Tok::FStrEnd) => {
 					self.pos += 1;
-					return Ok(Expr::InterpolatedStr(parts));
+					// A hole holding nothing but a string literal is that
+					// text, so it joins the text around it: `f"a={'b'}"` and
+					// `f"a=b"` are the same string, and writing them the same
+					// way is what lets one be printed and read back.
+					let mut merged: Vec<Expr> = Vec::with_capacity(parts.len());
+					for part in parts {
+						match (merged.last_mut(), &part) {
+							(Some(Expr::Str(last)), Expr::Str(next)) => last.push_str(next),
+							_ => merged.push(part),
+						}
+					}
+					return Ok(Expr::InterpolatedStr(merged));
 				}
 				Some(Tok::FStrChunk(text)) => {
 					self.pos += 1;
