@@ -336,45 +336,14 @@ impl<'a> Lower<'a> {
 			tys.push(Ty::Computed(arg.clone()));
 		}
 
-		// A Kaitai instance is worked out when it is asked for, so a `seq`
-		// field may read one declared below it. The IR reads backwards only, so
-		// the ones that depend on nothing the file holds are written out first,
-		// where a field before them can see them, and the rest stay after the
-		// `seq` where they can see it.
-		let early = early_instances(here);
+		// A Kaitai instance is worked out when it is asked for, so a `seq` field
+		// may read one declared below it. Nothing in the IR reads forwards, but
+		// an instance takes no room where it stands, so each one is written out
+		// as soon as everything it reads has been: right after the last `seq`
+		// field it depends on, or before the `seq` where it depends on none.
+		let plan = instance_order(here);
 		let outer_pending = std::mem::take(&mut self.pending);
-		for (name, instance) in &here.instances {
-			if !early.contains(name) {
-				continue;
-			}
-			match self.lower_instance(ctx, instance) {
-				Ok(ty) => {
-					self.report.became(
-						instance.path().to_string(),
-						instance_source(instance),
-						ty.display_name(),
-					);
-					if let Some(doc) = &instance.doc().summary {
-						docs.push((name.clone(), doc.to_string()));
-					}
-					names.push(name.clone());
-					tys.push(ty);
-				}
-				Err(gap) => {
-					self.report.gap(
-						instance.path().to_string(),
-						instance_source(instance),
-						format!("{} (the instance is dropped)", gap.reason),
-					);
-				}
-			}
-		}
-		self.pending = here
-			.instances
-			.iter()
-			.map(|(n, _)| n.clone())
-			.filter(|n| !early.contains(n))
-			.collect();
+		self.pending = here.instances.iter().map(|(n, _)| n.clone()).collect();
 
 		let mut placeable = true;
 		// Kaitai reads bits with a bit position of its own and throws away
@@ -384,7 +353,8 @@ impl<'a> Lower<'a> {
 		// offset after a `b3` would be wrong by five bits.
 		let mut loose_bits: u32 = 0;
 		let mut pads = 0;
-		for attr in &here.seq {
+		for (slot, attr) in here.seq.iter().enumerate() {
+			self.emit_instances(ctx, here, &plan, slot, &mut names, &mut tys, &mut docs);
 			let name = attr.name();
 			let width = bit_width(attr);
 			if width.is_none() && loose_bits % 8 != 0 {
@@ -436,10 +406,44 @@ impl<'a> Lower<'a> {
 		}
 
 		self.bit_offset = 0;
-		for (name, instance) in &here.instances {
-			if early.contains(name) {
-				continue;
-			}
+		self.emit_instances(ctx, here, &plan, here.seq.len(), &mut names, &mut tys, &mut docs);
+
+		self.pending = outer_pending;
+		let fields: Vec<(&str, Ty)> =
+			names.iter().map(String::as_str).zip(tys.into_iter()).collect();
+		let mut ty = Ty::structure(&struct_name(ir_name, here), fields);
+		let mut machinery: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+		machinery.extend(names.iter().filter(|n| n.starts_with("padding")).map(String::as_str));
+		if !machinery.is_empty() {
+			ty = ty.machinery(&machinery);
+		}
+		for (field, doc) in &docs {
+			ty = ty.field_doc(field, doc);
+		}
+		if let Some(doc) = class_doc(here) {
+			ty = ty.doc(&doc);
+		}
+		self.apply_representation(ctx, here, ty)
+	}
+
+	/// Write out the instances whose turn it is: the ones `plan` puts after
+	/// this many fields of the `seq`, in the order they read each other.
+	#[allow(clippy::too_many_arguments)]
+	fn emit_instances(
+		&mut self,
+		ctx: &Ctx<'a>,
+		here: &'a ClassSpec,
+		plan: &[Vec<usize>],
+		slot: usize,
+		names: &mut Vec<String>,
+		tys: &mut Vec<Ty>,
+		docs: &mut Vec<(String, String)>,
+	) {
+		let Some(here_now) = plan.get(slot) else { return };
+		let saved = self.bit_offset;
+		self.bit_offset = 0;
+		for i in here_now {
+			let (name, instance) = &here.instances[*i];
 			self.pending.retain(|n| n != name);
 			match self.lower_instance(ctx, instance) {
 				Ok(ty) => {
@@ -463,23 +467,7 @@ impl<'a> Lower<'a> {
 				}
 			}
 		}
-
-		self.pending = outer_pending;
-		let fields: Vec<(&str, Ty)> =
-			names.iter().map(String::as_str).zip(tys.into_iter()).collect();
-		let mut ty = Ty::structure(&struct_name(ir_name, here), fields);
-		let mut machinery: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
-		machinery.extend(names.iter().filter(|n| n.starts_with("padding")).map(String::as_str));
-		if !machinery.is_empty() {
-			ty = ty.machinery(&machinery);
-		}
-		for (field, doc) in &docs {
-			ty = ty.field_doc(field, doc);
-		}
-		if let Some(doc) = class_doc(here) {
-			ty = ty.doc(&doc);
-		}
-		self.apply_representation(ctx, here, ty)
+		self.bit_offset = saved;
 	}
 
 	/// `-webide-representation` says what one of these reads as on a single
@@ -1924,44 +1912,93 @@ fn process_name(process: &ProcessSpec) -> String {
 	}
 }
 
-/// Which of a type's value instances can be written out before its `seq`: the
-/// ones whose value depends on nothing the file holds, only on parameters,
-/// literals and each other. A `Computed` field takes no bytes, so moving one
-/// earlier changes only which rows can read it.
-fn early_instances(cls: &ClassSpec) -> Vec<String> {
-	let params: Vec<String> = cls.params.iter().map(ParamSpec::name).collect();
-	let mut early: Vec<String> = Vec::new();
-	loop {
-		let mut added = false;
-		for (name, instance) in &cls.instances {
-			if early.contains(name) {
+/// Where each instance goes among the `seq` fields, as one list of instances
+/// per slot: `plan[k]` is written out after `k` fields of the `seq`.
+///
+/// An instance covers no bytes where it is declared, so moving it earlier
+/// changes nothing about the layout and everything about what can read it: the
+/// IR resolves a name by looking back through the fields already written, while
+/// Kaitai works an instance out whenever it is first asked for. So each one
+/// goes as early as it can: one past the last `seq` field it reads, and before
+/// the `seq` where it reads none.
+///
+/// Within a slot they are in the order they read each other. One whose
+/// dependencies never settle -- a cycle, or a name that is not there -- is left
+/// at the end, where the whole type has been read.
+fn instance_order(cls: &ClassSpec) -> Vec<Vec<usize>> {
+	let used: Vec<Vec<String>> = cls.instances.iter().map(|(_, i)| names_read(i)).collect();
+	let mut slot_of: Vec<Option<usize>> = vec![None; cls.instances.len()];
+	let mut plan: Vec<Vec<usize>> = vec![Vec::new(); cls.seq.len() + 1];
+	for _ in 0..=cls.instances.len() {
+		let mut settled = false;
+		for i in 0..cls.instances.len() {
+			if slot_of[i].is_some() {
 				continue;
 			}
-			let InstanceSpec::Value(value) = instance else { continue };
-			let mut ok = true;
-			value.value.walk(&mut |node| {
-				if let KExpr::Name(n) = node {
-					if !params.contains(n) && !early.contains(n) && !n.starts_with('_') {
-						ok = false;
+			let mut after = 0usize;
+			let mut ready = true;
+			for name in &used[i] {
+				if let Some(k) = cls.seq.iter().position(|a| a.name() == *name) {
+					after = after.max(k + 1);
+				} else if let Some(j) = cls.instances.iter().position(|(n, _)| n == name) {
+					if j == i {
+						continue;
+					}
+					match slot_of[j] {
+						Some(p) => after = after.max(p),
+						None => ready = false,
 					}
 				}
-				if matches!(node, KExpr::Attribute { .. } | KExpr::Subscript { .. }) {
-					ok = false;
-				}
-			});
-			if let Some(cond) = &value.if_expr {
-				let _ = cond;
-				ok = false;
 			}
-			if ok {
-				early.push(name.clone());
-				added = true;
+			if ready {
+				let after = after.min(cls.seq.len());
+				slot_of[i] = Some(after);
+				plan[after].push(i);
+				settled = true;
 			}
 		}
-		if !added {
-			return early;
+		if !settled {
+			break;
 		}
 	}
+	for i in 0..cls.instances.len() {
+		if slot_of[i].is_none() {
+			plan[cls.seq.len()].push(i);
+		}
+	}
+	plan
+}
+
+/// Every name an instance reads, so that it can be put after them.
+fn names_read(instance: &InstanceSpec) -> Vec<String> {
+	let mut out = Vec::new();
+	let mut take = |e: &KExpr| {
+		e.walk(&mut |node| {
+			if let KExpr::Name(n) = node {
+				if !n.starts_with('_') {
+					out.push(n.clone());
+				}
+			}
+		});
+	};
+	match instance {
+		InstanceSpec::Value(v) => {
+			take(&v.value);
+			if let Some(cond) = &v.if_expr {
+				take(cond);
+			}
+		}
+		InstanceSpec::Parse(p) => {
+			if let Some(pos) = &p.pos {
+				take(pos);
+			}
+			if let Some(io) = &p.io {
+				take(io);
+			}
+			p.attr.for_each_expr(&mut |_, e| take(e));
+		}
+	}
+	out
 }
 
 /// How many bits a field takes out of the current byte, where it is one of the
