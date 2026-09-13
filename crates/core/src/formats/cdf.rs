@@ -685,6 +685,11 @@ fn vxr(s: Shape) -> T {
 /// what lets the block below say how many records it has to lay out. What the
 /// entry points at is usually a block of values and may be another index, for
 /// a variable with more blocks than one index record holds.
+///
+/// The `i` is [`Expr::Idx`](crate::template::Expr::Idx), which is this entry's
+/// place in the nearest list around it, and the nearest list has to be the
+/// `blocks` array. Nothing between this structure and that array may be a list
+/// of its own, or every entry would read the first element of all three.
 fn vxr_entry(s: Shape) -> T {
     T::structure(
         "CdfValueBlock",
@@ -1214,7 +1219,14 @@ mod tests {
         // bounded by the length of the file.
         let inside = e.node(&d, &[3, 2, 4, 0]).unwrap();
         assert_eq!(inside.type_name, "CdfInsideCompressed");
-        assert_eq!(e.node(&d, &[3, 2, 4, 0, 0]).unwrap().value, Value::Int(8));
+        // Every offset in this template is taken back by this field, found by
+        // its name from wherever the offset is. A space whose root does not
+        // declare it would find the file's own nought instead and read every
+        // record eight bytes late, so the name is checked and not only the
+        // number.
+        let base = e.node(&d, &[3, 2, 4, 0, 0]).unwrap();
+        assert_eq!(base.name, "bytes_before");
+        assert_eq!(base.value, Value::Int(8));
         // The descriptor record is the first byte of the stream, and the global
         // descriptor is at the offset it names less those eight.
         let cdr = e.node(&d, &[3, 2, 4, 0, 1, 2]).unwrap();
