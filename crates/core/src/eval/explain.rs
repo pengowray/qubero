@@ -298,6 +298,91 @@ pub const HDF5_VALUES_SHOWN: usize = 32;
 /// with millions of objects; nothing real reaches it.
 const XREF_PACKED_LIMIT: u64 = 4 << 20;
 
+/// Which side reader a packed structure is taken apart by: the module that
+/// knows what a template can only say is bytes.
+///
+/// Each is found from the name the template marked the structure with, and
+/// each says how far above the cursor that structure may be. Adding a reader
+/// is a case here, a line in [`Unpacker::of`] and [`Unpacker::reach`], and
+/// the function that builds its answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unpacker {
+    Xref,
+    ObjStm,
+    Hdf5Chunk,
+    GwfVect,
+    SqliteRow,
+    ParquetPage,
+    FitsTile,
+    /// The encoding and byte order are in the packing name, since the template
+    /// has already settled both by the time it marks the data.
+    Mseed { encoding: u8, big: bool },
+    /// A ggml block, by the layout name. Not every layout ggml has can be
+    /// taken apart here, which is only found out by asking.
+    Quant,
+}
+
+/// How far above the cursor a reader's packed structure is looked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// The field the cursor is on, or its parent. As deep as the fields of
+    /// most packed structures go, and as far as they have been checked: a
+    /// filtered HDF5 chunk is one run of bytes under the structure that marks
+    /// it.
+    Near,
+    /// Any structure the cursor is inside, however far down. A Steim
+    /// difference is four levels under a miniSEED record's data, the frame,
+    /// the word, the word's shape and the difference; a FITS tile's
+    /// descriptors are four levels into a row, and its compressed bytes are a
+    /// byte of an array in the heap.
+    Anywhere,
+}
+
+impl Unpacker {
+    /// The reader a packing name belongs to, if any here does.
+    fn of(packing: &str) -> Option<Unpacker> {
+        Some(match packing {
+            pdf_xref::PACKING => Unpacker::Xref,
+            pdf_objstm::PACKING => Unpacker::ObjStm,
+            hdf5_chunk::PACKING => Unpacker::Hdf5Chunk,
+            gwf_vect::PACKING => Unpacker::GwfVect,
+            sqlite_overflow::PACKING => Unpacker::SqliteRow,
+            parquet_page::PACKING => Unpacker::ParquetPage,
+            fits_tile::PACKING => Unpacker::FitsTile,
+            _ => {
+                if let Some((encoding, big)) = mseed_steim::parse_packing(packing) {
+                    return Some(Unpacker::Mseed { encoding, big });
+                }
+                ggml_quant::by_name(packing)?;
+                Unpacker::Quant
+            }
+        })
+    }
+
+    fn reach(self) -> Reach {
+        match self {
+            Unpacker::FitsTile | Unpacker::Mseed { .. } => Reach::Anywhere,
+            Unpacker::Xref
+            | Unpacker::ObjStm
+            | Unpacker::Hdf5Chunk
+            | Unpacker::GwfVect
+            | Unpacker::SqliteRow
+            | Unpacker::ParquetPage
+            | Unpacker::Quant => Reach::Near,
+        }
+    }
+}
+
+/// Where a packed structure was found: the cursor's path, the structure's
+/// own path and what it resolved to, and the cursor's bit, which only a ggml
+/// block uses to say which weight is under it.
+struct Packed<'a> {
+    path: &'a [usize],
+    at: &'a [usize],
+    r: &'a Resolved,
+    at_bits: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagBit {
     pub bit: u32,
@@ -366,68 +451,58 @@ impl Evaluator {
         })
     }
 
-    /// A packed block, from the cursor being on it or on one of its fields.
+    /// What a side reader makes of the packed structure the cursor is in, or
+    /// on one of the fields of.
     ///
-    /// Both are asked because the fields are where a reader lands: the cursor
-    /// is almost always inside `qs`, and a panel that only answered for the
-    /// block itself would be blank exactly when it is wanted.
+    /// The fields are asked about as well as the structure because the fields
+    /// are where a reader lands: the cursor is almost always inside `qs`, and
+    /// a panel that only answered for the block itself would be blank exactly
+    /// when it is wanted. How far up is looked is each reader's own, and is in
+    /// [`Unpacker::reach`].
+    ///
+    /// The nearest packed structure answers first. A reader that turns out to
+    /// have nothing to say about the bytes, which only a ggml block of a
+    /// layout nobody here unpacks does, lets the walk carry on outward.
     fn explain_packed<S: Source>(&mut self, doc: &Document<S>, path: &[usize], at_bits: Option<u64>) -> R<Explain> {
-        for len in [path.len(), path.len().wrapping_sub(1)] {
-            if len > path.len() {
-                break;
-            }
+        for len in (0..=path.len()).rev() {
             let at = &path[..len];
             self.resolve(doc, at)?;
             let r = self.memo.get(at).expect("resolved").clone();
             let Ty::Struct(def) = &r.ty else { continue };
-            let Some(packing) = def.packed.clone() else { continue };
-            if &*packing == pdf_xref::PACKING {
-                return self.explain_xref(doc, at, &r);
+            let Some(packing) = def.packed.as_deref() else { continue };
+            let Some(unpacker) = Unpacker::of(packing) else { continue };
+            if unpacker.reach() == Reach::Near && path.len() - len > 1 {
+                continue;
             }
-            if &*packing == pdf_objstm::PACKING {
-                return self.explain_objstm(doc, at, &r);
+            let found = Packed { path, at, r: &r, at_bits };
+            if let Some(explain) = self.side_reader(doc, unpacker, found)? {
+                return Ok(explain);
             }
-            if &*packing == hdf5_chunk::PACKING {
-                return self.explain_hdf5_chunk(doc, at, &r);
-            }
-            if &*packing == gwf_vect::PACKING {
-                return self.explain_gwf_vect(doc, at, &r);
-            }
-            if &*packing == sqlite_overflow::PACKING {
-                return self.explain_sqlite_row(doc, at);
-            }
-            if &*packing == parquet_page::PACKING {
-                return self.explain_parquet_page(doc, at);
-            }
-            if &*packing == fits_tile::PACKING {
-                return self.explain_fits_tile(doc, path);
-            }
-            if let Some((encoding, big)) = mseed_steim::parse_packing(&packing) {
-                return self.explain_mseed(doc, at, &r, encoding, big);
-            }
-            let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { continue };
-            return Ok(quant_of(kind, block, at_block, at_bits));
-        }
-        // A miniSEED record's data is asked about from further down than the
-        // field or its parent. The cursor on a Steim difference is four levels
-        // under the data: the frame, the word, the word's shape and the
-        // difference. So every ancestor is looked at for that packing, and for
-        // a FITS compressed image, whose compressed bytes are a byte of an
-        // array in the heap and whose descriptors are four levels into a row.
-        // The other packings keep to the two levels above, which is as deep as
-        // their fields go and as far as they have been checked.
-        for len in (0..path.len().saturating_sub(1)).rev() {
-            let at = &path[..len];
-            self.resolve(doc, at)?;
-            let r = self.memo.get(at).expect("resolved").clone();
-            let Ty::Struct(def) = &r.ty else { continue };
-            if def.packed.as_deref() == Some(fits_tile::PACKING) {
-                return self.explain_fits_tile(doc, path);
-            }
-            let Some((encoding, big)) = def.packed.as_deref().and_then(mseed_steim::parse_packing) else { continue };
-            return self.explain_mseed(doc, at, &r, encoding, big);
         }
         Ok(Explain::Plain)
+    }
+
+    /// The answer one side reader gives for the packed structure `found.at`.
+    /// `None` only where the reader has nothing to say about these bytes and
+    /// the structures further out should be asked instead.
+    fn side_reader<S: Source>(&mut self, doc: &Document<S>, unpacker: Unpacker, found: Packed) -> R<Option<Explain>> {
+        let Packed { path, at, r, at_bits } = found;
+        Ok(Some(match unpacker {
+            Unpacker::Xref => self.explain_xref(doc, at, r)?,
+            Unpacker::ObjStm => self.explain_objstm(doc, at, r)?,
+            Unpacker::Hdf5Chunk => self.explain_hdf5_chunk(doc, at, r)?,
+            Unpacker::GwfVect => self.explain_gwf_vect(doc, at, r)?,
+            Unpacker::SqliteRow => self.explain_sqlite_row(doc, at)?,
+            Unpacker::ParquetPage => self.explain_parquet_page(doc, at)?,
+            // The tile is found again from the cursor's own path, because
+            // which tile it is depends on how far into the image the path goes.
+            Unpacker::FitsTile => self.explain_fits_tile(doc, path)?,
+            Unpacker::Mseed { encoding, big } => self.explain_mseed(doc, at, r, encoding, big)?,
+            Unpacker::Quant => {
+                let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { return Ok(None) };
+                quant_of(kind, block, at_block, at_bits)
+            }
+        }))
     }
 
     /// A miniSEED record's data, decoded into samples.
