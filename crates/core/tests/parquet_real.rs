@@ -179,3 +179,150 @@ fn the_unread_codecs_are_not_in_the_switch() {
     // `codec`: there is no decoder to name.
     assert!(!printed.contains("Lzo"));
 }
+
+/// The first dictionary page of a file, read as the values it holds.
+///
+/// Every expectation is what pyarrow gives for the same column, read on
+/// 2026-09-13 with `pq.read_table(path).column(i).to_pylist()`: a dictionary
+/// page holds the distinct values of its column, so for these files it is the
+/// column itself with the repeats taken out.
+#[test]
+fn dictionary_pages_read_as_their_values() {
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // file, which dictionary page counting from the front of the file, the
+    // type the values read as, and them. Counted that way because a column
+    // without one writes no page: `alltypes_dictionary`'s booleans are the
+    // second column and there is no second dictionary page.
+    let cases: &[(&str, usize, &str, &[i64])] = &[
+        ("alltypes_dictionary.parquet", 0, "i32 le", &[0, 1]),
+        ("alltypes_dictionary.parquet", 4, "i64 le", &[0, 10]),
+        ("repeated_no_annotation.parquet", 0, "i32 le", &[1, 2, 3, 4, 5, 6]),
+    ];
+    for (name, nth, ty, want) in cases {
+        let path = root.join(name);
+        let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+        let dict = dictionary_values(&mut ev, &doc, *nth);
+        let values: Vec<i64> = dict
+            .iter()
+            .map(|p| ev.node(&doc, p).unwrap().value.as_int().unwrap() as i64)
+            .collect();
+        assert_eq!(&values[..], *want, "{name} dictionary page {nth}");
+        assert_eq!(ev.node(&doc, &dict[0]).unwrap().type_name, *ty, "{name} dictionary page {nth}");
+        eprintln!("{name} dictionary page {nth}: {values:?}");
+    }
+
+    // A byte array dictionary carries its own lengths, so each value is a
+    // record rather than a number. pyarrow: [b'0', b'1'].
+    let path = root.join("alltypes_dictionary.parquet");
+    let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+    let dict = dictionary_values(&mut ev, &doc, 8);
+    assert_eq!(dict.len(), 2);
+    for (at, want) in dict.iter().zip([b'0', b'1']) {
+        assert_eq!(ev.node(&doc, at).unwrap().type_name, "ByteArray");
+        let mut length = at.clone();
+        length.push(0);
+        assert_eq!(ev.node(&doc, &length).unwrap().value.as_int(), Some(1));
+        let mut bytes = at.clone();
+        bytes.push(1);
+        let read = ev.node(&doc, &bytes).unwrap().value;
+        assert_eq!(read, qubero_core::eval::Value::Bytes { len: 1, preview: vec![want] });
+    }
+}
+
+/// The paths of the values inside the `nth` dictionary page of the file,
+/// counting in the order the column chunks are declared.
+fn dictionary_values(ev: &mut Evaluator, doc: &Document<MemSource>, nth: usize) -> Vec<Vec<usize>> {
+    let mut stack = vec![Vec::new()];
+    let mut pages = Vec::new();
+    while let Some(at) = stack.pop() {
+        let node = ev.node(doc, &at).unwrap();
+        for i in (0..node.child_count as usize).rev() {
+            let mut next = at.clone();
+            next.push(i);
+            stack.push(next);
+        }
+        // A page's second field is its type, worked out from the header.
+        // DICTIONARY_PAGE is 2.
+        if node.type_name == "Page" {
+            let mut kind = at.clone();
+            kind.push(1);
+            if ev.node(doc, &kind).unwrap().value.as_int() == Some(2) {
+                pages.push(at);
+            }
+        }
+    }
+    pages.sort();
+    let page = pages.get(nth).unwrap_or_else(|| panic!("no dictionary page {nth}"));
+    // The page's payload, the space the codec opened, and the values in it.
+    let mut values = page.clone();
+    values.extend([2, 0]);
+    let n = ev.node(doc, &values).unwrap().child_count as usize;
+    (0..n)
+        .map(|i| {
+            let mut p = values.clone();
+            p.push(i);
+            p
+        })
+        .collect()
+}
+
+/// A `DATA_PAGE_V2` keeps its levels out of the packed run, and its dictionary
+/// indices read as the hybrid's runs.
+///
+/// pyarrow for `datapage_v2.snappy.parquet` column `c`: [2.0, 3.0, 4.0, 5.0,
+/// 2.0]. Four distinct values, so an index needs two bits, and five indices
+/// fit in one bit-packed group of eight: one run of two bytes behind a width
+/// byte of 2.
+#[test]
+fn a_v2_data_page_reads_its_levels_and_its_indices() {
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let path = root.join("datapage_v2.snappy.parquet");
+    let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+    let mut stack = vec![Vec::new()];
+    let mut widths = Vec::new();
+    let mut levels = Vec::new();
+    while let Some(at) = stack.pop() {
+        let node = ev.node(&doc, &at).unwrap();
+        for i in (0..node.child_count as usize).rev() {
+            let mut next = at.clone();
+            next.push(i);
+            stack.push(next);
+        }
+        if node.type_name == "DictionaryIndices" {
+            let mut width = at.clone();
+            width.push(0);
+            widths.push((at.clone(), ev.node(&doc, &width).unwrap().value.as_int().unwrap()));
+        }
+        if node.type_name == "DataPageV2Payload" {
+            let mut rep = at.clone();
+            rep.push(0);
+            let mut def = at.clone();
+            def.push(1);
+            levels.push((
+                ev.node(&doc, &rep).unwrap().size_bits / 8,
+                ev.node(&doc, &def).unwrap().size_bits / 8,
+            ));
+        }
+    }
+    widths.sort();
+    // Three of the five columns are dictionary encoded: a, c and e.
+    let found: Vec<i128> = widths.iter().map(|(_, w)| *w).collect();
+    assert_eq!(found, vec![0, 2, 2], "index widths, in column order");
+    // Column a is optional, so it has definition levels and no repetition
+    // levels; b, c and d are required and have neither; e is a list, so it has
+    // both. pyarrow: a has one null, e has two.
+    levels.sort();
+    assert!(levels.contains(&(0, 0)), "a required column writes no levels");
+    assert!(levels.contains(&(0, 2)), "an optional column writes definition levels only");
+    assert!(levels.iter().any(|(r, d)| *r > 0 && *d > 0), "a list column writes both");
+    eprintln!("datapage_v2.snappy.parquet: index widths {found:?}, levels {levels:?}");
+}
