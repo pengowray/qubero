@@ -8,11 +8,20 @@
 //! beside it. The header is laid out as the NIfTI Data Format Working Group's
 //! `nifti1.h` lays it out, and every field is called what that file calls it.
 //!
-//! Nothing says which way round the numbers are. `sizeof_hdr` is 348 in the
-//! file's own order, and 348 read the wrong way round is 1,543,569,408, so the
-//! template peeks at that word both ways and lays the file out in whichever
-//! answers, as `sac` does with `nvhdr` and as every NIfTI reader does. The
-//! magic cannot say it, since it is text.
+//! NIfTI-2 is the same idea for volumes too big for a 16-bit dimension: 540
+//! bytes, with the dimensions and `vox_offset` at 64 bits and every float a
+//! double. It is not NIfTI-1 at double width. The fields are reordered, the
+//! magic moves to the front as `n+2` or `ni2`, and the four bytes after the
+//! magic are `\r\n\032\n`, PNG's trick for catching a transfer that rewrote
+//! line endings. Analyze's leftovers are gone. So the two layouts are written
+//! out separately, from `nifti2.h` for the second, and share everything after
+//! the header.
+//!
+//! Nothing says which way round the numbers are. `sizeof_hdr` is 348 or 540
+//! in the file's own order, and those read the wrong way round are
+//! 1,543,569,408 and 469,893,120, so the template peeks at that word both ways
+//! and lays the file out in whichever answers, as `sac` does with `nvhdr` and
+//! as every NIfTI reader does. The magic cannot say it, since it is text.
 //!
 //! `vox_offset` says where the voxels start, and in NIfTI-1 it is a float,
 //! because Analyze had a float there before it. An expression here is an
@@ -84,10 +93,22 @@ pub const HEADER_1: i128 = 348;
 /// Where NIfTI-1 writes its magic: the last four bytes of the header.
 pub const MAGIC_1_AT: usize = 344;
 
-/// The two NIfTI-1 magics, as the big-endian numbers their bytes read as:
-/// `n+1\0` for a file that holds its voxels and `ni1\0` for one that does not.
+/// How long a NIfTI-2 header is.
+pub const HEADER_2: i128 = 540;
+
+/// Where NIfTI-2 writes its magic: straight after `sizeof_hdr`.
+pub const MAGIC_2_AT: usize = 4;
+
+/// The magics, as the big-endian numbers their four bytes read as: `n+1\0`
+/// for a file that holds its voxels and `ni1\0` for one that does not, and
+/// `n+2\0` and `ni2\0` the same for NIfTI-2. The four bytes NIfTI-2 writes
+/// after its magic are not part of the test, since they are the ones a
+/// transfer that mangled line endings would have changed, and a file like
+/// that is still worth reading to see it.
 const SINGLE_1: i128 = 0x6e2b_3100;
 const PAIR_1: i128 = 0x6e69_3100;
+const SINGLE_2: i128 = 0x6e2b_3200;
+const PAIR_2: i128 = 0x6e69_3200;
 
 /// The layout of an IEEE float: how many bits hold the fraction and how many
 /// the exponent, the sign being the one bit above both.
@@ -98,6 +119,7 @@ struct Float {
 }
 
 const SINGLE: Float = Float { fraction: 23, exponent: 8 };
+const DOUBLE: Float = Float { fraction: 52, exponent: 11 };
 
 /// A float read here as a whole number is one under two to the forty, and
 /// anything bigger is not read as one. No offset or scale factor in a real
@@ -342,7 +364,9 @@ const TEXT_ECODES: &[i128] = &[4, 6, 8, 30, 32, 44];
 /// A NIfTI file of either version, in either byte order, or an Analyze 7.5
 /// header when the magic that would make it NIfTI-1 is not there.
 pub fn nifti() -> Template {
-    let by_size = |e: Endian, otherwise: T| T::switch(E::peek(32, e), vec![(HEADER_1, version_1(e))], otherwise);
+    let by_size = |e: Endian, otherwise: T| {
+        T::switch(E::peek(32, e), vec![(HEADER_1, version(e, Version::One)), (HEADER_2, version(e, Version::Two))], otherwise)
+    };
     let root = T::switch(
         E::Remaining.less_than(E::lit(4)),
         vec![(1, T::bytes(E::Remaining))],
@@ -351,31 +375,45 @@ pub fn nifti() -> Template {
     Template::new("nifti", root)
 }
 
-/// A 348-byte header, told apart by its magic. Too short to hold one keeps
-/// its bytes.
-fn version_1(e: Endian) -> T {
-    let magic = E::peek_at(E::lit(MAGIC_1_AT as i128 * 8), 32, Big);
+/// Which of the two layouts a header is in.
+#[derive(Clone, Copy, PartialEq)]
+enum Version {
+    One,
+    Two,
+}
+
+/// A header of either size, told apart by its magic. A file too short to hold
+/// the header keeps its bytes.
+fn version(e: Endian, v: Version) -> T {
+    let (size, magic, single, pair) = match v {
+        Version::One => (HEADER_1, E::peek_at(E::lit(MAGIC_1_AT as i128 * 8), 32, Big), SINGLE_1, PAIR_1),
+        Version::Two => (HEADER_2, E::peek_at(E::lit(MAGIC_2_AT as i128 * 8), 32, Big), SINGLE_2, PAIR_2),
+    };
     T::switch(
-        E::Remaining.less_than(E::lit(HEADER_1)),
+        E::Remaining.less_than(E::lit(size)),
         vec![(1, T::bytes(E::Remaining))],
-        T::switch(magic, vec![(SINGLE_1, file_1(e, true)), (PAIR_1, file_1(e, false))], T::bytes(E::Remaining)),
+        T::switch(magic, vec![(single, file(e, v, true)), (pair, file(e, v, false))], T::bytes(E::Remaining)),
     )
 }
 
-/// A NIfTI-1 file: the header, the four bytes that say whether extensions
+/// A NIfTI file: the header, the four bytes that say whether extensions
 /// follow, the extensions, and in a `.nii` the voxels.
-fn file_1(e: Endian, single: bool) -> T {
+fn file(e: Endian, v: Version, single: bool) -> T {
+    let (header, size, offset, name) = match (v, single) {
+        (Version::One, _) => (header_1(e), HEADER_1, "data_offset", ["NIfTI-1", "NIfTI-1 header"]),
+        (Version::Two, _) => (header_2(e), HEADER_2, "vox_offset", ["NIfTI-2", "NIfTI-2 header"]),
+    };
     // In a `.nii` the extensions stop where the voxels start; in a `.hdr`
     // there is nothing after them but the end of the file.
     let room = match single {
-        true => E::within(&["header", "data_offset"]).sub(E::lit(HEADER_1)).sub(E::size_of("extender")).at_least(E::lit(0)),
+        true => E::within(&["header", offset]).sub(E::lit(size)).sub(E::size_of("extender")).at_least(E::lit(0)),
         false => E::Remaining,
     };
-    let mut fields = vec![("header", header_1(e)), ("extender", extender()), ("extensions", extensions(e, room))];
+    let mut fields = vec![("header", header), ("extender", extender()), ("extensions", extensions(e, room))];
     if single {
         fields.push(("voxels", voxels(e)));
     }
-    T::structure(if single { "NIfTI-1" } else { "NIfTI-1 header" }, fields).payload(&["header", "voxels"])
+    T::structure(name[usize::from(!single)], fields).payload(&["header", "voxels"])
 }
 
 /// The 348 bytes, field by field as `nifti1.h` has them. The first 40 are
@@ -449,6 +487,71 @@ fn header_1(e: Endian) -> T {
     .payload(&["dim", "datatype", "pixdim"])
 }
 
+/// The 540 bytes of a NIfTI-2 header, as `nifti2.h` has them. The same fields
+/// as NIfTI-1 less Analyze's leftovers, at 64 bits where NIfTI-1 had fewer, and
+/// in a different order: the magic moved to the front and the small fields to
+/// the back. `vox_offset` is an integer at last, so nothing has to read a
+/// float to find the voxels.
+///
+/// The eight bytes `nifti2.h` calls `magic` are split as nibabel splits them:
+/// the text, and the four bytes after it that are there to show whether a
+/// transfer changed `\r\n` or `\032`.
+fn header_2(e: Endian) -> T {
+    let i64_ = || T::Int { bits: 64, endian: e };
+    let text = |n: i128| T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii);
+    let doubles = |n: i128| T::array(T::F64(e), E::lit(n));
+    let here = E::peek(64, e);
+    let next = E::peek_at(E::lit(64), 64, e);
+    let is_scaled = scaled(DOUBLE, &here, &next);
+    T::structure(
+        "Nifti2Header",
+        vec![
+            ("sizeof_hdr", T::i32(e)),
+            ("magic", text(4)),
+            ("eol_check", T::bytes(E::lit(4))),
+            ("datatype", T::enumeration("VoxelType", T::Int { bits: 16, endian: e }, VOXEL_TYPES)),
+            ("bitpix", T::Int { bits: 16, endian: e }),
+            ("dim", T::array(i64_(), E::lit(8))),
+            ("intent_p1", T::F64(e)),
+            ("intent_p2", T::F64(e)),
+            ("intent_p3", T::F64(e)),
+            ("pixdim", doubles(8)),
+            ("vox_offset", i64_()),
+            ("scale", scaling(is_scaled.clone(), DOUBLE.value(&here))),
+            ("zero", scaling(is_scaled, DOUBLE.value(&next))),
+            ("scl_slope", T::F64(e)),
+            ("scl_inter", T::F64(e)),
+            ("cal_max", T::F64(e)),
+            ("cal_min", T::F64(e)),
+            ("slice_duration", T::F64(e)),
+            ("toffset", T::F64(e)),
+            ("slice_start", i64_()),
+            ("slice_end", i64_()),
+            ("descrip", text(80)),
+            ("aux_file", text(24)),
+            ("qform_code", T::enumeration("NiftiXform", T::i32(e), XFORMS)),
+            ("sform_code", T::enumeration("NiftiXform", T::i32(e), XFORMS)),
+            ("quatern_b", T::F64(e)),
+            ("quatern_c", T::F64(e)),
+            ("quatern_d", T::F64(e)),
+            ("qoffset_x", T::F64(e)),
+            ("qoffset_y", T::F64(e)),
+            ("qoffset_z", T::F64(e)),
+            ("srow_x", doubles(4)),
+            ("srow_y", doubles(4)),
+            ("srow_z", doubles(4)),
+            ("slice_code", T::enumeration("NiftiSliceOrder", T::i32(e), SLICE_ORDERS)),
+            ("xyzt_units", xyzt_units(Some(T::UInt { bits: 24, endian: e }), e)),
+            ("intent_code", T::enumeration("NiftiIntent", T::i32(e), INTENTS)),
+            ("intent_name", text(16)),
+            ("dim_info", dim_info()),
+            ("unused_str", text(15)),
+        ],
+    )
+    .machinery(&["scale", "zero", "eol_check", "unused_str"])
+    .payload(&["dim", "datatype", "pixdim", "vox_offset"])
+}
+
 /// `dim_info`: which axis, 1 to 3 or 0 for not said, the frequency encoding,
 /// the phase encoding and the slices each ran along. Two bits apiece from the
 /// bottom of the byte, which is the order `nifti1.h`'s macros take them in.
@@ -502,11 +605,10 @@ fn extensions(e: Endian, room: E) -> T {
             ("edata", T::switch(E::field("ecode"), TEXT_ECODES.iter().map(|c| (*c, text.clone())).collect(), T::bytes(size()))),
         ],
     );
-    // A tail too short to be a record keeps its bytes rather than reading a
-    // size out of the voxels.
-    let one = T::switch(E::Remaining.less_than(E::lit(8)), vec![(1, T::bytes(E::Remaining))], record);
+    // The records are read inside the room, so one whose size runs past it
+    // fails on its own rather than reading a size out of the voxels.
     let room = room.at_most(E::Remaining);
-    T::switch(follow, vec![(1, T::sized(room.clone(), T::repeat(one, Until::End)))], T::bytes(room))
+    T::switch(follow, vec![(1, T::sized(room.clone(), T::repeat(record, Until::End)))], T::bytes(room))
 }
 
 /// How long dimension `k` of the header's `dim` is, with `dim[0]` the count.
@@ -585,13 +687,16 @@ fn shaped(elem: T, width: i128) -> T {
     T::switch(dim(0), (1..=DIMS).map(|n| (n, nest(n))).collect(), T::array(elem.clone(), E::Remaining.div(E::lit(width))))
 }
 
-/// A NIfTI-1 file, of either kind and either byte order: `sizeof_hdr` is 348
-/// read one way or the other and the magic at 344 is one of the two. Eight
-/// bytes that have to agree, which nothing else is likely to write.
+/// A NIfTI file of either version, of either kind and in either byte order:
+/// `sizeof_hdr` is 348 or 540 read one way or the other, and the magic that
+/// size puts it at is one of the two. Eight bytes that have to agree, which
+/// nothing else is likely to write.
 pub fn is_nifti(head: &[u8], _len: u64) -> bool {
     let Some(size) = head.get(..4) else { return false };
-    let sized = size == 348u32.to_le_bytes() || size == 348u32.to_be_bytes();
-    sized && matches!(head.get(MAGIC_1_AT..MAGIC_1_AT + 4), Some(b"n+1\0" | b"ni1\0"))
+    let sized = |n: u32| size == n.to_le_bytes() || size == n.to_be_bytes();
+    let magic = |at: usize| head.get(at..at + 4);
+    (sized(348) && matches!(magic(MAGIC_1_AT), Some(b"n+1\0" | b"ni1\0")))
+        || (sized(540) && matches!(magic(MAGIC_2_AT), Some(b"n+2\0" | b"ni2\0")))
 }
 
 #[cfg(test)]
@@ -851,6 +956,7 @@ mod tests {
             let list = at(&mut ev, &d, &["extensions"]);
             let node = ev.node(&d, &list).unwrap();
             assert_eq!((node.child_count, node.size_bits), (2, 48 * 8), "big={big}");
+            assert_eq!(node.type_name, "NiftiExtension[]");
             let first = [list.clone(), vec![0]].concat();
             assert_eq!(ev.node(&d, &first).unwrap().type_name, "NiftiExtension");
             assert_eq!(ev.node(&d, &[first.clone(), vec![1]].concat()).unwrap().value.as_int(), Some(6));
@@ -898,8 +1004,84 @@ mod tests {
         assert_eq!(time.offset_bits, 123 * 8 + 2, "bits 3 to 5, counted from the top of the byte");
     }
 
+    /// A NIfTI-2 `.nii` in either byte order: 540 bytes of header, no
+    /// extensions, and 4 by 3 by 2 voxels of 16 bits counting up, with the
+    /// slope and intercept doubles given.
+    fn nifti2(big: bool, slope: f64, inter: f64) -> Vec<u8> {
+        let mut v = vec![0u8; 540];
+        let put = |v: &mut Vec<u8>, at: usize, b: &[u8]| v[at..at + b.len()].copy_from_slice(b);
+        let i16b = |x: i16| if big { x.to_be_bytes() } else { x.to_le_bytes() };
+        let i32b = |x: i32| if big { x.to_be_bytes() } else { x.to_le_bytes() };
+        let i64b = |x: i64| if big { x.to_be_bytes() } else { x.to_le_bytes() };
+        let f64b = |x: f64| if big { x.to_be_bytes() } else { x.to_le_bytes() };
+        put(&mut v, 0, &i32b(540));
+        put(&mut v, 4, b"n+2\0\r\n\x1a\n");
+        put(&mut v, 12, &i16b(512));
+        put(&mut v, 14, &i16b(16));
+        for (i, d) in [3i64, 4, 3, 2, 1, 1, 1, 1].iter().enumerate() {
+            put(&mut v, 16 + 8 * i, &i64b(*d));
+        }
+        put(&mut v, 168, &i64b(544));
+        put(&mut v, 176, &f64b(slope));
+        put(&mut v, 184, &f64b(inter));
+        put(&mut v, 240, b"two");
+        put(&mut v, 344, &i32b(4));
+        // Millimetres and milliseconds, with a stray bit in the upper bytes
+        // to show those are not the units.
+        put(&mut v, 500, &i32b(0x0100 | 2 | (2 << 3)));
+        put(&mut v, 504, &i32b(2001));
+        v[524] = 57;
+        v.extend_from_slice(&[0; 4]);
+        for i in 0..24u16 {
+            v.extend_from_slice(&if big { i.to_be_bytes() } else { i.to_le_bytes() });
+        }
+        v
+    }
+
+    #[test]
+    fn a_nifti_2_file_reads_at_the_wider_layout() {
+        for big in [false, true] {
+            let (d, mut ev) = eval(nifti2(big, f64::NAN, 0.0));
+            assert_eq!(ev.node(&d, &[]).unwrap().type_name, "NIfTI-2", "big={big}");
+            let header = named(&mut ev, &d, &["header"]);
+            assert_eq!((header.type_name.as_str(), header.size_bits), ("Nifti2Header", 540 * 8));
+            assert_eq!(value(&mut ev, &d, &["header", "magic"]), Value::Str("n+2".into()));
+            assert_eq!(value(&mut ev, &d, &["header", "vox_offset"]).as_int(), Some(544));
+            assert_eq!(value(&mut ev, &d, &["header", "descrip"]), Value::Str("two".into()));
+            assert_eq!(value(&mut ev, &d, &["header", "qform_code"]).as_int(), Some(4));
+            assert_eq!(value(&mut ev, &d, &["header", "intent_code"]).as_int(), Some(2001));
+            assert_eq!(value(&mut ev, &d, &["header", "xyzt_units", "space"]).as_int(), Some(2));
+            assert_eq!(value(&mut ev, &d, &["header", "xyzt_units", "time"]).as_int(), Some(2));
+            assert_eq!(value(&mut ev, &d, &["header", "xyzt_units", "upper"]).as_int(), Some(1));
+            assert_eq!(value(&mut ev, &d, &["header", "dim_info", "slice_dim"]).as_int(), Some(3));
+            let voxels = at(&mut ev, &d, &["voxels"]);
+            let top = ev.node(&d, &voxels).unwrap();
+            assert_eq!((top.offset_bits, top.child_count), (544 * 8, 2));
+            let row = ev.node(&d, &[voxels.clone(), vec![1, 2]].concat()).unwrap();
+            assert_eq!((row.type_name.as_str(), row.child_count), (if big { "u16 be[]" } else { "u16 le[]" }, 4));
+            assert_eq!(ev.node(&d, &[voxels, vec![1, 2, 3]].concat()).unwrap().value.as_int(), Some(23));
+        }
+    }
+
+    #[test]
+    fn a_nifti_2_file_scales_by_its_doubles() {
+        for big in [false, true] {
+            let (d, mut ev) = eval(nifti2(big, 3.0, 1000.0));
+            assert_eq!(value(&mut ev, &d, &["header", "scale"]).as_int(), Some(3), "big={big}");
+            assert_eq!(value(&mut ev, &d, &["header", "zero"]).as_int(), Some(1000));
+            let voxels = at(&mut ev, &d, &["voxels"]);
+            assert_eq!(ev.node(&d, &[voxels, vec![1, 2, 3, 1]].concat()).unwrap().value.as_int(), Some(1069));
+        }
+        let (d, mut ev) = eval(nifti2(false, 0.1, 0.0));
+        assert_eq!(named(&mut ev, &d, &["header", "scale"]).size_bits, 0);
+        let voxels = at(&mut ev, &d, &["voxels"]);
+        assert_eq!(ev.node(&d, &[voxels, vec![0, 0]].concat()).unwrap().type_name, "u16 le[]");
+    }
+
     #[test]
     fn recognised_by_size_and_magic_either_way_round() {
+        assert!(is_nifti(&nifti2(false, 0.0, 0.0), 588));
+        assert!(is_nifti(&nifti2(true, 0.0, 0.0), 588));
         assert!(is_nifti(&Header::new(false).bytes(), 348));
         assert!(is_nifti(&Header::new(true).bytes(), 348));
         let mut pair = Header::new(true);
