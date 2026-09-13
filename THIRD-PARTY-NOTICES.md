@@ -66,6 +66,11 @@ text below is reproduced from their repository.
 
 Upstream: https://github.com/qjerome/magic-rs
 
+`pure-magic` is built from a copy in `crates/vendor/pure-magic` with one
+change, marked "Qubero:" in `src/parser.rs`: a `\0` at the end of a rule's
+string is kept, as `file` keeps it, rather than dropped. The BSD terms are
+the same.
+
 ```
 BSD 2-Clause License
 
