@@ -40,10 +40,11 @@
 //! a gap. A tile-compressed image is the common case, one row per tile and
 //! each tile's compressed bytes an array in the heap.
 //!
-//! What the header says about each column is read once, into `columns`, and
-//! the rows read it from there. That list covers no bytes: it is the cards
-//! gathered into the shape a row is read through, and it is also where a
-//! reader can see in one row why a column reads as it does.
+//! What the header says about each column is on one row per column, in
+//! `columns`. That list covers no bytes and nothing depends on it: it is the
+//! cards a column is described by, which are scattered through the header,
+//! gathered into the shape the rows are read through, so that a reader asking
+//! why a column reads as it does has the whole answer in one place.
 //!
 //! `TSCALn` and `TZEROn` say what the numbers in a column are worth: a stored
 //! value `x` means `TZEROn + TSCALn * x`, and `BZERO` and `BSCALE` say the
