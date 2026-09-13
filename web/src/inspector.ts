@@ -10,9 +10,9 @@ import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
-import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
+import type { DecodedCode, DecodedStep, Doc, FieldGraph, JoinedPart, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
@@ -1022,7 +1022,7 @@ export class Inspector {
     this.detail.hidden = false;
     const at = document.createElement("span");
     at.className = "addr";
-    at.append(...address(formatAddress(n.offset_bits, n.space), DECODED_PLUS_TITLE));
+    at.append(...address(formatAddress(n.offset_bits, n.space), plusTitle(n)));
     // A field read out of a compressed stream is at an address of that
     // stream, not of the file, and the two look the same written down. The
     // trail above already says which stream; this says which space the number
@@ -1030,7 +1030,7 @@ export class Inspector {
     // The type and the size used to be here too. They moved under the box,
     // beside the value they describe: a reader who wants to know what they
     // are looking at looks at the value first and the line under it next.
-    const inside = n.space === 0 ? "" : ` ${DECODED_INSIDE}`;
+    const inside = n.space === 0 ? "" : ` ${n.joined ? JOINED.inside : DECODED_INSIDE}`;
     this.detail.replaceChildren(at, inside);
     this.shape.textContent = `${n.type} · ${bitSizeText(n.size_bits)}`;
     this.shape.hidden = false;
@@ -1687,8 +1687,8 @@ export class Inspector {
       const value = formatAddress(n.offset_bits, n.space);
       const clause = this.placedHow(path, shape, from);
       const detail = this.working(["position"], from, how, value, clause);
-      if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream));
-      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, detail });
+      if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream), ...this.joinedRows(path, n));
+      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, detail, plus: plusTitle(n) });
     }
     if (!terse || said_(["length", "width"])) {
       const value = bitSizeText(n.size_bits);
@@ -2016,6 +2016,34 @@ export class Inspector {
   }
 
   /**
+   * Where the bytes are kept, for a field read inside a stream joined from
+   * several runs: the run its first byte is in, as an offset inside what that
+   * run gives, which is a field of this document with a place to go and look
+   * at.
+   *
+   * Two more rows where they have an answer. A run stored as it sits in the
+   * file says where the byte is in the file, which for a PDB page is the first
+   * thing a reader wants. A BGZF block gives the virtual offset a BAI or a CSI
+   * would name the byte by, in the halves the index's own rows are called.
+   */
+  private joinedRows(path: readonly number[], n: TemplateNode): Node[] {
+    if (!n.joined) return [];
+    const part = this.doc.partOf(path);
+    if (part === null) return [];
+    const rows: Node[] = [joinedRow(part)];
+    if (!part.packed && part.run_space === 0) {
+      rows.push(plainRow(JOINED.inFile(formatOffset(part.run_offset_bits + part.in_part * 8))));
+    }
+    if (part.block_offset !== null && part.in_block !== null) {
+      const voffset = (BigInt(part.block_offset) << 16n) | BigInt(part.in_block);
+      const row = plainRow(`${JOINED.virtualLabel} ${JOINED.virtual(voffset.toString(), String(part.block_offset), String(part.in_block))}`);
+      row.title = JOINED.virtualTitle(formatOffset(part.block_offset * 8));
+      rows.push(row);
+    }
+    return [roleHead(JOINED.startsIn), ...rows];
+  }
+
+  /**
    * What the structures above the field settled about it, nearest first, each
    * headed by the field it is about.
    *
@@ -2109,7 +2137,7 @@ export class Inspector {
     // address line at the top of the panel. Read off the text rather than
     // passed down: a Property is a label and a fact, and the one fact that has
     // a mark on it is the one that starts with the mark.
-    value.append(...address(p.value, DECODED_PLUS_TITLE));
+    value.append(...address(p.value, p.plus ?? DECODED_PLUS_TITLE));
     return value;
   }
 
@@ -2962,7 +2990,16 @@ type Property = {
   readonly bit: number | null;
   readonly how: How | null;
   readonly detail: Node[];
+  /** What the `+` of an address answer counts from, where that is not an
+   *  unpacked stream. */
+  readonly plus?: string;
 };
+
+/** What the `+` in front of a field's address counts from: the stream it was
+ *  joined into, or the one it was unpacked out of. */
+function plusTitle(n: TemplateNode): string {
+  return n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE;
+}
 
 /** How an answer was arrived at, and the field it names, when it names one. */
 type How = { readonly text: string; readonly path: readonly number[] | null };
@@ -2989,6 +3026,35 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
   const what = document.createElement("span");
   what.className = "insp-origin-name";
   what.append(...address(PROPERTIES.withinAt(name, `${ADDRESS_MARK}+${offsetDigits(delta)}`), PROPERTIES.withinPlusTitle(name)));
+  row.append(what);
+  return row;
+}
+
+/**
+ * The run a field of a joined stream starts in, and where in it: `@+0x4d2 in
+ * pages[12]`. The whole row carries the run's path, the way an `Offset within`
+ * row carries its structure's, so pointing at it marks the run and clicking
+ * goes there.
+ */
+function joinedRow(part: JoinedPart): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-origin";
+  row.dataset["path"] = part.path.join("/");
+  const what = document.createElement("span");
+  what.className = "insp-origin-name";
+  const at = `${ADDRESS_MARK}+${offsetDigits(part.in_part * 8)}`;
+  what.append(...address(JOINED.at(at, part.label, part.packed), JOINED.plusTitle(part.label, part.packed)));
+  row.append(what);
+  return row;
+}
+
+/** A row of the same group with nowhere to go. */
+function plainRow(text: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "insp-origin";
+  const what = document.createElement("span");
+  what.className = "insp-origin-name";
+  what.textContent = text;
   row.append(what);
   return row;
 }

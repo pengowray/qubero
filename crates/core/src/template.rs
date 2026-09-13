@@ -3255,8 +3255,14 @@ impl Ty {
             // of the five it is, and what comes out is a row of its own below.
             Ty::Decoded { codec, .. } => codec.as_str().to_string(),
             // Not `inner` alone: the field itself is no bytes, and what it
-            // reads is joined from parts that are elsewhere.
-            Ty::Stitched { inner, .. } => format!("joined \u{2192} {}", inner.display_name()),
+            // reads is joined from parts that are elsewhere. A choice made by
+            // what the joined bytes turn out to hold has no name until it is
+            // made, and `joined → switch` names the mechanism rather than the
+            // contents, so that says only how the contents were reached.
+            Ty::Stitched { inner, .. } => match inner.display_name().as_str() {
+                "switch" => "joined".into(),
+                name => format!("joined \u{2192} {name}"),
+            },
             Ty::Traced { part } => match part {
                 TracedPart::Blocks => "blocks".into(),
                 TracedPart::Block(_) => "block".into(),

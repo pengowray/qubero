@@ -312,6 +312,38 @@ fn the_side_reader_finds_every_record_once() {
     }
 }
 
+/// Where every record the template reads out of the joined stream starts, as
+/// a virtual offset worked out from the part its first byte is in, is where a
+/// BAI's chunks and linear index say records start. The side reader already
+/// agrees with the index; this is the template's own account of the same
+/// places, from its part table rather than from a walk of the blocks.
+#[test]
+fn a_records_virtual_offset_matches_the_bai() {
+    for name in ["range.bam", "mpileup.1.bam"] {
+        let (bam, mut bam_ev) = skip_without!(read(name, "bgzf"));
+        let p = stream(&mut bam_ev, &bam);
+        let records = at(&mut bam_ev, &bam, &p, &["records"]);
+        let mut starts = std::collections::HashSet::new();
+        for i in 0..bam_ev.node(&bam, &records).unwrap().child_count as usize {
+            let r = bam_ev.node(&bam, &[records.clone(), vec![i]].concat()).unwrap();
+            let hit = bam_ev.part_of(&bam, r.space, r.offset_bits / 8).unwrap().expect("a record's first byte is in a part");
+            starts.insert(hit.virtual_offset.expect("a BGZF block's part has a virtual offset"));
+        }
+        let (d, mut ev) = skip_without!(read(&format!("{name}.bai"), "bai"));
+        let refs = at(&mut ev, &d, &[], &["references"]);
+        let mut checked = 0;
+        for i in 0..ev.node(&d, &refs).unwrap().child_count as usize {
+            let ioffsets = at(&mut ev, &d, &[refs.clone(), vec![i]].concat(), &["ioffsets"]);
+            for k in 0..ev.node(&d, &ioffsets).unwrap().child_count as usize {
+                let v = int(&mut ev, &d, &[ioffsets.clone(), vec![k]].concat(), &["voffset"]) as u64;
+                assert!(starts.contains(&v), "{name}: window {k} of reference {i} at {}:{}", v >> 16, v & 0xffff);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "{name}");
+    }
+}
+
 fn int(ev: &mut Evaluator, d: &Document<MemSource>, from: &[usize], names: &[&str]) -> i128 {
     let p = at(ev, d, from, names);
     ev.node(d, &p).unwrap().value.as_int().unwrap_or_else(|| panic!("{names:?} is not a number"))

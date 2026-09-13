@@ -2629,6 +2629,79 @@ they were until the memo forgets them, and the memo forgets forwards
 Parquet footer after its pages. Neither the placed index nor `kinds` counts a
 gathered child twice, but a gather over records that two paths reach would.
 
+### One stream kept in several runs
+A PDB keeps each stream in fixed-size blocks, listed by number in the order
+the stream's bytes go and placed wherever the writer found room. A BAM is one
+stream of records written through BGZF, cut into gzip members every 64 KB
+whether or not a record ends there. In both, the stream is in the file and is
+no run of the file, and neither reads as anything until its pieces are joined.
+A `Decoded` field opens one buffer over one run, which covers neither.
+
+`Ty::Stitched { from, part_len, len, inner }` (2026-09-14) is the join. It is
+zero bits where it is declared, like a gather, and walks to its runs the same
+way: `from` is a run of `Step`s, and the walk is the gather's own, factored
+out of `eval/gather.rs` with a rule for what it may stop on (a gather wants a
+record with fields; a join wants any run, through an `At`). Each landing is a
+part. A part that lands on a `Decoded` field is what that field unpacks to;
+anything else is its own bytes. `inner` is read in a space of its own made of
+the parts end to end, so a record cut across seventeen BGZF members is one
+field at one offset.
+
+**The total comes first.** What is inside a space needs to know where the
+space ends before it is placed: a repeat to the end of its room and
+`Remaining` both ask. So opening one walks to every part. A stored part costs
+its size. A packed part would cost an inflate, so `part_len` lets the format
+say how long each comes to, worked out one past the last field of the
+structure the run is in: a BGZF member's `original_size` is in its trailer,
+and a BAM of sixteen thousand members is measured without inflating one. `len`
+is the stream's own total where the format writes one, which a PDB stream does,
+and the last part is cut there. Only reaching a part is charged against a go,
+the gather's rule, so a walk that runs out carries on from the part it stood
+on. Writing the test for that found a gather bug the factoring had inherited:
+a go that ran out on a record reached by a named field skipped that record on
+the next go, because the frame held the field's index and the step asked only
+whether anything had been taken.
+
+**Reads unpack, and only reads.** `Spaces` keeps a backing per space: the
+buffer a `Decoded` field unpacked, or a stitched space's part table. A read in
+a stitched space halves the table for its first byte and copies across as
+many parts as it covers. A stored part reads from the space its run is in, so
+a page of the file can answer `Pending` like any other read. A packed part
+comes from the member's own stream if something opened it, else from a cache
+of the parts read most recently, capped at 16 MiB and dropping the part read
+longest ago, else it is unpacked there and then. Reading the last of 12,000
+records across 300 members with the cap at four members held four members'
+bytes at most. A part that will not unpack, or unpacks to another length than
+its trailer said, fails the read that reached it with the part named, and a
+run of records inside stops there with that as its reason.
+
+**Mapping back.** `Evaluator::part_of(space, byte)` answers which part a byte
+of a joined stream came from and where in it, from the part table alone: the
+run's path and its label (`blocks[3].compressed`, `pages[10]`, written the way
+a gathered element names its descriptor), the byte's place inside what the run
+gives, and for a BGZF member the virtual offset an index names the byte by.
+That is the member's own start shifted up sixteen bits, not the start of the
+deflate run eighteen bytes in. The panel's Position row says `Starts in @+0x6
+in unpacked blocks[3].compressed`, adds the file address for a stored run, and
+adds the virtual offset for a BGZF one. Addresses inside say `joined` on their
+`+` rather than `unpacked`, since a PDB page was never packed.
+
+**What the formats do with it.** `formats/pdb.rs` keeps its check that a
+stream's blocks are one ascending run, and a stream that passes is read where
+it lies and stays editable; one that fails is its pages, each where it is, and
+the stream joined from them. `formats/bam.rs` reads every block as the gzip
+member it is and joins their runs into `stream`, which opens as a BAM, a CSI or
+text by its first four bytes. The first-block-only reading, its `Idx == 0`
+sniff and the records cut short at the end of a block are gone.
+`formats/bam_records.rs`, which walks the stream from the front with no
+template, stays as the reading the template is checked against, record by
+record, in `tests/bam_real.rs`.
+
+Not yet: nothing inside a joined stream is editable (a field whose first byte
+is in a stored page says where that byte is in the file); a joined stream opens
+no tab of its own; `map_out` has nothing to delegate to without one. HDF4 linked
+blocks and Godot `RSCC` fit the shape and are not written.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
@@ -2649,15 +2722,10 @@ which the IR cannot describe, so a NAL unit stops at its header bits. What is
 left for an H.264 Annex B stream is a template for one; the measure it needs is
 built, and see "A stream that ends at something longer than a byte".
 
-A program database's scattered streams are their block lists and nothing more.
-A PDB is a paged container, so a stream whose blocks are not consecutive is
-nowhere in the file as a run of bytes, and the blocks are stored rather than
-compressed: joining them is the whole of what is missing, and nothing in the IR
-says "one space stitched from several runs". A Godot `RSCC` written across more
-than one block waits on the same sentence. A stream whose blocks *are* one
-ascending run is read where it lies, which covers the stream directory in every
-PDB measured and the info stream in nearly all of them; see `formats/pdb.rs`
-for the check that says so and for what a stream is read as once it is found.
+A program database's stream directory, when its blocks are not one run, is
+still its blocks and nothing more; its streams are joined (see "One stream kept
+in several runs"). A Godot `RSCC` written across more than one block and an
+HDF4 element in linked blocks can be joined the same way and are not yet.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 

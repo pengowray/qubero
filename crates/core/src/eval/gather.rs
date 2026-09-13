@@ -407,6 +407,27 @@ impl Evaluator {
     /// `rows[3].col1[0]`, which is the descriptor a FITS heap array came from.
     pub(super) fn gathered_label<S: Source>(&mut self, doc: &Document<S>, list: &[usize], record: &[usize]) -> R<String> {
         let Ty::Gather { from, .. } = self.memo[list].ty.clone() else { return fail("not a gathered list") };
+        self.walk_label(doc, list, &from, record)
+    }
+
+    /// The place a walk from `at` down `from` landed, named the way a reader
+    /// would name it: each step's name, with the index each fanning step took.
+    /// The same for a gather's record and a stitched stream's part.
+    pub(super) fn walk_label<S: Source>(&mut self, doc: &Document<S>, at: &[usize], from: &[Step], record: &[usize]) -> R<String> {
+        // Everything the label reads is a node on the way down to the record,
+        // so those are opened first and the naming itself reads only the memo.
+        for k in 0..=record.len() {
+            self.resolve(doc, &record[..k])?;
+        }
+        Ok(self.walk_label_here(at, from, record))
+    }
+
+    /// The same, from what the memo already holds, for a caller with no
+    /// document to open anything with: a read that fails in a stitched stream
+    /// names the part it failed in. A step whose node has been given back is
+    /// named by what can still be said about it.
+    pub(super) fn walk_label_here(&self, at: &[usize], from: &[Step], record: &[usize]) -> String {
+        let list = at;
         let mut label = String::new();
         let mut p: Vec<usize> = Vec::new();
         for (k, step) in from.iter().enumerate() {
@@ -425,21 +446,20 @@ impl Evaluator {
                 Step::Tagged { shown, .. } => label.push_str(&format!("{dot}{shown}")),
                 Step::Each => label.push_str(&format!("[{j}]")),
                 Step::Fields(_) => {
-                    self.resolve(doc, &p[..p.len() - 1])?;
-                    let name = match self.memo[&p[..p.len() - 1]].ty.base() {
-                        Ty::Struct(s) => s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default(),
+                    let name = match self.memo.get(&p[..p.len() - 1]).map(|r| r.ty.base()) {
+                        Some(Ty::Struct(s)) => s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default(),
                         _ => String::new(),
                     };
                     label.push_str(&format!("{dot}{name}"));
                 }
             }
-            if matches!(step, Step::Field(_) | Step::Fields(_)) && record.len() > p.len() {
-                self.resolve(doc, &p)?;
-                if matches!(self.memo[&p].ty, Ty::At { .. }) {
-                    p.push(0);
-                }
+            if matches!(step, Step::Field(_) | Step::Fields(_))
+                && record.len() > p.len()
+                && matches!(self.memo.get(&p).map(|r| &r.ty), Some(Ty::At { .. }))
+            {
+                p.push(0);
             }
         }
-        Ok(label)
+        label
     }
 }

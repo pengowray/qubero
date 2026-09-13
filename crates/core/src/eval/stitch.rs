@@ -256,10 +256,14 @@ impl Evaluator {
         let PartSource::Packed { space, at_bits, size_bits, codec } = &part.source else {
             return fail("not a packed part");
         };
+        // Both of these are shown over the bytes a run of records could not
+        // read, so they name the part the way the listing names the field it
+        // is, and say what the file claimed in the file's own voice.
         let checked = |bytes: Arc<Vec<u8>>| -> R<Arc<Vec<u8>>> {
             if bytes.len() as u64 != part.len {
                 return fail(format!(
-                    "part {i} unpacks to {} bytes, not the {} its run says",
+                    "{} unpacks to {} bytes, not the {} the file says",
+                    self.part_label(stitch, i),
                     bytes.len(),
                     part.len
                 ));
@@ -274,13 +278,138 @@ impl Evaluator {
         if let Some(bytes) = stitch.cache.borrow_mut().get(i) {
             return Ok(bytes);
         }
-        let Ok(codec) = codec else { return fail(format!("part {i} would not unpack")) };
-        let bytes = match self.unpack_run(doc, *space, *at_bits, *size_bits, *codec)? {
+        let unpacked = match codec {
+            Ok(codec) => self.unpack_run(doc, *space, *at_bits, *size_bits, *codec)?,
+            Err(why) => Err(*why),
+        };
+        let bytes = match unpacked {
             Ok(bytes) => checked(Arc::new(bytes))?,
-            Err(_) => return fail(format!("part {i} would not unpack")),
+            Err(_) => return fail(format!("{} could not be unpacked", self.part_label(stitch, i))),
         };
         stitch.cache.borrow_mut().put(i, bytes.clone());
         Ok(bytes)
+    }
+
+    /// Part `i` as a reader would name it, for a read that failed in it: the
+    /// field the walk landed on, `blocks[2].compressed`. Where that cannot be
+    /// said any more, its index, marked as one so that `2` is not read as the
+    /// second.
+    fn part_label(&self, stitch: &Stitch, i: usize) -> String {
+        let label = match self.memo.get(&stitch.path).map(|r| &r.ty) {
+            Some(Ty::Stitched { from, .. }) => self.walk_label_here(&stitch.path, from, &stitch.parts[i].path),
+            _ => String::new(),
+        };
+        if label.is_empty() { format!("part index {i}") } else { label }
+    }
+}
+
+/// Which part of a stitched stream a byte of it came from, and where in that
+/// part. See [`Evaluator::part_of`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartHit {
+    /// Which part, counting from 0 in the order the stream goes, and how many
+    /// parts the stream has.
+    pub index: usize,
+    pub parts: usize,
+    /// The field the part is: a PDB page, or a BGZF block's compressed run. A
+    /// place a reader can go to.
+    pub path: Vec<usize>,
+    /// That field as a reader would name it, the way a gathered element names
+    /// its descriptor: `blocks[3].compressed`.
+    pub label: String,
+    /// The byte's place inside what the part gives, and how much that is.
+    pub in_part: u64,
+    pub part_len: u64,
+    /// Where the part's run starts, in the space it is a field of. 0 is the
+    /// file.
+    pub run_space: u32,
+    pub run_offset_bits: u64,
+    /// Whether the run was unpacked to give the part, rather than read as it
+    /// sits.
+    pub packed: bool,
+    /// For a part that is a BGZF block, the byte as a BAI or a CSI names it:
+    /// where the block starts in the file, shifted up sixteen bits, with the
+    /// byte's place in what the block unpacks to below. The block, not the
+    /// deflate run inside it, which starts eighteen bytes later.
+    pub virtual_offset: Option<u64>,
+}
+
+impl Evaluator {
+    /// Which part byte `byte` of `space` came from, when `space` is a stitched
+    /// stream's. `space` is the number a node inside the stream carries
+    /// ([`NodeInfo::space`]), not a tab's. Nothing for any other space, and
+    /// for a byte past the end.
+    ///
+    /// The reverse of a read, from the part table alone: nothing is unpacked
+    /// to answer, since the question is where the byte is kept rather than what
+    /// it holds.
+    pub fn part_of<S: Source>(&mut self, doc: &Document<S>, space: u32, byte: u64) -> R<Option<PartHit>> {
+        let Some(stitch) = self.spaces.stitch(space) else { return Ok(None) };
+        let Some(index) = stitch.part_at(byte) else { return Ok(None) };
+        let (part, parts, owner) = (stitch.parts[index].clone(), stitch.parts.len(), stitch.path.clone());
+        let (run_space, run_offset_bits, packed) = match part.source {
+            PartSource::Stored { space, at_bits } => (space, at_bits, false),
+            PartSource::Packed { space, at_bits, .. } => (space, at_bits, true),
+        };
+        self.resolve(doc, &owner)?;
+        let Ty::Stitched { from, .. } = self.memo[&owner].ty.clone() else { return Ok(None) };
+        let label = self.walk_label(doc, &owner, &from, &part.path)?;
+        let in_part = byte - part.start;
+        let virtual_offset = match self.bgzf_block_of(doc, &part.path)? {
+            Some(block_bits) if in_part < 1 << 16 => Some((block_bits / 8) << 16 | in_part),
+            _ => None,
+        };
+        Ok(Some(PartHit {
+            index,
+            parts,
+            path: part.path,
+            label,
+            in_part,
+            part_len: part.len,
+            run_space,
+            run_offset_bits,
+            packed,
+            virtual_offset,
+        }))
+    }
+
+    /// Why a field inside a joined stream cannot be written, when its first
+    /// byte is kept in a run stored as it sits in the file. Nothing for a run
+    /// that was unpacked, whose bytes are in no place in the file, and which
+    /// the refusal for any unpacked stream already words: see
+    /// [`encode::UNPACKED_MSG`].
+    ///
+    /// The run is named, and the byte's place in the file given, because the
+    /// hex view is a real way to make the change and the address the panel
+    /// shows is an offset of the joined stream: without these the reader would
+    /// work out a page-relative offset by hand. "Starting" because only the
+    /// first byte's run is known, and a field may carry on into the next.
+    pub(super) fn joined_refusal<S: Source>(&mut self, doc: &Document<S>, r: &Resolved) -> R<Option<String>> {
+        let Some(hit) = self.part_of(doc, r.space, r.offset / 8)? else { return Ok(None) };
+        if hit.packed || hit.run_space != 0 {
+            return Ok(None);
+        }
+        let at = hit.run_offset_bits / 8 + hit.in_part;
+        Ok(Some(format!(
+            "Can't edit here: editing inside a joined stream isn't supported yet. This field's bytes are in the file, starting at 0x{at:x} in {}; edit them in the hex view.",
+            hit.label
+        )))
+    }
+
+    /// Where the BGZF block a run is a field of starts, when it is one: the
+    /// nearest structure above the run, marked as the packing the BAM side
+    /// reader answers for. The same mark the panel for a block's records goes
+    /// by, so the two agree on what a block is.
+    fn bgzf_block_of<S: Source>(&mut self, doc: &Document<S>, run: &[usize]) -> R<Option<u64>> {
+        for k in (0..run.len()).rev() {
+            self.resolve(doc, &run[..k])?;
+            let r = &self.memo[&run[..k]];
+            if let Ty::Struct(def) = r.ty.base() {
+                let bgzf = def.packed.as_deref() == Some(crate::formats::bam_records::PACKING);
+                return Ok(bgzf.then_some(r.offset));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -449,9 +578,22 @@ mod tests {
         let mut e = Evaluator::new(paged(record(), false));
         let b = e.node(&d, &[STREAM, 0, 1]).unwrap();
         assert!(!b.editable);
-        assert!(e.prepare_write(&d, &[STREAM, 0, 1], "1").is_err());
-        // The page the same bytes sit in is a field of the file, and is.
-        assert!(e.node(&d, &[PAGES, 0, 0]).unwrap().space == 0);
+        // The page the same bytes sit in is a field of the file.
+        assert_eq!(e.node(&d, &[PAGES, 0, 0]).unwrap().space, 0);
+        // `b` starts two bytes into page 3, which is at 0x18 in the file, and
+        // the refusal says where to make the change instead.
+        assert_eq!(
+            e.prepare_write(&d, &[STREAM, 0, 1], "1"),
+            Err(crate::eval::EvalError::Failed(
+                "Can't edit here: editing inside a joined stream isn't supported yet. This field's bytes are in the file, starting at 0x1a in pages[0]; edit them in the hex view.".into()
+            ))
+        );
+        // A field of a joined stream whose run was unpacked says what any
+        // unpacked field says: its bytes are in no place in the file.
+        let d = Document::new(MemSource(bgzf_of(&[b"some text in one block"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let text = e.child_named(&d, &JOINED, "text").unwrap().unwrap();
+        assert_eq!(e.prepare_write(&d, &text, "x"), Err(crate::eval::EvalError::Failed(crate::encode::UNPACKED_MSG.into())));
     }
 
     /// A BGZF file of `pieces`, one block each, and the block every BGZF file
@@ -539,7 +681,7 @@ mod tests {
         // bad block begins, saying which part it was.
         assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
         let why = e.list(&records).repeat_trouble.clone().expect("the run says why it stopped");
-        assert!(why.contains("part 2 would not unpack"), "{why}");
+        assert!(why.contains("blocks[2].compressed could not be unpacked"), "{why}");
         // The blocks themselves are still what they are.
         assert_eq!(e.node(&d, &[0]).unwrap().child_count, 4);
     }
@@ -556,7 +698,9 @@ mod tests {
         let (mut e, records) = records_of(&d);
         assert_eq!(e.node(&d, &records).unwrap().child_count, 2);
         let why = e.list(&records).repeat_trouble.clone().expect("the run says why it stopped");
-        assert!(why.contains("part 2 unpacks to") && why.contains("not the"), "{why}");
+        let (odd, even) = crate::formats::bam::tests::two_records();
+        let got = odd.len() + even.len();
+        assert_eq!(why, format!("blocks[2].compressed unpacks to {got} bytes, not the {} the file says", got + 5));
     }
 
     #[test]
@@ -666,6 +810,40 @@ mod tests {
         assert!(peak <= cap, "held {peak} bytes with a cap of {cap}");
         assert!(peak >= block_bytes, "nothing was held at all");
         assert!(unpacked > 50 * cap, "the stream is not long enough for the cap to be what bounds it");
+    }
+
+    #[test]
+    fn a_byte_of_a_stitched_space_names_its_part_and_offset() {
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let c = e.node(&d, &[STREAM, 0, 2]).unwrap();
+        // `c` starts two bytes before the end of page 3, which is the stream's
+        // first part and the last page of the file.
+        let hit = e.part_of(&d, c.space, c.offset_bits / 8).unwrap().expect("a byte of the stream");
+        assert_eq!((hit.index, hit.parts, hit.label.as_str()), (0, 3, "pages[0]"));
+        assert_eq!(hit.path, [PAGES, 0, 0]);
+        assert_eq!((hit.in_part, hit.part_len, hit.run_space, hit.run_offset_bits), (6, 8, 0, 24 * 8));
+        assert!(!hit.packed);
+        assert_eq!(hit.virtual_offset, None, "a page is not a BGZF block");
+        // Its third byte is the first of page 1, eight bytes into the file.
+        let hit = e.part_of(&d, c.space, 8).unwrap().unwrap();
+        assert_eq!((hit.index, hit.label.as_str(), hit.in_part, hit.run_offset_bits), (1, "pages[1]", 0, 8 * 8));
+        // Past the length is no part, and so is a space that is not stitched.
+        assert_eq!(e.part_of(&d, c.space, 20).unwrap(), None);
+        assert_eq!(e.part_of(&d, 0, 0).unwrap(), None);
+
+        // A BGZF block names its byte the way an index does: the block's own
+        // place in the file, not its deflate run's, and the byte in what it
+        // unpacks to.
+        let first = [b'x'; 40];
+        let d = Document::new(MemSource(bgzf_of(&[&first, b"the second block"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let space = e.node(&d, &JOINED).unwrap().space;
+        let hit = e.part_of(&d, space, 45).unwrap().unwrap();
+        let block = e.node(&d, &[0, 1]).unwrap().offset_bits / 8;
+        assert_eq!((hit.label.as_str(), hit.in_part, hit.packed), ("blocks[1].compressed", 5, true));
+        assert_eq!(hit.run_offset_bits / 8, block + 18);
+        assert_eq!(hit.virtual_offset, Some(block << 16 | 5));
     }
 
     #[test]

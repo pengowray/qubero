@@ -149,6 +149,9 @@ pub(super) enum Backing {
 
 /// A space made of parts that are elsewhere, joined end to end.
 pub(super) struct Stitch {
+    /// The `Stitched` node that opened it, which is what knows the walk its
+    /// parts were found by.
+    pub(super) path: Vec<usize>,
     /// Every part, by where it starts in the joined bytes. Complete before
     /// anything inside is placed, so the total is known.
     pub(super) parts: Vec<Part>,
@@ -282,7 +285,7 @@ impl Spaces {
     /// became.
     pub(super) fn add_stitched(&mut self, path: &[usize], parts: Vec<Part>, len_bytes: u64) -> u32 {
         let cache = std::cell::RefCell::new(PartCache::new(self.cache_cap));
-        self.backings.push(Backing::Stitched(Box::new(Stitch { parts, len_bytes, cache })));
+        self.backings.push(Backing::Stitched(Box::new(Stitch { path: path.to_vec(), parts, len_bytes, cache })));
         let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id

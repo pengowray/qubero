@@ -47,6 +47,7 @@ pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP}
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
+pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
 pub use time::{Moment, TimeInfo, FIRST_SECOND, LAST_SECOND};
@@ -253,6 +254,13 @@ pub struct NodeInfo {
     /// `decoded`, is where a listing hangs Open unpacked, and the stream it
     /// opens is this node's parent.
     pub space_root: bool,
+    /// True for a field read inside a stream joined from several runs, whose
+    /// offsets count from the front of the joined stream: see
+    /// [`crate::template::Ty::Stitched`]. A view saying what an address counts
+    /// from says "joined" rather than "unpacked" for these, since a PDB page
+    /// was never packed, and asks [`Evaluator::part_of`] which run a byte is
+    /// kept in.
+    pub joined: bool,
     /// What the template says about this field regardless of the shapes:
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
@@ -751,6 +759,7 @@ impl Evaluator {
             space_root: r.space != 0
                 && !path.is_empty()
                 && self.memo.get(&path[..path.len() - 1]).is_none_or(|p| p.space != r.space),
+            joined: self.spaces.stitch(r.space).is_some(),
             // Nothing inside a decoded stream is written back: there is no
             // mapping from a decoded byte to a byte of the file, so a change
             // made there has nowhere to go.
@@ -906,6 +915,9 @@ impl Evaluator {
         // since the offset below would otherwise be a bit of the stream used as
         // a bit of the file.
         if r.space != 0 {
+            if let Some(why) = self.joined_refusal(doc, &r)? {
+                return fail(why);
+            }
             return fail(encode::UNPACKED_MSG);
         }
         if !encode::editable(&r.ty, size) {
