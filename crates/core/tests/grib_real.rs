@@ -545,3 +545,107 @@ fn a_simply_packed_value_agrees_with_the_panel() {
     eprintln!("{checked} simply packed values checked");
     assert!(checked > 0, "no simply packed value in the collection");
 }
+
+/// Every simply packed message in the collection is a field of one value,
+/// written in no bits, so the test above never sees a packed number that is
+/// not nought or a binary scale that does anything. This one makes a message
+/// that does, out of a real one: `regular_ll_complex.grib2` unpacked by the
+/// side reader, whose values ecCodes agrees with, and packed again as simple
+/// packing with the same reference value and scale factors, every packed
+/// number whole and eleven bits wide. The template then has to land on the
+/// values ecCodes read from the original.
+#[test]
+fn a_real_field_packed_again_simply_is_worth_what_eccodes_read() {
+    use qubero_core::eval::Value;
+    use qubero_core::formats::grib_values::{complex, simple};
+    let Some((p, bytes)) = packing_and_data("regular_ll_complex.grib2", 0) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let original = complex(&p, &bytes);
+    assert_eq!(original.problem, None);
+    let raw = std::fs::read(sample("regular_ll_complex.grib2").unwrap()).unwrap();
+    let (d, mut ev) = read("regular_ll_complex.grib2").unwrap();
+    let widest = original.packed.iter().copied().max().unwrap() as u64;
+    let bits = (64 - widest.leading_zeros()).max(1);
+    let count = original.packed.len();
+
+    // Section 7: the packed numbers, most significant bit first.
+    let mut packed = vec![0u8; (count * bits as usize).div_ceil(8)];
+    for (i, x) in original.packed.iter().enumerate() {
+        for b in 0..bits as usize {
+            if (*x as u64) >> (bits as usize - 1 - b) & 1 == 1 {
+                let at = i * bits as usize + b;
+                packed[at / 8] |= 0x80 >> (at % 8);
+            }
+        }
+    }
+    let section = |number: u8, body: &[u8]| {
+        let mut s = ((body.len() + 5) as u32).to_be_bytes().to_vec();
+        s.push(number);
+        s.extend_from_slice(body);
+        s
+    };
+    let mut message = Vec::new();
+    for (number, path) in sections(&d, &mut ev) {
+        let node = ev.node(&d, &path).unwrap();
+        let (from, len) = ((node.offset_bits / 8) as usize, (node.size_bits / 8) as usize);
+        assert_eq!(u32::from_be_bytes(raw[from..from + 4].try_into().unwrap()) as usize, len, "section {number} is its whole length");
+        match number {
+            // Template 5.0 with the original's reference value and scale
+            // factors, byte for byte, and the new width.
+            5 => {
+                let template = [path.clone(), vec![2, 2]].concat();
+                let at = |ev: &mut Evaluator, name: &str| {
+                    let p = ev.child_named(&d, &template, name).unwrap().unwrap();
+                    (ev.node(&d, &p).unwrap().offset_bits / 8) as usize
+                };
+                let reference = at(&mut ev, "reference_value");
+                let mut body = (count as u32).to_be_bytes().to_vec();
+                body.extend_from_slice(&0u16.to_be_bytes());
+                body.extend_from_slice(&raw[reference..reference + 8]);
+                body.push(bits as u8);
+                body.push(0);
+                message.extend(section(5, &body));
+            }
+            7 => message.extend(section(7, &packed)),
+            _ => message.extend_from_slice(&raw[from..from + len]),
+        }
+    }
+    message.extend_from_slice(b"7777");
+    let mut file = raw[..8].to_vec();
+    file.extend_from_slice(&((message.len() + 16) as u64).to_be_bytes());
+    file.extend(message);
+
+    let d = Document::new(MemSource(file));
+    let mut ev = Evaluator::new(formats::builtin("grib").unwrap());
+    let found = sections(&d, &mut ev);
+    let seven = found.iter().find(|(n, _)| *n == 7).unwrap().1.clone();
+    let body = [seven, vec![2]].concat();
+    assert_eq!(ev.node(&d, &body).unwrap().type_name, "PackedData");
+    let values = ev.child_named(&d, &body, "values").unwrap().unwrap();
+    let list = ev.node(&d, &values).unwrap();
+    assert_eq!((list.type_name.as_str(), list.child_count), ("Packed[]", count as u64));
+    // The side reader over the new bytes says what the original said, which
+    // is what makes this a message about the same field.
+    let again = simple(&qubero_core::formats::grib_values::Packing { bits_per_value: bits, n_groups: 0, spatial_order: 0, ..p.clone() }, &packed, count);
+    assert_eq!(again.values, original.values);
+    for (i, want) in original.values.iter().enumerate() {
+        let stored = ev.node(&d, &[values.clone(), vec![i, 0]].concat()).unwrap().value;
+        assert_eq!(stored.as_int(), Some(i128::from(original.packed[i])), "value {i}");
+        let Value::Float(got) = ev.node(&d, &[values.clone(), vec![i, 1]].concat()).unwrap().value else { panic!("value {i}") };
+        assert!((got - want).abs() <= 1e-7 * want.abs().max(1.0), "value {i}: {got} against the panel's {want}");
+    }
+    // And the numbers ecCodes 2.48 gave for the original file.
+    let worth = |ev: &mut Evaluator, i: usize| match ev.node(&d, &[values.clone(), vec![i, 1]].concat()).unwrap().value {
+        Value::Float(f) => f,
+        other => panic!("{other:?}"),
+    };
+    for (i, eccodes) in [(0, 272.9888), (1, 279.5513), (2, 285.3638), (count - 1, 254.5825)] {
+        let got = worth(&mut ev, i);
+        assert!((got - eccodes).abs() < 5e-4, "value {i}: {got} against ecCodes' {eccodes}");
+    }
+    // What a reader is shown for the first: a binary scale that does something.
+    let rel = ev.relations(&d, &[values.clone(), vec![0, 1]].concat()).unwrap();
+    assert_eq!(rel[0].substituted, "(253.02 + 639 * pow2(-5)) / pow10(0)");
+}
