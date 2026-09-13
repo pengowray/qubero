@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
+use qubero_core::eval::{leap_seconds, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -706,18 +706,31 @@ struct CheckDto {
 /// number in it. The number itself is untouched and stays on the value row.
 #[derive(Serialize)]
 struct TimeDto {
-    /// "at" | "unset" | "impossible". `unset` is the value a format writes when
-    /// it has no time to record, and `impossible` is a number that names no
-    /// moment: a year outside 1 to 9999, or a packed date that is not a date.
+    /// "at" | "leap" | "unset" | "impossible". `leap` is an instant inside a
+    /// leap second, second 60 of a minute. `unset` is the value a format writes
+    /// when it has no time to record, and `impossible` is a number that names
+    /// no moment: a year outside 1 to 9999, or a packed date that is not a
+    /// date.
     state: &'static str,
-    /// Seconds from 1970-01-01T00:00:00Z, negative before it. Only for "at".
+    /// Seconds from 1970-01-01T00:00:00Z, negative before it. Only for "at" and
+    /// "leap"; for "leap" it is second 59 of the minute, and the moment is the
+    /// second after it, which a Unix count has no number for.
     ///
     /// Well inside what an f64 holds exactly: the core refuses anything outside
     /// year 1 to year 9999, which is at most 2.5e11.
     unix_seconds: Option<f64>,
     /// The sub-second part, in nanoseconds, always 0 to 999,999,999 and never
-    /// negative. Only for "at".
+    /// negative. Only for "at" and "leap".
     nanos: Option<f64>,
+    /// "past_leap_second_table" | "before_leap_seconds" | null. What has to be
+    /// shown beside a moment that is right as far as it goes: a count on a
+    /// clock with leap seconds that falls after the last day the table of them
+    /// vouches for, or before 1972, when UTC had none.
+    note: Option<&'static str>,
+    /// The first day the leap-second table does not vouch for, as seconds from
+    /// 1970-01-01T00:00:00Z. Only with the first of those notes, so the words
+    /// can name the day.
+    leap_table_expires: Option<f64>,
     /// "utc" | "local" | "unknown". For the last two the seconds above are the
     /// digits the file wrote laid on the UTC line, so an interface prints them
     /// unchanged and says which this was. Shifting them into the reader's own
@@ -2933,13 +2946,21 @@ impl Editor {
                     t.map(|t| {
                         let (state, unix_seconds, nanos) = match t.moment {
                             Moment::At { unix_seconds, nanos } => ("at", Some(unix_seconds as f64), Some(nanos as f64)),
+                            Moment::LeapSecond { unix_seconds, nanos } => ("leap", Some(unix_seconds as f64), Some(nanos as f64)),
                             Moment::Unset => ("unset", None, None),
                             Moment::Impossible => ("impossible", None, None),
                         };
+                        let note = t.note.map(|n| match n {
+                            TimeNote::PastLeapSecondTable => "past_leap_second_table",
+                            TimeNote::BeforeLeapSeconds => "before_leap_seconds",
+                        });
                         TimeDto {
                             state,
                             unix_seconds,
                             nanos,
+                            note,
+                            leap_table_expires: matches!(t.note, Some(TimeNote::PastLeapSecondTable))
+                                .then_some(leap_seconds::EXPIRES as f64),
                             zone: match t.zone {
                                 Zone::Utc => "utc",
                                 Zone::Local => "local",

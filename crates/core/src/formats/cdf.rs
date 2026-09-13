@@ -90,18 +90,33 @@
 //! or the record before. A record's values are a flat run, in the order the
 //! file wrote them: how to fold them into the variable's shape is what the
 //! majority flag and the dimension variances say, and doing that folding is a
-//! reader's job rather than this one's. And a CDF_TIME_TT2000 reads as the
-//! number it is rather than as a moment: it counts leap seconds from an
-//! instant that is not a whole second, which no counted epoch here can state.
-//! A date this could only get wrong is one it does not show.
+//! reader's job rather than this one's.
 //!
-//! **Times.** A CDF_EPOCH is milliseconds from 0000-01-01 in a double, and is
-//! declared a moment wherever one is read: a variable's values, its pad value,
-//! and an attribute entry such as the FILLVAL or VALIDMIN beside it. A
-//! CDF_EPOCH16 is two doubles, whole seconds from the same instant and
-//! picoseconds within the second, and its seconds are the moment, with the
-//! picoseconds on the row beside them. Both types' fill value, -1.0E31, and
-//! pad value, 0.0, read as no time.
+//! **Times.** CDF has three, and each is declared a moment wherever a value of
+//! it is read: a variable's values, its pad value, and an attribute entry such
+//! as the FILLVAL or VALIDMIN beside it.
+//!
+//! A CDF_EPOCH is milliseconds from 0000-01-01 in a double, every day 86,400
+//! seconds long. A CDF_EPOCH16 is two doubles, whole seconds from the same
+//! instant and picoseconds within the second, and its seconds are the moment,
+//! with the picoseconds on the row beside them. Both types' fill value,
+//! -1.0E31, and pad value, 0.0, read as no time.
+//!
+//! A CDF_TIME_TT2000 is nanoseconds in an `int8` from noon on 2000-01-01 in
+//! Terrestrial Time, and it counts the leap seconds UTC inserts, so it becomes
+//! a UTC date only through the table of them: counted as if there were none,
+//! from the right zero, a time from after 2016 would be five seconds out, and
+//! from noon on 2000-01-01 in UTC, 69.184 seconds. So it is an
+//! [`Atomic`](crate::template::Atomic) epoch, a moment inside a leap second
+//! reads as the `23:59:60` it was, and a moment after the table's last day
+//! says so. Its fill value, the most negative `int8`, and its pad value, the
+//! one after, read as no time; as counts both would be dates in 1707.
+//!
+//! The global descriptor records which table the writing library had:
+//! `leap_second_last_updated` is the day it was last changed, or -1 from a
+//! library older than 3.6. It is read and not yet used. A library whose table
+//! stopped before a leap second wrote every later time a second away from what
+//! the table here reads it as, and nothing yet says so.
 
 use crate::codec::Codec;
 use crate::template::{
@@ -372,15 +387,18 @@ fn number(code: i128, e: Endian) -> Option<T> {
 
 /// The data types whose numbers are moments, other than the epoch16, which
 /// declares its own. See [`time_of_type`].
-const TIME_TYPES: &[i128] = &[31];
+const TIME_TYPES: &[i128] = &[31, 33];
 
 /// The moment a value of this data type is, if it is one.
 ///
-/// A CDF_EPOCH is milliseconds from the year 0 in a double, fill and pad value
-/// included; see [`Time::cdf_epoch`].
+/// A CDF_EPOCH is milliseconds from the year 0 in a double; see
+/// [`Time::cdf_epoch`]. A CDF_TIME_TT2000 is nanoseconds from J2000 on a clock
+/// that counts leap seconds; see [`Time::tt2000`]. Both with the fill and pad
+/// values CDF gives them.
 fn time_of_type(code: i128) -> Option<Time> {
     match code {
         31 => Some(Time::cdf_epoch()),
+        33 => Some(Time::tt2000()),
         _ => None,
     }
 }
@@ -1488,6 +1506,22 @@ mod tests {
         let d = Document::new(MemSource(with_values(1, 45, 1, 2, &block, false)));
         let mut e = Evaluator::new(cdf());
         assert!(e.time_of(&d, &path(VALUES, &[0, 0])).unwrap().is_none());
+    }
+
+    /// A CDF_TIME_TT2000 variable's values go through the table of leap
+    /// seconds. The first is half a second into the one at the end of 2016,
+    /// by `cdflib`'s `compute_tt2000`; the second is the pad value.
+    #[test]
+    fn a_tt2000_variables_values_count_leap_seconds() {
+        let mut block = Vec::new();
+        for n in [536_500_868_684_000_000i64, i64::MIN + 1] {
+            block.extend(n.to_be_bytes());
+        }
+        let d = Document::new(MemSource(with_values(1, 33, 1, 2, &block, false)));
+        let mut e = Evaluator::new(cdf());
+        let leap = e.time_of(&d, &path(VALUES, &[0, 0])).unwrap().expect("a TT2000 is a time");
+        assert_eq!(leap.moment, Moment::LeapSecond { unix_seconds: 1_483_228_799, nanos: 500_000_000 });
+        assert_eq!(e.time_of(&d, &path(VALUES, &[1, 0])).unwrap().unwrap().moment, Moment::Unset);
     }
 
     /// A CDF_EPOCH16's seconds are the moment and its picoseconds are not.

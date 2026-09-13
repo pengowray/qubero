@@ -636,6 +636,11 @@ fn time_text(t: &Time) -> String {
             (YEAR_ZERO, 1_000_000_000) => "year zero".to_string(),
             (zero, step) => format!("counted from {zero} by {step}ns"),
         },
+        Epoch::Atomic(a) => match (a.zero_tai_nanos, a.step_nanos) {
+            (J2000_TAI_NANOS, 1) => "tt2000".to_string(),
+            (GPS_TAI_NANOS, 1_000_000_000) => "gps seconds".to_string(),
+            (zero, step) => format!("atomic from {zero}ns tai by {step}ns"),
+        },
         Epoch::Dos => "dos".to_string(),
         Epoch::DosHalves { date, time } => format!("dos halves(date {date}, time {time})"),
     };

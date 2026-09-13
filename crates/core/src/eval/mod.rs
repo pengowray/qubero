@@ -48,7 +48,7 @@ pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
-pub use time::{Moment, TimeInfo, FIRST_SECOND, LAST_SECOND};
+pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;

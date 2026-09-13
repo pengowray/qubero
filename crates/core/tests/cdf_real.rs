@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use qubero_core::{
     document::Document,
-    eval::{Evaluator, Moment, TimeInfo, Value},
+    eval::{Evaluator, Moment, TimeInfo, TimeNote, Value},
     formats,
     source::MemSource,
 };
@@ -323,6 +323,45 @@ fn the_psp_magnetometer_reads_the_numbers_cdflib_reads() {
     assert_eq!(quality_times.len(), 1440);
     assert_eq!(quality_times[0], 631368069184000000);
     assert_eq!(quality_times[1439], 631454409184000000);
+
+    // The same counts as moments, against what `cdflib.cdfepoch.encode` prints
+    // for them. A TT2000 counts leap seconds, and five have been inserted
+    // since J2000, so a count read without the table would be five seconds
+    // out.
+    let times = cdf.value_paths("epoch_mag_RTN_1min");
+    let first = cdf.moment(&times[0]);
+    assert_eq!(first.moment, encoded("2020-01-04T02:33:30.000000000"));
+    assert_eq!((first.step_nanos, first.note), (1, None));
+    assert_eq!(cdf.moment(&times[117]).moment, encoded("2020-01-04T19:33:30.000000000"));
+    // The slots past the hundred and eighteen records the variable has hold
+    // its pad value, which is no time, where as a count it would be 1707.
+    for p in &times[118..] {
+        assert_eq!(cdf.moment(p).moment, Moment::Unset, "{p:?}");
+    }
+    let vdr = cdf.variable("epoch_mag_RTN_1min");
+    let pad = cdf.field(&vdr, "pad_value");
+    assert_eq!(cdf.moment(&pad).moment, Moment::Unset);
+    // `cdflib` reads the quality flags' times as every minute of the day, and
+    // so does this, all 1,440 of them.
+    let Moment::At { unix_seconds: midnight, .. } = encoded("2020-01-04T00:00:00") else { unreachable!() };
+    for (i, p) in cdf.value_paths("epoch_quality_flags").iter().enumerate() {
+        assert_eq!(cdf.moment(p).moment, Moment::At { unix_seconds: midnight + 60 * i as i64, nanos: 0 }, "minute {i}");
+    }
+    // The attributes beside them. Both variables' fill value is no time, and
+    // the top of their valid range is after the last day the table of leap
+    // seconds vouches for, which the answer says.
+    let fill = cdf.attribute_moments("FILLVAL");
+    assert_eq!(fill.iter().map(|t| t.moment).collect::<Vec<_>>(), vec![Moment::Unset; 2]);
+    let valid_min = cdf.attribute_moments("VALIDMIN");
+    assert_eq!(valid_min.iter().map(|t| t.moment).collect::<Vec<_>>(), vec![encoded("2010-01-01T00:00:00.000000000"); 2]);
+    let valid_max = cdf.attribute_moments("VALIDMAX");
+    assert_eq!(
+        valid_max.iter().map(|t| (t.moment, t.note)).collect::<Vec<_>>(),
+        vec![
+            (encoded("2049-12-31T23:59:59.999999999"), Some(TimeNote::PastLeapSecondTable)),
+            (encoded("2050-01-01T00:00:00.000000000"), Some(TimeNote::PastLeapSecondTable)),
+        ]
+    );
 
     assert_eq!(cdf.global_attribute("Logical_source"), "psp_fld_l2_mag_RTN_1min");
     assert_eq!(cdf.global_attribute("TITLE"), "PSP FIELDS Fluxgate Magnetometer (MAG) data");

@@ -1506,6 +1506,9 @@ pub struct Time {
 pub enum Epoch {
     /// A count of fixed steps from a fixed instant.
     Counted(Counted),
+    /// A count of fixed steps on a clock that counts leap seconds, turned into
+    /// UTC through the table of them. See [`Atomic`].
+    Atomic(Atomic),
     /// MS-DOS's packed date and time, both halves in one thirty-two bit field:
     /// the date in the top sixteen bits, the time in the bottom sixteen. A RAR
     /// 4 file block and an LHA level 0 or 1 header write one this way.
@@ -1558,6 +1561,52 @@ pub struct Counted {
     /// either inventing digits the file does not have or dropping ones it does.
     pub step_nanos: u64,
 }
+
+/// A count of fixed steps from a fixed instant, on a clock that does not stop
+/// for leap seconds.
+///
+/// A [`Counted`] epoch is UTC's own count, in which every day is 86,400 seconds
+/// long: a Unix time simply has no number for `23:59:60`, and neither does
+/// anything else this reads that counts from 1970 or 1601. A clock that counts
+/// every SI second as it passes is a different thing, and the difference is 37
+/// seconds by now: TAI, and every clock defined as a fixed distance from it.
+/// Laying such a count on the UTC line as if it were one gives a date that
+/// many seconds late, which is a confident wrong answer, so the count goes
+/// through the table of leap seconds instead. See `eval/time/leap_seconds.rs`
+/// for the table, where its rows came from, and what is said about a moment
+/// after the last day it vouches for.
+///
+/// The zero is given as nanoseconds on TAI's own reading, which is the one
+/// place the different clocks meet, rather than as a clock and a date on it.
+/// CDF's TT2000 counts from noon on 2000-01-01 in Terrestrial Time, which runs
+/// 32.184 seconds ahead of TAI, so its zero is 11:59:27.816 on TAI and not a
+/// whole second; GPS time counts from midnight on 1980-01-06 and runs 19
+/// seconds behind TAI. Each is one number here, and the constructors on
+/// [`Time`] say which.
+///
+/// GWF frames are the other format here that could say this: a frame's
+/// `GTimeS` counts GPS seconds, and the frame writes its own `ULeapS` beside
+/// it. `Time::gps_seconds` is that declaration, not yet made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Atomic {
+    /// Where the count's zero is, as nanoseconds from 1970-01-01T00:00:00 on
+    /// TAI's reading: a TAI clock's date and time of day turned into a count
+    /// the way a Unix time is, every day 86,400 seconds, which is exact for TAI
+    /// since TAI has no other kind of day.
+    pub zero_tai_nanos: i128,
+    /// How long one step is, in nanoseconds, and so how precise the field is,
+    /// as for [`Counted::step_nanos`].
+    pub step_nanos: u64,
+}
+
+/// J2000, noon on 2000-01-01 in Terrestrial Time, as [`Atomic::zero_tai_nanos`]:
+/// 2000-01-01T11:59:27.816 on TAI, since TT is TAI plus 32.184 seconds.
+pub const J2000_TAI_NANOS: i128 = 946_727_967_816_000_000;
+
+/// The GPS epoch, midnight at the start of 1980-01-06 in UTC, as
+/// [`Atomic::zero_tai_nanos`]: 19 seconds later on TAI, which was ahead of UTC
+/// by that much then and is ahead of GPS time by that much for ever.
+pub const GPS_TAI_NANOS: i128 = 315_964_819_000_000_000;
 
 /// What a format says about the zone its times are in.
 ///
@@ -1639,6 +1688,29 @@ impl Time {
     /// picoseconds are on their own row beside it.
     pub fn cdf_epoch16_seconds() -> Time {
         Time::counted(YEAR_ZERO, 1_000_000_000).unset_float(-1.0e31).unset_float(0.0)
+    }
+    /// Nanoseconds from J2000 in Terrestrial Time, leap seconds and all: a NASA
+    /// CDF_TIME_TT2000. See [`Atomic`].
+    ///
+    /// Both of CDF's values for no time are declared, and here they matter
+    /// more than anywhere: the fill value is the most negative `int8` and the
+    /// pad value the one after it, and read as counts both are dates in
+    /// September 1707, inside the years this names. The CDF library prints
+    /// the first as the last nanosecond of 9999 and the second as the first of
+    /// the year 0, which is to say as no time, and `cdflib` reads both so.
+    pub fn tt2000() -> Time {
+        Time::atomic(J2000_TAI_NANOS, 1).unset(i64::MIN as i128).unset(i64::MIN as i128 + 1)
+    }
+    /// Whole seconds from the GPS epoch, which is how a GWF frame writes its
+    /// start. See [`Atomic`].
+    pub fn gps_seconds() -> Time {
+        Time::atomic(GPS_TAI_NANOS, 1_000_000_000)
+    }
+    /// A count of `step_nanos`-long steps from `zero_tai_nanos` on TAI's own
+    /// reading, turned into UTC through the table of leap seconds. For a clock
+    /// none of the constructors above names.
+    pub fn atomic(zero_tai_nanos: i128, step_nanos: u64) -> Time {
+        Time { epoch: Epoch::Atomic(Atomic { zero_tai_nanos, step_nanos }), zone: Zone::Utc, unset: Vec::new() }
     }
     /// MS-DOS's packed date and time in one thirty-two bit field. Local, since
     /// that is what MS-DOS had. See [`Epoch::Dos`].
