@@ -725,3 +725,77 @@ fn rntuple_headers_list_the_fields_and_columns_uproot_reads() {
         eprintln!("--- {file}: {} fields and {} columns, as uproot reads them", fields.len(), columns.len());
     }
 }
+
+/// One cluster's pages, one per column in both samples: element count, then
+/// the locator's size and offset. Every page in both files has a checksum after
+/// it. uproot's `page_link_list`.
+const STAFF_PAGES: [(i128, u64, u64); 13] = [
+    (3354, 3643, 642),
+    (3354, 1196, 4293),
+    (3354, 2226, 5497),
+    (3354, 1392, 7731),
+    (3354, 1051, 9131),
+    (3354, 1504, 10190),
+    (3354, 1655, 11702),
+    (3354, 273, 13365),
+    (3354, 6147, 13646),
+    (3354, 591, 19801),
+    (7811, 2062, 20400),
+    (3354, 32, 22470),
+    (6708, 1747, 22510),
+];
+const VIEWER_PAGES: [(i128, u64, u64); 4] = [(22, 176, 620), (178, 178, 804), (22, 176, 990), (193, 193, 1174)];
+
+/// The page list of the first cluster group, found through the footer the
+/// anchor points at, and the payload of the envelope it turned out to be.
+fn page_list_payload(d: &Document<MemSource>, ev: &mut Evaluator, anchor: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let footer = find_type(d, ev, &[anchor, &[16]].concat(), "RNTupleEnvelope", 10).expect("a footer");
+    let group = [footer.as_slice(), &[2, 4, 2, 0]].concat();
+    let list = find_type(d, ev, &[group.as_slice(), &[6]].concat(), "RNTupleEnvelope", 10).expect("a page list");
+    (group, [list.as_slice(), &[2]].concat())
+}
+
+#[test]
+fn rntuple_pages_are_placed_where_uproot_finds_them() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    // The file, its entries, the page list's length unpacked and its
+    // locator, the pages, and the compression settings every column has.
+    let cases: [(&str, u64, (u64, u64, u64), &[(i128, u64, u64)], u64); 2] = [
+        ("ntpl001_staff_rntuple_v1-0-1-0.root", 3354, (604, 194, 24307), &STAFF_PAGES, 505),
+        ("rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root", 22, (244, 244, 1409), &VIEWER_PAGES, 0),
+    ];
+    for (file, entries, (length, size, offset), pages, settings) in cases {
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let anchor = rntuple_anchor(&d, &mut ev);
+        let (group, payload) = page_list_payload(&d, &mut ev, &anchor);
+        let at = |base: &[usize], more: &[usize]| [base, more].concat();
+        assert_eq!(ev.node(&d, &at(&group, &[2])).unwrap().value, Value::UInt(entries as u128), "{file}");
+        assert_eq!(ev.node(&d, &at(&group, &[4])).unwrap().value, Value::UInt(length as u128), "{file}");
+        assert_eq!(ev.node(&d, &at(&group, &[5, 0])).unwrap().value.as_int(), Some(size as i128), "{file}");
+        let placed = ev.node(&d, &at(&group, &[6, 0])).unwrap();
+        assert_eq!((placed.offset_bits / 8, placed.size_bits / 8, placed.space), (offset, size, 0), "{file}");
+
+        assert_eq!(ev.node(&d, &at(&payload, &[1, 2, 0, 2])).unwrap().value, Value::UInt(entries as u128), "{file}");
+        let columns = at(&payload, &[2, 2, 0, 2]);
+        assert_eq!(ev.node(&d, &columns).unwrap().child_count as usize, pages.len(), "{file}");
+        let mut covered = 0;
+        for (j, (elements, size, offset)) in pages.iter().enumerate() {
+            let column = at(&columns, &[j]);
+            assert_eq!(ev.node(&d, &at(&column, &[2])).unwrap().child_count, 1, "{file} column {j}");
+            assert_eq!(ev.node(&d, &at(&column, &[4])).unwrap().value, Value::UInt(settings as u128), "{file} column {j}");
+            let entry = at(&column, &[2, 0]);
+            assert_eq!(ev.node(&d, &at(&entry, &[1])).unwrap().value.as_int(), Some(*elements), "{file} column {j}");
+            // Negative, because a checksum follows.
+            assert_eq!(ev.node(&d, &at(&entry, &[0])).unwrap().value.as_int(), Some(-*elements), "{file} column {j}");
+            let data = ev.node(&d, &at(&entry, &[3, 0, 0])).unwrap();
+            assert_eq!((data.offset_bits / 8, data.size_bits / 8, data.space), (*offset, *size, 0), "{file} column {j}");
+            let sum = ev.node(&d, &at(&entry, &[3, 0, 1])).unwrap();
+            assert_eq!((sum.offset_bits / 8, sum.size_bits / 8), (offset + size, 8), "{file} column {j}");
+            covered += size + 8;
+        }
+        eprintln!("--- {file}: {} pages placed, {covered} of {} bytes", pages.len(), d.len_bytes());
+    }
+}
