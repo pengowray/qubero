@@ -41,8 +41,11 @@
 //! anchor      := "file" | "window" | "origin" | "own start aligned to" int
 //! until       := "until end" | "until element." NAME ("is" bytes | "==" int)
 //!
-//! An element of a list that ends in a word of its own is bracketed first, so
-//! `(u32le unset 0)[4]` is four of them rather than an index into one.
+//! A count binds to the word in front of it, so an element written in more
+//! than one word is bracketed first: `(text[4] utf8)[3]` is three of them,
+//! where `text[4] utf8[3]` would read as an index into the encoding. An
+//! element that closes with a brace has already said where it ends and keeps
+//! no brackets.
 //!
 //! extra       := "check" sum "over" covers ["when" expr] ["blanking" byte]
 //!              | "element check" ...                the check is on each element
@@ -788,11 +791,16 @@ fn inline(ty: &Ty) -> Option<String> {
     Some(s)
 }
 
-/// The brackets a type needs around it to be the element of a list: a reading
-/// that ends in a word of its own would otherwise run into the count.
+/// The brackets a type needs around it to be the element of a list.
+///
+/// A count binds to the word in front of it, so only a one-word type can take
+/// one bare: `u8be[4]` is four numbers, but `text[4] utf8[3]` would read as an
+/// index into the encoding and `sized(n) u8be[4]` as a window holding a list
+/// rather than a list of windows. A type that closes with a brace has already
+/// said where it ends and needs nothing.
 fn brackets(elem: &Ty) -> (&'static str, &'static str) {
-    match elem {
-        Ty::Nullable { .. } => ("(", ")"),
+    match inline(elem) {
+        Some(s) if !s.ends_with('}') && (s.contains(' ') || s.ends_with(']')) => ("(", ")"),
         _ => ("", ""),
     }
 }
@@ -1101,10 +1109,13 @@ mod tests {
     }
 
     #[test]
-    fn an_element_that_ends_in_a_word_keeps_its_brackets() {
+    fn an_element_of_more_than_one_word_keeps_its_brackets() {
         let elem = Ty::Nullable { inner: Box::new(Ty::u32(Endian::Little)), unset: Unset::Int(0) };
         let list = Ty::Array { elem: Box::new(elem), count: E::lit(4) };
         assert_eq!(inline(&list).as_deref(), Some("(u32le unset 0)[4]"));
+        // One word takes the count bare.
+        let plain = Ty::Array { elem: Box::new(Ty::u32(Endian::Big)), count: E::field("n") };
+        assert_eq!(inline(&plain).as_deref(), Some("u32be[n]"));
     }
 
     #[test]

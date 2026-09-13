@@ -22,7 +22,7 @@ type Box (named by type, contents body) {
       'ftyp' => FileType {
         major_brand: text[4] utf8
         minor_version: u32be
-        compatible_brands: text[4] utf8[(remaining - 8) / 4]
+        compatible_brands: (text[4] utf8)[(remaining - 8) / 4]
       }
       'mvhd' => MovieHeader {
         version: u8be
@@ -544,7 +544,7 @@ type Box (named by type, contents body) {
         'ftyp' => FileType {
           major_brand: text[4] utf8
           minor_version: u32be
-          compatible_brands: text[4] utf8[(largesize - 16 - 8) / 4]
+          compatible_brands: (text[4] utf8)[(largesize - 16 - 8) / 4]
         }
         'mvhd' => MovieHeader {
           version: u8be
@@ -1065,7 +1065,7 @@ type Box (named by type, contents body) {
       'ftyp' => FileType {
         major_brand: text[4] utf8
         minor_version: u32be
-        compatible_brands: text[4] utf8[(size - 8 - 8) / 4]
+        compatible_brands: (text[4] utf8)[(size - 8 - 8) / 4]
       }
       'mvhd' => MovieHeader {
         version: u8be

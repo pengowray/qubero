@@ -274,7 +274,7 @@ type BTree2Node = switch peek(u32be) {
     signature: magic "BTLF"
     version: u8be
     type: u8be
-    records: bytes[record_size][child_records]
+    records: (bytes[record_size])[child_records]
     checksum: u32le
   }
   'BTIN' => BTree2Internal {
@@ -282,7 +282,7 @@ type BTree2Node = switch peek(u32be) {
     version: u8be
     type: u8be
     level: computed child_level
-    records: bytes[record_size][child_records]
+    records: (bytes[record_size])[child_records]
     children: BTree2Child {
       address: u64le
       child_records: u(child_records_size * 8)le
@@ -424,7 +424,7 @@ type ExtensibleArray {
                   0x05e0 => f16be[run_bytes / element_size]
                   0x05e4 => f32be[run_bytes / element_size]
                   0x05ec => f64be[run_bytes / element_size]
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
                 1 => switch datatype.class * 1000 +
                     (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 + datatype.size * 2
@@ -451,10 +451,10 @@ type ExtensibleArray {
                   0x05e0 => f16be[run_bytes / element_size]
                   0x05e4 => f32be[run_bytes / element_size]
                   0x05ec => f64be[run_bytes / element_size]
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
-                3 => sized(element_size) text[element_size] padded with 0x00
-                    utf8[run_bytes / element_size]
+                3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
+                    element_size]
                 9 => switch element_size {
                   16 => sized(element_size) GlobalHeapId {
                     length: u32le
@@ -465,9 +465,9 @@ type ExtensibleArray {
                       _ => at(collection_address from origin) GlobalHeap
                     }
                   }[run_bytes / element_size]
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
-                _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
               }
             }
           }
@@ -532,7 +532,7 @@ type ExtensibleArray {
                         0x05e0 => f16be[run_bytes / element_size]
                         0x05e4 => f32be[run_bytes / element_size]
                         0x05ec => f64be[run_bytes / element_size]
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                       1 => switch datatype.class * 1000 +
                           (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -560,10 +560,10 @@ type ExtensibleArray {
                         0x05e0 => f16be[run_bytes / element_size]
                         0x05e4 => f32be[run_bytes / element_size]
                         0x05ec => f64be[run_bytes / element_size]
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
-                      3 => sized(element_size) text[element_size] padded with 0x00
-                          utf8[run_bytes / element_size]
+                      3 => (sized(element_size) text[element_size] padded with 0x00
+                          utf8)[run_bytes / element_size]
                       9 => switch element_size {
                         16 => sized(element_size) GlobalHeapId {
                           length: u32le
@@ -574,9 +574,9 @@ type ExtensibleArray {
                             _ => at(collection_address from origin) GlobalHeap
                           }
                         }[run_bytes / element_size]
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                   }
                 }
@@ -665,8 +665,8 @@ type ExtensibleArray {
                                 0x05e0 => f16be[run_bytes / element_size]
                                 0x05e4 => f32be[run_bytes / element_size]
                                 0x05ec => f64be[run_bytes / element_size]
-                                _ => sized(element_size)
-                                    bytes[element_size][run_bytes / element_size]
+                                _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                    element_size]
                               }
                               1 => switch datatype.class * 1000 +
                                   (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -694,11 +694,11 @@ type ExtensibleArray {
                                 0x05e0 => f16be[run_bytes / element_size]
                                 0x05e4 => f32be[run_bytes / element_size]
                                 0x05ec => f64be[run_bytes / element_size]
-                                _ => sized(element_size)
-                                    bytes[element_size][run_bytes / element_size]
+                                _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                    element_size]
                               }
-                              3 => sized(element_size) text[element_size] padded with 0x00
-                                  utf8[run_bytes / element_size]
+                              3 => (sized(element_size) text[element_size] padded with 0x00
+                                  utf8)[run_bytes / element_size]
                               9 => switch element_size {
                                 16 => sized(element_size) GlobalHeapId {
                                   length: u32le
@@ -709,11 +709,11 @@ type ExtensibleArray {
                                     _ => at(collection_address from origin) GlobalHeap
                                   }
                                 }[run_bytes / element_size]
-                                _ => sized(element_size)
-                                    bytes[element_size][run_bytes / element_size]
+                                _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                    element_size]
                               }
-                              _ => sized(element_size)
-                                  bytes[element_size][run_bytes / element_size]
+                              _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                  element_size]
                             }
                           }
                         }
@@ -776,8 +776,8 @@ type ExtensibleArray {
                                   0x05e0 => f16be[run_bytes / element_size]
                                   0x05e4 => f32be[run_bytes / element_size]
                                   0x05ec => f64be[run_bytes / element_size]
-                                  _ => sized(element_size)
-                                      bytes[element_size][run_bytes / element_size]
+                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                      element_size]
                                 }
                                 1 => switch datatype.class * 1000 +
                                     (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -805,11 +805,11 @@ type ExtensibleArray {
                                   0x05e0 => f16be[run_bytes / element_size]
                                   0x05e4 => f32be[run_bytes / element_size]
                                   0x05ec => f64be[run_bytes / element_size]
-                                  _ => sized(element_size)
-                                      bytes[element_size][run_bytes / element_size]
+                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                      element_size]
                                 }
-                                3 => sized(element_size) text[element_size] padded with 0x00
-                                    utf8[run_bytes / element_size]
+                                3 => (sized(element_size) text[element_size] padded with 0x00
+                                    utf8)[run_bytes / element_size]
                                 9 => switch element_size {
                                   16 => sized(element_size) GlobalHeapId {
                                     length: u32le
@@ -820,11 +820,11 @@ type ExtensibleArray {
                                       _ => at(collection_address from origin) GlobalHeap
                                     }
                                   }[run_bytes / element_size]
-                                  _ => sized(element_size)
-                                      bytes[element_size][run_bytes / element_size]
+                                  _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                      element_size]
                                 }
-                                _ => sized(element_size)
-                                    bytes[element_size][run_bytes / element_size]
+                                _ => (sized(element_size) bytes[element_size])[run_bytes /
+                                    element_size]
                               }
                             }
                           }
@@ -916,7 +916,7 @@ type FixedArray {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch datatype.class * 1000 +
                       (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 + datatype.size *
@@ -943,10 +943,10 @@ type FixedArray {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -957,9 +957,9 @@ type FixedArray {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -1018,7 +1018,7 @@ type FixedArray {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch datatype.class * 1000 +
                         (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 + datatype.size
@@ -1045,10 +1045,10 @@ type FixedArray {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -1059,9 +1059,9 @@ type FixedArray {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -1417,7 +1417,7 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1445,10 +1445,10 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -1459,9 +1459,9 @@ type Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -1514,7 +1514,7 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1542,10 +1542,10 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -1556,9 +1556,9 @@ type Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -1606,7 +1606,7 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1634,10 +1634,10 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -1648,9 +1648,9 @@ type Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -1689,7 +1689,7 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1717,10 +1717,10 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -1731,9 +1731,9 @@ type Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -1788,7 +1788,7 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1816,10 +1816,10 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -1830,9 +1830,9 @@ type Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -1871,7 +1871,7 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -1899,10 +1899,10 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -1913,9 +1913,9 @@ type Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -1926,7 +1926,7 @@ type Message (named by type, contents body) {
               }
               dimensionality: u8be
               dimension_width: u8be
-              chunk_dimensions: u(dimension_width * 8)le[dimensionality]
+              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
               index_type: u8be enum ChunkIndexType {
                 0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
                 4 = extensible array, 5 = version 2 b-tree
@@ -1999,7 +1999,8 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -2027,10 +2028,11 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -2041,9 +2043,10 @@ type Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }
                   }
@@ -2150,7 +2153,8 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -2178,10 +2182,11 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -2192,9 +2197,10 @@ type Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }[product(chunks_across)]
                   }
@@ -2262,7 +2268,7 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -2290,10 +2296,10 @@ type Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -2304,9 +2310,9 @@ type Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -2345,7 +2351,7 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -2373,10 +2379,10 @@ type Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -2387,9 +2393,9 @@ type Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -2400,7 +2406,7 @@ type Message (named by type, contents body) {
               }
               dimensionality: u8be
               dimension_width: u8be
-              chunk_dimensions: u(dimension_width * 8)le[dimensionality]
+              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
               index_type: u8be enum ChunkIndexType {
                 0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
                 4 = extensible array, 5 = version 2 b-tree
@@ -2473,7 +2479,8 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -2501,10 +2508,11 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -2515,9 +2523,10 @@ type Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }
                   }
@@ -2624,7 +2633,8 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -2652,10 +2662,11 @@ type Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -2666,9 +2677,10 @@ type Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }[product(chunks_across)]
                   }
@@ -2797,7 +2809,7 @@ type Message (named by type, contents body) {
             0x05e0 => f16be[run_bytes / element_size]
             0x05e4 => f32be[run_bytes / element_size]
             0x05ec => f64be[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
           1 => switch datatype.class * 1000 + (datatype.bit_field - datatype.bit_field / 2 * 2)
               * 500 + datatype.size * 2 + (datatype.bit_field / 8 - datatype.bit_field / 16 * 2)
@@ -2824,10 +2836,10 @@ type Message (named by type, contents body) {
             0x05e0 => f16be[run_bytes / element_size]
             0x05e4 => f32be[run_bytes / element_size]
             0x05ec => f64be[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
-          3 => sized(element_size) text[element_size] padded with 0x00
-              utf8[run_bytes / element_size]
+          3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
+              element_size]
           9 => switch element_size {
             16 => sized(element_size) GlobalHeapId {
               length: u32le
@@ -2838,9 +2850,9 @@ type Message (named by type, contents body) {
                 _ => at(collection_address from origin) GlobalHeap
               }
             }[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
-          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+          _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
         }
       }
     }
@@ -3036,7 +3048,7 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3064,10 +3076,10 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -3078,9 +3090,9 @@ type MessageV2 = Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -3133,7 +3145,7 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3161,10 +3173,10 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -3175,9 +3187,9 @@ type MessageV2 = Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -3225,7 +3237,7 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3253,10 +3265,10 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -3267,9 +3279,9 @@ type MessageV2 = Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -3308,7 +3320,7 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3336,10 +3348,10 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -3350,9 +3362,9 @@ type MessageV2 = Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -3407,7 +3419,7 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3435,10 +3447,10 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -3449,9 +3461,9 @@ type MessageV2 = Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -3490,7 +3502,7 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3518,10 +3530,10 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -3532,9 +3544,9 @@ type MessageV2 = Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -3545,7 +3557,7 @@ type MessageV2 = Message (named by type, contents body) {
               }
               dimensionality: u8be
               dimension_width: u8be
-              chunk_dimensions: u(dimension_width * 8)le[dimensionality]
+              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
               index_type: u8be enum ChunkIndexType {
                 0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
                 4 = extensible array, 5 = version 2 b-tree
@@ -3618,7 +3630,8 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -3646,10 +3659,11 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -3660,9 +3674,10 @@ type MessageV2 = Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }
                   }
@@ -3769,7 +3784,8 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -3797,10 +3813,11 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -3811,9 +3828,10 @@ type MessageV2 = Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }[product(chunks_across)]
                   }
@@ -3881,7 +3899,7 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3909,10 +3927,10 @@ type MessageV2 = Message (named by type, contents body) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -3923,9 +3941,9 @@ type MessageV2 = Message (named by type, contents body) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
             }
@@ -3964,7 +3982,7 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
                     1 => switch earlier(body.class) * 1000 +
                         (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -3992,10 +4010,10 @@ type MessageV2 = Message (named by type, contents body) {
                       0x05e0 => f16be[run_bytes / element_size]
                       0x05e4 => f32be[run_bytes / element_size]
                       0x05ec => f64be[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    3 => sized(element_size) text[element_size] padded with 0x00
-                        utf8[run_bytes / element_size]
+                    3 => (sized(element_size) text[element_size] padded with 0x00
+                        utf8)[run_bytes / element_size]
                     9 => switch element_size {
                       16 => sized(element_size) GlobalHeapId {
                         length: u32le
@@ -4006,9 +4024,9 @@ type MessageV2 = Message (named by type, contents body) {
                           _ => at(collection_address from origin) GlobalHeap
                         }
                       }[run_bytes / element_size]
-                      _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                      _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                     }
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                 }
               }
@@ -4019,7 +4037,7 @@ type MessageV2 = Message (named by type, contents body) {
               }
               dimensionality: u8be
               dimension_width: u8be
-              chunk_dimensions: u(dimension_width * 8)le[dimensionality]
+              chunk_dimensions: (u(dimension_width * 8)le)[dimensionality]
               index_type: u8be enum ChunkIndexType {
                 0 = version 1 b-tree, 1 = single chunk, 2 = implicit, 3 = fixed array,
                 4 = extensible array, 5 = version 2 b-tree
@@ -4092,7 +4110,8 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -4120,10 +4139,11 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -4134,9 +4154,10 @@ type MessageV2 = Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }
                   }
@@ -4243,7 +4264,8 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
                         1 => switch datatype.class * 1000 +
                             (datatype.bit_field - datatype.bit_field / 2 * 2) * 500 +
@@ -4271,10 +4293,11 @@ type MessageV2 = Message (named by type, contents body) {
                           0x05e0 => f16be[run_bytes / element_size]
                           0x05e4 => f32be[run_bytes / element_size]
                           0x05ec => f64be[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        3 => sized(element_size) text[element_size] padded with 0x00
-                            utf8[run_bytes / element_size]
+                        3 => (sized(element_size) text[element_size] padded with 0x00
+                            utf8)[run_bytes / element_size]
                         9 => switch element_size {
                           16 => sized(element_size) GlobalHeapId {
                             length: u32le
@@ -4285,9 +4308,10 @@ type MessageV2 = Message (named by type, contents body) {
                               _ => at(collection_address from origin) GlobalHeap
                             }
                           }[run_bytes / element_size]
-                          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                          _ => (sized(element_size) bytes[element_size])[run_bytes /
+                              element_size]
                         }
-                        _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                        _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                       }
                     }[product(chunks_across)]
                   }
@@ -4416,7 +4440,7 @@ type MessageV2 = Message (named by type, contents body) {
             0x05e0 => f16be[run_bytes / element_size]
             0x05e4 => f32be[run_bytes / element_size]
             0x05ec => f64be[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
           1 => switch datatype.class * 1000 + (datatype.bit_field - datatype.bit_field / 2 * 2)
               * 500 + datatype.size * 2 + (datatype.bit_field / 8 - datatype.bit_field / 16 * 2)
@@ -4443,10 +4467,10 @@ type MessageV2 = Message (named by type, contents body) {
             0x05e0 => f16be[run_bytes / element_size]
             0x05e4 => f32be[run_bytes / element_size]
             0x05ec => f64be[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
-          3 => sized(element_size) text[element_size] padded with 0x00
-              utf8[run_bytes / element_size]
+          3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes /
+              element_size]
           9 => switch element_size {
             16 => sized(element_size) GlobalHeapId {
               length: u32le
@@ -4457,9 +4481,9 @@ type MessageV2 = Message (named by type, contents body) {
                 _ => at(collection_address from origin) GlobalHeap
               }
             }[run_bytes / element_size]
-            _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+            _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
           }
-          _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+          _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
         }
       }
     }
@@ -4549,7 +4573,7 @@ type Node = switch peek(u32be) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
                   1 => switch earlier(body.class) * 1000 +
                       (earlier(body.bit_field) - earlier(body.bit_field) / 2 * 2) * 500 +
@@ -4577,10 +4601,10 @@ type Node = switch peek(u32be) {
                     0x05e0 => f16be[run_bytes / element_size]
                     0x05e4 => f32be[run_bytes / element_size]
                     0x05ec => f64be[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  3 => sized(element_size) text[element_size] padded with 0x00
-                      utf8[run_bytes / element_size]
+                  3 => (sized(element_size) text[element_size] padded with 0x00 utf8)[run_bytes
+                      / element_size]
                   9 => switch element_size {
                     16 => sized(element_size) GlobalHeapId {
                       length: u32le
@@ -4591,9 +4615,9 @@ type Node = switch peek(u32be) {
                         _ => at(collection_address from origin) GlobalHeap
                       }
                     }[run_bytes / element_size]
-                    _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                    _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                   }
-                  _ => sized(element_size) bytes[element_size][run_bytes / element_size]
+                  _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
                 }
               }
               _ => FilteredChunk (packed hdf5_chunk) {
