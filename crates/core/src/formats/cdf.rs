@@ -90,18 +90,39 @@
 //! or the record before. A record's values are a flat run, in the order the
 //! file wrote them: how to fold them into the variable's shape is what the
 //! majority flag and the dimension variances say, and doing that folding is a
-//! reader's job rather than this one's. And a CDF_EPOCH and a CDF_TIME_TT2000
-//! read as the numbers they are rather than as moments: the first is a count
-//! of milliseconds in a float, which no counted epoch here takes, and the
-//! second counts leap seconds from an instant that is not a whole second,
-//! which none of them can state. A date this could only get wrong is one it
-//! does not show.
+//! reader's job rather than this one's.
+//!
+//! **Times.** CDF has three, and each is declared a moment wherever a value of
+//! it is read: a variable's values, its pad value, and an attribute entry such
+//! as the FILLVAL or VALIDMIN beside it.
+//!
+//! A CDF_EPOCH is milliseconds from 0000-01-01 in a double, every day 86,400
+//! seconds long. A CDF_EPOCH16 is two doubles, whole seconds from the same
+//! instant and picoseconds within the second, and its seconds are the moment,
+//! with the picoseconds on the row beside them. Both types' fill value,
+//! -1.0E31, and pad value, 0.0, read as no time.
+//!
+//! A CDF_TIME_TT2000 is nanoseconds in an `int8` from noon on 2000-01-01 in
+//! Terrestrial Time, and it counts the leap seconds UTC inserts, so it becomes
+//! a UTC date only through the table of them: counted as if there were none,
+//! from the right zero, a time from after 2016 would be five seconds out, and
+//! from noon on 2000-01-01 in UTC, 69.184 seconds. So it is an
+//! [`Atomic`](crate::template::Atomic) epoch, a moment inside a leap second
+//! reads as the `23:59:60` it was, and a moment after the table's last day
+//! says so. Its fill value, the most negative `int8`, and its pad value, the
+//! one after, read as no time; as counts both would be dates in 1707.
+//!
+//! The global descriptor records which table the writing library had:
+//! `leap_second_last_updated` is the day it was last changed, or -1 from a
+//! library older than 3.6. It is read and not yet used. A library whose table
+//! stopped before a leap second wrote every later time a second away from what
+//! the table here reads it as, and nothing yet says so.
 
 use crate::codec::Codec;
 use crate::template::{
     Anchor, Encoding,
     Endian::{self, Big, Little},
-    Expr as E, StrLen, Template, Ty as T,
+    Expr as E, StrLen, Template, Time, Ty as T,
 };
 
 /// What a version 3 file starts with.
@@ -247,6 +268,11 @@ impl Shape {
         T::Int { bits: if self.wide { 64 } else { 32 }, endian: Big }
     }
 
+    /// How many bytes one of those offsets takes.
+    fn offset_bytes(self) -> i128 {
+        if self.wide { 8 } else { 4 }
+    }
+
     /// A name, in the fixed room the version gives one, padded with nuls.
     fn name(self) -> T {
         T::text(StrLen::Padded { size: E::lit(if self.wide { 256 } else { 64 }), pad: 0 }, Encoding::Ascii)
@@ -336,9 +362,12 @@ fn from_file_start(field: &str) -> E {
 /// `double`, and `byte` is `int1`: the second name of each pair is what the
 /// 1990s library called it and both are still written. An epoch is a count of
 /// milliseconds in a float and an epoch16 is a pair of them, seconds and
-/// picoseconds; a TT2000 is a count of nanoseconds in an `int8`. All three are
-/// read as the numbers they hold. See the module doc for why none of them is
-/// declared a moment.
+/// picoseconds; a TT2000 is a count of nanoseconds in an `int8`.
+///
+/// The number is the same whether or not it is a time, so the times are
+/// declared where the numbers are used rather than here, which is a field
+/// holding them: see [`time_of_type`]. The epoch16 is the exception, being a
+/// structure of its own, so its seconds carry their declaration with them.
 fn number(code: i128, e: Endian) -> Option<T> {
     Some(match code {
         1 | 41 => T::Int { bits: 8, endian: e },
@@ -350,9 +379,44 @@ fn number(code: i128, e: Endian) -> Option<T> {
         14 => T::UInt { bits: 32, endian: e },
         21 | 44 => T::F32(e),
         22 | 31 | 45 => T::F64(e),
-        32 => T::structure("CdfEpoch16", vec![("seconds", T::F64(e)), ("picoseconds", T::F64(e))]),
+        32 => T::structure("CdfEpoch16", vec![("seconds", T::F64(e)), ("picoseconds", T::F64(e))])
+            .field_time("seconds", Time::cdf_epoch16_seconds()),
         _ => return None,
     })
+}
+
+/// The data types whose numbers are moments, other than the epoch16, which
+/// declares its own. See [`time_of_type`].
+const TIME_TYPES: &[i128] = &[31, 33];
+
+/// The moment a value of this data type is, if it is one.
+///
+/// A CDF_EPOCH is milliseconds from the year 0 in a double; see
+/// [`Time::cdf_epoch`]. A CDF_TIME_TT2000 is nanoseconds from J2000 on a clock
+/// that counts leap seconds; see [`Time::tt2000`]. Both with the fill and pad
+/// values CDF gives them.
+fn time_of_type(code: i128) -> Option<Time> {
+    match code {
+        31 => Some(Time::cdf_epoch()),
+        33 => Some(Time::tt2000()),
+        _ => None,
+    }
+}
+
+/// A record whose value is typed by its own `data_type`, built once for each
+/// data type that is a moment and once for everything else.
+///
+/// A time is declared on a field, and the field that holds an attribute
+/// entry's value or a variable's pad value is the same field whatever the
+/// type: which of a dozen numbers it holds is a switch inside it. So the choice
+/// is made one level out, on the record, by the four bytes of `data_type`
+/// `at` bytes into it, and the copies differ in nothing but the declaration.
+/// The other way to say it, a structure of one field around each time-typed
+/// value, would put a row in the field tree above every FILLVAL and VALIDMIN
+/// that nothing in the file corresponds to.
+fn by_time_type(at: i128, build: impl Fn(Option<Time>) -> T) -> T {
+    let cases = TIME_TYPES.iter().map(|code| (*code, build(time_of_type(*code)))).collect();
+    T::switch(E::peek_at(E::lit(at * 8), 32, Big), cases, build(None))
 }
 
 /// Whether this data type is characters rather than numbers.
@@ -454,11 +518,17 @@ fn value_records(e: Endian) -> T {
         // expression would see a block one record shorter and answer with
         // fewer values each time.
         let per_record = E::Remaining.div(records.clone()).div(width).at_least(E::lit(0));
-        T::structure(
+        let values = T::structure(
             "CdfValues",
             vec![("per_record", T::computed(per_record)), ("records", T::array(T::array(one, E::field("per_record")), records.clone()))],
         )
-        .machinery(&["per_record"])
+        .machinery(&["per_record"]);
+        // Declared on the rows, which is every value in every row: a list of
+        // lists lends its declaration to the numbers at the bottom of it.
+        match time_of_type(code) {
+            Some(time) => values.field_time("records", time),
+            None => values,
+        }
     })
 }
 
@@ -572,8 +642,22 @@ fn adr(s: Shape) -> T {
 }
 
 /// One entry of an attribute: which variable it is set on, what type its value
-/// is, and the value itself, which stays bytes.
+/// is, and the value itself, read as that type.
+///
+/// An entry of a time type holds moments, which is what a time variable's
+/// FILLVAL, VALIDMIN and VALIDMAX are, and is declared so: its data type is
+/// the second field after the link to the next entry.
 fn aedr(s: Shape) -> T {
+    by_time_type(s.offset_bytes() + 4, |time| {
+        let entry = aedr_layout(s);
+        match time {
+            Some(t) => entry.field_time("value", t),
+            None => entry,
+        }
+    })
+}
+
+fn aedr_layout(s: Shape) -> T {
     T::structure(
         "CdfAttributeEntry",
         vec![
@@ -600,7 +684,21 @@ fn aedr(s: Shape) -> T {
 /// One variable. `z` says which of the two kinds: a zVariable writes its own
 /// shape, and an rVariable takes the shape the global descriptor declared and
 /// writes only which of those dimensions it varies along.
+///
+/// A variable of a time type has a pad value that is a moment, or more often
+/// the value that means none, and is declared so: its data type is the field
+/// straight after the link to the next variable.
 fn vdr(s: Shape, z: bool) -> T {
+    by_time_type(s.offset_bytes(), |time| {
+        let variable = vdr_layout(s, z);
+        match time {
+            Some(t) => variable.field_time("pad_value", t),
+            None => variable,
+        }
+    })
+}
+
+fn vdr_layout(s: Shape, z: bool) -> T {
     let dims = || E::field("num_dims").at_least(E::lit(0));
     let mut fields = vec![
         ("vdr_next", s.offset()),
@@ -905,7 +1003,7 @@ pub fn cdf() -> Template {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{document::Document, eval::{Evaluator, Value}, source::MemSource};
+    use crate::{document::Document, eval::{Evaluator, Moment, Value}, source::MemSource};
 
     fn be32(v: i32) -> Vec<u8> {
         v.to_be_bytes().to_vec()
@@ -1382,6 +1480,60 @@ mod tests {
             p.extend([i / 2, i % 2]);
             assert_eq!(e.node(&d, &p).unwrap().value, Value::Int(*want as i128));
         }
+    }
+
+    fn path(at: &[usize], more: &[usize]) -> Vec<usize> {
+        let mut p = at.to_vec();
+        p.extend(more);
+        p
+    }
+
+    /// A CDF_EPOCH variable's values are moments, and its fill value is no
+    /// time. The number is `cacsst2.cdf`'s, 1982-01-01 by `cdflib`.
+    #[test]
+    fn an_epoch_variables_values_are_moments() {
+        let mut block = Vec::new();
+        for ms in [62545910400000.0f64, -1.0e31] {
+            block.extend(ms.to_be_bytes());
+        }
+        let d = Document::new(MemSource(with_values(1, 31, 1, 2, &block, false)));
+        let mut e = Evaluator::new(cdf());
+        let first = e.time_of(&d, &path(VALUES, &[0, 0])).unwrap().expect("an epoch is a time");
+        assert_eq!(first.moment, Moment::At { unix_seconds: 378_691_200, nanos: 0 });
+        assert_eq!(e.time_of(&d, &path(VALUES, &[1, 0])).unwrap().unwrap().moment, Moment::Unset);
+
+        // The same eight bytes in a double variable are a double.
+        let d = Document::new(MemSource(with_values(1, 45, 1, 2, &block, false)));
+        let mut e = Evaluator::new(cdf());
+        assert!(e.time_of(&d, &path(VALUES, &[0, 0])).unwrap().is_none());
+    }
+
+    /// A CDF_TIME_TT2000 variable's values go through the table of leap
+    /// seconds. The first is half a second into the one at the end of 2016,
+    /// by `cdflib`'s `compute_tt2000`; the second is the pad value.
+    #[test]
+    fn a_tt2000_variables_values_count_leap_seconds() {
+        let mut block = Vec::new();
+        for n in [536_500_868_684_000_000i64, i64::MIN + 1] {
+            block.extend(n.to_be_bytes());
+        }
+        let d = Document::new(MemSource(with_values(1, 33, 1, 2, &block, false)));
+        let mut e = Evaluator::new(cdf());
+        let leap = e.time_of(&d, &path(VALUES, &[0, 0])).unwrap().expect("a TT2000 is a time");
+        assert_eq!(leap.moment, Moment::LeapSecond { unix_seconds: 1_483_228_799, nanos: 500_000_000 });
+        assert_eq!(e.time_of(&d, &path(VALUES, &[1, 0])).unwrap().unwrap().moment, Moment::Unset);
+    }
+
+    /// A CDF_EPOCH16's seconds are the moment and its picoseconds are not.
+    #[test]
+    fn an_epoch16s_seconds_are_the_moment() {
+        let mut block = 62545910400.0f64.to_le_bytes().to_vec();
+        block.extend(123456789012.0f64.to_le_bytes());
+        let d = Document::new(MemSource(with_values(6, 32, 1, 1, &block, false)));
+        let mut e = Evaluator::new(cdf());
+        let seconds = e.time_of(&d, &path(VALUES, &[0, 0, 0])).unwrap().expect("the seconds are a time");
+        assert_eq!(seconds.moment, Moment::At { unix_seconds: 378_691_200, nanos: 0 });
+        assert!(e.time_of(&d, &path(VALUES, &[0, 0, 1])).unwrap().is_none(), "the picoseconds are a count");
     }
 
     /// A gzip member holding `data`, written as one stored deflate block, which

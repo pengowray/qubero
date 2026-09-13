@@ -33,6 +33,9 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| CDF time values as moments: float counts (CDF_EPOCH, EPOCH16 seconds), `Epoch::Atomic` with a leap-second table for TT2000 (IERS from 1972, the CDF library's drifting offsets 1960 to 1971), fill and pad values as no time, and `23:59:60` shown inside a leap second. 2,489 sample sites and a 34,640-count sweep match cdflib, bar two cdflib faults. | c9cfdb5, f70cf0c, 97b3565 |
+| Arrow IPC files and streams: a new template and a FlatBuffers reader in the IR (`flatbuf.rs`), the footer read from the back, batches placed from their blocks, buffers typed by schema field to three levels, ZSTD bodies decoded. Matches pyarrow on six samples. | 92aa7cc, 24ca3b6, 5c596ad |
+| Decoder panels: one `Unpacker` table picks the side reader for the cursor (near or any ancestor), `ExplainDto` is a tagged enum mirrored as a TypeScript union, GWF vectors have their own panel, and GRIB values reach a panel that says which value the cursor is on and how it decodes. | 63806d1, d803c1e, f2ac9b4, 0685d12 |
 | BGZF, BAM, BAI and CSI: new templates. BGZF sniffs apart from gzip (which fixed false CRC mismatches on every `.bam`), the first block's header and records as fields, later records through a side reader, indexes with split virtual offsets. Matches bamnostic. | 1830e4a, 3b48b16, 8f47af1 |
 | NIfTI-1, NIfTI-2 and Analyze 7.5: a new template, headers in either byte order, extensions, voxels shaped by `dim` with `dim[1]` innermost, whole-number scaling. Matches nibabel. `.nii.gz` opens through gzip. | 44d98c4, 12cf556, 8f63c5b |
 | SEG-Y: a new template, EBCDIC 037 text, binary header, trace headers and samples for rev 0 to 2.1 in either byte order, and a new `ibm32` float type. Matches segyio on 13 files. | 1cadde4, 7254613, 11c297b |
@@ -301,10 +304,15 @@ the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
   rather than from `product(dim_sizes)`, because a dimension the variable does
   not vary along is not stored; the shape is in the descriptor for a reader
   to fold in.
-- CDF_EPOCH (float64 ms since 0 AD) and CDF_TIME_TT2000 (int64 ns since J2000
-  on TAI) are not declared as moments. `Counted.zero` is whole seconds,
-  `moment_number` takes only integers, and TT2000 counts TAI so a linear count
-  is up to 5.8 s out after 2017. A `time.rs` item, not a template one.
+- CDF_EPOCH16's picoseconds stay on their own row: a moment is nanoseconds.
+  A declaration pairing a seconds field with a fraction field would fold them
+  in, and would suit GWF's `GTimeS`/`GTimeN` too (`Time::gps_seconds()` exists
+  and is tested; `gwf.rs` does not use it yet).
+- The file's `leap_second_last_updated` is read and not compared with the
+  table, so a file written with a stale table is not flagged.
+- Moments before 1960 still end in "UTC", a scale that did not exist then.
+- The leap-second table (`eval/time/leap_seconds.rs`) expires 2027-06-28 and
+  needs refreshing from IERS Bulletin C before then.
 - The template needed `Ty::Chain` to take an `adjust` and to take its room
   from its anchor rather than the file, so a chain inside an unpacked run does
   not end where the compressed file does. `T::chain` defaults `adjust` to 0.
@@ -382,9 +390,7 @@ Seven samples. Left:
   HDU 1's heap no longer resolves). Also true on main before the tile work.
   `fits_real` works round it with a fresh evaluator; a task was filed.
 - `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
-  code would each make a module. `explain.rs` grows by one decoder a time;
-  a small trait (which ancestor, where the data is, how to decode) would let
-  miniSEED, Parquet pages, FITS tiles and GWF vectors share the dispatch.
+  code would each make a module.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
   its piece, and nothing in the IR reads text out of several runs at once.
   A text-joining `Ty` is the missing piece.
@@ -412,13 +418,12 @@ Seven samples. Left:
 Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
 (see Closed). Left:
 
-- **What a value is worth is computed and not shown.** `grib_values.rs`
-  undoes group references, the smallest difference and spatial
-  differencing, and matches ecCodes on every GFS value, but nothing reaches
-  a panel: it needs an `Explain` variant and wasm and web wiring, the way
-  Parquet's page reader was wired. `explain_packed` also looks only one
-  level up from the cursor. Its step strings need a `ui-text` pass when they
-  are wired.
+- The values panel rounds a decoded value to the decimal places of the
+  reference value's shortest float form (or the `2^E` step, if finer),
+  shifted by D, to drop digits that come only from R being a 32-bit float:
+  GFS reads `101124.03` where ecCodes prints `101124.03125`. The arithmetic
+  matches ecCodes; showing the full double is a one-function change
+  (`Packing::text`). Needs the user's call.
 - JPEG 2000 (5.40) names its codestream and stays bytes; there is no JPEG
   2000 template.
 - Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
@@ -468,23 +473,12 @@ Samples decode (see Closed), for 2.4 and 3, with a samples panel. Left:
   from libmseed were checked once and are not in the collection; copying them
   in would make those checks permanent.
 - miniSEED 3's CRC-32C is placed and not verified.
-- `ExplainDto` is one flat struct carrying every panel's fields, about 20
-  more per panel; a tagged enum mirrored as a TypeScript union on `kind`
-  would stop that. `explain_packed`'s chain of packing-name checks is the
-  Rust half of the same problem.
-- `chunkpanel.ts` puts its row of values in the 4em label column, so they
-  stack one per line; the samples panel has an `.is-values` fix the chunk
-  panel does not use yet.
 
 ### GWF
 
 All 18 classes checked against file dictionaries, version 6 read, compressed
 vectors unpacked (see Closed). Five samples. Left:
 
-- **The vector panel uses HDF5's words.** `explain_gwf_vect` returns
-  `Explain::Hdf5Chunk`, so a GWF vector's panel says "Inside this chunk" and
-  "Filters, in the order they were undone". Give it its own variant, or make
-  the chunk panel's headings neutral.
 - Zero-suppressed vectors unpack only in the panel; a packing that carries a
   count expression would open them as a space like gzip ones.
 - Unchecked against bytes: FrStatData and the static-data table-of-contents
@@ -518,9 +512,37 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-BUFR, ADIOS2 BP, TDMS. Arrow IPC / Feather was being built on 2026-09-14.
-DICOM is read by the bundled Kaitai description (`dicom.ksy`) rather than a
-native template.
+ADIOS2 BP. BUFR and TDMS were being built on 2026-09-14. DICOM is read by the
+bundled Kaitai description (`dicom.ksy`) rather than a native template.
+
+### Arrow IPC files and streams (built 2026-09-14)
+
+FlatBuffers read through their vtables in the IR (no engine change: `StartOf`
+gives a table its own position), the file footer read from the back, every
+batch placed from its block, and every buffer placed and typed by the schema
+field its node stands for (see Closed). Six pyarrow samples; every block,
+buffer and value matches pyarrow. Left:
+
+- Nested types are followed three levels; from the fourth, nodes are
+  `unparsed` and their buffers are named bytes. A lookup by position in a
+  flattened pre-order field tree would remove the limit and most of the walk.
+- LZ4-compressed bodies stay named bytes: Arrow uses the LZ4 *frame* format and
+  the codec layer has only `Lz4Block`. ZSTD bodies decode.
+- Dictionary batches find their field only when it is a top-level column.
+- Legacy streams without the continuation marker are not recognised.
+- Text columns' character data reads as one run, not one value per row.
+- **Stack depth:** reading one late buffer from a cold start needs about 2 MB
+  of stack in a debug build (under 256 KB in release, and the wasm build is
+  release). Tests run with the 64 MB stack from `.cargo/config.toml`, so they
+  would never catch a regression. The engine guards depth when sizing a type
+  but not in nested computed values; a guard there would turn an overflow
+  into a readable error.
+- `File.fbs`'s comment on `Block` disagrees with what pyarrow writes: the
+  offset points at the continuation marker and the body starts at `offset +
+  metaDataLength`.
+- `arrow.rs` is about 1,200 lines: the transcribed schema, the node and buffer
+  walk (which packs a field's layout into one number to stay inside the
+  stack), and the buffer readings would each make a file.
 
 ### BGZF, BAM, BAI and CSI (built 2026-09-14)
 

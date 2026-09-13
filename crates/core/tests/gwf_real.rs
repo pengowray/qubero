@@ -267,7 +267,7 @@ fn zero_suppressed_shorts_are_half_the_floats_beside_them(name: &str) {
         let proc = proc.expect("a fastProc after each fastAdc1");
         let data = f.child(&vect, "data");
         let (steps, values, total, problem) = match f.ev.explain(&f.d, &data, None).unwrap() {
-            Explain::Hdf5Chunk { steps, values, total, problem, .. } => (steps, values, total, problem),
+            Explain::GwfVector { steps, values, total, problem, .. } => (steps, values, total, problem),
             other => panic!("{other:?}"),
         };
         assert_eq!(problem, None);

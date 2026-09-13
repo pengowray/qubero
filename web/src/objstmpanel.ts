@@ -4,7 +4,7 @@
 // where the objects are. Nothing here can be clicked through to, because none
 // of these bytes are in the file.
 
-import type { ObjStmObject, TypeInfo } from "./doc.ts";
+import type { ObjStmObject, ObjStmInfo } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 function span(cls: string, text: string): HTMLElement {
@@ -15,8 +15,8 @@ function span(cls: string, text: string): HTMLElement {
 }
 
 /** How many objects are in here, for the note beside the heading. */
-export function objstmNote(info: TypeInfo): string {
-  return countText(info.objstm_total, "object");
+export function objstmNote(info: ObjStmInfo): string {
+  return countText(info.total, "object");
 }
 
 /** One object: its number, and the text it is written in. */
@@ -41,13 +41,13 @@ function objectLine(o: ObjStmObject): HTMLElement {
  * could not be done are together how a reader tells an odd file from a gap in
  * this program.
  */
-export function objstmBody(info: TypeInfo): DocumentFragment {
+export function objstmBody(info: ObjStmInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
   const sizes = document.createElement("div");
   sizes.className = "insp-qcount";
-  const packed = `${info.objstm_packed.toLocaleString()} bytes compressed`;
-  const unpacked = info.objstm_decoded > 0 ? `, ${info.objstm_decoded.toLocaleString()} decompressed` : "";
+  const packed = `${info.packed.toLocaleString()} bytes compressed`;
+  const unpacked = info.decoded > 0 ? `, ${info.decoded.toLocaleString()} decompressed` : "";
   sizes.textContent = packed + unpacked;
   frag.append(sizes);
 
@@ -61,11 +61,11 @@ export function objstmBody(info: TypeInfo): DocumentFragment {
 
   frag.append(span("insp-qsubhead", "These objects are stored in the compressed data and have no file offsets."));
 
-  if (info.objstm_extends >= 0) {
+  if (info.extends >= 0) {
     frag.append(
       span(
         "insp-qcount",
-        `Extends object stream ${info.objstm_extends.toLocaleString()}; its objects are not listed here (/Extends).`,
+        `Extends object stream ${info.extends.toLocaleString()}; its objects are not listed here (/Extends).`,
       ),
     );
   }
@@ -81,14 +81,14 @@ export function objstmBody(info: TypeInfo): DocumentFragment {
 
   const list = document.createElement("div");
   list.className = "insp-orows";
-  for (const o of info.objstm_objects) list.append(objectLine(o));
+  for (const o of info.objects) list.append(objectLine(o));
   frag.append(list);
 
-  if (info.objstm_objects.length < info.objstm_total) {
+  if (info.objects.length < info.total) {
     frag.append(
       span(
         "insp-qcount",
-        `Showing the first ${info.objstm_objects.length.toLocaleString()} of ${info.objstm_total.toLocaleString()} objects.`,
+        `Showing the first ${info.objects.length.toLocaleString()} of ${info.total.toLocaleString()} objects.`,
       ),
     );
   }

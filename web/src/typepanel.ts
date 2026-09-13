@@ -4,11 +4,13 @@
 // together. Nothing here holds state; writing a value chosen here goes back
 // through the callback the inspector passes in.
 
-import type { TemplateNode, TypeInfo } from "./doc.ts";
+import type { EnumInfo, FlagsInfo, FloatInfo, MagicInfo, TemplateNode, TypeInfo } from "./doc.ts";
 import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.ts";
 import { quantBody, type GoTo } from "./quantpanel.ts";
 import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
+import { vectorBody, vectorNote } from "./vectorpanel.ts";
+import { gribBody, gribNote } from "./gribpanel.ts";
 import { pageBody, pageNote } from "./pagepanel.ts";
 import { tileBody, tileNote } from "./tilepanel.ts";
 import { bufrBody, bufrNote } from "./bufrpanel.ts";
@@ -35,35 +37,74 @@ function heading(text: string, suffix = ""): HTMLElement {
   return h;
 }
 
-function headingFor(info: TypeInfo): string {
-  if (info.kind === "magic") return "Expected bytes";
-  if (info.kind === "flags") return "Flags";
-  if (info.kind === "float") return "Bit layout";
-  if (info.kind === "quant") return "Weights";
-  if (info.kind === "xref") return "Cross-reference rows";
-  if (info.kind === "objstm") return "Objects in this stream";
-  if (info.kind === "sqliterow") return "Columns in this row";
-  if (info.kind === "chunk") return "Inside this chunk";
-  if (info.kind === "samples") return "Samples in this record";
-  if (info.kind === "page") return "Inside this page";
-  if (info.kind === "tile") return "Inside this tile";
-  if (info.kind === "bufr") return "Values in this message";
-  return `Defined values (${info.cases.length})`;
+/** A kind that has a panel. */
+type Shown = Exclude<TypeInfo, { kind: "plain" }>;
+
+function headingFor(info: Shown): string {
+  switch (info.kind) {
+    case "magic":
+      return "Expected bytes";
+    case "flags":
+      return "Flags";
+    case "float":
+      return "Bit layout";
+    case "quant":
+      return "Weights";
+    case "xref":
+      return "Cross-reference rows";
+    case "objstm":
+      return "Objects in this stream";
+    case "sqliterow":
+      return "Columns in this row";
+    case "chunk":
+      return "Inside this chunk";
+    case "vector":
+      return "Inside this vector";
+    case "grib":
+      return "Inside section 7";
+    case "samples":
+      return "Samples in this record";
+    case "page":
+      return "Inside this page";
+    case "tile":
+      return "Inside this tile";
+    case "bufr":
+      return "Values in this message";
+    case "enum":
+      return `Defined values (${info.cases.length})`;
+  }
 }
 
 /** The format's own name for what the heading is about, where it has one. */
-function headingNote(info: TypeInfo): string {
-  if (info.kind === "float") return FLOATS[info.format]?.name ?? "";
-  if (info.kind === "quant") return info.name;
-  if (info.kind === "xref") return xrefNote(info);
-  if (info.kind === "objstm") return objstmNote(info);
-  if (info.kind === "sqliterow") return rowNote(info);
-  if (info.kind === "chunk") return chunkNote(info);
-  if (info.kind === "samples") return samplesNote(info);
-  if (info.kind === "page") return pageNote(info);
-  if (info.kind === "tile") return tileNote(info);
-  if (info.kind === "bufr") return bufrNote(info);
-  return "";
+function headingNote(info: Shown): string {
+  switch (info.kind) {
+    case "float":
+      return FLOATS[info.format]?.name ?? "";
+    case "quant":
+      return info.name;
+    case "xref":
+      return xrefNote(info);
+    case "objstm":
+      return objstmNote(info);
+    case "sqliterow":
+      return rowNote(info);
+    case "chunk":
+      return chunkNote(info);
+    case "vector":
+      return vectorNote(info);
+    case "grib":
+      return gribNote(info);
+    case "samples":
+      return samplesNote(info);
+    case "page":
+      return pageNote(info);
+    case "tile":
+      return tileNote(info);
+    case "bufr":
+      return bufrNote(info);
+    default:
+      return "";
+  }
 }
 
 /**
@@ -173,7 +214,7 @@ function floatRow(label: string, ...value: (Node | string)[]): HTMLElement {
  * A float taken apart: which bits are the sign, the exponent and the
  * significand, what each of them says, and the number they add up to.
  */
-function floatBody(info: TypeInfo): DocumentFragment {
+function floatBody(info: FloatInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   const shape = FLOATS[info.format];
   if (shape === undefined) return frag;
@@ -277,7 +318,7 @@ function textOf(bytes: readonly number[]): string {
  * The bytes the format wanted, and when they are not the bytes that are there,
  * both of them lined up so the difference is where the reader is looking.
  */
-function magicBody(info: TypeInfo): DocumentFragment {
+function magicBody(info: MagicInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   const same =
     info.expected.length === info.actual.length && info.expected.every((b, i) => b === info.actual[i]);
@@ -303,7 +344,7 @@ function magicBody(info: TypeInfo): DocumentFragment {
 }
 
 /** Every value the enum names, the one in the file marked, click to apply. */
-function enumBody(info: TypeInfo, path: readonly number[], apply: Apply): DocumentFragment {
+function enumBody(info: EnumInfo, path: readonly number[], apply: Apply): DocumentFragment {
   const frag = document.createDocumentFragment();
   const known = info.cases.some((c) => c.value === info.current);
   if (!known) {
@@ -344,7 +385,7 @@ function enumBody(info: TypeInfo, path: readonly number[], apply: Apply): Docume
 }
 
 /** Each bit of the field: whether it is set, and what it is called. */
-function flagsBody(info: TypeInfo, path: readonly number[], n: TemplateNode, apply: Apply): DocumentFragment {
+function flagsBody(info: FlagsInfo, path: readonly number[], n: TemplateNode, apply: Apply): DocumentFragment {
   const frag = document.createDocumentFragment();
   const width = info.bits.length;
   const readout = document.createElement("div");
@@ -431,19 +472,51 @@ export function typePanel(
   redraw: () => void,
 ): DocumentFragment {
   const frag = document.createDocumentFragment();
+  if (info.kind === "plain") return frag;
   frag.append(heading(headingFor(info), headingNote(info)));
-  if (info.kind === "quant") frag.append(quantBody(info, goTo, redraw));
-  else if (info.kind === "xref") frag.append(xrefBody(info, goTo));
-  else if (info.kind === "objstm") frag.append(objstmBody(info));
-  else if (info.kind === "sqliterow") frag.append(rowBody(info));
-  else if (info.kind === "chunk") frag.append(chunkBody(info));
-  else if (info.kind === "samples") frag.append(samplesBody(info));
-  else if (info.kind === "page") frag.append(pageBody(info));
-  else if (info.kind === "tile") frag.append(tileBody(info));
-  else if (info.kind === "bufr") frag.append(bufrBody(info));
-  else if (info.kind === "float") frag.append(floatBody(info));
-  else if (info.kind === "magic") frag.append(magicBody(info));
-  else if (info.kind === "enum") frag.append(enumBody(info, path, apply));
-  else frag.append(flagsBody(info, path, n, apply));
+  frag.append(body(info, path, n, apply, goTo, redraw));
   return frag;
+}
+
+/** Everything under the heading, from whichever panel the kind belongs to. */
+function body(
+  info: Shown,
+  path: readonly number[],
+  n: TemplateNode,
+  apply: Apply,
+  goTo: GoTo,
+  redraw: () => void,
+): DocumentFragment {
+  switch (info.kind) {
+    case "quant":
+      return quantBody(info, goTo, redraw);
+    case "xref":
+      return xrefBody(info, goTo);
+    case "objstm":
+      return objstmBody(info);
+    case "sqliterow":
+      return rowBody(info);
+    case "chunk":
+      return chunkBody(info);
+    case "vector":
+      return vectorBody(info);
+    case "grib":
+      return gribBody(info);
+    case "samples":
+      return samplesBody(info);
+    case "page":
+      return pageBody(info);
+    case "tile":
+      return tileBody(info);
+    case "bufr":
+      return bufrBody(info);
+    case "float":
+      return floatBody(info);
+    case "magic":
+      return magicBody(info);
+    case "enum":
+      return enumBody(info, path, apply);
+    case "flags":
+      return flagsBody(info, path, n, apply);
+  }
 }

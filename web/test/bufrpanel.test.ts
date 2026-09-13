@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { BufrCursor, BufrInfo, BufrValue, TypeInfo } from "../src/doc.ts";
+import type { BufrCursor, BufrInfo, BufrValue } from "../src/doc.ts";
 import { aboutText, bufrNote, code6, cursorLines, showingLine, subsetHead, tablesLine, valueLabel, valueText } from "../src/bufrpanel.ts";
 
 function value(over: Partial<BufrValue> = {}): BufrValue {
@@ -34,6 +34,8 @@ function cursor(over: Partial<BufrCursor> = {}): BufrCursor {
 
 function bufr(over: Partial<BufrInfo> = {}): BufrInfo {
   return {
+    kind: "bufr",
+    problem: "",
     edition: 3,
     master_table_version: 13,
     tables_version: 13,
@@ -51,14 +53,11 @@ function bufr(over: Partial<BufrInfo> = {}): BufrInfo {
   };
 }
 
-function info(b: BufrInfo | null): TypeInfo {
-  return { kind: "bufr", problem: "", bufr: b } as unknown as TypeInfo;
-}
-
 test("the note counts subsets and says when they are compressed", () => {
-  assert.equal(bufrNote(info(bufr())), "1 subset");
-  assert.equal(bufrNote(info(bufr({ subsets: 128, compressed: true }))), "128 subsets, compressed");
-  assert.equal(bufrNote(info(null)), "");
+  assert.equal(bufrNote(bufr()), "1 subset");
+  assert.equal(bufrNote(bufr({ subsets: 128, compressed: true })), "128 subsets, compressed");
+  // A message whose header would not read has nothing to count.
+  assert.equal(bufrNote(bufr({ edition: 0 })), "");
 });
 
 test("the tables line names the version used where it is not the one section 1 names", () => {

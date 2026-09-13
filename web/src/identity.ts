@@ -106,6 +106,8 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   safetensors: ["safetensors"],
   npy: ["npy"],
   parquet: ["parquet"],
+  arrow: ["arrow", "feather", "ipc"],
+  arrowstream: ["arrows", "stream"],
   hdf5: ["h5", "hdf5", "h5ad", "nc"],
   hdf4: ["hdf", "h4"],
   netcdf: ["nc", "cdf"],

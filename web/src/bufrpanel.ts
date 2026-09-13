@@ -10,7 +10,7 @@
 // scale gives, so a value can be compared with ecCodes' by eye. Counts are
 // grouped.
 
-import type { BufrCursor, BufrInfo, BufrValue, TypeInfo } from "./doc.ts";
+import type { BufrCursor, BufrInfo, BufrValue } from "./doc.ts";
 import { countText } from "./strings.ts";
 import { line, problemLine, span, stepList } from "./steplist.ts";
 
@@ -21,9 +21,8 @@ export function code6(code: number): string {
 
 /** How many subsets, and whether they are compressed, for the note beside
  *  the heading. */
-export function bufrNote(info: TypeInfo): string {
-  const b = info.bufr;
-  if (b === null || b.edition === 0) return "";
+export function bufrNote(b: BufrInfo): string {
+  if (b.edition === 0) return "";
   return `${countText(b.subsets, "subset")}${b.compressed ? ", compressed" : ""}`;
 }
 
@@ -172,13 +171,11 @@ function cursorSection(b: BufrInfo, c: BufrCursor): DocumentFragment {
  * descriptor that stopped it are right, and which descriptor that was is how a
  * reader tells a centre's local table from a damaged file.
  */
-export function bufrBody(info: TypeInfo): DocumentFragment {
+export function bufrBody(b: BufrInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
-  const b = info.bufr;
-  if (b === null) return frag;
   const tables = tablesLine(b);
   if (tables !== null) frag.append(line("insp-qcount", tables));
-  frag.append(problemLine(info.problem));
+  frag.append(problemLine(b.problem));
 
   if (b.cursor !== null) frag.append(cursorSection(b, b.cursor));
 

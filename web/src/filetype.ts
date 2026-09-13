@@ -117,6 +117,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   cdf: "NASA CDF",
   hdf4: "HDF4",
   parquet: "Parquet",
+  arrow: "Arrow IPC file",
+  arrowstream: "Arrow IPC stream",
   mat: "MATLAB MAT",
   // The rest were only ever seen in the template menu until every answer
   // started being listed in the dialog, where "pe file" reads as a typo.

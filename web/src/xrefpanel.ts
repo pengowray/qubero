@@ -6,7 +6,7 @@
 // cannot build from bytes that are not in the file.
 
 import type { GoTo } from "./quantpanel.ts";
-import type { TypeInfo, XrefRow } from "./doc.ts";
+import type { XrefInfo, XrefRow } from "./doc.ts";
 import { countText } from "./strings.ts";
 
 function span(cls: string, text: string): HTMLElement {
@@ -19,10 +19,10 @@ function span(cls: string, text: string): HTMLElement {
 /** How wide a row is, for the note beside the heading. The plain fact first,
  *  since that is what a reader counting bytes in the hex view wants, and the
  *  dictionary key after it, since that is what they would search for. */
-export function xrefNote(info: TypeInfo): string {
-  if (info.xref_widths.length !== 3) return "";
-  const total = info.xref_widths.reduce((a, b) => a + b, 0);
-  return `${total}-byte rows (/W [${info.xref_widths.join(" ")}])`;
+export function xrefNote(info: XrefInfo): string {
+  if (info.widths.length !== 3) return "";
+  const total = info.widths.reduce((a, b) => a + b, 0);
+  return `${total}-byte rows (/W [${info.widths.join(" ")}])`;
 }
 
 /** How many rows there are, and how they split between the three kinds. Kinds
@@ -32,19 +32,19 @@ export function xrefNote(info: TypeInfo): string {
  *  Not "in the file" for the first of them. An object inside an object stream
  *  is in the file too; what tells the three apart is that one names an offset,
  *  one names another object, and one names nowhere. */
-function tally(info: TypeInfo): string {
+function tally(info: XrefInfo): string {
   const parts: string[] = [];
   const n = (x: number) => x.toLocaleString();
-  if (info.xref_in_file > 0) {
-    parts.push(`${n(info.xref_in_file)} at ${info.xref_in_file === 1 ? "an offset" : "offsets"}`);
+  if (info.in_file > 0) {
+    parts.push(`${n(info.in_file)} at ${info.in_file === 1 ? "an offset" : "offsets"}`);
   }
-  if (info.xref_in_stream > 0) {
-    const one = info.xref_in_stream === 1;
-    parts.push(`${n(info.xref_in_stream)} in ${one ? "an object stream" : "object streams"}`);
+  if (info.in_stream > 0) {
+    const one = info.in_stream === 1;
+    parts.push(`${n(info.in_stream)} in ${one ? "an object stream" : "object streams"}`);
   }
-  if (info.xref_free > 0) parts.push(`${n(info.xref_free)} free`);
-  if (info.xref_unknown > 0) parts.push(`${n(info.xref_unknown)} of unknown type`);
-  const rows = countText(info.xref_total, "row");
+  if (info.free > 0) parts.push(`${n(info.free)} free`);
+  if (info.unknown > 0) parts.push(`${n(info.unknown)} of unknown type`);
+  const rows = countText(info.total, "row");
   return parts.length === 0 ? rows : `${rows}: ${parts.join(", ")}`;
 }
 
@@ -98,14 +98,14 @@ function rowLine(r: XrefRow, goTo: GoTo): HTMLElement {
  * for and the reason it could not be done are together how a reader tells an
  * odd file from a gap in this program.
  */
-export function xrefBody(info: TypeInfo, goTo: GoTo): DocumentFragment {
+export function xrefBody(info: XrefInfo, goTo: GoTo): DocumentFragment {
   const frag = document.createDocumentFragment();
 
   const sizes = document.createElement("div");
   sizes.className = "insp-qcount";
-  const packed = `${info.xref_packed.toLocaleString()} bytes compressed`;
-  const unpacked = info.xref_decoded > 0 ? `, ${info.xref_decoded.toLocaleString()} decompressed` : "";
-  const pred = info.xref_predictor >= 0 ? `, PNG predictor ${info.xref_predictor}` : "";
+  const packed = `${info.packed.toLocaleString()} bytes compressed`;
+  const unpacked = info.decoded > 0 ? `, ${info.decoded.toLocaleString()} decompressed` : "";
+  const pred = info.predictor >= 0 ? `, PNG predictor ${info.predictor}` : "";
   sizes.textContent = packed + unpacked + pred;
   frag.append(sizes);
 
@@ -129,14 +129,14 @@ export function xrefBody(info: TypeInfo, goTo: GoTo): DocumentFragment {
 
   const list = document.createElement("div");
   list.className = "insp-xrows";
-  for (const r of info.xref_rows) list.append(rowLine(r, goTo));
+  for (const r of info.rows) list.append(rowLine(r, goTo));
   frag.append(list);
 
-  if (info.xref_rows.length < info.xref_total) {
+  if (info.rows.length < info.total) {
     frag.append(
       span(
         "insp-qcount",
-        `Showing the first ${info.xref_rows.length.toLocaleString()} of ${info.xref_total.toLocaleString()} rows.`,
+        `Showing the first ${info.rows.length.toLocaleString()} of ${info.total.toLocaleString()} rows.`,
       ),
     );
   }

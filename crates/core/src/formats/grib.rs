@@ -826,6 +826,7 @@ fn simple_packed_data() -> T {
         ],
     )
     .machinery(&["bits_per_value", "count"])
+    .packed_as(super::grib_values::PACKING)
     .payload(&["values"])
 }
 
@@ -924,7 +925,7 @@ fn complex_packed_data(spatial: bool) -> T {
         .map(|(n, _)| *n)
         .filter(|n| !matches!(*n, "first_values" | "overall_minimum" | "group_references" | "group_widths" | "group_lengths" | "groups"))
         .collect();
-    T::structure("ComplexPackedData", fields).machinery(&machinery).payload(&["groups"])
+    T::structure("ComplexPackedData", fields).machinery(&machinery).payload(&["groups"]).packed_as(super::grib_values::PACKING)
 }
 
 /// The bits between the end of a table of `n_groups` entries `bits` wide and

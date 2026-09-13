@@ -346,8 +346,86 @@ fn the_values_a_complex_packed_message_stands_for_match_another_reader() {
     // Every step is named, in the order it was done, and the last is the
     // scaling that turns a packed number into a measurement.
     let steps: Vec<&str> = r.steps.iter().map(|s| s.what.as_str()).collect();
-    assert_eq!(steps.len(), 8, "{steps:?}");
+    assert_eq!(steps.len(), 9, "{steps:?}");
     assert!(steps.last().unwrap().contains("10^9"), "{:?}", steps.last());
+}
+
+/// The panel's answer for a cursor on a packed value, however far under
+/// section 7's data it is: which value of the message it is, what it is worth,
+/// and the whole packed integer, against the same ecCodes numbers.
+#[test]
+fn a_cursor_on_a_packed_value_is_told_what_that_value_is_worth() {
+    use qubero_core::eval::{Explain, GribPlace};
+    let Some((d, mut ev)) = read("regular_ll_complex.grib2") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let near = |text: &str, b: f64| {
+        let a: f64 = text.parse().unwrap();
+        assert!((a - b).abs() < 5e-4, "{a} is not {b}");
+    };
+    // Four levels down: the groups, group 2, its values, its first. Groups 0
+    // and 1 hold 40 and 50, so this is value 90 of the message.
+    match ev.explain(&d, &[0, 1, 4, 5, 2, 14, 2, 2, 0], None).unwrap() {
+        Explain::GribValues { template, declared, total, values, at, problem, steps, .. } => {
+            assert_eq!(problem, None);
+            assert_eq!((template, declared, total), (2, 16 * 31, 16 * 31));
+            near(&values[0], 272.9888);
+            near(&values[2], 285.3638);
+            let at = at.expect("the cursor is on a value");
+            assert_eq!(at.index, 90);
+            assert!(matches!(at.place, GribPlace::Group { group: 2, position: 0, .. }), "{:?}", at.place);
+            assert_eq!(steps.last().unwrap().label, "scaling");
+        }
+        other => panic!("{other:?}"),
+    }
+    // The first value, whose field holds 639 above a group reference of 0.
+    match ev.explain(&d, &[0, 1, 4, 5, 2, 14, 0, 2, 0], None).unwrap() {
+        Explain::GribValues { at: Some(at), .. } => {
+            assert_eq!((at.index, at.packed), (0, 639));
+            assert_eq!(at.place, GribPlace::Group { group: 0, position: 0, written: 639 });
+            near(&at.value, 272.9888);
+        }
+        other => panic!("{other:?}"),
+    }
+    // On a table rather than a value: the section's answer, and no value.
+    match ev.explain(&d, &[0, 1, 4, 5, 2, 10, 3], None).unwrap() {
+        Explain::GribValues { at, .. } => assert_eq!(at, None),
+        other => panic!("{other:?}"),
+    }
+
+    // Simple packing, two levels down: the value is where it is in the run.
+    let Some((d, mut ev)) = read("regular_ll_sfc.grib2") else { return };
+    match ev.explain(&d, &[0, 1, 4, 5, 2, 2, 5], None).unwrap() {
+        Explain::GribValues { template, at: Some(at), total, problem, .. } => {
+            assert_eq!(problem, None);
+            assert_eq!((template, total), (0, 16 * 31));
+            assert_eq!((at.index, at.place), (5, GribPlace::Values));
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Second-order spatial differencing: the first values are the message's
+    // first, and the last value lands where ecCodes lands.
+    let Some((d, mut ev)) = read("gfs-1p00-3messages.grib2") else { return };
+    let body = [0, 1, 4, 5, 2];
+    assert_eq!(ev.node(&d, &body).unwrap().type_name, "ComplexPackedData");
+    let first = ev.child_named(&d, &body, "first_values").unwrap().expect("5.3 has first values");
+    let mut second = first.clone();
+    second.push(1);
+    match ev.explain(&d, &second, None).unwrap() {
+        Explain::GribValues { template, spatial_order, minimum, at: Some(at), total, problem, values, .. } => {
+            assert_eq!(problem, None);
+            assert_eq!((template, spatial_order, total), (3, 2, 360 * 181));
+            assert!(minimum.is_some());
+            assert_eq!((at.index, at.place), (1, GribPlace::First));
+            // Written to hundredths: the reference is 947324.3 over a decimal
+            // scale of 1, and ecCodes' 101124.03125 is those four bytes read
+            // exactly.
+            assert_eq!(values[0], "101124.03");
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 /// A section 7 that holds a PNG opens as one, the way a stored ZIP member
