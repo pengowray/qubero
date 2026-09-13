@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{fits_tile, gwf_vect, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{fits_tile, grib_values, gwf_vect, hdf5_chunk, mseed_steim, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -189,6 +189,41 @@ pub enum Explain {
         /// Why the unpacking stopped early, where it did.
         problem: Option<String>,
     },
+    /// A GRIB2 message's packed values, worked out by [`grib_values`]: what
+    /// each packed number in section 7 is worth, which takes section 5's
+    /// reference value and scale factors and, for complex packing, the groups
+    /// and the differencing undone. Shown for the cursor anywhere in the
+    /// section's data, a value or the tables in front of them, because a
+    /// value's worth is nowhere in the file and, under spatial differencing,
+    /// depends on every value before it.
+    GribValues {
+        /// The data representation template that packed them: 0 for simple
+        /// packing, 2 for complex, 3 for complex with spatial differencing,
+        /// and for 3, whether the differences are first or second order.
+        template: u16,
+        spatial_order: u32,
+        /// R, E and D, the reference value as [`grib_values::Packing::reference_text`]
+        /// writes it, so a panel can show the formula a value came out of.
+        reference: String,
+        binary_scale: i32,
+        decimal_scale: i32,
+        /// The overall minimum of the differences, under spatial differencing.
+        minimum: Option<i64>,
+        /// How many values section 5 says section 7 holds.
+        declared: u64,
+        /// How many bytes section 7's data is in the file.
+        packed_bytes: u64,
+        /// Every step, in the order it was done.
+        steps: Vec<grib_values::Step>,
+        /// The first values, as text, and how many came out.
+        values: Vec<String>,
+        total: u64,
+        /// The value the cursor is on, where it is on one packed value rather
+        /// than on the tables, the padding or the minimum.
+        at: Option<GribValue>,
+        /// What stopped it, or what it could not say.
+        problem: Option<String>,
+    },
     /// A miniSEED record's samples, worked out of its data by
     /// [`mseed_steim`]. Shown for the cursor anywhere in the data, because a
     /// Steim sample is not at any one place in the file: it is every
@@ -344,6 +379,7 @@ enum Unpacker {
     SqliteRow,
     ParquetPage,
     FitsTile,
+    GribValues,
     /// The encoding and byte order are in the packing name, since the template
     /// has already settled both by the time it marks the data.
     Mseed { encoding: u8, big: bool },
@@ -364,7 +400,9 @@ enum Reach {
     /// difference is four levels under a miniSEED record's data, the frame,
     /// the word, the word's shape and the difference; a FITS tile's
     /// descriptors are four levels into a row, and its compressed bytes are a
-    /// byte of an array in the heap.
+    /// byte of an array in the heap; a GRIB value under complex packing is
+    /// four levels under section 7's data, the groups, the group, its values
+    /// and the value.
     Anywhere,
 }
 
@@ -379,6 +417,7 @@ impl Unpacker {
             sqlite_overflow::PACKING => Unpacker::SqliteRow,
             parquet_page::PACKING => Unpacker::ParquetPage,
             fits_tile::PACKING => Unpacker::FitsTile,
+            grib_values::PACKING => Unpacker::GribValues,
             _ => {
                 if let Some((encoding, big)) = mseed_steim::parse_packing(packing) {
                     return Some(Unpacker::Mseed { encoding, big });
@@ -391,7 +430,7 @@ impl Unpacker {
 
     fn reach(self) -> Reach {
         match self {
-            Unpacker::FitsTile | Unpacker::Mseed { .. } => Reach::Anywhere,
+            Unpacker::FitsTile | Unpacker::Mseed { .. } | Unpacker::GribValues => Reach::Anywhere,
             Unpacker::Xref
             | Unpacker::ObjStm
             | Unpacker::Hdf5Chunk
@@ -411,6 +450,37 @@ struct Packed<'a> {
     at: &'a [usize],
     r: &'a Resolved,
     at_bits: Option<u64>,
+}
+
+/// One GRIB value, the one under the cursor: where it is in the message's run
+/// of values and in the tree, what it is worth, and the whole packed number it
+/// was worked out from.
+///
+/// `packed` is not always the number the tree shows on the field. Complex
+/// packing writes how far a value is above its group's reference, and spatial
+/// differencing writes a difference on top of that; `packed` is what those
+/// come to once undone, the X in `(R + X * 2^E) / 10^D`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GribValue {
+    /// Where the value is in the message's run of values, from 0.
+    pub index: u64,
+    pub place: GribPlace,
+    /// What it is worth, as [`grib_values::Packing::text`] writes it.
+    pub value: String,
+    pub packed: i64,
+}
+
+/// Which field of section 7 a GRIB value is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GribPlace {
+    /// `values[index]` of simply packed data, which holds X as it is.
+    Values,
+    /// `groups[group].values[position]` of complex packing, and the number
+    /// that field holds, which is only part of X.
+    Group { group: u64, position: u64, written: i64 },
+    /// `first_values[index]` under spatial differencing: one of the values
+    /// written whole, which holds X as it is.
+    First,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -528,6 +598,7 @@ impl Evaluator {
             // which tile it is depends on how far into the image the path goes.
             Unpacker::FitsTile => self.explain_fits_tile(doc, path)?,
             Unpacker::Mseed { encoding, big } => self.explain_mseed(doc, at, r, encoding, big)?,
+            Unpacker::GribValues => self.explain_grib_values(doc, path, at, r)?,
             Unpacker::Quant => {
                 let Some((kind, block, at_block)) = self.quant_block(doc, at)? else { return Ok(None) };
                 quant_of(kind, block, at_block, at_bits)
@@ -1072,6 +1143,135 @@ impl Evaluator {
             total,
             element_type,
             problem: unpacked.problem,
+        })
+    }
+
+    /// A GRIB2 message's section 7 data, worked out into the values it stands
+    /// for. See [`grib_values`].
+    ///
+    /// Section 7 has already copied in the numbers it needs to place its own
+    /// runs, the group counts and the three tables' widths, so those are read
+    /// from its fields. What a value is worth also takes section 5's reference
+    /// value and its two scale factors, which nothing in section 7 depends on
+    /// and nothing copies, so they are found the way the template finds the
+    /// others: back through the sections to the nearest one with a packing
+    /// template in it.
+    ///
+    /// `path` is the cursor, which says which value it is on, if any. The
+    /// template is told apart by the fields the structure has: simple packing
+    /// has a run of `values`, complex packing has `groups`, and spatial
+    /// differencing puts `first_values` in front of them.
+    fn explain_grib_values<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        at: &[usize],
+        r: &Resolved,
+    ) -> R<Explain> {
+        let Ty::Struct(def) = &r.ty else { return Ok(Explain::Plain) };
+        let index_of = |name: &str| def.fields.iter().position(|f| &*f.name == name);
+        let (groups, first_values, simple_values) = (index_of("groups"), index_of("first_values"), index_of("values"));
+        let template: u16 = match (groups, first_values) {
+            (None, _) => 0,
+            (Some(_), None) => 2,
+            (Some(_), Some(_)) => 3,
+        };
+
+        let earlier = |ev: &mut Self, field: &[&str]| -> R<Option<Value>> {
+            let field: Vec<String> = field.iter().map(|s| s.to_string()).collect();
+            let Some(p) = ev.sibling_field_path(doc, at, &field)? else { return Ok(None) };
+            Ok(Some(ev.node(doc, &p)?.value))
+        };
+        let int = |v: Option<Value>| v.and_then(|v| v.as_int()).unwrap_or(0);
+        let reference = match earlier(self, &["body", "template", "reference_value"])? {
+            Some(Value::Float(f)) => f as f32,
+            _ => 0.0,
+        };
+        let binary_scale = int(earlier(self, &["body", "template", "binary_scale_factor"])?) as i32;
+        let decimal_scale = int(earlier(self, &["body", "template", "decimal_scale_factor"])?) as i32;
+        let missing_value_management =
+            int(earlier(self, &["body", "template", "missing_value_management"])?).clamp(0, 255) as u32;
+        let declared = int(earlier(self, &["body", "number_of_values"])?).max(0) as u64;
+        let mut own = |name: &str| -> R<u32> {
+            Ok(self.field_under(doc, at, name)?.unwrap_or(0).clamp(0, i128::from(u32::MAX)) as u32)
+        };
+        let packing = grib_values::Packing {
+            reference,
+            binary_scale,
+            decimal_scale,
+            missing_value_management,
+            bits_per_value: own("bits_per_value")?,
+            n_groups: own("n_groups")?,
+            group_widths_reference: own("group_widths_reference")?,
+            group_widths_bits: own("group_widths_bits")?,
+            group_lengths_reference: own("group_lengths_reference")?,
+            group_length_increment: own("group_length_increment")?,
+            last_group_length: own("last_group_length")?,
+            group_lengths_bits: own("group_lengths_bits")?,
+            spatial_order: own("spatial_differencing_order")?,
+            extra_bytes: own("extra_bytes")?,
+        };
+        let count = own("count")? as usize;
+        let minimum = self.field_under(doc, at, "overall_minimum")?.map(|v| v as i64);
+
+        let packed_bits = self.size_of(doc, at)?;
+        let packed_bytes = packed_bits / 8;
+        let reading = if packed_bytes > grib_values::PACKED_LIMIT as u64 {
+            // Over the limit, the bytes are not read at all.
+            grib_values::refused()
+        } else {
+            let bytes = self.read(doc, r, r.offset, packed_bits)?;
+            if template == 0 { grib_values::simple(&packing, &bytes, count) } else { grib_values::complex(&packing, &bytes) }
+        };
+
+        // Which value the cursor is on, counted through the whole message:
+        // simple packing's run is one list, the first values of spatial
+        // differencing are the first of it, and a complex group's values
+        // start where the groups before it left off.
+        let rel = &path[at.len()..];
+        let place = match rel {
+            [v, i, ..] if simple_values == Some(*v) => Some((*i as u64, GribPlace::Values)),
+            [f, k, ..] if first_values == Some(*f) => Some((*k as u64, GribPlace::First)),
+            [g, n, v, i, ..] if groups == Some(*g) => {
+                let mut group = at.to_vec();
+                group.extend([*g, *n]);
+                if self.child_index(doc, &group, "values")? == Some(*v) {
+                    group.extend([*v, *i]);
+                    let written = self.node(doc, &group)?.value.as_int().unwrap_or(0) as i64;
+                    let mut before = 0u64;
+                    for k in 0..*n {
+                        let mut earlier_group = at.to_vec();
+                        earlier_group.extend([*g, k]);
+                        before += self.field_under(doc, &earlier_group, "count")?.unwrap_or(0).max(0) as u64;
+                    }
+                    let place = GribPlace::Group { group: *n as u64, position: *i as u64, written };
+                    Some((before + *i as u64, place))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let at_value = place.and_then(|(index, place)| {
+            let k = usize::try_from(index).ok()?;
+            let value = packing.text(*reading.values.get(k)?);
+            Some(GribValue { index, place, value, packed: *reading.packed.get(k)? })
+        });
+
+        Ok(Explain::GribValues {
+            template,
+            spatial_order: packing.spatial_order,
+            reference: packing.reference_text(),
+            binary_scale,
+            decimal_scale,
+            minimum,
+            declared,
+            packed_bytes,
+            total: reading.values.len() as u64,
+            values: reading.values.iter().take(grib_values::SHOWN).map(|v| packing.text(*v)).collect(),
+            at: at_value,
+            steps: reading.steps,
+            problem: reading.problem,
         })
     }
 

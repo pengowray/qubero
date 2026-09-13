@@ -1195,6 +1195,7 @@ export type TypeInfo =
   | SqliteRowInfo
   | ChunkInfo
   | VectorInfo
+  | GribInfo
   | PageInfo
   | SamplesInfo
   | TileInfo
@@ -1359,6 +1360,56 @@ export type VectorInfo = {
   readonly values: readonly string[];
   readonly total: number;
   readonly problem: string;
+};
+
+export type GribInfo = {
+  readonly kind: "grib";
+  /** The data representation template, 0, 2 or 3, and for 3 whether the
+   *  spatial differencing is first or second order. */
+  readonly template: number;
+  readonly spatial_order: number;
+  /** R as the core writes it, and E and D: a value is (R + X × 2^E) / 10^D. */
+  readonly reference: string;
+  readonly binary_scale: number;
+  readonly decimal_scale: number;
+  /** The overall minimum of the differences, null without differencing. */
+  readonly minimum: number | null;
+  /** How many values section 5 says there are, and the bytes of section 7's
+   *  data in the file. */
+  readonly declared: number;
+  readonly packed: number;
+  /** Every step, in the order it was done. */
+  readonly steps: readonly GribStep[];
+  /** The first values, as the core writes them, and how many came out. */
+  readonly values: readonly string[];
+  readonly total: number;
+  /** The value the cursor is on, null where it is not on one. */
+  readonly at: GribValue | null;
+  readonly problem: string;
+};
+
+/** One step of working out a GRIB message's values. `count` is how many
+ *  numbers it was done to, which `what` already says. */
+export type GribStep = {
+  readonly label: string;
+  readonly what: string;
+  readonly count: number;
+};
+
+/** The GRIB value under the cursor. */
+export type GribValue = {
+  /** Where it is in the message's run of values, from 0. */
+  readonly index: number;
+  /** Which field it is: `values[index]`, `groups[group].values[position]`,
+   *  or `first_values[index]`. */
+  readonly place: "values" | "group" | "first";
+  readonly group: number;
+  readonly position: number;
+  /** The number the field holds, for a group's value: only part of `packed`. */
+  readonly written: number;
+  /** What it is worth, and the whole packed integer X it came from. */
+  readonly value: string;
+  readonly packed: number;
 };
 
 /** One step of unpacking a GWF vector. */

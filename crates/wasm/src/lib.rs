@@ -431,6 +431,33 @@ struct VectorStepDto {
     out_bytes: f64,
 }
 
+/// One step of working out a GRIB message's values: a short label a problem
+/// can name it by, what it came to, and how many numbers it was done to.
+#[derive(Serialize)]
+struct GribStepDto {
+    label: String,
+    what: String,
+    count: f64,
+}
+
+/// The GRIB value under the cursor.
+#[derive(Serialize)]
+struct GribValueDto {
+    /// Where it is in the message's run of values, from 0.
+    index: f64,
+    /// "values" for `values[index]`, "group" for `groups[group].values[position]`,
+    /// "first" for `first_values[index]`.
+    place: &'static str,
+    /// Which group and where in it, and the number that field holds, for
+    /// "group". Zero otherwise.
+    group: f64,
+    position: f64,
+    written: f64,
+    /// What it is worth, and the whole packed integer it was worked out from.
+    value: String,
+    packed: f64,
+}
+
 /// One Steim frame of a miniSEED record: how many differences its codes named,
 /// and how many of them became samples.
 #[derive(Serialize)]
@@ -590,6 +617,31 @@ enum ExplainDto {
         element_type: String,
         values: Vec<String>,
         total: f64,
+        problem: String,
+    },
+    Grib {
+        /// The data representation template, 0, 2 or 3, and for 3 whether the
+        /// differencing is first or second order.
+        template: f64,
+        spatial_order: f64,
+        /// R as text, and E and D, for the formula a value came out of.
+        reference: String,
+        binary_scale: f64,
+        decimal_scale: f64,
+        /// The overall minimum of the differences, or null without spatial
+        /// differencing.
+        minimum: Option<f64>,
+        /// How many values section 5 says there are, and how many bytes
+        /// section 7's data is.
+        declared: f64,
+        packed: f64,
+        /// Every step, in the order it was done.
+        steps: Vec<GribStepDto>,
+        /// The first values, and how many came out.
+        values: Vec<String>,
+        total: f64,
+        /// The value the cursor is on, or null where it is not on one.
+        at: Option<GribValueDto>,
         problem: String,
     },
     Page {
@@ -1270,6 +1322,54 @@ fn explain_dto(e: Explain) -> ExplainDto {
             values,
             problem: problem.unwrap_or_default(),
             steps: chunk_steps(steps),
+        },
+        Explain::GribValues {
+            template,
+            spatial_order,
+            reference,
+            binary_scale,
+            decimal_scale,
+            minimum,
+            declared,
+            packed_bytes,
+            steps,
+            values,
+            total,
+            at,
+            problem,
+        } => ExplainDto::Grib {
+            template: f64::from(template),
+            spatial_order: f64::from(spatial_order),
+            reference,
+            binary_scale: f64::from(binary_scale),
+            decimal_scale: f64::from(decimal_scale),
+            minimum: minimum.map(|m| m as f64),
+            declared: declared as f64,
+            packed: packed_bytes as f64,
+            values,
+            total: total as f64,
+            problem: problem.unwrap_or_default(),
+            steps: steps
+                .into_iter()
+                .map(|s| GribStepDto { label: s.label, what: s.what, count: s.count as f64 })
+                .collect(),
+            at: at.map(|v| {
+                use qubero_core::eval::GribPlace;
+                let (place, group, position, written) = match v.place {
+                    GribPlace::Values => ("values", 0, 0, 0),
+                    GribPlace::First => ("first", 0, 0, 0),
+                    GribPlace::Group { group, position, written } => ("group", group, position, written),
+                };
+                GribValueDto {
+                    index: v.index as f64,
+                    place,
+                    group: group as f64,
+                    position: position as f64,
+                    written: written as f64,
+                    value: v.value,
+                    packed: v.packed as f64,
+                }
+            }),
         },
         Explain::GwfVector {
             compress,

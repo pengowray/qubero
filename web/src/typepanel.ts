@@ -10,6 +10,7 @@ import { quantBody, type GoTo } from "./quantpanel.ts";
 import { xrefBody, xrefNote } from "./xrefpanel.ts";
 import { chunkBody, chunkNote } from "./chunkpanel.ts";
 import { vectorBody, vectorNote } from "./vectorpanel.ts";
+import { gribBody, gribNote } from "./gribpanel.ts";
 import { pageBody, pageNote } from "./pagepanel.ts";
 import { tileBody, tileNote } from "./tilepanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
@@ -58,6 +59,8 @@ function headingFor(info: Shown): string {
       return "Inside this chunk";
     case "vector":
       return "Inside this vector";
+    case "grib":
+      return "Inside section 7";
     case "samples":
       return "Samples in this record";
     case "page":
@@ -86,6 +89,8 @@ function headingNote(info: Shown): string {
       return chunkNote(info);
     case "vector":
       return vectorNote(info);
+    case "grib":
+      return gribNote(info);
     case "samples":
       return samplesNote(info);
     case "page":
@@ -490,6 +495,8 @@ function body(
       return chunkBody(info);
     case "vector":
       return vectorBody(info);
+    case "grib":
+      return gribBody(info);
     case "samples":
       return samplesBody(info);
     case "page":
