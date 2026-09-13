@@ -550,7 +550,8 @@ fn nodes<S: Source>(
 }
 
 /// The links in a group's fractal heap: every one in the root block, or in
-/// each of the blocks the root block's table points at.
+/// each of the blocks the root block's table points at, and in the blocks of
+/// any table that table points at in turn.
 fn heap_links<S: Source>(
     ev: &mut Evaluator,
     doc: &Document<S>,
@@ -561,25 +562,42 @@ fn heap_links<S: Source>(
     let Some(heap) = inside(ev, doc, &heap)? else { return Ok(out) };
     let Some(root) = ev.child_named(doc, &heap, "root_block")? else { return Ok(out) };
     let Some(root) = inside(ev, doc, &root)? else { return Ok(out) };
-    // The root is either the objects themselves or the table saying where the
-    // blocks holding them are.
-    if let Some(children) = ev.child_named(doc, &root, "children")? {
-        let n = ev.node(doc, &children)?.child_count;
-        for i in 0..n.min(LIMIT as u64 * 4) {
-            let mut entry = children.clone();
-            entry.push(i as usize);
-            let Some(block) = ev.child_named(doc, &entry, "block")? else { continue };
-            let Some(block) = inside(ev, doc, &block)? else { continue };
-            match block_links(ev, doc, &block, &mut out) {
-                Ok(()) => {}
-                Err(e) if e.interrupted() => return Err(e),
-                Err(_) => continue,
-            }
-        }
-        return Ok(out);
-    }
-    block_links(ev, doc, &root, &mut out)?;
+    heap_block_links(ev, doc, &root, &mut out, 0)?;
     Ok(out)
+}
+
+/// How many tables deep [`heap_block_links`] follows. A table's rows are
+/// fewer than those of the table pointing at it, so a well-formed heap ends
+/// on its own within a handful; this is the stop for one whose tables point
+/// back at each other.
+const HEAP_DEPTH: usize = 16;
+
+/// The links in one block of a heap: the objects themselves, or, for a table,
+/// the links in every block it points at.
+fn heap_block_links<S: Source>(
+    ev: &mut Evaluator,
+    doc: &Document<S>,
+    block: &[usize],
+    out: &mut Vec<(String, Vec<usize>)>,
+    depth: usize,
+) -> R<()> {
+    let Some(children) = ev.child_named(doc, block, "children")? else { return block_links(ev, doc, block, out) };
+    if depth >= HEAP_DEPTH {
+        return Ok(());
+    }
+    let n = ev.node(doc, &children)?.child_count;
+    for i in 0..n.min(LIMIT as u64 * 4) {
+        let mut entry = children.clone();
+        entry.push(i as usize);
+        let Some(child) = ev.child_named(doc, &entry, "block")? else { continue };
+        let Some(child) = inside(ev, doc, &child)? else { continue };
+        match heap_block_links(ev, doc, &child, out, depth + 1) {
+            Ok(()) => {}
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => continue,
+        }
+    }
+    Ok(())
 }
 
 /// The links in one block of a heap. What is not a link is not one: free

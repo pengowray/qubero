@@ -87,22 +87,27 @@
 //! A group with more links than fit as messages keeps them in a fractal heap:
 //! a header, a table of blocks whose rows double in size, and the links
 //! written one after another inside those blocks. That is read, and the names
-//! come out. Where the links stop inside a block is not written anywhere, so
+//! come out, however far the heap has grown. Once a row's blocks would be
+//! bigger than the largest direct block, that row holds tables of its own
+//! instead, and those are followed too. Which rows are which, and how many
+//! rows a table below the root has, are written nowhere: they follow from the
+//! block sizes in the header by a base-two logarithm, and are worked out that
+//! way. Where the links stop inside a block is not written anywhere either, so
 //! a run of zeros or a stretch too short to hold a link ends the run; a block
 //! whose free space holds an older link reads that link again, wrongly, and
 //! the name says so.
 //!
-//! The version 2 b-tree that indexes those links by name is read as far as its
-//! root node, and its records are left as bytes: a record is a hash and a heap
-//! id, which is an offset into the heap rather than an address in the file, and
-//! the links themselves are already read from the blocks. A tree deeper than
-//! its root keeps how many records each child holds inside those same records,
-//! so the children are not followed.
+//! The version 2 b-tree that indexes those links by name is read all the way
+//! down, and its records are left as bytes: a record is a hash and a heap id,
+//! which is an offset into the heap rather than an address in the file, and the
+//! links themselves are already read from the blocks. A node below the root is
+//! reached through the pointer above it, which is also what says how many
+//! records the node holds. How wide that count is, and the total beside it,
+//! is worked out a level at a time from the node size and the record size, the
+//! way the library works it out when it opens the tree.
 //!
-//! What is still not read: huge and tiny heap objects, the free-space managers,
-//! and a heap grown past the largest direct block size, whose later rows hold
-//! indirect blocks rather than direct ones. Telling those apart takes a base
-//! two logarithm, which the expressions here do not have.
+//! What is still not read: huge and tiny heap objects, and the free-space
+//! managers.
 //!
 //! The same logarithm is what stops the chunk indexes short. An extensible
 //! array past its index block keeps the rest of its entries in data blocks and
@@ -283,8 +288,8 @@ fn superblock_v0(indexed_k: bool) -> T {
 
 /// Versions 2 and 3, which drop the caches and the node sizes and add a
 /// checksum. Where the objects are is the same question and a different
-/// answer: the root group's header is a version 2 one and its links are in a
-/// fractal heap, which nothing here reads yet.
+/// answer: the root group's header is a version 2 one, and a group with many
+/// links keeps them in a fractal heap.
 fn superblock_v2() -> T {
     T::structure(
         "Superblock",
@@ -945,6 +950,23 @@ fn fractal_heap() -> T {
                 ),
             ),
             ("checksum", T::u32(Little)),
+            // How many rows of any table hold direct blocks: the first two
+            // rows are the starting size, and each row after that doubles,
+            // until a row's blocks would be bigger than a direct block may be.
+            // A table row past these holds indirect blocks instead.
+            (
+                "direct_rows",
+                T::computed(
+                    E::field("max_direct_block_size")
+                        .log2()
+                        .sub(E::field("starting_block_size").log2())
+                        .add(E::lit(2)),
+                )
+                .counted_as("rows"),
+            ),
+            // The root table's rows, under the name an entry in a table gives
+            // the rows of the table it points at. See `heap_child`.
+            ("block_rows", T::computed(E::field("current_rows")).counted_as("rows")),
             // No rows means the root block holds the objects themselves;
             // otherwise it is the table that says where those blocks are.
             (
@@ -1011,11 +1033,19 @@ fn heap_link() -> T {
 /// The table of where a heap's blocks are: `table_width` of them per row, each
 /// row twice the size of the one before.
 ///
-/// A row past the largest direct block size holds indirect blocks rather than
-/// direct ones, and telling the two apart takes a base-two logarithm, which is
-/// not something an expression here can do. So every entry is read as a direct
-/// block; a heap large enough to have grown past that size is read as far as
-/// its first rows and no further.
+/// The rows up to the largest direct block size hold direct blocks, and every
+/// row past them holds indirect blocks: another table like this one, standing
+/// for as much of the heap as a block of that row's size would. That is how a
+/// heap grows past its largest direct block without its blocks getting any
+/// bigger, and how a group of a few thousand links ends up with a table inside
+/// a table.
+///
+/// How many rows a table has is written in the heap's header for the root one
+/// and nowhere at all for the rest. A table in a row whose blocks are of size
+/// `s` has as many rows as it takes for its own blocks to add up to `s`, which
+/// is `log2(s)` less `log2` of the first row's total, plus one. The entry
+/// pointing at the table works that out, and the table reads it from there
+/// under the same name the header gives the root's: `block_rows`.
 fn heap_indirect_block() -> T {
     T::structure(
         "HeapIndirectBlock",
@@ -1026,47 +1056,93 @@ fn heap_indirect_block() -> T {
             ("block_offset", T::bytes(E::field("max_heap_size").add(E::lit(7)).div(E::lit(8)))),
             (
                 "children",
-                T::array(heap_child(), E::field("table_width").mul(E::field("current_rows")))
-                    .counted_as("blocks"),
+                T::array(heap_child(), E::field("table_width").mul(E::field("block_rows"))).counted_as("blocks"),
             ),
             ("checksum", T::u32(Little)),
         ],
     )
 }
 
-/// One entry of that table: where a block is, and the block.
+/// One entry of that table: where a block is, and the block, which is a direct
+/// block in the rows up to `direct_rows` and another table in the rows past
+/// them.
+///
+/// A heap whose blocks went through filters writes two more fields beside each
+/// direct block's address: how big the block came out, and which filters were
+/// skipped. A filtered block is the filters' output, so it keeps its bytes.
+/// Nothing in the collection has a filtered heap, since a group's heap is
+/// never filtered, so that reading has been checked against the specification
+/// and not against a file.
 fn heap_child() -> T {
+    let direct = || E::field("row").less_than(E::field("direct_rows"));
+    let filtered = || E::lit(0).less_than(E::field("io_filter_length"));
     T::structure(
         "HeapBlock",
         vec![
             ("address", addr()),
             ("row", T::computed(E::Idx.div(E::field("table_width")))),
             ("block_size", row_block_size()),
-            ("block", at_address("address", T::sized(E::field("block_size"), T::Named("HeapDirectBlock".into())))),
+            (
+                "filtered_block",
+                when(
+                    direct().mul(filtered()),
+                    T::inline_structure(
+                        "FilteredBlock",
+                        vec![("size", length().counted_as("bytes")), ("filter_mask", T::u32(Little))],
+                    ),
+                ),
+            ),
+            // How many rows the table this entry points at has, for an entry
+            // in the indirect rows. Nought for a direct block, which is not a
+            // table.
+            (
+                "block_rows",
+                T::switch(
+                    direct(),
+                    vec![(1, T::computed(E::lit(0)))],
+                    T::computed(
+                        E::field("block_size")
+                            .log2()
+                            .sub(E::field("starting_block_size").mul(E::field("table_width")).log2())
+                            .add(E::lit(1)),
+                    ),
+                )
+                .counted_as("rows"),
+            ),
+            (
+                "block",
+                T::switch(
+                    direct(),
+                    vec![(
+                        1,
+                        T::switch(
+                            filtered(),
+                            vec![(1, at_address("address", T::bytes(E::within(&["filtered_block", "size"]))))],
+                            at_address("address", T::sized(E::field("block_size"), T::Named("HeapDirectBlock".into()))),
+                        ),
+                    )],
+                    at_address("address", T::Named("HeapIndirectBlock".into())),
+                ),
+            ),
         ],
     )
 }
 
-/// How big the blocks of one row are, in a field of no bytes.
-///
-/// The first two rows are the starting size and every row after that doubles.
-/// A doubling is a power of two and there is no power here, so the fourteen
-/// rows a heap could plausibly have are written out; a row past them is read
-/// as the starting size, which is wrong, and is a heap of eight thousand
-/// times the starting block that nothing has yet built.
+/// How big the blocks of one row are, in a field of no bytes: the starting
+/// size for the first two rows, and double the row before for every row after.
 ///
 /// Sizing them matters because a direct block says nothing about how long it
 /// is. Without this the links inside one would be read on past the block's end
-/// and into whatever the bytes after it happen to be.
+/// and into whatever the bytes after it happen to be. And an indirect block's
+/// size is what says how many rows it has.
 fn row_block_size() -> T {
     let starting = E::field("starting_block_size");
-    let cases: Vec<(i128, T)> = (0..14u32)
-        .map(|row| {
-            let times = if row < 2 { 1i128 } else { 1i128 << (row - 1) };
-            (i128::from(row), T::computed(starting.clone().mul(E::lit(times))))
-        })
-        .collect();
-    T::switch(E::field("row"), cases, T::computed(starting))
+    T::switch(
+        E::field("row"),
+        vec![(0, T::computed(starting.clone()))],
+        T::computed(starting.shl(E::field("row").sub(E::lit(1)))),
+    )
+    .counted_as("bytes")
 }
 
 /// What a version 2 b-tree's records are, by the type byte its header writes.
@@ -1101,13 +1177,24 @@ pub(crate) const BTREE2_TYPE: &[(i128, &str)] = &[
 /// in the file. The links themselves are read from the heap's blocks, so
 /// nothing is lost by leaving the index alone.
 ///
-/// Only the root node is placed, and its children are left as the bytes of a
-/// `children` field. Placing them would take the widths of the two counts in
-/// a child pointer, and those come out of an iteration over the tree's levels
-/// with a base-two logarithm in it, which is not something an expression here
-/// can do. [`super::hdf5_tree`] does that arithmetic in Rust and reads the
-/// nodes below the root as bytes, so the shape of one of these is drawn even
-/// though the Listing stops at the root.
+/// Every node is placed, the root and everything under it. A node says nothing
+/// about itself beyond its signature: how many records it holds, and how far
+/// above the leaves it sits, are written in the pointer that names it, or in
+/// the header for the root. So the header writes those two for the root under
+/// the same names a child pointer writes them for its child, `child_records`
+/// and `child_level`, and a node reads whichever is nearest above it. One node
+/// type serves every level that way, which is what lets the tree be as deep as
+/// the file made it.
+///
+/// What a pointer holds is not written anywhere either. It is an address, the
+/// child's record count, and, above the level just over the leaves, how many
+/// records the child and everything under it hold; the two counts are as many
+/// bytes as the largest number each could ever be needs, and those largest
+/// numbers come from the node size, the record size, and every level below.
+/// `levels` works that out, one level at a time from the leaves up, the way the
+/// library does when it opens the tree. [`super::hdf5_tree`] does the same
+/// arithmetic in Rust to draw the tree, and the two are checked against each
+/// other on real files.
 fn btree2() -> T {
     T::structure(
         "BTree2",
@@ -1124,6 +1211,30 @@ fn btree2() -> T {
             ("root_record_count", T::u16(Little).counted_as("records")),
             ("record_count", length().counted_as("records")),
             ("checksum", T::u32(Little)),
+            // How wide the record count in every child pointer is: as many
+            // bytes as the most records a leaf can hold needs. A leaf holds
+            // the most of any node, having no pointers to make room for, so
+            // the one width does for the whole tree.
+            (
+                "child_records_size",
+                T::computed(
+                    E::field("node_size")
+                        .sub(E::lit(BTREE2_NODE_PREFIX))
+                        .div(E::field("record_size"))
+                        .log2()
+                        .div(E::lit(8))
+                        .add(E::lit(1)),
+                )
+                .counted_as("bytes"),
+            ),
+            (
+                "levels",
+                T::array(btree2_level(), E::field("depth").at_most(E::lit(BTREE2_MAX_LEVELS)).add(E::lit(1))),
+            ),
+            // The root node's level and record count, under the names a child
+            // pointer gives its child's.
+            ("child_level", T::computed(E::field("depth"))),
+            ("child_records", T::computed(E::field("root_record_count")).counted_as("records")),
             (
                 "root_node",
                 at_address("root_node_address", T::sized(E::field("node_size"), T::Named("BTree2Node".into()))),
@@ -1132,10 +1243,84 @@ fn btree2() -> T {
     )
 }
 
+/// What a node spends on being a node: its signature, version and type byte in
+/// front, and its checksum at the end. The library calls it the metadata
+/// prefix.
+const BTREE2_NODE_PREFIX: i128 = 10;
+
+/// The deepest tree whose levels are worked out. Each level is worked out from
+/// the one below it, so a depth field that is not a depth would otherwise ask
+/// for sixty thousand of them, each waiting on the last; a tree this deep with
+/// the library's own node sizes would index more records than a file can hold.
+/// The same bound [`super::hdf5_tree`] walks to.
+const BTREE2_MAX_LEVELS: i128 = 24;
+
+/// One level of a version 2 b-tree, as the library works it out: how wide a
+/// pointer written by a node at this level is, how many records such a node can
+/// hold, and how many records can be under one in all. Element 0 is the leaves.
+///
+/// Every number is computed and none is read. A level's pointers hold a total
+/// as wide as the level below it can need, so each element asks the one before
+/// it, and the leaves, which point at nothing, start the chain off.
+fn btree2_level() -> T {
+    let leaves = || E::Idx.less_than(E::lit(1));
+    T::structure(
+        "BTree2Level",
+        vec![
+            // An address, the child's record count, and the total under the
+            // child, which is as wide as the level below needed. Nothing at
+            // all at the leaves.
+            (
+                "pointer_size",
+                T::switch(
+                    leaves(),
+                    vec![(1, T::computed(E::lit(0)))],
+                    T::computed(E::lit(8).add(E::field("child_records_size")).add(E::prev("total_records_size"))),
+                )
+                .counted_as("bytes"),
+            ),
+            // A node has one more pointer than it has records, so the spare
+            // one is taken off with the prefix before dividing.
+            (
+                "max_records",
+                T::computed(
+                    E::field("node_size")
+                        .sub(E::lit(BTREE2_NODE_PREFIX))
+                        .sub(E::field("pointer_size"))
+                        .div(E::field("record_size").add(E::field("pointer_size"))),
+                )
+                .counted_as("records"),
+            ),
+            // A node's own records and the whole of each of its children.
+            // Held to what a length can say, since a node size read from
+            // bytes that are not a tree header can make the product as large
+            // as it likes.
+            (
+                "max_total_records",
+                T::computed(
+                    E::field("max_records")
+                        .add(E::field("max_records").add(E::lit(1)).mul(E::prev("max_total_records")))
+                        .at_most(E::lit(u64::MAX as i128)),
+                )
+                .counted_as("records"),
+            ),
+            // How wide the total in a pointer to a node of this level is. A
+            // pointer to a leaf writes no total, since the leaf's own count is
+            // all there is under it.
+            (
+                "total_records_size",
+                T::switch(
+                    leaves(),
+                    vec![(1, T::computed(E::lit(0)))],
+                    T::computed(E::field("max_total_records").log2().div(E::lit(8)).add(E::lit(1))),
+                )
+                .counted_as("bytes"),
+            ),
+        ],
+    )
+}
+
 /// A node of such a tree, of whichever of the two kinds the signature says.
-/// Only the root is placed: how many records a child holds is written in the
-/// entry that points at it, and the entries are part of the record layout this
-/// leaves alone.
 fn btree2_node() -> T {
     T::switch(
         E::peek(32, Big),
@@ -1156,13 +1341,16 @@ fn btree2_leaf() -> T {
             ("type", T::u8()),
             (
                 "records",
-                T::array(T::bytes(E::field("record_size")), E::field("root_record_count")).counted_as("records"),
+                T::array(T::bytes(E::field("record_size")), E::field("child_records")).counted_as("records"),
             ),
             ("checksum", T::u32(Little)),
         ],
     )
 }
 
+/// A node above the leaves: records of its own, read the same way a leaf's
+/// are, and one more pointer than it has records, since a record sits between
+/// every two children.
 fn btree2_internal() -> T {
     T::structure(
         "BTree2Internal",
@@ -1170,16 +1358,47 @@ fn btree2_internal() -> T {
             ("signature", T::magic(b"BTIN")),
             ("version", T::u8()),
             ("type", T::u8()),
+            ("level", T::computed(E::field("child_level"))),
             (
                 "records",
-                T::array(T::bytes(E::field("record_size")), E::field("root_record_count")).counted_as("records"),
+                T::array(T::bytes(E::field("record_size")), E::field("child_records")).counted_as("records"),
             ),
-            // What follows is one entry per child: an address, how many
-            // records are under it, and how many are under it in all. The
-            // widths of the last two are worked out from the tree's depth and
-            // node size, which is arithmetic this cannot do, so the entries
-            // keep their bytes.
-            ("children", T::bytes(E::Remaining)),
+            (
+                "children",
+                T::array(btree2_child(), E::field("child_records").add(E::lit(1))).counted_as("children"),
+            ),
+            ("checksum", T::u32(Little)),
+        ],
+    )
+}
+
+/// One child pointer, and the node it points at.
+///
+/// The total is left out of a pointer to a leaf rather than read as a field of
+/// no bytes, which is what the library writes: the leaf's own count is all
+/// there is under it.
+fn btree2_child() -> T {
+    T::structure(
+        "BTree2Child",
+        vec![
+            ("address", addr()),
+            (
+                "child_records",
+                T::uint_expr(E::field("child_records_size").mul(E::lit(8)), Little).counted_as("records"),
+            ),
+            (
+                "total_records",
+                when(
+                    E::lit(1).less_than(E::field("level")),
+                    T::uint_expr(
+                        E::elem_field("levels", E::field("level").sub(E::lit(1)), &["total_records_size"]).mul(E::lit(8)),
+                        Little,
+                    )
+                    .counted_as("records"),
+                ),
+            ),
+            ("child_level", T::computed(E::field("level").sub(E::lit(1)))),
+            ("node", at_address("address", T::sized(E::field("node_size"), T::Named("BTree2Node".into())))),
         ],
     )
 }
@@ -2972,9 +3191,9 @@ mod tests {
     /// stood. From inside the tree's own header the walk answers with that
     /// tree.
     ///
-    /// The root node is the one node of one of these the template places, and
-    /// it carries the path that takes a reader to it; every node below it has
-    /// none, because there is no field at those bytes to go to.
+    /// Every node carries the path that takes a reader to it: the root's is a
+    /// field of the header, and each node below is a field of the pointer
+    /// above it.
     #[test]
     fn a_version_2_object_header_is_found_by_its_flags() {
         let f = v2_file();
@@ -2986,11 +3205,235 @@ mod tests {
         at.push(3);
         let tree = super::super::hdf5_tree::tree(&mut ev, &doc, &at, 64).expect("walk").expect("a tree");
         assert_eq!(tree.nodes[0].address, V2_BTIN);
-        let mut root = V2_TREE.to_vec();
-        root.extend_from_slice(&[12, 0]);
+        let root = named(&mut ev, &doc, V2_TREE, &["root_node"]);
         assert_eq!(tree.nodes[0].path, root);
-        assert!(tree.nodes[1].path.is_empty());
-        assert_eq!(ev.node(&doc, &tree.nodes[0].path).expect("root node").offset_bits / 8, V2_BTIN);
+        for node in &tree.nodes {
+            assert!(!node.path.is_empty(), "{tree:?}");
+            assert_eq!(ev.node(&doc, &node.path).expect("node").offset_bits / 8, node.address);
+        }
+    }
+
+    /// The path under `from` that the names lead to, stepping into what each
+    /// named field points at, since a node reached by address is the field's
+    /// only child. By name rather than by index, so a field added to a
+    /// structure does not quietly move the test onto its neighbour.
+    fn named(ev: &mut Evaluator, doc: &Document<MemSource>, from: &[usize], names: &[&str]) -> Vec<usize> {
+        let mut at = from.to_vec();
+        for name in names {
+            if let Ok(i) = name.parse::<usize>() {
+                at.push(i);
+                continue;
+            }
+            at = ev.child_named(doc, &at, name).expect("reads").unwrap_or_else(|| panic!("no {name} under {at:?}"));
+            if matches!(ev.node(doc, &at).expect("reads").type_name.as_str(), t if t.starts_with("at ")) {
+                at.push(0);
+            }
+        }
+        at
+    }
+
+    fn int_at(ev: &mut Evaluator, doc: &Document<MemSource>, at: &[usize]) -> i128 {
+        match ev.node(doc, at).expect("reads").value {
+            Value::Int(v) => v,
+            Value::UInt(v) => i128::try_from(v).expect("fits"),
+            other => panic!("{at:?} holds {other:?}"),
+        }
+    }
+
+    /// The children of a version 2 node are fields, and each one is the node
+    /// its pointer names, holding as many records as the pointer says. A
+    /// pointer's two counts are not written at any width the file states, so
+    /// the second child landing on its leaf is what says the width of the
+    /// first pointer was worked out right.
+    #[test]
+    fn a_version_2_node_below_the_root_is_placed_by_the_pointer_above_it() {
+        let doc = Document::new(MemSource(v2_file()));
+        let mut ev = Evaluator::new(hdf5());
+        // Node size 512, records of 24 bytes: a leaf holds 20 records, so a
+        // count takes one byte, and a pointer from level 1 is an address and
+        // that byte.
+        let level = named(&mut ev, &doc, V2_TREE, &["levels", "1", "pointer_size"]);
+        assert_eq!(int_at(&mut ev, &doc, &level), 9);
+        let root = named(&mut ev, &doc, V2_TREE, &["root_node"]);
+        let children = named(&mut ev, &doc, &root, &["children"]);
+        assert_eq!(ev.node(&doc, &children).expect("children").child_count, 2);
+        for (i, leaf) in [(0usize, V2_LEAF_A), (1, V2_LEAF_B)] {
+            let i = i.to_string();
+            let count = named(&mut ev, &doc, &children, &[&i, "child_records"]);
+            assert_eq!(int_at(&mut ev, &doc, &count), 2);
+            // No total in a pointer to a leaf, and not a field of nought bytes
+            // read as nought records either.
+            let total = named(&mut ev, &doc, &children, &[&i, "total_records"]);
+            assert_eq!(ev.node(&doc, &total).expect("total").size_bits, 0);
+            let node = named(&mut ev, &doc, &children, &[&i, "node"]);
+            let info = ev.node(&doc, &node).expect("leaf");
+            assert_eq!(info.offset_bits / 8, leaf);
+            assert_eq!(info.type_name, "BTree2Leaf");
+            let records = named(&mut ev, &doc, &node, &["records"]);
+            assert_eq!(ev.node(&doc, &records).expect("records").child_count, 2);
+        }
+    }
+
+    /// Where the tree above sits under one more node, at level 2.
+    const V2_TOP: u64 = 512;
+
+    /// The same tree two levels deep: a `BTIN` at level 2 holding no records of
+    /// its own and pointing at the level 1 node above the leaves.
+    fn v2_deep_file() -> Vec<u8> {
+        let mut f = v2_file();
+        put(&mut f, V2_BTHD + 12, &2u16.to_le_bytes());
+        put(&mut f, V2_BTHD + 16, &addr_bytes(V2_TOP));
+        put(&mut f, V2_BTHD + 24, &0u16.to_le_bytes());
+        // A pointer from level 2 is an address, the one-byte count, and a total
+        // as wide as the most records a level 1 node and its leaves can hold,
+        // which is 14 of its own and 20 in each of its 15 leaves: 314, which
+        // takes two bytes.
+        put(&mut f, V2_TOP, b"BTIN");
+        put(&mut f, V2_TOP + 4, &[0, 10]);
+        put(&mut f, V2_TOP + 6, &addr_bytes(V2_BTIN));
+        put(&mut f, V2_TOP + 14, &[1]);
+        put(&mut f, V2_TOP + 15, &5u16.to_le_bytes());
+        f
+    }
+
+    /// A pointer above level 1 carries a total beside its count, as wide as
+    /// the levels under it can need, and the node under it is read at the
+    /// level one below its own. Walked from the bytes, every node lands where
+    /// the template placed it.
+    #[test]
+    fn a_version_2_pointer_two_levels_up_reads_the_total_beside_its_count() {
+        let doc = Document::new(MemSource(v2_deep_file()));
+        let mut ev = Evaluator::new(hdf5());
+        for (i, (pointer, total)) in [(0, 0), (9, 2), (11, 2)].into_iter().enumerate() {
+            let i = i.to_string();
+            let at = named(&mut ev, &doc, V2_TREE, &["levels", &i, "pointer_size"]);
+            assert_eq!(int_at(&mut ev, &doc, &at), pointer, "level {i}");
+            let at = named(&mut ev, &doc, V2_TREE, &["levels", &i, "total_records_size"]);
+            assert_eq!(int_at(&mut ev, &doc, &at), total, "level {i}");
+        }
+        let top = named(&mut ev, &doc, V2_TREE, &["root_node"]);
+        assert_eq!(ev.node(&doc, &top).expect("top").offset_bits / 8, V2_TOP);
+        let level = named(&mut ev, &doc, &top, &["level"]);
+        assert_eq!(int_at(&mut ev, &doc, &level), 2);
+        let total = named(&mut ev, &doc, &top, &["children", "0", "total_records"]);
+        assert_eq!(int_at(&mut ev, &doc, &total), 5);
+        let middle = named(&mut ev, &doc, &top, &["children", "0", "node"]);
+        assert_eq!(ev.node(&doc, &middle).expect("middle").offset_bits / 8, V2_BTIN);
+        let level = named(&mut ev, &doc, &middle, &["level"]);
+        assert_eq!(int_at(&mut ev, &doc, &level), 1);
+        let leaf = named(&mut ev, &doc, &middle, &["children", "1", "node"]);
+        assert_eq!(ev.node(&doc, &leaf).expect("leaf").offset_bits / 8, V2_LEAF_B);
+
+        let tree = super::super::hdf5_tree::tree(&mut ev, &doc, V2_TREE, 64).expect("walk").expect("a tree");
+        assert_eq!(tree.nodes.len(), 4, "{tree:?}");
+        for node in &tree.nodes {
+            assert!(!node.path.is_empty(), "{tree:?}");
+            assert_eq!(ev.node(&doc, &node.path).expect("node").offset_bits / 8, node.address);
+        }
+        assert_eq!(tree.nodes[3].path, leaf);
+    }
+
+    // A group whose links are in a fractal heap grown past its direct rows,
+    // built by hand and made as small as the arithmetic allows: two blocks to
+    // a row, 64 bytes to the smallest block and 128 to the largest direct one.
+    // So rows 0 to 2 hold direct blocks and row 3, of 256-byte blocks, holds
+    // tables, each of two rows.
+    const HEAP_HEADER_V2: u64 = 256;
+    const HEAP_ROOT_TABLE: u64 = 512;
+    const HEAP_ROOT_BLOCK: u64 = 640;
+    const HEAP_CHILD_TABLE: u64 = 768;
+    const HEAP_CHILD_BLOCK: u64 = 896;
+    const HEAP_END: u64 = 1024;
+
+    /// The path to the heap: the root group's object header, its link info
+    /// message, and the heap that message names.
+    const HEAP_PATH: &[usize] = &[2, 8, 0, 6, 0, 4];
+
+    /// One link in a heap block: version 1, no optional fields, a name, and an
+    /// address that says there is nothing there to follow.
+    fn heap_link_bytes(name: &str) -> Vec<u8> {
+        let mut out = vec![1, 0, name.len() as u8];
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&addr_bytes(u64::MAX));
+        out
+    }
+
+    fn heap_file() -> Vec<u8> {
+        let mut f = v2_file();
+        f.truncate(V2_BTHD as usize);
+        // The link info message names the heap, and no tree.
+        put(&mut f, V2_ROOT_HEADER + 13, &addr_bytes(HEAP_HEADER_V2));
+        put(&mut f, V2_ROOT_HEADER + 21, &addr_bytes(u64::MAX));
+        put(&mut f, 28, &addr_bytes(HEAP_END));
+        let h = HEAP_HEADER_V2;
+        put(&mut f, h, b"FRHP");
+        put(&mut f, h + 5, &7u16.to_le_bytes());
+        put(&mut f, h + 7, &0u16.to_le_bytes());
+        put(&mut f, h + 9, &[0]);
+        put(&mut f, h + 22, &addr_bytes(u64::MAX));
+        put(&mut f, h + 38, &addr_bytes(u64::MAX));
+        put(&mut f, h + 110, &2u16.to_le_bytes());
+        put(&mut f, h + 112, &64u64.to_le_bytes());
+        put(&mut f, h + 120, &128u64.to_le_bytes());
+        put(&mut f, h + 128, &32u16.to_le_bytes());
+        put(&mut f, h + 130, &1u16.to_le_bytes());
+        put(&mut f, h + 132, &addr_bytes(HEAP_ROOT_TABLE));
+        put(&mut f, h + 140, &4u16.to_le_bytes());
+        // The root table: four rows of two, every entry empty but the first
+        // direct block and the first table in row 3.
+        let entries = HEAP_ROOT_TABLE + 17;
+        put(&mut f, HEAP_ROOT_TABLE, b"FHIB");
+        for i in 0..8 {
+            put(&mut f, entries + 8 * i, &addr_bytes(u64::MAX));
+        }
+        put(&mut f, entries, &addr_bytes(HEAP_ROOT_BLOCK));
+        put(&mut f, entries + 8 * 6, &addr_bytes(HEAP_CHILD_TABLE));
+        put(&mut f, HEAP_ROOT_BLOCK, b"FHDB");
+        put(&mut f, HEAP_ROOT_BLOCK + 17, &heap_link_bytes("alpha"));
+        // The table in row 3, of two rows, whose first block holds the second
+        // link.
+        let entries = HEAP_CHILD_TABLE + 17;
+        put(&mut f, HEAP_CHILD_TABLE, b"FHIB");
+        for i in 0..4 {
+            put(&mut f, entries + 8 * i, &addr_bytes(u64::MAX));
+        }
+        put(&mut f, entries, &addr_bytes(HEAP_CHILD_BLOCK));
+        put(&mut f, HEAP_CHILD_BLOCK, b"FHDB");
+        put(&mut f, HEAP_CHILD_BLOCK + 17, &heap_link_bytes("beta"));
+        f.resize(HEAP_END as usize, 0);
+        f
+    }
+
+    /// A heap row past the largest direct block size holds a table rather than
+    /// a block, and that table has as many rows as its size says, which is
+    /// written nowhere. The links in the blocks under it come out the same as
+    /// the links in the root table's own blocks.
+    #[test]
+    fn a_heap_row_past_the_direct_rows_holds_another_table() {
+        let doc = Document::new(MemSource(heap_file()));
+        let mut ev = Evaluator::new(hdf5());
+        let heap = named(&mut ev, &doc, HEAP_PATH, &["heap"]);
+        let direct = named(&mut ev, &doc, &heap, &["direct_rows"]);
+        assert_eq!(int_at(&mut ev, &doc, &direct), 3);
+        let root = named(&mut ev, &doc, &heap, &["root_block"]);
+        assert_eq!(ev.node(&doc, &root).expect("root").offset_bits / 8, HEAP_ROOT_TABLE);
+        let children = named(&mut ev, &doc, &root, &["children"]);
+        assert_eq!(ev.node(&doc, &children).expect("children").child_count, 8);
+        let name = named(&mut ev, &doc, &children, &["0", "block", "links", "0", "name"]);
+        assert_eq!(ev.node(&doc, &name).expect("name").value, Value::Str("alpha".into()));
+
+        let size = named(&mut ev, &doc, &children, &["6", "block_size"]);
+        assert_eq!(int_at(&mut ev, &doc, &size), 256);
+        let rows = named(&mut ev, &doc, &children, &["6", "block_rows"]);
+        assert_eq!(int_at(&mut ev, &doc, &rows), 2);
+        let table = named(&mut ev, &doc, &children, &["6", "block"]);
+        let info = ev.node(&doc, &table).expect("table");
+        assert_eq!((info.offset_bits / 8, info.type_name.as_str()), (HEAP_CHILD_TABLE, "HeapIndirectBlock"));
+        // Four entries and then the checksum, which is what a table read with
+        // the root's four rows would have run straight past.
+        assert_eq!(info.size_bits / 8, 17 + 4 * 8 + 4);
+        let name = named(&mut ev, &doc, &table, &["children", "0", "block", "links", "0", "name"]);
+        assert_eq!(ev.node(&doc, &name).expect("name").value, Value::Str("beta".into()));
     }
     /// `sniff` over a file that is exactly these bytes.
     fn sniffed(head: &[u8]) -> Option<&'static str> {

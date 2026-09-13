@@ -290,10 +290,10 @@ export class BTreePanel {
    *  own path is a prefix of every path inside it, and the deepest such node
    *  is the one the cursor is actually in.
    *
-   *  A node with no path of its own is passed over rather than matched. Every
-   *  version 2 node below the root has one, because the template places only
-   *  the root, and an empty path is a prefix of every path there is: matched,
-   *  it would light whichever of those boxes came first wherever the cursor
+   *  A node with no path of its own is passed over rather than matched. A
+   *  version 2 node the template does not place where the walk found it has
+   *  one, and an empty path is a prefix of every path there is: matched, it
+   *  would light whichever of those boxes came first wherever the cursor
    *  stood. */
   private nodeAt(path: readonly number[]): number {
     const tree = this.tree;
@@ -429,9 +429,11 @@ export class BTreePanel {
     const rows = Math.max(...tree.nodes.map((n) => n.depth)) + 1;
     this.widths.hidden = !this.boxes.some((box) => this.boxes.some((other) => other.row === box.row && other !== box));
     this.keyLine.hidden = rows < 2;
-    // What a press does, which depends on the tree: a version 1 node is placed
-    // in the template and a version 2 node below the root is not.
-    this.note.textContent = BTREES.hint(entryNoun(tree), tree.version === 2 && tree.nodes.length > 1);
+    // What a press does, which depends on whether every node is placed in the
+    // template. Every node of a well-formed tree is; a version 2 node the
+    // template places somewhere other than where the walk read it comes back
+    // with no path.
+    this.note.textContent = BTREES.hint(entryNoun(tree), tree.nodes.some((n) => n.path.length === 0));
     // The address picture is the tree's nodes in file order against its own
     // span. One node is in one order and spans its own bytes, so the strip is
     // a single mark against a scale it defines, its caption promises a second
@@ -570,9 +572,9 @@ export class BTreePanel {
       this.selected = key;
       this.light();
       this.drawReadout();
-      // A node with no path is not in the Listing to be opened: the template
-      // places only the root of a version 2 tree, and the rest are read from
-      // their bytes. So the second press does nothing beyond putting the mark
+      // A node with no path is not in the Listing to be opened: the walk read
+      // it from its bytes and the template does not place it there. So the
+      // second press does nothing beyond putting the mark
       // back. Not the jump again: the first of the two presses already made
       // it, and a second would record a step from where the reader is to where
       // they already are. An empty path handed on would send the Listing to
