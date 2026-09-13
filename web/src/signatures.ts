@@ -8,7 +8,8 @@
 // that is XML underneath starts `<?xml`, every one that is ZIP starts `PK\3\4`,
 // and 140 of them are identified by nothing more than a first byte of `<`. So a
 // match is ranked by how many bytes it pinned down, with the file's extension
-// counting for some more when the format lists it.
+// counting for some more when the format lists it, and a match of one byte
+// is dropped unless the extension agrees.
 
 /** One pattern: canonical PRONOM syntax, its offset, and whether that offset
  *  counts back from the end of the file. */
@@ -66,6 +67,16 @@ export type SigMatch = {
  * an extension outrank a long signature.
  */
 export const EXTENSION_WORTH = 4;
+
+/**
+ * The fewest pinned bytes that count as a match without the extension behind
+ * them. One byte says nothing about a file: "Vue D'Esprit 4 Atmosphere Preset"
+ * is a zero at offset 12, which 132 of the 592 sample files have, HDF5 among
+ * them, and a lone `M` or `P` at offset 0 made every big-endian TIFF a DMIS
+ * file and every ZIP a PrintFox bitmap. With its extension, a one-byte match
+ * stays: a `{` in a .json is at least consistent with GeoJSON.
+ */
+export const LISTING_BYTES_ALONE = 2;
 
 /** A compiled pattern. Gaps have a minimum and maximum length. */
 type Token =
@@ -321,6 +332,7 @@ function bestOf(ext: string): Best {
       for (const c of byFormat.values()) {
         const f = c.format;
         const agrees = ext !== "" && ((f.ext?.includes(ext) ?? false) || (f.wpExt?.includes(ext) ?? false));
+        if (c.fixed < LISTING_BYTES_ALONE && !agrees) continue;
         out.push({
           format: f,
           pattern: c.sig[0],

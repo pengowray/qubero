@@ -51,8 +51,13 @@ walk(root);
 let named = 0;
 let time = 0;
 for (const f of files) {
-  const size = statSync(f).size;
-  const fd = openSync(f, "r");
+  let size, fd;
+  try {
+    size = statSync(f).size;
+    fd = openSync(f, "r");
+  } catch {
+    continue; // A temporary file a writer in the samples folder has already renamed.
+  }
   const head = Buffer.alloc(Math.min(WINDOW, size));
   readSync(fd, head, 0, head.length, 0);
   const tailLen = Math.min(TAIL, size);

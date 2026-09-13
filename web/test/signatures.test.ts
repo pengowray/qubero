@@ -106,7 +106,7 @@ test("the longest match comes first, with an agreeing extension counting for mor
   const data: SigData = {
     fetched: "",
     formats: [
-      fmt("Q1", "Any XML", [["3C", 0]]),
+      fmt("Q1", "Any XML", [["3C3F", 0]]),
       fmt("Q2", "XML with a prolog", [["3C3F786D6C", 0]], ["xml"]),
       fmt("Q3", "Some other XML", [["3C3F786D6C", 0]], ["foo"]),
       fmt("Q4", "PDF", [["2525454F46", 1024, "eof"]], ["pdf"]),
@@ -134,6 +134,17 @@ test("a few bytes name a file only with its extension behind them", () => {
   assert.equal(one(hex("1F9D90"), "words.Z"), "Q2");
   assert.equal(one(hex("1F9D90"), "words"), undefined);
   assert.equal(one(hex("0000000001"), "test.mat"), undefined);
+});
+
+test("one byte is not a match unless the extension agrees", () => {
+  const index = indexOf({
+    fetched: "",
+    formats: [fmt("Q105854027", "Vue D'Esprit 4 Atmosphere Preset", [["00", 12]], ["atm"]), fmt("Q2", "HDF5", [["894844460D0A1A0A", 0]], ["h5"])],
+  });
+  const hdf5 = hex("894844460D0A1A0A00000000000800080004001000000000");
+  const ids = (name: string): string[] => matchFormats(index, { head: hdf5, tail: hdf5, name }).map((m) => m.format.id);
+  assert.deepEqual(ids("a.h5"), ["Q2"]);
+  assert.deepEqual(ids("sky.atm"), ["Q2", "Q105854027"]);
 });
 
 test("the extension is what follows the last dot", () => {
