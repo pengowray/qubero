@@ -1411,6 +1411,9 @@ export class Doc {
   private readonly listeners = new Set<() => void>();
   /** A go at unfinished work is already queued. */
   private workScheduled = false;
+  /** Where a miss would land if the file were being read front to back:
+   *  just past the last one, or past the run read ahead of it. */
+  private nextMiss = -1;
 
   private constructor(
     private readonly editor: Editor,
@@ -1685,9 +1688,19 @@ export class Doc {
       // next: worth reading in one go. Scattered ones mean fields across the
       // file wanting a byte each, and reading around those would evict what
       // they asked for.
+      //
+      // One chunk is a run only when it carries on from the last miss. On its
+      // own it is as likely a node of a tree whose nodes are all over the
+      // file: an HDF5 chunk index read that way pulled forty-eight chunks in
+      // after every node, the cache evicted the nodes to make room, and the
+      // listing asked for them again for as long as the file was open.
       const first = r.chunks[0];
-      if (first !== undefined && r.chunks.every((c, i) => c === first + i)) {
-        this.fetchRun(first + r.chunks.length, READ_AHEAD);
+      const last = r.chunks[r.chunks.length - 1];
+      if (first !== undefined && last !== undefined && r.chunks.every((c, i) => c === first + i)) {
+        if (r.chunks.length > 1 || first === this.nextMiss) {
+          this.fetchRun(last + 1, READ_AHEAD);
+          this.nextMiss = last + 1 + READ_AHEAD;
+        } else this.nextMiss = last + 1;
       }
       return { status: "pending", reachedBytes: r.reached_bytes };
     }

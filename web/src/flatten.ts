@@ -38,6 +38,15 @@ export const RECORD_OPEN_MAX = 200;
  *  structure the reader has to click to see is a structure they will not
  *  see. */
 export const LIST_OPEN_MAX = 64;
+/** Items the listing can hold before a structure stops arriving open. What is
+ *  open is walked on every chunk that lands, so a list's length is not the only
+ *  way to be too big: a tree is short lists nested deep. An HDF5 chunk index
+ *  is nodes of thirty-six entries, each pointing at the next node down, and
+ *  opening all of it is 350,000 rows read from all over a 480 MiB file. That
+ *  is more than the chunk cache holds, so the walk never finishes: each chunk
+ *  that lands evicts one it needs. Past this many items, a structure arrives
+ *  closed. One the reader opens still opens. */
+export const OPEN_BUDGET = 50_000;
 /** Bytes a gap or an opaque field can hold before its value column cannot
  *  show them, which is when the bytes arrive as a scrolling dump under the
  *  row instead of behind a control. Sixteen is a line of the dump and the
@@ -233,6 +242,8 @@ export type FlatOptions = {
    *  address, so the root's own size is not the file's; the bytes past it
    *  are still the file's and are still a row. */
   readonly fileBits?: number;
+  /** `OPEN_BUDGET`, for a test that wants a small one. */
+  readonly openBudget?: number;
 };
 
 export type Flattened = {
@@ -336,6 +347,11 @@ class Walk {
   reachedBytes = 0;
   readonly page: number;
   readonly sectionListMax: number;
+  readonly openBudget: number;
+  /** Items ahead of this walk in the list, when it walks one fold of a list
+   *  already made. The budget counts from the top of the list, so a fold
+   *  walked again opens what the whole walk would have. */
+  before = 0;
   section = -1;
   /** The whole file, for deciding what counts as a division of it. */
   fileBits = 0;
@@ -350,13 +366,15 @@ class Walk {
     this.opts = opts;
     this.page = opts.page ?? PAGE;
     this.sectionListMax = opts.sectionListMax ?? SECTION_LIST_MAX;
+    this.openBudget = opts.openBudget ?? OPEN_BUDGET;
   }
 
   /** Whether a fold is open: what the reader did, or failing that what the
    *  fold does on arrival. Shut by the reader beats everything. */
   isOpen(key: string, arrivesOpen: boolean): boolean {
     if (this.state.closed.has(key)) return false;
-    return arrivesOpen || this.state.open.has(key);
+    if (this.state.open.has(key)) return true;
+    return arrivesOpen && this.before + this.items.length < this.openBudget;
   }
 
   /** The strip under an item, when its bytes are showing: because the reader
@@ -487,6 +505,7 @@ export function refold(src: TreeSource, state: ListingState, opts: FlatOptions, 
   if (item === undefined) return null;
   const w = new Walk(src, state, opts);
   w.section = item.section;
+  w.before = at;
   // Whether the item arrives open turns on how long the list it is in is,
   // which is its parent's to say. One read, on a click.
   const total = (): number => {

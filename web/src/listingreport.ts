@@ -13,7 +13,7 @@
 
 import type { Doc } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
-import { emptyState, flatten, hopPath, PAGE, pathKey, refold } from "./flatten.ts";
+import { emptyState, flatten, hopPath, OPEN_BUDGET, PAGE, pathKey, refold } from "./flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.ts";
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { markStrip } from "./bytestrip.ts";
@@ -90,6 +90,9 @@ export class ListingReport {
   /** The owners of the byte strips and dumps on the list, worked out with the
    *  layout. */
   private showing: ReadonlySet<string> = new Set();
+  /** The streams that have a row of their own in this listing, worked out
+   *  with the layout rather than on every paint: see `context`. */
+  private streams: ReadonlySet<string> = new Set();
   private drawn: { from: number; to: number } | null = null;
   /** The file's top-level parts, which every strip of the map is drawn from.
    *  Worked out once per flatten so that every strip has the same geometry. */
@@ -429,6 +432,11 @@ export class ListingReport {
   private place(): void {
     this.byKey = new Map(this.items.map((item) => [item.key, item]));
     this.showing = new Set(this.items.flatMap((item) => (item.kind === "bytes" ? [item.owner] : [])));
+    this.streams = new Set(
+      this.items
+        .filter((i) => (i.kind === "row" || i.kind === "heading") && i.node !== null && i.node.decoded)
+        .map((i) => pathKey(i.path)),
+    );
     this.nesting = buildNesting(this.items);
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
@@ -619,11 +627,7 @@ export class ListingReport {
       // holds also offers Open unpacked, for the templates that show only the
       // contents and fold the stream itself away; this is how the contents know
       // not to offer it twice when the stream is right above them.
-      streams: new Set(
-        this.items
-          .filter((i) => (i.kind === "row" || i.kind === "heading") && i.node !== null && i.node.decoded)
-          .map((i) => pathKey(i.path)),
-      ),
+      streams: this.streams,
       shown: this.scroller.clientWidth > 0,
     };
   }
@@ -856,6 +860,11 @@ export class ListingReport {
   private splice(at: number): boolean {
     const cut = refold(this.src, this.state, this.flatOpts(), this.items, at);
     if (cut === null) return false;
+    // Past the budget, whether an item arrives open turns on how many items
+    // are above it, so a fold that grew or shrank changes what arrives open
+    // below it too. Only a whole walk knows what that is.
+    const length = this.items.length - (cut.to - cut.from) + cut.items.length;
+    if (Math.max(this.items.length, length) >= OPEN_BUDGET) return false;
     const top = this.tops[cut.from] ?? 0;
     const was = (this.tops[cut.to] ?? top) - top;
     this.items = [...this.items.slice(0, cut.from), ...cut.items, ...this.items.slice(cut.to)];

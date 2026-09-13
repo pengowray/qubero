@@ -428,6 +428,26 @@ test("the elements of a long list arrive closed, and one of a short one open", (
   assert.equal(one.filter((i) => i.kind === "row" && i.node.name === "a").length, 1);
 });
 
+test("past the budget a structure arrives closed, and one the reader opens still opens", () => {
+  // A tree of short lists nested deep, as an HDF5 chunk index is: no list is
+  // long enough to arrive closed, and opened whole it is every node there is.
+  const node = (depth: number, name: string): Spec =>
+    depth === 0 ? { name, bytes: 2 } : { name, bytes: 2 ** depth * 2, kids: [node(depth - 1, "left"), node(depth - 1, "right")] };
+  const tree: Spec = { name: "file", bytes: 2 ** 8 * 2, kids: [node(8, "root")] };
+  const all = run(tree).items;
+  const some = run(tree, emptyState, undefined, { openBudget: 40 }).items;
+  assert.ok(all.length > 500);
+  assert.ok(some.length < 80, `${some.length} items`);
+  // The last thing opened is still inside the budget, and what comes after it
+  // is closed rather than missing: every level has its row.
+  const shut = some.filter((i) => i.kind === "row" && i.node.composite && !i.open);
+  assert.ok(shut.length > 0);
+  // Opened by the reader, one of them opens past the budget.
+  const key = pathKey(shut[shut.length - 1]!.path);
+  const opened = run(tree, { ...emptyState, open: new Set([key]) }, undefined, { openBudget: 40 }).items;
+  assert.equal(opened.find((i) => i.kind === "row" && pathKey(i.path) === key && i.open) !== undefined, true);
+});
+
 test("a gap longer than a row can show arrives with its dump, a shorter one does not", () => {
   const holes: Spec = {
     name: "file",
