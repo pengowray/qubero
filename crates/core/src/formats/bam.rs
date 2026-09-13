@@ -84,7 +84,10 @@ fn block() -> T {
         .both(peek16(BSIZE_AT - 4, Big).equal_to(E::lit(u16::from_be_bytes(*BC) as i128)))
         .both(peek16(BSIZE_AT - 2, Little).equal_to(E::lit(2)));
     let size = E::cond(is_bc, peek16(BSIZE_AT, Little).add(E::lit(1)), E::Remaining);
-    T::sized(size, super::gzip::member("BgzfBlock", extra(), payload())).counted_as("block")
+    // Marked as a packing so that the records starting in the block, which
+    // no field can hold, can be found from the block under the cursor.
+    let member = super::gzip::member("BgzfBlock", extra(), payload()).packed_as(super::bam_records::PACKING);
+    T::sized(size, member.counted_as("block"))
 }
 
 /// The extra field, as the subfields RFC 1952 says it holds: two letters, a
