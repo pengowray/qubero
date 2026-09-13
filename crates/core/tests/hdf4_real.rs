@@ -119,7 +119,7 @@ fn the_data_behind_the_descriptors_is_opened() {
                 assert_eq!(of("Hdf4ScientificDataset"), 7);
                 let mut ten_by_ten = 0;
                 for at in found["Hdf4ScientificDataset"].clone() {
-                    let rows = [at, vec![1, 0]].concat();
+                    let rows = [at, vec![2, 0]].concat();
                     if ev.node(&doc, &rows).unwrap().child_count != 10 {
                         continue;
                     }
@@ -147,8 +147,8 @@ fn the_data_behind_the_descriptors_is_opened() {
                 for at in found["Hdf4SdScales"].clone() {
                     assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 0]].concat()), Value::UInt(1));
                     assert_eq!(value(&mut ev, &doc, &[at.clone(), vec![1, 1]].concat()), Value::UInt(0));
-                    assert_eq!(ev.node(&doc, &[at.clone(), vec![2, 0, 1]].concat()).unwrap().child_count, 10);
-                    assert_eq!(ev.node(&doc, &[at, vec![2, 1, 1]].concat()).unwrap().size_bits, 0);
+                    assert_eq!(ev.node(&doc, &[at.clone(), vec![2, 0, 2]].concat()).unwrap().child_count, 10);
+                    assert_eq!(ev.node(&doc, &[at, vec![2, 1, 2]].concat()).unwrap().size_bits, 0);
                 }
                 // A maximum and a minimum in the dataset's own number type.
                 assert_eq!(of("Hdf4MaxAndMin"), 6);
@@ -162,7 +162,7 @@ fn the_data_behind_the_descriptors_is_opened() {
                 assert_eq!(of("Hdf4ScientificDataset"), 6);
                 let mut little = 0;
                 for at in found["Hdf4ScientificDataset"].clone() {
-                    let first = [at, vec![1, 0, 0, 1]].concat();
+                    let first = [at, vec![2, 0, 0, 1]].concat();
                     if let Ok(node) = ev.node(&doc, &first) {
                         if node.value == Value::Int(1) && node.size_bits > 8 {
                             little += 1;
@@ -178,7 +178,7 @@ fn the_data_behind_the_descriptors_is_opened() {
                 assert_eq!(of("Hdf4Palette"), 1);
                 let colours = [found["Hdf4Palette"][0].clone(), vec![0]].concat();
                 assert_eq!(ev.node(&doc, &colours).unwrap().child_count, 256);
-                let rows = [found["Hdf4RasterImage"][0].clone(), vec![0]].concat();
+                let rows = [found["Hdf4RasterImage"][0].clone(), vec![2, 0]].concat();
                 assert_eq!(ev.node(&doc, &rows).unwrap().child_count, 5);
                 // Five pixels across, two samples each, which is what the
                 // image dimension record beside it says.
@@ -227,11 +227,14 @@ fn the_data_behind_the_descriptors_is_opened() {
                 }
             }
             // Three rasters of the same image, one per interlacing, and a
-            // fourth of its own size.
+            // fourth of its own size. The interlacing decides the nesting, so
+            // it decides which shape each one reads as.
             "grtdfui83.hdf" => {
-                assert_eq!(of("Hdf4RasterImage"), 3);
-                assert_eq!(of("Hdf4RasterPlanes"), 1, "one of them is written a component at a time");
-                let planes = [found["Hdf4RasterPlanes"][0].clone(), vec![0]].concat();
+                assert_eq!(of("Hdf4RasterImage"), 4);
+                assert_eq!(of("Hdf4RasterPixels"), 2, "the samples of a pixel together");
+                assert_eq!(of("Hdf4RasterComponentLines"), 1, "one run per component in a row");
+                assert_eq!(of("Hdf4RasterComponentPlanes"), 1, "one of them is written a component at a time");
+                let planes = [found["Hdf4RasterComponentPlanes"][0].clone(), vec![0]].concat();
                 assert_eq!(ev.node(&doc, &planes).unwrap().child_count, 3);
                 assert_eq!(ev.node(&doc, &[planes, vec![0]].concat()).unwrap().child_count, 15);
             }
