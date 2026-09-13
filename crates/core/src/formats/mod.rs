@@ -108,6 +108,7 @@ mod mkv;
 mod mp4;
 mod mseed;
 mod mseed3;
+pub mod mseed_steim;
 mod nes;
 mod netcdf;
 mod npy;

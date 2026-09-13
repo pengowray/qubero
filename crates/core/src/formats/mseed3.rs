@@ -33,10 +33,15 @@
 //! network, station, location, and the band, source and subsource codes that
 //! used to be the three characters of a channel name.
 //!
-//! The samples are exposed as far as their shape goes and no further, exactly
+//! The samples are laid out as far as their shape goes and no further, exactly
 //! as in 2.4, and by the same code: the encodings share their numbers with the
 //! older format, so the Steim frames and the fixed-width runs are `mseed`'s
-//! own and the differences are not undone into samples here.
+//! own. The differences are not undone into samples by the template; the data
+//! is marked for [`mseed_steim`](super::mseed_steim), which does that and
+//! reports each step. Nothing in a miniSEED 3 file can be checked against a
+//! second reader, since obspy reads only 2.x, so the check that matters here
+//! is the one the format carries: the last sample of a Steim record has to
+//! come out equal to the reverse integration constant.
 //!
 //! The record carries a CRC-32C of itself with the CRC field zeroed, and that
 //! is not declared as a check. Two things are missing for it: the arithmetic,
@@ -222,10 +227,10 @@ fn data() -> T {
         E::field("encoding"),
         vec![
             (0, T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8)),
-            (1, mseed::samples(T::Int { bits: 16, endian: Little }, 2)),
-            (3, mseed::samples(T::Int { bits: 32, endian: Little }, 4)),
-            (4, mseed::samples(T::F32(Little), 4)),
-            (5, mseed::samples(T::F64(Little), 8)),
+            (1, mseed::samples(1, Little, T::Int { bits: 16, endian: Little }, 2)),
+            (3, mseed::samples(3, Little, T::Int { bits: 32, endian: Little }, 4)),
+            (4, mseed::samples(4, Little, T::F32(Little), 4)),
+            (5, mseed::samples(5, Little, T::F64(Little), 8)),
             (10, mseed::steim(Big, false)),
             (11, mseed::steim(Big, true)),
         ],

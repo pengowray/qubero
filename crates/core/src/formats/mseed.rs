@@ -34,7 +34,11 @@
 //! between seven 4-bit differences and one 30-bit. Word 1 and word 2 of the
 //! first frame are the forward and reverse integration constants, which is
 //! what turns differences back into samples. Undoing the differencing is not
-//! done here.
+//! done here, because a sample is the sample before it plus a difference and
+//! no expression carries a value along a list. The data is marked for
+//! [`mseed_steim`](super::mseed_steim) instead, which adds the differences up
+//! and reports each step of it, down to whether the last sample comes out
+//! equal to the reverse constant.
 //!
 //! A little-endian record swaps less than it looks like it should, and this is
 //! the part worth knowing. A Steim word that holds whole differences is not
@@ -61,8 +65,12 @@
 //! Encodings typed: 0 to 5, 10 and 11, 12 to 18, 30 and 32. The gain-ranged
 //! ones, 12 to 18 and 30, are exposed at their sample width and no further;
 //! which bits of a GEOSCOPE or a CDSN word are the gain differs by network.
+//! Every numeric encoding is marked for `mseed_steim` all the same, so a
+//! record says what its samples are whatever it was written in: CDSN and SRO
+//! by the rules the SEED manual gives, and the rest named as having none.
 //! 19 (Steim3) and 31 (HGLP) stay bytes, having no fixed width here to go on.
 
+use crate::formats::mseed_steim;
 use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
 
 /// How long the fixed header is, which is where the blockette chain starts
@@ -246,24 +254,24 @@ fn record_of(e: Endian) -> T {
         encoding,
         vec![
             (0, sized(e, T::text(StrLen::Fixed(E::Remaining), Encoding::Ascii))),
-            (1, sized(e, samples(T::Int { bits: 16, endian: e }, 2))),
-            (2, sized(e, samples(T::Int { bits: 24, endian: e }, 3))),
-            (3, sized(e, samples(T::Int { bits: 32, endian: e }, 4))),
-            (4, sized(e, samples(T::F32(e), 4))),
-            (5, sized(e, samples(T::F64(e), 8))),
+            (1, sized(e, samples(1, e, T::Int { bits: 16, endian: e }, 2))),
+            (2, sized(e, samples(2, e, T::Int { bits: 24, endian: e }, 3))),
+            (3, sized(e, samples(3, e, T::Int { bits: 32, endian: e }, 4))),
+            (4, sized(e, samples(4, e, T::F32(e), 4))),
+            (5, sized(e, samples(5, e, T::F64(e), 8))),
             (10, sized(e, steim(e, false))),
             (11, sized(e, steim(e, true))),
             // Three bytes a sample, a gain and a mantissa packed together in a
             // shape that is not a number of any width. Named, and left alone.
-            (12, sized(e, gain_ranged(T::bytes(E::lit(3)), 3))),
-            (13, sized(e, gain_ranged(T::u16(e), 2))),
-            (14, sized(e, gain_ranged(T::u16(e), 2))),
-            (15, sized(e, gain_ranged(T::u16(e), 2))),
-            (16, sized(e, gain_ranged(T::u16(e), 2))),
-            (17, sized(e, gain_ranged(T::u16(e), 2))),
-            (18, sized(e, gain_ranged(T::u16(e), 2))),
-            (30, sized(e, gain_ranged(T::u16(e), 2))),
-            (32, sized(e, samples(T::Int { bits: 16, endian: e }, 2))),
+            (12, sized(e, gain_ranged(12, e, T::bytes(E::lit(3)), 3))),
+            (13, sized(e, gain_ranged(13, e, T::u16(e), 2))),
+            (14, sized(e, gain_ranged(14, e, T::u16(e), 2))),
+            (15, sized(e, gain_ranged(15, e, T::u16(e), 2))),
+            (16, sized(e, gain_ranged(16, e, T::u16(e), 2))),
+            (17, sized(e, gain_ranged(17, e, T::u16(e), 2))),
+            (18, sized(e, gain_ranged(18, e, T::u16(e), 2))),
+            (30, sized(e, gain_ranged(30, e, T::u16(e), 2))),
+            (32, sized(e, samples(32, e, T::Int { bits: 16, endian: e }, 2))),
         ],
         sized(e, T::bytes(E::Remaining)),
     )
@@ -273,12 +281,13 @@ fn record_of(e: Endian) -> T {
 /// mantissa and the gain the amplifier was on, packed differently by every
 /// network that invented one.
 ///
-/// The width is the same for all of them and that is what is exposed. Which
-/// bits are the gain is not: it differs between GEOSCOPE, CDSN, SRO and the
-/// rest, and a wrong split would read as numbers rather than as the words it
-/// got wrong.
-fn gain_ranged(elem: T, width: i128) -> T {
-    samples(elem, width)
+/// The width is the same for all of them and that is what the template
+/// exposes. Which bits are the gain is not laid out as fields: it differs
+/// between GEOSCOPE, CDSN, SRO and the rest. The rules the SEED manual gives,
+/// for CDSN and SRO, are applied by [`mseed_steim`], which reads the words and
+/// says what samples they make; the rest stay words.
+fn gain_ranged(encoding: u8, e: Endian, elem: T, width: i128) -> T {
+    samples(encoding, e, elem, width)
 }
 
 /// The record in the room blockette 1000 gives it: two to the power of the
@@ -683,9 +692,14 @@ fn b100_body(e: Endian) -> T {
 /// Shared with `mseed3`, which numbers its encodings the same way and names
 /// its sample count the same: what changes between the two formats is where
 /// the count is written, not what a run of samples is.
-pub(super) fn samples(elem: T, width: i128) -> T {
+///
+/// `encoding` and `e` are what the run is marked with, so that
+/// [`mseed_steim`] reads the run the way it is laid out here: `e` is the byte
+/// order `elem` was given, which in miniSEED 3 is not always the record's.
+pub(super) fn samples(encoding: u8, e: Endian, elem: T, width: i128) -> T {
     let count = E::field("sample_count").at_most(E::Remaining.div(E::lit(width)));
     T::structure("MiniSEEDSamples", vec![("samples", T::array(elem, count)), ("padding", T::bytes(E::Remaining))])
+        .packed_as(&mseed_steim::packing(encoding, e))
 }
 
 /// Steim1 or Steim2 compressed differences, as the 64-byte frames they are
@@ -712,6 +726,9 @@ pub(super) fn steim(e: Endian, two: bool) -> T {
             ("slack", T::bytes(E::Remaining)),
         ],
     )
+    // The running sum that turns these differences into samples is done by
+    // `mseed_steim`, which this names the encoding and byte order for.
+    .packed_as(&mseed_steim::packing(if two { 11 } else { 10 }, e))
 }
 
 /// The names of the fifteen words after the code word, which the IR needs as
