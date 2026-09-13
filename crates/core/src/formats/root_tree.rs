@@ -11,11 +11,12 @@
 //!
 //! ## Why the baskets are not placed
 //!
-//! A `TTree` holds almost none of its own bytes. In `uproot-Zmumu-lz4.root`,
-//! 213 KB of file, the tree's record is under 5 KB and the other 208 KB is
-//! baskets: one `TKey` record per branch per few thousand entries, which the
-//! directory's key list does not list and nothing in the file points at except
-//! `fBasketSeek`, an array of file offsets inside each streamed `TBranch`.
+//! A `TTree` holds almost none of its own bytes. `uproot-Zmumu-lz4.root` is
+//! 212,813 bytes and 206,455 of them, 97 per cent, are baskets: one `TKey`
+//! record per branch per few thousand entries, which the directory's key list
+//! does not list and nothing in the file points at except `fBasketSeek`, an
+//! array of file offsets inside each streamed `TBranch`. The tree's own record
+//! is under 5 KB.
 //!
 //! It is worth being exact about which part of that the IR cannot do, because
 //! it is not the part the handover's gap S4 names. An offset read inside a
