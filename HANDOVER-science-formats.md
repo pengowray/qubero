@@ -46,24 +46,82 @@ same `spans` call, so this is what a person opening the file waits on.
 
 ### S1. A pointer list whose offsets come from a lookup
 
-**Unblocks:** Parquet's pages (everything between `PAR1` and the footer), the
-FITS binary-table heap (variable-length array columns).
+**Unblocks:** the FITS binary-table heap (variable-length array columns), and
+one construct for Parquet's pages in place of the `At` per column chunk it uses
+now.
 
-`Ty::PointerList` names the array holding its offsets by field name. Parquet's
-offsets are `data_page_offset` and `dictionary_page_offset` in each
-`ColumnMetaData`, reached with `Expr::tagged("fields", &["id"], 9, &["value"])`
-style lookups because a Thrift struct has no fixed field order, so there is no
-field name to give. FITS has the same shape one level down: each row's
-descriptor column holds a length and an offset into the heap, so the offsets are
-inside every row rather than in one array.
+**Correction.** The first version of this list said Parquet's pages were
+unplaced. They have been placed since `912947b` (2026-09-05): `column_data` in
+`parquet.rs` puts an `At` under every `ColumnChunk` for its pages, offset index,
+column index and bloom filter, using `Expr::tagged_in`, and
+`tests/parquet_real.rs` checks every sample. The module doc and a memory note
+still said otherwise. What that arrangement does not give: a node for the region
+between `PAR1` and the footer (pages sit at path depth 17, under the footer),
+and anything FITS can use.
 
-Options written down on 2026-09-05 (memory `parquet-pages-need-an-ir-addition`):
-a `PointerList` whose offsets come from an expression evaluated per element of
-some list, or a `Chain`-like walk. Decide before building.
+**Why FITS cannot use an `At` per descriptor.** `locate` asks the placed index
+only for bits outside the root's extent, and a FITS root covers the whole file;
+`child_at` finds an `At`'s contents only when the `At` is a direct field of the
+struct being descended, and a descriptor is four levels inside `rows`;
+`Anchor::Window` from inside a row resolves to the row's `Sized`, not the data
+unit; and `placed.rs` stops indexing a list after 64 children that add nothing,
+which 64 empty cells in a row would trigger.
 
-Must not fall back to walking the Parquet row-group region in order: a column
-index, an offset index and a bloom filter can sit between the last row group and
-the footer. `data_index_bloom_encoding_stats.parquet` proves it.
+**Design (Fable, 2026-09-13), not built.** A `Chain`-like gather:
+
+```rust
+pub enum Step {
+    Field(Arc<str>),                                         // into a named field, through an `At`
+    Tagged { key: Arc<[String]>, tag: Tag, shown: Arc<str> }, // first element whose key holds tag
+    Each,                                                    // every element of the list here
+    Fields(Arc<[String]>),                                   // every field here with one of these names
+}
+// in Ty
+Gather { from: Arc<[Step]>, offset: Expr, anchor: Anchor, adjust: Expr, elem: Box<Ty>, skip_zero: bool },
+// in Expr: this expression read in the record that placed this element
+Placer(Box<Expr>),
+```
+
+Child `i` starts at `anchor + adjust + offset`, with `offset` evaluated in
+record `i` as if it were that record's last field. It covers no bytes where it
+is declared, as `Chain` does; a record whose offset does not read is passed
+over; stops at `CHAIN_CAP`; resumable across `Busy` the way `extend_chain_to`
+is. `ListState` keeps one index per `Each`/`Fields` step per found record and
+re-derives the record path by re-walking, since a million full paths is
+hundreds of MB. `gap_inside` also asks each ancestor struct's scattered siblings
+(`Chain`, `Gather`) for their sorted starts, so a region bounds its own gaps
+without waiting on the placed-index walk.
+
+Parquet with it: a zero-byte-where-declared `RowGroups` region
+(`Sized(Remaining - 8 - footer_length)`) holding four gathers over
+`footer.fields[id=4].value.elems[*].fields[id=1].value.elems[*]`: pages at
+`dictionary_page_offset or data_page_offset` sized by
+`placer(total_compressed_size)`, then offset indexes, column indexes, bloom
+filters. FITS: a `Heap` region holding one gather over
+`rows[*].{col1..col32}[*]` at `offset`, each child sized
+`placer(count * width)` and typed by `placer(kind)`, the letter after `P`/`Q` in
+`TFORMn` (`digits_then` needs to split it out).
+
+Files: `template.rs`, `decode.rs`, `eval/mod.rs` (ListState, node, place_child,
+a new `extend_gather_to` beside `extend_chain_to`, `scattered_starts`),
+`size.rs`, `expr.rs` (Placer), `listing.rs` (child_at, gap_inside), `placed.rs`,
+`shape.rs` (a `Placed::Gathered` mirrored in `crates/wasm/src/lib.rs` and
+`web/src/doc.ts`), `origin.rs`, `relate.rs`, `kinds.rs`, `graph.rs`,
+`explain.rs`, `time.rs`, `machinery.rs`: every `Ty::Chain` arm gains `Gather`.
+
+Build order: IR types; walk, placement and `Placer` with tests beside
+`a_chain_of_pointers_is_a_flat_list` (two lists deep, tagged lists in any
+order, a record with no offset, resuming with `set_slice(8)`); locate and gaps;
+origins and relations; migrate Parquet (bytes named per sample by
+`spans_probe` must not drop); FITS against `comp.fits` (300 rows of `1PB`, a
+66,896-byte heap); DESIGN.md section.
+
+Risks: `memo.rs` `forget_after` assumes a field depends only on what is before
+it, and Parquet's footer is after its pages, so editing a footer offset leaves
+stale placements (already true today; drop every scattered list's starts on
+invalidation). FITS enumeration costs rows times 32 resolves. A walk into an
+unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
+(S4).
 
 ### S2. log2 and ceiling division in `Expr`
 
@@ -124,9 +182,12 @@ themselves are bytes.
 
 ### Parquet
 
-Everything but the footer is one region. Blocked on S1, then page headers
-(already transcribed as `PAGE_SCHEMA`), then codecs (snappy, zstd, brotli, lz4)
-and encodings (RLE/bit-packed hybrid, dictionary, delta).
+Pages, offset indexes, column indexes and bloom filters are placed from the
+footer, each under the column chunk that points at it (see the correction in
+S1). Page payloads keep their bytes: codecs (snappy, zstd, brotli, lz4, gzip)
+and then encodings (RLE/bit-packed hybrid, dictionary, delta) are what is left.
+No node covers the row-group region as a whole. Of the four at the top of this
+list, Parquet is the least unread.
 
 ### NASA CDF
 
