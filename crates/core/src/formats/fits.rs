@@ -428,23 +428,60 @@ fn quoted_part() -> T {
 ///
 /// A binary table writes `rTa`: a repeat count, a type letter, and sometimes
 /// more. An ASCII table writes `Tw.d`: a type letter, a width, and for a float
-/// how many digits are after the point. The two are told apart by whether a
-/// digit follows the opening quote, and both leave the same three fields to
+/// how many digits are after the point. Both leave the same three fields to
 /// look up by name: `repeat`, `code` and `width`.
+///
+/// Which of the two a card holds is read from where its digits are. A digit
+/// before the letter is a repeat count, so the card is a binary table's. A
+/// digit after the letter is a width, so it is an ASCII table's. A letter with
+/// no digits at all is a binary table's with the count left out, which the
+/// standard allows and means one: `TFORM1 = 'I'` is one 16-bit integer, and an
+/// ASCII column with no width is a card nobody can read either way.
 ///
 /// The type letter is read as the number its ASCII is, since that is what the
 /// column's own type switches on, and nothing in the IR switches a type on
 /// text found by keyword.
 fn tform_value() -> T {
-    let binary = digits_then(1, 5);
+    // No leading digit: a width after the letter says ASCII, and nothing
+    // after it says a binary column whose count was left out.
+    let by_letter = T::switch(digit_peek(1), vec![(1, ascii_form())], binary_form(None));
     T::structure(
         "TFORM",
         vec![
             ("open", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
-            ("form", T::switch(digit_peek(0), vec![(1, binary)], ascii_form())),
+            ("form", T::switch(digit_peek(0), vec![(1, digits_then(1, 5))], by_letter)),
         ],
     )
     .machinery(&["open"])
+}
+
+/// The fields of a binary table's `TFORMn`. `digits` is how many digits the
+/// repeat count is written in, or nothing at all for a card that left the
+/// count out, where the count reads as the one the standard says it means.
+fn binary_form(digits: Option<i128>) -> T {
+    // A variable-length column writes the type of what its arrays hold as a
+    // second letter, `1PB`: `P` says the cell is a descriptor and `B` says the
+    // heap array it points at is bytes. Every other column has no second
+    // letter, and this is nothing there.
+    let letter = T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii);
+    let elem_code = T::switch(
+        E::field("code"),
+        vec![(b'P' as i128, letter.clone()), (b'Q' as i128, letter)],
+        T::bytes(E::lit(0)),
+    );
+    let repeat = match digits {
+        Some(d) => T::decimal(StrLen::Fixed(E::lit(d))),
+        None => T::computed(E::lit(1)),
+    };
+    T::structure(
+        "Binary column",
+        vec![
+            ("repeat", repeat),
+            ("code", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
+            ("elem_code", elem_code),
+            ("tail", T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)),
+        ],
+    )
 }
 
 /// One when the byte `n` further on is a digit, and zero when it is not.
@@ -458,25 +495,7 @@ fn digit_peek(n: i128) -> E {
 /// `most` is where the walk stops: a repeat count longer than that reads as
 /// that many digits, and the letter after it is read as part of the number.
 fn digits_then(d: i128, most: i128) -> T {
-    // A variable-length column writes the type of what its arrays hold as a
-    // second letter, `1PB`: `P` says the cell is a descriptor and `B` says the
-    // heap array it points at is bytes. Every other column has no second
-    // letter, and this is nothing there.
-    let letter = T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii);
-    let elem_code = T::switch(
-        E::field("code"),
-        vec![(b'P' as i128, letter.clone()), (b'Q' as i128, letter)],
-        T::bytes(E::lit(0)),
-    );
-    let form = T::structure(
-        "Binary column",
-        vec![
-            ("repeat", T::decimal(StrLen::Fixed(E::lit(d)))),
-            ("code", T::text(StrLen::Fixed(E::lit(1)), Encoding::Ascii)),
-            ("elem_code", elem_code),
-            ("tail", T::text(StrLen::Fixed(E::to_bytes(b"/")), Encoding::Ascii)),
-        ],
-    );
+    let form = binary_form(Some(d));
     if d == most {
         return form;
     }
@@ -1208,6 +1227,22 @@ mod tests {
         // And the cursor in a gap stands on the heap itself.
         assert_eq!(ev.locate(&d, start + 4 * 8).unwrap(), vec![0, 1, 2, 2]);
         assert_eq!(ev.locate(&d, start + 7 * 8).unwrap(), vec![0, 1, 2, 2, 1, 1]);
+    }
+
+    /// A binary table may leave the repeat count out of a `TFORMn`, which is
+    /// what astropy writes for a column of one value. A letter with a digit
+    /// after it is an ASCII table's width instead.
+    #[test]
+    fn a_tform_with_no_repeat_count_is_one_value_of_that_type() {
+        let cards = ["TFIELDS =                    2", "TFORM1  = 'I       '", "TFORM2  = '2I      '"];
+        let mut b = primary();
+        b.extend_from_slice(&table_header(&cards, 1, 6, 0));
+        b.extend_from_slice(&padded(vec![0, 1, 0, 2, 0, 3]));
+        let (d, mut ev) = eval(b);
+        let one = ev.node(&d, &[0, 1, 2, 1, 0, 0]).unwrap();
+        assert_eq!((one.type_name.as_str(), one.child_count, one.size_bits), ("i16 be[]", 1, 16));
+        let two = ev.node(&d, &[0, 1, 2, 1, 0, 1]).unwrap();
+        assert_eq!((two.type_name.as_str(), two.child_count, two.size_bits), ("i16 be[]", 2, 32));
     }
 
     /// A string too long for one card ends in `&` and goes on in the cards
