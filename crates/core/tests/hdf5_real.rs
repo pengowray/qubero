@@ -1296,3 +1296,208 @@ fn name_of(ev: &mut Evaluator, doc: &Document<FileSource>, entry: &[usize]) -> S
     }
     String::new()
 }
+
+/// A row of `compound-and-vlen-seq.h5`'s `table` as `make_hdf5_samples.py`
+/// writes it and h5py reads it back, written out the way [`shown`] writes a
+/// record: `(100, 0.0, b'row-0', (-33.5, 151.25), [0, 0, 0])` is
+/// `{id: 100, x: 0, label: row-0, pos: {lat: -33.5, lon: 151.25}, samples: [0, 0, 0]}`.
+fn table_row(i: i64) -> String {
+    let f = |v: f64| format!("{v}");
+    format!(
+        "{{id: {}, x: {}, label: row-{i}, pos: {{lat: {}, lon: {}}}, samples: [{i}, {}, {}]}}",
+        100 + i,
+        f(i as f64 * 1.25),
+        f(-33.5 + i as f64),
+        f(151.25 - i as f64),
+        -i,
+        i * i
+    )
+}
+
+/// A value the template read, written out: a number or a string as itself, a
+/// record of a compound as its members by name, a list as its elements.
+///
+/// A member's name is read off its label, `[2] label`, which is what says the
+/// label is the member's own name and not an index alone.
+fn shown(ev: &mut Evaluator, doc: &Document<FileSource>, path: &[usize]) -> String {
+    let node = ev.node(doc, path).unwrap_or_else(|e| panic!("{path:?} does not read: {e:?}"));
+    match &node.value {
+        Value::Int(v) => return v.to_string(),
+        Value::UInt(v) => return v.to_string(),
+        Value::Float(v) => return format!("{v}"),
+        Value::Str(s) => return s.clone(),
+        Value::Bytes { len: 0, .. } => return "[]".into(),
+        _ => {}
+    }
+    if node.type_name == "Record" {
+        let values = ev.child_named(doc, path, "values").expect("reads").expect("a record has values");
+        let n = ev.node(doc, &values).expect("reads").child_count;
+        let mut parts = Vec::new();
+        for j in 0..n as usize {
+            let mut one = values.clone();
+            one.push(j);
+            let label = ev.node(doc, &one).expect("reads").name;
+            let prefix = format!("[{j}] ");
+            let name = label.strip_prefix(&prefix).unwrap_or_else(|| panic!("{one:?} is labelled {label:?}"));
+            parts.push(format!("{name}: {}", shown(ev, doc, &one)));
+        }
+        return format!("{{{}}}", parts.join(", "));
+    }
+    let mut parts = Vec::new();
+    for j in 0..node.child_count as usize {
+        let mut one = path.to_vec();
+        one.push(j);
+        parts.push(shown(ev, doc, &one));
+    }
+    format!("[{}]", parts.join(", "))
+}
+
+/// Every run of elements under `path`, and whether it is an attribute's. The
+/// copies of datatype messages and the heap collections are passed over: they
+/// hold no runs, and the second is most of the file.
+fn runs(ev: &mut Evaluator, doc: &Document<FileSource>, path: &[usize], attribute: bool, out: &mut Vec<(Vec<usize>, bool)>) {
+    let Ok(node) = ev.node(doc, path) else { return };
+    if node.name == "elements" && node.composite {
+        out.push((path.to_vec(), attribute));
+        return;
+    }
+    if node.name == "datatype" || node.name == "collection" {
+        return;
+    }
+    let attribute = attribute || node.type_name == "Attribute";
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        runs(ev, doc, &p, attribute, out);
+    }
+}
+
+/// The version nibble of the datatype message a run of elements was read by:
+/// the copy its run keeps, or an attribute's own.
+fn datatype_version(ev: &mut Evaluator, doc: &Document<FileSource>, run: &[usize], attribute: bool) -> i128 {
+    let up = if attribute { &run[..run.len() - 2] } else { &run[..run.len() - 1] };
+    let datatype = ev.child_named(doc, up, "datatype").expect("reads").expect("a datatype in reach");
+    let mut at = datatype;
+    if ev.child_named(doc, &at, "version").expect("reads").is_none() {
+        at.push(0);
+    }
+    let version = ev.child_named(doc, &at, "version").expect("reads").expect("a version");
+    ev.node(doc, &version).expect("reads").value.as_int().expect("a number")
+}
+
+/// The object header of every object `h5ad::contents` finds, by the path the
+/// file names it by.
+fn objects(ev: &mut Evaluator, doc: &Document<FileSource>) -> Vec<(String, Vec<usize>)> {
+    let contents = qubero_core::formats::h5ad::contents(ev, doc).expect("contents");
+    contents.objects.into_iter().map(|o| (o.name, o.path)).collect()
+}
+
+/// A compound element reads as its members, each at its own offset and read by
+/// its own datatype, labelled with its name, and the numbers are the ones h5py
+/// reads.
+///
+/// `compound-and-vlen-seq.h5` holds every shape a compound's datatype message
+/// takes. The default file writes `table` as version 2, because it holds an
+/// array member, and `pos` inside it as version 2 too, since the library raises
+/// the compounds inside a type along with it; the `calibration` attribute holds
+/// no array and is version 1. The latest-bound file writes all three as version
+/// 5, and HDF5 2.0 writes a compound of that version the way version 3 does,
+/// names unpadded and offsets one byte wide.
+/// `table` is aligned, so its members have room between them, and
+/// `calibration` lists `gain` first though its bytes come second. The same rows
+/// are read again through chunks: a version 1 b-tree in the default file and an
+/// extensible array in the other.
+#[test]
+fn a_compound_element_reads_as_its_members_by_name() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut checked = 0usize;
+    for (name, table_version, pos_version, calibration_version) in
+        [("compound-and-vlen-seq.h5", 2, 2, 1), ("compound-and-vlen-seq-latest.h5", 5, 5, 5)]
+    {
+        let path = dir.join("hdf5").join(name);
+        let Ok(file) = File::open(&path) else {
+            eprintln!("skipped: no {}", path.display());
+            continue;
+        };
+        let len = file.metadata().unwrap().len();
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+        let objects = objects(&mut ev, &doc);
+        let header = |want: &str| objects.iter().find(|(n, _)| n == want).map(|(_, p)| p.clone()).expect(want);
+
+        // The contiguous table and its attribute.
+        let (table, chunked) = (header("/table"), header("/table_chunked"));
+        let mut found = Vec::new();
+        runs(&mut ev, &doc, &table, false, &mut found);
+        let data: Vec<_> = found.iter().filter(|(_, a)| !a).cloned().collect();
+        let attrs: Vec<_> = found.iter().filter(|(_, a)| *a).cloned().collect();
+        assert_eq!((data.len(), attrs.len()), (1, 1), "{}: {found:?}", path.display());
+        let (run, _) = &data[0];
+        assert_eq!(datatype_version(&mut ev, &doc, run, false), table_version, "{}", path.display());
+        let run_at = ev.node(&doc, run).expect("reads").offset_bits;
+        for i in 0..5 {
+            let mut row = run.clone();
+            row.push(i);
+            assert_eq!(shown(&mut ev, &doc, &row), table_row(i as i64), "{}: row {i}", path.display());
+            // Where each member is: its offset in the element, which the
+            // alignment leaves room between.
+            let values = ev.child_named(&doc, &row, "values").unwrap().unwrap();
+            for (j, offset) in [0u64, 8, 16, 24, 32].into_iter().enumerate() {
+                let mut one = values.clone();
+                one.push(j);
+                let at = ev.node(&doc, &one).expect("reads").offset_bits;
+                assert_eq!(at, run_at + (i as u64 * 40 + offset) * 8, "{}: row {i} member {j}", path.display());
+            }
+            // The nested record keeps its own datatype, and says which
+            // version it is.
+            let mut pos = values.clone();
+            pos.push(3);
+            let copy = ev.child_named(&doc, &pos, "datatype").unwrap().expect("a nested record places its datatype");
+            let mut at = copy;
+            at.push(0);
+            let version = ev.child_named(&doc, &at, "version").unwrap().unwrap();
+            assert_eq!(ev.node(&doc, &version).unwrap().value.as_int(), Some(pos_version), "{}", path.display());
+        }
+        let label = {
+            let mut one = run.clone();
+            one.extend_from_slice(&[2, 0, 2]);
+            ev.node(&doc, &one).expect("reads").name
+        };
+        assert_eq!(label, "[2] label", "{}", path.display());
+
+        let (run, _) = &attrs[0];
+        assert_eq!(datatype_version(&mut ev, &doc, run, true), calibration_version, "{}", path.display());
+        assert_eq!(shown(&mut ev, &doc, run), "[{gain: 1.5, offset: -2}, {gain: 0.25, offset: 7}]", "{}", path.display());
+        // Listed first, placed second.
+        let at = ev.node(&doc, run).expect("reads").offset_bits;
+        let mut gain = run.clone();
+        gain.extend_from_slice(&[1, 0, 0]);
+        let mut offset = run.clone();
+        offset.extend_from_slice(&[1, 0, 1]);
+        assert_eq!(ev.node(&doc, &gain).unwrap().offset_bits, at + (8 + 4) * 8, "{}", path.display());
+        assert_eq!(ev.node(&doc, &offset).unwrap().offset_bits, at + 8 * 8, "{}", path.display());
+
+        // The chunked copy, two rows a chunk.
+        let mut found = Vec::new();
+        runs(&mut ev, &doc, &chunked, false, &mut found);
+        let mut rows = Vec::new();
+        for (run, _) in found.iter().filter(|(_, a)| !a) {
+            let n = ev.node(&doc, run).expect("reads").child_count as usize;
+            for i in 0..n {
+                let mut row = run.clone();
+                row.push(i);
+                rows.push(shown(&mut ev, &doc, &row));
+            }
+        }
+        // A chunk is whole: the last one holds row 4 and a row of fill.
+        assert_eq!(rows.len(), 6, "{}: {rows:?}", path.display());
+        assert_eq!(&rows[..5], &(0..5).map(table_row).collect::<Vec<_>>()[..], "{}", path.display());
+        checked += 1;
+    }
+    if checked == 0 {
+        eprintln!("skipped: no compound-and-vlen-seq.h5 in the collection");
+    }
+}

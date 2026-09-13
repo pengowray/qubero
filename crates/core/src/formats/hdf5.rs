@@ -142,10 +142,10 @@
 //! contiguous dataset, one per chunk for a chunked one, in the header itself
 //! for a compact one. They read as the dataset's elements, and what an element
 //! is comes from the datatype message beside the layout one: integers of any
-//! width and either sign, floats, fixed-width strings, and the note a
-//! variable-length element leaves. A datatype this does not take apart, a
-//! compound row among them, is one element of the right size and its own
-//! bytes.
+//! width and either sign, floats, fixed-width strings, the note a
+//! variable-length element leaves, compounds, enumerations and arrays. A
+//! datatype this does not take apart (a time, a bit field, an opaque blob, a
+//! reference) is one element of the right size and its own bytes.
 //!
 //! Nothing in a layout message says what its elements are, and nothing in a
 //! datatype message says where they are, so the two have to see each other.
@@ -177,12 +177,45 @@
 //! say: `Expr::Ref` names a field beside this one and stops there, so
 //! `Expr::Within` was added to name a field and then a path down into it.
 //! `shape` on an `.h5ad` group is two numbers because of it.
+//!
+//! ## Compounds
+//!
+//! A compound element is a row of named members, each at an offset inside the
+//! element and each of a type of its own, and none of that is in the element:
+//! the datatype message lists the members, a name, an offset and a whole
+//! datatype message again for each. So every member of the message is read,
+//! in all three shapes its versions give it (a name padded to eight bytes or
+//! not, an offset in four bytes or in as few as the compound's size needs, the
+//! dimensions only version 1 has), and each element is a `Record` whose
+//! `values` are a [`Ty::Gather`](crate::template::Ty::Gather) over those member
+//! records: one value per record, at the offset the record gives, read by the
+//! record's datatype through `Expr::Placer` and labelled with its name,
+//! `[2] label`. The records need not be in the order their bytes are, and
+//! room no member covers is a gap. HDF5 2.0 writes version 5 for a file bound
+//! to the latest library, and lays a compound out in it as version 3 does.
+//!
+//! Every element walks the member records again, so the list the walk starts
+//! from has to be a field in scope. An attribute has its datatype there
+//! already; a dataset places its datatype message a second time beside its
+//! run, as `datatype`, and a chunked layout keeps one above its chunks. Only
+//! classes whose elements ask their datatype something (a compound, an
+//! enumeration, an array, a variable-length sequence) get the copy, since it
+//! is a search back through the messages to find.
+//!
+//! A member may be a compound itself. That member places its own datatype and
+//! walks its own members, and it is followed as deep as the file nests it:
+//! each level is inside the bytes of the one above, so the nesting cannot
+//! loop. An array member reads as its elements, and so does an enumeration as
+//! the integers it is based on; those two, and what a sequence holds, are
+//! followed two levels down (an array of arrays, an enumeration inside an
+//! array) before what is further in keeps its bytes, because each level is
+//! written out again in the template for every class that could be inside it.
 
 use super::hdf5_index::{chunked_v4, extensible_array, fixed_array};
 use crate::template::{
-    Encoding,
+    Anchor, Encoding,
     Endian::{Big, Little},
-    Expr as E, Part, StrLen, Template, Time, Ty as T, Until,
+    Expr as E, Part, Step, StrLen, Template, Time, Ty as T, Until,
 };
 
 /// The address a file writes for "there is nothing here": all ones, in
@@ -216,6 +249,16 @@ pub fn hdf5_part() -> Part {
         .with_type("BTree2Node", btree2_node())
         .with_type("FixedArray", fixed_array())
         .with_type("ExtensibleArray", extensible_array())
+        .with_type(ELEMENTS_BESIDE, element_type(Described::Beside))
+        .with_type(ELEMENTS_INSIDE, element_type(Described::Inside))
+        .with_type(BASE_VALUE, value_of(&Reach::top(Described::Inside).base(), 1))
+        .with_type(BASE_SEQUENCE, base_sequence(&Reach::top(Described::Inside).base(), 1))
+        .with_type(MEMBER_BASE_VALUE, value_of(&Reach::member().base(), 1))
+        .with_type(MEMBER_BASE_SEQUENCE, base_sequence(&Reach::member().base(), 1))
+        .with_type("Member", member())
+        .with_type("EnumName", enum_name())
+        .with_type(MEMBER_VALUE, member_value())
+        .with_type(MEMBER_ELEMENT, value_of(&Reach::member(), 0))
 }
 
 /// The eight bytes every HDF5 superblock opens with.
@@ -699,6 +742,7 @@ fn datatype() -> T {
                         (8, "enumerated"),
                         (9, "variable-length"),
                         (10, "array"),
+                        (11, "complex"),
                     ],
                 ),
             ),
@@ -750,14 +794,175 @@ fn datatype() -> T {
                                 ],
                             ),
                         ),
+                        (2, T::inline_structure("Time", vec![("bit_precision", T::u16(Little))])),
                         // A string says everything it has to say in the class
                         // bits: padding in the low nibble, character set in
                         // the one above it.
                         (3, T::bytes(E::lit(0))),
+                        (
+                            4,
+                            T::inline_structure(
+                                "BitField",
+                                vec![("bit_offset", T::u16(Little)), ("bit_precision", T::u16(Little))],
+                            ),
+                        ),
+                        // The tag is as long as the low byte of the class bits
+                        // says, nul-padded to a multiple of eight.
+                        (
+                            5,
+                            T::structure(
+                                "Opaque",
+                                vec![("tag", T::text(StrLen::Padded { size: E::field("bit_field"), pad: 0 }, Encoding::Ascii))],
+                            ),
+                        ),
+                        (6, compound_type()),
+                        // Which kind of reference is in the class bits, and
+                        // nothing follows them.
+                        (7, T::bytes(E::lit(0))),
+                        (8, enumeration_type()),
+                        (9, T::structure("VariableLength", vec![("base", T::Named("Datatype".into()))])),
+                        (10, array_type()),
+                        (11, T::structure("Complex", vec![("base", T::Named("Datatype".into()))])),
                     ],
+                    // Every class the format has is above. What is left runs to
+                    // the end of the message, which is right for a datatype
+                    // message of its own and wrong for one inside another: a
+                    // member of an unknown class takes the members after it
+                    // with it.
                     T::bytes(E::Remaining),
                 ),
             ),
+        ],
+    )
+}
+
+/// How many members a compound or an enumeration has, which is the low sixteen
+/// bits of the class bits.
+fn member_count() -> E {
+    E::field("bit_field").add(E::field("bit_field_rest").and(E::lit(255)).mul(E::lit(256)))
+}
+
+/// A name inside a datatype message: nul-terminated, and in versions 1 and 2
+/// padded with more nuls to a multiple of eight bytes, the terminator counted.
+/// Version 3 and later stopped padding.
+fn padded_name(fields: &mut Vec<(&'static str, T)>, version: u8) {
+    fields.push(("name", T::text(StrLen::Terminated { end: 0, or_end: false }, Encoding::Utf8)));
+    if version < 3 {
+        fields.push(("name_padding", T::bytes(E::size_of("name").pad_to(8))));
+    }
+}
+
+/// The members of a compound datatype: a name, where in the element the
+/// member's bytes start, and the member's own datatype, which is a whole
+/// datatype message again and may be a compound itself.
+///
+/// The three versions write a member three ways. Version 1 pads the name to
+/// eight bytes, writes the offset in four, and then a dimensionality and four
+/// dimension sizes, which is how a member was made an array before there was
+/// an array class. Version 2 drops those, since an array member is an array
+/// datatype now. Version 3 stops padding the name and writes the offset in as
+/// few bytes as the compound's size needs: one for a compound under 256 bytes.
+/// A file written under HDF5 2.0's latest bound says version 5, and writes a
+/// compound the way version 3 does.
+fn compound_type() -> T {
+    T::structure(
+        "Compound",
+        vec![(
+            "members",
+            T::array(T::Named("Member".into()), member_count()).counted_as("members"),
+        )],
+    )
+}
+
+/// One member, in whichever of the three shapes the compound's version gives
+/// it. A named type so that the list of them says what it is a list of.
+fn member() -> T {
+    T::switch(E::field("version"), vec![(1, member_v(1)), (2, member_v(2))], member_v(3))
+}
+
+fn member_v(version: u8) -> T {
+    let mut fields = Vec::new();
+    padded_name(&mut fields, version);
+    if version < 3 {
+        fields.push(("offset", T::u32(Little).counted_as("bytes")));
+    } else {
+        // The fewest whole bytes that can write the compound's size, which is
+        // what the library sizes the offset by.
+        let width = E::field("size").log2().div(E::lit(8)).add(E::lit(1));
+        fields.push(("offset", T::uint_expr(width.mul(E::lit(8)), Little).counted_as("bytes")));
+    }
+    if version == 1 {
+        fields.extend(vec![
+            ("dimensionality", T::u8()),
+            ("reserved", T::bytes(E::lit(3))),
+            ("permutation", T::u32(Little)),
+            ("reserved_2", T::u32(Little)),
+            // Always four, however many are used.
+            ("dimensions", T::array(T::u32(Little), E::lit(4))),
+            (
+                "element_count",
+                T::when(E::lit(0).less_than(E::field("dimensionality")), T::computed(used_dimensions()))
+                    .counted_as("elements"),
+            ),
+        ]);
+    }
+    fields.push(("datatype", T::Named("Datatype".into())));
+    T::structure_named("Member", "name", "", fields)
+}
+
+/// The first `dimensionality` of a version 1 member's four dimension sizes,
+/// multiplied together.
+fn used_dimensions() -> E {
+    (0..4).fold(E::lit(1), |product, k| {
+        let used = E::lit(k).less_than(E::field("dimensionality"));
+        product.mul(E::cond(used, E::elem("dimensions", E::lit(k)), E::lit(1)))
+    })
+}
+
+/// An enumeration: the integer type its values are written in, then every
+/// name, then every value in the same order.
+fn enumeration_type() -> T {
+    T::structure(
+        "Enumeration",
+        vec![
+            ("base", T::Named("Datatype".into())),
+            (
+                "names",
+                T::array(T::Named("EnumName".into()), member_count()),
+            ),
+            (
+                "values",
+                run_of(&Reach::local(&["base"]), member_count(), E::within(&["base", "size"]), MAX_NESTING),
+            ),
+        ],
+    )
+    .field_elem_named_from("values", E::elem_field("names", E::idx(), &["name"]))
+}
+
+/// One name of an enumeration, padded the way a compound member's name is.
+fn enum_name() -> T {
+    let name = |version: u8| {
+        let mut fields = Vec::new();
+        padded_name(&mut fields, version);
+        T::structure_named("EnumName", "name", "", fields)
+    };
+    T::switch(E::field("version"), vec![(1, name(1)), (2, name(2))], name(3))
+}
+
+/// An array: dimensions, and the datatype of one element of it. Versions 1 and
+/// 2 keep three reserved bytes and a permutation the library never used; 3
+/// dropped both.
+fn array_type() -> T {
+    let before_3 = || E::field("version").less_than(E::lit(3));
+    T::structure(
+        "Array",
+        vec![
+            ("dimensionality", T::u8()),
+            ("reserved", T::when(before_3(), T::bytes(E::lit(3)))),
+            ("dimensions", T::array(T::u32(Little), E::field("dimensionality")).counted_as("dimensions")),
+            ("permutation", T::when(before_3(), T::array(T::u32(Little), E::field("dimensionality")))),
+            ("element_count", T::computed(E::product_of("dimensions")).counted_as("elements")),
+            ("base", T::Named("Datatype".into())),
         ],
     )
 }
@@ -775,8 +980,9 @@ pub(super) enum Described {
     /// By a datatype message among the same object's messages.
     Beside,
     /// By a field called `datatype` in a structure around the elements: the
-    /// datatype an attribute writes before its value, or the copy a chunked
-    /// layout keeps above its chunks (see [`datatype_copy`]).
+    /// datatype an attribute writes before its value, or the second reading of
+    /// the message a chunked layout keeps above its chunks (see
+    /// `hdf5_index::datatype_copy`).
     Inside,
 }
 
@@ -787,6 +993,31 @@ impl Described {
             Described::Inside => E::within(&["datatype", name]),
         }
     }
+
+    /// Where the datatype message beside this one starts, as an address of
+    /// this format, so that it can be placed again somewhere an expression
+    /// can name it.
+    ///
+    /// Found by a field only a datatype has, two bytes in, rather than by the
+    /// message's `body`: every message has a body, and the one just before a
+    /// layout message is as likely to be a fill value.
+    pub(super) fn beside_address() -> E {
+        E::start_of(E::sibling(&["body", "bit_field_rest"])).sub(E::lit(2))
+    }
+}
+
+/// Whether a run's elements are of a class whose elements ask their datatype
+/// something once per element: a compound's members, an enumeration's or an
+/// array's base type, a sequence's element type. Those go through a copy of
+/// the datatype in scope, and a run of any other class places no copy.
+fn needs_datatype(by: Described) -> E {
+    let class = || by.part("class");
+    let sequence = by.part("bit_field").and(E::lit(15)).equal_to(E::lit(0));
+    E::cond(
+        class().equal_to(E::lit(9)),
+        sequence,
+        class().equal_to(E::lit(6)).either(class().equal_to(E::lit(8))).either(class().equal_to(E::lit(10))),
+    )
 }
 
 fn element_size(by: Described) -> E {
@@ -805,24 +1036,115 @@ fn element_size_field(by: Described) -> (&'static str, T) {
     ("element_size", T::computed(element_size(by)))
 }
 
-/// What one element of a dataset is, read from the datatype message that sits
-/// before the layout one among the object's messages. A datatype this does not
-/// take apart leaves its elements as their own bytes, which is still one row
-/// per element and still the right size.
-fn element_type(by: Described) -> T {
-    // Class, byte order, width and sign in one number, so a single switch can
-    // ask about all four: there is no bitwise operator here, and four nested
-    // switches would say the same thing at four times the length.
-    let bits = by.part("bit_field");
-    let big_endian = bits.clone().sub(bits.clone().div(E::lit(2)).mul(E::lit(2)));
-    let signed = bits.clone().div(E::lit(8)).sub(bits.div(E::lit(16)).mul(E::lit(2)));
-    let key = by
-        .part("class")
+/// How deep an array, an enumeration or a variable-length sequence is followed
+/// into the type of what it holds, before what is further in keeps its bytes.
+///
+/// A bound on the template rather than on the file. Each of those three is
+/// written out again for the type inside it when the template is built, so
+/// every level multiplies what the template holds by three; two levels reach
+/// an array of arrays, a sequence of arrays and an enumeration inside either.
+/// A compound is not counted here: a member is a named type, followed only
+/// when it is opened, and each nested compound is inside the bytes of the one
+/// around it, so the file bounds how deep that goes.
+const MAX_NESTING: u32 = 2;
+
+/// What a gathered member of a compound is read as: one value of its type,
+/// or, for a version 1 member with dimensions of its own, an array of them.
+const MEMBER_VALUE: &str = "MemberValue";
+/// One element of that: the value itself, or one of the array's.
+const MEMBER_ELEMENT: &str = "MemberElement";
+
+/// How an expression reaches the datatype describing the bytes it is about.
+///
+/// At the top of a run of elements that is [`Described`]: a message beside
+/// the layout, or a `datatype` field in a structure around the elements. Below
+/// that, what an element holds is described by a datatype inside that one: a
+/// member's, an array's base, a sequence's base. So a reach is a path from a
+/// field called `datatype` down to the datatype wanted, asked either where the
+/// value is or, for the member of a compound, of the member record that placed
+/// the value (see [`Expr::Placer`](crate::template::Expr::Placer)).
+#[derive(Clone)]
+struct Reach {
+    path: Vec<&'static str>,
+    /// Asked of the member record that placed this value.
+    placer: bool,
+    /// The three numbers asked once per run, `class`, `bit_field` and `size`,
+    /// come from the message beside the layout rather than from a `datatype`
+    /// in scope. Only the top of a dataset's run is read this way, and only
+    /// those three: anything asked once per element goes through the copy of
+    /// the message the run keeps, because a search back through the messages
+    /// from inside a column of a million elements passes every element before
+    /// the one asking.
+    beside: bool,
+}
+
+impl Reach {
+    fn top(by: Described) -> Reach {
+        Reach { path: vec!["datatype"], placer: false, beside: matches!(by, Described::Beside) }
+    }
+
+    /// A datatype reached down a path from a field in scope.
+    fn local(path: &[&'static str]) -> Reach {
+        Reach { path: path.to_vec(), placer: false, beside: false }
+    }
+
+    /// The datatype of the member whose record placed this value.
+    fn member() -> Reach {
+        Reach { path: vec!["datatype"], placer: true, beside: false }
+    }
+
+    /// A number inside the datatype, at `rest` below it.
+    fn at(&self, rest: &[&'static str]) -> E {
+        if self.beside && rest.len() == 1 {
+            return Described::Beside.part(rest[0]);
+        }
+        let mut path = self.path.clone();
+        path.extend_from_slice(rest);
+        let e = E::within(&path);
+        if self.placer { E::placer(e) } else { e }
+    }
+
+    /// The same datatype, asked from inside one element rather than once for
+    /// the run.
+    fn per_element(&self) -> Reach {
+        Reach { beside: false, ..self.clone() }
+    }
+
+    /// The datatype of what this one holds: an array's element, a sequence's
+    /// element, the integer an enumeration is written in.
+    fn base(&self) -> Reach {
+        let mut path = self.path.clone();
+        path.extend_from_slice(&["properties", "base"]);
+        Reach { path, placer: self.placer, beside: false }
+    }
+
+    /// Where the datatype starts, as an address, so it can be placed again.
+    fn address(&self) -> E {
+        let e = E::start_of(E::within(&self.path));
+        if self.placer { E::placer(e) } else { e }
+    }
+
+    /// Whether the datatype is the `datatype` field in scope, which a record
+    /// can walk its members from without placing anything.
+    fn in_scope(&self) -> bool {
+        !self.placer && self.path == ["datatype"]
+    }
+}
+
+/// Which of the numeric types an integer or float datatype is, as one number:
+/// class, byte order, width and sign together, so a single switch asks about
+/// all four instead of four nested switches saying the same thing at four
+/// times the length. Keyed as `class * 1000 + big_endian * 500 + size * 2 +
+/// signed`.
+fn numeric(reach: &Reach) -> (E, Vec<(i128, T)>) {
+    let bits = reach.at(&["bit_field"]);
+    let key = reach
+        .at(&["class"])
         .mul(E::lit(1000))
-        .add(big_endian.mul(E::lit(500)))
-        .add(by.part("size").mul(E::lit(2)))
-        .add(signed);
-    let numeric = vec![
+        .add(bits.clone().bit(0).mul(E::lit(500)))
+        .add(reach.at(&["size"]).mul(E::lit(2)))
+        .add(bits.bit(3));
+    let types = vec![
         (2, T::u8()),
         (3, T::Int { bits: 8, endian: Little }),
         (4, T::u16(Little)),
@@ -846,61 +1168,215 @@ fn element_type(by: Described) -> T {
         (1508, T::F32(Big)),
         (1516, T::F64(Big)),
     ];
+    (key, types)
+}
+
+/// What one element of a dataset is, read from the datatype message that sits
+/// before the layout one among the object's messages. A datatype this does not
+/// take apart leaves its elements as their own bytes, which is still one row
+/// per element and still the right size.
+///
+/// A named type, one for each of the two places a datatype can be, because a
+/// run of elements is read in half a dozen places and every class of element
+/// is a few hundred lines of template once written out.
+fn element_type(by: Described) -> T {
     let width = E::field("element_size");
-    // The switch is outside the arrays rather than inside one: an array of a
-    // type chosen per element has no stride, and a stride is what lets the
-    // cursor land in the middle of thirteen million numbers without reading
-    // the ones before it.
-    let count = E::field("run_bytes").div(width.clone());
+    run_of(&Reach::top(by), E::field("run_bytes").div(width.clone()), width, 0)
+}
+
+const ELEMENTS_BESIDE: &str = "ElementsBeside";
+const ELEMENTS_INSIDE: &str = "ElementsInside";
+
+/// `count` elements of the datatype `reach` reaches, each `width` bytes.
+///
+/// The switch is outside the arrays rather than inside one: an array of a type
+/// chosen per element has no stride, and a stride is what lets the cursor land
+/// in the middle of thirteen million numbers without reading the ones before
+/// it. Every element here is one width, so a type that is not a number is
+/// sized to it, which gives the array its stride back.
+fn run_of(reach: &Reach, count: E, width: E, depth: u32) -> T {
     let of = |t: T| T::array(t, count.clone()).counted_as("elements");
+    let (key, numeric) = numeric(reach);
     let numeric: Vec<(i128, T)> = numeric.into_iter().map(|(k, t)| (k, of(t))).collect();
     let opaque = of(T::sized(width.clone(), T::bytes(width.clone())));
-    T::switch(
-        by.part("class"),
-        vec![
-            (0, T::switch(key.clone(), numeric.clone(), opaque.clone())),
-            (1, T::switch(key, numeric, opaque.clone())),
-            // A string of a fixed width, which is what a column of names is.
-            // Sized as well as padded, so the run has a stride.
-            (
-                3,
-                of(T::sized(
-                    width.clone(),
-                    T::text(StrLen::Padded { size: width.clone(), pad: 0 }, Encoding::Utf8),
-                )),
-            ),
-            // A variable-length element is not the thing but a note saying
-            // where the thing is: how long it is, which global heap
-            // collection holds it, and which object in that collection it is.
-            // The note carries the object too, found by searching the
-            // collection for that index. Sixteen bytes is the shape a file
-            // with eight-byte addresses writes; anything else is left as its
-            // bytes.
-            //
-            // Class nine covers two things and the low four bits of the class
-            // bit field say which: a string, or a sequence of some other type.
-            // Asked here rather than inside the note, so that a column of a
-            // million strings asks it once: reaching a datatype message two
-            // levels away is what `element_size_field` exists to avoid doing
-            // per element.
-            (
-                9,
-                {
-                    let bits = by.part("bit_field");
-                    let string = bits.clone().sub(bits.div(E::lit(16)).mul(E::lit(16)));
-                    let note = |text: bool| {
+    let one = reach.per_element();
+    let mut cases = vec![
+        (0, T::switch(key.clone(), numeric.clone(), opaque.clone())),
+        (1, T::switch(key, numeric, opaque.clone())),
+        // A string of a fixed width, which is what a column of names is.
+        // Sized as well as padded, so the run has a stride.
+        (3, of(T::sized(width.clone(), T::text(StrLen::Padded { size: width.clone(), pad: 0 }, Encoding::Utf8)))),
+        // A variable-length element is not the thing but a note saying where
+        // the thing is: how long it is, which global heap collection holds it,
+        // and which object in that collection it is. The note carries the
+        // object too, found by searching the collection for that index.
+        // Sixteen bytes is the shape a file with eight-byte addresses writes;
+        // anything else is left as its bytes.
+        //
+        // Class nine covers two things and the low four bits of the class bit
+        // field say which: a string, or a sequence of some other type. Asked
+        // here rather than inside the note, so that a column of a million
+        // strings asks it once: reaching a datatype message two levels away is
+        // what `element_size_field` exists to avoid doing per element.
+        (9, {
+            let string = reach.at(&["bit_field"]).and(E::lit(15));
+            let note = |kind: Vlen| {
+                T::switch(width.clone(), vec![(16, of(T::sized(width.clone(), vlen_reference(kind))))], opaque.clone())
+            };
+            let sequence = if depth < MAX_NESTING { Vlen::Sequence(one.base(), depth + 1) } else { Vlen::Bytes };
+            T::switch(string, vec![(1, note(Vlen::Text))], note(sequence))
+        }),
+    ];
+    if depth < MAX_NESTING {
+        // A compound: every element is a record of its members, each at its
+        // own offset inside the element.
+        cases.push((6, of(T::sized(width.clone(), record(&one)))));
+        // An enumeration is written as the integer it is based on.
+        cases.push((8, of(T::sized(width.clone(), base_value(&one, depth)))));
+        cases.push((
+            10,
+            of(T::sized(
+                width,
+                T::array(base_value(&one, depth), one.at(&["properties", "element_count"])).counted_as("elements"),
+            )),
+        ));
+    }
+    T::switch(reach.at(&["class"]), cases, opaque)
+}
+
+/// One value of the datatype inside the one `reach` reaches: an array's
+/// element, the integer an enumeration is written in.
+///
+/// One level down from a run's own datatype, and from a member's, the path is
+/// the same wherever the run or the member is, so those two are named types
+/// written out once rather than once per class of element that holds one.
+fn base_value(reach: &Reach, depth: u32) -> T {
+    match depth {
+        0 => T::Named(if reach.placer { MEMBER_BASE_VALUE } else { BASE_VALUE }.into()),
+        _ => value_of(&reach.base(), depth + 1),
+    }
+}
+
+/// The elements of a variable-length sequence, `length` of them, of the
+/// datatype `base` reaches.
+fn base_sequence(base: &Reach, depth: u32) -> T {
+    run_of(base, E::field("length"), base.at(&["size"]), depth)
+}
+
+const BASE_VALUE: &str = "BaseValue";
+const BASE_SEQUENCE: &str = "BaseSequence";
+const MEMBER_BASE_VALUE: &str = "MemberBaseValue";
+const MEMBER_BASE_SEQUENCE: &str = "MemberBaseSequence";
+
+/// One value of the datatype `reach` reaches, where the value is on its own
+/// rather than one of a run: a member of a compound, an element of an array
+/// member. The same classes [`run_of`] reads, one at a time.
+fn value_of(reach: &Reach, depth: u32) -> T {
+    let size = reach.at(&["size"]);
+    let opaque = T::bytes(size.clone());
+    let (key, numeric) = numeric(reach);
+    let mut cases = vec![
+        (0, T::switch(key.clone(), numeric.clone(), opaque.clone())),
+        (1, T::switch(key, numeric, opaque.clone())),
+        (3, T::sized(size.clone(), T::text(StrLen::Padded { size: size.clone(), pad: 0 }, Encoding::Utf8))),
+    ];
+    if depth < MAX_NESTING {
+        // Sized, because a record counts its members' offsets from the start
+        // of the nearest sized window, and that has to be this value rather
+        // than the element around it.
+        cases.push((6, T::sized(size.clone(), record(reach))));
+        cases.push((8, base_value(reach, depth)));
+        cases.push((
+            9,
+            T::switch(
+                size.clone(),
+                vec![(
+                    16,
+                    T::sized(
+                        size.clone(),
                         T::switch(
-                            width.clone(),
-                            vec![(16, of(T::sized(width.clone(), vlen_reference(text))))],
-                            opaque.clone(),
-                        )
-                    };
-                    T::switch(string, vec![(1, note(true))], note(false))
-                },
+                            reach.at(&["bit_field"]).and(E::lit(15)),
+                            vec![(1, vlen_reference(Vlen::Text))],
+                            vlen_reference(Vlen::Sequence(reach.base(), depth + 1)),
+                        ),
+                    ),
+                )],
+                opaque.clone(),
             ),
-        ],
-        opaque,
+        ));
+        cases.push((
+            10,
+            T::array(base_value(reach, depth), reach.at(&["properties", "element_count"])).counted_as("elements"),
+        ));
+    }
+    T::switch(reach.at(&["class"]), cases, opaque)
+}
+
+/// One element of a compound: its members, each read by its own datatype at
+/// the offset the datatype message gives it, and labelled with its name.
+///
+/// The members are a [`Ty::Gather`](crate::template::Ty::Gather) over the
+/// member records in the datatype message. Nothing in an element says where a
+/// member starts or what it is; the records do, and they are not in order: a
+/// member may be listed before one that sits in front of it, and there may be
+/// room between two that no member covers. Each value asks its record what it
+/// is with `placer`, and the record's name is the label, `[2] label`.
+///
+/// Where the datatype is already a field in scope, the walk starts from it.
+/// Anywhere else, a member that is a compound or an array of them, it is
+/// placed again here first, as a second reading of the message's bytes, since
+/// a walk has to start from a field.
+///
+/// A version 1 member may be an array of its type without being an array
+/// datatype, by the dimensions in its record, so every member's value looks.
+fn record(reach: &Reach) -> T {
+    let own = !reach.in_scope();
+    let mut fields = Vec::new();
+    if own {
+        fields.push(("datatype", T::at_origin(reach.address(), T::Named("Datatype".into()))));
+    }
+    fields.push((
+        "values",
+        T::gather(
+            vec![Step::field("datatype"), Step::field("properties"), Step::field("members"), Step::each()],
+            E::field("offset"),
+            Anchor::Window,
+            E::lit(0),
+            T::Named(MEMBER_VALUE.into()),
+        ),
+    ));
+    let record = T::structure("Record", fields)
+        .field_elem_named_from("values", E::placer(E::field("name")))
+        .counted_as("record");
+    if own { record.field_aside("datatype").machinery(&["datatype"]) } else { record }
+}
+
+/// A member's value: one of its type, or, for a member of a version 1
+/// compound whose record gives it dimensions, as many as those multiply to.
+///
+/// The compound's version is asked first and the record's dimensionality only
+/// when it is 1, since a record of any later version has no such field and
+/// the search for one would climb out of the record looking.
+fn member_value() -> T {
+    let element = || T::Named(MEMBER_ELEMENT.into());
+    let dimensioned = E::within(&["datatype", "version"])
+        .equal_to(E::lit(1))
+        .both(E::lit(0).less_than(E::placer(E::field("dimensionality"))));
+    T::switch(
+        dimensioned,
+        vec![(0, element())],
+        T::array(element(), E::placer(E::field("element_count"))).counted_as("elements"),
     )
+}
+
+/// What a variable-length element's object is read as.
+enum Vlen {
+    /// The text of a string.
+    Text,
+    /// `length` elements of the datatype reached, at this depth.
+    Sequence(Reach, u32),
+    /// Bytes, past [`MAX_NESTING`].
+    Bytes,
 }
 
 /// The note a variable-length element leaves in place of its contents: how
@@ -917,35 +1393,50 @@ fn element_type(by: Described) -> T {
 /// second reading of them: several notes can point at one object, and an
 /// object nothing points at is still part of the heap. See [`Field::aside`].
 ///
-/// `text` says whether these are a string, which is the low four bits of the
-/// datatype's class bit field, asked where the column is typed rather than
-/// once per element.
-fn vlen_reference(text: bool) -> T {
+/// A string's `length` counts bytes and a sequence's counts elements, and the
+/// object is read as the one or the other. Which it is, is the low four bits
+/// of the datatype's class bit field, asked where the column is typed rather
+/// than once per element. What a sequence's elements are is the datatype
+/// inside the variable-length one, and that is asked per element, through the
+/// copy of the datatype message the run keeps.
+fn vlen_reference(kind: Vlen) -> T {
     let found = |field: &[&str]| {
         E::tagged_in_by(E::within(&["collection", "objects"]), &["object_index"], E::field("object_index"), field)
     };
-    // A sequence is left as its bytes: what its elements are is a datatype
-    // message of its own, and nothing here has reached it.
-    let contents = match text {
-        true => T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8),
-        false => T::bytes(E::Remaining),
+    let (contents, unit) = match kind {
+        Vlen::Text => (T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8), "bytes"),
+        Vlen::Sequence(base, 1) => {
+            let named = if base.placer { MEMBER_BASE_SEQUENCE } else { BASE_SEQUENCE };
+            (T::Named(named.into()), "elements")
+        }
+        Vlen::Sequence(base, depth) => (base_sequence(&base, depth), "elements"),
+        Vlen::Bytes => (T::bytes(E::Remaining), "elements"),
     };
     T::structure_named(
         "GlobalHeapId",
         "object",
         "",
         vec![
-            ("length", T::u32(Little).counted_as("bytes")),
+            ("length", T::u32(Little).counted_as(unit)),
             ("collection_address", addr()),
             ("object_index", T::u32(Little)),
-            ("collection", at_address("collection_address", T::Named("GlobalHeap".into()))),
-            // An element of no length writes the undefined address and points
-            // at nothing, the same as every other address in this format.
+            // An element of no length points at nothing. Some writers say so
+            // with the undefined address, the same as every other address in
+            // this format; HDF5 2.0 writes a sequence of no elements with
+            // address nought, which is the superblock and never a collection.
+            (
+                "collection",
+                T::switch(
+                    E::field("collection_address"),
+                    vec![(0, T::bytes(E::lit(0))), (UNDEFINED, T::bytes(E::lit(0)))],
+                    T::at_origin(E::field("collection_address"), T::Named("GlobalHeap".into())),
+                ),
+            ),
             (
                 "object",
                 T::switch(
                     E::field("collection_address"),
-                    vec![(UNDEFINED, T::bytes(E::lit(0)))],
+                    vec![(0, T::bytes(E::lit(0))), (UNDEFINED, T::bytes(E::lit(0)))],
                     T::at_origin(E::start_of(found(&["payload"])), T::sized(found(&["size"]), contents)),
                 ),
             ),
@@ -1543,11 +2034,29 @@ fn heap_object() -> T {
 /// bytes in front of them are how far the elements can see: an expression
 /// reads the fields of the structures it sits in, and both of these are
 /// answers from somewhere else in the object header.
+///
+/// A dataset whose elements are compounds, enumerations, arrays or sequences
+/// also places its datatype message a third time, as `datatype`: each element
+/// asks it what its members or its base type are, and a search back through
+/// the messages from inside the run would pass every element before the one
+/// asking. An attribute has its own `datatype` in scope already, and a chunked
+/// layout keeps one above its chunks.
 pub(super) fn elements(by: Described, bytes: E) -> T {
-    T::structure(
-        "Data",
-        vec![element_size_field(by), ("run_bytes", T::computed(bytes)), ("elements", element_type(by))],
-    )
+    let mut fields = vec![element_size_field(by), ("run_bytes", T::computed(bytes))];
+    let beside = matches!(by, Described::Beside);
+    if beside {
+        fields.push((
+            "datatype",
+            T::when(needs_datatype(by), T::at_origin(Described::beside_address(), T::Named("Datatype".into()))),
+        ));
+    }
+    let named = match by {
+        Described::Beside => ELEMENTS_BESIDE,
+        Described::Inside => ELEMENTS_INSIDE,
+    };
+    fields.push(("elements", T::Named(named.into())));
+    let data = T::structure("Data", fields);
+    if beside { data.field_aside("datatype").machinery(&["datatype"]) } else { data }
 }
 
 fn fill_value_old() -> T {
@@ -2599,9 +3108,11 @@ pub(crate) mod tests {
     fn a_dataset_reads_as_the_elements_its_datatype_declares() {
         let f = one_link_file();
         // The layout message of the object the link points at, down to the
-        // first of the numbers it places.
+        // first of the numbers it places. The run's fourth field: the third is
+        // the copy of the datatype a run of compounds keeps, which a run of
+        // integers leaves out.
         let mut first = LINK.to_vec();
-        first.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 2, 0, 2, 0]);
+        first.extend_from_slice(&[6, 0, 6, 2, 4, 1, 1, 2, 0, 3, 0]);
         let (_, value) = read(&f, &first);
         assert_eq!(value.as_int(), Some(-7));
         let mut second = first.clone();
@@ -3161,6 +3672,125 @@ pub(crate) mod tests {
         let name = named(&mut ev, &doc, &table, &["children", "0", "block", "links", "0", "name"]);
         assert_eq!(ev.node(&doc, &name).expect("name").value, Value::Str("beta".into()));
     }
+    /// The eight bytes every datatype message opens with: version and class in
+    /// one byte, the three bytes of class bits, the size.
+    fn datatype_head(version: u8, class: u8, bits: [u8; 3], size: u32) -> Vec<u8> {
+        let mut v = vec![version << 4 | class];
+        v.extend_from_slice(&bits);
+        v.extend_from_slice(&size.to_le_bytes());
+        v
+    }
+
+    /// An integer datatype of this many bytes, little-endian.
+    fn integer(bytes: u32, signed: bool) -> Vec<u8> {
+        let mut v = datatype_head(1, 0, [if signed { 8 } else { 0 }, 0, 0], bytes);
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&(bytes as u16 * 8).to_le_bytes());
+        v
+    }
+
+    /// A name padded the way versions 1 and 2 pad one.
+    fn name8(name: &str) -> Vec<u8> {
+        let mut v = name.as_bytes().to_vec();
+        v.push(0);
+        v.resize(v.len().div_ceil(8) * 8, 0);
+        v
+    }
+
+    /// A datatype and then elements of it, read the way an attribute reads
+    /// its value: the datatype is a field in scope, and the rest is the run.
+    fn typed(datatype: &[u8], data: &[u8]) -> (Evaluator, Document<MemSource>) {
+        let part = hdf5_part();
+        let root = T::structure(
+            "Typed",
+            vec![("datatype", T::Named("Datatype".into())), ("data", elements(Described::Inside, E::Remaining))],
+        );
+        let mut bytes = datatype.to_vec();
+        bytes.extend_from_slice(data);
+        (Evaluator::new(Template::new("typed", root).with_part(&part)), Document::new(MemSource(bytes)))
+    }
+
+    /// A member of a version 1 compound can be an array without being an array
+    /// datatype: its record says how many dimensions and how long each is, and
+    /// the type is the element's. No library since 1.4 writes one, so this is
+    /// built by hand. The second member is two 32-bit integers.
+    #[test]
+    fn a_version_1_member_with_dimensions_reads_as_that_many_values() {
+        let mut dt = datatype_head(1, 6, [2, 0, 0], 12);
+        for (name, offset, dims) in [("a", 0u32, [0u32; 4]), ("b", 4, [2, 0, 0, 0])] {
+            dt.extend(name8(name));
+            dt.extend_from_slice(&offset.to_le_bytes());
+            dt.push(u8::from(dims[0] > 0));
+            dt.extend_from_slice(&[0; 3]);
+            dt.extend_from_slice(&0u32.to_le_bytes());
+            dt.extend_from_slice(&0u32.to_le_bytes());
+            for d in dims {
+                dt.extend_from_slice(&d.to_le_bytes());
+            }
+            dt.extend(integer(4, true));
+        }
+        let data: Vec<u8> = [7i32, 8, 9].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (mut ev, doc) = typed(&dt, &data);
+        let values = [1, 2, 0, 0];
+        let member = |ev: &mut Evaluator, path: &[usize]| {
+            let mut p = values.to_vec();
+            p.extend_from_slice(path);
+            ev.node(&doc, &p).expect("reads")
+        };
+        let a = member(&mut ev, &[0]);
+        assert_eq!((a.name.as_str(), a.value.as_int()), ("[0] a", Some(7)));
+        let b = member(&mut ev, &[1]);
+        assert_eq!((b.name.as_str(), b.child_count, b.offset_bits), ("[1] b", 2, (dt.len() as u64 + 4) * 8));
+        assert_eq!(member(&mut ev, &[1, 0]).value.as_int(), Some(8));
+        assert_eq!(member(&mut ev, &[1, 1]).value.as_int(), Some(9));
+    }
+
+    /// Version 3 writes a member's offset in as few bytes as the compound's
+    /// size needs, so a compound of 300 bytes writes two, and a name with no
+    /// padding after it. Read one byte wide, the second member's offset would
+    /// be 43 and its datatype would start a byte early.
+    #[test]
+    fn a_version_3_member_offset_is_as_wide_as_the_compound_s_size_needs() {
+        let mut dt = datatype_head(3, 6, [2, 0, 0], 300);
+        for (name, offset) in [("x", 0u16), ("y", 299)] {
+            dt.extend_from_slice(name.as_bytes());
+            dt.push(0);
+            dt.extend_from_slice(&offset.to_le_bytes());
+            dt.extend(integer(1, false));
+        }
+        let mut data = vec![0u8; 300];
+        data[0] = 5;
+        data[299] = 6;
+        let (mut ev, doc) = typed(&dt, &data);
+        let x = ev.node(&doc, &[1, 2, 0, 0, 0]).expect("reads");
+        let y = ev.node(&doc, &[1, 2, 0, 0, 1]).expect("reads");
+        assert_eq!((x.name.as_str(), x.value.as_int()), ("[0] x", Some(5)));
+        assert_eq!((y.name.as_str(), y.value.as_int()), ("[1] y", Some(6)));
+        assert_eq!(y.offset_bits, (dt.len() as u64 + 299) * 8);
+    }
+
+    /// An enumeration's elements are the integers it is based on, and its
+    /// values in the datatype message are labelled with the names written
+    /// before them. What h5py stores a boolean as.
+    #[test]
+    fn an_enumeration_reads_as_its_base_integers_and_names_its_values() {
+        let mut dt = datatype_head(1, 8, [2, 0, 0], 1);
+        dt.extend(integer(1, true));
+        dt.extend(name8("FALSE"));
+        dt.extend(name8("TRUE"));
+        dt.extend_from_slice(&[0, 1]);
+        let (mut ev, doc) = typed(&dt, &[1, 0, 1]);
+        let run = [1, 2];
+        assert_eq!(ev.node(&doc, &run).expect("reads").child_count, 3);
+        assert_eq!(ev.node(&doc, &[1, 2, 0]).expect("reads").value.as_int(), Some(1));
+        assert_eq!(ev.node(&doc, &[1, 2, 1]).expect("reads").value.as_int(), Some(0));
+        let values = named(&mut ev, &doc, &[], &["datatype", "properties", "values"]);
+        let mut second = values.clone();
+        second.push(1);
+        let second = ev.node(&doc, &second).expect("reads");
+        assert_eq!((second.name.as_str(), second.value.as_int()), ("[1] TRUE", Some(1)));
+    }
+
     /// `sniff` over a file that is exactly these bytes.
     fn sniffed(head: &[u8]) -> Option<&'static str> {
         crate::formats::sniff(head, head.len() as u64)

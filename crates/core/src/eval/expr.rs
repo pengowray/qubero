@@ -531,6 +531,16 @@ impl Evaluator {
                 let (end, frame) = self.placer_frame(doc, at)?;
                 return self.text_path(doc, &end, &inner.clone(), frame);
             }
+            // The field the backwards search lands on, which is what an HDF5
+            // dataset needs to place its datatype message a second time: the
+            // message is an earlier element of the object's messages, beside
+            // the layout message that places the elements, and how those
+            // elements are laid out is a list inside it. Nothing found is no
+            // field, as it is for a search by label.
+            Expr::Sibling(field) => match self.sibling_field_path(doc, at, &field.clone())? {
+                Some(p) => p,
+                None => return Ok(None),
+            },
             _ => return fail("text has to come from a field, not from arithmetic"),
         }))
     }
