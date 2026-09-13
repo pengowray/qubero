@@ -228,420 +228,7 @@ root switch peek(u64be) {
   }
 }
 
-type BTree2 {
-  signature: magic "BTHD"
-  version: u8be
-  type: u8be enum BTree2Type {
-    0 = testing, 1 = huge objects, indirectly accessed,
-    2 = huge objects, filtered and indirectly accessed, 3 = huge objects, directly accessed,
-    4 = huge objects, filtered and directly accessed, 5 = link names, 6 = link creation order,
-    7 = shared object header messages, 8 = attribute names, 9 = attribute creation order,
-    10 = chunks, unfiltered, 11 = chunks, filtered
-  }
-  node_size: u32le
-  record_size: u16le
-  depth: u16le
-  split_percent: u8be
-  merge_percent: u8be
-  root_node_address: u64le
-  root_record_count: u16le
-  record_count: u64le
-  checksum: u32le
-  child_records_size: computed log2((node_size - 10) / record_size) / 8 + 1
-  levels: BTree2Level {
-    pointer_size: switch index < 1 {
-      1 => computed 0
-      _ => computed 8 + child_records_size + previous(total_records_size)
-    }
-    max_records: computed (node_size - 10 - pointer_size) / (record_size + pointer_size)
-    max_total_records: computed min(max_records + (max_records + 1) *
-        previous(max_total_records), 18446744073709551615)
-    total_records_size: switch index < 1 {
-      1 => computed 0
-      _ => computed log2(max_total_records) / 8 + 1
-    }
-  }[min(depth, 24) + 1]
-  child_level: computed depth
-  child_records: computed root_record_count
-  root_node: switch root_node_address {
-    0xffffffffffffffff => bytes[0]
-    _ => at(root_node_address from origin) sized(node_size) BTree2Node
-  }
-}
-
-type BTree2Node = switch peek(u32be) {
-  'BTLF' => BTree2Leaf {
-    signature: magic "BTLF"
-    version: u8be
-    type: u8be
-    records: (bytes[record_size])[child_records]
-    checksum: u32le
-  }
-  'BTIN' => BTree2Internal {
-    signature: magic "BTIN"
-    version: u8be
-    type: u8be
-    level: computed child_level
-    records: (bytes[record_size])[child_records]
-    children: BTree2Child {
-      address: u64le
-      child_records: u(child_records_size * 8)le
-      total_records: switch 1 < level {
-        1 => u(levels[level - 1].total_records_size * 8)le
-        _ => bytes[0]
-      }
-      child_level: computed level - 1
-      node: switch address {
-        0xffffffffffffffff => bytes[0]
-        _ => at(address from origin) sized(node_size) BTree2Node
-      }
-    }[child_records + 1]
-    checksum: u32le
-  }
-  _ => UnknownBTree2Node {
-    signature: text[4] utf8
-  }
-}
-
-type BaseSequence = switch datatype.properties.base.class {
-  0 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
-      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-  }
-  1 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
-      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-  }
-  3 => (sized(datatype.properties.base.size) text[datatype.properties.base.size] padded with
-      0x00 utf8)[length]
-  9 => switch datatype.properties.base.bit_field & 0x0f {
-    1 => switch datatype.properties.base.size {
-      16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
-        length: u32le
-        collection_address: u64le
-        object_index: u32le
-        collection: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(collection_address from origin) GlobalHeap
-        }
-        object: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) text[remaining] utf8
-        }  aside
-      }[length]
-      _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-    }
-    _ => switch datatype.properties.base.size {
-      16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
-        length: u32le
-        collection_address: u64le
-        object_index: u32le
-        collection: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(collection_address from origin) GlobalHeap
-        }
-        object: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) switch
-              datatype.properties.base.properties.base.class {
-            0 => switch datatype.properties.base.properties.base.class * 1000 +
-                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                datatype.properties.base.properties.base.size * 2 +
-                bit(datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(datatype.properties.base.properties.base.size)
-                  bytes[datatype.properties.base.properties.base.size])[length]
-            }
-            1 => switch datatype.properties.base.properties.base.class * 1000 +
-                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                datatype.properties.base.properties.base.size * 2 +
-                bit(datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(datatype.properties.base.properties.base.size)
-                  bytes[datatype.properties.base.properties.base.size])[length]
-            }
-            3 => (sized(datatype.properties.base.properties.base.size)
-                text[datatype.properties.base.properties.base.size] padded with 0x00
-                utf8)[length]
-            9 => switch datatype.properties.base.properties.base.bit_field & 0x0f {
-              1 => switch datatype.properties.base.properties.base.size {
-                16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
-                    (named by object) {
-                  length: u32le
-                  collection_address: u64le
-                  object_index: u32le
-                  collection: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(collection_address from origin) GlobalHeap
-                  }
-                  object: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(start of collection.objects[object_index = object_index].payload
-                        from origin) sized(collection.objects[object_index = object_index].size)
-                        text[remaining] utf8
-                  }  aside
-                }[length]
-                _ => (sized(datatype.properties.base.properties.base.size)
-                    bytes[datatype.properties.base.properties.base.size])[length]
-              }
-              _ => switch datatype.properties.base.properties.base.size {
-                16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
-                    (named by object) {
-                  length: u32le
-                  collection_address: u64le
-                  object_index: u32le
-                  collection: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(collection_address from origin) GlobalHeap
-                  }
-                  object: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(start of collection.objects[object_index = object_index].payload
-                        from origin) sized(collection.objects[object_index = object_index].size)
-                        bytes[remaining]
-                  }  aside
-                }[length]
-                _ => (sized(datatype.properties.base.properties.base.size)
-                    bytes[datatype.properties.base.properties.base.size])[length]
-              }
-            }
-            _ => (sized(datatype.properties.base.properties.base.size)
-                bytes[datatype.properties.base.properties.base.size])[length]
-          }
-        }  aside
-      }[length]
-      _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-    }
-  }
-  6 => sized(datatype.properties.base.size) Record (unit record, machinery datatype) {
-    datatype: at(start of datatype.properties.base from origin) Datatype  aside
-    values: gather(from datatype.properties.members[], at offset from window) MemberValue
-        element name from descriptor.name
-  }[length]
-  8 => sized(datatype.properties.base.size) switch
-      datatype.properties.base.properties.base.class {
-    0 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
-    3 => sized(datatype.properties.base.properties.base.size)
-        text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
-    _ => bytes[datatype.properties.base.properties.base.size]
-  }[length]
-  10 => (sized(datatype.properties.base.size) switch
-      datatype.properties.base.properties.base.class {
-    0 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
-    1 => switch datatype.properties.base.properties.base.class * 1000 +
-        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        datatype.properties.base.properties.base.size * 2 +
-        bit(datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[datatype.properties.base.properties.base.size]
-    }
-    3 => sized(datatype.properties.base.properties.base.size)
-        text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
-    _ => bytes[datatype.properties.base.properties.base.size]
-  }[datatype.properties.base.properties.element_count])[length]
-  _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
-}
-
-type BaseValue = switch datatype.properties.base.class {
+type ArrayElement = switch datatype.properties.base.class {
   0 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
       * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
     2 => u8be
@@ -975,6 +562,81 @@ type BaseValue = switch datatype.properties.base.class {
   _ => bytes[datatype.properties.base.size]
 }
 
+type BTree2 {
+  signature: magic "BTHD"
+  version: u8be
+  type: u8be enum BTree2Type {
+    0 = testing, 1 = huge objects, indirectly accessed,
+    2 = huge objects, filtered and indirectly accessed, 3 = huge objects, directly accessed,
+    4 = huge objects, filtered and directly accessed, 5 = link names, 6 = link creation order,
+    7 = shared object header messages, 8 = attribute names, 9 = attribute creation order,
+    10 = chunks, unfiltered, 11 = chunks, filtered
+  }
+  node_size: u32le
+  record_size: u16le
+  depth: u16le
+  split_percent: u8be
+  merge_percent: u8be
+  root_node_address: u64le
+  root_record_count: u16le
+  record_count: u64le
+  checksum: u32le
+  child_records_size: computed log2((node_size - 10) / record_size) / 8 + 1
+  levels: BTree2Level {
+    pointer_size: switch index < 1 {
+      1 => computed 0
+      _ => computed 8 + child_records_size + previous(total_records_size)
+    }
+    max_records: computed (node_size - 10 - pointer_size) / (record_size + pointer_size)
+    max_total_records: computed min(max_records + (max_records + 1) *
+        previous(max_total_records), 18446744073709551615)
+    total_records_size: switch index < 1 {
+      1 => computed 0
+      _ => computed log2(max_total_records) / 8 + 1
+    }
+  }[min(depth, 24) + 1]
+  child_level: computed depth
+  child_records: computed root_record_count
+  root_node: switch root_node_address {
+    0xffffffffffffffff => bytes[0]
+    _ => at(root_node_address from origin) sized(node_size) BTree2Node
+  }
+}
+
+type BTree2Node = switch peek(u32be) {
+  'BTLF' => BTree2Leaf {
+    signature: magic "BTLF"
+    version: u8be
+    type: u8be
+    records: (bytes[record_size])[child_records]
+    checksum: u32le
+  }
+  'BTIN' => BTree2Internal {
+    signature: magic "BTIN"
+    version: u8be
+    type: u8be
+    level: computed child_level
+    records: (bytes[record_size])[child_records]
+    children: BTree2Child {
+      address: u64le
+      child_records: u(child_records_size * 8)le
+      total_records: switch 1 < level {
+        1 => u(levels[level - 1].total_records_size * 8)le
+        _ => bytes[0]
+      }
+      child_level: computed level - 1
+      node: switch address {
+        0xffffffffffffffff => bytes[0]
+        _ => at(address from origin) sized(node_size) BTree2Node
+      }
+    }[child_records + 1]
+    checksum: u32le
+  }
+  _ => UnknownBTree2Node {
+    signature: text[4] utf8
+  }
+}
+
 type Dataspace {
   version: u8be
   dimensionality: u8be
@@ -1243,7 +905,7 @@ type ElementsBeside = switch earlier(body.class) {
           0 => bytes[0]
           0xffffffffffffffff => bytes[0]
           _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) BaseSequence
+              sized(collection.objects[object_index = object_index].size) SequenceElements
         }  aside
       }[run_bytes / element_size]
       _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
@@ -1253,8 +915,8 @@ type ElementsBeside = switch earlier(body.class) {
     values: gather(from datatype.properties.members[], at offset from window) MemberValue
         element name from descriptor.name
   }[run_bytes / element_size]
-  8 => (sized(element_size) BaseValue)[run_bytes / element_size]
-  10 => (sized(element_size) BaseValue[datatype.properties.element_count])[run_bytes /
+  8 => (sized(element_size) ArrayElement)[run_bytes / element_size]
+  10 => (sized(element_size) ArrayElement[datatype.properties.element_count])[run_bytes /
       element_size]
   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
 }
@@ -1347,7 +1009,7 @@ type ElementsInside = switch datatype.class {
           0 => bytes[0]
           0xffffffffffffffff => bytes[0]
           _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) BaseSequence
+              sized(collection.objects[object_index = object_index].size) SequenceElements
         }  aside
       }[run_bytes / element_size]
       _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
@@ -1357,8 +1019,8 @@ type ElementsInside = switch datatype.class {
     values: gather(from datatype.properties.members[], at offset from window) MemberValue
         element name from descriptor.name
   }[run_bytes / element_size]
-  8 => (sized(element_size) BaseValue)[run_bytes / element_size]
-  10 => (sized(element_size) BaseValue[datatype.properties.element_count])[run_bytes /
+  8 => (sized(element_size) ArrayElement)[run_bytes / element_size]
+  10 => (sized(element_size) ArrayElement[datatype.properties.element_count])[run_bytes /
       element_size]
   _ => (sized(element_size) bytes[element_size])[run_bytes / element_size]
 }
@@ -1883,355 +1545,7 @@ type Member = switch version {
   }
 }
 
-type MemberBaseSequence = switch descriptor.datatype.properties.base.class {
-  0 => switch descriptor.datatype.properties.base.class * 1000 +
-      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
-      descriptor.datatype.properties.base.size * 2 +
-      bit(descriptor.datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(descriptor.datatype.properties.base.size)
-        bytes[descriptor.datatype.properties.base.size])[length]
-  }
-  1 => switch descriptor.datatype.properties.base.class * 1000 +
-      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
-      descriptor.datatype.properties.base.size * 2 +
-      bit(descriptor.datatype.properties.base.bit_field, 3) {
-    2 => u8be[length]
-    3 => i8le[length]
-    4 => u16le[length]
-    5 => i16le[length]
-    8 => u32le[length]
-    9 => i32le[length]
-    16 => u64le[length]
-    17 => i64le[length]
-    0x01f6 => u8be[length]
-    0x01f7 => i8be[length]
-    0x01f8 => u16be[length]
-    0x01f9 => i16be[length]
-    0x01fc => u32be[length]
-    0x01fd => i32be[length]
-    0x0204 => u64be[length]
-    0x0205 => i64be[length]
-    0x03ec => f16le[length]
-    0x03f0 => f32le[length]
-    0x03f8 => f64le[length]
-    0x05e0 => f16be[length]
-    0x05e4 => f32be[length]
-    0x05ec => f64be[length]
-    _ => (sized(descriptor.datatype.properties.base.size)
-        bytes[descriptor.datatype.properties.base.size])[length]
-  }
-  3 => (sized(descriptor.datatype.properties.base.size)
-      text[descriptor.datatype.properties.base.size] padded with 0x00 utf8)[length]
-  9 => switch descriptor.datatype.properties.base.bit_field & 0x0f {
-    1 => switch descriptor.datatype.properties.base.size {
-      16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
-        length: u32le
-        collection_address: u64le
-        object_index: u32le
-        collection: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(collection_address from origin) GlobalHeap
-        }
-        object: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) text[remaining] utf8
-        }  aside
-      }[length]
-      _ => (sized(descriptor.datatype.properties.base.size)
-          bytes[descriptor.datatype.properties.base.size])[length]
-    }
-    _ => switch descriptor.datatype.properties.base.size {
-      16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
-        length: u32le
-        collection_address: u64le
-        object_index: u32le
-        collection: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(collection_address from origin) GlobalHeap
-        }
-        object: switch collection_address {
-          0 => bytes[0]
-          0xffffffffffffffff => bytes[0]
-          _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) switch
-              descriptor.datatype.properties.base.properties.base.class {
-            0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                descriptor.datatype.properties.base.properties.base.size * 2 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-            }
-            1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-                descriptor.datatype.properties.base.properties.base.size * 2 +
-                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-              2 => u8be[length]
-              3 => i8le[length]
-              4 => u16le[length]
-              5 => i16le[length]
-              8 => u32le[length]
-              9 => i32le[length]
-              16 => u64le[length]
-              17 => i64le[length]
-              0x01f6 => u8be[length]
-              0x01f7 => i8be[length]
-              0x01f8 => u16be[length]
-              0x01f9 => i16be[length]
-              0x01fc => u32be[length]
-              0x01fd => i32be[length]
-              0x0204 => u64be[length]
-              0x0205 => i64be[length]
-              0x03ec => f16le[length]
-              0x03f0 => f32le[length]
-              0x03f8 => f64le[length]
-              0x05e0 => f16be[length]
-              0x05e4 => f32be[length]
-              0x05ec => f64be[length]
-              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-            }
-            3 => (sized(descriptor.datatype.properties.base.properties.base.size)
-                text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00
-                utf8)[length]
-            9 => switch descriptor.datatype.properties.base.properties.base.bit_field & 0x0f {
-              1 => switch descriptor.datatype.properties.base.properties.base.size {
-                16 => sized(descriptor.datatype.properties.base.properties.base.size)
-                    GlobalHeapId (named by object) {
-                  length: u32le
-                  collection_address: u64le
-                  object_index: u32le
-                  collection: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(collection_address from origin) GlobalHeap
-                  }
-                  object: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(start of collection.objects[object_index = object_index].payload
-                        from origin) sized(collection.objects[object_index = object_index].size)
-                        text[remaining] utf8
-                  }  aside
-                }[length]
-                _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                    bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-              }
-              _ => switch descriptor.datatype.properties.base.properties.base.size {
-                16 => sized(descriptor.datatype.properties.base.properties.base.size)
-                    GlobalHeapId (named by object) {
-                  length: u32le
-                  collection_address: u64le
-                  object_index: u32le
-                  collection: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(collection_address from origin) GlobalHeap
-                  }
-                  object: switch collection_address {
-                    0 => bytes[0]
-                    0xffffffffffffffff => bytes[0]
-                    _ => at(start of collection.objects[object_index = object_index].payload
-                        from origin) sized(collection.objects[object_index = object_index].size)
-                        bytes[remaining]
-                  }  aside
-                }[length]
-                _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                    bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-              }
-            }
-            _ => (sized(descriptor.datatype.properties.base.properties.base.size)
-                bytes[descriptor.datatype.properties.base.properties.base.size])[length]
-          }
-        }  aside
-      }[length]
-      _ => (sized(descriptor.datatype.properties.base.size)
-          bytes[descriptor.datatype.properties.base.size])[length]
-    }
-  }
-  6 => sized(descriptor.datatype.properties.base.size) Record (unit record, machinery datatype)
-      {
-    datatype: at(descriptor.(start of datatype.properties.base) from origin) Datatype  aside
-    values: gather(from datatype.properties.members[], at offset from window) MemberValue
-        element name from descriptor.name
-  }[length]
-  8 => sized(descriptor.datatype.properties.base.size) switch
-      descriptor.datatype.properties.base.properties.base.class {
-    0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
-    3 => sized(descriptor.datatype.properties.base.properties.base.size)
-        text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
-    _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-  }[length]
-  10 => (sized(descriptor.datatype.properties.base.size) switch
-      descriptor.datatype.properties.base.properties.base.class {
-    0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
-    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
-        descriptor.datatype.properties.base.properties.base.size * 2 +
-        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
-      2 => u8be
-      3 => i8le
-      4 => u16le
-      5 => i16le
-      8 => u32le
-      9 => i32le
-      16 => u64le
-      17 => i64le
-      0x01f6 => u8be
-      0x01f7 => i8be
-      0x01f8 => u16be
-      0x01f9 => i16be
-      0x01fc => u32be
-      0x01fd => i32be
-      0x0204 => u64be
-      0x0205 => i64be
-      0x03ec => f16le
-      0x03f0 => f32le
-      0x03f8 => f64le
-      0x05e0 => f16be
-      0x05e4 => f32be
-      0x05ec => f64be
-      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-    }
-    3 => sized(descriptor.datatype.properties.base.properties.base.size)
-        text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
-    _ => bytes[descriptor.datatype.properties.base.properties.base.size]
-  }[descriptor.datatype.properties.base.properties.element_count])[length]
-  _ => (sized(descriptor.datatype.properties.base.size)
-      bytes[descriptor.datatype.properties.base.size])[length]
-}
-
-type MemberBaseValue = switch descriptor.datatype.properties.base.class {
+type MemberArrayElement = switch descriptor.datatype.properties.base.class {
   0 => switch descriptor.datatype.properties.base.class * 1000 +
       bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
       descriptor.datatype.properties.base.size * 2 +
@@ -2629,7 +1943,7 @@ type MemberElement = switch descriptor.datatype.class {
     values: gather(from datatype.properties.members[], at offset from window) MemberValue
         element name from descriptor.name
   }
-  8 => MemberBaseValue
+  8 => MemberArrayElement
   9 => switch descriptor.datatype.size {
     16 => sized(descriptor.datatype.size) switch descriptor.datatype.bit_field & 0x0f {
       1 => GlobalHeapId (named by object) {
@@ -2661,14 +1975,362 @@ type MemberElement = switch descriptor.datatype.class {
           0 => bytes[0]
           0xffffffffffffffff => bytes[0]
           _ => at(start of collection.objects[object_index = object_index].payload from origin)
-              sized(collection.objects[object_index = object_index].size) MemberBaseSequence
+              sized(collection.objects[object_index = object_index].size) MemberSequenceElements
         }  aside
       }
     }
     _ => bytes[descriptor.datatype.size]
   }
-  10 => MemberBaseValue[descriptor.datatype.properties.element_count]
+  10 => MemberArrayElement[descriptor.datatype.properties.element_count]
   _ => bytes[descriptor.datatype.size]
+}
+
+type MemberSequenceElements = switch descriptor.datatype.properties.base.class {
+  0 => switch descriptor.datatype.properties.base.class * 1000 +
+      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
+      descriptor.datatype.properties.base.size * 2 +
+      bit(descriptor.datatype.properties.base.bit_field, 3) {
+    2 => u8be[length]
+    3 => i8le[length]
+    4 => u16le[length]
+    5 => i16le[length]
+    8 => u32le[length]
+    9 => i32le[length]
+    16 => u64le[length]
+    17 => i64le[length]
+    0x01f6 => u8be[length]
+    0x01f7 => i8be[length]
+    0x01f8 => u16be[length]
+    0x01f9 => i16be[length]
+    0x01fc => u32be[length]
+    0x01fd => i32be[length]
+    0x0204 => u64be[length]
+    0x0205 => i64be[length]
+    0x03ec => f16le[length]
+    0x03f0 => f32le[length]
+    0x03f8 => f64le[length]
+    0x05e0 => f16be[length]
+    0x05e4 => f32be[length]
+    0x05ec => f64be[length]
+    _ => (sized(descriptor.datatype.properties.base.size)
+        bytes[descriptor.datatype.properties.base.size])[length]
+  }
+  1 => switch descriptor.datatype.properties.base.class * 1000 +
+      bit(descriptor.datatype.properties.base.bit_field, 0) * 500 +
+      descriptor.datatype.properties.base.size * 2 +
+      bit(descriptor.datatype.properties.base.bit_field, 3) {
+    2 => u8be[length]
+    3 => i8le[length]
+    4 => u16le[length]
+    5 => i16le[length]
+    8 => u32le[length]
+    9 => i32le[length]
+    16 => u64le[length]
+    17 => i64le[length]
+    0x01f6 => u8be[length]
+    0x01f7 => i8be[length]
+    0x01f8 => u16be[length]
+    0x01f9 => i16be[length]
+    0x01fc => u32be[length]
+    0x01fd => i32be[length]
+    0x0204 => u64be[length]
+    0x0205 => i64be[length]
+    0x03ec => f16le[length]
+    0x03f0 => f32le[length]
+    0x03f8 => f64le[length]
+    0x05e0 => f16be[length]
+    0x05e4 => f32be[length]
+    0x05ec => f64be[length]
+    _ => (sized(descriptor.datatype.properties.base.size)
+        bytes[descriptor.datatype.properties.base.size])[length]
+  }
+  3 => (sized(descriptor.datatype.properties.base.size)
+      text[descriptor.datatype.properties.base.size] padded with 0x00 utf8)[length]
+  9 => switch descriptor.datatype.properties.base.bit_field & 0x0f {
+    1 => switch descriptor.datatype.properties.base.size {
+      16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
+        length: u32le
+        collection_address: u64le
+        object_index: u32le
+        collection: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(collection_address from origin) GlobalHeap
+        }
+        object: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(start of collection.objects[object_index = object_index].payload from origin)
+              sized(collection.objects[object_index = object_index].size) text[remaining] utf8
+        }  aside
+      }[length]
+      _ => (sized(descriptor.datatype.properties.base.size)
+          bytes[descriptor.datatype.properties.base.size])[length]
+    }
+    _ => switch descriptor.datatype.properties.base.size {
+      16 => sized(descriptor.datatype.properties.base.size) GlobalHeapId (named by object) {
+        length: u32le
+        collection_address: u64le
+        object_index: u32le
+        collection: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(collection_address from origin) GlobalHeap
+        }
+        object: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(start of collection.objects[object_index = object_index].payload from origin)
+              sized(collection.objects[object_index = object_index].size) switch
+              descriptor.datatype.properties.base.properties.base.class {
+            0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+                descriptor.datatype.properties.base.properties.base.size * 2 +
+                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+              2 => u8be[length]
+              3 => i8le[length]
+              4 => u16le[length]
+              5 => i16le[length]
+              8 => u32le[length]
+              9 => i32le[length]
+              16 => u64le[length]
+              17 => i64le[length]
+              0x01f6 => u8be[length]
+              0x01f7 => i8be[length]
+              0x01f8 => u16be[length]
+              0x01f9 => i16be[length]
+              0x01fc => u32be[length]
+              0x01fd => i32be[length]
+              0x0204 => u64be[length]
+              0x0205 => i64be[length]
+              0x03ec => f16le[length]
+              0x03f0 => f32le[length]
+              0x03f8 => f64le[length]
+              0x05e0 => f16be[length]
+              0x05e4 => f32be[length]
+              0x05ec => f64be[length]
+              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
+                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
+            }
+            1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+                bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+                descriptor.datatype.properties.base.properties.base.size * 2 +
+                bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+              2 => u8be[length]
+              3 => i8le[length]
+              4 => u16le[length]
+              5 => i16le[length]
+              8 => u32le[length]
+              9 => i32le[length]
+              16 => u64le[length]
+              17 => i64le[length]
+              0x01f6 => u8be[length]
+              0x01f7 => i8be[length]
+              0x01f8 => u16be[length]
+              0x01f9 => i16be[length]
+              0x01fc => u32be[length]
+              0x01fd => i32be[length]
+              0x0204 => u64be[length]
+              0x0205 => i64be[length]
+              0x03ec => f16le[length]
+              0x03f0 => f32le[length]
+              0x03f8 => f64le[length]
+              0x05e0 => f16be[length]
+              0x05e4 => f32be[length]
+              0x05ec => f64be[length]
+              _ => (sized(descriptor.datatype.properties.base.properties.base.size)
+                  bytes[descriptor.datatype.properties.base.properties.base.size])[length]
+            }
+            3 => (sized(descriptor.datatype.properties.base.properties.base.size)
+                text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00
+                utf8)[length]
+            9 => switch descriptor.datatype.properties.base.properties.base.bit_field & 0x0f {
+              1 => switch descriptor.datatype.properties.base.properties.base.size {
+                16 => sized(descriptor.datatype.properties.base.properties.base.size)
+                    GlobalHeapId (named by object) {
+                  length: u32le
+                  collection_address: u64le
+                  object_index: u32le
+                  collection: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(collection_address from origin) GlobalHeap
+                  }
+                  object: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(start of collection.objects[object_index = object_index].payload
+                        from origin) sized(collection.objects[object_index = object_index].size)
+                        text[remaining] utf8
+                  }  aside
+                }[length]
+                _ => (sized(descriptor.datatype.properties.base.properties.base.size)
+                    bytes[descriptor.datatype.properties.base.properties.base.size])[length]
+              }
+              _ => switch descriptor.datatype.properties.base.properties.base.size {
+                16 => sized(descriptor.datatype.properties.base.properties.base.size)
+                    GlobalHeapId (named by object) {
+                  length: u32le
+                  collection_address: u64le
+                  object_index: u32le
+                  collection: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(collection_address from origin) GlobalHeap
+                  }
+                  object: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(start of collection.objects[object_index = object_index].payload
+                        from origin) sized(collection.objects[object_index = object_index].size)
+                        bytes[remaining]
+                  }  aside
+                }[length]
+                _ => (sized(descriptor.datatype.properties.base.properties.base.size)
+                    bytes[descriptor.datatype.properties.base.properties.base.size])[length]
+              }
+            }
+            _ => (sized(descriptor.datatype.properties.base.properties.base.size)
+                bytes[descriptor.datatype.properties.base.properties.base.size])[length]
+          }
+        }  aside
+      }[length]
+      _ => (sized(descriptor.datatype.properties.base.size)
+          bytes[descriptor.datatype.properties.base.size])[length]
+    }
+  }
+  6 => sized(descriptor.datatype.properties.base.size) Record (unit record, machinery datatype)
+      {
+    datatype: at(descriptor.(start of datatype.properties.base) from origin) Datatype  aside
+    values: gather(from datatype.properties.members[], at offset from window) MemberValue
+        element name from descriptor.name
+  }[length]
+  8 => sized(descriptor.datatype.properties.base.size) switch
+      descriptor.datatype.properties.base.properties.base.class {
+    0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        descriptor.datatype.properties.base.properties.base.size * 2 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+    }
+    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        descriptor.datatype.properties.base.properties.base.size * 2 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+    }
+    3 => sized(descriptor.datatype.properties.base.properties.base.size)
+        text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
+    _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+  }[length]
+  10 => (sized(descriptor.datatype.properties.base.size) switch
+      descriptor.datatype.properties.base.properties.base.class {
+    0 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        descriptor.datatype.properties.base.properties.base.size * 2 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+    }
+    1 => switch descriptor.datatype.properties.base.properties.base.class * 1000 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        descriptor.datatype.properties.base.properties.base.size * 2 +
+        bit(descriptor.datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+    }
+    3 => sized(descriptor.datatype.properties.base.properties.base.size)
+        text[descriptor.datatype.properties.base.properties.base.size] padded with 0x00 utf8
+    _ => bytes[descriptor.datatype.properties.base.properties.base.size]
+  }[descriptor.datatype.properties.base.properties.element_count])[length]
+  _ => (sized(descriptor.datatype.properties.base.size)
+      bytes[descriptor.datatype.properties.base.size])[length]
 }
 
 type MemberValue = switch datatype.version == 1 and 0 < descriptor.dimensionality {
@@ -4255,4 +3917,342 @@ type ObjectHeader = switch peek(u8le) {
   _ => UnknownObjectHeader {
     version: u8be
   }
+}
+
+type SequenceElements = switch datatype.properties.base.class {
+  0 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
+      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
+    2 => u8be[length]
+    3 => i8le[length]
+    4 => u16le[length]
+    5 => i16le[length]
+    8 => u32le[length]
+    9 => i32le[length]
+    16 => u64le[length]
+    17 => i64le[length]
+    0x01f6 => u8be[length]
+    0x01f7 => i8be[length]
+    0x01f8 => u16be[length]
+    0x01f9 => i16be[length]
+    0x01fc => u32be[length]
+    0x01fd => i32be[length]
+    0x0204 => u64be[length]
+    0x0205 => i64be[length]
+    0x03ec => f16le[length]
+    0x03f0 => f32le[length]
+    0x03f8 => f64le[length]
+    0x05e0 => f16be[length]
+    0x05e4 => f32be[length]
+    0x05ec => f64be[length]
+    _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
+  }
+  1 => switch datatype.properties.base.class * 1000 + bit(datatype.properties.base.bit_field, 0)
+      * 500 + datatype.properties.base.size * 2 + bit(datatype.properties.base.bit_field, 3) {
+    2 => u8be[length]
+    3 => i8le[length]
+    4 => u16le[length]
+    5 => i16le[length]
+    8 => u32le[length]
+    9 => i32le[length]
+    16 => u64le[length]
+    17 => i64le[length]
+    0x01f6 => u8be[length]
+    0x01f7 => i8be[length]
+    0x01f8 => u16be[length]
+    0x01f9 => i16be[length]
+    0x01fc => u32be[length]
+    0x01fd => i32be[length]
+    0x0204 => u64be[length]
+    0x0205 => i64be[length]
+    0x03ec => f16le[length]
+    0x03f0 => f32le[length]
+    0x03f8 => f64le[length]
+    0x05e0 => f16be[length]
+    0x05e4 => f32be[length]
+    0x05ec => f64be[length]
+    _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
+  }
+  3 => (sized(datatype.properties.base.size) text[datatype.properties.base.size] padded with
+      0x00 utf8)[length]
+  9 => switch datatype.properties.base.bit_field & 0x0f {
+    1 => switch datatype.properties.base.size {
+      16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
+        length: u32le
+        collection_address: u64le
+        object_index: u32le
+        collection: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(collection_address from origin) GlobalHeap
+        }
+        object: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(start of collection.objects[object_index = object_index].payload from origin)
+              sized(collection.objects[object_index = object_index].size) text[remaining] utf8
+        }  aside
+      }[length]
+      _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
+    }
+    _ => switch datatype.properties.base.size {
+      16 => sized(datatype.properties.base.size) GlobalHeapId (named by object) {
+        length: u32le
+        collection_address: u64le
+        object_index: u32le
+        collection: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(collection_address from origin) GlobalHeap
+        }
+        object: switch collection_address {
+          0 => bytes[0]
+          0xffffffffffffffff => bytes[0]
+          _ => at(start of collection.objects[object_index = object_index].payload from origin)
+              sized(collection.objects[object_index = object_index].size) switch
+              datatype.properties.base.properties.base.class {
+            0 => switch datatype.properties.base.properties.base.class * 1000 +
+                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+                datatype.properties.base.properties.base.size * 2 +
+                bit(datatype.properties.base.properties.base.bit_field, 3) {
+              2 => u8be[length]
+              3 => i8le[length]
+              4 => u16le[length]
+              5 => i16le[length]
+              8 => u32le[length]
+              9 => i32le[length]
+              16 => u64le[length]
+              17 => i64le[length]
+              0x01f6 => u8be[length]
+              0x01f7 => i8be[length]
+              0x01f8 => u16be[length]
+              0x01f9 => i16be[length]
+              0x01fc => u32be[length]
+              0x01fd => i32be[length]
+              0x0204 => u64be[length]
+              0x0205 => i64be[length]
+              0x03ec => f16le[length]
+              0x03f0 => f32le[length]
+              0x03f8 => f64le[length]
+              0x05e0 => f16be[length]
+              0x05e4 => f32be[length]
+              0x05ec => f64be[length]
+              _ => (sized(datatype.properties.base.properties.base.size)
+                  bytes[datatype.properties.base.properties.base.size])[length]
+            }
+            1 => switch datatype.properties.base.properties.base.class * 1000 +
+                bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+                datatype.properties.base.properties.base.size * 2 +
+                bit(datatype.properties.base.properties.base.bit_field, 3) {
+              2 => u8be[length]
+              3 => i8le[length]
+              4 => u16le[length]
+              5 => i16le[length]
+              8 => u32le[length]
+              9 => i32le[length]
+              16 => u64le[length]
+              17 => i64le[length]
+              0x01f6 => u8be[length]
+              0x01f7 => i8be[length]
+              0x01f8 => u16be[length]
+              0x01f9 => i16be[length]
+              0x01fc => u32be[length]
+              0x01fd => i32be[length]
+              0x0204 => u64be[length]
+              0x0205 => i64be[length]
+              0x03ec => f16le[length]
+              0x03f0 => f32le[length]
+              0x03f8 => f64le[length]
+              0x05e0 => f16be[length]
+              0x05e4 => f32be[length]
+              0x05ec => f64be[length]
+              _ => (sized(datatype.properties.base.properties.base.size)
+                  bytes[datatype.properties.base.properties.base.size])[length]
+            }
+            3 => (sized(datatype.properties.base.properties.base.size)
+                text[datatype.properties.base.properties.base.size] padded with 0x00
+                utf8)[length]
+            9 => switch datatype.properties.base.properties.base.bit_field & 0x0f {
+              1 => switch datatype.properties.base.properties.base.size {
+                16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
+                    (named by object) {
+                  length: u32le
+                  collection_address: u64le
+                  object_index: u32le
+                  collection: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(collection_address from origin) GlobalHeap
+                  }
+                  object: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(start of collection.objects[object_index = object_index].payload
+                        from origin) sized(collection.objects[object_index = object_index].size)
+                        text[remaining] utf8
+                  }  aside
+                }[length]
+                _ => (sized(datatype.properties.base.properties.base.size)
+                    bytes[datatype.properties.base.properties.base.size])[length]
+              }
+              _ => switch datatype.properties.base.properties.base.size {
+                16 => sized(datatype.properties.base.properties.base.size) GlobalHeapId
+                    (named by object) {
+                  length: u32le
+                  collection_address: u64le
+                  object_index: u32le
+                  collection: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(collection_address from origin) GlobalHeap
+                  }
+                  object: switch collection_address {
+                    0 => bytes[0]
+                    0xffffffffffffffff => bytes[0]
+                    _ => at(start of collection.objects[object_index = object_index].payload
+                        from origin) sized(collection.objects[object_index = object_index].size)
+                        bytes[remaining]
+                  }  aside
+                }[length]
+                _ => (sized(datatype.properties.base.properties.base.size)
+                    bytes[datatype.properties.base.properties.base.size])[length]
+              }
+            }
+            _ => (sized(datatype.properties.base.properties.base.size)
+                bytes[datatype.properties.base.properties.base.size])[length]
+          }
+        }  aside
+      }[length]
+      _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
+    }
+  }
+  6 => sized(datatype.properties.base.size) Record (unit record, machinery datatype) {
+    datatype: at(start of datatype.properties.base from origin) Datatype  aside
+    values: gather(from datatype.properties.members[], at offset from window) MemberValue
+        element name from descriptor.name
+  }[length]
+  8 => sized(datatype.properties.base.size) switch
+      datatype.properties.base.properties.base.class {
+    0 => switch datatype.properties.base.properties.base.class * 1000 +
+        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        datatype.properties.base.properties.base.size * 2 +
+        bit(datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[datatype.properties.base.properties.base.size]
+    }
+    1 => switch datatype.properties.base.properties.base.class * 1000 +
+        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        datatype.properties.base.properties.base.size * 2 +
+        bit(datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[datatype.properties.base.properties.base.size]
+    }
+    3 => sized(datatype.properties.base.properties.base.size)
+        text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
+    _ => bytes[datatype.properties.base.properties.base.size]
+  }[length]
+  10 => (sized(datatype.properties.base.size) switch
+      datatype.properties.base.properties.base.class {
+    0 => switch datatype.properties.base.properties.base.class * 1000 +
+        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        datatype.properties.base.properties.base.size * 2 +
+        bit(datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[datatype.properties.base.properties.base.size]
+    }
+    1 => switch datatype.properties.base.properties.base.class * 1000 +
+        bit(datatype.properties.base.properties.base.bit_field, 0) * 500 +
+        datatype.properties.base.properties.base.size * 2 +
+        bit(datatype.properties.base.properties.base.bit_field, 3) {
+      2 => u8be
+      3 => i8le
+      4 => u16le
+      5 => i16le
+      8 => u32le
+      9 => i32le
+      16 => u64le
+      17 => i64le
+      0x01f6 => u8be
+      0x01f7 => i8be
+      0x01f8 => u16be
+      0x01f9 => i16be
+      0x01fc => u32be
+      0x01fd => i32be
+      0x0204 => u64be
+      0x0205 => i64be
+      0x03ec => f16le
+      0x03f0 => f32le
+      0x03f8 => f64le
+      0x05e0 => f16be
+      0x05e4 => f32be
+      0x05ec => f64be
+      _ => bytes[datatype.properties.base.properties.base.size]
+    }
+    3 => sized(datatype.properties.base.properties.base.size)
+        text[datatype.properties.base.properties.base.size] padded with 0x00 utf8
+    _ => bytes[datatype.properties.base.properties.base.size]
+  }[datatype.properties.base.properties.element_count])[length]
+  _ => (sized(datatype.properties.base.size) bytes[datatype.properties.base.size])[length]
 }

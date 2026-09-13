@@ -172,6 +172,15 @@
 //! bytes are counted in the collection and not in the column, since several
 //! notes can point at one object.
 //!
+//! The note is the same for a string and for a sequence of anything else, and
+//! the low four bits of the datatype's class bits say which. A string's object
+//! reads as its text. A sequence's reads as `length` elements of the datatype
+//! inside the variable-length one, which is a datatype message of its own, so
+//! a sequence of 32-bit integers is a run of `i32` over the heap object's
+//! bytes and a sequence of compounds is a run of records. An empty sequence
+//! points at nothing, and HDF5 2.0 writes it with address nought rather than
+//! the undefined address, so both mean nothing here.
+//!
 //! An attribute's value reads as elements too, by the datatype written inside
 //! the attribute rather than beside it. That is the one thing the IR could not
 //! say: `Expr::Ref` names a field beside this one and stops there, so
@@ -869,7 +878,7 @@ fn compound_type() -> T {
         "Compound",
         vec![(
             "members",
-            T::array(T::Named("Member".into()), member_count()).counted_as("members"),
+            T::array(T::Named("Member".into()), member_count()),
         )],
     )
 }
@@ -884,12 +893,12 @@ fn member_v(version: u8) -> T {
     let mut fields = Vec::new();
     padded_name(&mut fields, version);
     if version < 3 {
-        fields.push(("offset", T::u32(Little).counted_as("bytes")));
+        fields.push(("offset", T::u32(Little)));
     } else {
         // The fewest whole bytes that can write the compound's size, which is
         // what the library sizes the offset by.
         let width = E::field("size").log2().div(E::lit(8)).add(E::lit(1));
-        fields.push(("offset", T::uint_expr(width.mul(E::lit(8)), Little).counted_as("bytes")));
+        fields.push(("offset", T::uint_expr(width.mul(E::lit(8)), Little)));
     }
     if version == 1 {
         fields.extend(vec![
@@ -901,8 +910,7 @@ fn member_v(version: u8) -> T {
             ("dimensions", T::array(T::u32(Little), E::lit(4))),
             (
                 "element_count",
-                T::when(E::lit(0).less_than(E::field("dimensionality")), T::computed(used_dimensions()))
-                    .counted_as("elements"),
+                T::when(E::lit(0).less_than(E::field("dimensionality")), T::computed(used_dimensions())),
             ),
         ]);
     }
@@ -959,9 +967,9 @@ fn array_type() -> T {
         vec![
             ("dimensionality", T::u8()),
             ("reserved", T::when(before_3(), T::bytes(E::lit(3)))),
-            ("dimensions", T::array(T::u32(Little), E::field("dimensionality")).counted_as("dimensions")),
+            ("dimensions", T::array(T::u32(Little), E::field("dimensionality"))),
             ("permutation", T::when(before_3(), T::array(T::u32(Little), E::field("dimensionality")))),
-            ("element_count", T::computed(E::product_of("dimensions")).counted_as("elements")),
+            ("element_count", T::computed(E::product_of("dimensions"))),
             ("base", T::Named("Datatype".into())),
         ],
     )
@@ -1237,7 +1245,7 @@ fn run_of(reach: &Reach, count: E, width: E, depth: u32) -> T {
             10,
             of(T::sized(
                 width,
-                T::array(base_value(&one, depth), one.at(&["properties", "element_count"])).counted_as("elements"),
+                T::array(base_value(&one, depth), one.at(&["properties", "element_count"])),
             )),
         ));
     }
@@ -1263,10 +1271,15 @@ fn base_sequence(base: &Reach, depth: u32) -> T {
     run_of(base, E::field("length"), base.at(&["size"]), depth)
 }
 
-const BASE_VALUE: &str = "BaseValue";
-const BASE_SEQUENCE: &str = "BaseSequence";
-const MEMBER_BASE_VALUE: &str = "MemberBaseValue";
-const MEMBER_BASE_SEQUENCE: &str = "MemberBaseSequence";
+/// The names those named types go by. What a reader sees of them is the type
+/// column of an array, `ArrayElement[]`, and of a sequence's object,
+/// `at → SequenceElements`: an enumeration resolves to the integer it is
+/// written in before anything shows its type. `Member` in front is the same
+/// thing reached from inside a compound's member.
+const BASE_VALUE: &str = "ArrayElement";
+const BASE_SEQUENCE: &str = "SequenceElements";
+const MEMBER_BASE_VALUE: &str = "MemberArrayElement";
+const MEMBER_BASE_SEQUENCE: &str = "MemberSequenceElements";
 
 /// One value of the datatype `reach` reaches, where the value is on its own
 /// rather than one of a run: a member of a compound, an element of an array
@@ -1306,7 +1319,7 @@ fn value_of(reach: &Reach, depth: u32) -> T {
         ));
         cases.push((
             10,
-            T::array(base_value(reach, depth), reach.at(&["properties", "element_count"])).counted_as("elements"),
+            T::array(base_value(reach, depth), reach.at(&["properties", "element_count"])),
         ));
     }
     T::switch(reach.at(&["class"]), cases, opaque)
@@ -1365,7 +1378,7 @@ fn member_value() -> T {
     T::switch(
         dimensioned,
         vec![(0, element())],
-        T::array(element(), E::placer(E::field("element_count"))).counted_as("elements"),
+        T::array(element(), E::placer(E::field("element_count"))),
     )
 }
 
@@ -1403,21 +1416,18 @@ fn vlen_reference(kind: Vlen) -> T {
     let found = |field: &[&str]| {
         E::tagged_in_by(E::within(&["collection", "objects"]), &["object_index"], E::field("object_index"), field)
     };
-    let (contents, unit) = match kind {
-        Vlen::Text => (T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8), "bytes"),
-        Vlen::Sequence(base, 1) => {
-            let named = if base.placer { MEMBER_BASE_SEQUENCE } else { BASE_SEQUENCE };
-            (T::Named(named.into()), "elements")
-        }
-        Vlen::Sequence(base, depth) => (base_sequence(&base, depth), "elements"),
-        Vlen::Bytes => (T::bytes(E::Remaining), "elements"),
+    let contents = match kind {
+        Vlen::Text => T::text(StrLen::Fixed(E::Remaining), Encoding::Utf8),
+        Vlen::Sequence(base, 1) => T::Named(if base.placer { MEMBER_BASE_SEQUENCE } else { BASE_SEQUENCE }.into()),
+        Vlen::Sequence(base, depth) => base_sequence(&base, depth),
+        Vlen::Bytes => T::bytes(E::Remaining),
     };
     T::structure_named(
         "GlobalHeapId",
         "object",
         "",
         vec![
-            ("length", T::u32(Little).counted_as(unit)),
+            ("length", T::u32(Little).counted_as("bytes")),
             ("collection_address", addr()),
             ("object_index", T::u32(Little)),
             // An element of no length points at nothing. Some writers say so

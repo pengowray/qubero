@@ -1501,3 +1501,66 @@ fn a_compound_element_reads_as_its_members_by_name() {
         eprintln!("skipped: no compound-and-vlen-seq.h5 in the collection");
     }
 }
+
+/// A variable-length sequence reads as its elements, typed by the datatype
+/// inside the variable-length one, over the heap object's own bytes.
+///
+/// A sequence element is the same sixteen-byte note a string is, and its
+/// `length` counts elements rather than bytes. `sequences` in both
+/// `compound-and-vlen-seq` files holds four runs of 32-bit integers, which
+/// `make_hdf5_samples.py` writes as `arange(n) * 7 - 3` for n of 0, 1, 4 and 9
+/// and h5py reads back the same. The empty one is written with address
+/// nought, which is not a collection, and points at nothing.
+#[test]
+fn a_variable_length_sequence_reads_as_its_elements() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let want: Vec<Vec<i64>> = [0i64, 1, 4, 9].iter().map(|&n| (0..n).map(|k| k * 7 - 3).collect()).collect();
+    let mut checked = 0usize;
+    for name in ["compound-and-vlen-seq.h5", "compound-and-vlen-seq-latest.h5"] {
+        let path = dir.join("hdf5").join(name);
+        let Ok(file) = File::open(&path) else {
+            eprintln!("skipped: no {}", path.display());
+            continue;
+        };
+        let raw = std::fs::read(&path).expect("reads");
+        let len = file.metadata().unwrap().len();
+        let doc = Document::new(FileSource { file: RefCell::new(file), len });
+        let mut ev = Evaluator::new(hdf5());
+        let objects = objects(&mut ev, &doc);
+        let header = objects.iter().find(|(n, _)| n == "/sequences").map(|(_, p)| p.clone()).expect("/sequences");
+        let mut found = Vec::new();
+        runs(&mut ev, &doc, &header, false, &mut found);
+        assert_eq!(found.len(), 1, "{}: {found:?}", path.display());
+        let (run, _) = &found[0];
+        assert_eq!(ev.node(&doc, run).expect("reads").child_count, 4, "{}", path.display());
+        for (i, want) in want.iter().enumerate() {
+            let mut note = run.clone();
+            note.push(i);
+            let length = ev.child_named(&doc, &note, "length").unwrap().unwrap();
+            let length = ev.node(&doc, &length).unwrap();
+            assert_eq!(length.value.as_int(), Some(want.len() as i128), "{}: sequence {i}", path.display());
+            let mut object = ev.child_named(&doc, &note, "object").unwrap().expect("a note carries its object");
+            if want.is_empty() {
+                assert_eq!(shown(&mut ev, &doc, &object), "[]", "{}: sequence {i}", path.display());
+                continue;
+            }
+            object.push(0);
+            let elements = ev.node(&doc, &object).expect("reads");
+            assert_eq!(elements.type_name, "i32 le[]", "{}: sequence {i}", path.display());
+            let text: Vec<String> = want.iter().map(|v| v.to_string()).collect();
+            assert_eq!(shown(&mut ev, &doc, &object), format!("[{}]", text.join(", ")), "{}: sequence {i}", path.display());
+            // Over the heap object's own bytes.
+            let at = (elements.offset_bits / 8) as usize;
+            let bytes: Vec<u8> = want.iter().flat_map(|v| (*v as i32).to_le_bytes()).collect();
+            assert_eq!(&raw[at..at + bytes.len()], &bytes[..], "{}: sequence {i} is not at {at:#x}", path.display());
+            assert_eq!(elements.size_bits, bytes.len() as u64 * 8, "{}: sequence {i}", path.display());
+        }
+        checked += 1;
+    }
+    if checked == 0 {
+        eprintln!("skipped: no compound-and-vlen-seq.h5 in the collection");
+    }
+}
