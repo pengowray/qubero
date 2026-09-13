@@ -21,20 +21,46 @@
 //! An attribute descriptor names an attribute and heads a chain of entries,
 //! one per variable it has been set on, or one for the file as a whole.
 //!
-//! What is not read is the values. A variable points at an index of index
-//! records, and those at the blocks of records that hold the numbers; both
-//! stay as sized bytes here, so the data of a file is a gap. So is an
-//! attribute's value and a variable's pad value, which are the bytes at the
-//! end of their own records: how to read them depends on the encoding named in
-//! the descriptor record at the front of the file, which may be any of a dozen
-//! machines' byte orders, and reading them the wrong way round would answer
-//! with numbers no instrument measured. The records themselves, and every
-//! offset in them, are big-endian whatever that encoding says.
+//! **The values.** A variable points at an index of index records, each entry
+//! of which says which records of the variable it covers and where their bytes
+//! are. Those bytes are read here as the numbers they are: one row per record
+//! of the variable, and inside it one value per element of the shape the
+//! variable declared, so a record of a three-vector of floats reads as three
+//! floats. An attribute entry's value and a variable's pad value are read the
+//! same way, by the type each of them names.
+//!
+//! How to read any of them depends on the encoding named in the descriptor
+//! record at the front of the file, which may be any of a dozen machines'
+//! byte orders, and reading them the wrong way round would answer with numbers
+//! no instrument measured. So the whole set of value types is switched on that
+//! field, one arm per byte order, the way `gwf` and `elf` switch on theirs. The
+//! records themselves, and every offset in them, are big-endian whatever the
+//! encoding says.
+//!
+//! Five of those encodings are VAX floating point rather than IEEE: VAX itself
+//! and the four Alpha and Itanium VMS ones, which are the same D and G formats
+//! the VAX had. They are read here at the right width and the wrong layout, so
+//! the encoding is named and the numbers under it are wrong. `mat` says the
+//! same about level 4 written on a VAX, and for the same reason: no file like
+//! that has been seen this century. CDF has no Cray encoding at all.
+//!
+//! A block of values may be compressed, in which case the block is a record of
+//! its own holding a stream. CDF squeezes with gzip, with a run-length coding
+//! of zeroes, or with one of two Huffman codings; the first two are read here
+//! and the Huffman ones are not, so such a block keeps its bytes. A compressed
+//! block is told from an uncompressed one by its record type, and which codec
+//! it holds by the gzip signature at the front of the stream, since the record
+//! that names the codec is the variable's and not the block's.
 //!
 //! A compressed file says so in its second word and holds one compressed
-//! record, which is the whole of the uncompressed file squeezed; the chains
-//! are inside it and nothing here unpacks it. The compression parameters are a
-//! record of their own that it points at.
+//! record, which is the whole of the uncompressed file squeezed. That is
+//! unpacked and the chains inside it are walked, so such a file reads as the
+//! file it holds. What comes out of the stream is everything after the eight
+//! bytes of signature, while every offset inside it still counts from the
+//! file's first byte, so the walk is taken back by those eight bytes: that is
+//! what `bytes_before` is, and it is nought everywhere else. The compression
+//! parameters are a record of their own that the compressed record points at,
+//! and they are what says which codec to open it with.
 //!
 //! Version 2.x is the same idea with 32-bit offsets and a record header half
 //! as wide, and it opens with the compression magic twice over. The descriptor
@@ -46,8 +72,23 @@
 //! One more thing belongs to no record: a file whose flags say it is checksummed
 //! keeps sixteen bytes of MD5 at the very end, after everything the chains
 //! reach.
+//!
+//! What is still not read: a dimension a variable says it does not vary along
+//! is one value repeated and is not stored, and the count of values in a
+//! record here is the whole shape multiplied out, so a variable with a
+//! non-varying dimension reads too many. No file seen here has one. Neither
+//! the two Huffman codings nor a sparse variable's records are opened, and
+//! a CDF_EPOCH and a CDF_TIME_TT2000 read as the numbers they are rather than
+//! as moments: the first is a float and the second counts leap seconds from an
+//! instant that is not a whole second, and neither is a count this can state
+//! without stating it wrongly.
 
-use crate::template::{Anchor, Encoding, Endian::Big, Expr as E, StrLen, Template, Ty as T};
+use crate::codec::Codec;
+use crate::template::{
+    Anchor, Encoding,
+    Endian::{self, Big, Little},
+    Expr as E, StrLen, Template, Ty as T,
+};
 
 /// What a version 3 file starts with.
 pub const MAGIC: &[u8] = &[0xCD, 0xF3, 0x00, 0x01];
@@ -75,8 +116,8 @@ const RECORD_TYPE: &[(i128, &str)] = &[
     (13, "compressed variable values"),
 ];
 
-/// What the numbers in a variable or an attribute entry are. The widths are
-/// not read here, only the names: nothing decodes a value.
+/// What the numbers in a variable or an attribute entry are. Every one of
+/// these is read as the number it names; see [`number`] for the widths.
 const DATA_TYPE: &[(i128, &str)] = &[
     (1, "int1"),
     (2, "int2"),
@@ -132,8 +173,21 @@ const SCOPE: &[(i128, &str)] = &[
     (4, "variable assumed"),
 ];
 
+/// The encodings whose numbers are written most significant byte first.
+const BIG_ENDIAN: &[i128] = &[1, 2, 5, 7, 9, 10, 11, 12, 18];
+
+/// The encodings whose numbers are written least significant byte first. The
+/// five VAX ones are here too: their integers really are this way round, and
+/// their floats are a layout nothing here reads. See the module doc.
+const LITTLE_ENDIAN: &[i128] = &[3, 4, 6, 13, 14, 15, 16, 17, 19, 20, 21];
+
 /// How a compressed record was squeezed.
 const COMPRESSION: &[(i128, &str)] = &[(1, "run-length"), (2, "Huffman"), (3, "adaptive Huffman"), (5, "gzip")];
+
+/// What a gzip member starts with, which is how a compressed block of values
+/// says it is one. The record that names the codec belongs to the variable and
+/// not to the block, so this is what the block itself has to be asked.
+const GZIP_MAGIC: i128 = 0x1f8b;
 
 fn i32be() -> T {
     T::i32(Big)
@@ -169,17 +223,149 @@ fn data_type() -> T {
 /// attribute sits behind two hundred rows the reader has to open one at a
 /// time. It is a list, and this says so.
 fn chain_of(field: &str, next: &str) -> T {
-    T::chain(E::field(field), &["body", next], Anchor::File, T::Named("CdfRecord".into()))
+    T::chain_adjusted(
+        E::field(field),
+        &["body", next],
+        Anchor::Origin,
+        E::lit(0).sub(E::field("bytes_before")),
+        T::Named("CdfRecord".into()),
+    )
 }
 
-/// The record `field` points at, or nothing where it holds zero. Every chain
-/// and every pointer in the file ends this way rather than with a count.
+/// Where in the bytes to hand an offset lands. Every offset in a CDF counts
+/// from the first byte of the file, and the bytes being read are not always
+/// the file: the whole of a compressed one unpacks into a run whose first byte
+/// is the file's ninth. `bytes_before` is how many of the file's bytes come in
+/// front of these, and it is nought for a file read where it lies.
+fn from_file_start(field: &str) -> E {
+    E::field(field).sub(E::field("bytes_before"))
+}
+
+/// The record `field` points at, or nothing where it holds no offset. Every
+/// chain and every pointer in the file ends this way rather than with a count.
+///
+/// Nought is how the format says there is nothing there, and the library also
+/// writes all ones in a field it has no use for: a variable that is neither
+/// compressed nor sparse leaves -1 where the parameters would be pointed at.
 fn at_record(field: &str) -> T {
     T::switch(
         E::field(field),
-        vec![(0, T::bytes(E::lit(0)))],
-        T::at(E::field(field), T::Named("CdfRecord".into())),
+        vec![(0, T::bytes(E::lit(0))), (-1, T::bytes(E::lit(0)))],
+        T::at_origin(from_file_start(field), T::Named("CdfRecord".into())),
     )
+}
+
+/// One value of the type numbered `code`, read the way `e` says. Nothing for
+/// the two character types, which are text and are shaped by whoever is asking
+/// rather than by the type alone, and nothing for a number no version of CDF
+/// has.
+///
+/// `real4` and `float` are the same thing under two names, as are `real8` and
+/// `double`, and `byte` is `int1`: the second name of each pair is what the
+/// 1990s library called it and both are still written. An epoch is a count of
+/// milliseconds in a float and an epoch16 is a pair of them, seconds and
+/// picoseconds; a TT2000 is a count of nanoseconds in an `int8`. All three are
+/// read as the numbers they hold. See the module doc for why none of them is
+/// declared a moment.
+fn number(code: i128, e: Endian) -> Option<T> {
+    Some(match code {
+        1 | 41 => T::Int { bits: 8, endian: e },
+        2 => T::Int { bits: 16, endian: e },
+        4 => T::Int { bits: 32, endian: e },
+        8 | 33 => T::Int { bits: 64, endian: e },
+        11 => T::UInt { bits: 8, endian: e },
+        12 => T::UInt { bits: 16, endian: e },
+        14 => T::UInt { bits: 32, endian: e },
+        21 | 44 => T::F32(e),
+        22 | 31 | 45 => T::F64(e),
+        32 => T::structure("CdfEpoch16", vec![("seconds", T::F64(e)), ("picoseconds", T::F64(e))]),
+        _ => return None,
+    })
+}
+
+/// Whether this data type is characters rather than numbers.
+fn is_text(code: i128) -> bool {
+    code == 51 || code == 52
+}
+
+/// A switch over every data type, with `shape` saying what a field of that
+/// type looks like: the element for a number, the width for text.
+///
+/// The three places values are read all have the same list of types and
+/// differently shaped fields around them, which is what this collects. A type
+/// number no version of CDF has keeps its bytes rather than reading as
+/// nothing.
+fn by_data_type(e: Endian, shape: impl Fn(i128, Option<T>) -> T) -> T {
+    let cases = DATA_TYPE.iter().map(|(code, _)| (*code, shape(*code, number(*code, e)))).collect();
+    T::switch(E::field("data_type"), cases, T::bytes(E::Remaining))
+}
+
+/// The same set of value types twice over, once for each byte order, picked by
+/// the encoding the descriptor record at the front of the file names.
+///
+/// This is the shape `gwf` and `elf` use for the same question: one arm per
+/// byte order, each holding the whole of what depends on it. The encoding is
+/// reached outwards from wherever the values are, which is however many
+/// records away the chains led: a variable's numbers are in a block pointed at
+/// by an index pointed at by a descriptor, and the byte order is still the
+/// file's.
+///
+/// An encoding this has never heard of, and `host`, which is a file saying its
+/// numbers are in the order of a machine it does not name, read as network
+/// order: that is what the format's own default is and the only answer left.
+fn by_encoding(build: fn(Endian) -> T) -> T {
+    let (big, little) = (build(Big), build(Little));
+    let mut cases: Vec<(i128, T)> = BIG_ENDIAN.iter().map(|c| (*c, big.clone())).collect();
+    cases.extend(LITTLE_ENDIAN.iter().map(|c| (*c, little.clone())));
+    T::switch(E::field("encoding"), cases, big)
+}
+
+/// The value an attribute entry ends with: `num_elements` numbers, or that
+/// many characters where the type is text.
+fn entry_value(e: Endian) -> T {
+    by_data_type(e, |code, number| match (is_text(code), number) {
+        // A string attribute is one run of characters as wide as the record
+        // has room for, which is the same as the count it declares.
+        (true, _) => T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Ascii),
+        (_, Some(n)) => T::array(n, E::field("num_elements").at_least(E::lit(0))),
+        (_, None) => T::bytes(E::Remaining),
+    })
+}
+
+/// A variable's pad value: one value of its type, and nothing at all where the
+/// flags said there is no pad value and the record stops.
+fn pad_value(e: Endian) -> T {
+    let one = by_data_type(e, |code, number| match (is_text(code), number) {
+        (true, _) => T::text(StrLen::Padded { size: E::Remaining, pad: 0 }, Encoding::Ascii),
+        (_, Some(n)) => n,
+        (_, None) => T::bytes(E::Remaining),
+    });
+    T::switch(E::Remaining, vec![(0, T::bytes(E::lit(0)))], one)
+}
+
+/// Every value one block holds: a row per record of the variable, and inside
+/// it one value for each element of the variable's shape.
+///
+/// Both numbers come from records other than this one. How many records the
+/// block covers is in the index entry that pointed at it, which wrote the
+/// first and the last it holds; how many values are in one record is the
+/// variable's dimensions multiplied out, which is `dim_sizes` in the
+/// descriptor of a zVariable and the global descriptor's own for an
+/// rVariable, found outwards under the one name. A scalar variable has no
+/// dimensions, and the empty product is one value.
+fn value_records(e: Endian) -> T {
+    let records = E::field("to_record").sub(E::field("from_record")).add(E::lit(1)).at_least(E::lit(0));
+    let per_record = E::product_of("dim_sizes").at_least(E::lit(0));
+    by_data_type(e, move |code, number| {
+        let one = match (is_text(code), number) {
+            // A character variable's value is `num_elems` characters, which is
+            // what makes a string an element rather than a dimension.
+            (true, _) => T::text(StrLen::Padded { size: E::field("num_elems"), pad: 0 }, Encoding::Ascii),
+            (_, Some(n)) => n,
+            (_, None) => return T::bytes(E::Remaining),
+        };
+        T::array(T::array(one, per_record.clone()), records.clone())
+    })
 }
 
 /// The descriptor record: which release of the library wrote the file, how its
@@ -228,7 +414,11 @@ fn gdr() -> T {
             ("n_r_vars", i32be()),
             ("num_attr", i32be()),
             ("r_max_rec", i32be()),
-            ("r_num_dims", i32be()),
+            // The shape every rVariable shares. Called what a zVariable calls
+            // its own, because a value block asks for it by name and has to
+            // find whichever of the two its variable has: a zVariable's is
+            // beside it, and an rVariable has none and finds this one.
+            ("num_dims", i32be()),
             ("n_z_vars", i32be()),
             // The head of the free list: records the file has finished with
             // and would write over before it grew.
@@ -239,7 +429,7 @@ fn gdr() -> T {
             // file older than that writes -1 here.
             ("leap_second_last_updated", i32be()),
             ("rfu_e", i32be()),
-            ("r_dim_sizes", T::array(i32be(), E::field("r_num_dims").at_least(E::lit(0)))),
+            ("dim_sizes", T::array(i32be(), E::field("num_dims").at_least(E::lit(0)))),
             ("r_variables", chain_of("r_vdr_head", "vdr_next")),
             ("z_variables", chain_of("z_vdr_head", "vdr_next")),
             ("attributes", chain_of("adr_head", "adr_next")),
@@ -292,9 +482,9 @@ fn aedr() -> T {
             ("rfu_c", i32be()),
             ("rfu_d", i32be()),
             ("rfu_e", i32be()),
-            // The value, as wide as the record has room for. Reading it means
-            // knowing the file's encoding, which is not this record's to say.
-            ("value", T::bytes(E::Remaining)),
+            // The value, read by the type this record named and the byte order
+            // the file's descriptor record did.
+            ("value", by_encoding(entry_value)),
         ],
     )
 }
@@ -303,10 +493,7 @@ fn aedr() -> T {
 /// shape, and an rVariable takes the shape the global descriptor declared and
 /// writes only which of those dimensions it varies along.
 fn vdr(z: bool) -> T {
-    let dims = || match z {
-        true => E::field("z_num_dims").at_least(E::lit(0)),
-        false => E::field("r_num_dims").at_least(E::lit(0)),
-    };
+    let dims = || E::field("num_dims").at_least(E::lit(0));
     let mut fields = vec![
         ("vdr_next", offset()),
         ("data_type", data_type()),
@@ -334,20 +521,115 @@ fn vdr(z: bool) -> T {
         ("name", name()),
     ];
     if z {
-        fields.push(("z_num_dims", i32be()));
-        fields.push(("z_dim_sizes", T::array(i32be(), dims())));
+        fields.push(("num_dims", i32be()));
+        fields.push(("dim_sizes", T::array(i32be(), dims())));
     }
     // Which of the dimensions the values actually vary along. A dimension that
     // does not vary is one value repeated, and is not stored.
     fields.push(("dim_varys", T::array(i32be(), dims())));
-    fields.push(("pad_value", T::bytes(E::Remaining)));
-    fields.push(("values_index", at_record("vxr_head")));
+    fields.push(("pad_value", by_encoding(pad_value)));
+    // The index of where the values are, which is a chain of its own: one
+    // index record per few thousand records of the variable.
+    fields.push(("values_index", chain_of("vxr_head", "vxr_next")));
+    // Whichever of the two the flags said: how a compressed variable was
+    // squeezed, or how a sparse one stores the records it was not given.
+    fields.push(("parameters", at_record("cpr_or_spr_offset")));
     T::structure_named(if z { "CdfZVariable" } else { "CdfRVariable" }, "name", "", fields)
 }
 
-/// The whole of an uncompressed file, squeezed into one record. The chains are
-/// inside it; nothing here unpacks it.
+/// An index of the blocks of one variable's values: which records each block
+/// covers, and where it is. A variable with more blocks than an index record
+/// holds writes another and points at it from here, so these are a chain.
+///
+/// The three arrays are parallel and only the first `n_used_entries` of them
+/// mean anything; what is written above that is room the writer left itself.
+/// `blocks` is those three read as what they are, an entry each, with the
+/// values at the far end of every one. It covers no bytes of its own.
+fn vxr() -> T {
+    let n = || E::field("n_entries").at_least(E::lit(0));
+    T::structure(
+        "CdfValueIndex",
+        vec![
+            ("vxr_next", offset()),
+            ("n_entries", i32be()),
+            ("n_used_entries", i32be()),
+            ("first_record", T::array(i32be(), n())),
+            ("last_record", T::array(i32be(), n())),
+            ("block_offset", T::array(offset(), n())),
+            ("blocks", T::array(vxr_entry(), E::field("n_used_entries").at_least(E::lit(0)))),
+        ],
+    )
+}
+
+/// One entry of that index: the records it covers and the block that holds
+/// them, read out of the three arrays above it.
+///
+/// The three numbers are worked out rather than read, because they are already
+/// in the file: they are element `i` of three arrays, and writing them here is
+/// what lets the block below say how many records it has to lay out. What the
+/// entry points at is usually a block of values and may be another index, for
+/// a variable with more blocks than one index record holds.
+fn vxr_entry() -> T {
+    T::structure(
+        "CdfValueBlock",
+        vec![
+            ("from_record", T::computed(E::elem("first_record", E::Idx))),
+            ("to_record", T::computed(E::elem("last_record", E::Idx))),
+            ("at", T::computed(E::elem("block_offset", E::Idx))),
+            ("values", at_record("at")),
+        ],
+    )
+}
+
+/// A block of values that was compressed: how long the stream is, and the
+/// values inside it.
+///
+/// Which codec is in the variable's own compression parameters and not here,
+/// so what is asked is the stream: a gzip member starts with two bytes that
+/// say so, and the other three codings CDF has start with nothing in
+/// particular. A block packed one of those other ways keeps its bytes.
+fn cvvr() -> T {
+    T::structure(
+        "CdfCompressedValues",
+        vec![
+            ("rfu_a", i32be()),
+            ("c_size", u64be()),
+            (
+                "data",
+                T::switch(
+                    E::peek(16, Big),
+                    vec![(GZIP_MAGIC, T::decoded(E::field("c_size"), Codec::Gzip, by_encoding(value_records)))],
+                    T::bytes(E::field("c_size").at_least(E::lit(0))),
+                ),
+            ),
+        ],
+    )
+}
+
+/// How a sparse variable stores the records nobody gave it, and with what
+/// settings. The companion of the compression parameters, in the same slot of
+/// the variable descriptor.
+fn spr() -> T {
+    T::structure(
+        "CdfSparsenessParameters",
+        vec![
+            ("s_arrays_type", i32be()),
+            ("rfu_a", i32be()),
+            ("p_count", i32be()),
+            ("s_arrays_parms", T::array(i32be(), E::field("p_count").at_least(E::lit(0)))),
+        ],
+    )
+}
+
+/// The whole of an uncompressed file, squeezed into one record, and the file
+/// read out of it.
+///
+/// The parameters are read before the stream because they are what says how to
+/// open it: they are a record of their own somewhere else in the file, and a
+/// field that points at one takes no room, so reading it first costs nothing
+/// and puts the codec in hand while the cursor is still here.
 fn ccr() -> T {
+    let inside = |codec| T::decoded(E::Remaining, codec, inside_a_compressed_file());
     T::structure(
         "CdfCompressed",
         vec![
@@ -355,9 +637,39 @@ fn ccr() -> T {
             // How large it was before, which is what a reader allocates.
             ("u_size", u64be()),
             ("rfu_a", i32be()),
-            ("data", T::bytes(E::Remaining)),
-            ("parameters", at_record("cpr_offset")),
+            ("parameters", T::at_origin(from_file_start("cpr_offset"), T::Named("CdfRecord".into()))),
+            (
+                "data",
+                T::switch(
+                    E::within(&["parameters", "body", "c_type"]),
+                    vec![(1, inside(Codec::CdfRle)), (5, inside(Codec::Gzip))],
+                    T::bytes(E::Remaining),
+                ),
+            ),
         ],
+    )
+}
+
+/// The file a compressed one holds, read over the bytes that come out of the
+/// stream.
+///
+/// What is squeezed is everything after the eight-byte signature, so the first
+/// byte out of the stream is the file's ninth and every offset written inside
+/// it is eight larger than where it lands here. `bytes_before` is that eight,
+/// and every offset in this template is taken back by it; at the front of a
+/// file read where it lies the same field is nought and nothing moves.
+///
+/// The marker round it is what the offsets count from. `Anchor::File` would
+/// mean the file these bytes came out of, which is a different set of bytes
+/// with a different length, and the walk would end wherever the packing
+/// happened to leave off.
+fn inside_a_compressed_file() -> T {
+    T::origin(
+        T::structure(
+            "CdfInsideCompressed",
+            vec![("bytes_before", T::computed(E::lit(8))), ("first_record", T::Named("CdfRecord".into()))],
+        )
+        .machinery(&["bytes_before"]),
     )
 }
 
@@ -398,13 +710,16 @@ fn record() -> T {
             (3, vdr(false)),
             (4, adr()),
             (5, aedr()),
+            (6, vxr()),
+            (7, by_encoding(value_records)),
             (8, vdr(true)),
             (9, aedr()),
             (10, ccr()),
             (11, cpr()),
+            (12, spr()),
+            (13, cvvr()),
         ],
-        // The index of where a variable's values are, the values themselves,
-        // and the sparseness parameters: sized, named, and not opened.
+        // A record type no version of CDF has: sized, named, and not opened.
         T::bytes(E::Remaining),
     );
     T::structure_named(
@@ -461,6 +776,9 @@ pub fn cdf() -> Template {
     let root = T::structure(
         "Cdf",
         vec![
+            // Nought, because these bytes are the file. See `from_file_start`,
+            // and `inside_a_compressed_file` for where it is not.
+            ("bytes_before", T::computed(E::lit(0))),
             ("magic", T::enumeration_hex("CdfMagic", T::u32(Big), &[(0xCDF3_0001, "CDF 3"), (0x0000_FFFF, "CDF 2.x")])),
             (
                 "compression",
@@ -482,7 +800,8 @@ pub fn cdf() -> Template {
                 ),
             ),
         ],
-    );
+    )
+    .machinery(&["bytes_before"]);
     Template::new("cdf", root).with_type("CdfRecord", record()).with_type("Cdf2Record", record_v2())
 }
 
@@ -636,20 +955,20 @@ mod tests {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
         assert_eq!(
-            e.node(&d, &[0]).unwrap().value,
+            e.node(&d, &[1]).unwrap().value,
             Value::Enum { raw: 0xCDF3_0001, name: Some("CDF 3".into()), hex: true }
         );
         assert_eq!(
-            e.node(&d, &[1]).unwrap().value,
+            e.node(&d, &[2]).unwrap().value,
             Value::Enum { raw: 0x0000_FFFF, name: Some("uncompressed".into()), hex: true }
         );
-        let cdr = e.node(&d, &[2, 2]).unwrap();
+        let cdr = e.node(&d, &[3, 2]).unwrap();
         assert_eq!(cdr.type_name, "CdfDescriptor");
-        assert_eq!(e.node(&d, &[2, 2, 1]).unwrap().value, Value::Int(3));
-        assert_eq!(e.node(&d, &[2, 2, 10]).unwrap().value, Value::Str("Common Data Format (CDF)".into()));
+        assert_eq!(e.node(&d, &[3, 2, 1]).unwrap().value, Value::Int(3));
+        assert_eq!(e.node(&d, &[3, 2, 10]).unwrap().value, Value::Str("Common Data Format (CDF)".into()));
         // The global descriptor, reached by the offset rather than by lying
         // next to it.
-        let gdr = e.node(&d, &[2, 2, 11, 0, 2]).unwrap();
+        let gdr = e.node(&d, &[3, 2, 11, 0, 2]).unwrap();
         assert_eq!(gdr.type_name, "CdfGlobalDescriptor");
     }
 
@@ -657,23 +976,23 @@ mod tests {
     fn a_records_body_is_as_long_as_the_record_says() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        let size = e.node(&d, &[2, 0]).unwrap().value.as_int().unwrap();
-        assert_eq!(e.node(&d, &[2, 2]).unwrap().size_bits as i128, (size - 12) * 8);
+        let size = e.node(&d, &[3, 0]).unwrap().value.as_int().unwrap();
+        assert_eq!(e.node(&d, &[3, 2]).unwrap().size_bits as i128, (size - 12) * 8);
         // The notice runs to the end of the record and nothing says how long
         // it is but the record's own size.
-        assert_eq!(e.node(&d, &[2, 2, 10]).unwrap().size_bits, 256 * 8);
+        assert_eq!(e.node(&d, &[3, 2, 10]).unwrap().size_bits, 256 * 8);
     }
 
     #[test]
     fn a_z_variable_carries_its_own_shape() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        let z = e.node(&d, &[2, 2, 11, 0, 2, 15, 0, 2]).unwrap();
+        let z = e.node(&d, &[3, 2, 11, 0, 2, 15, 0, 2]).unwrap();
         assert_eq!(z.type_name, "CdfZVariable");
         assert_eq!(z.name, "body sea_temp");
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 15, 0, 2, 1]).unwrap().value.as_int(), Some(45));
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 15, 0, 2, 15]).unwrap().value, Value::Int(1));
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 15, 0, 2, 16, 0]).unwrap().value, Value::Int(3));
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 15, 0, 2, 1]).unwrap().value.as_int(), Some(45));
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 15, 0, 2, 15]).unwrap().value, Value::Int(1));
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 15, 0, 2, 16, 0]).unwrap().value, Value::Int(3));
     }
 
     #[test]
@@ -682,31 +1001,31 @@ mod tests {
         // rVariable writes two variances and no sizes of its own.
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        let r = e.node(&d, &[2, 2, 11, 0, 2, 14, 0, 2]).unwrap();
+        let r = e.node(&d, &[3, 2, 11, 0, 2, 14, 0, 2]).unwrap();
         assert_eq!(r.type_name, "CdfRVariable");
         assert_eq!(r.name, "body r_field");
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 14, 0, 2, 15]).unwrap().child_count, 2);
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 14, 0, 2, 15]).unwrap().child_count, 2);
     }
 
     #[test]
     fn an_attribute_heads_a_chain_of_entries() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        let adr = e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2]).unwrap();
+        let adr = e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2]).unwrap();
         assert_eq!(adr.name, "body TITLE");
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 2]).unwrap().value.as_int(), Some(1));
-        let entry = e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 12, 0, 2]).unwrap();
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2, 2]).unwrap().value.as_int(), Some(1));
+        let entry = e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2, 12, 0, 2]).unwrap();
         assert_eq!(entry.type_name, "CdfAttributeEntry");
         // Five characters of value, which stay bytes: how to read them is the
         // file's encoding to say, not this record's.
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 12, 0, 2, 10]).unwrap().size_bits, 5 * 8);
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2, 12, 0, 2, 10]).unwrap().size_bits, 5 * 8);
     }
 
     #[test]
     fn every_chain_is_a_flat_list_however_long_it_is() {
         let d = Document::new(MemSource(file()));
         let mut e = Evaluator::new(cdf());
-        let gdr = [2, 2, 11, 0, 2];
+        let gdr = [3, 2, 11, 0, 2];
         let at = |e: &mut Evaluator, i: usize| {
             let mut p = gdr.to_vec();
             p.push(i);
@@ -724,7 +1043,7 @@ mod tests {
         // A chain whose head is zero is a list of nothing, not a broken file.
         assert_eq!(at(&mut e, 17).child_count, 0); // the free list
         // The attribute's own entries are a list too.
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 2, 16, 0, 2, 12]).unwrap().child_count, 1);
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 2, 16, 0, 2, 12]).unwrap().child_count, 1);
     }
 
     #[test]
@@ -746,19 +1065,19 @@ mod tests {
         let d = Document::new(MemSource(b));
         let mut e = Evaluator::new(cdf());
         assert_eq!(
-            e.node(&d, &[1]).unwrap().value,
+            e.node(&d, &[2]).unwrap().value,
             Value::Enum { raw: 0xCCCC_0001, name: Some("compressed".into()), hex: true }
         );
-        let body = e.node(&d, &[2, 2]).unwrap();
+        let body = e.node(&d, &[3, 2]).unwrap();
         assert_eq!(body.type_name, "CdfCompressed");
-        assert_eq!(e.node(&d, &[2, 2, 1]).unwrap().value, Value::UInt(4096));
-        let parms = e.node(&d, &[2, 2, 4, 0, 2]).unwrap();
+        assert_eq!(e.node(&d, &[3, 2, 1]).unwrap().value, Value::UInt(4096));
+        let parms = e.node(&d, &[3, 2, 4, 0, 2]).unwrap();
         assert_eq!(parms.type_name, "CdfCompressionParameters");
         assert_eq!(
-            e.node(&d, &[2, 2, 4, 0, 2, 0]).unwrap().value,
+            e.node(&d, &[3, 2, 4, 0, 2, 0]).unwrap().value,
             Value::Enum { raw: 5, name: Some("gzip".into()), hex: false }
         );
-        assert_eq!(e.node(&d, &[2, 2, 4, 0, 2, 3, 0]).unwrap().value, Value::Int(6));
+        assert_eq!(e.node(&d, &[3, 2, 4, 0, 2, 3, 0]).unwrap().value, Value::Int(6));
     }
 
     #[test]
@@ -787,15 +1106,15 @@ mod tests {
         let d = Document::new(MemSource(b));
         let mut e = Evaluator::new(cdf());
         assert_eq!(
-            e.node(&d, &[0]).unwrap().value,
+            e.node(&d, &[1]).unwrap().value,
             Value::Enum { raw: 0x0000_FFFF, name: Some("CDF 2.x".into()), hex: true }
         );
-        let cdr = e.node(&d, &[2, 2]).unwrap();
+        let cdr = e.node(&d, &[3, 2]).unwrap();
         assert_eq!(cdr.type_name, "Cdf2Descriptor");
-        assert_eq!(e.node(&d, &[2, 2, 0]).unwrap().value, Value::UInt(gdr_at as u128));
-        assert_eq!(e.node(&d, &[2, 2, 1]).unwrap().value, Value::Int(2));
-        assert_eq!(e.node(&d, &[2, 2, 10]).unwrap().value, Value::Str("NSSDC".into()));
+        assert_eq!(e.node(&d, &[3, 2, 0]).unwrap().value, Value::UInt(gdr_at as u128));
+        assert_eq!(e.node(&d, &[3, 2, 1]).unwrap().value, Value::Int(2));
+        assert_eq!(e.node(&d, &[3, 2, 10]).unwrap().value, Value::Str("NSSDC".into()));
         // The record it points at, read as far as its size and its type.
-        assert_eq!(e.node(&d, &[2, 2, 11, 0, 0]).unwrap().value, Value::UInt(16));
+        assert_eq!(e.node(&d, &[3, 2, 11, 0, 0]).unwrap().value, Value::UInt(16));
     }
 }
