@@ -952,9 +952,9 @@ fn scientific_data_group() -> T {
     )
 }
 
-/// The attributes a vdata header or a vgroup grew in version 4: a flag word,
-/// a count, and one record per attribute saying which field it belongs to and
-/// where its value is kept.
+/// The attributes a vdata header grew in version 4: a flag word, a count, and
+/// one record per attribute saying which field it belongs to and where its
+/// value is kept. A vgroup's are written differently; see [`vgroup`].
 ///
 /// A field index of -1 is an attribute of the whole thing rather than of one
 /// of its columns. The value itself is a vdata of one record, named by the tag
@@ -990,9 +990,27 @@ fn version_four_attributes() -> Vec<(&'static str, T)> {
 ///
 /// The tags and the reference numbers are written as two runs rather than as
 /// pairs, so `members` reads them back together and is where each one points.
+///
+/// A vgroup is not laid out the way a vdata header is, though the two share
+/// their version numbers. The version and the `more` field are written once,
+/// last, and the library finds them by counting back five bytes from the end
+/// of the record. What version 4 added comes straight after the extension
+/// pair: a flag word, and where the flag says so a count and a tag and a
+/// reference number for each attribute, with no field index, since a vgroup
+/// has no columns. A vgroup with no flags set is written the old way, so the
+/// flag word is there exactly when more than those five bytes are left.
 fn vgroup() -> T {
     let n = || E::field("nvelt").at_least(E::lit(0));
-    let mut fields = vec![
+    let attribute = T::structure(
+        "Hdf4VgroupAttribute",
+        vec![
+            ("tag", tag()),
+            ("ref", u16be()),
+            ("offset", T::computed(place_of_member(&["offset"]))),
+            ("length", T::computed(place_of_member(&["length"]))),
+        ],
+    );
+    let fields = vec![
         ("nvelt", i16be()),
         ("tags", T::array(tag(), n())),
         ("refs", T::array(u16be(), n())),
@@ -1001,11 +1019,14 @@ fn vgroup() -> T {
         ("class", counted_name()),
         ("extension_tag", u16be()),
         ("extension_ref", u16be()),
+        ("flags", T::present_if(E::lit(5).less_than(E::Remaining), u32be())),
+        ("nattrs", T::present_if(E::field("flags").bit(0), T::i32(Big))),
+        ("attributes", T::array(attribute, E::field("nattrs").at_least(E::lit(0)))),
         ("version", i16be()),
         ("more", i16be()),
+        // The nul the writer ends the record with.
+        ("terminator", T::bytes(E::Remaining)),
     ];
-    fields.extend(version_four_attributes());
-    fields.push(("terminator", T::bytes(E::Remaining)));
     // The two runs are where the bytes are; `members` is the reading of them a
     // person wants, so it is the one the listing leads with.
     T::structure_named("Hdf4Vgroup", "name", "", fields).machinery(&["tags", "refs"])
@@ -1271,9 +1292,10 @@ mod tests {
         v
     }
 
-    /// A vgroup naming the table in its own block, the image in the next one,
-    /// and values two blocks on that are kept in linked blocks and so have
-    /// only a special element's tag.
+    /// A version 4 vgroup naming the table in its own block, the image in the
+    /// next one, and values two blocks on that are kept in linked blocks and so
+    /// have only a special element's tag, with one attribute whose value is
+    /// the second table's header, two blocks on.
     fn vg() -> Vec<u8> {
         let mut v = be16(3);
         v.extend(be16(1962));
@@ -1286,7 +1308,11 @@ mod tests {
         v.extend(nm(""));
         v.extend(be16(0)); // extension tag
         v.extend(be16(0)); // extension ref
-        v.extend(be16(3)); // version
+        v.extend(be32(1)); // flags: has attributes
+        v.extend(be32(1)); // one of them
+        v.extend(be16(1962));
+        v.extend(be16(12));
+        v.extend(be16(4)); // version, last
         v.extend(be16(0)); // more
         v.push(0);
         v
@@ -1568,6 +1594,41 @@ mod tests {
         let image_at = read(&[3, 1, 2, 0, 2]).value.as_int();
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 2]).value.as_int(), image_at);
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 1, 3]).value, Value::Int(6));
+    }
+
+    /// A version 4 vgroup writes its flags and attributes straight after the
+    /// extension pair and its version last, which is not where a vdata header
+    /// writes them. Read the vdata way, the flag word would be a version of 0
+    /// and a `more` of 1, and the attribute would be lost in the terminator.
+    #[test]
+    fn a_vgroup_keeps_its_version_last_and_its_attributes_before_it() {
+        let flags = read(&[3, 0, 2, 3, 4, 0, 8]);
+        assert_eq!((flags.value, flags.size_bits), (Value::UInt(1), 32));
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10]).child_count, 1);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10, 0, 1]).value, Value::UInt(12));
+        let header_at = read(&[3, 2, 2, 4, 2]).value.as_int();
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 10, 0, 2]).value.as_int(), header_at);
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 11]).value, Value::Int(4));
+        assert_eq!(read(&[3, 0, 2, 3, 4, 0, 13]).size_bits, 8);
+    }
+
+    /// A version 3 vgroup has no flag word: the five bytes after the extension
+    /// pair are the version, `more` and the nul.
+    #[test]
+    fn a_version_three_vgroup_has_no_flags() {
+        // The same vgroup with the flag word, the count, the attribute and
+        // the version 4 taken off the end, and a version 3 put back.
+        let mut old = vg();
+        old.truncate(old.len() - 17);
+        old.extend(be16(3));
+        old.extend(be16(0));
+        old.push(0);
+        let doc = Document::new(MemSource(old));
+        let mut ev = Evaluator::new(Template::new("vgroup", vgroup()));
+        assert_eq!(ev.node(&doc, &[8]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&doc, &[10]).unwrap().child_count, 0);
+        assert_eq!(ev.node(&doc, &[11]).unwrap().value, Value::Int(3));
+        assert_eq!(ev.node(&doc, &[13]).unwrap().size_bits, 8);
     }
 
     /// The vgroup's third member names values as tag 702, and the file holds

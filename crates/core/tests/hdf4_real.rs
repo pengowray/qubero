@@ -128,10 +128,13 @@ fn reached(ev: &mut Evaluator, doc: &Document<MemSource>, found: &BTreeMap<Strin
         }
     }
     let mut attributes = std::collections::BTreeMap::new();
-    for at in found.get("Hdf4VdataAttribute").cloned().unwrap_or_default() {
-        let offset = ev.node(doc, &at).unwrap().offset_bits;
-        let placed = value(ev, doc, &[at, vec![3]].concat()) != Value::Int(0);
-        attributes.insert(offset, placed);
+    // Where the offset is in each: a vgroup's attribute has no field index.
+    for (kind, offset) in [("Hdf4VdataAttribute", 3), ("Hdf4VgroupAttribute", 2)] {
+        for at in found.get(kind).cloned().unwrap_or_default() {
+            let start = ev.node(doc, &at).unwrap().offset_bits;
+            let placed = value(ev, doc, &[at, vec![offset]].concat()) != Value::Int(0);
+            attributes.insert(start, placed);
+        }
     }
     out.attributes = (attributes.values().filter(|p| **p).count(), attributes.len());
     let reads_as = [(1963, "Hdf4VdataRecords"), (302, "Hdf4RasterImage"), (703, "Hdf4SdScales"), (707, "Hdf4MaxAndMin")];
@@ -182,7 +185,9 @@ fn every_reference_is_followed_whichever_block_holds_what_it_names() {
             // while the file holds only the special element's, and are found
             // under that, the way pyhdf's library finds them.
             "tdata.hdf" => Reached { datasets: (0, 3), members: (36, 36), attributes: (0, 0), by_ref: (3, 3) },
-            "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), attributes: (11, 11), by_ref: (17, 17) },
+            // Fifteen attributes, as pyhdf counts them: eleven on two tables
+            // and their columns, and two on each of two vgroups.
+            "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), attributes: (15, 15), by_ref: (17, 17) },
             other => panic!("{other} is in the collection with nothing counted of it"),
         };
         assert_eq!(got, want, "{name}");
