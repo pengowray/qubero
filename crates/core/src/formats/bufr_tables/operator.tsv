@@ -1,0 +1,29 @@
+code	name
+201YYY	Change data width
+202YYY	Change scale
+203YYY	Change reference values
+204YYY	Add associated field
+205YYY	Signify character
+206YYY	Signify data width for the immediately following local descriptor
+207YYY	Increase scale, reference value and data width
+208YYY	Change width of CCITT IA5 field
+221YYY	Data not present
+222000	Quality information follows
+223000	Substituted values operator
+223255	Substituted values marker operator
+224000	First-order statistical values follow
+224255	First-order statistical values marker operator
+225000	Difference statistical values follow
+225255	Difference statistical values marker operator
+232000	Replaced/retained values follow
+232255	Replaced/retained value marker operator
+235000	Cancel backward data reference
+236000	Define data present bit-map
+237000	Use defined data present bit-map
+237255	Cancel use defined data present bit-map
+241000	Define event
+241255	Cancel define event
+242000	Define conditioning event
+242255	Cancel define conditioning event
+243000	Categorical forecast values follow
+243255	Cancel categorical forecast values follow

@@ -39,6 +39,7 @@ pub mod bam_records;
 mod appledouble;
 mod au;
 mod bmp;
+pub mod bufr_tables;
 mod bzip2;
 mod bdb;
 mod bencode;
