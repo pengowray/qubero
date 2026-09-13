@@ -30,6 +30,8 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| S2: HDF5 fractal-heap indirect blocks, for a heap grown past its largest direct block | `4308a8f` |
+| S2: children of a version 2 B-tree node below the root (`HANDOVER-open-hazards.md` 4) | `4308a8f` |
 
 ## Bugs
 
@@ -75,10 +77,21 @@ the footer. `data_index_bloom_encoding_stats.parquet` proves it.
 - Paged fixed arrays. A page's worth of entries is a power of two.
 - Implicit-index chunks. The chunk count is each dimension of the dataspace
   divided by the chunk dimension, rounded up, multiplied together.
-- Fractal-heap indirect blocks, for a heap grown past its largest direct block.
-- Children of a version 2 B-tree node below the root
-  (`HANDOVER-open-hazards.md` "Still open" 4). `hdf5_tree.rs` already does the
-  arithmetic in Rust; the template cannot.
+
+The heap tables and the B-tree children are closed (see the Closed table).
+Both are checked by `fractal-heap-deep.h5`, whose group of 2,000 links puts
+176 of them under a second heap table and indexes them with a tree of depth 2.
+What the B-tree work left for the web side is a string: `BTREES.notInListing`
+and the `rootOnly` form of `BTREES.hint` still say only the root of a version
+2 tree is in the Listing. Both now show only for a node the template places
+somewhere other than where `hdf5_tree.rs` read it, which a well-formed file
+never has, so they want rewording rather than removing.
+
+While making that file: two thousand hard links to one object make
+`kinds_real`'s `every_sample_adds_up` fail, covering 9.1 Mbit of a 4.9 Mbit
+file, because the kind walk counts an object header once for every link that
+reaches it. The sample uses soft links to stay clear of it. Any real HDF5 file
+with many hard links to one object will show the same over-count.
 
 Every HDF5 gap here also applies to NetCDF-4, MATLAB 7.3 and `.h5ad`, which are
 HDF5 files.
@@ -152,7 +165,7 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- The five S2 items.
+- The S2 items still open.
 - Variable-length strings (S5).
 - Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
@@ -217,7 +230,7 @@ opened at all, since the app opens one file.
 
 Thin enough that a clean sweep says little: NetCDF classic (3 files, 3 KB, one
 dataset), HDF4 (2 files, 8 KB), GWF (1 file), CDF (2 files), FITS (3 files).
-HDF5's six are small synthetic files; nothing from a real instrument.
+HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
