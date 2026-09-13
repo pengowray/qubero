@@ -44,6 +44,30 @@ const OVERSCAN = 6;
  *  walking the tree for the views that are showing. */
 const HIDDEN_WALK_MS = 300;
 
+/** The name column's width with nothing nested: the fold marker, the gap
+ *  after it and the name. Must match `--rp-tree`'s fallback in the stylesheet. */
+const TREE_WIDTH = 228;
+/** One fold's step in, and where the guide lines are spaced. */
+const INDENT_STEP = 12;
+/** Folds that each take a full step. Past these a fold takes a third of one,
+ *  up to `INDENT_SQUEEZED` more, and past that none: an HDF5 chunk index is
+ *  thirty-nine folds deep, and a full step each would leave no room for the
+ *  name. Guide lines stop where the full steps do. */
+const INDENT_FULL = 8;
+const INDENT_SQUEEZED = 8;
+/** Folds the name column widens for, rather than taking the room from the
+ *  name. */
+const TREE_GROWS_FOR = 6;
+
+/** Put an item at its level: how far its name steps in, and how many guide
+ *  lines run down beside it. */
+function setLevel(node: HTMLElement, level: number): void {
+  const full = Math.min(level, INDENT_FULL);
+  const squeezed = Math.min(Math.max(0, level - INDENT_FULL), INDENT_SQUEEZED);
+  node.style.setProperty("--rp-ind", `${full * INDENT_STEP + squeezed * (INDENT_STEP / 3)}px`);
+  node.style.setProperty("--rp-guides", `${full * INDENT_STEP}px`);
+}
+
 /** What an item is worth before it has been drawn. A byte strip's chips wrap
  *  to the width they are given, so its real height is only known once it is
  *  in the document; this is the guess the first layout uses, and `measured`
@@ -90,6 +114,9 @@ export class ListingReport {
   /** The owners of the byte strips and dumps on the list, worked out with the
    *  layout. */
   private showing: ReadonlySet<string> = new Set();
+  /** How many folds in from its heading each item is, worked out with the
+   *  tops. */
+  private levels = new Uint8Array(0);
   /** The streams that have a row of their own in this listing, worked out
    *  with the layout rather than on every paint: see `context`. */
   private streams: ReadonlySet<string> = new Set();
@@ -440,10 +467,24 @@ export class ListingReport {
     this.nesting = buildNesting(this.items);
     this.tops = new Array(this.items.length + 1);
     this.tops[0] = 0;
+    this.levels = new Uint8Array(this.items.length);
+    let under = -1;
+    let deepest = 0;
     for (const [i, item] of this.items.entries()) {
       this.tops[i + 1] = (this.tops[i] ?? 0) + (this.measured.get(item.key) ?? heightOf(item));
+      if (item.kind === "heading") under = item.level;
+      const level = Math.min(255, Math.max(0, item.depth - (under + 1)));
+      this.levels[i] = level;
+      if (item.kind === "heading") continue;
+      if (level > deepest) deepest = level;
+      // A row kept standing may be under a different heading now.
+      const kept = this.mounted.get(item.key);
+      if (kept !== undefined) setLevel(kept, level);
     }
     this.canvas.style.height = `${this.tops[this.items.length] ?? 0}px`;
+    // The name column widens for a file that nests, so a deep name is not all
+    // indent, and costs a file that does not nest nothing.
+    this.el.style.setProperty("--rp-tree", `${TREE_WIDTH + INDENT_STEP * Math.min(deepest, TREE_GROWS_FOR)}px`);
     this.drawn = null;
   }
 
@@ -515,6 +556,7 @@ export class ListingReport {
         node.setAttribute("role", "treeitem");
         if (openKeyOf(item) !== null && (item.kind === "heading" || item.kind === "row")) node.setAttribute("aria-expanded", String(item.open));
         if (item.key === this.cursor) node.classList.add("is-cursor");
+        if (item.kind !== "heading") setLevel(node, this.levels[i] ?? 0);
         this.mounted.set(item.key, node);
         this.canvas.append(node);
       }

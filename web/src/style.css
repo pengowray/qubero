@@ -3111,11 +3111,34 @@ button.insp-xrow-where:hover {
 .rp-range {
   width: auto;
 }
-.rp-field {
+/* The fold marker and the name, which step in one fold at a time inside a
+   column of their own, so the address, value, type and size columns stay put
+   at every depth. `--rp-ind` and `--rp-guides` are set per row by the layout;
+   `--rp-tree` widens the column for a file that nests. A faint line runs down
+   under each open fold's marker for as long as the fold lasts: the rows are
+   contiguous and the cell is their full height, so the lines join up. */
+.rp-tree {
   flex: none;
-  width: 210px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: var(--rp-tree, 228px);
+  padding-inline-start: var(--rp-ind, 0px);
+  background: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 12px) 4px 0 / var(--rp-guides, 0px) 100% no-repeat;
+}
+.rp-field {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A strip, a dump, a table or a card under a row starts where that row's
+   name does, with the same guide lines to its left. 97px is the listing's
+   margin, the address column and the gap after it. */
+.rp-item.rp-block {
+  padding-inline-start: calc(97px + var(--rp-ind, 0px));
+  background: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 12px) 101px 0 / var(--rp-guides, 0px) 100% no-repeat;
 }
 .rp-value {
   flex: 1;
@@ -3157,6 +3180,14 @@ button.insp-xrow-where:hover {
   width: 10px;
   color: var(--muted);
 }
+/* An open fold is the one whose rows follow, so it is the one that stands
+   out; a closed marker stays quiet. */
+.rp-row.is-open .rp-twist {
+  color: var(--fg);
+}
+.rp-row.is-open .rp-field {
+  font-weight: 600;
+}
 .rp-size {
   flex: none;
   margin-inline-start: auto;
@@ -3188,12 +3219,6 @@ button.insp-xrow-where:hover {
 .rp-nobytes {
   color: var(--muted);
 }
-/* A row opened out of a row, past the one step in that shows where the
-   opened row's contents end. Depth beyond that is said by dimming the name
-   rather than by indenting further: rule 2, no indentation ladders. */
-.rp-deep .rp-field {
-  color: var(--muted);
-}
 
 /* What reads this field, on the field's own row and pointing at it. Small and
    muted: the row's own name and value are what the reader is scanning, and
@@ -3218,7 +3243,7 @@ button.insp-xrow-where:hover {
   color: var(--accent);
   cursor: pointer;
 }
-.rp-more .rp-field {
+.rp-more .rp-tree {
   width: auto;
 }
 .rp-pending {

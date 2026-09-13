@@ -145,7 +145,7 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
     case "more":
       return drawMore(c, item);
     case "pending":
-      return el("div", "rp-item rp-pending", REPORT.reading);
+      return el("div", "rp-item rp-block rp-pending", REPORT.reading);
     case "card":
       return drawCard(c.doc, item, c.shown);
     case "formatcard":
@@ -158,20 +158,18 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
  *  in a registry of one. */
 function drawFormatCard(c: DrawContext, item: Extract<Item, { kind: "formatcard" }>): HTMLElement {
   const host = drawJpegCard(c, item);
-  indent(host, item.depth);
+  host.classList.add("rp-block");
   return host;
 }
 
-/** How far in from the left a row at this depth starts, and whether its name
- *  is dimmed. The rows under a top-level part are the listing's own margin;
- *  the rows under a part inside it are one step in, so where that part ends
- *  can be seen; anything opened out of a row is one more step and no further,
- *  with its name dimmed instead. Depth is a fact the reader can act on for
- *  one or two levels and a ladder past that, and a ladder is what rule 2
- *  says not to draw. */
-function indent(row: HTMLElement, depth: number): void {
-  row.style.paddingLeft = `${8 + 12 * Math.min(depth, 3)}px`;
-  if (depth >= 3) row.classList.add("rp-deep");
+/** The name and its fold marker, in the one cell that steps in with depth.
+ *  The address, value, type and size columns stay where they are at every
+ *  depth, so they still read down the page; how far in the name sits is set
+ *  by the layout (`--rp-ind`), which knows the heading the row is under. */
+function treeCell(twist: string, field: HTMLElement): HTMLElement {
+  const cell = el("span", "rp-tree");
+  cell.append(el("span", "rp-twist", twist), field);
+  return cell;
 }
 
 function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, fileBits: number): HTMLElement {
@@ -211,9 +209,8 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // A field of no bytes is grey: whether it is a value the template worked
   // out or a list that turned out to be empty, there is nothing of it in the
   // file, and a row the reader can skip should look like one.
-  const row = el("div", `rp-item rp-row${n.size_bits === 0 ? " rp-nobytes" : ""}`);
+  const row = el("div", `rp-item rp-row${n.size_bits === 0 ? " rp-nobytes" : ""}${item.open ? " is-open" : ""}`);
   if (isSelected(c.selected, item.offsetBits, item.sizeBits) || c.nearest === item.key) row.classList.add("is-on");
-  indent(row, item.depth);
   // A computed value is not written anywhere, so it has no address, and its
   // length says so in words: "@0x101a7" and "0 bytes" would be answers to
   // questions this row is not the answer to.
@@ -228,8 +225,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
-  row.append(el("span", "rp-twist", itemOpens(n) ? (item.open ? "▾" : "▸") : ""));
-  row.append(el("span", `rp-field ${fieldClass(n.kind)}`, n.name));
+  row.append(treeCell(itemOpens(n) ? (item.open ? "▾" : "▸") : "", el("span", `rp-field ${fieldClass(n.kind)}`, n.name)));
   // A compressed run nothing could open says why where its count would be:
   // "0 fields" is true and tells the reader nothing they can act on.
   const said =
@@ -267,10 +263,8 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
 
 function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElement {
   const row = el("div", "rp-item rp-row rp-gap");
-  indent(row, item.depth);
   row.append(el("span", "rp-at", formatOffset(item.offsetBits)));
-  row.append(el("span", "rp-twist", ""));
-  row.append(el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap));
+  row.append(treeCell("", el("span", "rp-field", item.unmapped ? GAP_LABEL : REPORT.gap)));
   // A gap short enough to read is shown, the way a `reserved` field's bytes
   // are; a longer one gets a word about what is in it, and its dump below.
   row.append(el("span", "rp-value", gapBytes(c, item) ?? GAP_VERDICT[c.verdict(item)]));
@@ -295,8 +289,7 @@ function gapBytes(c: DrawContext, item: Extract<Item, { kind: "gap" }>): string 
 /** A structure the format keeps as a table, drawn as one: the format's own
  *  column names, and where each row is written. */
 function drawRecord(c: DrawContext, item: Extract<Item, { kind: "record" }>): HTMLElement {
-  const host = el("div", "rp-item rp-record");
-  indent(host, item.depth);
+  const host = el("div", "rp-item rp-block rp-record");
   const table = recordTable(c.doc, item.node);
   if (table === null) {
     host.append(el("div", "bs-wait", REPORT.reading));
@@ -356,8 +349,7 @@ function drawCell(cell: RecordCell): HTMLElement {
 }
 
 function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTMLElement {
-  const host = el("div", "rp-item rp-strip");
-  indent(host, item.depth);
+  const host = el("div", "rp-item rp-block rp-strip");
   // A gap has no field to take a name from, so the row's own word names it.
   const gap = item.owner.startsWith("gap:");
   const name = gap ? GAP_LABEL : item.name;
@@ -407,11 +399,10 @@ function dumpOf(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, name: st
 
 function drawMore(c: DrawContext, item: Extract<Item, { kind: "more" }>): HTMLElement {
   const row = el("div", "rp-item rp-row rp-more");
-  indent(row, item.depth);
   const reply = c.doc.templateNode(item.path);
   const noun = reply.status === "ok" ? childWord(reply.node) : "item";
   row.append(el("span", "rp-at", ""));
-  row.append(el("span", "rp-field", REPORT.more(countText(item.remaining, noun), item.side)));
+  row.append(treeCell("", el("span", "rp-field", REPORT.more(countText(item.remaining, noun), item.side))));
   row.append(listButton(item.path));
   return row;
 }

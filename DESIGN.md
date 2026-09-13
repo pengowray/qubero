@@ -474,11 +474,16 @@ most space above it, a title a size larger than anything under it, its swatch,
 its address range, its size and share of the file, and the file map; the
 space above is what groups its rows with it, so there is no rule or bar above
 it doing that job. A named part inside one is a heading too, smaller, with
-space of its own. Everything below that is a row of one fixed height. Depth is
-shown once by indenting: the rows of an inner part sit one step in from the
-rows of its top-level part, so where the inner part ends can be seen, and a
-row opened out of a row is one more step and no further, with its name dimmed
-instead of indented again. A part that is an element of a list carries the
+space of its own. Everything below that is a row of one fixed height. Under a
+heading, each open fold steps its rows' names in by 12px, counted from the
+heading rather than from the file, and a faint line runs down under the fold's
+marker for as long as the fold lasts; an open fold's name is bold. Only the
+name column steps in: addresses, values, types and sizes stay in straight
+columns at every depth. Past eight folds a step is 4px, past sixteen there is
+none, and the name column widens by up to six steps for a file that nests.
+(This replaced a cap of three steps with dimmed names past it, on 2026-09-13:
+an open fold and its first child sat at the same x, and a reader could not
+tell from anything but the marker's shape whether a fold was open.) A part that is an element of a list carries the
 list's name in its title (`pages[1]`, not `[1]`), since the title is what the
 rail and the hex view name the part by too.
 
