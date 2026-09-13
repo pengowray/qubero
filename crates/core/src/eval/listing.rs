@@ -183,6 +183,7 @@ pub(super) fn plain(ty: &Ty) -> bool {
         | Ty::BF16(_)
         | Ty::F32(_)
         | Ty::F64(_)
+        | Ty::IbmF32(_)
         | Ty::Fixed { .. }
         | Ty::Leb128 { .. }
         | Ty::Zigzag

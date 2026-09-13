@@ -483,6 +483,7 @@ impl Evaluator {
             Ty::F32(e) => Value::Float(narrow_f32(f32::from_bits(read_uint(&self.read(doc, r, r.offset, 32)?, 32, *e) as u32))),
             Ty::F64(e) => Value::Float(f64::from_bits(read_uint(&self.read(doc, r, r.offset, 64)?, 64, *e) as u64)),
             Ty::F80(e) => Value::Float(f80_to_f64(read_uint(&self.read(doc, r, r.offset, 80)?, 80, *e))),
+            Ty::IbmF32(e) => Value::Float(ibm32_to_f64(read_uint(&self.read(doc, r, r.offset, 32)?, 32, *e) as u32)),
             Ty::Leb128 { signed } => {
                 let (v, _) = self.read_leb(doc, r)?;
                 if *signed { Value::Int(v as i128) } else { Value::UInt(v) }

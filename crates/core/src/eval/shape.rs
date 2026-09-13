@@ -362,6 +362,7 @@ fn width_in_name(ty: &Ty) -> bool {
         | Ty::F32(_)
         | Ty::F64(_)
         | Ty::F80(_)
+        | Ty::IbmF32(_)
         | Ty::Fixed { .. }
         | Ty::Magic(_) => true,
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => width_in_name(inner),

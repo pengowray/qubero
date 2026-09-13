@@ -326,6 +326,7 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::F32(_) => "f32".to_string(),
         Ty::F64(_) => "f64".to_string(),
         Ty::F80(_) => "f80".to_string(),
+        Ty::IbmF32(_) => "ibm32".to_string(),
         Ty::F8 { .. } => "f8".to_string(),
         Ty::Fixed { .. } => "fixed".to_string(),
         // A number the file wrote out in words: a FITS keyword's value, a
@@ -407,7 +408,7 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::Zigzag | Ty::SqliteVarint | Ty::TextInt { .. } | Ty::Computed(_) => "int",
         // A fixed-point number reads as the fraction it stands for, not as the
         // integer it is stored as.
-        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::F8 { .. } | Ty::Fixed { .. } => "float",
+        Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::IbmF32(_) | Ty::F8 { .. } | Ty::Fixed { .. } => "float",
         Ty::Magic(_) => "magic",
         Ty::Enum { .. } => "enum",
         Ty::Flags { .. } => "flags",

@@ -761,6 +761,7 @@ fn inline(ty: &Ty) -> Option<String> {
         Ty::F32(e) => format!("f32{}", end(*e)),
         Ty::F64(e) => format!("f64{}", end(*e)),
         Ty::F80(e) => format!("f80{}", end(*e)),
+        Ty::IbmF32(e) => format!("ibm32{}", end(*e)),
         Ty::F8 { e4m3 } => if *e4m3 { "f8e4m3" } else { "f8e5m2" }.to_string(),
         Ty::Computed(e) => format!("computed {}", expr(e)),
         Ty::ComputedText(e) => format!("computed text {}", expr(e)),

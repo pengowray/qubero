@@ -1907,6 +1907,22 @@ pub enum Ty {
     /// and a fraction of all ones is not a number. The other, `e5m2`, spends
     /// five and two, reaches 57344, and does have them.
     F8 { e4m3: bool },
+    /// IBM System/360 hexadecimal floating point, thirty-two bits: a sign,
+    /// seven bits of exponent counting powers of sixteen from 64, and a
+    /// twenty-four bit fraction below the point, so the value is
+    /// `fraction / 2^24 * 16^(exponent - 64)` with nothing assumed in front.
+    ///
+    /// A type rather than a computed field beside a `u32`, which is how GRIB's
+    /// sign and magnitude could have gone and did not: the answer is a float,
+    /// and an expression here is an integer. What writes these is seismic
+    /// processing that began on IBM mainframes, and a SEG-Y trace is still
+    /// most often a run of them.
+    ///
+    /// Read into an f64, which holds every one exactly. There is no infinity
+    /// and no not-a-number: every bit pattern is a number, and the same number
+    /// can be written several ways, since a fraction whose top nibble is zero
+    /// is only a different exponent away from one whose top nibble is not.
+    IbmF32(Endian),
     /// A field of no bits whose value is worked out rather than read. What it
     /// takes to say "the same as the last one" without inventing a byte.
     Computed(Expr),
@@ -3124,6 +3140,7 @@ impl Ty {
             Ty::F32(en) => format!("f32 {}", e(*en)),
             Ty::F64(en) => format!("f64 {}", e(*en)),
             Ty::F80(en) => format!("f80 {}", e(*en)),
+            Ty::IbmF32(en) => format!("ibm32 {}", e(*en)),
             Ty::Fixed { bits, frac, endian, signed } => {
                 format!("{}{}.{frac} {}", if *signed { "i" } else { "u" }, bits - frac, e(*endian))
             }

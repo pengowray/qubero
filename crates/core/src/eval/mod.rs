@@ -7,7 +7,7 @@
 
 use crate::bits::bytes_for;
 use crate::codec::Refusal;
-use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
+use crate::decode::{be_int, f8_to_f64, f80_to_f64, fixed_bits, ibm32_to_f64, lsb_offset, lsb_packed, narrow_bf16, narrow_f16, narrow_f32, packed_int, read_int, read_sign_magnitude, read_uint};
 use crate::document::Document;
 use crate::encode;
 use crate::json;

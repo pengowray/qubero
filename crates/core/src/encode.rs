@@ -62,7 +62,7 @@ pub fn editable(ty: &Ty, size_bits: u64) -> bool {
         // A sentinel and a set of names are both readings of the number, so a
         // field keeps whatever editability the number under them has.
         Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => editable(inner, size_bits),
-        Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::Leb128 { .. } | Ty::Zigzag | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
+        Ty::UInt { .. } | Ty::Int { .. } | Ty::SignMagnitude { .. } | Ty::UIntExpr { .. } | Ty::F16(_) | Ty::BF16(_) | Ty::F32(_) | Ty::F64(_) | Ty::F80(_) | Ty::IbmF32(_) | Ty::Leb128 { .. } | Ty::Zigzag | Ty::EbmlVint { .. } | Ty::Vlq | Ty::SqliteVarint | Ty::Fixed { .. } => true,
         Ty::Bytes(_) | Ty::Str { .. } => size_bits <= EDIT_LIMIT_BYTES * 8,
         // A scalar inside a JSON field is written back as the literal it is.
         // An object or an array is its members, and editing those is editing
@@ -245,6 +245,11 @@ pub fn encode(ty: &Ty, text: &str, size_bits: u64, state: &StrState) -> Result<V
         Ty::F80(e) => {
             let x = parse_float(text)?;
             Ok(write_uint(f64_to_f80(x), 80, *e))
+        }
+        Ty::IbmF32(e) => {
+            let x = parse_float(text)?;
+            let word = f64_to_ibm32(x).ok_or_else(|| format!("{} range is -7.2e75 to 7.2e75. No inf or nan.", ty.display_name()))?;
+            Ok(write_uint(u128::from(word), 32, *e))
         }
         Ty::Leb128 { signed } => {
             let room = (size_bits / 8) as usize;
@@ -710,6 +715,51 @@ pub(crate) fn f64_to_bf16(x: f64) -> u16 {
     ((bits + 0x7fff + ((bits >> 16) & 1)) >> 16) as u16
 }
 
+/// Inverse of `decode::ibm32_to_f64`, written the way IBM hardware and every
+/// SEG-Y writer write one: normalised, so the fraction's top nibble is not zero
+/// unless nothing smaller would do.
+///
+/// Twenty-four bits of fraction is fewer than an f64 has, so a value that needs
+/// more rounds to the nearest, and one too small for the smallest exponent
+/// rounds to zero the way an f32 does. What this form cannot hold at all is
+/// refused: an infinity, a not-a-number, and a magnitude past a whisker under
+/// 16^63. A negative zero is written as zero, since the format says a zero
+/// fraction takes a zero sign and exponent with it.
+pub(crate) fn f64_to_ibm32(x: f64) -> Option<u32> {
+    if !x.is_finite() {
+        return None;
+    }
+    let mut m = x.abs();
+    if m == 0.0 {
+        return Some(0);
+    }
+    // Into [1/16, 1) a power of sixteen at a time, which is exact in binary.
+    let mut exp = 64i32;
+    while m >= 1.0 {
+        m /= 16.0;
+        exp += 1;
+    }
+    while m < 0.0625 && exp > 0 {
+        m *= 16.0;
+        exp -= 1;
+    }
+    let mut fraction = (m * f64::from(1u32 << 24)).round() as u32;
+    // Rounding up can carry out of the fraction, which is one more power of
+    // sixteen and a fraction of one sixteenth.
+    if fraction == 1 << 24 {
+        fraction = 1 << 20;
+        exp += 1;
+    }
+    if exp > 127 {
+        return None;
+    }
+    if fraction == 0 {
+        return Some(0);
+    }
+    let sign = if x < 0.0 { 1u32 << 31 } else { 0 };
+    Some(sign | (exp as u32) << 24 | fraction)
+}
+
 /// Inverse of `decode::f80_to_f64`. Every f64 fits exactly: eighty bits have
 /// room for all eleven of its exponent bits and all fifty-two of its
 /// significand, and the leading one an f64 assumes is written out here.
@@ -845,6 +895,42 @@ mod tests {
         assert_eq!(f80_to_f64(be_int(&cd) as u128), 44100.0);
         assert_eq!(encode(&Ty::F80(Endian::Big), "44100", 80, &StrState::default()).unwrap(), cd);
         assert!(encode(&Ty::F80(Endian::Big), "one", 80, &StrState::default()).is_err());
+    }
+
+    #[test]
+    fn ibm_floats_read_and_write() {
+        use crate::decode::ibm32_to_f64;
+        // Zero, one, and the example every description of the format works
+        // through: -118.625 is 76.A in hex, 0.76A times 16 squared, so an
+        // exponent of 66 with the sign bit on top and a fraction of 76A000.
+        for (word, x) in [(0u32, 0.0f64), (0x4110_0000, 1.0), (0xc276_a000, -118.625)] {
+            assert_eq!(ibm32_to_f64(word), x, "{word:#010x}");
+            assert_eq!(f64_to_ibm32(x), Some(word), "{x}");
+        }
+        // The smallest normalised value, a top nibble of one at the lowest
+        // exponent, and the largest, every fraction bit set at the highest.
+        assert_eq!(ibm32_to_f64(0x0010_0000), 16f64.powi(-65));
+        assert_eq!(ibm32_to_f64(0x7fff_ffff), (1.0 - 2f64.powi(-24)) * 16f64.powi(63));
+        assert_eq!(f64_to_ibm32(16f64.powi(-65)), Some(0x0010_0000));
+        assert_eq!(f64_to_ibm32((1.0 - 2f64.powi(-24)) * 16f64.powi(63)), Some(0x7fff_ffff));
+        // Past the largest there is nowhere to go, and nothing is infinite.
+        assert_eq!(f64_to_ibm32(16f64.powi(63)), None);
+        assert_eq!(f64_to_ibm32(f64::INFINITY), None);
+        assert_eq!(f64_to_ibm32(f64::NAN), None);
+        // Below the smallest normalised value the fraction gives up its top
+        // nibble rather than its value, and far enough below it is zero.
+        assert_eq!(f64_to_ibm32(16f64.powi(-66)), Some(0x0001_0000));
+        assert_eq!(f64_to_ibm32(1e-300), Some(0));
+        assert_eq!(f64_to_ibm32(-0.0), Some(0));
+        // A tenth has no end in hex, so it rounds to the nearest step the
+        // fraction has, and those are 2^-24 apart here. That is coarser than
+        // an f32 manages at the same size: a top nibble of 1 leaves three of
+        // its four bits unused, where a binary float spends none on that.
+        assert_eq!(f64_to_ibm32(0.1), Some(0x4019_999a));
+        assert!((ibm32_to_f64(0x4019_999a) - 0.1).abs() <= 2f64.powi(-25));
+        assert_eq!(encode(&Ty::IbmF32(Endian::Big), "-118.625", 32, &StrState::default()).unwrap(), vec![0xc2, 0x76, 0xa0, 0]);
+        assert_eq!(encode(&Ty::IbmF32(Endian::Little), "1", 32, &StrState::default()).unwrap(), vec![0, 0, 0x10, 0x41]);
+        assert!(encode(&Ty::IbmF32(Endian::Big), "inf", 32, &StrState::default()).is_err());
     }
 
     #[test]
