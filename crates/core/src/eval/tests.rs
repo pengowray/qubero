@@ -1367,6 +1367,24 @@ fn a_real_relation_is_written_with_its_values_in_place() {
     let mut ev = Evaluator::new(t);
     let rel = ev.relations(&d, &[1]).unwrap();
     assert_eq!((rel[0].written.as_str(), rel[0].substituted.as_str(), rel[0].result.as_str()), ("trunc(off) - 4", "trunc(6.9) - 4", "2"));
+
+    // A float found by walking back through a list, which as a whole number
+    // passes over the float and answers nought: written in as the float, the
+    // way a GRIB section 7 reads section 5's reference value.
+    let section = T::switch(
+        E::peek(8, Big),
+        vec![(1, T::structure("Five", vec![("kind", T::u8()), ("reference", T::F32(Big))]))],
+        T::structure("Seven", vec![("kind", T::u8()), ("worth", T::computed_real(E::sibling(&["reference"]).add(E::lit(1))))]),
+    );
+    let t = Template::new("t", T::structure("Root", vec![("sections", T::array(section, E::lit(2)))]));
+    let mut bytes = vec![1];
+    bytes.extend_from_slice(&2.5f32.to_be_bytes());
+    bytes.push(7);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    assert_eq!(ev.node(&d, &[0, 1, 1]).unwrap().value, Value::Float(3.5));
+    let rel = ev.relations(&d, &[0, 1, 1]).unwrap();
+    assert_eq!((rel[0].written.as_str(), rel[0].substituted.as_str(), rel[0].result.as_str()), ("earlier(reference) + 1", "2.5 + 1", "3.5"));
 }
 
 /// What a scaled number is worth is a reading of the stored integer, and the

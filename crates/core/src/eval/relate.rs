@@ -285,8 +285,30 @@ impl Evaluator {
             return Ok(Some(real_text(self.eval_real_at(doc, at, e, here)?)));
         }
         // A field that holds a float is written in as the float, which is what
-        // its own row shows. Asked as a whole number first, so a count keeps
-        // every digit an i128 has and a double would round.
+        // its own row shows. Looked at before it is asked as a whole number,
+        // since three of the leaves that name a field do not fail on a float
+        // there: a walk back and a search pass over one and answer nought,
+        // which would write a GRIB reference value into its formula as 0.
+        if matches!(
+            e,
+            Expr::Ref(_) | Expr::Within(_) | Expr::Elem { .. } | Expr::ElemWithin { .. } | Expr::Placer(_) | Expr::Sibling(_) | Expr::Prev(_)
+        ) {
+            match self.field_value(doc, at, e, here) {
+                Ok(super::expr::Leaf::Value(v, _)) if v.as_int().is_none() => {
+                    if let Some(f) = super::expr::real_reading(&v) {
+                        return Ok(Some(real_text(f)));
+                    }
+                }
+                Err(err) if err.interrupted() => return Err(err),
+                // Nothing found, a whole number, or a question asked of a
+                // descriptor that is arithmetic rather than a field: the
+                // reading below says each of those as it always has.
+                _ => {}
+            }
+        }
+        // Everything else as a whole number, so a count keeps every digit an
+        // i128 has and a double would round. What will not read as one is
+        // tried as a real before it is given up on.
         match self.eval_expr_at(doc, at, e, here) {
             Ok(v) => Ok(Some(v.to_string())),
             Err(err) if err.interrupted() => Err(err),
