@@ -5208,11 +5208,6 @@ table.rec tr.is-on td {
 .dv-box.is-switch .dv-box-name {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.dv-tag {
-  font-weight: 400;
-  font-size: 10px;
-  color: var(--muted);
-}
 .dv-table {
   border-collapse: collapse;
 }

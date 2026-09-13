@@ -30,11 +30,13 @@
 //! outside the subtree.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::graph::value_kind;
 use super::origin::Role;
 use super::relate::write_expr;
-use crate::template::{Expr, Packing, StrLen, StructDef, Template, Ty};
+use crate::template::{Expr, Packing, StrLen, StructDef, Template, Ty, Until};
+use crate::template_text::tag_lit;
 
 /// How many boxes one diagram may hold. A format whose switch cases are all
 /// written inline can declare hundreds of shapes, and past a few hundred boxes
@@ -95,6 +97,11 @@ pub struct TypeBox {
     /// What the type is called. A type declared inside a field rather than in
     /// the template's table is named for where it was found: `Header.entry`.
     pub name: String,
+    /// Where the walk first reached it: `png.chunks.data.'IHDR'`. The name is
+    /// what the type is called and is what a box is labelled with; this is how
+    /// to get to it, which is a different question and belongs on a second
+    /// line. A type read in nine places has one of these, the first.
+    pub path: String,
     pub kind: BoxKind,
     /// The type this one was declared inside, for a box that has no name of its
     /// own in the template. None for a named type, which may be used from
@@ -142,7 +149,8 @@ pub fn diagram(t: &Template) -> Diagram {
         t,
         boxes: Vec::new(),
         defs: Vec::new(),
-        by_name: HashMap::new(),
+        by_ptr: HashMap::new(),
+        by_path: HashMap::new(),
         edges: Vec::new(),
         named_drawn: 0,
         capped: 0,
@@ -153,11 +161,21 @@ pub fn diagram(t: &Template) -> Diagram {
         Some(name) => {
             w.named_box(&name);
         }
-        None => {
-            if let Some(sd) = as_struct(t, &t.root) {
-                w.struct_box(t.name.clone(), None, sd);
+        // A root that is a choice is a choice: an HDF5 file is a superblock or
+        // a user block and then a superblock, and the template says so at the
+        // root. Drawn as a structure it drew nothing at all.
+        None => match as_switch(t, &t.root) {
+            Some(sw) => {
+                let sw = sw.clone();
+                w.switch_box(t.name.clone(), None, &sw);
             }
-        }
+            None => {
+                if let Some(sd) = as_struct(t, &t.root) {
+                    let sd = sd.clone();
+                    w.struct_box(t.name.clone(), None, &sd);
+                }
+            }
+        },
     }
     w.link();
     let omitted = (t.types.len() as u32).saturating_sub(w.named_drawn) + w.capped;
@@ -180,13 +198,18 @@ fn root_name(ty: &Ty) -> Option<String> {
 /// The structure inside a type, past the wrappers that say where it is, how big
 /// it is, or how it is packed. None for a type that is not one: a number, a
 /// string, a list of numbers.
-fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a StructDef> {
+///
+/// The `Arc` rather than the `StructDef` behind it, because which structure
+/// this is, is the pointer: a format that reads the same record in nine places
+/// clones one `Arc` nine times, and that is what says the nine are one type and
+/// not nine that happen to have the same fields.
+fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
     match ty {
         Ty::Struct(sd) => Some(sd),
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::At { inner, .. } => {
             as_struct(t, inner)
         }
-        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } => as_struct(t, inner),
+        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_struct(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -206,7 +229,7 @@ fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::At { inner, .. } => {
             as_switch(t, inner)
         }
-        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } => as_switch(t, inner),
+        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -226,7 +249,7 @@ fn named_target(ty: &Ty) -> Option<String> {
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::At { inner, .. } => {
             named_target(inner)
         }
-        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } => named_target(inner),
+        Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => named_target(inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -271,6 +294,10 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
         Ty::Nullable { inner, .. } | Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Origin { inner } => {
             static_bits(t, inner, depth + 1)
         }
+        // A field that may not be there has no width the template fixes: what
+        // it costs depends on what the file says. Saying its inner width would
+        // put every field after it at an offset no file need agree with.
+        Ty::When { .. } => None,
         Ty::Array { elem, count: Expr::Lit(n) } => {
             static_bits(t, elem, depth + 1).and_then(|b| b.checked_mul(u64::try_from(*n).ok()?))
         }
@@ -334,6 +361,21 @@ fn size_text(t: &Template, ty: &Ty) -> String {
         Ty::Nullable { inner, .. } | Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Origin { inner } => {
             size_text(t, inner)
         }
+        // Nothing at all, or whatever is inside it. The type column already
+        // says `optional`, so the size says what it is when it is there.
+        Ty::When { inner, .. } => size_text(t, inner),
+        // Where a run stops, which is the nearest thing it has to a length. The
+        // two that compare one field say which field; a condition is written
+        // out the way every other expression here is.
+        Ty::Repeat { until, .. } => match until {
+            Until::End => "to the end".to_string(),
+            Until::FieldValue { field, value } => format!("until {field} = {}", tag_lit(*value)),
+            Until::FieldBytes { field, bytes } => match std::str::from_utf8(bytes) {
+                Ok(text) if text.chars().all(|c| c.is_ascii_graphic()) => format!("until {field} = '{text}'"),
+                _ => format!("until {field} matches"),
+            },
+            Until::Cond(e) => write_expr(e).map_or(String::new(), |s| format!("until {s}")),
+        },
         _ => String::new(),
     }
 }
@@ -343,28 +385,24 @@ fn size_text(t: &Template, ty: &Ty) -> String {
 fn at_text(ty: &Ty) -> Option<String> {
     match ty {
         Ty::At { at, .. } => write_expr(at),
-        Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::Nullable { inner, .. } => {
-            at_text(inner)
-        }
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::Nullable { inner, .. }
+        | Ty::When { inner, .. } => at_text(inner),
         _ => None,
     }
-}
-
-/// One value a switch keys on, as a reader would recognise it.
-///
-/// Hexadecimal past sixteen bits, because a case that wide is nearly always a
-/// signature read as a number: a ZIP local header is `0x04034b50`, and written
-/// as 67,324,752 it is a number nothing in the file or in the format's own
-/// documentation says. Small values stay decimal, which is how a format that
-/// numbers its cases writes them.
-fn case_key(k: i128) -> String {
-    if k > 0xffff || k < -0xffff { format!("{k:#x}") } else { k.to_string() }
 }
 
 /// One expression a row holds, and what it decides about the row.
 struct Source {
     expr: Expr,
     role: Role,
+    /// True when the expression is worked out inside one element of this row
+    /// rather than beside the row: a run's stopping condition reads the
+    /// element's own fields, and looking them up among this structure's would
+    /// find the wrong field or none.
+    inside: bool,
 }
 
 /// Every expression a field's declaration holds, with the role each plays.
@@ -374,7 +412,7 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
     if depth > 32 {
         return;
     }
-    let add = |e: &Expr, role: Role, out: &mut Vec<Source>| out.push(Source { expr: e.clone(), role });
+    let add = |e: &Expr, role: Role, out: &mut Vec<Source>| out.push(Source { expr: e.clone(), role, inside: false });
     match ty {
         Ty::Sized { size, inner } => {
             add(size, Role::Length, out);
@@ -391,6 +429,13 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
         Ty::Origin { inner } | Ty::Nullable { inner, .. } | Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => {
             sources(inner, out, depth + 1)
         }
+        // Whether the field is there at all. `origin.rs` reports this under
+        // `Type`, which reads well in a panel about one field; drawn, it needs
+        // a word of its own. See [`Role::Condition`].
+        Ty::When { cond, inner } => {
+            add(cond, Role::Condition, out);
+            sources(inner, out, depth + 1);
+        }
         Ty::Switch { on, .. } | Ty::Match { on, .. } => add(on, Role::Type, out),
         Ty::Bytes(e) => add(e, Role::Length, out),
         Ty::Str { len: StrLen::Fixed(e) | StrLen::Padded { size: e, .. }, .. }
@@ -401,7 +446,19 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
             add(count, Role::Count, out);
             sources(elem, out, depth + 1);
         }
-        Ty::Repeat { elem, .. } => sources(elem, out, depth + 1),
+        // Where the run stops, which is how many elements it has. Read inside
+        // the element: `until type = 'IEND'` names the element's `type`, and
+        // the arrow belongs on that row of the element's box.
+        Ty::Repeat { elem, until } => {
+            match until {
+                Until::Cond(e) => out.push(Source { expr: e.clone(), role: Role::Count, inside: true }),
+                Until::FieldValue { field, .. } | Until::FieldBytes { field, .. } => {
+                    out.push(Source { expr: Expr::field(field), role: Role::Count, inside: true })
+                }
+                Until::End => {}
+            }
+            sources(elem, out, depth + 1);
+        }
         Ty::PointerList { offsets, adjust, elem, .. } => {
             add(&Expr::Ref(offsets.clone()), Role::Position, out);
             add(adjust, Role::Position, out);
@@ -446,7 +503,7 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
 fn names_in(e: &Expr, out: &mut Vec<String>) {
     match e {
         Expr::Ref(n) | Expr::SizeOf(n) | Expr::BitsOf(n) | Expr::ProductOf(n) | Expr::SumOf(n) | Expr::MaxOf(n)
-        | Expr::PopCount(n) | Expr::Prev(n) => out.push(n.to_string()),
+        | Expr::PopCount(n) | Expr::Prev(n) | Expr::LenOf(n) => out.push(n.to_string()),
         // A path into an earlier field. The field is its first name; the rest
         // are that field's own, and belong to no row of this box.
         Expr::Within(f) | Expr::Sibling(f) => {
@@ -472,17 +529,33 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
                 names_in(inner, out);
             }
         }
-        Expr::Placer(inner) | Expr::Log2(inner) | Expr::Bit(inner, _) | Expr::PadTo { n: inner, .. } => {
-            names_in(inner, out)
-        }
+        Expr::Placer(inner)
+        | Expr::Log2(inner)
+        | Expr::Bit(inner, _)
+        | Expr::PadTo { n: inner, .. }
+        | Expr::Not(inner)
+        | Expr::StartOf(inner) => names_in(inner, out),
         Expr::PeekAt { skip, .. } => names_in(skip, out),
+        Expr::Cond { when, then, otherwise } => {
+            names_in(when, out);
+            names_in(then, out);
+            names_in(otherwise, out);
+        }
         Expr::Or(a, b)
         | Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
         | Expr::DivCeil(a, b)
+        | Expr::Mod(a, b)
         | Expr::Less(a, b)
+        | Expr::Eq(a, b)
+        | Expr::Ne(a, b)
+        | Expr::Le(a, b)
+        | Expr::Gt(a, b)
+        | Expr::Ge(a, b)
+        | Expr::Both(a, b)
+        | Expr::Either(a, b)
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
@@ -491,6 +564,10 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
             names_in(a, out);
             names_in(b, out);
         }
+        // What is left names no field: a literal, an index, a peek at bits, a
+        // search for a pattern, where the cursor is, how big the window is.
+        // `Pos` and `WindowSize` are facts about the frame rather than about
+        // any row, so there is nothing to draw an arrow from.
         _ => {}
     }
 }
@@ -504,9 +581,21 @@ struct Walk<'a> {
     /// down the template is a second answer to a question already answered.
     /// None for a switch box, whose rows are cases rather than fields.
     defs: Vec<Option<StructDef>>,
-    /// Box index by box name, filled in before the box's own fields are walked
-    /// so that a type referring to itself stops.
-    by_name: HashMap<String, usize>,
+    /// Box index by the address of the `Arc<StructDef>` it was drawn from, so
+    /// one type read in nine places is one box.
+    ///
+    /// This is what makes the picture the size of the format rather than the
+    /// size of the walk: an ELF declares one program-header type and reaches it
+    /// from four combinations of width and endianness, and drawn per reaching
+    /// it was four boxes saying the same thing. Filled in before the box's own
+    /// fields are walked, so a type holding itself stops.
+    ///
+    /// The address is only a key while the `Arc` is alive, which it is: the
+    /// template outlives this walk, and `defs` keeps a clone besides.
+    by_ptr: HashMap<usize, usize>,
+    /// Box index by the path it was first reached down, for the boxes an `Arc`
+    /// cannot key: a switch, which the IR does not put behind one.
+    by_path: HashMap<String, usize>,
     edges: Vec<DiagramEdge>,
     /// How many of the template's named types got a box.
     named_drawn: u32,
@@ -520,19 +609,33 @@ impl<'a> Walk<'a> {
     /// that is not a structure or a switch: a named integer is a type column
     /// entry, not a box.
     fn named_box(&mut self, name: &str) -> Option<usize> {
-        if let Some(&at) = self.by_name.get(name) {
+        if let Some(&at) = self.by_path.get(name) {
             return Some(at);
         }
         let ty = self.t.types.get(name)?;
-        if self.boxes.len() >= BOX_CAP {
-            self.capped += 1;
-            return None;
-        }
         if let Some(sd) = as_struct(self.t, ty) {
+            let sd = sd.clone();
+            // Already drawn where it was written inline, or under another of
+            // its names. One type, one box, whichever way the walk got here
+            // first; the table's name for it is recorded all the same so a
+            // second `Named` lookup is answered without another search.
+            if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
+                self.by_path.insert(name.to_string(), at);
+                self.named_drawn += 1;
+                return Some(at);
+            }
+            if self.boxes.len() >= BOX_CAP {
+                self.capped += 1;
+                return None;
+            }
             self.named_drawn += 1;
-            return Some(self.struct_box(name.to_string(), None, sd));
+            return Some(self.struct_box(name.to_string(), None, &sd));
         }
         if let Some(sw) = as_switch(self.t, ty) {
+            if self.boxes.len() >= BOX_CAP {
+                self.capped += 1;
+                return None;
+            }
             self.named_drawn += 1;
             let sw = sw.clone();
             return Some(self.switch_box(name.to_string(), None, &sw));
@@ -541,11 +644,24 @@ impl<'a> Walk<'a> {
     }
 
     /// One structure as a box: a row per field, then the boxes its fields reach.
-    fn struct_box(&mut self, name: String, parent: Option<String>, sd: &StructDef) -> usize {
-        let sd = sd.clone();
+    ///
+    /// `path` is where the walk found it. What the box is *called* is the
+    /// structure's own name, which is what the format calls the thing:
+    /// `IHDR`, not `png.chunks.data.'IHDR'`. The path stays, on the box, for
+    /// the reader who wants to know how they would get there.
+    fn struct_box(&mut self, path: String, parent: Option<String>, sd: &Arc<StructDef>) -> usize {
         let here = self.boxes.len();
-        self.by_name.insert(name.clone(), here);
-        self.boxes.push(TypeBox { name: name.clone(), kind: BoxKind::Seq, parent, rows: Vec::new() });
+        self.by_ptr.insert(Arc::as_ptr(sd) as usize, here);
+        self.by_path.insert(path.clone(), here);
+        let name = if sd.name.is_empty() { path.clone() } else { sd.name.clone() };
+        let sd = (**sd).clone();
+        self.boxes.push(TypeBox {
+            name,
+            path: path.clone(),
+            kind: BoxKind::Seq,
+            parent,
+            rows: Vec::new(),
+        });
         self.defs.push(Some(sd.clone()));
         // The running offset, which stops for good at the first field whose
         // width the file rather than the template settles. A position that
@@ -576,9 +692,11 @@ impl<'a> Walk<'a> {
         }
         // The types the fields reach, once every row of this box exists: a
         // field whose type is this very structure has to find the box already
-        // there.
+        // there. Named down the path rather than down the title, so two types
+        // the format happens to call the same thing do not claim each other's
+        // children.
         for (i, f) in sd.fields.iter().enumerate() {
-            self.field_target(here, i, &name, &f.name, &f.ty);
+            self.field_target(here, i, &path, &f.name, &f.ty);
         }
         here
     }
@@ -605,7 +723,7 @@ impl<'a> Walk<'a> {
         if let Some(sw) = as_switch(self.t, ty) {
             let sw = sw.clone();
             let name = format!("{owner}.{label}");
-            if let Some(&at) = self.by_name.get(&name) {
+            if let Some(&at) = self.by_path.get(&name) {
                 return Some((at, String::new()));
             }
             if self.boxes.len() >= BOX_CAP {
@@ -626,10 +744,12 @@ impl<'a> Walk<'a> {
         // table. It is still a type and still worth a box; it is named for
         // where it was found, since the template gave it no name of its own.
         let sd = as_struct(self.t, ty)?.clone();
-        let name = format!("{owner}.{label}");
-        if let Some(&at) = self.by_name.get(&name) {
+        // The same structure reached a second time is the same box, whether it
+        // was reached by another name or from another case.
+        if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
             return Some((at, String::new()));
         }
+        let name = format!("{owner}.{label}");
         if self.boxes.len() >= BOX_CAP {
             self.capped += 1;
             return None;
@@ -641,13 +761,28 @@ impl<'a> Walk<'a> {
     /// type it picks.
     fn switch_box(&mut self, name: String, parent: Option<String>, sw: &Ty) -> usize {
         let here = self.boxes.len();
-        self.by_name.insert(name.clone(), here);
-        self.boxes.push(TypeBox { name: name.clone(), kind: BoxKind::Switch, parent, rows: Vec::new() });
+        self.by_path.insert(name.clone(), here);
+        // A switch has no name of its own in the IR, so it is called what it
+        // reads. Not the last step of the path: a switch reached from a case of
+        // another switch would then be titled by that case's value, and an ELF
+        // would have three boxes called `1`. What the reader wants to know
+        // about a choice is what decides it.
+        let title = match sw {
+            Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).map(|e| format!("switch on {e}")),
+            _ => None,
+        };
+        self.boxes.push(TypeBox {
+            name: title.unwrap_or_else(|| name.rsplit_once('.').map_or(name.clone(), |(_, l)| l.to_string())),
+            path: name.clone(),
+            kind: BoxKind::Switch,
+            parent,
+            rows: Vec::new(),
+        });
         self.defs.push(None);
         let cases: Vec<(String, Ty)> = match sw {
             Ty::Switch { cases, default, .. } => cases
                 .iter()
-                .map(|(k, ty)| (case_key(*k), ty.clone()))
+                .map(|(k, ty)| (tag_lit(*k), ty.clone()))
                 .chain(std::iter::once(("_".to_string(), (**default).clone())))
                 .collect(),
             // Quoted, so a case a format keys on the word `F32` is not read as
@@ -701,10 +836,10 @@ impl<'a> Walk<'a> {
                 let mut found = Vec::new();
                 sources(&f.ty, &mut found, 0);
                 if let Some(e) = &f.name_from {
-                    found.push(Source { expr: e.clone(), role: Role::Name });
+                    found.push(Source { expr: e.clone(), role: Role::Name, inside: false });
                 }
                 if let Some(e) = &f.elem_name_from {
-                    found.push(Source { expr: e.clone(), role: Role::Name });
+                    found.push(Source { expr: e.clone(), role: Role::Name, inside: false });
                 }
                 if !found.is_empty() {
                     owed.push((bi, ri, found));
@@ -717,7 +852,16 @@ impl<'a> Walk<'a> {
                 let mut names = Vec::new();
                 names_in(&s.expr, &mut names);
                 for name in names {
-                    let Some((fb, fr)) = self.find_row(bi, ri, &name) else { continue };
+                    // A run's stopping condition is worked out inside the
+                    // element, so its names are the element's fields and not
+                    // this structure's. Resolved from anywhere in the element's
+                    // box, which then climbs out to this one exactly as a name
+                    // read there would.
+                    let from = match s.inside {
+                        true => self.elem_box(bi, ri).and_then(|eb| self.find_row(eb, usize::MAX, &name)),
+                        false => self.find_row(bi, ri, &name),
+                    };
+                    let Some((fb, fr)) = from else { continue };
                     self.edges.push(DiagramEdge {
                         from: (fb, fr),
                         to: (bi, Some(ri)),
@@ -729,6 +873,16 @@ impl<'a> Walk<'a> {
         }
         self.edges.sort_by_key(|e| (e.from, e.to, e.role.as_str(), e.label.clone()));
         self.edges.dedup();
+    }
+
+    /// The box of what one row's elements are, for a row that is a list. That
+    /// is the box its own `Type` edge reaches, which is already drawn by the
+    /// time the dependency edges are worked out.
+    fn elem_box(&self, from_box: usize, from_row: usize) -> Option<usize> {
+        self.edges
+            .iter()
+            .find(|e| e.from == (from_box, from_row) && e.role == Role::Type && e.to.1.is_none())
+            .map(|e| e.to.0)
     }
 
     /// The row a name means, seen from one row of one box: an earlier field of
@@ -757,7 +911,7 @@ impl<'a> Walk<'a> {
                     return Some((b, i));
                 }
             }
-            at = boxed.parent.as_ref().and_then(|p| self.by_name.get(p)).copied();
+            at = boxed.parent.as_ref().and_then(|p| self.by_path.get(p)).copied();
             row_cap = usize::MAX;
             hops += 1;
         }
@@ -824,7 +978,8 @@ mod tests {
         let t = Template::new("test", root).with_type("body", body);
         let d = diagram(&t);
         let switch = d.types.iter().position(|b| b.kind == BoxKind::Switch).expect("a switch box");
-        assert_eq!(d.types[switch].name, "test.payload");
+        assert_eq!(d.types[switch].name, "switch on kind");
+        assert_eq!(d.types[switch].path, "test.payload");
         assert_eq!(d.types[switch].parent.as_deref(), Some("test"));
         assert_eq!(d.types[switch].rows.len(), 2);
         assert_eq!(d.types[switch].rows[0].name, "1");
@@ -843,7 +998,8 @@ mod tests {
         let root = strukt("root", vec![("count", T::u8()), ("items", T::Array { elem: Box::new(inner), count: E::field("count") })]);
         let d = diagram(&Template::new("test", root));
         assert_eq!(d.types.len(), 2);
-        assert_eq!(d.types[1].name, "test.items");
+        assert_eq!(d.types[1].name, "inner");
+        assert_eq!(d.types[1].path, "test.items");
         assert_eq!(d.types[1].parent.as_deref(), Some("test"));
         // The count is a field of the container and the element is a box of its
         // own, so both edges exist and they run in different directions.
@@ -859,7 +1015,7 @@ mod tests {
             vec![("width", T::u8()), ("rows", T::Array { elem: Box::new(inner), count: E::lit(4) })],
         );
         let d = diagram(&Template::new("test", root));
-        let elem = d.types.iter().position(|b| b.name == "test.rows").expect("an element box");
+        let elem = d.types.iter().position(|b| b.path == "test.rows").expect("an element box");
         assert!(d.edges.iter().any(|e| e.from == (0, 0) && e.to == (elem, Some(0)) && e.role == Role::Length));
     }
 
@@ -875,9 +1031,76 @@ mod tests {
 
     #[test]
     fn a_signature_case_reads_as_the_signature_it_is() {
-        // The ZIP local header, which no reader recognises as 67,324,752.
-        assert_eq!(case_key(0x0403_4b50), "0x4034b50");
-        assert_eq!(case_key(3), "3");
+        // Through the same function the IR text uses, so a case is spelled one
+        // way across the whole interface: the letters where a tag spells
+        // something, hex where it does not.
+        let png = strukt(
+            "root",
+            vec![
+                ("tag", T::u32(Endian::Big)),
+                (
+                    "body",
+                    T::Switch {
+                        on: E::field("tag"),
+                        cases: vec![(0x4948_4452i128, T::u8()), (3i128, T::u8())].into(),
+                        default: std::sync::Arc::new(T::bytes(E::Remaining)),
+                    },
+                ),
+            ],
+        );
+        let d = diagram(&Template::new("test", png));
+        let sw = d.types.iter().find(|b| b.kind == BoxKind::Switch).expect("a switch box");
+        assert_eq!(sw.rows[0].name, "'IHDR'");
+        assert_eq!(sw.rows[1].name, "3");
+    }
+
+    #[test]
+    fn one_type_read_in_two_places_is_one_box() {
+        let record = strukt("Record", vec![("a", T::u8())]);
+        let root = strukt("root", vec![("head", record.clone()), ("tail", record)]);
+        let d = diagram(&Template::new("test", root));
+        // Two fields, one type, one box: `Ty::Struct` holds an `Arc`, and
+        // cloning the type shares it.
+        assert_eq!(d.types.len(), 2, "{:?}", d.types.iter().map(|b| &b.name).collect::<Vec<_>>());
+        assert_eq!(d.types[1].name, "Record");
+        let to_record: Vec<_> = d.edges.iter().filter(|e| e.to == (1, None) && e.role == Role::Type).collect();
+        assert_eq!(to_record.len(), 2, "both fields point at it");
+    }
+
+    #[test]
+    fn a_box_is_titled_by_the_structures_own_name_and_keeps_the_path() {
+        let inner = strukt("IHDR", vec![("width", T::u32(Endian::Big))]);
+        let root = strukt("png", vec![("head", inner)]);
+        let d = diagram(&Template::new("test", root));
+        assert_eq!(d.types[1].name, "IHDR");
+        assert_eq!(d.types[1].path, "test.head");
+    }
+
+    #[test]
+    fn an_optional_field_says_so_and_names_what_decides_it() {
+        let root = strukt(
+            "root",
+            vec![("flags", T::u8()), ("extra", T::when(E::field("flags").and(E::lit(1)), T::u16(Endian::Little)))],
+        );
+        let d = diagram(&Template::new("test", root));
+        assert_eq!(d.types[0].rows[1].type_text, "optional u16 le");
+        let e = d.edges.iter().find(|e| e.role == Role::Condition).expect("a condition edge");
+        assert_eq!((e.from, e.to), ((0, 0), (0, Some(1))));
+        assert_eq!(e.label, "flags & 1");
+    }
+
+    #[test]
+    fn a_run_that_stops_at_a_value_points_from_the_field_it_reads() {
+        let elem = strukt("Chunk", vec![("kind", T::u8()), ("body", T::u8())]);
+        let root = strukt(
+            "root",
+            vec![("chunks", T::Repeat { elem: Box::new(elem), until: Until::FieldValue { field: "kind".into(), value: 0 } })],
+        );
+        let d = diagram(&Template::new("test", root));
+        let chunk = d.types.iter().position(|b| b.name == "Chunk").expect("an element box");
+        // The field the run stops on is the element's, not the container's, so
+        // the arrow leaves the element's box.
+        assert!(d.edges.iter().any(|e| e.from == (chunk, 0) && e.to == (0, Some(0)) && e.role == Role::Count));
     }
 
     #[test]

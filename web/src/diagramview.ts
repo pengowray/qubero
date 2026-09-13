@@ -70,21 +70,6 @@ function svg<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string
   return node;
 }
 
-/**
- * A box's name, shortened to the part that tells it from its neighbours.
- *
- * The core names a type written inside a field for the whole path it was found
- * down, so a PNG chunk's packed payload is
- * `png.chunks.data.0x49444154.code.0x7070b1.packed`. Every box in that layer
- * shares the front of that, and the last two steps are what differ. The whole
- * name is on the element's title, so nothing is lost.
- */
-function shortName(name: string): string {
-  const parts = name.split(".");
-  if (parts.length <= 3) return name;
-  return `…${parts.slice(-2).join(".")}`;
-}
-
 export class DiagramView {
   readonly el: HTMLElement;
   /** What the wheel and the drag act on. Clips; the stage inside it moves. */
@@ -209,24 +194,17 @@ export class DiagramView {
     head.className = "dv-box-name";
     const label = document.createElement("span");
     label.className = "dv-box-label";
-    label.textContent = shortName(box.name);
-    // A type written inside a switch case inside a chunk is named for the whole
-    // path it was found down, which is honest and longer than the fields under
-    // it. Shortened to the part that tells it from its neighbours, with the
-    // whole of it on hover.
-    label.title = box.name;
+    label.textContent = box.name;
+    // What the format calls the type on the box; how the reader would get to it
+    // on hover. The path can run to six steps in a format whose types are
+    // written inside switch cases, and it is the second question.
+    label.title = DIAGRAM.boxPath(box.path);
     head.append(label);
-    if (box.kind === "switch") {
-      const tag = document.createElement("span");
-      tag.className = "dv-tag";
-      tag.textContent = DIAGRAM.switchTag;
-      head.append(tag);
-    } else if (box.parent !== undefined) {
-      const tag = document.createElement("span");
-      tag.className = "dv-tag";
-      tag.textContent = DIAGRAM.inlineTag;
-      head.append(tag);
-    }
+    // No tag beside the name. A switch says what it is in its own title
+    // (`switch on class`) and in its heading colour; whether a structure has a
+    // name of its own in the template is on all but a couple of boxes in most
+    // formats, so saying it on each of them is a word repeated eleven times
+    // that the reader cannot act on. The path on hover carries it.
     const table = document.createElement("table");
     table.className = "dv-table";
     const body = document.createElement("tbody");

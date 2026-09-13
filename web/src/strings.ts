@@ -2186,6 +2186,11 @@ export const ROLE_GROUP: Readonly<Record<string, string>> = {
   type: "Type",
   value: "Value",
   name: "Name",
+  // Whether the field is there at all. Kept apart from `Type` for the diagram,
+  // where `Type` is already the arrow from a field to the box of the type it is
+  // read as: an arrow saying `type` from a flag to an optional field would read
+  // as that flag naming the type.
+  condition: "Condition",
   // Only the diagram draws one: a resolved field has taken its case already, so
   // no panel over a file ever has one to show. The word names what the arrow
   // says, which is that this value of the switch picks that shape.
@@ -2632,11 +2637,9 @@ export const DIAGRAM = {
   more: (n: number): string => `… ${n.toLocaleString()} more fields`,
   moreTitle: "Show the rest of this type's fields",
   less: "Show fewer fields",
-  /** Beside a box's name, for a box that is a choice rather than a structure. */
-  switchTag: "switch",
-  /** Beside a box's name, for a type written inside a field rather than
-   *  declared with a name of its own. */
-  inlineTag: "written inline",
+  /** On a box's title. The core names a type by what the format calls it, which
+   *  two types in one format may share; this says which one this is. */
+  boxPath: (path: string): string => `Reached by ${path}`,
   fit: "Fit",
   fitTitle: "Draw the whole diagram inside the window",
   /** What a click on a field row does. Only the format's first type can be
