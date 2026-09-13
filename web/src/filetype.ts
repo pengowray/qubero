@@ -507,10 +507,9 @@ export function fileType(): FileType {
     // grouped, since most files match a crowd of them.
     const others = id.candidates.slice(1).filter((c) => c.source !== "signature");
     const tools = answers.tools ?? [];
-    if (others.length > 0 || (answers.signatures ?? []).length > 0) {
-      rows.push(el("p", { className: "dlg-muted", textContent: OTHERS_HEADING }));
+    if (others.length > 0) {
+      rows.push(el("p", { className: "dlg-muted", textContent: OTHERS_HEADING }), el("ul", { className: "dlg-others" }, ...others.map(candidateRow)));
     }
-    if (others.length > 0) rows.push(el("ul", { className: "dlg-others" }, ...others.map(candidateRow)));
     // Each credit covers only the answers it found. An answer the editor
     // read out of the file itself is not the database's to be credited
     // with, and the database's rules are not this editor's.
