@@ -85,6 +85,7 @@ mod uf2;
 mod hackrffw;
 mod hdf4;
 mod hdf5;
+mod hdf5_index;
 pub mod h5ad;
 pub mod hdf5_chunk;
 pub mod hdf5_tree;
