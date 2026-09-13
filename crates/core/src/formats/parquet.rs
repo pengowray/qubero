@@ -69,6 +69,13 @@
 //! delta block's values are packed at a width that changes every miniblock,
 //! which is a decoder rather than a declaration.
 //!
+//! What the template leaves as bytes, [`parquet_page`](super::parquet_page)
+//! reads. Every `Page` is marked as packed, so the inspector asks that reader
+//! for the page under the cursor, and it walks the schema for the column's
+//! levels, undoes the codec, and reports each step and then the values. Every
+//! page of every sample in the collection reads that way, bar two brotli pages
+//! that claim two gigabytes.
+//!
 //! A sequential walk of that region would be wrong, which is why it is not
 //! here: a writer may put a column index, an offset index and a bloom filter
 //! between the last row group and the footer, and none of those is a page.
