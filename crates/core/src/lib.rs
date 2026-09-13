@@ -32,6 +32,7 @@ pub mod search;
 pub mod source;
 pub mod stringscan;
 pub mod template;
+pub mod template_text;
 pub mod text;
 pub mod textview;
 pub mod thumb;

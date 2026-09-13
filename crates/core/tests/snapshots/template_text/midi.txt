@@ -1,0 +1,594 @@
+template midi
+
+root repeat(until end) Chunk
+
+type Chunk (named by id, contents body) {
+  id: text[4] ascii
+  size: u32be
+  body: sized(size) switch id {
+    'MThd' => Header {
+      format: u16be enum FileFormat {
+        0 = one track, 1 = tracks play together, 2 = tracks play separately
+      }
+      track_count: u16be
+      division: Division {
+        in_frames: u1be
+        rate: switch in_frames {
+          1 => Smpte {
+            frame_rate: u7be enum FrameRate {
+              98 = 30 fps, 99 = 29.97 fps drop, 103 = 25 fps, 104 = 24 fps
+            }
+            ticks_per_frame: u8be
+          }
+          _ => u15be
+        }
+      }
+      extra: bytes[remaining]
+    }
+    'MTrk' => repeat(until end) Event (named by effective_status, contents message) {
+      delta: vlq
+      status: switch peek(u8be) / 128 {
+        1 => u8be enum Status {
+          0xf0 = sysex, 0xf7 = sysex escape, 0xff = meta, 0x80 = note off ch1,
+          0x81 = note off ch2, 0x82 = note off ch3, 0x83 = note off ch4, 0x84 = note off ch5,
+          0x85 = note off ch6, 0x86 = note off ch7, 0x87 = note off ch8, 0x88 = note off ch9,
+          0x89 = note off ch10, 0x8a = note off ch11, 0x8b = note off ch12,
+          0x8c = note off ch13, 0x8d = note off ch14, 0x8e = note off ch15,
+          0x8f = note off ch16, 0x90 = note on ch1, 0x91 = note on ch2, 0x92 = note on ch3,
+          0x93 = note on ch4, 0x94 = note on ch5, 0x95 = note on ch6, 0x96 = note on ch7,
+          0x97 = note on ch8, 0x98 = note on ch9, 0x99 = note on ch10, 0x9a = note on ch11,
+          0x9b = note on ch12, 0x9c = note on ch13, 0x9d = note on ch14, 0x9e = note on ch15,
+          0x9f = note on ch16, 0xa0 = aftertouch ch1, 0xa1 = aftertouch ch2,
+          0xa2 = aftertouch ch3, 0xa3 = aftertouch ch4, 0xa4 = aftertouch ch5,
+          0xa5 = aftertouch ch6, 0xa6 = aftertouch ch7, 0xa7 = aftertouch ch8,
+          0xa8 = aftertouch ch9, 0xa9 = aftertouch ch10, 0xaa = aftertouch ch11,
+          0xab = aftertouch ch12, 0xac = aftertouch ch13, 0xad = aftertouch ch14,
+          0xae = aftertouch ch15, 0xaf = aftertouch ch16, 0xb0 = control change ch1,
+          0xb1 = control change ch2, 0xb2 = control change ch3, 0xb3 = control change ch4,
+          0xb4 = control change ch5, 0xb5 = control change ch6, 0xb6 = control change ch7,
+          0xb7 = control change ch8, 0xb8 = control change ch9, 0xb9 = control change ch10,
+          0xba = control change ch11, 0xbb = control change ch12, 0xbc = control change ch13,
+          0xbd = control change ch14, 0xbe = control change ch15, 0xbf = control change ch16,
+          0xc0 = program change ch1, 0xc1 = program change ch2, 0xc2 = program change ch3,
+          0xc3 = program change ch4, 0xc4 = program change ch5, 0xc5 = program change ch6,
+          0xc6 = program change ch7, 0xc7 = program change ch8, 0xc8 = program change ch9,
+          0xc9 = program change ch10, 0xca = program change ch11, 0xcb = program change ch12,
+          0xcc = program change ch13, 0xcd = program change ch14, 0xce = program change ch15,
+          0xcf = program change ch16, 0xd0 = channel pressure ch1, 0xd1 = channel pressure ch2,
+          0xd2 = channel pressure ch3, 0xd3 = channel pressure ch4,
+          0xd4 = channel pressure ch5, 0xd5 = channel pressure ch6,
+          0xd6 = channel pressure ch7, 0xd7 = channel pressure ch8,
+          0xd8 = channel pressure ch9, 0xd9 = channel pressure ch10,
+          0xda = channel pressure ch11, 0xdb = channel pressure ch12,
+          0xdc = channel pressure ch13, 0xdd = channel pressure ch14,
+          0xde = channel pressure ch15, 0xdf = channel pressure ch16, 0xe0 = pitch bend ch1,
+          0xe1 = pitch bend ch2, 0xe2 = pitch bend ch3, 0xe3 = pitch bend ch4,
+          0xe4 = pitch bend ch5, 0xe5 = pitch bend ch6, 0xe6 = pitch bend ch7,
+          0xe7 = pitch bend ch8, 0xe8 = pitch bend ch9, 0xe9 = pitch bend ch10,
+          0xea = pitch bend ch11, 0xeb = pitch bend ch12, 0xec = pitch bend ch13,
+          0xed = pitch bend ch14, 0xee = pitch bend ch15, 0xef = pitch bend ch16
+        }
+        _ => computed 0
+      }
+      effective_status: computed status or else previous(effective_status) enum Status {
+        0xf0 = sysex, 0xf7 = sysex escape, 0xff = meta, 0x80 = note off ch1,
+        0x81 = note off ch2, 0x82 = note off ch3, 0x83 = note off ch4, 0x84 = note off ch5,
+        0x85 = note off ch6, 0x86 = note off ch7, 0x87 = note off ch8, 0x88 = note off ch9,
+        0x89 = note off ch10, 0x8a = note off ch11, 0x8b = note off ch12, 0x8c = note off ch13,
+        0x8d = note off ch14, 0x8e = note off ch15, 0x8f = note off ch16, 0x90 = note on ch1,
+        0x91 = note on ch2, 0x92 = note on ch3, 0x93 = note on ch4, 0x94 = note on ch5,
+        0x95 = note on ch6, 0x96 = note on ch7, 0x97 = note on ch8, 0x98 = note on ch9,
+        0x99 = note on ch10, 0x9a = note on ch11, 0x9b = note on ch12, 0x9c = note on ch13,
+        0x9d = note on ch14, 0x9e = note on ch15, 0x9f = note on ch16, 0xa0 = aftertouch ch1,
+        0xa1 = aftertouch ch2, 0xa2 = aftertouch ch3, 0xa3 = aftertouch ch4,
+        0xa4 = aftertouch ch5, 0xa5 = aftertouch ch6, 0xa6 = aftertouch ch7,
+        0xa7 = aftertouch ch8, 0xa8 = aftertouch ch9, 0xa9 = aftertouch ch10,
+        0xaa = aftertouch ch11, 0xab = aftertouch ch12, 0xac = aftertouch ch13,
+        0xad = aftertouch ch14, 0xae = aftertouch ch15, 0xaf = aftertouch ch16,
+        0xb0 = control change ch1, 0xb1 = control change ch2, 0xb2 = control change ch3,
+        0xb3 = control change ch4, 0xb4 = control change ch5, 0xb5 = control change ch6,
+        0xb6 = control change ch7, 0xb7 = control change ch8, 0xb8 = control change ch9,
+        0xb9 = control change ch10, 0xba = control change ch11, 0xbb = control change ch12,
+        0xbc = control change ch13, 0xbd = control change ch14, 0xbe = control change ch15,
+        0xbf = control change ch16, 0xc0 = program change ch1, 0xc1 = program change ch2,
+        0xc2 = program change ch3, 0xc3 = program change ch4, 0xc4 = program change ch5,
+        0xc5 = program change ch6, 0xc6 = program change ch7, 0xc7 = program change ch8,
+        0xc8 = program change ch9, 0xc9 = program change ch10, 0xca = program change ch11,
+        0xcb = program change ch12, 0xcc = program change ch13, 0xcd = program change ch14,
+        0xce = program change ch15, 0xcf = program change ch16, 0xd0 = channel pressure ch1,
+        0xd1 = channel pressure ch2, 0xd2 = channel pressure ch3, 0xd3 = channel pressure ch4,
+        0xd4 = channel pressure ch5, 0xd5 = channel pressure ch6, 0xd6 = channel pressure ch7,
+        0xd7 = channel pressure ch8, 0xd8 = channel pressure ch9, 0xd9 = channel pressure ch10,
+        0xda = channel pressure ch11, 0xdb = channel pressure ch12,
+        0xdc = channel pressure ch13, 0xdd = channel pressure ch14,
+        0xde = channel pressure ch15, 0xdf = channel pressure ch16, 0xe0 = pitch bend ch1,
+        0xe1 = pitch bend ch2, 0xe2 = pitch bend ch3, 0xe3 = pitch bend ch4,
+        0xe4 = pitch bend ch5, 0xe5 = pitch bend ch6, 0xe6 = pitch bend ch7,
+        0xe7 = pitch bend ch8, 0xe8 = pitch bend ch9, 0xe9 = pitch bend ch10,
+        0xea = pitch bend ch11, 0xeb = pitch bend ch12, 0xec = pitch bend ch13,
+        0xed = pitch bend ch14, 0xee = pitch bend ch15, 0xef = pitch bend ch16
+      }
+      message: switch effective_status {
+        240 => SysEx {
+          length: vlq
+          data: sized(length) bytes[remaining]
+        }
+        247 => SysEx {
+          length: vlq
+          data: sized(length) bytes[remaining]
+        }
+        255 => Meta {
+          type: u8be enum MetaType {
+            0x00 = sequence number, 0x01 = text, 0x02 = copyright, 0x03 = track name,
+            0x04 = instrument name, 0x05 = lyric, 0x06 = marker, 0x07 = cue point,
+            0x08 = program name, 0x09 = device name, 0x20 = channel prefix, 0x21 = port,
+            0x2f = end of track, 0x51 = tempo, 0x54 = smpte offset, 0x58 = time signature,
+            0x59 = key signature, 0x7f = sequencer specific
+          }
+          length: vlq
+          value: sized(length) switch type {
+            1 => text[remaining] encoding unknown
+            2 => text[remaining] encoding unknown
+            3 => text[remaining] encoding unknown
+            4 => text[remaining] encoding unknown
+            5 => text[remaining] encoding unknown
+            6 => text[remaining] encoding unknown
+            7 => text[remaining] encoding unknown
+            8 => text[remaining] encoding unknown
+            9 => text[remaining] encoding unknown
+            0 => SequenceNumber {
+              number: u16be
+            }
+            32 => ChannelPrefix {
+              channel: u8be
+            }
+            33 => Port {
+              port: u8be
+            }
+            81 => Tempo {
+              microseconds_per_quarter: u24be
+            }
+            84 => SmpteOffset {
+              hour: u8be
+              minute: u8be
+              second: u8be
+              frame: u8be
+              subframe: u8be
+            }
+            88 => TimeSignature {
+              numerator: u8be
+              denominator: u8be
+              clocks_per_click: u8be
+              32nds_per_quarter: u8be
+            }
+            89 => KeySignature {
+              sharps: i8be
+              scale: u8be enum Scale {0 = major, 1 = minor}
+            }
+            _ => bytes[remaining]
+          }
+        }
+        128 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        129 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        130 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        131 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        132 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        133 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        134 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        135 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        136 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        137 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        138 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        139 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        140 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        141 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        142 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        143 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        144 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        145 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        146 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        147 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        148 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        149 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        150 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        151 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        152 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        153 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        154 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        155 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        156 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        157 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        158 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        159 => Message {
+          note: u8be
+          velocity: u8be
+        }
+        160 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        161 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        162 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        163 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        164 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        165 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        166 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        167 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        168 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        169 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        170 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        171 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        172 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        173 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        174 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        175 => Message {
+          note: u8be
+          pressure: u8be
+        }
+        176 => Message {
+          controller: u8be
+          value: u8be
+        }
+        177 => Message {
+          controller: u8be
+          value: u8be
+        }
+        178 => Message {
+          controller: u8be
+          value: u8be
+        }
+        179 => Message {
+          controller: u8be
+          value: u8be
+        }
+        180 => Message {
+          controller: u8be
+          value: u8be
+        }
+        181 => Message {
+          controller: u8be
+          value: u8be
+        }
+        182 => Message {
+          controller: u8be
+          value: u8be
+        }
+        183 => Message {
+          controller: u8be
+          value: u8be
+        }
+        184 => Message {
+          controller: u8be
+          value: u8be
+        }
+        185 => Message {
+          controller: u8be
+          value: u8be
+        }
+        186 => Message {
+          controller: u8be
+          value: u8be
+        }
+        187 => Message {
+          controller: u8be
+          value: u8be
+        }
+        188 => Message {
+          controller: u8be
+          value: u8be
+        }
+        189 => Message {
+          controller: u8be
+          value: u8be
+        }
+        190 => Message {
+          controller: u8be
+          value: u8be
+        }
+        191 => Message {
+          controller: u8be
+          value: u8be
+        }
+        192 => Message {
+          program: u8be
+        }
+        193 => Message {
+          program: u8be
+        }
+        194 => Message {
+          program: u8be
+        }
+        195 => Message {
+          program: u8be
+        }
+        196 => Message {
+          program: u8be
+        }
+        197 => Message {
+          program: u8be
+        }
+        198 => Message {
+          program: u8be
+        }
+        199 => Message {
+          program: u8be
+        }
+        200 => Message {
+          program: u8be
+        }
+        201 => Message {
+          program: u8be
+        }
+        202 => Message {
+          program: u8be
+        }
+        203 => Message {
+          program: u8be
+        }
+        204 => Message {
+          program: u8be
+        }
+        205 => Message {
+          program: u8be
+        }
+        206 => Message {
+          program: u8be
+        }
+        207 => Message {
+          program: u8be
+        }
+        208 => Message {
+          pressure: u8be
+        }
+        209 => Message {
+          pressure: u8be
+        }
+        210 => Message {
+          pressure: u8be
+        }
+        211 => Message {
+          pressure: u8be
+        }
+        212 => Message {
+          pressure: u8be
+        }
+        213 => Message {
+          pressure: u8be
+        }
+        214 => Message {
+          pressure: u8be
+        }
+        215 => Message {
+          pressure: u8be
+        }
+        216 => Message {
+          pressure: u8be
+        }
+        217 => Message {
+          pressure: u8be
+        }
+        218 => Message {
+          pressure: u8be
+        }
+        219 => Message {
+          pressure: u8be
+        }
+        220 => Message {
+          pressure: u8be
+        }
+        221 => Message {
+          pressure: u8be
+        }
+        222 => Message {
+          pressure: u8be
+        }
+        223 => Message {
+          pressure: u8be
+        }
+        224 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        225 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        226 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        227 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        228 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        229 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        230 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        231 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        232 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        233 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        234 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        235 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        236 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        237 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        238 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        239 => Message {
+          bend_low: u8be
+          bend_high: u8be
+        }
+        _ => NoStatus {
+          rest_of_track: bytes[remaining]
+        }
+      }
+    }
+    _ => bytes[remaining]
+  }
+}
