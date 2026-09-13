@@ -3007,6 +3007,17 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   white-space: nowrap;
 }
+/* A step of decoding a miniSEED record. Its labels run to `frame 61` in a
+   4096-byte record, which the object number column is too narrow for; any
+   wider and the text beside it wraps in a sidebar of ordinary width. */
+.insp-orow.is-step {
+  grid-template-columns: 5em minmax(0, 1fr) auto;
+}
+/* A run of sample values, which is one line of text across the whole row
+   rather than something to squeeze into the label column. */
+.insp-orow.is-values > .insp-orow-text {
+  grid-column: 1 / -1;
+}
 .insp-xproblem {
   font-size: 11px;
   color: var(--muted);

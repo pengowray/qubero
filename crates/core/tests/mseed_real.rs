@@ -14,10 +14,17 @@
 //! have to tile the file exactly. obspy cannot read these, its reader being
 //! the 2.x one, so the numbers below come from the headers themselves as the
 //! specification lays them out.
+//!
+//! And the samples, as `mseed_steim` works them out of the bytes the template
+//! placed. Every 2.4 record is checked against what obspy reads from the same
+//! record, every Steim record against its own reverse integration constant,
+//! and the miniSEED 3 series against obspy's reading of the 2.4 file libmseed
+//! wrote the same series into.
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats;
+use qubero_core::formats::mseed_steim;
 use qubero_core::source::MemSource;
 
 /// The record, its blockette array, and its data, as field indices.
@@ -287,4 +294,327 @@ fn a_miniseed_3_steim_payload_is_big_endian_inside_a_little_endian_record() {
     let frames = ev.node(&d, &[0, 0, ms3::DATA, 1]).unwrap();
     assert_eq!(frames.child_count, 6, "one frame0 and six after it");
     assert_eq!(steim.size_bits, 448 * 8);
+}
+
+/// One record's data through `mseed_steim`, from the bytes the template placed
+/// as the data, with the encoding and byte order blockette 1000 gives.
+fn decode_24(file: &[u8], d: &Document<MemSource>, ev: &mut Evaluator, record: usize) -> mseed_steim::Record {
+    let data = ev.node(d, &[0, record, DATA]).unwrap();
+    let count = ev.node(d, &[0, record, 8]).unwrap().value.as_int().unwrap() as usize;
+    let chain = ev.node(d, &[0, record, BLOCKETTES]).unwrap().child_count as usize;
+    let b1000 = (0..chain)
+        .find(|&i| ev.node(d, &[0, record, BLOCKETTES, i, 2]).unwrap().type_name == "DataOnlySEED")
+        .expect("blockette 1000");
+    let field = |ev: &mut Evaluator, f| match ev.node(d, &[0, record, BLOCKETTES, b1000, 2, f]).unwrap().value {
+        Value::Enum { raw, .. } => raw,
+        other => panic!("{other:?}"),
+    };
+    let (encoding, big) = (field(ev, 0) as u8, field(ev, 1) == 1);
+    let at = (data.offset_bits / 8) as usize;
+    decode_bytes(&file[at..at + (data.size_bits / 8) as usize], encoding, big, count)
+}
+
+fn decode_bytes(payload: &[u8], encoding: u8, big: bool, count: usize) -> mseed_steim::Record {
+    mseed_steim::decode(payload, encoding, big, count)
+}
+
+/// What a run of samples is checked by: how many, the first two, the last,
+/// their sum, and their sum weighted by position, which a sample out of place
+/// changes even where the plain sum does not.
+#[derive(Debug, PartialEq)]
+struct Facts {
+    count: usize,
+    first: Vec<f64>,
+    last: f64,
+    sum: f64,
+    weighted: f64,
+}
+
+fn facts(samples: &[f64]) -> Facts {
+    let (mut sum, mut weighted) = (0.0, 0.0);
+    for (i, &s) in samples.iter().enumerate() {
+        sum += s;
+        weighted += s * (i + 1) as f64;
+    }
+    Facts {
+        count: samples.len(),
+        first: samples.iter().take(2).copied().collect(),
+        last: *samples.last().unwrap(),
+        sum,
+        weighted,
+    }
+}
+
+/// Every record of the 2.4 files, against what obspy 1.5.1 reads from the same
+/// record cut out of the file on its own: `obspy.read(record)[0].data`.
+///
+/// obspy decodes with libmseed, so this is a second reader of the same bytes
+/// and not the same code run twice. Steim records also pass the check they
+/// carry, and the Steim1 file of ten records is there because 412 samples in
+/// seven frames exercise every word form Steim1 has.
+#[test]
+fn every_record_decodes_to_the_samples_obspy_reads() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // file, record, count, first two, last, sum, weighted sum
+    let table: &[(&str, usize, usize, [f64; 2], f64, f64, f64)] = &[
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 0, 412, [-363.0, -382.0], -389.0, -165813.0, -34527084.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 1, 412, [-397.0, -387.0], -413.0, -162847.0, -33725996.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 2, 412, [-427.0, -416.0], -398.0, -162479.0, -33392311.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 3, 412, [-418.0, -428.0], -388.0, -160954.0, -33082426.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 4, 412, [-407.0, -385.0], -383.0, -163137.0, -33211033.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 5, 412, [-396.0, -399.0], -409.0, -161461.0, -33120133.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 6, 412, [-413.0, -401.0], -390.0, -161036.0, -33189418.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 7, 412, [-407.0, -440.0], -345.0, -162073.0, -33536624.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 8, 412, [-397.0, -409.0], -341.0, -161654.0, -33735713.0),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", 9, 412, [-389.0, -428.0], -386.0, -162432.0, -34005243.0),
+        ("CDSN_encoding.mseed", 0, 100, [294.0, 32.0], -124.0, 1594.0, 23889.0),
+        ("DWWSSN_encoding.mseed", 0, 200, [-38.0, -38.0], -38.0, 940.0, 72656.0),
+        ("blockette300.mseed", 0, 20, [-948.0, -947.0], -1610.0, -22964.0, -267572.0),
+        ("blockette310.mseed", 0, 10, [-5620.0, -4278.0], -5565.0, -49108.0, -273364.0),
+        ("brokenlastrecord.mseed", 0, 5980, [2787.0, 2776.0], 2863.0, 16640837.0, 49754365513.0),
+        ("int32_Steim1_bigEndian.mseed", 0, 50, [1.0, 2.0], 50.0, 1275.0, 42925.0),
+        ("int32_Steim1_littleEndian.mseed", 0, 50, [1.0, 2.0], 50.0, 1275.0, 42925.0),
+        ("int32_Steim2_bigEndian.mseed", 0, 50, [1.0, 2.0], 50.0, 1275.0, 42925.0),
+        ("int32_Steim2_littleEndian.mseed", 0, 50, [1.0, 2.0], 50.0, 1275.0, 42925.0),
+        ("steim2.mseed", 0, 5980, [2787.0, 2776.0], 2863.0, 16640837.0, 49754365513.0),
+        ("test.mseed", 0, 5980, [2787.0, 2776.0], 2863.0, 16640837.0, 49754365513.0),
+        ("test.mseed", 1, 5967, [2870.0, 2870.0], 2853.0, 16600615.0, 49525994748.0),
+    ];
+    for &(file, record, count, first, last, sum, weighted) in table {
+        let bytes = std::fs::read(root.join("seismic").join(file)).unwrap();
+        let (d, mut ev) = open(&root, file);
+        let r = decode_24(&bytes, &d, &mut ev, record);
+        assert_eq!(r.problem, None, "{file} record {record}");
+        assert_eq!(r.declared, count, "{file} record {record}: the header's count");
+        let want = Facts { count, first: first.to_vec(), last, sum, weighted };
+        assert_eq!(facts(&r.samples), want, "{file} record {record}");
+        if r.steim.is_some() {
+            let check = r.check().expect("a check");
+            assert!(check.passed(), "{file} record {record}: last {} against reverse constant {}", check.last, check.xn);
+        }
+    }
+    // The one sample of blockette320.mseed is its forward and reverse constant
+    // both, and no difference is used at all.
+    let bytes = std::fs::read(root.join("seismic").join("blockette320.mseed")).unwrap();
+    let (d, mut ev) = open(&root, "blockette320.mseed");
+    let r = decode_24(&bytes, &d, &mut ev, 0);
+    assert_eq!(r.samples, vec![-3824.0]);
+    assert!(r.check().unwrap().passed());
+    assert_eq!(r.steim.unwrap().frames[0].used, 1);
+    // GEOSCOPE has no documented rule, and says so rather than guessing.
+    let bytes = std::fs::read(root.join("seismic").join("GEOSCOPE16_4_encoding.mseed")).unwrap();
+    let (d, mut ev) = open(&root, "GEOSCOPE16_4_encoding.mseed");
+    let r = decode_24(&bytes, &d, &mut ev, 0);
+    assert!(r.samples.is_empty() && r.problem.is_some());
+}
+
+/// The reader takes every word apart the way the template does, in every
+/// frame of the record and in both byte orders.
+///
+/// The reader reads bytes and the template lays out fields, and these are the
+/// same rules written twice. The little-endian files are where they could
+/// part: a word of whole differences swaps each difference, and a bit-packed
+/// Steim2 word swaps whole, and getting either backwards would still give
+/// numbers.
+#[test]
+fn the_reader_takes_each_word_apart_as_the_template_does() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    for (file, two, big) in [
+        ("int32_Steim1_bigEndian.mseed", false, true),
+        ("int32_Steim1_littleEndian.mseed", false, false),
+        ("int32_Steim2_bigEndian.mseed", true, true),
+        ("int32_Steim2_littleEndian.mseed", true, false),
+        ("BW.BGLD.__.EHE.D.2008.001.first_10_records", false, true),
+        ("steim2.mseed", true, true),
+    ] {
+        let bytes = std::fs::read(root.join("seismic").join(file)).unwrap();
+        let (d, mut ev) = open(&root, file);
+        let mut template: Vec<i128> = differences(&d, &mut ev, 0);
+        template.extend(differences(&d, &mut ev, 1));
+        let data = ev.node(&d, &[0, 0, DATA]).unwrap();
+        let at = (data.offset_bits / 8) as usize;
+        let payload = &bytes[at..at + (data.size_bits / 8) as usize];
+        let mut reader = Vec::new();
+        for (f, frame) in payload.chunks_exact(64).enumerate() {
+            let word = |w: usize| -> [u8; 4] { frame[w * 4..w * 4 + 4].try_into().unwrap() };
+            let nibbles = if big { u32::from_be_bytes(word(0)) } else { u32::from_le_bytes(word(0)) };
+            for w in if f == 0 { 3 } else { 1 }..16 {
+                let code = nibbles >> (30 - 2 * w) & 3;
+                let mut out = Vec::new();
+                mseed_steim::differences(word(w), code, two, big, &mut out).unwrap();
+                reader.extend(out.into_iter().map(i128::from));
+            }
+        }
+        assert!(template.len() > 40, "{file}: {} differences", template.len());
+        assert_eq!(reader, template, "{file}");
+    }
+}
+
+/// A count grouped the way the messages write one.
+fn commas(n: usize) -> String {
+    let d = n.to_string();
+    d.chars().enumerate().fold(String::new(), |mut out, (i, c)| {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+        out
+    })
+}
+
+/// A record the file stops in the middle of has fewer frames than its header
+/// has samples. What the frames hold is decoded, the rest is said to be
+/// missing, and there is no check, since there is no last sample to make one.
+#[test]
+fn a_record_cut_short_decodes_what_its_frames_hold_and_says_how_far_that_went() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut bytes = std::fs::read(root.join("seismic").join("steim2.mseed")).unwrap();
+    bytes.truncate(2048);
+    let d = Document::new(MemSource(bytes.clone()));
+    let mut ev = Evaluator::new(formats::builtin("mseed").unwrap());
+    let r = decode_24(&bytes, &d, &mut ev, 0);
+    let steim = r.steim.as_ref().unwrap();
+    let data_at = ev.node(&d, &[0, 0, DATA]).unwrap().offset_bits / 8;
+    assert_eq!(steim.frames_in_record as u64, (2048 - data_at) / 64);
+    assert!(r.samples.len() > 1000 && r.samples.len() < 5980, "{} samples", r.samples.len());
+    assert_eq!(&r.samples[..2], &[2787.0, 2776.0]);
+    let problem = r.problem.clone().expect("a problem");
+    assert!(problem.contains(&format!("after {} samples; the header says 5,980", commas(r.samples.len()))), "{problem}");
+    assert_eq!(r.check(), None);
+}
+
+/// miniSEED 3, which obspy cannot read. Two checks instead.
+///
+/// The first is the one the format carries: every Steim2 record's last sample
+/// equals its reverse integration constant. The second is that libmseed wrote
+/// its reference series both ways: beside each `.mseed3` file in the sample
+/// collection, libmseed's `test/data` has a `.mseed2` of the same name, and
+/// the numbers below are what obspy 1.5.1 reads from that 2.4 file, every
+/// record joined. The records are of different lengths in the two versions,
+/// so the series is compared whole rather than a record at a time.
+#[test]
+fn a_miniseed_3_record_decodes_to_the_series_its_2_4_twin_holds() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // file, the 2.4 twin's count, first two, last, sum, weighted sum
+    let table: &[(&str, usize, [f64; 2], f64, f64, f64)] = &[
+        ("reference-testdata-steim2.mseed3", 499, [0.0, 6.0], -556206270.0, -1499709039.0, -749567035618.0),
+        ("reference-testdata-nsec.mseed3", 500, [0.0, 6.0], 0.0, -1499709039.0, -749567035618.0),
+        ("reference-testdata-float32.mseed3", 500, [0.0, 6.109208106994629], 0.0, -1499709037.3653364, -749567036640.0464),
+    ];
+    for &(file, count, first, last, sum, weighted) in table {
+        let bytes = std::fs::read(root.join("seismic").join(file)).unwrap();
+        let (d, mut ev) = open_as(&root, file, "mseed3");
+        let records = ev.node(&d, &[0]).unwrap().child_count as usize;
+        let mut series = Vec::new();
+        for i in 0..records {
+            let encoding = match ev.node(&d, &[0, i, ms3::ENCODING]).unwrap().value {
+                Value::Enum { raw, .. } => raw as u8,
+                other => panic!("{other:?}"),
+            };
+            let n = ev.node(&d, &[0, i, ms3::SAMPLE_COUNT]).unwrap().value.as_int().unwrap() as usize;
+            let data = ev.node(&d, &[0, i, ms3::DATA]).unwrap();
+            let at = (data.offset_bits / 8) as usize;
+            let payload = &bytes[at..at + (data.size_bits / 8) as usize];
+            // Steim frames are big-endian in a miniSEED 3 record, and
+            // everything else is little-endian like the header.
+            let r = decode_bytes(payload, encoding, matches!(encoding, 10 | 11), n);
+            assert_eq!(r.problem, None, "{file} record {i}");
+            assert_eq!(r.samples.len(), n, "{file} record {i}");
+            if encoding == 11 {
+                let check = r.check().unwrap();
+                assert!(check.passed(), "{file} record {i}: last {} against reverse constant {}", check.last, check.xn);
+            }
+            series.extend(r.samples);
+        }
+        let got = facts(&series);
+        assert_eq!((got.count, got.first.clone(), got.last), (count, first.to_vec(), last), "{file}");
+        // A float series is summed in a different order by numpy, so its sums
+        // are compared to a part in a billion rather than to the bit.
+        let close = |a: f64, b: f64| (a - b).abs() <= b.abs() * 1e-9;
+        assert!(close(got.sum, sum) && close(got.weighted, weighted), "{file}: {got:?}");
+    }
+}
+
+/// The deepest field under `path`, found by always taking the last child.
+fn deepest(d: &Document<MemSource>, ev: &mut Evaluator, path: &[usize]) -> Vec<usize> {
+    let mut p = path.to_vec();
+    loop {
+        let n = ev.node(d, &p).unwrap().child_count;
+        if n == 0 {
+            return p;
+        }
+        p.push(n as usize - 1);
+    }
+}
+
+/// What the inspector asks for, end to end: `explain` on a field somewhere in
+/// a record's data answers with the samples, whether the cursor is on a
+/// difference four levels down, an integration constant, a code word, or a
+/// sample of a fixed-width run. This is the packing name the template sets,
+/// the ancestor walk that finds it, and the sample count looked up beside the
+/// data, which the byte-level tests above do not reach.
+#[test]
+fn the_samples_panel_answers_from_anywhere_in_a_records_data() {
+    use qubero_core::eval::Explain;
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // file, template, where the data is, a field inside it, the encoding name,
+    // the count, the first sample and the last
+    let (d24, ms3d) = (DATA, ms3::DATA);
+    let cases: Vec<(&str, &str, Vec<usize>, Vec<usize>, &str, u64, &str, &str)> = vec![
+        ("steim2.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 1, 40, 9], "Steim2", 5980, "2787", "2863"),
+        ("steim2.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 1], "Steim2", 5980, "2787", "2863"),
+        ("int32_Steim1_littleEndian.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 0], "Steim1", 50, "1", "50"),
+        ("CDSN_encoding.mseed", "mseed", vec![0, 0, d24], vec![0, 0, d24, 0, 7], "CDSN 16-bit gain", 100, "294", "-124"),
+        ("reference-testdata-steim2.mseed3", "mseed3", vec![0, 1, ms3d], vec![0, 1, ms3d, 1, 2, 7], "Steim2", 104, "-90282", "1718317"),
+        ("reference-testdata-nsec.mseed3", "mseed3", vec![0, 0, ms3d], vec![0, 0, ms3d, 0], "32-bit integers", 45, "0", ""),
+    ];
+    for (file, template, data, inside, name, count, first, last) in cases {
+        let (d, mut ev) = open_as(&root, file, template);
+        let at = deepest(&d, &mut ev, &inside);
+        assert!(at.starts_with(&data), "{file}: {at:?} is not inside the data");
+        let got = ev.explain(&d, &at, None).unwrap();
+        let Explain::MseedSamples { encoding_name, declared, total, values, last: got_last, steim, check, problem, .. } = got
+        else {
+            panic!("{file} at {at:?}: {got:?}");
+        };
+        assert_eq!((encoding_name.as_str(), declared, total), (name, count, count), "{file}");
+        assert_eq!(problem, None, "{file}");
+        assert_eq!(values[0], first, "{file}");
+        assert!(values.len() <= 32, "{file}: {} values handed over", values.len());
+        if !last.is_empty() {
+            assert_eq!(got_last.as_deref(), Some(last), "{file}");
+        }
+        // A Steim record carries its steps and its check, and nothing else does.
+        assert_eq!(steim.is_some(), name.starts_with("Steim"), "{file}");
+        if let Some(s) = steim {
+            assert_eq!(s.frames.iter().map(|f| f.used).sum::<usize>(), count as usize, "{file}: every sample from a frame");
+            assert!(check.unwrap().passed(), "{file}");
+        } else {
+            assert_eq!(check, None, "{file}");
+        }
+    }
+    // A float sample is the one place in the data the samples do not answer
+    // from: the float's own bit layout does, which is what a reader standing
+    // on one float wants. The run the float is in still answers.
+    let (d, mut ev) = open_as(&root, "reference-testdata-float32.mseed3", "mseed3");
+    assert!(matches!(ev.explain(&d, &[0, 0, ms3::DATA, 0, 5], None).unwrap(), Explain::Float { .. }));
+    assert!(matches!(ev.explain(&d, &[0, 0, ms3::DATA, 0], None).unwrap(), Explain::MseedSamples { total: 113, .. }));
+    // A field that is not in the data has no samples to show.
+    let (d, mut ev) = open(&root, "steim2.mseed");
+    assert_eq!(ev.explain(&d, &[0, 0, 8], None).unwrap(), Explain::Plain);
 }
