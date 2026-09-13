@@ -163,19 +163,100 @@ fn an_operational_forecast_reads_as_three_messages_on_one_grid() {
         let first = ev.node(&d, &[m, 1, 4, 1, 2, 5, 11]).unwrap().value.as_int().unwrap();
         let last = ev.node(&d, &[m, 1, 4, 1, 2, 5, 14]).unwrap().value.as_int().unwrap();
         assert_eq!((first, last), (90_000_000, -90_000_000));
-        // Complex packing with spatial differencing: the header reads, and
-        // the values stay bytes because their widths are inside them.
+        // Complex packing with spatial differencing: the header reads, and so
+        // does section 7, group by group.
         let packing = ev.node(&d, &[m, 1, 4, 3, 2, 2]).unwrap();
         assert_eq!(packing.type_name, "ComplexPackingSpatial", "message {m}");
         let groups = ev.node(&d, &[m, 1, 4, 3, 2, 2, 9]).unwrap().value.as_int().unwrap();
         assert!(groups > 0, "message {m}: {groups} groups");
         let order = ev.node(&d, &[m, 1, 4, 3, 2, 2, 16]).unwrap().value.as_int().unwrap();
         assert!((1..=2).contains(&order), "message {m}: differencing order {order}");
-        assert_eq!(ev.node(&d, &[m, 1, 4, 5, 2, 0]).unwrap().type_name, "bytes[]");
+        let body = ev.node(&d, &[m, 1, 4, 5, 2]).unwrap();
+        assert_eq!(body.type_name, "ComplexPackedData", "message {m}");
+        // Every group the header counted is there, and the lengths in the
+        // table add up to the number of points on the grid.
+        let list = ev.node(&d, &[m, 1, 4, 5, 2, 18]).unwrap();
+        assert_eq!(i128::from(list.child_count), groups, "message {m}");
+        let mut total = 0i128;
+        for g in 0..groups as usize {
+            let width = ev.node(&d, &[m, 1, 4, 5, 2, 18, g, 0]).unwrap().value.as_int().unwrap();
+            let count = ev.node(&d, &[m, 1, 4, 5, 2, 18, g, 1]).unwrap().value.as_int().unwrap();
+            let values = ev.node(&d, &[m, 1, 4, 5, 2, 18, g, 2]).unwrap();
+            assert_eq!(i128::from(values.child_count), count, "message {m} group {g}");
+            assert_eq!(u64::from(values.size_bits), (count * width) as u64, "message {m} group {g}");
+            total += count;
+        }
+        assert_eq!(total, ni * nj, "message {m}");
+        // And the groups end inside the section rather than past it.
+        let section = ev.node(&d, &[m, 1, 4, 5]).unwrap();
+        assert!(list.offset_bits + list.size_bits <= section.offset_bits + section.size_bits, "message {m}");
     }
     // And the three of them cover the file end to end.
     let last = ev.node(&d, &[2]).unwrap();
     assert_eq!(last.offset_bits + last.size_bits, d.len_bits());
+}
+
+/// Complex packing without spatial differencing, which is the plainer half of
+/// what section 7 now reads. The numbers checked here came out of ecCodes
+/// 2.48, which wrote the file: eleven groups, the widths and lengths it chose,
+/// and the packed number the first point turns out to be.
+#[test]
+fn complex_packing_reads_as_groups_of_different_widths() {
+    let Some((d, mut ev)) = read("regular_ll_complex.grib2") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "ComplexPacking");
+    let body = ev.node(&d, &[0, 1, 4, 5, 2]).unwrap();
+    assert_eq!(body.type_name, "ComplexPackedData");
+    // The three tables, each with one entry per group.
+    for table in [8usize, 10, 12] {
+        assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2, table]).unwrap().child_count, 11, "table {table}");
+    }
+    // The widths ecCodes chose, straight out of the table and with the
+    // reference added. One group is zero bits wide: every value in it is the
+    // group's reference and nothing is written for them at all.
+    let widths: Vec<i128> =
+        (0..11).map(|g| ev.node(&d, &[0, 1, 4, 5, 2, 14, g, 0]).unwrap().value.as_int().unwrap()).collect();
+    assert_eq!(widths, vec![11, 0, 9, 9, 7, 10, 11, 10, 8, 10, 11]);
+    let counts: Vec<i128> =
+        (0..11).map(|g| ev.node(&d, &[0, 1, 4, 5, 2, 14, g, 1]).unwrap().value.as_int().unwrap()).collect();
+    assert_eq!(counts, vec![40, 50, 6, 25, 26, 71, 86, 64, 43, 54, 31]);
+    // The last of those is not in the table: it is `last_group_length` from
+    // section 5, which is the one group the scaled form could not hold.
+    let last = ev.node(&d, &[0, 1, 4, 3, 2, 2, 14]).unwrap().value.as_int().unwrap();
+    assert_eq!(last, 31);
+    assert_eq!(counts.iter().sum::<i128>(), 16 * 31);
+    // The zero-width group takes no room and still has all its values.
+    let flat = ev.node(&d, &[0, 1, 4, 5, 2, 14, 1, 2]).unwrap();
+    assert_eq!((flat.child_count, flat.size_bits), (50, 0));
+    // The first point, as the file holds it: group 0's reference plus the
+    // first eleven bits under it. (253.02 + 639 * 2^-5) is 272.9888, which is
+    // what ecCodes reads for it.
+    let reference = ev.node(&d, &[0, 1, 4, 5, 2, 8, 0]).unwrap().value.as_int().unwrap();
+    let first = ev.node(&d, &[0, 1, 4, 5, 2, 14, 0, 2, 0]).unwrap().value.as_int().unwrap();
+    assert_eq!((reference, first), (0, 639));
+}
+
+/// A section 7 that holds a PNG opens as one, the way a stored ZIP member
+/// opens as whatever it holds.
+#[test]
+fn a_png_packed_section_opens_as_a_png() {
+    let Some((d, mut ev)) = read("regular_ll_png.grib2") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "PngPacking");
+    let body = ev.node(&d, &[0, 1, 4, 5, 2]).unwrap();
+    assert_eq!(body.type_name, "PngPackedData");
+    // The run itself, and then the space a reading opens over it.
+    let at = [0, 1, 4, 5, 2, 0];
+    let run = ev.node(&d, &at).unwrap();
+    assert!(run.size_bits > 0, "an empty PNG section");
+    let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the codestream opens");
+    let space = ev.space(id).expect("just opened");
+    assert_eq!(space.template, "png", "section 7 opened as {:?}", space.template);
+    assert_eq!(space.len_bytes() as u64, u64::from(run.size_bits) / 8);
 }
 
 #[test]

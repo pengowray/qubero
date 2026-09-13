@@ -19,16 +19,26 @@
 //! 3.30), a forecast at a level, an ensemble member and a field processed over
 //! an interval (product templates 4.0, 4.1 and 4.8), the packing headers
 //! (5.0, 5.2, 5.3, 5.40, 5.41, 5.42), the bitmap indicator, and section 7's
-//! values when they are simply packed. A section written to a template this
-//! does not know keeps its length and its number and its contents stay bytes,
-//! which is the honest answer: the templates are a WMO table of several
-//! hundred and each one is a different set of fields.
+//! values when they are simply or complexly packed. A section written to a
+//! template this does not know keeps its length and its number and its
+//! contents stay bytes, which is the honest answer: the templates are a WMO
+//! table of several hundred and each one is a different set of fields.
 //!
-//! Section 7 reads as its numbers only for simple packing. The complex
-//! packings cut the grid into groups whose widths are themselves packed at the
-//! front of the section, and the image packings hold a whole JPEG 2000 or PNG
-//! codestream; neither is a run of values with a stride. See [`data`] for what
-//! a packed value is worth.
+//! Section 7 reads as its numbers for simple packing (5.0) and for the complex
+//! packings (5.2 and 5.3), which are what an operational forecast is actually
+//! distributed as. Complex packing cuts the grid into groups and writes three
+//! tables in front of the data saying what each group is worth, how wide its
+//! values are and how many it holds; the run under one group is then that
+//! group's width a value. See [`complex_packed_data`].
+//!
+//! What a packed value is worth is a second question and not a field: the
+//! arithmetic is a float times a power of two over a power of ten, and 5.3
+//! adds a running sum on top of that. See [`data`] for the formula and
+//! [`grib_values`](super::grib_values) for the reading that carries it out.
+//!
+//! The image packings hold a whole codestream of another format. A PNG one
+//! (5.41) opens as a PNG, since that is a format this crate reads; a JPEG 2000
+//! one (5.40) is named and stays bytes, since it is not.
 //!
 //! Edition 1 is still published and is a different layout: three-byte lengths,
 //! no section numbers, and the sections identified by their order and by flags
@@ -179,6 +189,10 @@ fn u24be() -> T {
 /// than being part of the number. See [`T::sign_magnitude`].
 fn sm32() -> T {
     T::sign_magnitude(32, Big)
+}
+
+fn sm24() -> T {
+    T::sign_magnitude(24, Big)
 }
 
 fn sm16() -> T {
@@ -662,11 +676,12 @@ fn simple_packing() -> T {
 /// Data templates 5.2 and 5.3, complex packing, with spatial differencing in
 /// 5.3. The values are cut into groups, each group gets its own reference and
 /// its own width, and the widths and references are themselves packed at the
-/// front of section 7. That is a layout no template can describe: how long the
-/// three runs are depends on numbers inside them.
+/// front of section 7.
 ///
-/// What reads is the header, which says how the groups were chosen and how
-/// wide the three tables are. Section 7 stays bytes for these.
+/// This is the header, which says how the groups were chosen and how wide each
+/// of the three tables in front of the data is. Every number in it is read
+/// again by section 7, which is where the groups are; see
+/// [`complex_packed_data`].
 fn complex_packing(spatial: bool) -> T {
     let mut fields = packing_head();
     fields.extend(vec![
@@ -699,7 +714,8 @@ fn complex_packing(spatial: bool) -> T {
 /// Data templates 5.40 and 5.41: the grid packed as an image, JPEG 2000 or
 /// PNG. The header says what a sample is worth, the same as simple packing
 /// does, and section 7 is then a whole codestream of that format rather than a
-/// run of numbers, so it stays bytes.
+/// run of numbers. See [`png_packed_data`] and [`jpeg2000_packed_data`] for
+/// what becomes of it.
 fn image_packing(name: &str, jpeg: bool) -> T {
     let mut fields = packing_head();
     if jpeg {
@@ -757,10 +773,15 @@ fn bitmap() -> T {
 /// often as not, and the IR's arithmetic is over integers with no power of
 /// ten in it.
 ///
-/// Any other packing stays bytes. A complex-packed section is three runs whose
-/// lengths are inside themselves, and a JPEG 2000 or PNG one is a whole
-/// codestream of another format; neither is a run of numbers a template can
-/// place.
+/// Complex packing reads as its values too, by way of the three tables the
+/// groups are described by; see [`complex_packed_data`]. What one of those
+/// values is worth takes the formula above and then two more steps, and the
+/// second of them is a running sum no expression can write. See
+/// [`grib_values`](super::grib_values).
+///
+/// An image-packed section holds a whole codestream of another format. The PNG
+/// one opens as a PNG, since that is a format this already reads; the JPEG 2000
+/// one is named and stays bytes, since it is not.
 fn data() -> T {
     T::switch(
         // Which packing, from the nearest earlier section that says: section
@@ -769,7 +790,13 @@ fn data() -> T {
         // with no section 5 in front of it reads as no values rather than as
         // a wrong number of them.
         E::sibling(&["body", "template_number"]),
-        vec![(0, simple_packed_data())],
+        vec![
+            (0, simple_packed_data()),
+            (2, complex_packed_data(false)),
+            (3, complex_packed_data(true)),
+            (40, jpeg2000_packed_data()),
+            (41, png_packed_data()),
+        ],
         T::structure("PackedData", vec![("values", T::bytes(E::Remaining))]),
     )
 }
@@ -785,6 +812,176 @@ fn simple_packed_data() -> T {
     )
     .machinery(&["bits_per_value", "count"])
     .payload(&["values"])
+}
+
+/// What one of section 5's numbers is called when section 7 copies it in to
+/// place its own runs by. Always the same walk: back to the nearest earlier
+/// section with a `template` in it, which is section 5, and then the named
+/// field of whichever packing template it wrote.
+fn from_packing(name: &'static str) -> (&'static str, T) {
+    // The name is handed back with the type so that a run of these reads as
+    // one line each rather than as the same expression written out twice, and
+    // so that section 7's field goes by the name section 5 gave it.
+    (name, T::computed(E::sibling(&["body", "template", name])))
+}
+
+/// Section 7 for data templates 5.2 and 5.3: complex packing, with spatial
+/// differencing in 5.3.
+///
+/// The grid is cut into groups of neighbouring points that are alike, and each
+/// group is packed to whatever width its own numbers need: a run of sea-level
+/// pressure over flat ocean is a group whose values differ by so little that
+/// three bits hold each one, next to a group crossing a front that needs
+/// eleven. What makes that readable is three tables at the front of the
+/// section, each with one entry per group and each packed to a width section 5
+/// gives:
+///
+/// - `group_references`, the number every value in the group is counted from,
+///   each `bits_per_value` wide;
+/// - `group_widths`, how many bits one of that group's values takes, each
+///   `group_widths_bits` wide and counted up from `group_widths_reference`;
+/// - `group_lengths`, how many values the group holds, each
+///   `group_lengths_bits` wide, multiplied by `group_length_increment` and
+///   counted up from `group_lengths_reference`. The last group is the
+///   exception: its length is `last_group_length`, written in section 5,
+///   because the scaled form could not hold it.
+///
+/// Each of the three is padded out to a byte before the next begins. Nothing in
+/// the file says so and the WMO text does not either; it is what NCEP's
+/// `comunpack` does and what every writer therefore matches. Two of the three
+/// messages in the GFS sample have tables that end on a byte anyway, and the
+/// third does not and is unreadable without the padding, which is how it came
+/// to be found.
+///
+/// Then the values, group by group, each group's run at that group's width.
+/// That is the connection worth seeing on screen: `groups[7] width` is
+/// `group_widths[7]` plus the reference, and the run under it is that many bits
+/// a value. So it is written as a field and not folded into the array's type.
+///
+/// 5.3 puts three more numbers in front of everything, each
+/// `octets_for_extra_descriptors` wide: the first one or two values of the
+/// grid, kept whole because a difference has to start somewhere, and the
+/// smallest difference in the message, which is taken off every other one so
+/// that none of them is negative. See [`grib_values`](super::grib_values) for
+/// undoing that.
+///
+/// What this does not say: `missing_value_management` past 0. A message that
+/// uses it writes a group reference of all ones to mean the group is missing,
+/// and the widths and lengths are unchanged, so the fields here still land on
+/// the right bits and only what they are worth differs.
+fn complex_packed_data(spatial: bool) -> T {
+    let mut fields = vec![
+        from_packing("bits_per_value"),
+        from_packing("n_groups"),
+        from_packing("group_widths_reference"),
+        from_packing("group_widths_bits"),
+        from_packing("group_lengths_reference"),
+        from_packing("group_length_increment"),
+        from_packing("last_group_length"),
+        from_packing("group_lengths_bits"),
+    ];
+    if spatial {
+        fields.extend(vec![from_packing("spatial_differencing_order"), from_packing("extra_bytes")]);
+        let wide = E::field("extra_bytes").mul(E::lit(8));
+        fields.extend(vec![
+            // One value for first-order differencing and two for second, which
+            // is what the order says. Read as they were written, whole, with
+            // no reference and no scaling of their own.
+            ("first_values", T::array(T::uint_expr(wide.clone(), Big), E::field("spatial_differencing_order"))),
+            // The one negative number in the section, and written the way this
+            // format writes those: a magnitude with the top bit set. How wide
+            // it is is not a constant, so which of the four widths it is read
+            // at is a switch rather than a type.
+            ("overall_minimum", extra_descriptor()),
+        ]);
+    }
+    fields.extend(vec![
+        ("group_references", T::array(T::uint_expr(E::field("bits_per_value"), Big), E::field("n_groups"))),
+        ("group_references_padding", table_padding("bits_per_value")),
+        ("group_widths", T::array(T::uint_expr(E::field("group_widths_bits"), Big), E::field("n_groups"))),
+        ("group_widths_padding", table_padding("group_widths_bits")),
+        ("group_lengths", T::array(T::uint_expr(E::field("group_lengths_bits"), Big), E::field("n_groups"))),
+        ("group_lengths_padding", table_padding("group_lengths_bits")),
+        ("groups", T::array(group(), E::field("n_groups")).counted_as("group")),
+    ]);
+    let machinery: Vec<&str> = fields
+        .iter()
+        .map(|(n, _)| *n)
+        .filter(|n| !matches!(*n, "first_values" | "overall_minimum" | "group_references" | "group_widths" | "group_lengths" | "groups"))
+        .collect();
+    T::structure("ComplexPackedData", fields).machinery(&machinery).payload(&["groups"])
+}
+
+/// The bits between the end of a table of `n_groups` entries `bits` wide and
+/// the byte the next table starts on. Zero when the table already ends on one,
+/// which is the usual case and is why the padding took a while to find.
+fn table_padding(bits: &str) -> T {
+    T::uint_expr(E::field("n_groups").mul(E::field(bits)).pad_to(8), Big)
+}
+
+/// The overall minimum of the differences, read at whatever width
+/// `extra_bytes` gives it. One to four octets is what the field can say; a
+/// message claiming anything else has the run stay bytes rather than read at a
+/// width nothing supports.
+fn extra_descriptor() -> T {
+    T::switch(
+        E::field("extra_bytes"),
+        vec![(1, sm8()), (2, sm16()), (3, sm24()), (4, sm32())],
+        T::bytes(E::field("extra_bytes")),
+    )
+}
+
+/// One group: how wide its values are, how many there are, and them.
+///
+/// Both numbers are read out of the tables in front rather than out of the
+/// file here, which is the whole of what complex packing is. `Expr::Idx` is
+/// this group's place in the run, so `group_widths[Idx]` is its own entry and
+/// not another group's, and the width is copied into a field of no bits so the
+/// run under it is measured once by arithmetic; see [`T::uint_expr`].
+fn group() -> T {
+    // The last group's length is not in the table: the table holds a scaled
+    // form that could not reach it, so section 5 wrote the real one. Which
+    // makes the count a choice rather than a sum, and a switch says so on
+    // screen better than the arithmetic that would stand in for it.
+    let not_last = E::Idx.add(E::lit(1)).less_than(E::field("n_groups"));
+    let scaled = E::field("group_lengths_reference")
+        .add(E::field("group_length_increment").mul(E::elem("group_lengths", E::Idx)));
+    T::structure(
+        "Group",
+        vec![
+            ("width", T::computed(E::elem("group_widths", E::Idx).add(E::field("group_widths_reference")))),
+            ("count", T::switch(not_last, vec![(1, T::computed(scaled))], T::computed(E::field("last_group_length")))),
+            ("values", T::array(T::uint_expr(E::field("width"), Big), E::field("count"))),
+        ],
+    )
+    .machinery(&["width", "count"])
+    .payload(&["values"])
+}
+
+/// Section 7 for data template 5.41: the grid as a PNG.
+///
+/// The section holds a whole PNG file, signature and chunks and all, whose
+/// pixels are the packed values. So it is declared as a run that is already
+/// what it is, and the reader opens it as a PNG the way a stored ZIP member
+/// opens as whatever it holds: the inner template says only bytes, which is
+/// what a reading sniffs.
+///
+/// What the pixels are worth is section 5's business and the same formula
+/// simple packing uses, one sample being one value. Inflating the image is
+/// not done here.
+fn png_packed_data() -> T {
+    T::structure("PngPackedData", vec![("png", T::decoded(E::Remaining, crate::codec::Codec::Stored, super::decoded_text()))])
+}
+
+/// Section 7 for data template 5.40: the grid as a JPEG 2000 codestream.
+///
+/// Named and left as bytes. There is no JPEG 2000 template in this crate to
+/// open it with, so sniffing it would find nothing, and a codestream is not a
+/// run of values with a stride: it is wavelet coefficients in code blocks,
+/// arithmetic coded. The section says which format it is holding and stops
+/// there.
+fn jpeg2000_packed_data() -> T {
+    T::structure("Jpeg2000PackedData", vec![("codestream", T::bytes(E::Remaining))])
 }
 
 /// An edition 1 message. Its sections have three-byte lengths and no numbers
@@ -1316,25 +1513,18 @@ mod tests {
 
     #[test]
     fn a_packing_this_does_not_read_leaves_section_7_alone() {
-        // Section 5 written as complex packing: its header reads, and the
-        // data stays bytes because the widths are inside the data.
+        // Section 5 written as CCSDS 121.0, the Rice coding a spacecraft
+        // downlink uses: its header reads, and the data stays bytes because
+        // what follows is an entropy-coded stream and not a run of anything.
         let mut packing = packing_bytes();
-        packing[5] = 2; // template 2 rather than 0
-        packing.extend_from_slice(&[0, 0]); // splitting method, missing management
-        packing.extend_from_slice(&0u32.to_be_bytes());
-        packing.extend_from_slice(&0u32.to_be_bytes());
-        packing.extend_from_slice(&3u32.to_be_bytes()); // three groups
-        packing.extend_from_slice(&[0, 8]);
-        packing.extend_from_slice(&0u32.to_be_bytes());
-        packing.push(1);
-        packing.extend_from_slice(&2u32.to_be_bytes());
-        packing.push(8);
+        packing[5] = 42; // template 42 rather than 0
+        packing.extend_from_slice(&[0x10, 32]); // flags, and a block of 32
+        packing.extend_from_slice(&128u16.to_be_bytes()); // a reference every 128
         let d = Document::new(MemSource(one_message(&[(5, packing), (7, vec![1, 2, 3, 4, 5, 6])])));
         let mut ev = Evaluator::new(grib());
         let kind = ev.node(&d, &[0, 1, 4, 0, 2, 1]).unwrap();
-        assert_eq!(kind.value, Value::Enum { raw: 2, name: Some("complex packing".into()), hex: false });
-        // Three groups, from the header this does read.
-        assert_eq!(ev.node(&d, &[0, 1, 4, 0, 2, 2, 9]).unwrap().value, Value::UInt(3));
+        assert_eq!(kind.value, Value::Enum { raw: 42, name: Some("CCSDS".into()), hex: false });
+        assert_eq!(ev.node(&d, &[0, 1, 4, 0, 2, 2]).unwrap().type_name, "CcsdsPacking");
         let data = ev.node(&d, &[0, 1, 4, 1, 2, 0]).unwrap();
         assert_eq!((data.type_name.as_str(), data.size_bits), ("bytes[]", 6 * 8));
     }
@@ -1497,5 +1687,136 @@ mod tests {
         let sections = ev.node(&d, &[0, 1, 4]).unwrap();
         // The window the length asked for is clamped to what is there.
         assert_eq!(sections.offset_bits + sections.size_bits, bytes.len() as u64 * 8);
+    }
+
+    /// Section 5 for a complex-packed message of two groups. Every number in
+    /// it is picked so that the one it decides can be told apart from the
+    /// others: the two group widths differ, the reference width is not zero,
+    /// the length increment is not one, and the last group's length is not
+    /// what the scaled form would have given.
+    ///
+    /// `spatial` writes it as template 5.3, first order, two octets of extra
+    /// descriptors.
+    fn complex_packing_bytes(spatial: bool) -> Vec<u8> {
+        let mut b = 7u32.to_be_bytes().to_vec(); // seven values
+        b.extend_from_slice(&(if spatial { 3u16 } else { 2u16 }).to_be_bytes());
+        b.extend_from_slice(&10.0f32.to_be_bytes()); // reference value
+        b.extend_from_slice(&0u16.to_be_bytes()); // binary scale
+        b.extend_from_slice(&0u16.to_be_bytes()); // decimal scale
+        b.extend_from_slice(&[6, 0]); // six bits a group reference
+        b.extend_from_slice(&[1, 0]); // split by row, no missing values
+        b.extend_from_slice(&0u32.to_be_bytes()); // primary missing value
+        b.extend_from_slice(&0u32.to_be_bytes()); // secondary missing value
+        b.extend_from_slice(&2u32.to_be_bytes()); // two groups
+        b.extend_from_slice(&[1, 3]); // widths count up from 1, three bits each
+        b.extend_from_slice(&2u32.to_be_bytes()); // lengths count up from 2
+        b.push(2); // in steps of 2
+        b.extend_from_slice(&3u32.to_be_bytes()); // and the last group holds 3
+        b.push(4); // four bits a scaled length
+        if spatial {
+            b.extend_from_slice(&[1, 2]); // first order, two octets
+        }
+        b
+    }
+
+    /// Section 7 to match: two group references at six bits, padded to a byte;
+    /// two widths at three bits, padded; two scaled lengths at four bits; then
+    /// four values four bits wide and three values one bit wide.
+    fn complex_data_bytes(spatial: bool) -> Vec<u8> {
+        let mut b = Vec::new();
+        if spatial {
+            b.extend_from_slice(&100u16.to_be_bytes()); // the first value, kept whole
+            b.extend_from_slice(&0x8003u16.to_be_bytes()); // and a minimum of -3
+        }
+        // 000101 101000 0000: references of 5 and 40, and four bits of padding.
+        b.extend_from_slice(&[0x16, 0x80]);
+        // 011 000 00: raw widths of 3 and 0, which with the reference are 4
+        // and 1, and two bits of padding.
+        b.push(0x60);
+        // 0001 0000: a raw length of 1, which scaled is 2 + 2 * 1 = 4, and one
+        // the reader must ignore, since the last group's length is in
+        // section 5.
+        b.push(0x10);
+        // 0001 0010 0011 0100 101 00000: four values four bits wide and three
+        // one bit wide, and five bits of padding to the end of the section.
+        b.extend_from_slice(&[0x12, 0x34, 0xA0]);
+        b
+    }
+
+    fn complex_message(spatial: bool) -> Vec<u8> {
+        one_message(&[(5, complex_packing_bytes(spatial)), (7, complex_data_bytes(spatial))])
+    }
+
+    #[test]
+    fn a_complex_packed_section_reads_as_its_three_tables_and_its_groups() {
+        let d = Document::new(MemSource(complex_message(false)));
+        let mut ev = Evaluator::new(grib());
+        let body = ev.node(&d, &[0, 1, 4, 1, 2]).unwrap();
+        assert_eq!(body.type_name, "ComplexPackedData");
+        let ints = |ev: &mut Evaluator, at: [usize; 6], n: usize| -> Vec<i128> {
+            (0..n)
+                .map(|i| {
+                    let mut p = at.to_vec();
+                    p.push(i);
+                    ev.node(&d, &p).unwrap().value.as_int().unwrap()
+                })
+                .collect()
+        };
+        assert_eq!(ints(&mut ev, [0, 1, 4, 1, 2, 8], 2), vec![5, 40]);
+        assert_eq!(ints(&mut ev, [0, 1, 4, 1, 2, 10], 2), vec![3, 0]);
+        assert_eq!(ints(&mut ev, [0, 1, 4, 1, 2, 12], 2), vec![1, 0]);
+        // The padding between the tables: four bits after twelve, two after
+        // six, none after eight.
+        let pad = |ev: &mut Evaluator, i: usize| ev.node(&d, &[0, 1, 4, 1, 2, i]).unwrap().size_bits;
+        assert_eq!((pad(&mut ev, 9), pad(&mut ev, 11), pad(&mut ev, 13)), (4, 2, 0));
+    }
+
+    #[test]
+    fn a_group_is_as_wide_and_as_long_as_the_tables_in_front_of_it_say() {
+        let d = Document::new(MemSource(complex_message(false)));
+        let mut ev = Evaluator::new(grib());
+        let groups = ev.node(&d, &[0, 1, 4, 1, 2, 14]).unwrap();
+        assert_eq!(groups.child_count, 2);
+        // Group 0: a raw width of 3 counted up from the reference of 1, and a
+        // raw length of 1 scaled by the increment of 2 from the reference
+        // of 2.
+        let width = ev.node(&d, &[0, 1, 4, 1, 2, 14, 0, 0]).unwrap().value.as_int().unwrap();
+        let count = ev.node(&d, &[0, 1, 4, 1, 2, 14, 0, 1]).unwrap().value.as_int().unwrap();
+        assert_eq!((width, count), (4, 4));
+        let values: Vec<i128> = (0..4)
+            .map(|i| ev.node(&d, &[0, 1, 4, 1, 2, 14, 0, 2, i]).unwrap().value.as_int().unwrap())
+            .collect();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+        // Group 1 is the last, so its length is section 5's `last_group_length`
+        // and not the entry in the table, which says something else.
+        let width = ev.node(&d, &[0, 1, 4, 1, 2, 14, 1, 0]).unwrap().value.as_int().unwrap();
+        let count = ev.node(&d, &[0, 1, 4, 1, 2, 14, 1, 1]).unwrap().value.as_int().unwrap();
+        assert_eq!((width, count), (1, 3));
+        let values: Vec<i128> = (0..3)
+            .map(|i| ev.node(&d, &[0, 1, 4, 1, 2, 14, 1, 2, i]).unwrap().value.as_int().unwrap())
+            .collect();
+        assert_eq!(values, vec![1, 0, 1]);
+        // Seven values in all, which is what section 5 counted.
+        assert_eq!(ev.node(&d, &[0, 1, 4, 0, 2, 0]).unwrap().value.as_int().unwrap(), 7);
+    }
+
+    #[test]
+    fn spatial_differencing_puts_its_first_value_and_its_minimum_in_front() {
+        let d = Document::new(MemSource(complex_message(true)));
+        let mut ev = Evaluator::new(grib());
+        let body = ev.node(&d, &[0, 1, 4, 1, 2]).unwrap();
+        assert_eq!(body.type_name, "ComplexPackedData");
+        let first = ev.node(&d, &[0, 1, 4, 1, 2, 10]).unwrap();
+        assert_eq!((first.child_count, first.size_bits), (1, 16));
+        assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 10, 0]).unwrap().value.as_int().unwrap(), 100);
+        // The one negative number in the section, written as a magnitude with
+        // the top bit set rather than as two's complement.
+        let minimum = ev.node(&d, &[0, 1, 4, 1, 2, 11]).unwrap();
+        assert_eq!(minimum.value.as_int().unwrap(), -3);
+        assert_eq!(minimum.size_bits, 16);
+        // And everything after them is where it was without them.
+        let width = ev.node(&d, &[0, 1, 4, 1, 2, 18, 0, 0]).unwrap().value.as_int().unwrap();
+        let count = ev.node(&d, &[0, 1, 4, 1, 2, 18, 0, 1]).unwrap().value.as_int().unwrap();
+        assert_eq!((width, count), (4, 4));
     }
 }
