@@ -749,6 +749,68 @@ export type FieldGraph = {
   readonly omitted: number;
 };
 
+/** What a diagram box stands for: a structure and its fields, a block of
+ *  worked-out fields, or a choice and its cases. */
+export type DiagramBoxKind = "seq" | "instances" | "switch";
+
+/** One row of a diagram box: one field of a type, or one case of a switch. */
+export type DiagramRow = {
+  readonly name: string;
+  /** The type as the listing's type column writes it. */
+  readonly type_text: string;
+  /** How long the field runs (`4 bytes`), or the expression that decides it
+   *  (`len bytes`). Empty when only reading a file settles it. */
+  readonly size_text: string;
+  /** Where it starts inside its own type (`0x4`), or the address it reads its
+   *  contents at. Empty when the template fixes neither. */
+  readonly pos_text: string;
+  /** The word the listing gives a field of this type, so the same field is the
+   *  same colour in both. Pass it to `fieldClass`. */
+  readonly kind: string;
+};
+
+/** One type of the format, and its fields. */
+export type DiagramBox = {
+  readonly name: string;
+  readonly kind: DiagramBoxKind;
+  /** The type this one was written inside, for a box the template gave no name
+   *  of its own (`Header.entry`). Absent for a named type. */
+  readonly parent?: string;
+  readonly rows: DiagramRow[];
+};
+
+/** One connection, drawn the way a reader follows it: from the row that
+ *  decides to the row it decides about. */
+export type DiagramEdge = {
+  /** Box index and row index: where the edge leaves. */
+  readonly from: readonly [number, number];
+  /** Box index where it lands. */
+  readonly to: number;
+  /** Row index in that box. Absent for an edge to the box as a whole, which is
+   *  what naming a type is. */
+  readonly to_row?: number;
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case";
+  /** The expression the edge stands for, as the template writes it. Empty for a
+   *  declaration rather than an expression. */
+  readonly label: string;
+};
+
+/**
+ * The format as boxes and arrows, read off the template rather than off a file.
+ *
+ * `graph` answers about one file: these are the fields it turned out to have.
+ * This answers about the format: these are the types it declares. Nothing in it
+ * depends on a file being open.
+ */
+export type TemplateDiagram = {
+  readonly types: DiagramBox[];
+  readonly edges: DiagramEdge[];
+  /** Named types of the template with no box here: the ones nothing reachable
+   *  from the root refers to, the ones that are not structures, and the ones
+   *  past the core's box cap. */
+  readonly omitted: number;
+};
+
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
   /** Where the node is in the template. Empty for a version 2 node below the
@@ -2030,6 +2092,18 @@ export class Doc {
    */
   graph(path: readonly number[], limit: number): TemplateReply<FieldGraph> {
     return this.handleReply<FieldGraph>(this.editor.graph(this.space, Uint32Array.from(path), limit));
+  }
+
+  /**
+   * The format as boxes and arrows: the types the template declares, the fields
+   * of each, and which field decides what about which other.
+   *
+   * About the format, not about this file. Nothing is read, no field is
+   * resolved, and the answer is the same for every file the same template
+   * opens, so it never comes back pending.
+   */
+  templateDiagram(): TemplateReply<TemplateDiagram> {
+    return this.handleReply<TemplateDiagram>(this.editor.template_diagram(this.space));
   }
 
   /**

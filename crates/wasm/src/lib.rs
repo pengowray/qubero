@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
+use qubero_core::eval::{Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -717,6 +717,101 @@ struct GraphDto {
     /// How many nodes under the one asked about were left out, as far as is
     /// known.
     omitted: f64,
+}
+
+/// One row of a diagram box: one field of a type, or one case of a switch.
+#[derive(Serialize)]
+struct DiagramRowDto {
+    name: String,
+    /// The type as the listing's type column writes it.
+    type_text: String,
+    /// How long the field runs, or the expression that decides it. Empty when
+    /// only reading a file settles it.
+    size_text: String,
+    /// Where it starts inside its own type, or the address it reads its
+    /// contents at. Empty when neither is fixed by the template.
+    pos_text: String,
+    /// The word the listing gives a field of this type, so the same field is
+    /// the same colour in both: "uint", "str", "magic", "composite" and the
+    /// rest. See `qubero_core::eval::value_kind`.
+    kind: &'static str,
+}
+
+/// One type of the format, and its fields.
+#[derive(Serialize)]
+struct DiagramBoxDto {
+    name: String,
+    /// "seq" | "instances" | "switch"
+    kind: &'static str,
+    /// The type this one was written inside, for a box the template gave no
+    /// name of its own. Absent for a named type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    rows: Vec<DiagramRowDto>,
+}
+
+/// One connection, from the row that decides to the row it decides about.
+#[derive(Serialize)]
+struct DiagramEdgeDto {
+    /// Box index and row index: where the edge leaves.
+    from: (f64, f64),
+    /// Box index where it lands.
+    to: f64,
+    /// Row index in that box, absent for an edge to the box as a whole, which
+    /// is what naming a type is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to_row: Option<f64>,
+    /// "length" | "count" | "type" | "position" | "value" | "name" | "width" | "case"
+    role: &'static str,
+    /// The expression the edge stands for, as the template writes it. Empty for
+    /// a declaration rather than an expression.
+    label: String,
+}
+
+/// The format as boxes and arrows, read off the template rather than a file.
+#[derive(Serialize)]
+struct DiagramDto {
+    types: Vec<DiagramBoxDto>,
+    edges: Vec<DiagramEdgeDto>,
+    /// Named types of the template with no box here.
+    omitted: f64,
+}
+
+fn diagram_dto(d: Diagram) -> DiagramDto {
+    DiagramDto {
+        types: d
+            .types
+            .into_iter()
+            .map(|b| DiagramBoxDto {
+                name: b.name,
+                kind: b.kind.as_str(),
+                parent: b.parent,
+                rows: b
+                    .rows
+                    .into_iter()
+                    .map(|r| DiagramRowDto {
+                        name: r.name,
+                        type_text: r.type_text,
+                        size_text: r.size_text,
+                        pos_text: r.pos_text,
+                        kind: r.kind,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        edges: d
+            .edges
+            .into_iter()
+            .map(|e| DiagramEdgeDto {
+                from: (e.from.0 as f64, e.from.1 as f64),
+                to: e.to.0 as f64,
+                to_row: e.to.1.map(|r| r as f64),
+                role: e.role.as_str(),
+                label: e.label,
+            })
+            .collect(),
+        omitted: f64::from(d.omitted),
+    }
 }
 
 /// One Huffman-coded number of a deflate symbol: the symbol, how wide the code
@@ -2464,6 +2559,23 @@ impl Editor {
                 e.begin_slice();
                 reply(e.graph(&sh.doc, &p, limit as usize).map(graph_dto))
             }
+        }
+    }
+
+    /// The template as boxes and arrows: one box per type, one row per field,
+    /// and one edge per connection between two of them. JSON, in the same reply
+    /// shape as the rest.
+    ///
+    /// About the format rather than about the file. Nothing here is read from
+    /// the document, no node is resolved, and the answer is the same for every
+    /// file the same template opens. `space` picks which template, since an
+    /// unpacked stream is read by one of its own.
+    pub fn template_diagram(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        match &sh.eval {
+            None => reply::<DiagramDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
         }
     }
 

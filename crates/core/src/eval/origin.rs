@@ -42,6 +42,15 @@ pub enum Role {
     Name,
     /// Not about this field at all: this field is an offset, and points there.
     Points,
+    /// One value a switch may read, and the type it picks when it reads it.
+    ///
+    /// Not `Type`, which is the connection between a field and what it is read
+    /// as: this is one branch of that, and a diagram draws the two differently
+    /// because they answer different questions. The field's own arrow says
+    /// "this field is a choice"; a case's arrow says "and this value is what
+    /// picks that shape". Nothing produces one from a file, since a resolved
+    /// node has taken its case already; see [`crate::eval::diagram`].
+    Case,
 }
 
 impl Role {
@@ -55,6 +64,7 @@ impl Role {
             Role::Value => "value",
             Role::Name => "name",
             Role::Points => "points",
+            Role::Case => "case",
         }
     }
 }

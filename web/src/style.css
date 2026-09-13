@@ -5101,3 +5101,185 @@ table.rec tr.is-on td {
 .btp-big .btp-leafcount {
   font-size: 12px;
 }
+
+/* ---- diagram view ---- */
+/* The format as boxes and arrows. The boxes are tables so that a row can be
+   measured and coloured; the arrows are one SVG under them. The listing's
+   `.rp-*` rows are not reused directly: those are absolutely placed rows of a
+   canvas that scrolls by index, and inside a table they would all stack at the
+   top. What is shared is the vocabulary they are drawn in: `--field-color` per
+   row, `--addr` for a position, `--muted` for a type. */
+.diagramview {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.diagramview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.dv-note {
+  padding: 4px 8px;
+  font: 12px var(--sans);
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.dv-note.is-warn {
+  color: var(--warn);
+}
+.dv-omitted {
+  color: var(--warn);
+}
+.dv-bar {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* Clips the drawing and takes the wheel and the drag. `grab` rather than a
+   pointer: what the empty space between boxes does is move the picture. */
+.dv-board {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.dv-board.is-panning {
+  cursor: grabbing;
+}
+/* Everything drawn, moved and scaled as one. */
+.dv-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+/* Under the boxes, so a line never crosses a name. */
+.dv-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.dv-box {
+  position: absolute;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+}
+.dv-box-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  font: 600 12px var(--sans);
+}
+/* A type found inside a switch case inside a chunk carries the whole path it
+   was found down. Clipped here so one long name cannot set the width of its
+   whole layer; the element's title says the rest. */
+.dv-box-label {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A choice rather than a structure: its rows are values, not fields. */
+.dv-box.is-switch .dv-box-name {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.dv-tag {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--muted);
+}
+.dv-table {
+  border-collapse: collapse;
+}
+.dv-row {
+  border-left: 3px solid var(--field-color);
+}
+/* Only a row a click can actually reach in the open file. See
+   `DiagramView.canPick`. */
+.dv-row.is-pickable {
+  cursor: pointer;
+}
+.dv-row:hover {
+  background: color-mix(in srgb, var(--field-color) 12%, transparent);
+}
+.dv-row td {
+  padding: 1px 6px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dv-pos {
+  color: var(--addr);
+}
+/* The value a switch reads to pick this case. Not an address, so not the
+   address colour: it is what the field says, which is the value vocabulary. */
+.dv-case {
+  color: var(--fg);
+}
+.dv-size,
+.dv-type {
+  color: var(--muted);
+}
+/* The field's own name, which is what a reader looks for first. */
+.dv-name {
+  color: color-mix(in srgb, var(--field-color) 84%, var(--fg));
+}
+.dv-more td {
+  padding: 2px 6px;
+  color: var(--muted);
+  font-style: italic;
+  cursor: pointer;
+  border-top: 1px solid var(--line);
+}
+.dv-more:hover td {
+  color: var(--fg);
+}
+.dv-edge path {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  opacity: 0.75;
+}
+.dv-arrowhead {
+  fill: var(--muted);
+  stroke: none;
+  opacity: 1;
+}
+/* What a field is read as, which is the diagram's spine: drawn heavier than
+   the arrows that say what an expression decided. */
+.dv-edge.dv-role-type path,
+.dv-edge.dv-role-case path {
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  opacity: 0.85;
+}
+/* The role word on the arrow. Stroked in the background colour under the fill,
+   so it reads where it crosses a line of its own. */
+.dv-edge-label {
+  font: 9px var(--sans);
+  fill: var(--muted);
+  stroke: var(--bg);
+  stroke-width: 3;
+  paint-order: stroke;
+  text-anchor: middle;
+}
+/* A word before the point it labels rather than over it, for the brackets down
+   the left of a box: eight of them centred would be eight words in one place. */
+.dv-edge-label.is-end {
+  text-anchor: end;
+}
