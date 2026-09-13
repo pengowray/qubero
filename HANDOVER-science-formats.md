@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| GRIB complex packing (5.2, 5.3) as fields: the three group tables with their byte padding, and each group's run at `uint_expr(width)`. A side reader (`grib_values.rs`) undoes the differencing and matches ecCodes on all 195,480 GFS values. PNG-packed sections open as PNG. Two ecCodes-repacked samples. | 33f0f20, 7d3556b |
 | S5. `Expr::StartOf`, `E::tagged_in_by`, and a tag index shared by every referrer to one list: an HDF5 variable-length string reads as its text, over its own bytes. Two generated samples, one behind a 512-byte user block. | 240ca28, fea1214 |
 | FITS `TSCALn`/`TZEROn` and `BSCALE`/`BZERO`: the stored integer keeps its bytes and a zero-bit `worth = zero + scale * stored` hangs off it. Not read as the unsigned type: the convention is a bias, and `scaled.fits` shows physical 0 on disk as signed -32768. | ef3e54f |
 | FITS columns past 32: a row is a list of cells, each working out its own `TFORMn` from `Idx`, so the cap is the standard's 999. Labels are `[2] flux` now, were `col3 flux`. Axes past 9 read; `NAXISn = 0` reads as no data. | cdb051f |
@@ -349,10 +350,24 @@ Seven samples. Left:
 
 ### GRIB
 
-Values only for simple packing (5.0). Complex packing (5.2, 5.3; what GFS
-output uses) and JPEG 2000 / PNG sections (5.40, 5.41) keep their bytes.
-Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
-only; anything else is bytes.
+Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
+(see Closed). Left:
+
+- **What a value is worth is computed and not shown.** `grib_values.rs`
+  undoes group references, the smallest difference and spatial
+  differencing, and matches ecCodes on every GFS value, but nothing reaches
+  a panel: it needs an `Explain` variant and wasm and web wiring, the way
+  Parquet's page reader was wired. `explain_packed` also looks only one
+  level up from the cursor. Its step strings need a `ui-text` pass when they
+  are wired.
+- JPEG 2000 (5.40) names its codestream and stays bytes; there is no JPEG
+  2000 template.
+- Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
+  only; anything else is bytes.
+- `grib.rs` is about 1,900 lines; edition 1 (about 300) would split out as
+  `grib1.rs`.
+- ecCodes has no wheel for Python 3.14; the cross-check used a uv Python 3.11
+  environment.
 
 ### NPY / NPZ
 
