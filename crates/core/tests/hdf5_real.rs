@@ -212,6 +212,132 @@ fn gather(
     }
 }
 
+/// The chunk indexes that only show themselves in a dataset of more than a
+/// thousand chunks, each walked to every chunk it places and the places
+/// checked against what the HDF5 library itself reports.
+///
+/// `chunk-indexes-large.h5` holds an implicit index over a dataset that can
+/// grow in its second dimension, fixed arrays past one page (one of them with
+/// a page that was never written, one filtered), and extensible arrays past
+/// their index blocks into data blocks and secondary blocks (one filtered).
+/// None of the indexes writes down how its entries are laid out: that comes
+/// from logarithms and rounded-up divisions of numbers in a header, so a
+/// layout worked out wrongly reads entries from the wrong bytes and the
+/// chunks they name are not where h5py says.
+///
+/// The expected numbers were read out of the file with h5py 3.16, from
+/// `get_chunk_info`: how many chunks, and the byte offsets of the first and
+/// the last. Every chunk in between was compared once, the same way, when this
+/// was written. The implicit index places three more chunks than h5py lists,
+/// since its run is laid out for the largest the dataset can grow to and h5py
+/// counts the chunks of the extent it has now; the nine h5py lists are among
+/// them, at the places it gives.
+#[test]
+fn large_chunk_indexes_reach_every_chunk_where_the_library_puts_it() {
+    let Some(dir) = sample_dir() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = dir.join("hdf5").join("chunk-indexes-large.h5");
+    if !path.exists() {
+        eprintln!("skipped: no {}", path.display());
+        return;
+    }
+    let file = File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let len = file.metadata().unwrap().len();
+    let doc = Document::new(FileSource { file: RefCell::new(file), len });
+    let mut ev = Evaluator::new(hdf5());
+
+    let mut found: Vec<Placed> = Vec::new();
+    chunks_by_dataset(&mut ev, &doc, &[], &mut String::new(), false, false, &mut found, &path);
+    for d in &found {
+        eprintln!("--- {}: {} chunks from {:?} to {:?}, {} pages never written", d.name, d.chunks.len(), d.chunks.first(), d.chunks.last(), d.unwritten_pages);
+    }
+
+    // Name, chunks, where the first and last are, and how many pages were set
+    // aside and never written.
+    let want: &[(&str, usize, u64, u64, usize)] = &[
+        ("implicit", 12, 2048, 2312, 0),
+        ("fixed_paged", 2100, 2336, 23365, 0),
+        ("fixed_paged_sparse", 2, 63378, 63380, 1),
+        ("fixed_paged_shuffled", 1100, 23367, 49790, 0),
+        ("extensible", 600, 49794, 53040, 0),
+        ("extensible_shuffled", 300, 53042, 63370, 0),
+        ("extensible_paged_sparse", 3, 53890, 63376, 2),
+    ];
+    for &(name, count, first, last, unwritten) in want {
+        let Some(d) = found.iter().find(|d| d.name == name) else {
+            panic!("{}: no chunks reached for {name}", path.display());
+        };
+        assert_eq!(d.chunks.len(), count, "{}: {name}", path.display());
+        assert_eq!(d.chunks.first(), Some(&first), "{}: {name}", path.display());
+        assert_eq!(d.chunks.last(), Some(&last), "{}: {name}", path.display());
+        assert_eq!(d.unwritten_pages, unwritten, "{}: {name}", path.display());
+    }
+    // The first chunk of the implicit index's second row, which is where the
+    // largest extent and not the current one decides it is: h5py puts the
+    // chunk starting at row 4, column 0 at byte 2144.
+    let implicit = found.iter().find(|d| d.name == "implicit").unwrap();
+    assert_eq!(implicit.chunks[4], 2144, "{}: the implicit index counted rows across the wrong extent", path.display());
+}
+
+/// The chunks one dataset's index led to.
+struct Placed {
+    name: String,
+    /// Byte offsets, in the order the index lists them.
+    chunks: Vec<u64>,
+    /// Pages of index entries whose bit says they were never written.
+    unwritten_pages: usize,
+}
+
+/// Every chunk under `path`, as the byte offset it was placed at, under the
+/// name of the dataset it belongs to. A chunk is the run of elements an
+/// unfiltered index entry points at, or the packed bytes a filtered one does,
+/// and only under a chunked layout: the same run of elements is what a
+/// contiguous dataset or an attribute reads as.
+#[allow(clippy::too_many_arguments)]
+fn chunks_by_dataset(
+    ev: &mut Evaluator,
+    doc: &Document<FileSource>,
+    path: &[usize],
+    name: &mut String,
+    chunked: bool,
+    in_pages: bool,
+    out: &mut Vec<Placed>,
+    file: &Path,
+) {
+    let node = ev
+        .node(doc, path)
+        .unwrap_or_else(|e| panic!("{}: {path:?} does not read: {e:?}", file.display()));
+    if let (Value::Str(s), true) = (&node.value, node.name == "name") {
+        if !s.is_empty() {
+            *name = s.clone();
+        }
+    }
+    let chunked = chunked || node.type_name == "Chunked";
+    let is_chunk = chunked && (node.type_name == "Data" || node.type_name == "FilteredChunk");
+    let unwritten = in_pages && matches!(node.value, Value::Bytes { .. });
+    if is_chunk || unwritten {
+        let at = match out.iter().position(|d| d.name == *name) {
+            Some(i) => i,
+            None => {
+                out.push(Placed { name: name.clone(), chunks: Vec::new(), unwritten_pages: 0 });
+                out.len() - 1
+            }
+        };
+        match is_chunk {
+            true => out[at].chunks.push(node.offset_bits / 8),
+            false => out[at].unwritten_pages += 1,
+        }
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut p = path.to_vec();
+        p.push(i);
+        chunks_by_dataset(ev, doc, &p, name, chunked, node.name == "pages", out, file);
+    }
+}
+
 /// Every link in a group of two thousand is named under the template, the
 /// ones in a table under the root table among them, and every node of the
 /// version 2 tree indexing them is where the walk found it.

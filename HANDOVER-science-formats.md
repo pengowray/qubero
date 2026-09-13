@@ -30,6 +30,9 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
+| S2: HDF5 paged fixed arrays | 508fa3b |
+| S2: HDF5 implicit-index chunks | 508fa3b |
 | S2: HDF5 fractal-heap indirect blocks, for a heap grown past its largest direct block | `4308a8f` |
 | S2: children of a version 2 B-tree node below the root (`HANDOVER-open-hazards.md` 4) | `4308a8f` |
 | Kind totals counted an HDF5 object once per hard link to it, so `fractal-heap-deep.h5` covered 9.1 Mbit of a 4.9 Mbit file. What an `At` reaches now counts once. | `0d0ac8f` |
@@ -125,14 +128,18 @@ unpacked RNTuple envelope needs one more step rule, through a `Decoded`'s child
 
 ### S2. log2 and ceiling division in `Expr`
 
-**Unblocks, all in HDF5:**
+All five HDF5 gaps this unblocked are closed (see the Closed table).
 
-- Extensible-array data blocks and secondary blocks past the index block. How
-  many addresses of each the index block holds is worked out from the array's
-  size with a base-2 logarithm.
-- Paged fixed arrays. A page's worth of entries is a power of two.
-- Implicit-index chunks. The chunk count is each dimension of the dataspace
-  divided by the chunk dimension, rounded up, multiplied together.
+The three chunk index gaps are checked by `chunk-indexes-large.h5`: every
+chunk address the template reaches in it matched the byte offset h5py's
+`get_chunk_info` gives, and `hdf5_real.rs` keeps the counts and the first and
+last offsets. Placing them made a cost in `Expr::Sibling` show: a chunk asked
+for its datatype by searching back through every index entry before it, so a
+listing of a 100,000-chunk fixed array took over six minutes. Chunks now read a
+copy of the datatype kept in the layout (`datatype_copy` in `hdf5.rs`), and the
+same listing takes about 11 seconds, 4.5 of them the entry walk itself. The
+version 1 b-tree's chunk entries still search back the old way, bounded by the
+64 entries a node holds by default.
 
 The heap tables and the B-tree children are closed (see the Closed table).
 Both are checked by `fractal-heap-deep.h5`, whose group of 2,000 links puts
@@ -215,7 +222,6 @@ Reads further than any other scientific format. Left:
 - Filtered chunks are bytes in the template; `hdf5_chunk.rs` decodes deflate,
   shuffle, fletcher32 as a side reader. szip, nbit, scaleoffset and filters
   32000+ stop the walk.
-- The S2 items still open.
 - Variable-length strings (S5).
 - Compound datatypes are one element of the right size.
 - Virtual dataset mappings are bytes.
