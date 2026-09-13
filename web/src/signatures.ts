@@ -257,14 +257,16 @@ export type FileBytes = {
 export type SigIndex = {
   readonly plain: ReadonlyMap<number, ReadonlyMap<number, ReadonlyMap<string, readonly Compiled[]>>>;
   readonly rest: readonly Compiled[];
-  /** Every offset in `plain`, and every length within each, so `matchFormats`
-   *  can walk them without re-reading the map keys each time. */
+  /** Every offset in `plain`, and the lengths within it shortest first, so
+   *  that `matchFormats` can walk them without re-reading the map keys, and
+   *  can grow one key rather than build a new one for each length. */
   readonly offsets: readonly { readonly offset: number; readonly lengths: readonly { readonly length: number; readonly keys: ReadonlyMap<string, readonly Compiled[]> }[] }[];
 };
 
-const latin1 = (bytes: Uint8Array): string => {
+/** Bytes as a string, one character a byte. */
+const latin1 = (bytes: Uint8Array, from: number, to: number): string => {
   let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
+  for (let i = from; i < to; i++) s += String.fromCharCode(bytes[i] ?? 0);
   return s;
 };
 
@@ -288,14 +290,14 @@ export function buildIndex(compiled: readonly Compiled[]): SigIndex {
     if (byLength === undefined) plain.set(offset, (byLength = new Map()));
     let byKey = byLength.get(bytes.length);
     if (byKey === undefined) byLength.set(bytes.length, (byKey = new Map()));
-    const key = latin1(bytes);
+    const key = latin1(bytes, 0, bytes.length);
     const here = byKey.get(key);
     if (here === undefined) byKey.set(key, [c]);
     else here.push(c);
   }
   const offsets = [...plain].map(([offset, byLength]) => ({
     offset,
-    lengths: [...byLength].map(([length, keys]) => ({ length, keys })),
+    lengths: [...byLength].map(([length, keys]) => ({ length, keys })).sort((a, b) => a.length - b.length),
   }));
   return { plain, rest, offsets };
 }
@@ -358,16 +360,22 @@ function hits(c: Compiled, file: FileBytes): boolean {
  *
  * The literal patterns are looked up rather than run: for each offset the
  * index holds, and each pattern length at that offset, the file's bytes there
- * are one map key.
+ * are one map key. The lengths at an offset come shortest first and the key
+ * for each is the one before it plus the bytes between, so the file is read
+ * once per offset rather than once per length.
  */
 export function matchFormats(index: SigIndex, file: FileBytes): SigMatch[] {
   const best = bestOf(extensionOf(file.name));
   const { head } = file;
   for (const { offset, lengths } of index.offsets) {
     if (offset >= head.length) continue;
+    let key = "";
+    let have = 0;
     for (const { length, keys } of lengths) {
-      if (offset + length > head.length) continue;
-      const found = keys.get(latin1(head.subarray(offset, offset + length)));
+      if (offset + length > head.length) break;
+      key += latin1(head, offset + have, offset + length);
+      have = length;
+      const found = keys.get(key);
       if (found === undefined) continue;
       for (const c of found) best.offer(c);
     }

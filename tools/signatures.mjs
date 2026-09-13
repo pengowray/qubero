@@ -156,7 +156,8 @@ function readMagicFile(name, text, count) {
       count.skip("offset is worked out from the file rather than fixed", `${name}:${i + 1}`);
       continue;
     }
-    const offset = Number(offsetText);
+    // C number syntax here too, so a leading 0 is octal: `0774` is byte 508.
+    const offset = Number(/^0[0-7]+$/.test(offsetText) ? `0o${offsetText.slice(1)}` : offsetText);
     const spec = NUMERIC[type];
     const isString = type === "string" || type === "string/b";
     if (!isString && spec === undefined) {
@@ -171,8 +172,10 @@ function readMagicFile(name, text, count) {
       count.skip("no value to match against", `${name}:${i + 1}`);
       continue;
     }
-    if (/^[<>=!&^~x]/.test(value)) {
-      count.skip(`value is a comparison, not a constant: ${value[0]}`, `${name}:${i + 1}`);
+    // `x` is file(1)'s match-anything test only when it stands alone, so a
+    // string value of `xar!` is four literal bytes.
+    if (value === "x" || /^[<>=!&^~]/.test(value)) {
+      count.skip(`value is a comparison, not a constant: ${value === "x" ? "x" : value[0]}`, `${name}:${i + 1}`);
       continue;
     }
     const raw = split[2];
