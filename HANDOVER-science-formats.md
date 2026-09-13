@@ -33,6 +33,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S8. Computed values that are not integers: `Ty::ComputedReal`, `Expr::Real`, `RealText`, `Pow2`, `Pow10`, `Trunc` on a second evaluator. NIfTI voxels scaled by fractional slopes, FITS scales with fractions and exponents, GRIB simple-packed values with their worth. Matches nibabel, astropy and ecCodes within float tolerance. | 0ebc377, 4cecf62, e91ab8a, fbce36a |
 | NI TDMS: a new template. Segments, metadata, properties, raw data contiguous or interleaved, layouts reused from the last list and one segment back, index files. Matches npTDMS 1.11 on every channel of ten samples. | 31c731c, 5d00193, 11afb26, dea17d1 |
 | CDF time values as moments: float counts (CDF_EPOCH, EPOCH16 seconds), `Epoch::Atomic` with a leap-second table for TT2000 (IERS from 1972, the CDF library's drifting offsets 1960 to 1971), fill and pad values as no time, and `23:59:60` shown inside a leap second. 2,489 sample sites and a 34,640-count sweep match cdflib, bar two cdflib faults. | c9cfdb5, f70cf0c, 97b3565 |
 | Arrow IPC files and streams: a new template and a FlatBuffers reader in the IR (`flatbuf.rs`), the footer read from the back, batches placed from their blocks, buffers typed by schema field to three levels, ZSTD bodies decoded. Matches pyarrow on six samples. | 92aa7cc, 24ca3b6, 5c596ad |
@@ -404,9 +405,9 @@ Seven samples. Left:
   `Expr::equals` for the scaling guard (`equals` is two comparisons, so two
   header walks per ask): `manyrows.fits` 3.7 s to 2.1 s, `comp.fits` 1.2 s
   to 0.28 s for a full deep walk.
-- A scale or zero point written with an exponent (`2.0E+01`, cfitsio's
-  default) is declined rather than misread; the cards show beside the
-  column and the sum is left to the reader.
+- Scales and zero points with fractions or exponents apply as computed
+  reals (S8); a card written `.5` still fails the guard. No sample has an
+  exponent card over scaled data, so that path is a unit test only.
 - `Expr::Idx` answers only for the nearest enclosing list, so a
   variable-length cell needed a `Descriptors` wrapper to keep its column
   index; an `Expr` naming a level out would remove it.
@@ -620,10 +621,9 @@ htslib and samtools samples, matched against bamnostic. Left:
 NIfTI-1, NIfTI-2 and Analyze 7.5 headers in either byte order, extensions,
 and voxels shaped by `dim` (see Closed). Six nibabel samples. Left:
 
-- Voxel scaling applies only when `scl_slope` and `scl_inter` are whole
-  numbers, because expressions are integers; `functional.nii` (slope 0.0754)
-  shows stored integers. A float-valued computed expression in the IR would
-  fix it, and would also let FITS scale by a fractional `TSCALn`.
+- Voxel worth is a computed real now (S8), fractional slopes included.
+  Real leaves use the narrowed f32 value, so worth differs from nibabel's
+  exact-bit arithmetic by about 1e-8 relative.
 - `nifti.rs` decodes `vox_offset`'s IEEE float bits to a whole number with
   integer expressions; nothing in it is NIfTI's, so it belongs beside
   `template.rs` if another format stores an offset as a float.

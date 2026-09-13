@@ -300,6 +300,31 @@ unpacked()))` after `blocks`, with every block's contents
 
 # S8. Computed values that are not integers
 
+**Built 2026-09-14** (`0ebc377`..`a035960`), as designed, with these
+differences found by building it: `data_offset` had to follow `vox_offset`
+(a name sees only earlier fields); switch keys stay whole numbers, so NIfTI
+tests an integer `scaled` flag instead of the float slope; float voxels,
+columns and images are scaled too; in whole-number mode `Sibling`, `Prev` and
+`Tagged` read a float as 0, so the relations panel reads a leaf's value first;
+a run of `Packed` records needed a `Struct` arm in `size::stride` to stay
+placed by arithmetic; `decode.rs`'s `fixed_bits` needed an arm; `real(...)`
+is written as a leaf; real leaves use the narrowed f32 value. Left:
+
+- **The treemap walks simple-packed GRIB values one by one.**
+  `kinds.rs::exact_stride` ends in `listing::plain`, which is false for a
+  struct, so every `Packed` element is visited (a 1M-point field is about 2M
+  frames). A struct arm totalling each field's kind and bits times the count
+  is the fix.
+- A real relation with one leaf is dropped because its substituted text
+  equals its result, so FITS `zero` and GRIB `reference_value` show no
+  formula line.
+- Kaitai `FloatNum` still lowers to nothing: map it to `Expr::Real`, pick
+  `ComputedReal` for float-typed value instances, `.to_i` to `Trunc`. Integer
+  division and `%` on reals have no real-mode equivalent.
+
+The design as written follows.
+
+
 ## What the evaluator fixes
 
 `eval_expr_at` returns `i128`; a leaf reads a node's `Value` through
