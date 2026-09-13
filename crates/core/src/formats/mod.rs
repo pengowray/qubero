@@ -79,6 +79,7 @@ pub mod grib_values;
 mod grubenv;
 mod gdbm;
 mod gwf;
+pub mod gwf_vect;
 mod gzip;
 mod recognise;
 pub mod sqlite_overflow;

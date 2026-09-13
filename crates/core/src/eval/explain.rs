@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::formats::ggml_quant::{self, Group, Offset, Quant, Weight};
-use crate::formats::{hdf5_chunk, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
+use crate::formats::{gwf_vect, hdf5_chunk, parquet_page, pdf_objstm, pdf_xref, sqlite_overflow};
 
 /// What a type permits, as opposed to what this file happens to hold.
 ///
@@ -308,6 +308,9 @@ impl Evaluator {
             }
             if &*packing == hdf5_chunk::PACKING {
                 return self.explain_hdf5_chunk(doc, at, &r);
+            }
+            if &*packing == gwf_vect::PACKING {
+                return self.explain_gwf_vect(doc, at, &r);
             }
             if &*packing == sqlite_overflow::PACKING {
                 return self.explain_sqlite_row(doc, at);
@@ -657,6 +660,48 @@ impl Evaluator {
             total,
             element_type,
             problem: chunk.problem,
+        })
+    }
+
+    /// The numbers of a packed IGWD frame vector, unpacked. See [`gwf_vect`].
+    ///
+    /// Everything needed is in the vector itself, in the fields before its
+    /// data: `compress` for the scheme and the byte order, `type` for the
+    /// width, `nData` for how many numbers, which zero suppression needs
+    /// because its last word is padded. The answer is shaped as an HDF5
+    /// chunk's is, steps then values, since the two are the same kind of walk
+    /// and the panel for one reads the other.
+    fn explain_gwf_vect<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved) -> R<Explain> {
+        let packed_bits = self.size_of(doc, at)?;
+        let packed_bytes = packed_bits / 8;
+        let mut field = |name: &str| {
+            self.find_field(at, name).and_then(|p| self.node(doc, &p).ok()).and_then(|n| n.value.as_int()).unwrap_or(-1)
+        };
+        let (compress, vect_type, n_data) = (field("compress"), field("type"), field("nData"));
+        if packed_bytes as usize > gwf_vect::PACKED_LIMIT {
+            let mb = gwf_vect::PACKED_LIMIT / (1 << 20);
+            return Ok(Explain::Hdf5Chunk {
+                packed_bytes,
+                decoded_bytes: 0,
+                steps: Vec::new(),
+                values: Vec::new(),
+                total: 0,
+                element_type: String::new(),
+                problem: Some(format!("Not unpacked: the vector is over this viewer's {mb} MB limit.")),
+            });
+        }
+        let bytes = self.read(doc, r, r.offset, packed_bits)?;
+        let clamp = |v: i128| v.clamp(0, i128::from(u16::MAX)) as u16;
+        let v = gwf_vect::decode(&bytes, clamp(compress), clamp(vect_type), n_data.max(0) as u64);
+        let (element_type, values, total) = gwf_vect::values(&v.bytes, clamp(vect_type), v.little);
+        Ok(Explain::Hdf5Chunk {
+            packed_bytes,
+            decoded_bytes: v.bytes.len() as u64,
+            steps: v.steps,
+            values,
+            total,
+            element_type,
+            problem: v.problem,
         })
     }
 

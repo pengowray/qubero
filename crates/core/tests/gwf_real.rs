@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, Explain, Value};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
@@ -178,6 +178,99 @@ fn every_structure_of_the_gwosc_frame_reads_as_the_class_its_dictionary_names() 
         ev.node(&d, &[8, 7, vect, 5, 1]).unwrap().value,
         Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false }
     );
+}
+
+/// The strain inside the gzip-packed vector, against the HDF5 file GWOSC
+/// publishes for the same 32 seconds.
+///
+/// The twin is not in the collection. It was compared whole, all 131,072
+/// samples equal as doubles, with h5py reading `strain/Strain` from
+/// `H-H1_GWOSC_4KHZ_R1-1126259447-32.hdf5` and zlib and numpy reading this
+/// vector; the numbers below are three of those samples, and the two masks,
+/// which were equal too.
+#[test]
+fn the_gwosc_strain_opens_as_the_samples_its_hdf5_twin_holds() {
+    let Some(bytes) = sample(GWOSC) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let mut f = Frames::open(bytes);
+    let strain = f.named("FrVect", "H1:GWOSC-4KHZ_R1_STRAIN");
+    let data = f.child(&strain, "data");
+    let space = f.ev.node(&f.d, &data).unwrap();
+    assert_eq!(space.size_bits, 1_015_922 * 8, "the packed run keeps its size in the file");
+    let mut numbers = data.clone();
+    numbers.push(0);
+    assert_eq!(f.ev.node(&f.d, &numbers).unwrap().child_count, 131_072);
+    for (i, want) in [(0, 9.067308911592338e-21), (65_536, 2.098363051339207e-19), (131_071, 7.764568284598941e-20)] {
+        let mut p = numbers.clone();
+        p.push(i);
+        assert_eq!(f.ev.node(&f.d, &p).unwrap().value, Value::Float(want), "sample {i}");
+    }
+    for (name, want) in [("H1:GWOSC-4KHZ_R1_DQMASK", 127), ("H1:GWOSC-4KHZ_R1_INJMASK", 31)] {
+        let mask = f.named("FrVect", name);
+        let mut p = f.child(&mask, "data");
+        p.extend([0, 31]);
+        assert_eq!(f.ev.node(&f.d, &p).unwrap().value, Value::Int(want), "{name}");
+    }
+}
+
+/// FrameL's example writes `fastProc` as twice `fastAdc1` in every frame, the
+/// first uncompressed as floats and the second zero-suppressed as shorts. So
+/// every one of the 2,000 shorts the side reader unpacks, in each of the ten
+/// frames, has its double beside it in bytes nothing packed.
+#[test]
+fn every_zero_suppressed_short_in_framels_test_file_is_half_the_float_written_beside_it() {
+    let Some(bytes) = sample(FRAMEL) else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let file = bytes.clone();
+    let mut f = Frames::open(bytes);
+    let vects = count(&f.seen, "FrVect");
+    let mut adcs = 0;
+    for nth in 0..vects {
+        let vect = f.body("FrVect", nth);
+        if f.text(&vect, "name") != "fastAdc1" {
+            continue;
+        }
+        // The next vector called fastProc is this frame's.
+        let mut proc = None;
+        for k in nth + 1..vects {
+            let p = f.body("FrVect", k);
+            if f.text(&p, "name") == "fastProc" {
+                proc = Some(p);
+                break;
+            }
+        }
+        let proc = proc.expect("a fastProc after each fastAdc1");
+        let data = f.child(&vect, "data");
+        let (steps, values, total, problem) = match f.ev.explain(&f.d, &data, None).unwrap() {
+            Explain::Hdf5Chunk { steps, values, total, problem, .. } => (steps, values, total, problem),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(problem, None);
+        assert_eq!(total, 2000);
+        let names: Vec<&str> = steps.iter().map(|s| s.filter.as_str()).collect();
+        assert_eq!(names, ["zero suppression", "differences summed"]);
+        // The panel shows the first few; the side reader is asked for all of
+        // them, from the same bytes the template placed.
+        let packed = f.ev.node(&f.d, &data).unwrap();
+        let run = &file[(packed.offset_bits / 8) as usize..((packed.offset_bits + packed.size_bits) / 8) as usize];
+        let unpacked = qubero_core::formats::gwf_vect::decode(run, 261, 1, 2000);
+        let shorts: Vec<i16> = unpacked.bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        assert_eq!(shorts.len(), 2000);
+        assert_eq!(values[0], shorts[0].to_string());
+        let floats = f.child(&proc, "data");
+        for (j, s) in shorts.iter().enumerate() {
+            let mut p = floats.clone();
+            p.push(j);
+            let Value::Float(x) = f.ev.node(&f.d, &p).unwrap().value else { panic!() };
+            assert_eq!(x, 2.0 * f64::from(*s), "frame {adcs}, sample {j}");
+        }
+        adcs += 1;
+    }
+    assert_eq!(adcs, 10);
 }
 
 /// FrameL's own test file: ten frames of everything the format has, which is

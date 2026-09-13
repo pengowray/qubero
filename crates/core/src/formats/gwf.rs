@@ -58,13 +58,25 @@
 //! `exampleFull.c`, and their values are checked against what that program
 //! says it put in them.
 //!
-//! What stays bytes: the contents of a compressed FrVect, which is named but
-//! not unpacked; the body of a class this reader has no layout for; and the
+//! **Vectors.** An FrVect's numbers are read as its `type` names them, all
+//! thirteen types, complex pairs and counted strings included. A packed vector
+//! is opened as far as a template can open it: gzip as a space of the numbers,
+//! differences then gzip as a space of the differences, and zero suppression
+//! as its block size and the packed bits. The last two are finished by
+//! [`gwf_vect`](super::gwf_vect), which the value panel asks, and which
+//! reports each step it took. The GWOSC strain opens as the same 131,072
+//! doubles GWOSC's HDF5 file of the same 32 seconds holds; FrameL's
+//! zero-suppressed shorts unpack to half the floats its example wrote beside
+//! them. Only those two schemes have samples.
+//!
+//! What stays bytes: the body of a class this reader has no layout for, a
+//! vector packed with a scheme the specification does not list, and the
 //! whole stream of a version 6 or 7 file past its structure headers, which
 //! nothing here has a sample of. Version 6 differs in more than its header:
 //! `sampleRate` and the event parameters are 4-byte floats there and 8-byte
 //! ones from version 8, and no field is written out on a guess.
 
+use crate::codec::Codec;
 use crate::template::{Endian, Endian::*, Expr as E, Template, Ty as T, Until};
 
 /// Which library wrote the file, from byte 38 of the header.
@@ -820,14 +832,57 @@ fn vect(e: Endian) -> T {
 }
 
 /// What is inside a vector: the numbers themselves when nothing was packed,
-/// and the packed bytes otherwise.
+/// and what the packing made of them otherwise.
 ///
 /// Nothing packed is 0 or 256, the same scheme written by a big-endian and a
 /// little-endian machine, and both read the way round the file's header says.
 /// FrameL writes 256 on every vector it leaves alone, so reading only 0 left
 /// every vector of a FrameL file as bytes.
+///
+/// Every packed scheme has the same two numbers, one for each kind of machine,
+/// and inside the packed run the words are the way round the number says
+/// rather than the way the file's header does: a vector copied still packed
+/// from one file into another keeps the byte order it was packed in.
+///
+/// - gzip opens as a space of its own, typed by the vector's `type` and
+///   `nData`, since it is the zlib codec and nothing more.
+/// - Differences then gzip opens the same way, and what is in the space is
+///   named for what it is: the difference of each number from the one before.
+///   Adding them back up is [`gwf_vect`](super::gwf_vect)'s, which reports
+///   the steps.
+/// - Zero suppression is a bit packing no codec here reads, and it needs
+///   `nData` from outside the run, so its block size is read as the field it
+///   is and the rest is left to the same side reader.
+///
+/// Any other number keeps its bytes.
 fn vect_data(e: Endian) -> T {
-    T::switch(E::field("compress"), vec![(0, numbers(e)), (256, numbers(e))], T::bytes(E::Remaining))
+    let gzip = |ce: Endian| T::decoded(E::Remaining, Codec::Zlib, numbers(ce));
+    let differences = |ce: Endian| {
+        T::structure("DifferencesThenGzip", vec![("differences", gzip(ce))]).packed_as(super::gwf_vect::PACKING)
+    };
+    let suppressed = |ce: Endian| {
+        T::structure("ZeroSuppressed", vec![("block_size", T::u16(ce)), ("packed", T::bytes(E::Remaining))])
+            .machinery(&["block_size"])
+            .packed_as(super::gwf_vect::PACKING)
+    };
+    T::switch(
+        E::field("compress"),
+        vec![
+            (0, numbers(e)),
+            (256, numbers(e)),
+            (1, gzip(Big)),
+            (257, gzip(Little)),
+            (3, differences(Big)),
+            (259, differences(Little)),
+            (5, suppressed(Big)),
+            (261, suppressed(Little)),
+            (8, suppressed(Big)),
+            (264, suppressed(Little)),
+            (10, suppressed(Big)),
+            (266, suppressed(Little)),
+        ],
+        T::bytes(E::Remaining),
+    )
 }
 
 /// The `nData` numbers of a vector, as its `type` names them, read from the
@@ -1208,34 +1263,72 @@ mod tests {
         assert_eq!(ev.node(&d, &at(&[7, 5, 5, 1, 1])).unwrap().value, Value::Float(0.25));
     }
 
-    #[test]
-    fn a_compressed_vector_is_named_and_left_alone() {
-        // The same vector with gzip written by the other kind of machine,
-        // which is what every GWOSC file holds. The bytes stay bytes.
-        let w = W(true);
-        let mut b = file(true);
-        let start = b.len();
+    /// A vector whose data is `packed`, as the seventh structure of the file
+    /// above, the whole file big-endian when `big` is set.
+    fn packed_vector(big: bool, compress: u16, vect_type: u16, n: u64, packed: &[u8]) -> Vec<u8> {
+        let w = W(!big);
+        let mut b = file(!big);
         let mut fv = w.str("strain");
-        fv.extend(w.u16(257));
-        fv.extend(w.u16(2));
-        fv.extend(w.u64(2));
-        fv.extend(w.u64(6));
-        fv.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+        fv.extend(w.u16(compress));
+        fv.extend(w.u16(vect_type));
+        fv.extend(w.u64(n));
+        fv.extend(w.u64(packed.len() as u64));
+        fv.extend_from_slice(packed);
         fv.extend(w.u32(0)); // nDim
         fv.extend(w.str("strain")); // unitY
         fv.extend(w.ptr(0, 0));
         fv.extend(w.u32(0));
         b.extend(w.structure(20, 1, &fv));
-        let d = Document::new(MemSource(b));
+        b
+    }
+
+    /// Gzip, which is what every GWOSC vector holds, opens as a space of the
+    /// numbers the vector's type names. The words inside are the way round the
+    /// scheme says, which in a big-endian file packed on a little-endian
+    /// machine is not the way round the file is.
+    #[test]
+    fn a_gzip_vector_opens_as_the_numbers_inside_it() {
+        let plain: Vec<u8> = [1.5f64, -2.5].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(&plain, 6);
+        let d = Document::new(MemSource(packed_vector(true, 257, 2, 2, &packed)));
         let mut ev = Evaluator::new(gwf());
-        assert!(ev.node(&d, &at(&[6])).unwrap().offset_bits == start as u64 * 8);
         let kind = ev.node(&d, &at(&[6, 5, 1])).unwrap();
-        assert_eq!(
-            kind.value,
-            Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false }
-        );
+        assert_eq!(kind.value, Value::Enum { raw: 257, name: Some("gzip (little-endian words)".into()), hex: false });
         let data = ev.node(&d, &at(&[6, 5, 5])).unwrap();
-        assert_eq!((data.type_name.as_str(), data.size_bits), ("bytes[]", 6 * 8));
+        assert_eq!(data.size_bits, packed.len() as u64 * 8);
+        assert_eq!(ev.node(&d, &at(&[6, 5, 5, 0, 1])).unwrap().value, Value::Float(-2.5));
+        // And the fields after the data are where nBytes put them.
+        assert_eq!(ev.node(&d, &at(&[6, 5, 11, 1])).unwrap().value, Value::Str("strain".into()));
+    }
+
+    /// Zero suppression is marked for the side reader, which the panel asks.
+    /// Its block size is the one field of it the template reads.
+    #[test]
+    fn a_zero_suppressed_vector_is_marked_for_the_side_reader() {
+        let packed: Vec<u8> = [0x0003u16, 0x2D17, 0x37f8, 0x2963, 0x0025].iter().flat_map(|w| w.to_le_bytes()).collect();
+        let d = Document::new(MemSource(packed_vector(false, 261, 1, 8, &packed)));
+        let mut ev = Evaluator::new(gwf());
+        let data = ev.node(&d, &at(&[6, 5, 5])).unwrap();
+        assert_eq!(data.type_name, "ZeroSuppressed");
+        assert_eq!(ev.node(&d, &at(&[6, 5, 5, 0])).unwrap().value, Value::UInt(3));
+        match ev.explain(&d, &at(&[6, 5, 5, 1]), None).unwrap() {
+            crate::eval::Explain::Hdf5Chunk { values, total, element_type, problem, .. } => {
+                assert_eq!(problem, None);
+                assert_eq!((element_type.as_str(), total), ("i16", 8));
+                assert_eq!(values, ["82", "85", "85", "81", "80", "82", "84", "85"]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A stream that will not inflate is the bytes it is, not a guess.
+    #[test]
+    fn a_gzip_vector_that_will_not_inflate_keeps_its_bytes() {
+        let d = Document::new(MemSource(packed_vector(false, 257, 2, 2, &[1, 2, 3, 4, 5, 6])));
+        let mut ev = Evaluator::new(gwf());
+        let data = ev.node(&d, &at(&[6, 5, 5])).unwrap();
+        assert_eq!(data.size_bits, 6 * 8);
+        assert_eq!(ev.node(&d, &at(&[6, 5, 6])).unwrap().value, Value::UInt(0));
     }
 
     /// A dictionary entry: this file calls class `class` by this name.
