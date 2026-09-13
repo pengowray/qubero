@@ -68,6 +68,7 @@ const MAGIC: &[(&[u8], &str)] = &[
     (b"DRACO", "draco"),
     (b"MThd", "midi"),
     (b"\x1f\x8b", "gzip"),
+    (bam::BAM_MAGIC, "bam"),
     (b"\x1f\x9d", "compress"),
     (bzip2::MAGIC, "bzip2"),
     (lzip::MAGIC, "lzip"),
