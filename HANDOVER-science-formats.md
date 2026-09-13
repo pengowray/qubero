@@ -144,11 +144,10 @@ version 1 b-tree's chunk entries still search back the old way, bounded by the
 The heap tables and the B-tree children are closed (see the Closed table).
 Both are checked by `fractal-heap-deep.h5`, whose group of 2,000 links puts
 160 of them under a second heap table and indexes them with a tree of depth 2.
-What the B-tree work left for the web side is a string: `BTREES.notInListing`
-and the `rootOnly` form of `BTREES.hint` still say only the root of a version
-2 tree is in the Listing. Both now show only for a node the template places
-somewhere other than where `hdf5_tree.rs` read it, which a well-formed file
-never has, so they want rewording rather than removing.
+The two B-tree panel strings that said only the root of a version 2 tree is in
+the Listing were reworded in `46d12a7`. They now show only for a node the
+template places somewhere other than where `hdf5_tree.rs` read it, which a
+MATLAB 7.3 file does (see HDF5 below).
 
 The same file's links are all hard links to one dataset, which made
 `kinds_real`'s `every_sample_adds_up` count that object header once per link,
@@ -200,12 +199,15 @@ list, Parquet is the least unread.
 
 ### NASA CDF
 
-Descriptor chains read; values do not. Variable index records (VXR) and value
-records (VVR) are sized bytes, as are attribute entry values and pad values.
-Needs a switch on the encoding field in the descriptor record, the way GWF and
-ELF switch on byte order. Whole-file compression is not unpacked. Version 2.x
-stops after the global descriptor. `psp_fld_l2_mag_rtn_1min_20200104_v02.cdf`
-has about 30% of its bytes in gaps.
+Descriptor chains read; values do not. Checked against a tree, not only the
+module doc: variable index records (VXR), value records (VVR), compressed value
+records (CVVR) and sparseness records all fall to the `T::bytes(E::Remaining)`
+default in `cdf.rs`, as do attribute entry values and pad values. Needs a
+switch on the encoding field in the descriptor record, the way GWF and ELF
+switch on byte order. Whole-file compression is not unpacked. Version 2.x stops
+after the global descriptor. The 66 unused-space records in
+`psp_fld_l2_mag_rtn_1min_20200104_v02.cdf` are placed and really are free
+space, so its bytes-named figure undercounts nothing there.
 
 ### HDF4
 
@@ -227,6 +229,19 @@ Reads further than any other scientific format. Left:
 - Virtual dataset mappings are bytes.
 - Huge and tiny fractal-heap objects, free-space managers.
 - 4-byte offsets are read wrong rather than refused.
+- Checksums on the chunk index blocks and pages are placed as fields but not
+  verified: the crate has no lookup3.
+- `hdf5_tree.rs`'s version 2 walk ignores the superblock's base address, so
+  behind a user block (every MATLAB 7.3 file) its nodes come back with no
+  template path and the B-trees panel cannot open them in the Listing.
+- `Expr::Sibling` searches back through every earlier element of every list
+  around the field asking. Chunks under the array indexes now read a copy of
+  the datatype instead, but a version 1 b-tree's chunk entries (bounded by 64
+  per node) and the filtered-chunk explain panel in `eval/explain.rs` still
+  pay it.
+- `hdf5.rs` is about 3,700 lines. The chunk index code (implicit index, both
+  arrays, `array_entry`, `entries`, `page`, `page_written`, `datatype_copy`) is
+  about 500 lines with a clean edge and would split out as `hdf5_index.rs`.
 
 ### FITS
 
