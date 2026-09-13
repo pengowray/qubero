@@ -18,7 +18,8 @@ import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEMPLATE_GROUP_KAITAI, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEMPLATE_GROUP_KAITAI, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
   CODEPAGES_A,
@@ -41,8 +42,10 @@ const app: HTMLElement = appEl;
 const formatSize = formatBytes;
 
 /** The main views: one reading of the file at a time, in the same area. The
- *  graph is behind `?graph` and is not offered until it has been unlocked. */
-type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram";
+ *  graph is behind `?graph` and is not offered until it has been unlocked.
+ *  `ksy` is the converter, which takes the same area without being a reading of
+ *  the file: it is a tool, and it is opened from the template menu. */
+type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "ksy";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -161,6 +164,13 @@ function modifiedTab(): Tab | null {
 /** Writes to the toolbar's message slot, once there is one. */
 let say: (text: string, warn?: boolean) => void = () => {};
 
+/** Where a dropped `.ksy` goes: the showing tab's converter. A `.ksy` says how
+ *  to read a file rather than being one, so it opens the converter instead of
+ *  taking the place of what is open. Null while no file is open, and set to a
+ *  refusal for a tab of unpacked bytes, which no template of the reader's
+ *  choosing reads. */
+let dropKsy: ((text: string, name: string) => void) | null = null;
+
 const DROP_TITLE = "Drop to open";
 const DROP_HINT = "or drop a file anywhere on this page";
 const FOLDER_MSG =
@@ -189,6 +199,13 @@ const SIGNATURE_NOTE = "Signature only. This template marks the bytes that ident
 const SIGNATURE_VALUE = "generated-signature";
 const signatureOption = (name: string): string =>
   name === "" ? "Template: signature only" : `Template: ${name} (signature only)`;
+
+/** The menu entry that opens the `.ksy` converter. An action rather than a
+ *  template, so picking it puts the menu back where it was. */
+const KSY_OPEN_VALUE = "open-ksy-converter";
+/** The menu entry for the template a converted `.ksy` produced, added once one
+ *  is in use. Neither value can collide with a built-in's name. */
+const KSY_VALUE = "converted-ksy";
 
 /**
  * Open a file from disk, in place of everything already open. Unsaved edits
@@ -636,13 +653,35 @@ function build(tab: Tab): Page {
     for (const c of kaitai) group.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
     tmpl.append(group);
   }
+  // Last, after every template there is: it opens a tool rather than choosing
+  // one of them. The generated-signature entry is added later and goes in front
+  // of this one, so the tool stays at the end of the menu.
+  const ksyEntry = el("option", { value: KSY_OPEN_VALUE, textContent: KSY.menuEntry });
+  if (doc.isFile) tmpl.append(ksyEntry);
+  /** The entry for a converted `.ksy`, once one has been applied. */
+  let ksyOption: HTMLOptionElement | null = null;
+  /** What the menu was on before the current change, so the entry that opens
+   *  the converter can put it back. */
+  let tmplWas = "";
   // The generated template is not one of the built-ins, so switching back to it
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
   tmpl.addEventListener("change", () => {
+    if (tmpl.value === KSY_OPEN_VALUE) {
+      // Opening the converter changes nothing about how the file is read, so
+      // the menu goes back to saying what is reading it.
+      tmpl.value = tmplWas;
+      openKsyPanel();
+      return;
+    }
+    tmplWas = tmpl.value;
     overview.setNote("");
     if (tmpl.value === SIGNATURE_VALUE) {
       void reapplySignature?.();
+      return;
+    }
+    if (tmpl.value === KSY_VALUE) {
+      applyKsy();
       return;
     }
     doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
@@ -666,6 +705,7 @@ function build(tab: Tab): Page {
     structure.setMatched(templated);
     if (name !== null) {
       tmpl.value = name;
+      tmplWas = name;
       doc.setTemplate(name);
       // The template's answer goes up at once: it is the one source that
       // has read the file, and the one that answers before anything else.
@@ -700,8 +740,12 @@ function build(tab: Tab): Page {
       const signature = await doc.signatureTemplate(id);
       if (signature === null) return;
       const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
-      tmpl.append(option);
+      // Before the entry that opens the converter: templates first, the tool
+      // last.
+      if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(option, ksyEntry);
+      else tmpl.append(option);
       tmpl.value = SIGNATURE_VALUE;
+      tmplWas = SIGNATURE_VALUE;
       overview.setNote(SIGNATURE_NOTE);
       kind.setNote(SIGNATURE_TEMPLATE);
       reapplySignature = async (): Promise<void> => {
@@ -1204,7 +1248,64 @@ function build(tab: Tab): Page {
     diagram.show(reply.status === "ok" ? reply.node : null, templateLabel(format));
   };
 
+  /** The `.ksy` converter, built the first time it is opened. It keeps its text
+   *  while it is closed, so reopening comes back to what was being worked on. */
+  let ksyPanel: KsyPanel | null = null;
+  /** Which view the converter was opened over, so closing it goes back there. */
+  let ksyCameFrom: View = "hex";
+  /** What is in the main pane now. Only the converter needs to ask, and only so
+   *  that closing it can put back what it covered. */
+  let showingView: View = "hex";
+
+  /** Apply the template in the converter to the open file. Also what the menu's
+   *  own entry for it does, for a reader who read the file with something else
+   *  and has come back. */
+  const applyKsy = (): void => ksyPanel?.apply();
+
+  /**
+   * Open the converter over the main pane, with a `.ksy` in it where one was
+   * dropped or picked.
+   *
+   * Nothing about how the file is being read changes here. The converter is a
+   * tool: it converts as it is typed into, on a scratch basis, and only "Use
+   * this template" reaches the document.
+   */
+  const openKsyPanel = (text?: string, name?: string): void => {
+    if (ksyPanel === null) {
+      const panel = new KsyPanel(doc);
+      ksyPanel = panel;
+      panel.onMessage = (message, warn) => say(message, warn);
+      panel.onClose = () => setView(ksyCameFrom === "ksy" ? "hex" : ksyCameFrom);
+      panel.onApply = (id) => {
+        // The menu names whatever is reading the file, and that is now this.
+        if (ksyOption === null) {
+          ksyOption = el("option", { value: KSY_VALUE, textContent: KSY.menuApplied(id) });
+          // In front of the entry that opens the converter, which stays last.
+          if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(ksyOption, ksyEntry);
+          else tmpl.append(ksyOption);
+        } else ksyOption.textContent = KSY.menuApplied(id);
+        tmpl.value = KSY_VALUE;
+        tmplWas = KSY_VALUE;
+        overview.setNote("");
+        structure.setMatched(true);
+        inspector.setMode("structure");
+        // The diagram is a picture of the template, and the template is a new
+        // one, so the drawing on hand is of the last format.
+        diagramFor = null;
+        setView("listing");
+      };
+      panel.el.hidden = true;
+      workspaceLeft.append(panel.el);
+      tab.release.push(() => panel.dispose());
+    }
+    if (text !== undefined) ksyPanel.load(text, name ?? null);
+    if (showingView !== "ksy") ksyCameFrom = showingView;
+    setView("ksy");
+  };
+
   const setView = (which: View): void => {
+    showingView = which;
+    const ksyOn = which === "ksy";
     const listingOn = which === "listing";
     const textOn = which === "text";
     const stringsOn = which === "strings";
@@ -1218,6 +1319,7 @@ function build(tab: Tab): Page {
     strings.el.hidden = !stringsOn;
     if (graph !== null) graph.el.hidden = !graphOn;
     if (diagram !== null) diagram.el.hidden = !diagramOn;
+    if (ksyPanel !== null) ksyPanel.el.hidden = !ksyOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
     syncGlyphsShown();
     for (const c of textOnly) c.hidden = !textOn;
@@ -1233,7 +1335,9 @@ function build(tab: Tab): Page {
       btn.setAttribute("aria-pressed", String(on));
       btn.classList.toggle("is-on", on);
     }
-    localStorage.setItem("qubero.view", which);
+    // The converter is not a reading of the file, so it is not what a reader
+    // meant to come back to next time.
+    if (!ksyOn) localStorage.setItem("qubero.view", which);
     // A hidden view ignores the cursor, since scrolling something nobody is
     // looking at only loses their place in it. So when it comes back it has
     // wherever the cursor was left to catch up on.
@@ -1250,21 +1354,30 @@ function build(tab: Tab): Page {
       void showGraph();
     } else if (diagramOn) {
       void showDiagram();
-    } else view.relayout();
-    (listingOn
-      ? structure.el
-      : textOn
-        ? text.el
-        : stringsOn
-          ? strings.el
-          : graphOn && graph !== null
-            ? graph.el
-            : diagramOn && diagram !== null
-              ? diagram.el
-              : view.el
-    ).focus();
+    } else if (!ksyOn) view.relayout();
+    if (ksyOn) ksyPanel?.focus();
+    else
+      (listingOn
+        ? structure.el
+        : textOn
+          ? text.el
+          : stringsOn
+            ? strings.el
+            : graphOn && graph !== null
+              ? graph.el
+              : diagramOn && diagram !== null
+                ? diagram.el
+                : view.el
+      ).focus();
     refresh();
   };
+  // Escape leaves the converter and Ctrl+Enter applies it, from anywhere inside
+  // it: Tab in the text box indents rather than moving the focus out, so the
+  // keys have to work while the caret is in there.
+  key((e) => {
+    if (showingView !== "ksy" || ksyPanel === null) return;
+    if (ksyPanel.handleKey(e)) e.preventDefault();
+  });
   hexBtn.addEventListener("click", () => setView("hex"));
   listBtn.addEventListener("click", () => setView("listing"));
   textBtn.addEventListener("click", () => setView("text"));
@@ -1528,6 +1641,8 @@ function build(tab: Tab): Page {
       saveMsg.textContent = text;
       saveMsg.classList.toggle("warn", warn === true);
     };
+    // So does a dropped `.ksy`.
+    dropKsy = doc.isFile ? (text, name) => openKsyPanel(text, name) : () => say(KSY.notHere, true);
     if (!started) {
       started = true;
       // A saved "graph" from a browser where it was once unlocked is not a
@@ -1565,6 +1680,8 @@ function build(tab: Tab): Page {
         tabs,
         graph: () => graph,
         diagram: () => diagram,
+        ksy: () => ksyPanel,
+        openKsy: openKsyPanel,
       },
     });
   }
@@ -1687,8 +1804,26 @@ document.addEventListener("drop", (e) => {
   const files = e.dataTransfer?.files;
   const f = files?.[0];
   if (files === undefined || f === undefined) return;
+  if (/\.ksy$/i.test(f.name)) {
+    openKsy(f);
+    return;
+  }
   openFile(f, files.length > 1 ? manyFilesMsg(f.name, files.length - 1) : undefined);
 });
+
+/** A dropped `.ksy` goes into the converter over the open file, not into a tab
+ *  of its own: it describes how to read a file, so there has to be one. */
+function openKsy(f: File): void {
+  if (dropKsy === null) {
+    if (welcomeStatus !== null) welcomeStatus.textContent = KSY.needsFile;
+    else say(KSY.needsFile, true);
+    return;
+  }
+  void f
+    .text()
+    .then((text) => dropKsy?.(text, f.name))
+    .catch(openFailed);
+}
 // A drag that ends outside the window, or one the browser abandons, still has
 // to clear the overlay.
 window.addEventListener("dragend", () => showDropzone(false));

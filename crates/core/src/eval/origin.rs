@@ -45,13 +45,16 @@ pub enum Role {
     /// Whether the field is there at all: the expression a [`Ty::When`] is
     /// guarded by, and the fields that expression reads.
     ///
-    /// Apart from `Type`, which is what `wrapper_origins` reports for the same
-    /// guard, because the two questions read differently once they are drawn
-    /// side by side. In a panel about one field, "what decides which of these
-    /// this is" covers both. In a diagram, `Type` is already the heavy arrow
-    /// from a field to the box of the type it is read as, and an arrow saying
-    /// `type` from a flag to an optional field would read as that flag naming
-    /// the type. See [`crate::eval::diagram`].
+    /// Apart from `Type`, which is what a switch's expression decides, because
+    /// the two read differently once they are drawn side by side. `Type` is
+    /// the heavy arrow from a field to the box of the type it is read as, and
+    /// an arrow saying `type` from a flag to an optional field would read as
+    /// that flag naming the type. The flag decides whether the field is there,
+    /// not what it is. See [`crate::eval::diagram`].
+    ///
+    /// The panel about one field still shows both on its Type row, where
+    /// "which of these is this" covers them together; it is the word that
+    /// differs, not the place. See `properties` in `web/src/inspector.ts`.
     Condition,
     /// One value a switch may read, and the type it picks when it reads it.
     ///
@@ -442,12 +445,12 @@ impl Evaluator {
                 // answers for the node that is actually at that address.
                 Ty::At { inner, .. } => ty = *inner,
                 Ty::Origin { inner } => ty = *inner,
-                // Whether the field is here at all, which is a fact about
-                // what it is: a row that is not there is not a row of some
-                // other type. The same role a switch's expression has, since
-                // both answer "which of these is this field".
+                // Whether the field is here at all, which is its own question
+                // and not the one a switch asks: the flag decides that the row
+                // exists, and a switch decides which of several shapes a row
+                // that does exist has. See [`Role::Condition`].
                 Ty::When { cond, inner } => {
-                    self.from_expr(doc, path, &cond, Role::Type, out)?;
+                    self.from_expr(doc, path, &cond, Role::Condition, out)?;
                     ty = *inner;
                 }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {

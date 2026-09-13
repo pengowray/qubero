@@ -151,6 +151,9 @@ export type KsyLine = {
  *  A conversion with gaps still produced a template, and reading the file with
  *  it is still right about everything the gaps do not cover. */
 export type KsyReport = {
+  /** The format's own id, `meta/id`: the name the template goes by once it is
+   *  in use, in place of a built-in's name. */
+  readonly name: string;
   readonly fields: readonly KsyLine[];
   readonly gaps: readonly KsyLine[];
   readonly notes: readonly KsyLine[];
@@ -556,7 +559,7 @@ export type SearchStep =
 /** What one other field decided about this one. `points` is the other way
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "points";
   /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
   readonly label: string;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */
@@ -675,7 +678,7 @@ export type Verdict = {
  * never infers a relationship of its own.
  */
 export type Relation = {
-  readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position";
+  readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position" | "condition";
   /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
   readonly written: string;
   /** The same with every field's value in its place: `4 - 1`. */
@@ -772,7 +775,7 @@ export type GraphEdge = {
   readonly from: number;
   /** Index into the node list: the field it decided about. */
   readonly to: number;
-  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "points";
+  readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "points";
 };
 
 /**
@@ -1994,9 +1997,32 @@ export class Doc {
       | { status: "ok"; node: KsyReport }
       | { status: "error"; message: string };
     if (reply.status === "error") throw new Error(reply.message);
-    this.template = null;
+    // The format's own id, the way a built-in's name is its id. Everything
+    // that asks whether a file is being read at all asks this, so a `.ksy`
+    // template that left it null would read the file and then be told there
+    // was no template: no fields in the hex grid, no field under the cursor.
+    this.template = reply.node.name;
     this.notify();
     return reply.node;
+  }
+
+  /**
+   * Convert a `.ksy` and say what it became, without reading anything with it.
+   *
+   * The same report `setKsyTemplate` gives, plus the template it produced
+   * written out as text, and the document left on whatever template it had.
+   * This is what the converter panel calls as the text is edited; applying is
+   * `setKsyTemplate`.
+   */
+  previewKsyTemplate(
+    text: string,
+    imports: Record<string, string> = {},
+  ): { readonly status: "ok"; readonly report: KsyReport; readonly text: string } | { readonly status: "error"; readonly message: string } {
+    const reply = JSON.parse(this.editor.preview_ksy_template(text, JSON.stringify(imports))) as
+      | { status: "ok"; node: { report: KsyReport; text: string } }
+      | { status: "error"; message: string };
+    if (reply.status === "error") return { status: "error", message: reply.message };
+    return { status: "ok", report: reply.node.report, text: reply.node.text };
   }
 
   /**

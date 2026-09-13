@@ -1353,12 +1353,33 @@ struct TemplateChoiceDto {
 /// What a `.ksy` conversion had to say, for the panel.
 #[derive(Serialize)]
 struct KsyReportDto {
+    /// The format's own id, `meta/id`, which is the name the template goes by
+    /// once it is in use. The menu shows it in place of a built-in's name.
+    name: String,
     /// One per field converted, in the order the `.ksy` writes them.
     fields: Vec<KsyLineDto>,
     /// Everything the IR could not say, each with what was left in its place.
     gaps: Vec<KsyLineDto>,
     /// Everything said exactly, but not the way the `.ksy` said it.
     notes: Vec<KsyLineDto>,
+}
+
+/// The `meta/imports` map both `.ksy` entries take, or what was wrong with it.
+fn ksy_imports(imports_json: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    if imports_json.trim().is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    serde_json::from_str(imports_json).map_err(|e| format!("the imports are not a JSON object of name to text: {e}"))
+}
+
+/// A conversion done for the panel and thrown away: the report, and the
+/// template it produced written out as text. Nothing is read with it, so the
+/// document keeps whatever template it had.
+#[derive(Serialize)]
+struct KsyPreviewDto {
+    report: KsyReportDto,
+    /// The template as [`template_text`](Editor::template_text) writes it.
+    text: String,
 }
 
 /// One line of the report: where in the `.ksy`, the text there, and what of it.
@@ -1369,8 +1390,9 @@ struct KsyLineDto {
     message: String,
 }
 
-fn ksy_report_dto(report: &qubero_core::ksy::Report) -> KsyReportDto {
+fn ksy_report_dto(report: &qubero_core::ksy::Report, name: &str) -> KsyReportDto {
     KsyReportDto {
+        name: name.to_string(),
         fields: report
             .fields
             .iter()
@@ -2584,7 +2606,7 @@ impl Editor {
             Some(id) => match qubero_core::ksy::bundled::template(id) {
                 Some(Ok(converted)) => {
                     sh.ksy_report =
-                        serde_json::to_string(&ksy_report_dto(&converted.report)).unwrap_or_default();
+                        serde_json::to_string(&ksy_report_dto(&converted.report, &converted.template.name)).unwrap_or_default();
                     Some(converted.template)
                 }
                 // A bundled `.ksy` that no longer converts is a broken build,
@@ -2618,17 +2640,10 @@ impl Editor {
     /// text it came from and the reason; the field is left as bytes rather
     /// than guessed at. See [`ksy_report`](Self::ksy_report).
     pub fn set_ksy_template(&mut self, text: &str, imports_json: &str) -> String {
-        let map: std::collections::HashMap<String, String> = if imports_json.trim().is_empty() {
-            std::collections::HashMap::new()
-        } else {
-            match serde_json::from_str(imports_json) {
-                Ok(map) => map,
-                Err(e) => {
-                    return serde_json::to_string(&Reply::<KsyReportDto>::Error {
-                        message: format!("the imports are not a JSON object of name to text: {e}"),
-                    })
-                    .unwrap_or_default();
-                }
+        let map = match ksy_imports(imports_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<KsyReportDto>::Error { message }).unwrap_or_default();
             }
         };
         let imports = PastedImports(qubero_core::ksy::MapImports(map));
@@ -2643,7 +2658,7 @@ impl Editor {
         // `set_template`, which throws the same working away for the same
         // reasons.
         self.forget_spaces();
-        let report = ksy_report_dto(&converted.report);
+        let report = ksy_report_dto(&converted.report, &converted.template.name);
         let sh = self.sm();
         sh.disasm = None;
         sh.bpf = None;
@@ -2662,6 +2677,35 @@ impl Editor {
     /// Empty when the template in use did not come from one.
     pub fn ksy_report(&self, space: u32) -> String {
         self.at(space).ksy_report.clone()
+    }
+
+    /// Convert a `.ksy` and say what it became, without reading anything with
+    /// it. The document keeps the template it had.
+    ///
+    /// This is what the converter panel calls as the text is typed: the reply
+    /// carries the same report [`set_ksy_template`](Self::set_ksy_template)
+    /// gives, plus the template written out as text, so a reader sees what a
+    /// `.ksy` would produce before deciding to read the file with it.
+    pub fn preview_ksy_template(&self, text: &str, imports_json: &str) -> String {
+        let map = match ksy_imports(imports_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message }).unwrap_or_default();
+            }
+        };
+        let imports = PastedImports(qubero_core::ksy::MapImports(map));
+        let converted = match qubero_core::ksy::convert(text, &imports) {
+            Ok(converted) => converted,
+            Err(e) => {
+                return serde_json::to_string(&Reply::<KsyPreviewDto>::Error { message: e.to_string() })
+                    .unwrap_or_default();
+            }
+        };
+        let node = KsyPreviewDto {
+            report: ksy_report_dto(&converted.report, &converted.template.name),
+            text: qubero_core::template_text::render(&converted.template),
+        };
+        serde_json::to_string(&Reply::Ok { node, wanted: Vec::new() }).unwrap_or_default()
     }
 
     /// Build a template from a `file(1)` rule file and select it, for a format

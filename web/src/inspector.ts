@@ -1705,19 +1705,25 @@ export class Inspector {
     // The type, only where the file rather than the template settled it: the
     // line under the value already says what the type is, and a row repeating
     // it to say the template said so is a row that never varies.
-    if (said_(["type"])) {
-      const one = only(from.get("type"));
+    //
+    // A guard belongs on this row too. In a panel about one field, "which of
+    // these is this" covers both the switch that picked the shape and the flag
+    // that said there is a row here at all; the core keeps them apart because
+    // the diagram draws them as different arrows. See `Role::Condition`.
+    if (said_(["type", "condition"])) {
+      const decided = [...(from.get("type") ?? []), ...(from.get("condition") ?? [])];
+      const one = only(decided);
       // The value beside the field is the half a reader checks: `from
       // compression` alone sends them to the field to find out which case this
       // was. Two fields and there is no value to show, only a count.
-      const clause = one === null ? this.fromHow(from.get("type")) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path };
+      const clause = one === null ? this.fromHow(decided) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path };
       out.push({
         key: `${prefix}type`,
         label: PROPERTIES.row.type,
         value: n.type,
         bit: null,
         how: clause,
-        detail: this.working(["type"], from, how, n.type, clause),
+        detail: this.working(["type", "condition"], from, how, n.type, clause),
       });
     }
     if (said_(["count"])) {
@@ -3008,8 +3014,13 @@ function grouped(value: string): string {
 /**
  * What one field decided about another. `points` is not here because it is the
  * other direction: this field holds an offset, and that is where it leads.
+ *
+ * `condition` is whether the field is there at all, which this panel shows on
+ * the Type row: the two are one question about one field, and the core tells
+ * them apart for the diagram's sake. `case` is only ever drawn, never shown
+ * here, since a field that resolved has taken its case already.
  */
-const ROLE_ORDER = ["position", "length", "width", "count", "type", "value", "name"] as const;
+const ROLE_ORDER = ["position", "length", "width", "count", "type", "condition", "value", "name"] as const;
 type OriginRole = (typeof ROLE_ORDER)[number];
 
 /**

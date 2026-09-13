@@ -607,24 +607,6 @@ pub enum Tag {
     Text(String),
 }
 
-impl Tag {
-    /// How a tag reads in a sentence about a connection: a number as itself, a
-    /// key written in text as that text, with padding trimmed and anything
-    /// that is not printable shown as an escape, and a computed label as the
-    /// expression that works it out.
-    ///
-    /// Nothing when the expression has no reading, so that a connection is
-    /// written whole or not at all. See `eval::relate`.
-    pub fn written(&self) -> Option<String> {
-        Some(match self {
-            Tag::Int(v) => v.to_string(),
-            Tag::Bytes(b) => format!("{:?}", String::from_utf8_lossy(b).trim_end()),
-            Tag::Computed(e) | Tag::ComputedText(e) => crate::eval::write_expr(e)?,
-            Tag::Text(s) => format!("{s:?}"),
-        })
-    }
-}
-
 impl Expr {
     pub fn lit(v: impl Into<i128>) -> Expr {
         Expr::Lit(v.into())

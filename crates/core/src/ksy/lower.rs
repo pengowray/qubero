@@ -643,7 +643,7 @@ impl<'a> Lower<'a> {
 					let len = self.byte_length(ctx, attr, source);
 					return Err(Gap {
 						reason: format!(
-							"{what} takes bytes off the value of a byte field, which the IR can say of text and not of bytes; the value here holds them"
+							"`{what}` on a byte field is not applied: a template strips padding and terminators from text only, so the value keeps those bytes"
 						),
 						fallback: len.map(Ty::Bytes),
 						placeable: true,
@@ -676,7 +676,7 @@ impl<'a> Lower<'a> {
 				if *endian == Endian::Little && self.bit_offset % 8 + *width > 8 {
 					return Err(Gap {
 						reason: format!(
-							"a {width}-bit field packed low-bit-first starting {} bits into a byte runs into the next byte, which the IR cannot read as one number",
+							"a {width}-bit low-bit-first field starting {} bits into a byte crosses into the next byte, which a template cannot read as one number",
 							self.bit_offset % 8
 						),
 						fallback: Some(Ty::UInt { bits: *width, endian: Endian::Big }),
@@ -717,7 +717,7 @@ impl<'a> Lower<'a> {
 			ByteSource::Eos => Expr::Remaining,
 			ByteSource::Terminated => {
 				return Err(Gap::unplaceable(format!(
-					"{what} ended by a terminator rather than a length, which the IR has no form for"
+					"{what} ends at a terminator rather than a length, which a template cannot say of bytes"
 				)));
 			}
 		};
@@ -730,7 +730,7 @@ impl<'a> Lower<'a> {
 				Ok(Ty::decoded(len, Codec::Zlib, inner))
 			}
 			Some(other) => Err(Gap::bytes(
-				format!("`process: {}` is not a codec the IR has", process_name(other)),
+				format!("`process: {}` is not a codec templates have", process_name(other)),
 				len,
 			)),
 		}
@@ -747,14 +747,14 @@ impl<'a> Lower<'a> {
 		let Some(enc) = map_encoding(encoding) else {
 			let len = self.byte_length(ctx, attr, source);
 			return Err(Gap {
-				reason: format!("`encoding: {encoding}` is not one the IR can read"),
+				reason: format!("`encoding: {encoding}` is not an encoding templates can read"),
 				fallback: len.map(Ty::Bytes),
 				placeable: true,
 			});
 		};
 		if attr.include {
 			return Err(Gap::unplaceable(
-				"`include: true` keeps the terminator in the value, which the IR has no form for"
+				"`include: true` keeps the terminator in the value, which a template cannot say"
 					.to_string(),
 			));
 		}
@@ -762,7 +762,7 @@ impl<'a> Lower<'a> {
 		if let Some(term) = &terminator {
 			if term.len() > 1 {
 				return Err(Gap::unplaceable(format!(
-					"a {}-byte terminator, where the IR's text fields end at one byte",
+					"a {}-byte terminator; a template text field ends at a one-byte terminator",
 					term.len()
 				)));
 			}
@@ -964,14 +964,14 @@ impl<'a> Lower<'a> {
 					}
 					_ => {
 						return Err(Gap::sized(format!(
-							"case `{}` is a byte array the IR cannot compare",
+							"case `{}` is a byte array, which a switch cannot compare",
 							case.key_text
 						)));
 					}
 				},
 				other => {
 					return Err(Gap::sized(format!(
-						"case `{}` is not a value the IR can switch on: {other}",
+						"case `{}` is not a value a switch can take: {other}",
 						case.key_text
 					)));
 				}
@@ -1129,7 +1129,7 @@ impl<'a> Lower<'a> {
 		self.report.note(
 			format!("{}/valid", attr.path),
 			source_of(attr),
-			"the value constraint is not carried over: the IR's checks are checksums, and it has no form for a constraint on one field's value"
+			"`valid` is not carried over: templates check checksums, not a field's value, so the field is read the same and left unchecked"
 				.to_string(),
 		);
 	}
@@ -1171,7 +1171,7 @@ impl<'a> Lower<'a> {
 					// No `pos`: the field is read where it stands, which for
 					// something outside `seq` is nowhere the IR can put it.
 					return Err(Gap::dropped(
-						"an instance with no `pos` has no place in the file the IR can name"
+						"an instance with no `pos` has no place in the file a template can name"
 							.to_string(),
 					));
 				};
@@ -1202,11 +1202,11 @@ impl<'a> Lower<'a> {
 				// the two are the same only when nothing between them opens a
 				// window of its own, which nothing here can check.
 				other => Err(Gap::dropped(format!(
-					"`io: {other}._io` reads inside another field's stream, which the IR has no anchor for"
+					"`io: {other}._io` reads inside another field's stream; a template can anchor only on its own window or the whole file"
 				))),
 			},
 			other => {
-				Err(Gap::dropped(format!("`io: {other}` is not a stream the IR has an anchor for")))
+				Err(Gap::dropped(format!("`io: {other}` is not a stream a template can anchor on")))
 			}
 		}
 	}
@@ -1218,7 +1218,7 @@ impl<'a> Lower<'a> {
 			Some(e) => Ok(e),
 			None if one_byte => Ok(Endian::Big),
 			None => Err(Gap::unplaceable(
-				"the endianness is chosen while the file is read, and the IR has no form for that"
+				"the byte order is chosen while the file is read (`endian: switch-on`), which a template cannot do"
 					.to_string(),
 			)),
 		}
@@ -1303,12 +1303,12 @@ impl<'a> Lower<'a> {
 		match e {
 			KExpr::IntNum(n) => Ok(Expr::Lit(*n)),
 			KExpr::Bool(b) => Ok(Expr::Lit(i128::from(*b))),
-			KExpr::FloatNum(n) => Err(format!("`{n}` is a floating point number, and the IR's expressions are integers")),
-			KExpr::Str(s) => Err(format!("`{s}` is text, and the IR's expressions are integers")),
+			KExpr::FloatNum(n) => Err(format!("`{n}` is a floating-point number; template expressions are integers only")),
+			KExpr::Str(s) => Err(format!("`{s}` is text; template expressions are integers only")),
 			KExpr::InterpolatedStr(_) => {
-				Err("an interpolated string, and the IR's expressions are integers".to_string())
+				Err("an interpolated string; template expressions are integers only".to_string())
 			}
-			KExpr::List(_) => Err("a list, and the IR's expressions are integers".to_string()),
+			KExpr::List(_) => Err("a list; template expressions are integers only".to_string()),
 			KExpr::EnumByLabel { enum_name, label, in_type } => {
 				match self.enum_value(ctx, in_type, enum_name, label) {
 					Some(v) => Ok(Expr::Lit(v)),
@@ -1321,7 +1321,7 @@ impl<'a> Lower<'a> {
 					UnaryOp::Minus => Ok(Expr::Lit(0).sub(inner)),
 					UnaryOp::Not => Ok(inner.negate()),
 					UnaryOp::Invert => {
-						Err("`~` is a bitwise complement, which the IR has no operator for".to_string())
+						Err("`~` (bitwise complement) is not an operator templates have".to_string())
 					}
 				}
 			}
@@ -1340,10 +1340,10 @@ impl<'a> Lower<'a> {
 					BinOp::RShift => l.shr(r),
 					BinOp::BitAnd => l.and(r),
 					BinOp::BitOr => {
-						return Err("`|` is a bitwise or, and the IR's `Or` is a value-or (the right side only when the left is zero), which is a different answer".to_string());
+						return Err("`|` (bitwise or) is not an operator templates have; their `or else` answers a different question".to_string());
 					}
 					BinOp::BitXor => {
-						return Err("`^` is a bitwise exclusive or, which the IR has no operator for".to_string());
+						return Err("`^` (bitwise exclusive or) is not an operator templates have".to_string());
 					}
 				})
 			}
@@ -1434,13 +1434,13 @@ impl<'a> Lower<'a> {
 	fn lower_call(&mut self, _ctx: &Ctx<'a>, _path: &str, func: &KExpr, args: &[KExpr]) -> Result<Expr, String> {
 		match func {
 			KExpr::Attribute { value, attr } if attr == "to_s" => Err(format!(
-				"`{value}.to_s(...)` reads bytes as text, and the IR's expressions are integers"
+				"`{value}.to_s(...)` reads bytes as text; template expressions are integers only"
 			)),
 			KExpr::Attribute { value, attr } => Err(format!(
-				"`{value}.{attr}(...)` takes {} arguments and is not a method the IR has",
+				"`{value}.{attr}(...)` with {} arguments is not a method templates have",
 				args.len()
 			)),
-			other => Err(format!("`{other}(...)` is not a call the IR has")),
+			other => Err(format!("`{other}(...)` is not a call templates have")),
 		}
 	}
 
@@ -1462,7 +1462,7 @@ impl<'a> Lower<'a> {
 					"pos" => Ok(Expr::Pos),
 					"size" => Ok(Expr::WindowSize),
 					"eof" => Ok(Expr::Remaining.equal_to(Expr::Lit(0))),
-					other => Err(format!("`_io.{other}` is not something the IR can ask a stream")),
+					other => Err(format!("`_io.{other}` is not something a template can ask of a stream")),
 				}
 			}
 			"_index" => {
@@ -1474,7 +1474,7 @@ impl<'a> Lower<'a> {
 			}
 			"_" => {
 				let Some(Seg::Name(field)) = segs.first() else {
-					return Err("`_` on its own is the element itself, which the IR has no name for".to_string());
+					return Err("`_` on its own is the whole element, which a template expression cannot name".to_string());
 				};
 				let Some(elem) = ctx.elem else {
 					return Err("`_` is used where there is no element to read".to_string());
@@ -1491,7 +1491,7 @@ impl<'a> Lower<'a> {
 				};
 				if *field == "_io" {
 					return Err(
-						"`_root._io` is the whole file as a stream, and the IR has no expression for the file's own size or position"
+						"`_root._io` is the whole file as a stream; a template has no expression for the file's own size or position"
 							.to_string(),
 					);
 				}
@@ -1514,7 +1514,7 @@ impl<'a> Lower<'a> {
 				}
 				if self.pending.iter().any(|n| n == name) {
 					return Err(format!(
-						"`{name}` is worked out after this field, and the IR reads only what comes before"
+						"`{name}` is worked out after this field; a template reads only what comes before"
 					));
 				}
 				self.apply_segs(ctx, path, Acc::Path(vec![name.clone()]), &segs)
@@ -1661,7 +1661,7 @@ impl<'a> Lower<'a> {
 				if let Some(field) = &single {
 					if self.field_is_text(ctx, field) {
 						return Err(format!(
-							"`{field}.to_i` reads text as a number, which the IR does only where the field itself is declared as digits"
+							"`{field}.to_i` reads text as a number, which a template does only where the field itself is declared as digits"
 						));
 					}
 				}
@@ -1694,15 +1694,15 @@ impl<'a> Lower<'a> {
 					Expr::len_of(&array[0]).sub(Expr::Lit(1))
 				} else {
 					return Err(format!(
-						"`.{name}` takes the last element of a list one level in, which the IR cannot count"
+						"`.{name}` takes the last element of a list one level in, which a template cannot count"
 					));
 				};
 				Acc::Elem { array, index, field: Vec::new() }
 			}
 			"to_s" => {
-				return Err("`.to_s` reads a number as text, and the IR's expressions are integers".to_string());
+				return Err("`.to_s` reads a number as text; template expressions are integers only".to_string());
 			}
-			other => return Err(format!("`.{other}` is not a method the IR has")),
+			other => return Err(format!("`.{other}` is not a method templates have")),
 		})
 	}
 
@@ -2405,15 +2405,15 @@ instances:
 	}
 
 	#[test]
-	fn what_the_ir_cannot_say_is_named_rather_than_guessed_at() {
+	fn what_a_template_cannot_say_is_named_rather_than_guessed_at() {
 		let bitwise = gaps(&format("instances:\n  a:\n    value: 1 | 2\n"));
-		assert!(bitwise[0].contains("value-or"), "{bitwise:?}");
+		assert!(bitwise[0].contains("bitwise or"), "{bitwise:?}");
 		let float = gaps(&format("instances:\n  a:\n    value: 1.5\n"));
-		assert!(float[0].contains("floating point"), "{float:?}");
+		assert!(float[0].contains("floating"), "{float:?}");
 		let text = gaps(&format("instances:\n  a:\n    value: '\"hello\"'\n"));
 		assert!(text[0].contains("is text"), "{text:?}");
 		let endian = gaps("meta:\n  id: t\n  endian:\n    switch-on: 1\n    cases:\n      1: le\nseq:\n  - id: a\n    type: u4\n");
-		assert!(endian[0].contains("endianness is chosen while the file is read"), "{endian:?}");
+		assert!(endian[0].contains("byte order is chosen while the file is read"), "{endian:?}");
 	}
 
 	#[test]

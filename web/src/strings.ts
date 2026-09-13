@@ -2856,3 +2856,73 @@ export type PrefixReading = {
 function unitWord(counts: string): string {
   return counts === "code units" ? "code unit" : counts === "characters" ? "character" : "byte";
 }
+
+/**
+ * The `.ksy` converter panel: Kaitai Struct text in, one of this app's
+ * templates out, with a report of everything the conversion could not carry
+ * across.
+ *
+ * The report matters as much as the template, so its three groups lead with the
+ * news in that order: what could not be expressed, what was expressed another
+ * way, and, folded away, what every field became. Each heading carries its
+ * count, a count of nothing included: a `.ksy` that converted with nothing left
+ * behind is the good news, and a missing heading would leave a reader looking
+ * for it.
+ *
+ * The word "gap" is not used here. Elsewhere in the app a gap is bytes no field
+ * covers; these are constructs a template cannot express.
+ */
+export const KSY = {
+  /** The entry at the end of the template menu. It opens the panel rather than
+   *  choosing a template, which is what every other entry does. */
+  menuEntry: "Convert a .ksy…",
+  /** What the menu shows while the file is being read with a converted `.ksy`,
+   *  in place of a built-in's name. */
+  menuApplied: (id: string): string => `Template: ${id} (from .ksy)`,
+  regionLabel: "Kaitai .ksy converter",
+
+  // ---- the three columns ----
+
+  openButton: "Open .ksy…",
+  openTitle: "Open a .ksy file from this computer",
+  /** In the text box while it is empty. */
+  placeholder: "Paste a .ksy here, or drop one on the window.",
+  sourceLabel: "Kaitai .ksy",
+  reportLabel: "Conversion report",
+  templateLabel: "Template",
+  /** The right column before anything has converted. */
+  templateEmpty: "The template appears here as you type.",
+  /** The right column while the text does not convert. What is wrong with it is
+   *  in the middle column. */
+  templateFailed: "No template: the .ksy did not convert.",
+
+  // ---- the report ----
+
+  gapsHeading: (n: number): string => `Could not be expressed (${n.toLocaleString()})`,
+  gapsTitle:
+    "These parts of the .ksy have no equivalent in a template. Each field is read as plain bytes instead, never guessed at.",
+  notesHeading: (n: number): string => `Converted another way (${n.toLocaleString()})`,
+  notesTitle: "The same reading, reached differently: a string compared as its bytes read as one big-endian number, say.",
+  fieldsHeading: (n: number): string => `What each field became (${n.toLocaleString()})`,
+  /** On every report line. Clicking one moves the cursor to that line of the
+   *  .ksy, which is not what a line of a report usually does. */
+  lineTitle: "Go to this line of the .ksy",
+  /** Over the one line that replaces the report when nothing converted. The
+   *  path in the .ksy comes first, the way the Kaitai compiler writes it. */
+  failedHeading: "The .ksy did not convert",
+
+  // ---- the bottom bar ----
+
+  apply: "Use this template",
+  applyTitle: "Read the open file with this template (Ctrl+Enter)",
+  close: "Close",
+  closeTitle: "Close the converter (Escape)",
+  /** After applying, where the other status messages go. */
+  applied: (id: string): string => `Reading the file as ${id}.`,
+  /** A .ksy dropped with no file open. It describes how to read a file, so
+   *  there has to be one. */
+  needsFile: "Open a file first. A .ksy says how to read one.",
+  /** A .ksy dropped on a tab of unpacked bytes, which is read by whatever
+   *  declared it rather than by a template of the reader's choosing. */
+  notHere: "A .ksy reads the file, not an unpacked stream.",
+} as const;
