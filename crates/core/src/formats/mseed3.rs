@@ -122,6 +122,11 @@ fn sized() -> T {
     T::sized(length, body())
 }
 
+/// What a length field says, or what is left of the record if that is less.
+fn left(name: &str) -> E {
+    E::field(name).at_most(E::Remaining)
+}
+
 fn body() -> T {
     T::structure_named(
         "MiniSEED3Record",
@@ -152,9 +157,16 @@ fn body() -> T {
             ("extra_length", T::u16(Little)),
             ("data_length", T::u32(Little)),
             // A URI, and in practice `FDSN:NET_STA_LOC_B_S_SS`.
-            ("source_identifier", T::text(StrLen::Fixed(E::field("identifier_length")), Encoding::Ascii)),
+            //
+            // The last three are each clamped to what is left of the record.
+            // Clamping the record's own length is not enough: a file that
+            // stopped in the middle of one gives a container shorter than the
+            // three lengths the header promised, and a field measured against
+            // the promise runs past the end of it and fails. Every one of them
+            // is read as far as there are bytes to read.
+            ("source_identifier", T::text(StrLen::Fixed(left("identifier_length")), Encoding::Ascii)),
             ("extra_headers", extra_headers()),
-            ("data", T::sized(E::field("data_length"), data())),
+            ("data", T::sized(left("data_length"), data())),
         ],
     )
     .machinery(&["magic", "identifier_length", "extra_length", "data_length"])
@@ -179,11 +191,21 @@ fn start_time() -> T {
 }
 
 /// Whatever the writer had to say that the fixed header has no field for,
-/// as JSON. Most records carry none, and a length of zero is not an empty
-/// document but no document: read as the nothing it is rather than handed to
-/// a parser that would have to fail on it.
+/// as JSON.
+///
+/// Only when the whole of it is there. A length of zero is not an empty
+/// document but no document, and a record the file stops in the middle of has
+/// the front of a document and no end to it; neither is something to hand a
+/// parser that can only answer by failing. Both read as the bytes they are,
+/// which for a length of zero is no bytes at all.
 fn extra_headers() -> T {
-    T::switch(E::field("extra_length"), vec![(0, T::bytes(E::lit(0)))], T::sized(E::field("extra_length"), T::json()))
+    let some = E::lit(0).less_than(E::field("extra_length"));
+    let all_there = E::lit(1).sub(E::Remaining.less_than(E::field("extra_length")));
+    T::switch(
+        some.mul(all_there),
+        vec![(1, T::sized(E::field("extra_length"), T::json()))],
+        T::bytes(left("extra_length")),
+    )
 }
 
 /// The samples, typed by the encoding the header named.
@@ -317,6 +339,28 @@ mod tests {
         let d = Document::new(MemSource(other));
         let mut ev = Evaluator::new(mseed3());
         assert_eq!(ev.node(&d, &[0, 0]).unwrap().type_name, "MiniSEED3Tail");
+    }
+
+    #[test]
+    fn a_record_cut_off_short_reads_as_far_as_it_goes() {
+        // A transmission that stopped. The header promises an identifier, some
+        // extra headers and a payload, and none of the three is all there, so
+        // every one of them has to measure against what is left rather than
+        // against what it was told.
+        let extra = r#"{"FDSN":{"Clock":{"Model":"Acme 3"}}}"#;
+        let whole = record_bytes(3, "FDSN:XX_TEST__B_H_Z", extra, &[0u8; 40], 10);
+        for cut in [45, 50, 70, 100, whole.len() - 1] {
+            let d = Document::new(MemSource(whole[..cut].to_vec()));
+            let mut ev = Evaluator::new(mseed3());
+            let record = ev.node(&d, &[0, 0]).unwrap_or_else(|e| panic!("cut at {cut}: {e:?}"));
+            assert_eq!(record.type_name, "MiniSEED3Record", "cut at {cut}");
+            assert_eq!(record.size_bits, cut as u64 * 8, "cut at {cut}");
+            // And every field under it answers, rather than one of them
+            // failing and taking the rest of the record's panel with it.
+            for f in 0..record.child_count as usize {
+                ev.node(&d, &[0, 0, f]).unwrap_or_else(|e| panic!("cut at {cut}, field {f}: {e:?}"));
+            }
+        }
     }
 
     #[test]
