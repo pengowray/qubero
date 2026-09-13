@@ -434,6 +434,7 @@ export const UNPACKED = {
     pxu_bits: "index bits per token",
     lzma_props: "LZMA properties (lc, lp, pb)",
     range_init: "range decoder init",
+    unpacked_size: "unpacked size",
     code_len: "code-length code",
     lit_len: "literal code length",
     dist_len: "distance code length",

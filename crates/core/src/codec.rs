@@ -27,6 +27,7 @@ pub mod pico8;
 pub mod pixels;
 pub mod pxu;
 pub mod rar5;
+pub mod snappy;
 pub mod xz;
 
 use std::ops::Range;
@@ -62,6 +63,21 @@ pub enum Codec {
     /// One LZ4 block, with no frame header and no length in front of it. What
     /// ROOT hands to LZ4 and what an LZ4 frame's blocks hold.
     Lz4Block,
+    /// One raw Snappy block: a varint saying how many bytes come out, and then
+    /// tags to the end of the run.
+    ///
+    /// Not the framing format, which is the one with a stream identifier and a
+    /// checksum per chunk. A Parquet page, a ROOT basket and every other place
+    /// that says SNAPPY without saying framed holds this.
+    Snappy,
+    /// A whole Brotli stream. What Parquet's BROTLI codec packs a page with,
+    /// and what a `Content-Encoding: br` response body is.
+    ///
+    /// Traced as one step over the run. Brotli is a context-modelled Huffman
+    /// format with its own block-splitting and a built-in dictionary, and the
+    /// crate that reads it will not say where its blocks were, so the map here
+    /// is the honest one: these bits made those bytes, and no finer.
+    Brotli,
     Xz,
     /// A whole lzip member, header and all.
     ///
@@ -182,6 +198,8 @@ impl Codec {
             Codec::Deflate => "deflate",
             Codec::Zstd => "zstd",
             Codec::Lz4Block => "lz4",
+            Codec::Snappy => "snappy",
+            Codec::Brotli => "brotli",
             Codec::Xz => "xz",
             Codec::Lzip => "lzip",
             Codec::Lzma1 { .. } => "lzma",
@@ -314,6 +332,9 @@ pub enum StepField {
     /// LZMA: the five bytes that prime the range coder. The first is ignored
     /// and the other four are the interval the stream starts inside.
     RangeInit,
+    /// Snappy: the varint in front of a block saying how many bytes it comes
+    /// to. Its value is that number.
+    UnpackedSize,
 }
 
 impl StepField {
@@ -343,6 +364,7 @@ impl StepField {
             StepField::PxuBits => "pxu_bits",
             StepField::LzmaProps => "lzma_props",
             StepField::RangeInit => "range_init",
+            StepField::UnpackedSize => "unpacked_size",
         }
     }
 }
@@ -906,7 +928,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 23] = [
+const FIELDS: [StepField; 24] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -930,6 +952,7 @@ const FIELDS: [StepField; 23] = [
     StepField::PxuBits,
     StepField::LzmaProps,
     StepField::RangeInit,
+    StepField::UnpackedSize,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
@@ -950,6 +973,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Deflate => inflate::inflate(data)?,
         Codec::Zlib => inflate::zlib(data)?,
         Codec::Lz4Block => lz4::block(data)?,
+        Codec::Snappy => snappy::block(data)?,
+        Codec::Brotli => frames::brotli(data)?,
         Codec::Zstd => frames::zstd(data)?,
         Codec::Xz => xz::stream(data)?,
         Codec::Lzip => lzma::lzip(data)?,
@@ -987,6 +1012,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Zlib
         | Codec::Deflate
         | Codec::Lz4Block
+        | Codec::Snappy
+        | Codec::Brotli
         | Codec::PngUnfilter { .. }
         | Codec::LowBitsArgb
         | Codec::LowBitsRgba11
