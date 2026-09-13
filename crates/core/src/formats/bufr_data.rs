@@ -310,12 +310,12 @@ fn u16be(b: &[u8], at: usize) -> Option<u32> {
 /// Sections 0 to 3 of a message, and where section 4's data is.
 pub fn header(m: &[u8]) -> Result<Header, String> {
     if !m.starts_with(b"BUFR") {
-        return Err("The message does not start with BUFR.".into());
+        return Err("Not read: the message does not start with BUFR.".into());
     }
-    let short = || "The message ends before section 4.".to_string();
+    let short = || "Not read: the message ends before section 4.".to_string();
     let edition = byte(m, 7).ok_or_else(short)?;
     if !(2..=4).contains(&edition) {
-        return Err(format!("Edition {edition} is not read: only editions 2, 3 and 4 say how long their sections are."));
+        return Err(format!("Not read: this is edition {edition}, and only editions 2, 3 and 4 say how long their sections are."));
     }
     let s1 = 8;
     let len1 = u24(m, s1).ok_or_else(short)?;
@@ -386,7 +386,7 @@ pub fn read(message: &[u8]) -> Reading {
         },
     });
     if h.master_table != 0 {
-        out.problem = Some(format!("Master table {} is not read: only the meteorological tables, master table 0, are bundled.", h.master_table));
+        out.problem = Some(format!("Not read: this uses master table {}, and only master table 0, meteorology, is bundled.", h.master_table));
         return out;
     }
 
@@ -394,8 +394,20 @@ pub fn read(message: &[u8]) -> Reading {
     let mut unknown = None;
     expand(t, &h.descriptors, 0, &mut expanded, &mut unknown);
     out.steps.push(Step {
-        what: format!("Expanded {} through Table D into {}", count(h.descriptors.len(), "descriptor"), count(expanded.len(), "descriptor")),
+        what: if expanded.len() == h.descriptors.len() {
+            format!("No sequences to expand: {}", count(h.descriptors.len(), "descriptor"))
+        } else {
+            format!("Expanded {} through Table D into {}", count(h.descriptors.len(), "descriptor"), count(expanded.len(), "descriptor"))
+        },
     });
+    if let Some(code) = unknown {
+        // Only a note: the walk may never reach the sequence, when a
+        // replication around it repeats nothing, and a walk that does reach
+        // it stops there and says so itself.
+        out.steps.push(Step {
+            what: format!("{} is not in version {} of Table D, so the descriptor list is not fully expanded", written(code), t.version),
+        });
+    }
     out.expanded = expanded;
 
     let data = &message[h.data_offset..h.data_offset + h.data_len];
@@ -433,22 +445,25 @@ pub fn read(message: &[u8]) -> Reading {
     }
     out.bits_read = bits.at as u64;
 
-    let values = out.value_count();
+    let values = count(out.value_count(), "value");
+    let bits_read = count(out.bits_read as usize, "bit");
+    // With several subsets the count is of all of them together, and says so.
+    let all = if subsets > 1 { " in all" } else { "" };
     out.steps.push(Step {
         what: if h.compressed {
             format!(
-                "Read {} compressed: for each value, the smallest, a 6-bit width, and a difference per subset. {} in {}",
+                "Read {} compressed, each element as its smallest packed number, a 6-bit width and one difference per subset: {values}{all} in {bits_read}",
                 count(subsets, "subset"),
-                count(values, "value"),
-                count(out.bits_read as usize, "bit")
             )
+        } else if subsets == 1 {
+            format!("Read 1 subset: {values} in {bits_read}")
         } else {
-            format!("Read {} one after another: {} in {}", count(subsets, "subset"), count(values, "value"), count(out.bits_read as usize, "bit"))
+            format!("Read {} one after another: {values}{all} in {bits_read}", count(subsets, "subset"))
         },
     });
     for bitmap in &effects.bitmaps {
         let present = bitmap.iter().filter(|b| **b).count();
-        out.steps.push(Step { what: format!("Defined a bitmap of {}: {present} of the elements it covers have a value", count(bitmap.len(), "bit")) });
+        out.steps.push(Step { what: format!("Defined a bitmap of {}: {present} of the elements it covers are marked", count(bitmap.len(), "bit")) });
     }
     for (code, n) in &effects.counts {
         out.steps.push(Step { what: effect_text(*code, *n) });
@@ -458,16 +473,11 @@ pub fn read(message: &[u8]) -> Reading {
         let left = total.saturating_sub(out.bits_read);
         out.steps.push(Step {
             what: if left < 8 {
-                format!("Section 4 is used to its last byte: {} of padding", count(left as usize, "bit"))
+                format!("Section 4 is used to its last byte, with {} of padding", count(left as usize, "bit"))
             } else {
                 format!("Section 4 has {} left over after the last value", count(left as usize, "bit"))
             },
         });
-    }
-    if out.problem.is_none() {
-        if let Some(code) = unknown {
-            out.problem = Some(format!("{} is not in version {} of Table D, so the descriptors were not all expanded.", written(code), t.version));
-        }
     }
     out
 }
@@ -483,14 +493,14 @@ fn effect_text(code: u32, n: u64) -> String {
         1 => format!("{} bits of width on {values}", signed(i64::from(y) - 128)),
         2 => format!("scale {} on {values}", signed(i64::from(y) - 128)),
         3 => format!("{values} read with a new reference value"),
-        4 => format!("a {y}-bit field in front of {values}"),
+        4 => format!("{y} bits before each of {values}"),
         5 => format!("{values} of {y} characters"),
-        6 => format!("{values} read at {y} bits"),
-        7 => format!("scale +{y}, reference times 10^{y} and width +{} on {values}", (10 * y + 2) / 3),
-        8 => format!("{values} read at {y} characters"),
+        6 => format!("{values} read {y} bits wide"),
+        7 => format!("scale +{y}, reference × 10^{y}, width +{} on {values}", (10 * y + 2) / 3),
+        8 => format!("{values} read {y} characters long"),
         21 => format!("{values} not present"),
-        22 => format!("quality information for {values}"),
-        _ => format!("{values}"),
+        22 | 23 | 24 | 25 | 32 => format!("{values}, one for each element the bitmap marks"),
+        _ => values,
     };
     format!("{} {name}: {detail}", written(code))
 }
@@ -676,11 +686,11 @@ impl<'a, 'b> Walk<'a, 'b> {
                     let span = x as usize;
                     if y == 0 {
                         let Some(&factor) = list.get(i + 1) else {
-                            return Err(Stop(format!("{} has no count after it.", written(code))));
+                            return Err(Stop(format!("{} has no replication factor after it.", written(code))));
                         };
                         if !matches!(factor, 31000 | 31001 | 31002 | 31011 | 31012) {
                             return Err(Stop(format!(
-                                "{} is followed by {}, which is not a replication count.",
+                                "{} is followed by {}, which is not a replication factor.",
                                 written(code),
                                 written(factor)
                             )));
@@ -721,13 +731,13 @@ impl<'a, 'b> Walk<'a, 'b> {
                 _ => {
                     let Some(s) = self.t.sequence(code) else {
                         return Err(Stop(format!(
-                            "{} is not in version {} of Table D, so what it stands for is unknown and nothing after it can be found.",
+                            "{} is not in version {} of Table D, so what it expands to is unknown and nothing after it can be read.",
                             written(code),
                             self.t.version
                         )));
                     };
                     if self.depth >= DEPTH_LIMIT {
-                        return Err(Stop(format!("Sequences nest more than {DEPTH_LIMIT} deep at {}.", written(code))));
+                        return Err(Stop(format!("Table D sequences nest more than {DEPTH_LIMIT} deep at {}.", written(code))));
                     }
                     self.depth += 1;
                     let members = s.members.clone();
@@ -744,7 +754,10 @@ impl<'a, 'b> Walk<'a, 'b> {
     fn spend(&mut self, n: usize) -> Result<(), Stop> {
         let cost = n * self.n;
         if cost > *self.budget {
-            return Err(Stop(format!("The message holds more than {} values, which is past this reader's limit.", crate::encode::commas(VALUE_LIMIT as u64))));
+            return Err(Stop(format!(
+                "The message has more than {} values, this viewer's limit, so reading stopped there.",
+                crate::encode::commas(VALUE_LIMIT as u64)
+            )));
         }
         *self.budget -= cost;
         Ok(())
@@ -757,10 +770,13 @@ impl<'a, 'b> Walk<'a, 'b> {
         let mut found = None;
         for v in &item.values {
             let Datum::Integer(c) = v else {
-                return Err(Stop(format!("The count at {} has no value.", written(item.code))));
+                return Err(Stop(format!("The replication factor {} is missing, so the number of repeats is unknown.", written(item.code))));
             };
             if found.is_some_and(|f| f != *c) {
-                return Err(Stop(format!("The subsets have different counts at {}, which a compressed message cannot have.", written(item.code))));
+                return Err(Stop(format!(
+                    "The replication factor {} differs between subsets, which a compressed message cannot have.",
+                    written(item.code)
+                )));
             }
             found = Some(*c);
         }
@@ -814,7 +830,7 @@ impl<'a, 'b> Walk<'a, 'b> {
             }
             41 | 42 | 43 if y == 0 || y == 255 => {}
             _ => {
-                return Err(Stop(format!("{} is not an operator this reader knows, so what follows it cannot be read.", written(code))));
+                return Err(Stop(format!("{} is an operator this viewer does not know, so nothing after it can be read.", written(code))));
             }
         }
         self.push_operator(code);
@@ -935,13 +951,20 @@ impl<'a, 'b> Walk<'a, 'b> {
     fn element(&mut self, code: u32, role: Role) -> Result<usize, Stop> {
         let (_, x, _) = fxy(code);
         let Some(e) = self.t.element(code) else {
-            let local = x >= 48 || code % 1000 >= 192;
-            return Err(Stop(format!(
-                "{} is not in version {} of Table B{}, so its width is unknown and nothing after it can be found.",
-                written(code),
-                self.t.version,
-                if local { ": it is a local descriptor, from the originating centre's own table" } else { "" }
-            )));
+            // A local descriptor is in no version of the WMO's table, so the
+            // version is not worth naming for one.
+            return Err(Stop(if x >= 48 || code % 1000 >= 192 {
+                format!(
+                    "{} is a local descriptor, defined by the originating centre and not in Table B, so its width is unknown and nothing after it can be read.",
+                    written(code)
+                )
+            } else {
+                format!(
+                    "{} is not in version {} of Table B, so its width is unknown and nothing after it can be read.",
+                    written(code),
+                    self.t.version
+                )
+            }));
         };
         if !self.associated.is_empty() && x != 31 {
             self.associated_value(code, e)?;
@@ -1000,7 +1023,7 @@ impl<'a, 'b> Walk<'a, 'b> {
             }
         }
         if !(0..=64).contains(&width) {
-            return Err(Stop(format!("{} comes to a width of {width} bits, which cannot be read.", written(code))));
+            return Err(Stop(format!("{} would be {width} bits wide, a width this viewer cannot read.", written(code))));
         }
         let width = width as u32;
         let missing = code != 31031 && width > 1;
@@ -1215,11 +1238,11 @@ impl<'a, 'b> Walk<'a, 'b> {
     /// points at, read as that element.
     fn marker(&mut self, code: u32) -> Result<(), Stop> {
         let Some(target) = self.next_pointed() else {
-            return Err(Stop(format!("{} has no element left in the bitmap to be a value of.", written(code))));
+            return Err(Stop(format!("The bitmap has no marked element left for {} to refer to.", written(code))));
         };
         let element = self.items[target].code;
         let Some(e) = self.t.element(element) else {
-            return Err(Stop(format!("{} points at {}, which is not in Table B.", written(code), written(element))));
+            return Err(Stop(format!("{} refers to {}, which is not in Table B.", written(code), written(element))));
         };
         if !self.associated.is_empty() {
             self.associated_value(element, e)?;
@@ -1294,7 +1317,9 @@ pub struct PanelCursor {
     /// Its place in `Panel::values`, where it is among those listed.
     pub index: Option<usize>,
     pub value: PanelValue,
-    /// Where its bits start in section 4's data, and how wide the value is.
+    /// Where its bits start, counted from the first bit of section 4 with its
+    /// four-byte header included, which is how a reader counting from the
+    /// section's first byte will count; and how wide the value is.
     pub bit: u64,
     pub width: u32,
     pub scale: i32,
@@ -1310,9 +1335,23 @@ pub struct PanelCursor {
 }
 
 fn panel_value(t: &Tables, items: &[Item], item: &Item, subset: usize) -> PanelValue {
-    let about = item.refers_to.and_then(|k| items.get(k)).map(|e| format!("{:06} {}", e.code, e.name));
+    let mut about = item.refers_to.and_then(|k| items.get(k)).map(|e| format!("{:06} {}", e.code, e.name));
+    // A value that is about another element is named by what it is, and the
+    // element it is about goes beside it: the element's own name on both
+    // would read as two of the element.
     let name = match item.role {
-        Role::Marker | Role::Associated | Role::NewReference => item.name.to_string(),
+        Role::Marker => match fxy(item.code).1 {
+            23 => "Substituted value",
+            24 => "First-order statistic",
+            25 => "Difference statistic",
+            _ => "Replaced/retained value",
+        }
+        .to_string(),
+        Role::Associated => "Associated field".to_string(),
+        Role::NewReference => {
+            about = Some(format!("{:06} {}", item.code, item.name));
+            "New reference value".to_string()
+        }
         _ if item.name.is_empty() => describe(t, item.code),
         _ => item.name.to_string(),
     };
@@ -1393,7 +1432,7 @@ pub fn panel(r: &Reading, cursor_bit: Option<u64>) -> Panel {
         p.cursor = Some(PanelCursor {
             index: (a >= start && a < start + PANEL_VALUES).then(|| a - start),
             value: panel_value(t, items, i, subset),
-            bit: i.bit,
+            bit: i.bit + 32,
             width: i.width,
             scale: i.scale,
             reference: i.reference,
@@ -1419,7 +1458,7 @@ pub fn panel(r: &Reading, cursor_bit: Option<u64>) -> Panel {
 /// The X descriptors a replication repeats, from `start`.
 fn body(list: &[u32], start: usize, span: usize, code: u32) -> Result<&[u32], Stop> {
     list.get(start..start + span).ok_or_else(|| {
-        Stop(format!("{} repeats {} but only {} follow it.", written(code), span, list.len().saturating_sub(start)))
+        Stop(format!("{} repeats {} but only {} follow it.", written(code), count(span, "descriptor"), list.len().saturating_sub(start)))
     })
 }
 

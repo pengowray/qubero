@@ -218,7 +218,7 @@ fn rest(read: i128) -> E {
 /// The flags byte in section 1. Its first bit, the top one, says whether
 /// section 2 is there; the other seven are reserved.
 fn section_flags() -> T {
-    T::flags("SectionFlags", T::u8(), &[(7, "optional section 2")])
+    T::flags("SectionFlags", T::u8(), &[(7, "section 2 included")])
 }
 
 fn category() -> T {

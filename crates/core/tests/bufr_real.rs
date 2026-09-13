@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, Explain, Value};
 use qubero_core::formats;
 use qubero_core::formats::bufr_data::{self, Item, Reading, Role};
 use qubero_core::source::MemSource;
@@ -286,6 +286,52 @@ fn associated_fields_in_front_of_a_radiosonde_in_edition_4() {
     assert_eq!(v[1], (1001, "15".to_string()));
     assert_eq!(r.subsets[0][2].role, Role::Associated);
     assert_eq!(find(&r, 0, 1001, 0), "10");
+}
+
+/// What the inspector would show with the cursor `bit` bits into section 4's
+/// data of message `m`, whose chunk is at `chunk` in the file's run.
+fn panel_at(name: &str, chunk: usize, data_offset: usize, bit: u64) -> Option<bufr_data::Panel> {
+    let (d, mut ev) = read(name)?;
+    let message = ev.node(&d, &[chunk]).unwrap();
+    let at = message.offset_bits + data_offset as u64 * 8 + bit;
+    match ev.explain(&d, &[chunk, 1, 2, 3, 2], Some(at)).unwrap() {
+        Explain::BufrData(p) => Some(*p),
+        other => panic!("not the BUFR panel: {other:?}"),
+    }
+}
+
+#[test]
+fn the_panel_takes_apart_the_value_under_the_cursor() {
+    let Some(r) = reading("temp_101.bufr", 0) else { return };
+    let t = r.subsets[0].iter().find(|i| i.code == 12001).unwrap();
+    let Some(p) = panel_at("temp_101.bufr", 0, r.header.data_offset, t.bit + 3) else { return };
+    assert_eq!(p.problem, None);
+    assert_eq!((p.edition, p.tables_version, p.subsets, p.compressed), (3, 13, 1, false));
+    let c = p.cursor.expect("a value under the cursor");
+    assert_eq!((c.value.code, c.value.text.as_str(), c.value.unit.as_str()), (12001, "272.1", "K"));
+    // Counted from section 4's first byte, header and all.
+    assert_eq!(c.bit, t.bit + 32);
+    assert_eq!((c.width, c.scale, c.packed), (12, 1, Some(2721)));
+    // And the row in the list is marked.
+    assert_eq!(p.values[c.index.unwrap()].code, 12001);
+    assert_eq!(p.values_total, 1531);
+    assert!(p.steps.iter().any(|s| s.contains("bitmap of 550 bits")), "{:?}", p.steps);
+    assert_eq!(p.descriptors[0].code, 309007);
+}
+
+#[test]
+fn on_a_compressed_difference_the_panel_shows_that_subset() {
+    let Some(r) = reading("ISMD01_OKPR.bufr", 0) else { return };
+    let name = r.subsets[0].iter().find(|i| i.code == 1015).unwrap();
+    // The station name's run: the smallest, 160 bits; the 6-bit width; then
+    // twenty characters a subset. Two subsets in is the third station.
+    let third = name.bit + 160 + 6 + 2 * 20 * 8 + 5;
+    let Some(p) = panel_at("ISMD01_OKPR.bufr", 1, r.header.data_offset, third) else { return };
+    assert_eq!(p.subset, 2);
+    let c = p.cursor.expect("the station name");
+    assert_eq!(c.value.text, "Praha-Ruzyne");
+    assert_eq!((c.increment_width, c.across.len()), (Some(20), 7));
+    assert_eq!(p.values.iter().find(|v| v.code == 1002).map(|v| v.text.as_str()), Some("518"));
 }
 
 #[test]
