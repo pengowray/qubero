@@ -107,6 +107,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   npy: "NumPy array",
   netcdf: "NetCDF classic",
   grib: "GRIB weather data",
+  bufr: "BUFR weather observations",
   mseed: "miniSEED seismic records",
   mseed3: "miniSEED 3 seismic records",
   sac: "SAC seismogram",

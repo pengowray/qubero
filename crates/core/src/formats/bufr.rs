@@ -133,6 +133,35 @@ fn chunk() -> T {
     )
 }
 
+/// How far into a file a message is looked for behind a GTS envelope. The
+/// starting line and the abbreviated heading are about thirty bytes; a
+/// heading with the optional BBB group and a few extra line ends is still
+/// well inside this.
+const ENVELOPE_LIMIT: usize = 64;
+
+/// A BUFR file that opens with a GTS envelope rather than with `BUFR`: what a
+/// bulletin saved straight off a feed looks like.
+///
+/// The letters alone, a few bytes in, would be weak evidence, so three things
+/// have to agree. Everything in front of them is the envelope's own alphabet:
+/// start-of-heading, end-of-text, line ends and printable characters. The
+/// eighth byte of what follows is an edition this reads, 2 to 4. And the total
+/// length in section 0 fits in the file after the letters.
+pub fn in_envelope(head: &[u8], len: u64) -> bool {
+    if head.first() != Some(&0x01) {
+        return false;
+    }
+    let window = &head[..head.len().min(ENVELOPE_LIMIT)];
+    let Some(at) = window.windows(4).position(|w| w == b"BUFR") else { return false };
+    let envelope = |b: &u8| matches!(*b, 0x01 | 0x03 | b'\r' | b'\n') || (0x20..0x7F).contains(b);
+    if !head[..at].iter().all(envelope) {
+        return false;
+    }
+    let Some(section0) = head.get(at..at + 8) else { return false };
+    let total = (u64::from(section0[4]) << 16) | (u64::from(section0[5]) << 8) | u64::from(section0[6]);
+    (2..=4).contains(&section0[7]) && total >= 8 + 4 && total <= len.saturating_sub(at as u64)
+}
+
 /// The GTS envelope between two messages, or in front of the first: the end of
 /// one bulletin and the heading of the next.
 fn envelope() -> T {
@@ -637,6 +666,23 @@ mod tests {
         assert_eq!(kinds, vec!["GtsEnvelope", "Message", "GtsEnvelope", "Message", "GtsEnvelope"]);
         let Value::Str(text) = ev.node(&d, &[0, 0]).unwrap().value else { panic!("text") };
         assert!(text.contains("ISMD01 OKPR 211200"), "{text:?}");
+    }
+
+    #[test]
+    fn a_message_is_recognised_at_the_front_or_behind_an_envelope() {
+        let one = sample();
+        assert_eq!(crate::formats::sniff(&one, one.len() as u64), Some("bufr"));
+        let mut b = b"\x01\r\r\n052\r\r\nISMD01 OKPR 211200\r\r\n".to_vec();
+        b.extend_from_slice(&one);
+        b.extend_from_slice(b"\r\r\n\x03");
+        assert_eq!(crate::formats::sniff(&b, b.len() as u64), Some("bufr"));
+        // The same heading in front of a length that runs past the file.
+        let cut = &b[..b.len() - 20];
+        assert_ne!(crate::formats::sniff(cut, cut.len() as u64), Some("bufr"));
+        // And the letters behind bytes no envelope has.
+        let mut junk = vec![0x01, 0x00, 0xFF, 0x10];
+        junk.extend_from_slice(&one);
+        assert_ne!(crate::formats::sniff(&junk, junk.len() as u64), Some("bufr"));
     }
 
     #[test]
