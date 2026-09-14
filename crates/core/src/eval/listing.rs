@@ -378,15 +378,25 @@ impl Evaluator {
     /// first. So each is tried in turn, narrowest first, until one has a field
     /// at the bit, and when none has, the answer is where the first one led.
     pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {
-        self.resolve(doc, &[])?;
-        let size = self.size_of(doc, &[])?;
-        let root = self.memo[&Vec::new()].clone();
-        if bit >= doc.len_bits() {
+        self.locate_under(doc, &[], bit)
+    }
+
+    /// The same for the fields under `root`, and a bit of the space those are
+    /// counted in: what a stream opened as a tab asks, with its contents read
+    /// where the stream was declared. See [`Tab`](super::Tab).
+    ///
+    /// The index of placed stretches is of the file, so a tab does without it
+    /// and a bit its own fields do not cover is its root.
+    pub(super) fn locate_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
+        self.resolve(doc, root)?;
+        let size = self.size_of(doc, root)?;
+        let top = self.memo[root].clone();
+        if bit >= self.len_in(doc, top.space) {
             return fail("past the end of the file");
         }
-        let inside = root.offset <= bit && bit < root.offset + size;
-        let (found, settled) = if inside { self.walk_down_to(doc, Vec::new(), bit)? } else { (Vec::new(), false) };
-        if settled {
+        let inside = top.offset <= bit && bit < top.offset + size;
+        let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit)? } else { (root.to_vec(), false) };
+        if settled || !root.is_empty() {
             return Ok(found);
         }
         // Only a stretch narrower than the structure the walk stopped in says
@@ -482,8 +492,8 @@ impl Evaluator {
     /// The outermost enclosing structure that reads as one row, or the field
     /// itself when nothing on the way to it is marked that way. `locate` has
     /// already resolved every step, so this only reads what it left behind.
-    pub(super) fn inline_ancestor(&self, path: &[usize]) -> Vec<usize> {
-        for n in 0..path.len() {
+    pub(super) fn inline_ancestor(&self, root: &[usize], path: &[usize]) -> Vec<usize> {
+        for n in root.len()..path.len() {
             let prefix = &path[..n];
             if let Some(r) = self.memo.get(prefix) {
                 if matches!(r.ty.base(), Ty::Struct(s) if s.inline) {
@@ -504,20 +514,26 @@ impl Evaluator {
     /// table, comes back as the run itself: several hundred internal rows would
     /// fill the column with less than one entry saying what the section is.
     pub fn spans<S: Source>(&mut self, doc: &Document<S>, from: u64, to: u64, max: usize) -> R<Vec<Span>> {
-        self.resolve(doc, &[])?;
-        let root_size = self.size_of(doc, &[])?;
-        let root_offset = self.memo[&Vec::new()].offset;
+        self.spans_under(doc, &[], from, to, max)
+    }
+
+    /// The same for the fields under `root`, across a stretch of the space
+    /// those are counted in. See [`Evaluator::locate_under`].
+    pub(super) fn spans_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], from: u64, to: u64, max: usize) -> R<Vec<Span>> {
+        self.resolve(doc, root)?;
+        let root_size = self.size_of(doc, root)?;
+        let (root_offset, space) = (self.memo[root].offset, self.memo[root].space);
         // As far as the file goes rather than as far as the root's own fields
         // go: what a placed field covers is past the second and inside the
         // first, and it is most of an HDF5 file.
         let _ = root_size;
-        let end = to.min(doc.len_bits());
+        let end = to.min(self.len_in(doc, space));
         let mut at = from.max(root_offset);
         let mut out: Vec<Span> = Vec::new();
         while at < end && out.len() < max {
-            let path = self.locate(doc, at)?;
+            let path = self.locate_under(doc, root, at)?;
             // A structure marked to read on one row stands for its fields here.
-            let path = self.inline_ancestor(&path);
+            let path = self.inline_ancestor(root, &path);
             // Everything a decoder's trace laid down stands for the block it
             // belongs to. The cursor goes all the way to one literal, because
             // a reader who clicks a byte of a deflate stream is asking which
@@ -528,7 +544,7 @@ impl Evaluator {
             let inline = matches!(self.memo[&path].ty.base(), Ty::Struct(s) if s.inline);
             let info = self.node(doc, &path)?;
             let span = if at < info.offset_bits || at >= info.offset_bits + info.size_bits {
-                self.gap_before_the_next_placement(doc, &path, &info, at)?
+                self.gap_before_the_next_placement(doc, root, &path, &info, at)?
             } else if inline {
                 // A structure that reads on one row is still one of many when
                 // it is an element of a long run: a quantised tensor is
@@ -548,7 +564,7 @@ impl Evaluator {
             } else if matches!(self.memo[&path].ty, Ty::Traced { part: TracedPart::Block(_) }) {
                 self.traced_block_span(doc, &path, &info)?
             } else if info.composite {
-                self.gap_inside(doc, &path, &info, at)?
+                self.gap_inside(doc, root, &path, &info, at)?
             } else {
                 self.field_or_its_run(doc, &path, &info, at)?
             };
@@ -567,6 +583,7 @@ impl Evaluator {
     fn gap_before_the_next_placement<S: Source>(
         &mut self,
         doc: &Document<S>,
+        root: &[usize],
         path: &[usize],
         info: &NodeInfo,
         at: u64,
@@ -576,13 +593,14 @@ impl Evaluator {
         // begins after it, not the part of it from `at` on: `at` is wherever
         // the view happens to start, and a gap that began at the top of the
         // screen would shrink as the view scrolled down through it.
-        let root_end = self.memo[&Vec::new()].offset + self.size_of(doc, &[])?;
+        let root_end = self.memo[root].offset + self.size_of(doc, root)?;
         let mut begins = if root_end <= at { root_end } else { 0 };
-        if let Some(end) = self.placement_end_before(doc, at)? {
+        if let Some(end) = self.placement_end_before(doc, root, at)? {
             begins = begins.max(end);
         }
-        let mut ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits());
-        let (before, after) = self.scattered_around(doc, at)?;
+        let len = self.len_in(doc, self.memo[root].space);
+        let mut ends = self.placement_after(doc, root, at)?.unwrap_or(len);
+        let (before, after) = self.scattered_around(doc, root, at)?;
         if let Some(end) = before {
             begins = begins.max(end);
         }
@@ -606,7 +624,7 @@ impl Evaluator {
     /// while the table, the trailer and the end marker are placed beside it
     /// rather than inside it. Ending the gap where the list ends would swallow
     /// all three and leave most of the file unannotated.
-    fn gap_inside<S: Source>(&mut self, doc: &Document<S>, path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
+    fn gap_inside<S: Source>(&mut self, doc: &Document<S>, root: &[usize], path: &[usize], info: &NodeInfo, at: u64) -> R<Span> {
         let mut span = self.span_of(doc, path, info)?;
         // From where the last thing before `at` ends, not from `at` itself,
         // which is only where the view starts: see `gap_before_the_next_placement`.
@@ -614,25 +632,25 @@ impl Evaluator {
         if let Some(end) = self.prev_child_end(doc, path, at)? {
             begins = begins.max(end);
         }
-        if let Some(end) = self.placement_end_before(doc, at)? {
+        if let Some(end) = self.placement_end_before(doc, root, at)? {
             begins = begins.max(end);
         }
         // A list placed over the whole file begins where the file does, and
         // the root's own fields are not part of a gap past them.
-        let root_end = self.memo[&Vec::new()].offset + self.size_of(doc, &[])?;
+        let root_end = self.memo[root].offset + self.size_of(doc, root)?;
         if root_end <= at {
             begins = begins.max(root_end);
         }
         let mut ends = info.offset_bits + info.size_bits;
-        for k in (0..=path.len()).rev() {
+        for k in (root.len()..=path.len()).rev() {
             if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
                 ends = ends.min(next);
             }
         }
-        if let Some(next) = self.placement_after(doc, at)? {
+        if let Some(next) = self.placement_after(doc, root, at)? {
             ends = ends.min(next);
         }
-        let (before, after) = self.scattered_around(doc, at)?;
+        let (before, after) = self.scattered_around(doc, root, at)?;
         if let Some(end) = before {
             begins = begins.max(end);
         }
@@ -669,9 +687,12 @@ impl Evaluator {
     /// ending that gap where the next placed stretch begins ran it over every
     /// sample header to the first sample's data. Only lists that know where
     /// their elements start in order are asked, which is a halving each.
-    fn scattered_around<S: Source>(&mut self, doc: &Document<S>, at: u64) -> R<(Option<u64>, Option<u64>)> {
+    fn scattered_around<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: u64) -> R<(Option<u64>, Option<u64>)> {
         let mut before: Option<u64> = None;
         let mut after: Option<u64> = None;
+        if !root.is_empty() {
+            return Ok((before, after));
+        }
         for (_, mut placed) in self.placements_at(doc, at)?.into_iter().take(PLACEMENTS_TRIED) {
             self.resolve(doc, &placed)?;
             if matches!(self.memo[&placed].ty, Ty::At { .. }) {

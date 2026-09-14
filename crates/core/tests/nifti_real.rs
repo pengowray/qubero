@@ -68,7 +68,7 @@ fn open_gzip(name: &str, check: impl FnOnce(&str, bool, &mut Evaluator, &Documen
     let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the stream opens");
     let space = ev.space_mut(id).expect("just opened");
     let (template, recognised) = (space.template.clone(), space.recognised);
-    let (inner, doc) = space.reading();
+    let (inner, doc) = space.reading().expect("a gzip holds bytes, so what they are was recognised");
     check(&template, recognised, inner, doc);
     true
 }

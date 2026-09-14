@@ -104,10 +104,17 @@ impl Evaluator {
     /// with it, the same way the graph carries on past a field it cannot place:
     /// a count that is short by one broken record is worth more than no count.
     pub fn census<S: Source>(&mut self, doc: &Document<S>, limit: usize) -> R<Census> {
+        self.census_under(doc, &[], limit)
+    }
+
+    /// The same for the nodes under `root`, which is a stream opened as a tab
+    /// counted against the diagram of what the stream holds. See
+    /// [`Tab`](super::Tab).
+    pub(super) fn census_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], limit: usize) -> R<Census> {
         let mut boxes: FxHashMap<String, BoxCount> = FxHashMap::default();
         let mut rows: FxHashMap<(String, usize), RowCount> = FxHashMap::default();
         let mut queue: std::collections::VecDeque<Waiting> = std::collections::VecDeque::new();
-        queue.push_back(Waiting { path: Vec::new(), row: None, counted: false });
+        queue.push_back(Waiting { path: root.to_vec(), row: None, counted: false });
         let mut walked: u64 = 0;
         let mut truncated = false;
         // The key of a type is the type written out, and writing one out per

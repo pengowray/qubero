@@ -475,3 +475,66 @@ fn tdata_values_kept_in_linked_blocks_match_pyhdf() {
         assert_eq!(bytes[..4], [0, 0, 0, 1], "every dataset starts at 1");
     }
 }
+
+/// The same values with each dataset's run of linked blocks opened as a tab of
+/// its own, which is what the listing offers on the row.
+///
+/// What the values are laid out by is not in the run: the dimension record and
+/// the number type are fields of the group beside it, so a reading of the
+/// run's bytes on their own had nothing to lay them out by and failed at its
+/// root. The tab reads them where they were declared, and every value comes
+/// out in the same shape, counted from the front of the tab.
+#[test]
+fn tdata_values_opened_as_tabs_read_as_pyhdf_reads_them() {
+    let Some(bytes) = samples().into_iter().find(|(name, _)| name == "tdata.hdf").map(|(_, b)| b) else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("hdf4").unwrap());
+    let found = walk(&mut ev, &doc, "tdata.hdf");
+    let mut read = Vec::new();
+    for dataset in found["Hdf4ScientificDataset"].clone() {
+        let Some(linked) = found["Hdf4LinkedBlocks"].iter().find(|p| p.starts_with(&dataset)).cloned() else {
+            panic!("{dataset:?}: the values are in linked blocks")
+        };
+        let stream = ev.child_named(&doc, &linked, "values").unwrap().unwrap();
+        let id = ev.open_space(&doc, 0, &stream).unwrap().expect("the values open as a tab");
+        let root = ev.tab_node(&doc, id, &[]).unwrap();
+        let inside = ev.node(&doc, &[stream.clone(), vec![0]].concat()).unwrap();
+        assert_eq!((root.offset_bits, root.space, root.joined), (0, 0, false), "{stream:?}: the tab's own bytes");
+        assert_eq!((root.size_bits, root.child_count), (inside.size_bits, inside.child_count), "{stream:?}");
+        assert_eq!(ev.space(id).unwrap().len_bytes() * 8, root.size_bits, "{stream:?}: the tab is as long as the values");
+
+        // The shape, down the first of each level, and every value in order.
+        let mut dims = Vec::new();
+        let mut at = Vec::new();
+        loop {
+            let node = ev.tab_node(&doc, id, &at).unwrap();
+            if node.child_count == 0 {
+                break;
+            }
+            dims.push(node.child_count as usize);
+            at.push(0);
+        }
+        let mut values = Vec::new();
+        let mut stack = vec![Vec::new()];
+        while let Some(at) = stack.pop() {
+            let node = ev.tab_node(&doc, id, &at).unwrap();
+            assert_eq!(node.path, at);
+            if node.child_count == 0 {
+                values.push(number(node.value));
+                continue;
+            }
+            for i in (0..node.child_count as usize).rev() {
+                stack.push([at.clone(), vec![i]].concat());
+            }
+        }
+        read.push((dims, values));
+    }
+    read.sort_by(|a, b| a.0.cmp(&b.0));
+    let a: Vec<f64> = (0..5).flat_map(|r| (1..=6).map(move |i| (10 * r + i) as f64)).collect();
+    let b = [1, 2, 3, 2, 3, 4, 3, 4, 5, 4, 5, 6, 7, 8, 9].map(f64::from).to_vec();
+    let c = [1, 2, 3, 4, 5].map(f64::from).to_vec();
+    assert_eq!(read, [(vec![5], c), (vec![5, 2, 3], a), (vec![5, 3], b)]);
+}

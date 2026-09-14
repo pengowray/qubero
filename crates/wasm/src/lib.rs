@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, Census, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, Census, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -21,8 +21,13 @@ use wasm_bindgen::prelude::*;
 /// Everything one reading holds: a document, what reads it, and the working
 /// each format keeps beside it. There is one per address space. Space 0 is the
 /// file; every other is a `Decoded` stream that was opened as a document of its
-/// own, and it has its own template, its own evaluator and its own byte-class
-/// scan, so two tabs never read over each other's working.
+/// own, and it has its own byte-class scan, so two tabs never read over each
+/// other's working.
+///
+/// A stream whose template came from looking at its bytes has its own
+/// evaluator too. One read by the template it declared has none: its fields
+/// name what is outside the stream, so they are read in the file's reading,
+/// under the stream, and handed back as the tab's own. See `Editor::tab`.
 struct Sheet {
     doc: Document<ChunkStore>,
     /// Which `Decoded` node of the file this space was unpacked from. Empty for
@@ -34,6 +39,11 @@ struct Sheet {
     /// stream is opened again; a tab's own number never changes.
     core_space: SpaceId,
     eval: Option<Evaluator>,
+    /// For a stream read where it was declared, where its contents are in the
+    /// file's reading. `eval` is None for those.
+    view: Option<Vec<usize>>,
+    /// What such a stream declares it holds, which the diagram is drawn from.
+    read_as: Option<qubero_core::template::Template>,
     /// What the wasm sections say about the module, when that is the template.
     /// Built on the first listing that needs it, and thrown away whenever the
     /// document changes, since it holds paths that the change may have moved.
@@ -73,9 +83,10 @@ impl Sheet {
     /// The bytes are all here already, so the store keeps every chunk: a space
     /// has no file behind it to fetch a missing one back from. The template is
     /// the one the core settled on, which is the stream's own or, where that
-    /// said only bytes, whatever the unpacked bytes were recognised as.
-    fn from_space(space: &mut qubero_core::eval::Space, origin: Vec<usize>) -> Sheet {
-        let template = space.reading().0.template().clone();
+    /// said only bytes, whatever the unpacked bytes were recognised as. Only
+    /// the second is read here; the first is read in the file's reading.
+    fn from_space(space: &qubero_core::eval::Space, origin: Vec<usize>) -> Sheet {
+        let template = space.read_as().clone();
         let bytes = space.bytes();
         let n = bytes.len() as u64;
         let chunks = (n / SPACE_CHUNK + 1) as usize;
@@ -91,9 +102,17 @@ impl Sheet {
         let mut sheet = Sheet::new(store, origin);
         sheet.core_space = space.id;
         sheet.template = template.name.clone();
-        let mut ev = Evaluator::new(template);
-        ev.set_slice(Some(WORK_SLICE));
-        sheet.eval = Some(ev);
+        match space.view() {
+            Some(view) => {
+                sheet.view = Some(view.root.clone());
+                sheet.read_as = Some(template);
+            }
+            None => {
+                let mut ev = Evaluator::new(template);
+                ev.set_slice(Some(WORK_SLICE));
+                sheet.eval = Some(ev);
+            }
+        }
         sheet
     }
 
@@ -111,6 +130,8 @@ impl Sheet {
             origin,
             core_space: 0,
             eval: None,
+            view: None,
+            read_as: None,
             disasm: None,
             bpf: None,
             bpf_complete: false,
@@ -2622,9 +2643,16 @@ impl Editor {
         // number is written back here. A stream that no longer opens leaves an
         // empty space rather than falling back to the file's bytes under the
         // stream's name.
+        //
+        // A stream read where it was declared is left for `tab` to open again
+        // when it is next asked about, since its fields are read in the file's
+        // reading, and the file's reading is about to change.
         let origins: Vec<Vec<usize>> =
             self.sheets[1..].iter().map(|sh| sh.origin.clone()).collect();
         for (i, origin) in origins.into_iter().enumerate() {
+            if self.sheets[i + 1].view.is_some() {
+                continue;
+            }
             let file = &mut self.sheets[0];
             let opened = match &mut file.eval {
                 None => None,
@@ -2636,7 +2664,7 @@ impl Editor {
                 }
             };
             let sheet = match opened {
-                Some(id) => match self.sheets[0].eval.as_mut().and_then(|e| e.space_mut(id)) {
+                Some(id) => match self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) {
                     Some(sp) => Sheet::from_space(sp, origin),
                     None => Sheet::empty(origin),
                 },
@@ -2644,6 +2672,63 @@ impl Editor {
             };
             self.sheets[i + 1] = sheet;
         }
+    }
+
+    /// What reads the fields of `space`, lent for one call: its own reading, or
+    /// for a stream read where it was declared, the file's, under the stream.
+    /// The error is the reply to give instead, when nothing reads it.
+    ///
+    /// A stream read where it was declared is opened again first when the
+    /// file's reading no longer has it open. An edit to the file and a change
+    /// of template both drop the spaces with the rest of the reading, and the
+    /// tab would otherwise read whatever the new reading has at the old path.
+    fn tab(&mut self, space: u32) -> Result<Tab<'_, ChunkStore>, String> {
+        self.go(space);
+        let i = if self.live < self.sheets.len() { self.live } else { 0 };
+        if self.sheets[i].view.is_some() && self.core_space(i as u32).is_none() {
+            self.reopen(i)?;
+        }
+        let no_template = || reply::<()>(Err(EvalError::Failed("no template".into())));
+        match self.sheets[i].view.clone() {
+            None => {
+                let sh = &mut self.sheets[i];
+                let e = sh.eval.as_mut().ok_or_else(no_template)?;
+                Ok(Tab::new(e, &sh.doc, Vec::new()))
+            }
+            Some(root) => {
+                let file = &mut self.sheets[0];
+                let e = file.eval.as_mut().ok_or_else(no_template)?;
+                Ok(Tab::new(e, &file.doc, root))
+            }
+        }
+    }
+
+    /// Open the stream sheet `i` came from again, in the file's reading as it
+    /// is now. A stream that no longer opens leaves an empty sheet, as
+    /// `forget_spaces` does; one waiting on bytes of the file says so, and is
+    /// opened when it is asked again.
+    fn reopen(&mut self, i: usize) -> Result<(), String> {
+        let origin = self.sheets[i].origin.clone();
+        let file = &mut self.sheets[0];
+        let opened = match &mut file.eval {
+            None => Ok(None),
+            Some(e) => {
+                e.set_slice(None);
+                let got = e.open_space(&file.doc, 0, &origin);
+                e.set_slice(Some(WORK_SLICE));
+                got
+            }
+        };
+        let sheet = match opened {
+            Ok(Some(id)) => match self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) {
+                Some(sp) => Sheet::from_space(sp, origin),
+                None => Sheet::empty(origin),
+            },
+            Err(err) if err.interrupted() => return Err(reply::<()>(Err(err))),
+            Ok(None) | Err(_) => Sheet::empty(origin),
+        };
+        self.sheets[i] = sheet;
+        Ok(())
     }
 
     /// Open the `Decoded` stream at `path` as a document of its own, and give
@@ -2680,7 +2765,7 @@ impl Editor {
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
-        let Some(sp) = self.sheets[0].eval.as_mut().and_then(|e| e.space_mut(id)) else {
+        let Some(sp) = self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) else {
             return reply::<SpaceDto>(Err(EvalError::Failed("space vanished".into())));
         };
         let sheet = Sheet::from_space(sp, p);
@@ -2813,12 +2898,17 @@ impl Editor {
     }
 
     /// The core's number for one of this editor's spaces, if it is still open.
+    ///
+    /// Still open as the same stream: the core numbers its spaces from 1 again
+    /// once a reading is thrown away, and a stream opened again since then may
+    /// have been given the number this one had.
     fn core_space(&self, space: u32) -> Option<SpaceId> {
         let sh = self.sheets.get(space as usize)?;
         if sh.core_space == 0 {
             return None;
         }
-        Some(sh.core_space)
+        let open = self.sheets[0].eval.as_ref()?.space(sh.core_space)?;
+        (open.parent == 0 && open.path == sh.origin).then_some(sh.core_space)
     }
 
     fn changed(&mut self) {
@@ -2946,20 +3036,30 @@ impl Editor {
     ///
     /// An edit throws the walk away, and the next step starts it over.
     pub fn kind_totals_step(&mut self, space: u32) -> String {
-        self.go(space);
+        // The walk is this sheet's own, and a stream read where it was
+        // declared walks it in the file's reading, so it is taken out of the
+        // sheet for the length of the call. After the sheet is opened again,
+        // if it has to be, since that starts the sheet over.
+        if let Err(why) = self.tab(space) {
+            return why;
+        }
         let sh = self.sm();
         let len = sh.doc.len_bits();
-        let Some(e) = &mut sh.eval else {
-            return reply::<KindTotalsDto>(Err(EvalError::Failed("no template".into())));
+        let mut kinds = sh.kinds.take();
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
         };
         // A walk built for a file of another length is about other bytes.
-        if !matches!(&sh.kinds, Some(w) if w.file_bits() == len) {
-            sh.kinds = Some(KindWalk::new(len));
+        if !matches!(&kinds, Some(w) if w.file_bits() == len) {
+            kinds = Some(tab.kind_walk(len));
         }
-        let walk = sh.kinds.as_mut().expect("just built");
-        e.begin_slice();
-        let out = e.kind_totals_step(&sh.doc, walk);
-        reply_with(out.map(kind_totals_dto), (e.reached_bits() / 8) as f64, Vec::new())
+        let walk = kinds.as_mut().expect("just built");
+        tab.ev.begin_slice();
+        let out = tab.kind_totals_step(walk);
+        let reached = (tab.ev.reached_bits() / 8) as f64;
+        self.sm().kinds = kinds;
+        reply_with(out.map(kind_totals_dto), reached, Vec::new())
     }
 
     // ----- templates -----
@@ -3006,11 +3106,9 @@ impl Editor {
 
     /// Best current projection for a variable-size array being walked, or an
     /// empty string when no unfinished walk has enough information yet.
-    pub fn extent_estimate(&self, space: u32) -> String {
-        let sh = self.at(space);
-        sh.eval
-            .as_ref()
-            .and_then(Evaluator::extent_estimate)
+    pub fn extent_estimate(&mut self, space: u32) -> String {
+        let Ok(tab) = self.tab(space) else { return String::new() };
+        tab.extent_estimate()
             .map(extent_estimate_dto)
             .map(|estimate| serde_json::to_string(&estimate).unwrap_or_default())
             .unwrap_or_default()
@@ -3216,33 +3314,27 @@ impl Editor {
     /// `at_bits` is where the cursor is. Only a block of packed weights uses
     /// it, to say which weight the reader is standing on.
     pub fn type_info(&mut self, space: u32, path: &[u32], at_bits: f64) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let at = (at_bits >= 0.0).then(|| at_bits as u64);
-        match &mut sh.eval {
-            None => reply::<ExplainDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.explain(&sh.doc, &p, at).map(explain_dto))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.explain(&p, at).map(explain_dto))
     }
 
     /// Which fields settled the shape of the one at `path`, and where this one
     /// points if it holds an offset. JSON, in the same reply shape as the rest;
     /// usually an empty list, since most fields are placed and sized outright.
     pub fn origins(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Vec<OriginDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.origins(&sh.doc, &p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.origins(&p).map(|v| v.into_iter().map(origin_dto).collect::<Vec<_>>()))
     }
 
     /// How the field at `path` was placed and how it was sized, in one word
@@ -3252,16 +3344,13 @@ impl Editor {
     /// in a header has no origins and is still somewhere for a reason, and the
     /// reason is that the field in front of it ended there.
     pub fn shape(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<ShapeDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.shape(&sh.doc, &p).map(|s| ShapeDto { placed: s.placed.as_str(), sized: s.sized.as_str() }))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.shape(&p).map(|s| ShapeDto { placed: s.placed.as_str(), sized: s.sized.as_str() }))
     }
 
     /// Which part of a stream joined from several runs the field at `path`
@@ -3274,17 +3363,13 @@ impl Editor {
     /// far into what that run gives the byte is; for a BGZF block, the virtual
     /// offset an index would name the byte by. Nothing is unpacked to answer.
     pub fn part_of(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Option<StitchedPartDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                let hit = e.node(&sh.doc, &p).and_then(|n| e.part_of(&sh.doc, n.space, n.offset_bits / 8));
-                reply(hit.map(|h| h.map(stitched_part_dto)))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.part_of(&p).map(|h| h.map(stitched_part_dto)))
     }
 
     /// The same answer for byte `byte` of a joined stream opened as a tab of
@@ -3318,26 +3403,23 @@ impl Editor {
     /// `covered_bytes` whether to take the sum without being asked. Taking it
     /// is `run_check`.
     pub fn check_of(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Option<CheckDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.check_of(&sh.doc, &p).map(|c| {
-                    c.map(|c| CheckDto {
-                        algorithm: c.algorithm,
-                        over: c.over.map(|(at, len)| [at as f64, len as f64]),
-                        unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
-                        covered_bytes: c.covered_bytes as f64,
-                        covered_exact: c.covered_exact,
-                        unpacked_member: c.unpacked_member,
-                        blanked: c.blanked.map(|b| [b.at as f64, b.len as f64, b.byte as f64]),
-                    })
-                }))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.check_of(&p).map(|c| {
+            c.map(|c| CheckDto {
+                algorithm: c.algorithm,
+                over: c.over.map(|(at, len)| [at as f64, len as f64]),
+                unpacked_from: c.unpacked_from.map(|(at, len)| [at as f64, len as f64]),
+                covered_bytes: c.covered_bytes as f64,
+                covered_exact: c.covered_exact,
+                unpacked_member: c.unpacked_member,
+                blanked: c.blanked.map(|b| [b.at as f64, b.len as f64, b.byte as f64]),
+            })
+        }))
     }
 
     /// The moment the field at `path` means, or null when it means none. JSON,
@@ -3348,14 +3430,12 @@ impl Editor {
     /// stored number is not in here, because it is already on the value row and
     /// this is an addition to it rather than a replacement for it.
     pub fn time_of(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Option<TimeDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.time_of(&sh.doc, &p).map(|t| {
+        match self.tab(space) {
+            Err(why) => why,
+            Ok(mut tab) => {
+                tab.ev.begin_slice();
+                reply(tab.time_of(&p).map(|t| {
                     t.map(|t| {
                         let (state, unix_seconds, nanos) = match t.moment {
                             Moment::At { unix_seconds, nanos } => ("at", Some(unix_seconds as f64), Some(nanos as f64)),
@@ -3396,19 +3476,13 @@ impl Editor {
     /// like any other read when the bytes are not here yet. A check that
     /// cannot be made is an error with the reason in it, never a mismatch.
     pub fn run_check(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Option<VerdictDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(
-                    e.run_check(&sh.doc, &p)
-                        .map(|v| v.map(|v| VerdictDto { computed: v.computed, stored: v.stored, ok: v.ok })),
-                )
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.run_check(&p).map(|v| v.map(|v| VerdictDto { computed: v.computed, stored: v.stored, ok: v.ok })))
     }
 
     /// The same question asked of every field under `path` at once: the nodes
@@ -3419,16 +3493,13 @@ impl Editor {
     /// is the top of the format rather than one deep spine of it, and the
     /// answer says how many nodes it left out.
     pub fn graph(&mut self, space: u32, path: &[u32], limit: u32) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<GraphDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.graph(&sh.doc, &p, limit as usize).map(graph_dto))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.graph(&p, limit as usize).map(graph_dto))
     }
 
     /// The template as boxes and arrows: one box per type, one row per field,
@@ -3442,9 +3513,10 @@ impl Editor {
     pub fn template_diagram(&mut self, space: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        match &sh.eval {
-            None => reply::<DiagramDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
+        match (&sh.eval, &sh.read_as) {
+            (Some(e), _) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
+            (None, Some(t)) => reply(Ok(diagram_dto(qubero_core::eval::diagram(t)))),
+            (None, None) => reply::<DiagramDto>(Err(EvalError::Failed("no template".into()))),
         }
     }
 
@@ -3455,15 +3527,12 @@ impl Editor {
     /// `limit` caps the nodes walked. Breadth-first, so what a cap keeps is the
     /// top of the file, and the answer says whether it stopped short.
     pub fn diagram_census(&mut self, space: u32, limit: u32) -> String {
-        self.go(space);
-        let sh = self.sm();
-        match &mut sh.eval {
-            None => reply::<CensusDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.census(&sh.doc, limit as usize).map(census_dto))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.census(limit as usize).map(census_dto))
     }
 
     /// The relationships behind the shape of the field at `path`, written out:
@@ -3472,25 +3541,17 @@ impl Editor {
     /// as the rest. Empty for a field the template placed and sized outright,
     /// and for one whose expression has no reading in that notation.
     pub fn relations(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Vec<RelationDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.relations(&sh.doc, &p).map(|v| {
-                    v.into_iter()
-                        .map(|r| RelationDto {
-                            role: r.role.as_str(),
-                            written: r.written,
-                            substituted: r.substituted,
-                            result: r.result,
-                        })
-                        .collect::<Vec<_>>()
-                }))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.relations(&p).map(|v| {
+            v.into_iter()
+                .map(|r| RelationDto { role: r.role.as_str(), written: r.written, substituted: r.substituted, result: r.result })
+                .collect::<Vec<_>>()
+        }))
     }
 
     /// What tool produced this file, according to a bundle of Detect It Easy
@@ -3528,34 +3589,26 @@ impl Editor {
 
     /// JSON: {status:"ok",node} | {status:"pending",chunks} | {status:"error",message}
     pub fn template_node(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<NodeDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                let r = e.node(&sh.doc, &p).map(dto);
-                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        let r = tab.node(&p).map(dto);
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
     }
 
     /// Same envelope as `template_node`, with `node` being an array of children.
     pub fn template_children(&mut self, space: u32, path: &[u32], from: f64, to: f64) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Vec<NodeDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                let r = e
-                    .children(&sh.doc, &p, from as u64, to as u64)
-                    .map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
-                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        let r = tab.children(&p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
     }
 
     /// The elements of the folded run at `path` whose bits overlap
@@ -3564,34 +3617,28 @@ impl Editor {
     /// `template_children`. `path` is what a span with a count carries, or a
     /// block of a decoded stream's trace.
     pub fn run_cells(&mut self, space: u32, path: &[u32], from_bit: f64, to_bit: f64, max: u32) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<Vec<CellDto>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                let r = e
-                    .run_cells(&sh.doc, &p, from_bit as u64, to_bit as u64, max as usize)
-                    .map(|v| v.into_iter().map(cell_dto).collect::<Vec<CellDto>>());
-                reply_with(r, (e.reached_bits() / 8) as f64, wanted(e))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        let r = tab
+            .run_cells(&p, from_bit as u64, to_bit as u64, max as usize)
+            .map(|v| v.into_iter().map(cell_dto).collect::<Vec<CellDto>>());
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
     }
 
     /// Whole text of a text field, decoded in its own encoding:
     /// {status:"ok",node:{text,truncated}}.
     pub fn field_text(&mut self, space: u32, path: &[u32]) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<TextDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.text_value(&sh.doc, &p).map(|(text, truncated)| TextDto { text, truncated }))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.text_value(&p).map(|(text, truncated)| TextDto { text, truncated }))
     }
 
     /// The first `limit` bytes of a field, read in whatever address space the
@@ -3599,34 +3646,30 @@ impl Editor {
     /// than `read_bits` at the node's offset, which is the file and is the
     /// wrong bytes for anything inside a decoded stream.
     pub fn field_bytes(&mut self, space: u32, path: &[u32], limit: u32) -> String {
-        self.go(space);
-        let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        match &mut sh.eval {
-            None => reply::<BytesDto>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(
-                    e.field_bytes(&sh.doc, &p, u64::from(limit))
-                        .map(|(bytes, truncated)| BytesDto { bytes, truncated }),
-                )
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.field_bytes(&p, u64::from(limit)).map(|(bytes, truncated)| BytesDto { bytes, truncated }))
     }
 
     /// Every field between two bit offsets, for the annotation column:
     /// {status:"ok",node:[span,..]}. `max` caps how many come back.
     pub fn spans(&mut self, space: u32, from_bit: f64, to_bit: f64, max: u32) -> String {
-        self.go(space);
-        let sh = self.sm();
-        let Some(e) = &mut sh.eval else {
-            return reply::<Vec<SpanDto>>(Err(EvalError::Failed("no template".into())));
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
         };
-        e.begin_slice();
-        let found = match e.spans(&sh.doc, from_bit as u64, to_bit as u64, max as usize) {
+        tab.ev.begin_slice();
+        let found = match tab.spans(from_bit as u64, to_bit as u64, max as usize) {
             Ok(v) => v,
             Err(err) => return reply::<Vec<SpanDto>>(Err(err)),
         };
+        // Named through the tables of the program the sheet reads, which a
+        // stream read where it was declared does not: its rows stay as the
+        // template reads them.
         let named = self.name_instructions(found);
         reply(Ok(named))
     }
@@ -3642,6 +3685,9 @@ impl Editor {
     pub fn holds_hdf5(&mut self, space: u32) -> String {
         self.go(space);
         let sh = self.sm();
+        // A stream read where it was declared has no reading of its own for a
+        // superblock to be the root of, and asked of the file's this would
+        // answer for the file.
         let Some(e) = &mut sh.eval else { return reply(Ok(false)) };
         e.begin_slice();
         reply(qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc))
@@ -3795,7 +3841,9 @@ impl Editor {
     pub fn elf_contents(&mut self, space: u32, symbol_limit: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "elf" && sh.template != "bpf" {
+        // A stream read where it was declared carries the file's template name
+        // and is not a program: the tables are the file's.
+        if (sh.template != "elf" && sh.template != "bpf") || sh.view.is_some() {
             return reply::<ElfContentsDto>(Err(EvalError::Failed("not an ELF template".into())));
         }
         let Some(e) = &mut sh.eval else {
@@ -3857,7 +3905,9 @@ impl Editor {
     pub fn root_contents(&mut self, space: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "root" {
+        // The same for a record of a ROOT file opened as a tab, which is not a
+        // ROOT file.
+        if sh.template != "root" || sh.view.is_some() {
             return reply::<RootContentsDto>(Err(EvalError::Failed("not a ROOT template".into())));
         }
         let Some(e) = &mut sh.eval else {
@@ -4279,15 +4329,12 @@ impl Editor {
     /// Path of the deepest field covering `bit`, as {status:"ok",node:[..]}.
     /// Its ancestors are the prefixes of that path.
     pub fn locate(&mut self, space: u32, bit: f64) -> String {
-        self.go(space);
-        let sh = self.sm();
-        match &mut sh.eval {
-            None => reply::<Vec<usize>>(Err(EvalError::Failed("no template".into()))),
-            Some(e) => {
-                e.begin_slice();
-                reply(e.locate(&sh.doc, bit as u64))
-            }
-        }
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        tab.ev.begin_slice();
+        reply(tab.locate(bit as u64))
     }
 
     /// Write `text` into the field at `path`, encoded as that field's type.

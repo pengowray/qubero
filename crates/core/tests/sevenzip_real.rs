@@ -100,10 +100,11 @@ fn a_compressed_header_reads_as_the_names_the_plain_one_says_out_loud() {
     assert_eq!(e.space(id).unwrap().bytes(), &solid[at..], "the unpacked header is the plain one");
 
     // The point: the space reads as a header, and its file table names the
-    // same eight entries.
-    let space = e.space_mut(id).expect("it is there");
-    let (se, sd) = space.reading();
-    assert_eq!(names_in(se, sd, &[]), want);
+    // same eight entries. The header is what the stream declared, so it is
+    // read where it was declared, under the stream.
+    let header = e.space(id).expect("it is there").view().expect("a declared header").root.clone();
+    assert_eq!(header, [7, 2, 0, 0]);
+    assert_eq!(names_in(&mut e, &d, &header), want);
 }
 
 /// The four files that have bytes, in the order the archives pack them, which
