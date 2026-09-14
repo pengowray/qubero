@@ -2667,7 +2667,10 @@ row group and each column chunk as it records a FITS heap array, and a gap
 inside a row group ends at the next column chunk. An earlier attempt kept the
 row group without a region and taught a structure's gap accounting to see the
 children of a gather inside it that covers nothing (branch
-`wip-parquet-gather-region`); this arrangement does not need that. A page asks
+`wip-parquet-gather-region`). This arrangement does not need that, and the
+placement index already ends such a gap at the gather's elements, which
+`a_gather_covering_nothing_inside_a_structure_ends_the_gaps_around_its_elements`
+pins. A page asks
 the entry that placed its column chunk for the codec and the physical type
 with `Expr::Placer`. The offset index, column index and bloom filter stay `At`s
 under that entry, since no row group's region holds them.
