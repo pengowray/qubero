@@ -255,10 +255,23 @@ pub struct KindWalk {
     done: bool,
     /// The file's length in bits, which is where the root frame ends.
     file_bits: u64,
+    /// Where the walk starts: the file's root, or the contents of a stream
+    /// opened as a tab, read where the stream was declared. See
+    /// [`Tab`](super::Tab).
+    root: Vec<usize>,
+    /// The space the root's fields are counted in, once the root is placed.
+    /// Nothing in any other belongs to what is being totalled.
+    space: SpaceId,
 }
 
 impl KindWalk {
     pub fn new(file_bits: u64) -> KindWalk {
+        KindWalk::under(file_bits, Vec::new())
+    }
+
+    /// A walk over the fields under `root`, which hold `file_bits` bits of
+    /// the space they are counted in.
+    pub fn under(file_bits: u64, root: Vec<usize>) -> KindWalk {
         KindWalk {
             stack: Vec::new(),
             totals: FxHashMap::default(),
@@ -269,6 +282,8 @@ impl KindWalk {
             started: false,
             done: false,
             file_bits,
+            root,
+            space: 0,
         }
     }
 
@@ -383,9 +398,11 @@ impl Evaluator {
 
     /// Place the root, and open a frame over it when it holds anything.
     fn open_root<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk) -> R<()> {
-        self.resolve(doc, &[])?;
-        let size = self.size_of(doc, &[])?;
-        let r = self.memo[&Vec::new()].clone();
+        let root = walk.root.clone();
+        self.resolve(doc, &root)?;
+        let size = self.size_of(doc, &root)?;
+        let r = self.memo[&root].clone();
+        walk.space = r.space;
         if !descends(&r.ty) {
             // A template that is one field, with the rest of the file left
             // over. Answered here rather than given a case in the loop below.
@@ -396,7 +413,7 @@ impl Evaluator {
             walk.done = true;
             return Ok(());
         }
-        let opening = self.opening(doc, &[], &r)?;
+        let opening = self.opening(doc, &root, &r)?;
         walk.stack.push(opening.frame(&r, 1, walk.file_bits, (0, 0)));
         Ok(())
     }
@@ -436,7 +453,7 @@ impl Evaluator {
         // reading of bytes unpacked from it, and its offsets count from the
         // front of those. Reached only if a stream were descended into, which
         // `descends` refuses; kept here so that it stays refused.
-        if r.space != 0 {
+        if r.space != walk.space {
             self.step_past(walk, top, in_order);
             return Ok(());
         }

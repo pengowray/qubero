@@ -201,6 +201,65 @@ fn a_scattered_stream_reads_as_its_body() {
     assert!(types >= 1, "and its type stream is one of them");
 }
 
+/// Every scattered stream of the sample with 260 translation units, opened as
+/// a tab of its own, which is what the listing offers on the stream's row.
+///
+/// A stream's length is an entry in the directory and which stream it is
+/// decides what it holds, and neither is inside the stream: a reading of the
+/// joined bytes on their own failed at its root. The tab reads the stream
+/// where it was declared, so every field is the one the file's reading has,
+/// counted from the front of the tab, and the type stream is still the type
+/// stream.
+#[test]
+fn a_scattered_stream_opened_as_a_tab_reads_as_its_body() {
+    let Some(dir) = folder() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let (doc, mut ev) = open(&dir, "msvc-x64-260-modules.pdb", "pdb");
+    let streams = ev.node(&doc, &[DIRECTORY, 0, STREAMS]).unwrap().child_count as usize;
+    let (mut opened, mut types) = (0, 0);
+    for i in 0..streams {
+        if ev.node(&doc, &[DIRECTORY, 0, STREAMS, i, CONTENTS]).unwrap().type_name != "PdbScatteredStream" {
+            continue;
+        }
+        let stream = [DIRECTORY, 0, STREAMS, i, CONTENTS, 1];
+        let Some(id) = ev.open_space(&doc, 0, &stream).unwrap() else { continue };
+        let body = [stream.as_slice(), &[0]].concat();
+        let inside = ev.node(&doc, &body).unwrap();
+        let root = ev.tab_node(&doc, id, &[]).unwrap();
+        assert_eq!(root.type_name, inside.type_name, "stream {i}");
+        assert_eq!((root.offset_bits, root.space, root.joined, root.space_root), (0, 0, false, false), "stream {i}");
+        assert_eq!((root.size_bits, root.child_count), (inside.size_bits, inside.child_count), "stream {i}");
+        assert_eq!(ev.space(id).unwrap().len_bytes() * 8, root.size_bits, "stream {i}: the tab is the whole stream");
+        for c in 0..root.child_count as usize {
+            let in_tab = ev.tab_node(&doc, id, &[c]).unwrap();
+            let in_file = ev.node(&doc, &[body.as_slice(), &[c]].concat()).unwrap();
+            assert_eq!(in_tab.path, [c], "stream {i} field {c}");
+            assert_eq!(
+                (&in_tab.name, &in_tab.value, in_tab.offset_bits, in_tab.size_bits, in_tab.child_count),
+                (&in_file.name, &in_file.value, in_file.offset_bits, in_file.size_bits, in_file.child_count),
+                "stream {i} field {c}"
+            );
+        }
+        if i == 2 {
+            assert_eq!(root.type_name, "TpiStream", "stream 2 is the type stream in a tab too");
+            let field = |ev: &mut Evaluator, f: usize| ev.tab_node(&doc, id, &[f]).unwrap().value.as_int().unwrap();
+            let (begin, end) = (field(&mut ev, 2), field(&mut ev, 3));
+            let records = ev.tab_node(&doc, id, &[15, 0]).unwrap();
+            assert_eq!(records.child_count as i128, end - begin, "one record per type number, in the tab");
+            // The last record ends where the records do, in the tab's own
+            // bytes.
+            let last = ev.tab_node(&doc, id, &[15, 0, records.child_count as usize - 1]).unwrap();
+            assert_eq!(last.offset_bits + last.size_bits, records.offset_bits + records.size_bits);
+            types += 1;
+        }
+        opened += 1;
+    }
+    assert!(opened >= 2, "{opened} scattered streams opened as tabs");
+    assert_eq!(types, 1, "the type stream is one of them");
+}
+
 /// The GUID and the age in the executable's debug directory are the ones in
 /// the PDB's info stream. That pairing is what a debugger checks before it
 /// trusts the symbols, and it is a fact about two files at once.

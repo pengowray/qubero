@@ -216,7 +216,7 @@ fn every_compressed_sample_opens_as_a_space() {
             // template nothing in it satisfies is worse than one that opens
             // into bytes.
             if len > 0 {
-                ev.space_mut(id).unwrap().node(&[]).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                ev.tab_node(&doc, id, &[]).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             }
         }
     }
