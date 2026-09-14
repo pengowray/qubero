@@ -2989,6 +2989,78 @@ fn a_gather_finds_a_tagged_list_wherever_it_is_written() {
 }
 
 #[test]
+fn a_gather_inside_a_gathered_element_walks_from_the_record_that_placed_it() {
+    // Two groups, each saying where its region is and how long, and holding
+    // records that place bytes inside that region. The regions are a gather,
+    // and what is in each is a gather over that group's records alone.
+    let group = T::structure(
+        "Group",
+        vec![("at", T::u8()), ("len", T::u8()), ("n", T::u8()), ("recs", T::array(placing(), E::field("n")))],
+    );
+    let inner = vec![Step::placer(), Step::field("recs"), Step::each()];
+    let region = T::sized(
+        E::placer(E::field("len")),
+        T::gather(inner, E::field("off"), Anchor::File, E::lit(0), T::bytes(E::placer(E::field("len")))),
+    );
+    let outer = vec![Step::field("groups"), Step::each()];
+    let t = T::structure(
+        "Root",
+        vec![("groups", T::array(group, E::lit(2))), ("regions", T::gather(outer, E::field("at"), Anchor::File, E::lit(0), region))],
+    );
+    // Group 0 is a region at 20 of six bytes, with records placing 21 and 24;
+    // group 1 is a region at 12 of six bytes, with one record placing 13.
+    let mut bytes = vec![20, 6, 2, 21, 2, 24, 1, /* group 1 */ 12, 6, 1, 13, 3];
+    bytes.extend([0, 0xb0, 0xb1, 0xb2, 0, 0, /* 18 */ 0, 0, /* 20 */ 0, 0xa0, 0xa1, 0, 0xa2, 0]);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    let at = |ev: &mut Evaluator, path: &[usize]| {
+        let n = ev.node(&d, path).unwrap();
+        (n.offset_bits / 8, n.size_bits / 8, n.child_count)
+    };
+    assert_eq!(at(&mut ev, &[1, 0]), (20, 6, 2));
+    assert_eq!(at(&mut ev, &[1, 1]), (12, 6, 1));
+    // Each region holds only what its own group's records place.
+    assert_eq!(at(&mut ev, &[1, 0, 0]), (21, 2, 0));
+    assert_eq!(at(&mut ev, &[1, 0, 1]), (24, 1, 0));
+    assert_eq!(at(&mut ev, &[1, 1, 0]), (13, 3, 0));
+    assert_eq!(ev.locate(&d, 14 * 8).unwrap(), vec![1, 1, 0]);
+    assert_eq!(ev.locate(&d, 24 * 8).unwrap(), vec![1, 0, 1]);
+    assert_eq!(ev.locate(&d, 23 * 8).unwrap(), vec![1, 0]);
+    // Named from the outer record on, the way the walk went.
+    assert_eq!(ev.origins(&d, &[1, 1, 0]).unwrap()[0].label, "groups[1].recs[0]");
+    assert_eq!(ev.origins(&d, &[1, 0, 1]).unwrap()[0].label, "groups[0].recs[1]");
+}
+
+#[test]
+fn a_gather_covering_nothing_inside_a_structure_ends_the_gaps_around_its_elements() {
+    // A structure of twelve bytes holding a byte and a gather with no region
+    // of its own, whose two elements land inside the structure. The gaps in
+    // the structure are the bytes between those elements, not the whole of
+    // what is after the byte.
+    let from = vec![Step::field("recs"), Step::each()];
+    let items = T::gather(from, E::field("off"), Anchor::File, E::lit(0), T::bytes(E::placer(E::field("len"))));
+    let t = T::structure(
+        "Root",
+        vec![
+            ("recs", T::array(placing(), E::lit(2))),
+            ("region", T::sized(E::lit(12), T::structure("Region", vec![("head", T::u8()), ("items", items)]))),
+        ],
+    );
+    let bytes = [8, 2, 12, 1, /* 4 */ 0xee, 0, 0, 0, /* 8 */ 0xa0, 0xa1, 0, 0, /* 12 */ 0xb0, 0, 0, 0];
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    let spans = ev.spans(&d, 4 * 8, 16 * 8, 100).unwrap();
+    let seen: Vec<(u64, u64, bool)> = spans.iter().map(|s| (s.offset_bits / 8, s.size_bits / 8, s.gap)).collect();
+    assert_eq!(seen, vec![(4, 1, false), (5, 3, true), (8, 2, false), (10, 2, true), (12, 1, false), (13, 3, true)]);
+    // A window starting inside a gap still sees the gap end at the element.
+    let spans = ev.spans(&d, 10 * 8, 16 * 8, 100).unwrap();
+    assert_eq!((spans[0].offset_bits / 8, spans[0].size_bits / 8, spans[0].gap), (10, 2, true));
+    assert_eq!(ev.locate(&d, 9 * 8).unwrap(), vec![1, 1, 0]);
+    assert_eq!(ev.locate(&d, 12 * 8).unwrap(), vec![1, 1, 1]);
+    assert_eq!(ev.locate(&d, 11 * 8).unwrap(), vec![1]);
+}
+
+#[test]
 fn a_record_that_places_nothing_is_passed_over() {
     // A record holds an offset only when its kind says so. One of kind 1
     // points outside the region, which is passed over too, and so is an

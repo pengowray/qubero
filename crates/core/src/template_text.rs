@@ -718,6 +718,8 @@ fn until_text(u: &Until) -> String {
 fn step_text(s: &Step) -> String {
     match s {
         Step::Field(n) => format!(".{n}"),
+        // Spelled the way a formula spells `Expr::Placer`.
+        Step::Placer => "descriptor".to_string(),
         Step::Tagged { key, tag, shown } => {
             format!(".{shown}[{} = {}]", key.join("."), tag_text(tag, true).unwrap_or_default())
         }
