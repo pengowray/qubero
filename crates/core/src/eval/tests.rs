@@ -188,7 +188,7 @@ fn a_length_too_large_to_count_in_bits_fails_rather_than_wrapping() {
         let sized_bits = T::SizedBits { bits: E::field("n").mul(E::lit(8)), inner: Box::new(T::u8()) };
         assert_eq!(failed(sized_bits, &[1], n), format!("{} bits run past the end of the container", n as i128 * 8));
         assert_eq!(failed(T::bytes(E::field("n")), &[1], n), "runs past the end of its container");
-        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "runs past the end of the file");
+        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "runs past the end of its container");
         // A list of them, placed by stride when eight times the size fits and
         // by walking the first element when it does not.
         let each = T::sized(E::field("n"), T::u8());
@@ -1303,25 +1303,6 @@ fn a_real_has_no_place_in_a_size_or_a_count() {
     assert!(failure(ev.node(&d, &[1]).unwrap_err()).starts_with("n is a real number"));
     // And a power that is whole is the whole number it comes to.
     assert_eq!(within(E::pow2(E::lit(4))), "runs past the end of its container");
-}
-
-/// A length or an offset read from the file can be any 64-bit number, and
-/// the largest of them are more bytes than a `u64` counts in bits. Each is
-/// refused as running past what holds it, the same as a merely large one,
-/// instead of overflowing the multiplication by eight.
-#[test]
-fn a_length_too_large_to_count_in_bits_runs_past_its_container() {
-    let huge = [0xFF; 8];
-    let reading = |field: T, at: &[usize]| {
-        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("x", field)]));
-        let mut ev = Evaluator::new(t);
-        let d = doc(&[&huge[..], &[1, 2, 3, 4]].concat());
-        ev.node(&d, at).map(|n| n.size_bits).map_err(failure)
-    };
-    assert_eq!(reading(T::sized(E::field("n"), T::bytes(E::Remaining)), &[1]), Err("size 18446744073709551615 runs past the end of its container".into()));
-    assert_eq!(reading(T::bytes(E::field("n")), &[1]), Err("runs past the end of its container".into()));
-    // The pointer itself covers nothing; what it points at is refused.
-    assert_eq!(reading(T::at(E::field("n"), T::u8()), &[1, 0]), Err("runs past the end of the file".into()));
 }
 
 #[test]

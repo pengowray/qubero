@@ -104,7 +104,7 @@ impl Evaluator {
         // count in bits is no stride: the walk stops at the first element,
         // which says why.
         let n = self.eval_expr(doc, path, size)?;
-        Ok(if n > 0 { byte_bits(n) } else { None })
+        Ok(if n > 0 { bits_in(n) } else { None })
     }
 
     pub(super) fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
@@ -190,7 +190,10 @@ impl Evaluator {
                     if n < 0 {
                         return fail("negative length");
                     }
-                    match byte_bits(n) { Some(bits) => bits, None => return fail("runs past the end of its container") }
+                    match bits_in(n) {
+                        Some(bits) => bits,
+                        None => return fail("runs past the end of its container"),
+                    }
                 }
                 Ty::Str { len, .. } | Ty::TextInt { len, .. } => match len {
                     StrLen::Fixed(e) | StrLen::Padded { size: e, .. } => {
@@ -198,7 +201,10 @@ impl Evaluator {
                         if n < 0 {
                             return fail("negative length");
                         }
-                        match byte_bits(n) { Some(bits) => bits, None => return fail("runs past the end of its container") }
+                        match bits_in(n) {
+                            Some(bits) => bits,
+                            None => return fail("runs past the end of its container"),
+                        }
                     }
                     // Whitespace, then the value, then the byte that ends it.
                     StrLen::Scan { skip, ends, comment } => self.read_scan(doc, &r, skip, ends, *comment)?.1 * 8,
@@ -416,6 +422,14 @@ impl Evaluator {
             _ => Ok(0),
         }
     }
+}
+
+/// A length in bytes as bits, when bits can count it. The length is whatever a
+/// field of the file said, and a corrupt one can say more than eight times it
+/// fits in a u64: that is a length no container holds, not one to wrap round
+/// to something small.
+pub(super) fn bits_in(bytes: i128) -> Option<u64> {
+    u64::try_from(bytes).ok()?.checked_mul(8)
 }
 
 /// Whether an expression asks nothing about the element it sits in, so that
