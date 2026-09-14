@@ -24,7 +24,12 @@ fn editor(sample: &str, template: Option<&str>) -> Option<Editor> {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return None;
     };
-    let bytes = std::fs::read(root.join(sample)).unwrap();
+    // A sample another session has not committed yet is missing from a clean
+    // copy of the collection, and says so the same way.
+    let Ok(bytes) = std::fs::read(root.join(sample)) else {
+        eprintln!("skipped: no {sample} in the sample collection");
+        return None;
+    };
     let chunk = 64 * 1024;
     let mut ed = Editor::new(bytes.len() as f64, chunk, 1024);
     for (i, part) in bytes.chunks(chunk as usize).enumerate() {
