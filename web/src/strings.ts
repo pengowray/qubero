@@ -2826,6 +2826,25 @@ export const DIAGRAM = {
   /** A field the file has, but inside an unpacked stream, whose offsets are not
    *  the file's, so the hex cursor cannot be put on it. */
   inStream: "This one is inside an unpacked stream, which the hex view cannot go to",
+  /**
+   * The two pictures the view can draw.
+   *
+   * Named for what they look like rather than for what they are for, because a
+   * reader picking between two drawings is picking a drawing. Neither is a
+   * summary of the other: one says what decides what, the other what comes
+   * after what.
+   */
+  modeLabel: "How to draw it",
+  modeTitle: "Boxes joined by arrows, or each type as a strip of its fields in file order",
+  modeArrows: "Boxes and arrows",
+  modeStrips: "Strips",
+  /** Under the name of the last box of a run, where the first box carries the
+   *  count. */
+  runLast: "last",
+  /** Under the name of a field that may not be there, with what decides it. */
+  when: (cond: string): string => `when ${cond}`,
+  /** On the mark beside a field whose contents are somewhere else. */
+  placedTitle: "Read at an address this field points to, not where it is written",
   fit: "Fit",
   fitTitle: "Fit the whole diagram in the window",
   /** What a click on a field row does. Only the format's first type can be

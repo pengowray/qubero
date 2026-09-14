@@ -398,6 +398,74 @@ try {
       const after = await page.locator(".hv-offset, .status-offset, footer").first().textContent().catch(() => "");
       console.log(`  double-click went from ${JSON.stringify((before ?? "").trim().slice(0, 40))} to ${JSON.stringify((after ?? "").trim().slice(0, 40))}`);
     }
+    // The other mode. Same file, same census, same double click: what changes
+    // is that the format is drawn as the file is written rather than as the
+    // fields decide each other. Checked here rather than in a test of its own
+    // because what is worth knowing is that one file gets both pictures.
+    // Back to the drawing first: the double click above left the reader in the
+    // hex view, which is what it is for.
+    await page.getByRole("button", { name: "Diagram", exact: true }).click();
+    await page.waitForSelector(".dv-box", { timeout: 20000 });
+    await page.selectOption(".dv-mode", "strips");
+    await page.waitForSelector(".dv-strip", { timeout: 20000 });
+    await page.waitForTimeout(600);
+    const strips = await page.evaluate(() => ({
+      strips: document.querySelectorAll(".dv-strip").length,
+      boxes: document.querySelectorAll(".dv-sbox").length,
+      bands: document.querySelectorAll(".dv-band").length,
+      funnels: document.querySelectorAll(".dv-funnel").length,
+      badges: document.querySelectorAll(".dv-count").length,
+      goable: document.querySelectorAll(".is-goable").length,
+      // Two strips of one row sharing pixels is the layout having failed: the
+      // rows are laid out by hand and nothing else can put one over another.
+      overlaps: (() => {
+        const at = [...document.querySelectorAll(".dv-strip")].map((e) => ({
+          l: parseFloat(e.style.left),
+          t: parseFloat(e.style.top),
+          w: e.offsetWidth,
+          h: e.offsetHeight,
+        }));
+        let n = 0;
+        for (let i = 0; i < at.length; i++) {
+          for (let j = i + 1; j < at.length; j++) {
+            const a = at[i];
+            const b = at[j];
+            if (a.l < b.l + b.w && b.l < a.l + a.w && a.t < b.t + b.h && b.t < a.t + a.h) n++;
+          }
+        }
+        return n;
+      })(),
+      // A funnel drawn from a measurement that was not there is the fault a
+      // screenshot cannot show: the line simply is not drawn.
+      badPaths: [...document.querySelectorAll(".dv-funnel path")].filter((q) =>
+        /NaN|undefined/.test(q.getAttribute("d") || ""),
+      ).length,
+    }));
+    await page.screenshot({ path: join(outDir, c.shot.replace(".png", "-strips.png")) });
+    if (c.darkShot !== undefined) {
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.screenshot({ path: join(outDir, c.darkShot.replace(".png", "-strips.png")) });
+      await page.emulateMedia({ colorScheme: "light" });
+    }
+    console.log(`  strips: ${JSON.stringify(strips)}`);
+    assert(strips.strips >= 1, "no strips drawn");
+    assert(strips.boxes >= 1, "no field boxes drawn in a strip");
+    assert.equal(strips.overlaps, 0, "strips overlap each other");
+    assert.equal(strips.badPaths, 0, "a funnel was drawn with a broken path");
+    // The census belongs to the drawing, not to one way of drawing it.
+    if (found.badges > 0) assert(strips.badges > 0, "the counts went away with the mode");
+    if (found.goable > 0) assert(strips.goable > 0, "nothing offered to go to the file any more");
+    // And back, because a reader who tries the other mode and returns should
+    // find what they left.
+    await page.selectOption(".dv-mode", "arrows");
+    await page.waitForSelector(".dv-box", { timeout: 20000 });
+    const back = await page.evaluate(() => ({
+      boxes: document.querySelectorAll(".dv-box").length,
+      strips: document.querySelectorAll(".dv-strip").length,
+    }));
+    assert(back.boxes >= 1, "the boxes did not come back");
+    assert.equal(back.strips, 0, "the strips were left behind on the drawing");
+
     console.log(basename(c.file), JSON.stringify(found));
     assert.deepEqual(errors, [], `page errors for ${c.file}`);
     assert(found.boxes >= 1, "no boxes drawn");
