@@ -1414,7 +1414,10 @@ impl Evaluator {
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
-            pr.offset + idx as u64 * stride
+            let Some(at) = stride.checked_mul(idx as u64).and_then(|bits| pr.offset.checked_add(bits)) else {
+                return fail("runs past the end of its container");
+            };
+            at
         } else {
             // Place after the previous sibling, walking the elements in
             // between. A long list drops what the walk moves past, so this

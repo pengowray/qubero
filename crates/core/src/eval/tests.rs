@@ -172,6 +172,42 @@ fn sized_switch_and_pending() {
 }
 
 #[test]
+fn a_length_too_large_to_count_in_bits_fails_rather_than_wrapping() {
+    // A u64 read from a corrupt file, then a byte. Each length is past what
+    // bits can count: the first two once multiplied by eight, the third only
+    // once added to where the field starts.
+    let failed = |ty: T, path: &[usize], n: u64| {
+        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("body", ty)]));
+        let mut bytes = n.to_le_bytes().to_vec();
+        bytes.push(0);
+        failure(Evaluator::new(t).node(&doc(&bytes), path).unwrap_err())
+    };
+    for n in [0x7fff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x1fff_ffff_ffff_ffff] {
+        let sized = T::sized(E::field("n"), T::u8());
+        assert_eq!(failed(sized, &[1], n), format!("size {n} runs past the end of its container"));
+        let sized_bits = T::SizedBits { bits: E::field("n").mul(E::lit(8)), inner: Box::new(T::u8()) };
+        assert_eq!(failed(sized_bits, &[1], n), format!("{} bits run past the end of the container", n as i128 * 8));
+        assert_eq!(failed(T::bytes(E::field("n")), &[1], n), "runs past the end of its container");
+        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "runs past the end of the file");
+        // A list of them, placed by stride when eight times the size fits and
+        // by walking the first element when it does not.
+        let each = T::sized(E::field("n"), T::u8());
+        assert!(failed(T::array(each, E::lit(2)), &[1, 1], n).ends_with("runs past the end of its container"));
+        // And a count that many elements long.
+        assert_eq!(failed(T::array(T::u16(Little), E::field("n")), &[1], n), "runs past the end of its container");
+    }
+}
+
+#[test]
+fn a_count_too_large_for_a_u64_fails_rather_than_wrapping() {
+    // The largest u64, and one more: as a u64 that count wraps round to an
+    // empty list, which is a corrupt file read as a well-formed one.
+    let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("body", T::array(T::u8(), E::field("n").add(E::lit(1))))]));
+    let got = Evaluator::new(t).node(&doc(&u64::MAX.to_le_bytes()), &[1]).map(|n| n.child_count).map_err(failure);
+    assert_eq!(got, Err("count 18446744073709551616 does not fit in a u64".into()));
+}
+
+#[test]
 fn huge_variable_size_array_does_not_recurse() {
     // 50k LEB128 elements; the count itself is a 3-byte LEB128.
     let n = 50_000u32;
