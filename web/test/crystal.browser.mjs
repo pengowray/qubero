@@ -30,31 +30,31 @@ try {
   await page.waitForTimeout(300);
   assert.notEqual(await logo.locator("svg").innerHTML(), rest, "a drag turns the logo");
   assert.equal(await page.locator(".welcome-crystal").getAttribute("data-spinning"), "true");
-  // The drawing is the same at an angle and its negative, so nothing measured
-  // from it can say which way round the mark is. What it can say is how far
-  // from face-on: the silhouette is widest flat on and narrows either side. A
-  // spring that slid home would widen once and stop. This one reaches face-on,
-  // carries past it, and comes back, so the width rises, falls and rises.
-  const width = () => page.evaluate(() =>
-    +document.querySelector(".welcome-crystal svg").lastElementChild.getBBox().width.toFixed(1));
+  // The asymmetric prism can widen or narrow as different facets turn into
+  // view. Record the rendered angle to check spring overshoot independently
+  // of that changing silhouette; the visible drawing is checked above/below.
+  await page.evaluate(async () => {
+    const moduleUrl = performance.getEntriesByType("resource").find(entry =>
+      new URL(entry.name).pathname === "/src/crystal.ts").name;
+    const { Crystal } = await import(moduleUrl);
+    const draw = Crystal.prototype.draw;
+    window.crystalAngles = [];
+    Crystal.prototype.draw = function (angle) {
+      window.crystalAngles.push(angle);
+      return draw.call(this, angle);
+    };
+    window.restoreCrystalDraw = () => { Crystal.prototype.draw = draw; };
+  });
   await page.mouse.up();
-  const trace = [];
-  for (let i = 0; i < 40; i++) { trace.push(await width()); await page.waitForTimeout(22); }
-  // The shape rather than the numbers: sampling every 22ms lands where it
-  // lands, so a threshold set at face-on is missed by a pixel some runs. What
-  // is not missed is that the width climbs, turns over, drops a long way and
-  // climbs again. Sliding home would climb once and stay. A pixel of slack on
-  // each comparison keeps the rounding out of it.
-  const DIP = 20;
-  let peak = 1;
-  while (peak < trace.length && trace[peak] >= trace[peak - 1] - 1) peak++;
-  peak -= 1;
-  let low = peak;
-  while (low + 1 < trace.length && trace[low + 1] <= trace[low] + 1) low++;
-  const back = trace.slice(low).find(w => w >= trace[low] + DIP);
-  assert(peak > 0 && trace[peak] - trace[0] >= DIP, `the spring brings it home: ${trace.join(" ")}`);
-  assert(trace[peak] - trace[low] >= DIP, `the spring carries it past home: ${trace.join(" ")}`);
-  assert(back !== undefined, `and it comes back again: ${trace.join(" ")}`);
+  await page.waitForTimeout(1000);
+  const trace = await page.evaluate(() => {
+    window.restoreCrystalDraw();
+    return window.crystalAngles;
+  });
+  assert(trace[0] > 0.2, "the spring starts from the held turn");
+  const pastHome = trace.findIndex(angle => angle < -0.1);
+  assert(pastHome > 0, "the spring carries it past home");
+  assert(trace.slice(pastHome).some(angle => angle > 0.05), "and it comes back again");
   await page.waitForFunction(() => !document.querySelector(".welcome-crystal").dataset.spinning, null, { timeout: 4000 });
   assert.equal(await logo.locator("svg").innerHTML(), rest, "the spring puts it back at rest");
 

@@ -1,23 +1,100 @@
-// The opening-screen mark, rebuilt from the old drawing. Its rest projection
-// keeps the broad bevels and unequal long faces instead of replacing the ends
-// with a regular pyramid. A shallow solid gives those drawn facets real depth
-// when the mark turns; the back shares the same deliberately irregular cut.
+// The original irregular silhouette, cut from a solid with broad unequal
+// planes. The front keeps the long skewed facets and small chipped shoulders;
+// the back has its own cuts instead of mirroring a relief at a flat rim.
 type Vertex = readonly [number, number, number];
-const points: Vertex[] = [
-  [285, 10, 0], [140, 100, 0], [65, 160, 0], [43, 210, 0],
-  [12, 480, 0], [20, 540, 0], [59, 575, 0], [163, 760, 0],
-  [194, 808, 0], [401, 685, 0], [426, 625, 0], [449, 530, 0],
-  [465, 281, 0], [433, 235, 0], [355, 108, 0],
-  [100, 158, 40], [105, 237, 70], [170, 272, 120], [308, 294, 155],
-  [359, 235, 100], [76, 345, 65], [49, 500, 30], [131, 660, 70],
-  [201, 670, 90], [273, 609, 140], [379, 608, 80],
+type Plane = readonly [number, number, number, number];
+const contour = [
+  [285, 10], [140, 100], [65, 160], [43, 210], [12, 480],
+  [20, 540], [59, 575], [163, 760], [194, 808], [401, 685],
+  [426, 625], [449, 530], [465, 281], [433, 235], [355, 108],
+] as const;
+// Plane inequalities: ax + by + cz <= d. Front cuts preserve the drawing's
+// broad upper face, slanted central face, and narrow bevels along the left.
+const cuts: Plane[] = [
+  [-0.12, -0.03, 1, 113.9],
+  [-2, -0.08, 1, -3],
+  [1.1, 0.1, 1, 528],
+  [1.1, -1.2, 1, 215.72],
+  [0.02, -1, 1, -125],
+  [-0.3355, -0.30735, 1, 1.85],
+  [-2.3608, -0.85058, 1, -339.47],
+  [0.752639, 1, 1, 979.61],
+  [1.1, 1.1, 1, 1137],
+  [-1.3, 0.97, 1, 619.28],
+  [-0.26, 0.95, 1, 742.56],
+  [1.8, 0.12, 1, 856],
+  // The rear's long face tapers between oblique shoulder and base cuts,
+  // avoiding a rectangular panel surrounded by matching bevels.
+  [0.30, -0.08, -1, 215],
+  [-0.25, -0.65, -1, 50],
+  [0.2, 0.8, -1, 660],
+  [-1.3, -0.05, -1, -44.5],
+  [1.1, 0.12, -1, 547.7],
+  [-0.54, -0.0175, -1, 74.75],
+  [-0.08, -0.34, -1, 98],
+  [0.65, 0.50, -1, 635],
 ];
-const facets = [
-  [2, 1, 15], [0, 1, 15, 16, 17, 18, 19, 14], [14, 19, 13],
-  [13, 19, 18, 24, 25, 11, 12], [18, 17, 20, 21, 6, 22, 23, 24],
-  [17, 16, 20], [2, 15, 16, 20, 21, 4, 3], [4, 21, 6, 5],
-  [6, 22, 7], [22, 23, 7], [7, 23, 24, 25, 10, 9, 8], [25, 11, 10],
-];
+// Only supporting edges define the silhouette; a small inward kink in the
+// drawing must not slice off a distant tip when extended as a cutting plane.
+const sortedContour = [...contour].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+const halfContour = (vertices: readonly (readonly [number, number])[]): (readonly [number, number])[] => {
+  const hull: (readonly [number, number])[] = [];
+  for (const p of vertices) {
+    while (hull.length > 1) {
+      const a = hull[hull.length - 2]!, b = hull[hull.length - 1]!;
+      if ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) > 0) break;
+      hull.pop();
+    }
+    hull.push(p);
+  }
+  hull.pop();
+  return hull;
+};
+const silhouette = [...halfContour(sortedContour), ...halfContour([...sortedContour].reverse())].reverse();
+for (let i = 0; i < silhouette.length; i++) {
+  const [x, y] = silhouette[i]!;
+  const [nextX, nextY] = silhouette[(i + 1) % silhouette.length]!;
+  const a = y - nextY, b = nextX - x;
+  cuts.push([a, b, 0, a * x + b * y]);
+}
+const dot = (a: readonly number[], b: readonly number[]): number =>
+  a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+const cross3 = (a: readonly number[], b: readonly number[]): Vertex =>
+  [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
+// Intersect the cuts once. Every resulting facet is planar, so the bevels
+// connect in depth without triangulation lines or a front/back joining ring.
+const points: Vertex[] = [];
+for (let i = 0; i < cuts.length; i++) {
+  for (let j = i + 1; j < cuts.length; j++) {
+    for (let k = j + 1; k < cuts.length; k++) {
+      const a = cuts[i]!, b = cuts[j]!, c = cuts[k]!;
+      const bc = cross3(b, c), ca = cross3(c, a), ab = cross3(a, b);
+      const determinant = dot(a, bc);
+      if (Math.abs(determinant) < 1e-8) continue;
+      const coordinate = (axis: number): number =>
+        (a[3] * bc[axis]! + b[3] * ca[axis]! + c[3] * ab[axis]!) / determinant;
+      const p: Vertex = [coordinate(0), coordinate(1), coordinate(2)];
+      if (cuts.some(plane => dot(plane, p) - plane[3] > 1e-5)) continue;
+      if (!points.some(v => Math.hypot(v[0] - p[0], v[1] - p[1], v[2] - p[2]) < 1e-4)) points.push(p);
+    }
+  }
+}
+const facets = cuts.flatMap(plane => {
+  const face = points.flatMap((p, i) => Math.abs(dot(plane, p) - plane[3]) < 1e-5 ? [i] : []);
+  if (face.length < 3) return [];
+  const center = [0, 1, 2].map(axis => face.reduce((sum, i) => sum + points[i]![axis]!, 0) / face.length);
+  const u = cross3(plane, Math.abs(plane[0]) < Math.abs(plane[1]) ? [1, 0, 0] : [0, 1, 0]);
+  const length = Math.hypot(...u);
+  const unit = u.map(n => n / length);
+  const v = cross3(plane, unit);
+  const vLength = Math.hypot(...v);
+  const angle = (i: number): number => {
+    const offset = points[i]!.map((n, axis) => n - center[axis]!);
+    return Math.atan2(dot(v, offset) / vLength, dot(unit, offset));
+  };
+  face.sort((a, b) => angle(a) - angle(b));
+  return [face];
+});
 const NS = "http://www.w3.org/2000/svg";
 const TURN = 2400;
 
@@ -53,7 +130,7 @@ export class Crystal {
   readonly el = document.createElement("button");
   private readonly svg = document.createElementNS(NS, "svg");
   private readonly outline = document.createElementNS(NS, "path");
-  private readonly paths = Array.from({ length: facets.length * 2 }, () => document.createElementNS(NS, "path"));
+  private readonly paths = Array.from({ length: facets.length }, () => document.createElementNS(NS, "path"));
   private frame = 0;
   private began = 0;
   private turns = 1;
@@ -239,20 +316,33 @@ export class Crystal {
 
   private draw(angle: number): void {
     const c = Math.cos(angle), s = Math.sin(angle);
-    const faces = [-1, 1].flatMap(side => facets.map(face => {
-      const vertices = face.map(i => {
-        const [x, y, z] = points[i]!;
-        return [240 + (x - 240) * c + side * z * s, y, -(x - 240) * s + side * z * c];
-      });
-      return { vertices, depth: vertices.reduce((sum, v) => sum + v[2]!, 0) / vertices.length };
-    })).sort((a, b) => a.depth - b.depth);
+    const rotated = points.map(([x, y, z]) =>
+      [240 + (x - 240) * c + z * s, y, -(x - 240) * s + z * c]);
+    const faces = facets.map(face => {
+      const vertices = face.map(i => rotated[i]!);
+      const [a, b, d] = vertices as [number[], number[], number[], ...number[][]];
+      const ux = b[0]! - a[0]!, uy = b[1]! - a[1]!, uz = b[2]! - a[2]!;
+      const vx = d[0]! - a[0]!, vy = d[1]! - a[1]!, vz = d[2]! - a[2]!;
+      const normal = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+      const length = Math.hypot(...normal);
+      return { vertices, normal: normal.map(n => n / length), depth: vertices.reduce((sum, v) => sum + v[2]!, 0) / vertices.length };
+    }).filter(face => face.normal[2]! > 0.0001).sort((a, b) => a.depth - b.depth);
+    this.paths.forEach(path => {
+      path.setAttribute("display", "none");
+      path.removeAttribute("d");
+      path.removeAttribute("fill");
+    });
     faces.forEach((face, i) => {
       const path = this.paths[i]!;
+      path.removeAttribute("display");
+      // A restrained, theme-aware tint lets broad planes read as surfaces.
+      const light = -0.4 * face.normal[0]! - 0.5 * face.normal[1]! + 0.75 * face.normal[2]!;
+      const ink = 2 + 8 * (1 - Math.max(0, light));
+      path.setAttribute("fill", `color-mix(in srgb, var(--bg), currentColor ${ink.toFixed(2)}%)`);
       path.setAttribute("d", face.vertices.map((v, j) => `${j === 0 ? "M" : "L"}${v[0]!.toFixed(2)},${v[1]}`).join(" ") + " Z");
     });
-    // Give the silhouette the heavier ink of the original. Its convex hull
-    // follows the turning solid, including the edges that emerge in profile.
-    const projected = faces.flatMap(face => face.vertices).sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!);
+    // The outline is only the current silhouette, never an edge in the mesh.
+    const projected = [...rotated].sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!);
     const cross = (a: number[], b: number[], c: number[]): number =>
       (b[0]! - a[0]!) * (c[1]! - a[1]!) - (b[1]! - a[1]!) * (c[0]! - a[0]!);
     const half = (vertices: number[][]): number[][] => {
