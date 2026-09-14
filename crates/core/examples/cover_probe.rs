@@ -11,6 +11,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use qubero_core::document::Document;
 use qubero_core::eval::{EvalError, Evaluator};
@@ -45,7 +46,10 @@ fn tree(ev: &mut Evaluator, doc: &Document<MemSource>, path: &mut Vec<usize>, ou
         return;
     }
     let Ok(n) = ev.node(doc, path) else { return };
-    if n.space == 0 && n.size_bits > 0 && (n.decoded || !n.composite || n.child_count == 0) {
+    // Not a composite with nothing in it: a list the file gave no elements
+    // stretches over bytes it says nothing about, and the spans are right to
+    // call those a gap.
+    if n.space == 0 && n.size_bits > 0 && (n.decoded || !n.composite) {
         out.push((n.offset_bits, n.offset_bits + n.size_bits));
     }
     if !n.composite {
@@ -58,17 +62,20 @@ fn tree(ev: &mut Evaluator, doc: &Document<MemSource>, path: &mut Vec<usize>, ou
     }
 }
 
-fn spans(ev: &mut Evaluator, doc: &Document<MemSource>, from: u64, to: u64) -> Result<Vec<(u64, u64)>, String> {
-    for _ in 0..200 {
+/// The named stretches over one window, clipped to it, and how many goes of
+/// 5,000 steps they took.
+fn spans(ev: &mut Evaluator, doc: &Document<MemSource>, from: u64, to: u64) -> Result<(Vec<(u64, u64)>, usize), String> {
+    for go in 1..=200 {
         ev.begin_slice();
         match ev.spans(doc, from, to, 1_000_000) {
             Ok(v) => {
-                return Ok(v
+                let named = v
                     .iter()
                     .filter(|s| !s.gap)
                     .map(|s| (s.offset_bits.max(from), (s.offset_bits + s.size_bits).min(to)))
                     .filter(|(a, b)| b > a)
-                    .collect());
+                    .collect();
+                return Ok((named, go));
             }
             Err(EvalError::Busy { .. }) => {}
             Err(e) => return Err(format!("{e:?}")),
@@ -101,28 +108,40 @@ fn probe(path: &Path, rel: &str) {
 
     let mut ev = Evaluator::new(t.clone());
     ev.set_slice(Some(5_000));
+    let clock = Instant::now();
     let whole = match spans(&mut ev, &doc, 0, len * 8) {
-        Ok(v) => (union(v) / 8).to_string(),
-        Err(e) => e,
+        Ok((v, goes)) => format!("{}\t{} ms {goes} goes", union(v) / 8, clock.elapsed().as_millis()),
+        Err(e) => format!("{e}\t{} ms", clock.elapsed().as_millis()),
     };
 
+    // A fresh evaluator, as a file just opened has, so the first window pays
+    // for whatever the spans have to find before they can name anything.
     let mut ev = Evaluator::new(t);
     ev.set_slice(Some(5_000));
     let mut windowed = Vec::new();
     let mut trouble = None;
+    let mut slowest = 0;
+    let mut most_goes = 0;
     let mut at = 0;
     while at < len {
+        let clock = Instant::now();
         match spans(&mut ev, &doc, at * 8, (at + WINDOW).min(len) * 8) {
-            Ok(v) => windowed.extend(v),
+            Ok((v, goes)) => {
+                windowed.extend(v);
+                most_goes = most_goes.max(goes);
+            }
             Err(e) => trouble = Some(e),
         }
+        slowest = slowest.max(clock.elapsed().as_millis());
         at += WINDOW;
     }
     let windowed = match trouble {
         Some(e) => e,
         None => (union(windowed) / 8).to_string(),
     };
-    println!("{rel}\t{name}\t{len}\ttree {tree_bytes}\tspans {whole}\twindows {windowed}");
+    println!(
+        "{rel}\t{name}\t{len}\ttree {tree_bytes}\tspans {whole}\twindows {windowed}\tslowest window {slowest} ms {most_goes} goes"
+    );
 }
 
 fn sweep(root: &Path, dir: &Path, out: &mut Vec<(String, std::path::PathBuf)>) {
