@@ -19,8 +19,8 @@
 //! pages of every column, each with its own header and its own encoding. The
 //! footer is what places them, and two gathers read it that way (see
 //! [`row_groups`]). The first walks to every row group's `columns` in the
-//! footer and places a region for each row group, from where its first column
-//! chunk starts to where its last one ends. The second is inside that region
+//! footer and places a region for each row group, from where its column chunks
+//! start to where they end. The second is inside that region
 //! and walks to the column chunk entries of that one row group, placing each
 //! column chunk at its `dictionary_page_offset` or `data_page_offset` and
 //! sizing it by its `total_compressed_size`. A column chunk reads as pages: a
