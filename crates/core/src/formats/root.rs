@@ -266,11 +266,95 @@ fn basket() -> T {
         ("fLast", T::i32(Big)),
         ("flag", T::u8()),
         ("body", body()),
+        ("entries", joined(basket_entries())),
     ]);
     T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).counted_as("basket")
 }
 
-/// The object a record holds, read as the class its key names.
+/// What a basket's body comes to: the values of its entries up to `fLast`, and
+/// after them, for a branch whose entries vary in length, the table of where
+/// each entry starts.
+///
+/// The table is as ROOT writes it: its own length first, then one offset per
+/// entry counted from the start of the key, and one more that nothing reads.
+fn basket_entries() -> T {
+    let border = E::field("fLast").sub(E::field("fKeylen")).at_most(E::Remaining).at_least(E::lit(0));
+    T::structure_named(
+        "BasketEntries",
+        "",
+        "values",
+        vec![
+            ("values", T::sized(border, leaf_values())),
+            ("offsets", T::when(E::lit(0).less_than(E::Remaining), T::repeat(T::i32(Big), Until::End))),
+        ],
+    )
+}
+
+/// The values of a basket, read as its branch's one leaf says.
+///
+/// The same cases the side reader reads and no more: a `TBranch` not split
+/// into sub-branches, of fixed-length entries, with one leaf that no other
+/// leaf counts, whose class is a number and whose width and count per entry
+/// are both something. Everything else stays the bytes it is. Each question
+/// is asked of the branch that placed the basket, through the record that
+/// placed it, and only once the one before it has held, since each reads
+/// through what the one before it found.
+fn leaf_values() -> T {
+    const LEAF: &[&str] = &["fLeaves", "members", "elements", "0"];
+    let leaf = |more: &[&str]| E::placer(E::within(&[LEAF, more].concat()));
+    let tleaf = |name: &str| leaf(&["object", "members", "TLeaf", "members", name]);
+    let count = || E::field("fNevBuf").mul(tleaf("fLen"));
+    let width = || tleaf("fLenType");
+    let rest = || T::bytes(E::Remaining);
+    let signed = |bits: u32| {
+        T::switch(
+            tleaf("fIsUnsigned"),
+            vec![(0, T::array(T::Int { bits, endian: Big }, count()))],
+            T::array(T::UInt { bits, endian: Big }, count()),
+        )
+    };
+    let ints = T::switch(width(), vec![(1, signed(8)), (2, signed(16)), (4, signed(32)), (8, signed(64))], rest());
+    let floats =
+        T::switch(width(), vec![(4, T::array(T::F32(Big), count())), (8, T::array(T::F64(Big), count()))], rest());
+    let by_leaf = T::matches(
+        leaf(&["class_name"]),
+        vec![
+            ("TLeafF", floats.clone()),
+            ("TLeafD", floats.clone()),
+            ("TLeafF16", floats.clone()),
+            ("TLeafD32", floats),
+            ("TLeafB", ints.clone()),
+            ("TLeafS", ints.clone()),
+            ("TLeafI", ints.clone()),
+            ("TLeafL", ints.clone()),
+            ("TLeafO", ints.clone()),
+            ("TLeafG", ints),
+        ],
+        rest(),
+    );
+    let then = |when: E, next: E| E::cond(when, next, E::lit(0));
+    let simple = then(
+        E::placer(E::within(&["fBranches", "members", "fSize"])).equal_to(E::lit(0)),
+        then(
+            E::placer(E::field("fEntryOffsetLen")).equal_to(E::lit(0)),
+            then(
+                E::placer(E::within(&["fLeaves", "members", "fSize"])).equal_to(E::lit(1)),
+                then(
+                    // A leaf counted by another points at it; nothing, or the
+                    // object holding it, is the tag 0 or 1.
+                    leaf(&["object", "members", "TLeaf", "members", "fLeafCount", "first"]).less_than(E::lit(2)),
+                    then(
+                        E::lit(0).less_than(tleaf("fLen")).both(E::lit(0).less_than(width())),
+                        width().mul(count()).less_or_equal(E::Remaining),
+                    ),
+                ),
+            ),
+        ),
+    );
+    T::matches(E::placer(E::within(&["class_name"])), vec![("TBranch", T::switch(simple, vec![(1, by_leaf)], rest()))], rest())
+}
+
+/// What a record's blocks come to, joined, read as `inner`.
 ///
 /// Joined rather than read inside a block: ROOT compresses in blocks of at
 /// most sixteen mebibytes unpacked, so a large object runs across several and
@@ -278,14 +362,9 @@ fn basket() -> T {
 /// part, measured by the size its header gives rather than by unpacking it, and
 /// the whole is cut at `fObjlen`. A record written as it stands is one part,
 /// its own body.
-///
-/// The object is where the positions in it count from. A class name written
-/// once and referred back to later is referred to by where it was in these
-/// bytes, which is what the origin says.
-fn object() -> T {
+fn joined(inner: T) -> T {
     let size = E::field("fNbytes").sub(E::field("fKeylen"));
     let packed = size.less_than(E::field("fObjlen"));
-    let object = || T::origin(schema::object_of(E::within(&["fClassName", "text"])));
     T::switch(
         packed,
         vec![(
@@ -294,11 +373,20 @@ fn object() -> T {
                 vec![Step::field("body"), Step::each(), Step::stream()],
                 Some(E::field("uncompressed_size")),
                 Some(E::field("fObjlen")),
-                object(),
+                inner.clone(),
             ),
         )],
-        T::stitched(vec![Step::field("body")], None, Some(E::field("fObjlen")), object()),
+        T::stitched(vec![Step::field("body")], None, Some(E::field("fObjlen")), inner),
     )
+}
+
+/// The object a record holds, read as the class its key names.
+///
+/// The object is where the positions in it count from. A class name written
+/// once and referred back to later is referred to by where it was in these
+/// bytes, which is what the origin says.
+fn object() -> T {
+    joined(T::origin(schema::object_of(E::within(&["fClassName", "text"]))))
 }
 
 /// The record at `fBEGIN`. Its contents are the file's own name and title

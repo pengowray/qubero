@@ -1279,3 +1279,93 @@ fn zmumu_names_nine_tenths_of_its_bytes() {
     let (after, len) = zmumu.expect("uproot-Zmumu-lz4.root is in the collection");
     assert!(after * 10 >= len * 9, "uproot-Zmumu-lz4.root: {after} of {len}");
 }
+
+/// How many values of each basket are compared one by one. The rest are
+/// counted: a basket of the uncompressed sample holds a handful and one of
+/// Zmumu two thousand, and every one of those as a node is a slow test that
+/// says nothing the first few hundred did not.
+const VALUES_COMPARED: usize = 300;
+
+/// Every basket of every sample reads as the side reader reads it: the values
+/// of a branch it reads, number for number, by the leaf's type; bytes for a
+/// branch it does not; and the table of entry offsets, where there is one, as
+/// the same offsets less the key's length.
+#[test]
+fn a_baskets_values_match_the_side_reader() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (mut typed, mut left, mut tables) = (0, 0, 0);
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (d, contents) = contents_of(&folder, &name);
+        let mut ev = Evaluator::new(root());
+        for tree in &contents.trees {
+            let placed = template_baskets(&d, &mut ev, &tree.path);
+            let listed = tree.branches.iter().flat_map(|b| b.baskets.iter().map(move |k| (b, k)));
+            for ((branch, basket), (_, _, p)) in listed.zip(&placed) {
+                let say = format!("{name} {} @{}", branch.name, basket.at);
+                let side = root_tree::read_basket(&d, basket.at, &branch.reading).unwrap_or_else(|e| panic!("{say}: {e:?}"));
+                let values = go(&d, &mut ev, p, &["entries", "values"]).unwrap_or_else(|| panic!("{say}: no values"));
+                let node = ev.node(&d, &values).unwrap_or_else(|e| panic!("{say}: {e:?}"));
+                let at = |ev: &mut Evaluator, i: usize| ev.node(&d, &[values.as_slice(), &[i]].concat()).unwrap().value;
+                match &side.values {
+                    root_tree::Values::Ints(want) => {
+                        assert_eq!(node.child_count as usize, want.len(), "{say}: {}", node.type_name);
+                        for (i, w) in want.iter().enumerate().take(VALUES_COMPARED) {
+                            let got = match at(&mut ev, i) {
+                                Value::Int(v) => v as i64,
+                                Value::UInt(v) => v as u64 as i64,
+                                other => panic!("{say} [{i}]: {other:?}"),
+                            };
+                            assert_eq!(got, *w, "{say} [{i}]");
+                        }
+                        typed += 1;
+                    }
+                    root_tree::Values::Floats(want) => {
+                        assert_eq!(node.child_count as usize, want.len(), "{say}: {}", node.type_name);
+                        // A four-byte float is shown as the shortest decimal
+                        // that reads back as those four bytes, and the side
+                        // reader widens the same bits to a double, so the two
+                        // are compared as the float the file holds.
+                        let narrow = node.type_name.starts_with("f32");
+                        for (i, w) in want.iter().enumerate().take(VALUES_COMPARED) {
+                            let Value::Float(got) = at(&mut ev, i) else { panic!("{say} [{i}]: not a float") };
+                            match narrow {
+                                true => assert_eq!((got as f32).to_bits(), (*w as f32).to_bits(), "{say} [{i}]"),
+                                false => assert_eq!(got.to_bits(), w.to_bits(), "{say} [{i}]"),
+                            }
+                        }
+                        typed += 1;
+                    }
+                    root_tree::Values::None(why) => {
+                        assert_eq!(node.type_name, "bytes[]", "{say}: the side reader reads nothing ({why})");
+                        assert_eq!(node.size_bits / 8, side.border as u64, "{say}");
+                        left += 1;
+                    }
+                }
+                // The table after the values: its length, one offset per
+                // entry counted from the key, and one the side reader puts the
+                // border in place of.
+                if !side.offsets.is_empty() {
+                    let table = go(&d, &mut ev, p, &["entries", "offsets"]).unwrap_or_else(|| panic!("{say}: no offsets"));
+                    let n = ev.node(&d, &table).unwrap().child_count as usize;
+                    assert_eq!(n, side.offsets.len() + 1, "{say}");
+                    let key_len = int(&d, &mut ev, p, &["fKeylen"]).unwrap();
+                    for (i, w) in side.offsets.iter().enumerate().take(side.offsets.len() - 1).take(VALUES_COMPARED) {
+                        let raw = ev.node(&d, &[table.as_slice(), &[i + 1]].concat()).unwrap().value.as_int().unwrap();
+                        assert_eq!(raw - key_len, *w as i128, "{say} offset [{i}]");
+                    }
+                    tables += 1;
+                }
+            }
+        }
+    }
+    eprintln!("--- {typed} baskets read as their leaf's values, {left} left as bytes, {tables} with entry offsets");
+    assert!(typed > 0 && left > 0 && tables > 0);
+}
