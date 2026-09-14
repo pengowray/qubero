@@ -50,11 +50,12 @@
 //!
 //! A block of values may be compressed, in which case the block is a record of
 //! its own holding a stream. CDF squeezes with gzip, with a run-length coding
-//! of zeroes, or with one of two Huffman codings. Which of the four is in the
-//! variable's own compression parameters rather than in the block, so what is
-//! asked here is the stream: a gzip member opens with two bytes that say so,
-//! and the other three open with nothing in particular. A block packed one of
-//! those other ways keeps its bytes.
+//! of zeroes, or with one of two Huffman codings (see
+//! [`crate::codec::cdfhuff`]). Which of the four is in the variable's own
+//! compression parameters rather than in the block, so what is asked here is
+//! the stream: a gzip member opens with two bytes that say so, and the other
+//! three open with nothing in particular. A block packed one of those other
+//! ways keeps its bytes.
 //!
 //! A compressed file says so in its second word and holds one compressed
 //! record, which is the whole of the uncompressed file squeezed. That is
@@ -83,9 +84,11 @@
 //! keeps sixteen bytes of MD5 at the very end, after everything the chains
 //! reach.
 //!
-//! What is still not read. The two Huffman codings are not opened, so a file
-//! or a block squeezed with one keeps its bytes, and neither is a block
-//! squeezed with the run-length coding, which has no signature to be told by.
+//! What is still not read. A whole file opens with any of the four codings,
+//! because its compression parameters are in hand where the stream starts; a
+//! block of values squeezed with anything but gzip keeps its bytes, since the
+//! run-length and both Huffman codings open with no signature to be told by
+//! and the parameters that name them belong to the variable, not the block.
 //! Nor are a sparse variable's missing records worked out from its pad value
 //! or the record before. A record's values are a flat run, in the order the
 //! file wrote them: how to fold them into the variable's shape is what the
@@ -861,7 +864,12 @@ fn ccr(s: Shape) -> T {
                 "data",
                 T::switch(
                     E::within(&["parameters", "body", "c_type"]),
-                    vec![(1, inside(Codec::CdfRle)), (5, inside(Codec::Gzip))],
+                    vec![
+                        (1, inside(Codec::CdfRle)),
+                        (2, inside(Codec::CdfHuffman)),
+                        (3, inside(Codec::CdfAhuff)),
+                        (5, inside(Codec::Gzip)),
+                    ],
                     T::bytes(E::Remaining),
                 ),
             ),

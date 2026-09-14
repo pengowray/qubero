@@ -517,6 +517,60 @@ fn a_version_two_point_six_file_reads_its_z_variables() {
     assert_eq!(moments(cdf.attribute_moments("FILLVAL")), vec![]);
 }
 
+/// A whole file squeezed with CDF's Huffman coding, from NASA's distribution,
+/// and the same file squeezed again with the adaptive Huffman coding.
+///
+/// `cdflib` reads neither: it opens gzip and nothing else. So the numbers
+/// below came from `cdflib` reading the unpacked stream put back behind an
+/// uncompressed signature, where the unpacking was done by `DecompressHUFF0`
+/// from the distribution's own `cdfhuff.c`, compiled and run on 2026-09-14.
+/// The FNV-1a hash is of those 78,606 bytes, so the stream is checked byte for
+/// byte against the library as well as value by value against `cdflib`.
+///
+/// The adaptive file is `tools/make_cdf_huffman_samples.py`'s, and its stream
+/// is the one `CompressAHUFF0` from the same file writes over those bytes.
+/// Holding 78,606 bytes, it halves and rebuilds its tree more than once on
+/// the way through.
+#[test]
+fn both_huffman_codings_unpack_to_the_file_the_library_unpacks() {
+    let files = [("d103a2x.cdf", "cdf huffman"), ("d103a2x-ahuff.cdf", "cdf adaptive huffman")];
+    for (name, codec) in files {
+        let Some(path) = sample(name) else { continue };
+        let mut cdf = Cdf::open(&path);
+        let stream = cdf.ev.node(&cdf.doc, &[3, 2, 4]).unwrap();
+        assert_eq!(stream.type_name, codec, "{name}");
+        let id = cdf.ev.open_space(&cdf.doc, 0, &[3, 2, 4]).unwrap().expect("the stream opens");
+        let bytes = cdf.ev.space(id).unwrap().bytes().to_vec();
+        let fnv = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        assert_eq!((bytes.len(), fnv), (78_606, 0xe634_5974_1700_6f22), "{name}: the bytes the library unpacks");
+        cdf.ev.space(id).unwrap().trace().check_tiles().unwrap_or_else(|e| panic!("{name}: {e}"));
+
+        assert_eq!(ints(&cdf.values("D103SCAN")), (1..=120).collect::<Vec<i128>>(), "{name}");
+        assert_eq!(ints(&cdf.values("D103PIXL")), (1..=150).collect::<Vec<i128>>(), "{name}");
+        // An image of 150 rows by 120 scans, mostly dark. The file is column
+        // major, so in the order it writes them the first dimension runs
+        // fastest, and the positions are those of `cdflib`'s array flattened
+        // in Fortran order.
+        let image = singles(&cdf.values("D103KRAY"));
+        assert_eq!(image.len(), 18_000, "{name}");
+        assert_eq!(image.iter().filter(|v| **v != 0.0).count(), 8_202, "{name}");
+        let first: Vec<usize> = image.iter().enumerate().filter(|(_, v)| **v != 0.0).map(|(i, _)| i).take(3).collect();
+        assert_eq!(first, [12, 13, 14], "{name}");
+        assert_eq!(&image[12..15], &[0.9740260243415833, 0.9740260243415833, 2.597402572631836], "{name}");
+        assert_eq!((image[17_657], image[17_864]), (0.3246753215789795, 0.3246753215789795), "{name}");
+        assert!(image[17_865..].iter().all(|v| *v == 0.0), "{name}: nothing lit after the last");
+        assert_eq!(image[6921], 13.636363983154297, "{name}: the brightest");
+        let sum: f64 = image.iter().map(|v| f64::from(*v)).sum();
+        assert!((sum - 21_588.961_379_587_65).abs() < 1e-6, "{name}: {sum}");
+
+        assert_eq!(floats(&cdf.values("EPOCH")), vec![62_679_947_859_039.0], "{name}");
+        let epoch = cdf.value_paths("EPOCH");
+        assert_eq!(cdf.moment(&epoch[0]).moment, encoded("1986-04-01T08:37:39.039"), "{name}");
+        assert_eq!(cdf.global_attribute("TITLE"), "DE-1 Auroral Imager (SAI), images, 12 m,CDAW-9", "{name}");
+        eprintln!("{name}: {codec}, 78,606 bytes as the library unpacks them, values as cdflib reads them");
+    }
+}
+
 /// A file from before version 2.5, which leaves 128 bytes of nothing in the
 /// middle of every variable descriptor. Without reading past that, the name of
 /// a variable is 128 bytes further on than the template looks and comes back

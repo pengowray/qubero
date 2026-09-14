@@ -15,6 +15,7 @@
 //! stream is opened whole or not at all, which is why there is a cap.
 
 pub mod bzip2;
+pub mod cdfhuff;
 pub mod cdfrle;
 pub mod compress;
 pub mod fastlz;
@@ -196,6 +197,14 @@ pub enum Codec {
     /// byte is itself. One of the four ways a CDF may be squeezed, and the one
     /// a file written by IDL usually is. See [`crate::codec::cdfrle`].
     CdfRle,
+    /// NASA CDF's Huffman coding, compression type 2: counts for the bytes
+    /// written in front, a tree built from them, and a code per byte after.
+    /// See [`crate::codec::cdfhuff`].
+    CdfHuffman,
+    /// NASA CDF's adaptive Huffman coding, compression type 3: no table in
+    /// front, and a tree that encoder and decoder both change after every
+    /// byte. See [`crate::codec::cdfhuff`].
+    CdfAhuff,
 }
 
 impl Codec {
@@ -226,6 +235,8 @@ impl Codec {
             Codec::Pico8Old => "pico-8 old code",
             Codec::PicotronPxu => "picotron pxu",
             Codec::CdfRle => "cdf rle",
+            Codec::CdfHuffman => "cdf huffman",
+            Codec::CdfAhuff => "cdf adaptive huffman",
         }
     }
 }
@@ -344,6 +355,10 @@ pub enum StepField {
     /// Snappy: the varint in front of a block saying how many bytes it comes
     /// to. Its value is that number.
     UnpackedSize,
+    /// CDF Huffman: the runs of byte counts in front of the codes, which the
+    /// tree the codes are read by is built from. Its value is how many byte
+    /// values were given a count.
+    Counts,
 }
 
 impl StepField {
@@ -374,6 +389,7 @@ impl StepField {
             StepField::LzmaProps => "lzma_props",
             StepField::RangeInit => "range_init",
             StepField::UnpackedSize => "unpacked_size",
+            StepField::Counts => "counts",
         }
     }
 }
@@ -956,7 +972,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 24] = [
+const FIELDS: [StepField; 25] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -981,6 +997,7 @@ const FIELDS: [StepField; 24] = [
     StepField::LzmaProps,
     StepField::RangeInit,
     StepField::UnpackedSize,
+    StepField::Counts,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
@@ -1022,6 +1039,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Pico8Old => pico8::old(data)?,
         Codec::PicotronPxu => pxu::pxu(data)?,
         Codec::CdfRle => cdfrle::stream(data)?,
+        Codec::CdfHuffman => cdfhuff::huffman(data)?,
+        Codec::CdfAhuff => cdfhuff::adaptive(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -1059,6 +1078,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Compress
         | Codec::Gzip
         | Codec::CdfRle
+        | Codec::CdfHuffman
+        | Codec::CdfAhuff
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }

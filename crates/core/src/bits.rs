@@ -87,6 +87,16 @@ impl<'a> Bits<'a> {
         Some(v)
     }
 
+    /// The next bit on its own, which is what a walk down a Huffman tree
+    /// takes: one per branch, with the branch known only once it is taken.
+    #[inline]
+    pub(crate) fn bit(&mut self) -> Option<bool> {
+        let &byte = self.buf.get(self.at >> 3)?;
+        let set = (byte >> (7 - (self.at & 7))) & 1 == 1;
+        self.at += 1;
+        Some(set)
+    }
+
     /// On to the next byte boundary, which is where each of the tables in
     /// front of GRIB's complexly packed values begins.
     pub(crate) fn align(&mut self) {
