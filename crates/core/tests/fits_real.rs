@@ -373,10 +373,10 @@ fn a_real_tile_reports_the_steps_its_bytes_took() {
     assert_eq!(stored[0], ("stored".to_string(), "taken as they are (ZCMPTYPE = NOCOMPRESS)".to_string()));
 
     // The cursor on a tile's compressed bytes in the heap finds that tile
-    // through the descriptor that placed them. A fresh evaluator: one that
-    // has read the rows of a later unit fails to place this unit's heap,
-    // which is a fault in the evaluator's memo and not in the tiles.
-    let Some((doc, mut ev)) = read("fits/gzip2.fits") else { return };
+    // through the descriptor that placed them. Asked of the evaluator that has
+    // just read the third unit's rows: reading a later unit once dropped this
+    // unit's header, and its heap could not be placed without the cards.
+    ev.node(&doc, &[0, 3, 3, ROWS, 0]).unwrap();
     let heap = ev.node(&doc, &[0, 1, 3, HEAP]).unwrap();
     let tile_7 = ev.node(&doc, &[0, 1, 3, HEAP, 7]).unwrap();
     let found = ev.locate(&doc, tile_7.offset_bits + 8).unwrap();

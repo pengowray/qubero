@@ -30,6 +30,7 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| B2. A FITS table's heap failed with "unknown field cards" once a later HDU's rows had been read. A guarded walk in `walk.rs` dropped a node it had only placed again, which left the fields read inside it with no node above them, and a walk inside a walk left the element it kept behind once its list was dropped. The two walk tests check that no node is left without its parent, and `fits_real` no longer needs a fresh evaluator. | 5c0da64, deb296b |
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
@@ -74,7 +75,7 @@ cases only.
 
 ## Bugs
 
-None open. B1 is in the table above.
+None open. B1 and B2 are in the table above.
 
 ## IR additions that close gaps in more than one format
 
@@ -388,10 +389,6 @@ Seven samples. Left:
 
 - Tile-compressed images decode (see Closed); PLIO_1 and HCOMPRESS_1 are
   named and not decoded. The gzip fallback column is tested with f32 only.
-- **Evaluator bug:** a table's heap fails with "unknown field cards" once a
-  later HDU's rows have been read (open `gzip2.fits`, read HDU 3's rows, and
-  HDU 1's heap no longer resolves). Also true on main before the tile work.
-  `fits_real` works round it with a fresh evaluator; a task was filed.
 - `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
   code would each make a module.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
