@@ -36,10 +36,14 @@ Left:
 - Done 2026-09-14 (`8b13143`): a joined tab's inspector says `Byte under
   the cursor is at` with the part the byte sits in, keeps `Unpacked from` for
   runs that were unpacked, and has its own `Open joined stream` button.
-- A joined tab's template is the stream's inner type, which still names
-  fields of the structure that declared it: PDB streams fail with `unknown
-  field stream_sizes` and HDF4 dataset `values` tabs with `unknown field
-  dimensions` (`template_for`, `eval/mod.rs`).
+- Done 2026-09-14 (`07d91d1`..`a64e11f`): a tab over a declared stream is a
+  view onto the file's reading (`eval/tab.rs`, `Space::view`), so names from
+  outside the stream resolve. `tab_probe` over the collection: 547 of 549
+  streams read at the root, from 254. Left: a declared stream inside a
+  recognised stream has no tab in the editor; opening a nested stream from
+  a tab passes a tab path where a file path is expected; the inspector shows
+  a duplicate "Offset within" line; HDF5 chunks, FITS tiles and PDF streams
+  are not `Decoded` nodes and offer no tab.
 - An unused HDF4 slot (ref 0) before a used one would stand for bytes never
   written; the join cannot make zeros, so everything after reads early.
 - The cursor on an HDF4 block's bytes lands on whichever reading placed them
