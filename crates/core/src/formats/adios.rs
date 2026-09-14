@@ -245,10 +245,10 @@ const CHARACTERISTIC: &[(i128, &str)] = &[
     (DIMENSIONS, "dimensions"),
     (5, "var id"),
     (PAYLOAD_OFFSET, "payload offset"),
-    (FILE_INDEX, "file index"),
+    (FILE_INDEX, "subfile index"),
     (TIME_INDEX, "time index"),
-    (BITMAP, "bitmap"),
-    (STATISTICS, "stat"),
+    (BITMAP, "statistics bitmap"),
+    (STATISTICS, "statistics"),
     (TRANSFORM, "transform type"),
     (MINMAX, "minmax"),
 ];
@@ -323,7 +323,7 @@ fn characteristic_set(e: Endian, kind: Kind, side: Side, v: Version) -> T {
 /// A block an operator transformed is not placed, since the offset is to the
 /// transformed bytes and not to values of the type.
 fn indexed_values(e: Endian) -> Vec<(&'static str, T)> {
-    let in_file = E::within(&["footer", "subfiles"]).not_equal(E::lit(SUBFILES));
+    let in_file = E::within(&["footer", "flags"]).bit(0).negate();
     let count = || E::field("element_count");
     let row = || E::field("row_length");
     let place = in_file
@@ -665,7 +665,7 @@ fn process_group(e: Endian, v: Version) -> T {
 }
 
 /// ADIOS 1's transport method IDs, of which ADIOS2 writes three.
-const TRANSPORT: &[(i128, &str)] = &[(0xFF, "null"), (0xFE, "unknown"), (2, "POSIX"), (26, "fstream"), (27, "stdio"), (28, "ZeroMQ")];
+const TRANSPORT: &[(i128, &str)] = &[(0xFF, "null (discards output)"), (0xFE, "unknown"), (2, "POSIX"), (26, "fstream"), (27, "stdio"), (28, "ZeroMQ")];
 
 fn transport(e: Endian) -> T {
     T::structure(
@@ -816,9 +816,6 @@ fn attribute_record(e: Endian, v: Version) -> T {
 // ---------------------------------------------------------------------------
 // BP3
 
-/// The subfile flag a BP3 footer sets when the data is in `name.bp.dir`.
-const SUBFILES: i128 = 3;
-
 /// A BP3 file: process groups, the three indices, and the 56 bytes at the end
 /// that say where each index starts. Read from the back, as Parquet is: the
 /// byte order is the fourth byte from the end, and the footer is placed first
@@ -830,7 +827,7 @@ const SUBFILES: i128 = 3;
 ///
 /// A writer of more than one rank puts the data in subfiles and writes this
 /// file with the indices alone, starting at nought; its offsets are into the
-/// subfile its file index names. A subfile is itself a BP3 file with its own
+/// subfile its subfile index names. A subfile is itself a BP3 file with its own
 /// footer.
 pub fn adios_bp3() -> Template {
     let root = by_byte_order(E::peek_at(E::lit(-32), 8, Big), |e| {
@@ -878,8 +875,13 @@ pub fn adios_bp3() -> Template {
 const FOOTER: i128 = 56;
 
 /// The footer: the version string of the release that wrote the file, the
-/// release again as characters, where each index starts, the byte order,
-/// whether the data is in subfiles, and the BP version.
+/// release again as characters, where each index starts, the byte order, two
+/// flags, and the BP version.
+///
+/// The flags are the byte ADIOS 1 kept its version flags in, one bit for data
+/// in subfiles and one for a time index characteristic in every set. ADIOS2
+/// writes 3 in a file of indices alone and nothing in a file holding its data,
+/// and its reader takes 3 as subfiles and 0 or 2 as none, which is the low bit.
 fn minifooter(e: Endian) -> T {
     let digit = |name: &str| T::computed(E::field(name).sub(E::lit(b'0' as i128)));
     T::structure(
@@ -898,7 +900,7 @@ fn minifooter(e: Endian) -> T {
             ("attributes_index_offset", T::u64(e)),
             ("byte_order", T::enumeration("BpByteOrder", T::u8(), ENDIANNESS)),
             ("reserved", T::u8()),
-            ("subfiles", T::enumeration("BpSubfiles", T::u8(), &[(0, "none"), (2, "none"), (SUBFILES, "data in subfiles")])),
+            ("flags", T::flags("BpFooterFlags", T::u8(), &[(0, "data in subfiles"), (1, "time index")])),
             ("bp_version", T::u8()),
         ],
     )
@@ -1714,6 +1716,96 @@ mod tests {
         assert_eq!(node(&mut ev, &d, &data).size_bits, 40 * 8);
         let second = at(&mut ev, &d, &["1", "blocks"]);
         assert_eq!(node(&mut ev, &d, &second).type_name, "bytes[]");
+    }
+
+    /// A BP3 file of one process group, one variable of three int32s and one
+    /// double attribute, with its indices and footer.
+    fn bp3_file() -> Vec<u8> {
+        let characteristics = |records: &[Vec<u8>]| set(records);
+        let values: Vec<u8> = [7i32, 8, 9].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut var = W::default();
+        var.u32(0).name("v").name("").u8(2).u8(b'n').u8(1).u16(27);
+        var.u8(b'n').u64(3).u8(b'n').u64(3).u8(b'n').u64(0);
+        var.bytes(&characteristics(&[dims(&[(3, 3, 0)]), rec(MIN, &7i32.to_le_bytes()), rec(MAX, &9i32.to_le_bytes())]));
+        let header_len = 8 + var.len();
+        let mut attr = W::default();
+        attr.u32(0).name("a").name("").u8(b'n').u8(6).u32(8).bytes(&2.5f64.to_le_bytes());
+        let mut group = W::default();
+        group.u8(b'n').name("io").u32(0).name("1").u32(1).u8(1).u16(3).u8(2).u16(0);
+        let variables_at = 8 + group.len() + 12;
+        group.u32(1).u64(0).u64((header_len + values.len()) as u64).bytes(&var.0).bytes(&values);
+        group.u32(1).u64(8 + 4 + attr.len() as u64).u32(4 + attr.len() as u32).bytes(&attr.0);
+        let attribute_at = 8 + group.len() - attr.len() - 4;
+        let mut f = W::default();
+        f.u64(group.len() as u64).bytes(&group.0);
+        let pg_start = f.len() as u64;
+        let mut pg = W::default();
+        pg.name("io").u8(b'n').u32(0).name("1").u32(1).u64(0);
+        f.u64(1).u64(pg.len() as u64 + 2).u16(pg.len() as u16).bytes(&pg.0);
+        let vars_start = f.len() as u64;
+        let placed = |at: usize, payload: usize| [rec(OFFSET, &(at as u64).to_le_bytes()), rec(PAYLOAD_OFFSET, &(payload as u64).to_le_bytes())];
+        let [off, pay] = placed(variables_at, variables_at + header_len);
+        let var_set = characteristics(&[
+            rec(TIME_INDEX, &1u32.to_le_bytes()),
+            rec(FILE_INDEX, &0u32.to_le_bytes()),
+            rec(MIN, &7i32.to_le_bytes()),
+            rec(MAX, &9i32.to_le_bytes()),
+            dims(&[(3, 3, 0)]),
+            off,
+            pay,
+        ]);
+        let index_entry = |name: &str, data_type: u8, s: &[u8]| {
+            let mut body = W::default();
+            body.u32(0).u16(0).name(name).u16(0).u8(data_type).u64(1).bytes(s);
+            let mut w = W::default();
+            w.u32(body.len() as u32).bytes(&body.0);
+            w.0
+        };
+        let entry = index_entry("v", 2, &var_set);
+        f.u32(1).u64(entry.len() as u64).bytes(&entry);
+        let attrs_start = f.len() as u64;
+        let [off, pay] = placed(attribute_at, attribute_at + 4 + 4 + 3 + 2 + 1 + 1);
+        let attr_set = characteristics(&[
+            rec(TIME_INDEX, &1u32.to_le_bytes()),
+            rec(FILE_INDEX, &0u32.to_le_bytes()),
+            dims(&[(1, 0, 0)]),
+            rec(VALUE, &2.5f64.to_le_bytes()),
+            off,
+            pay,
+        ]);
+        let entry = index_entry("a", 6, &attr_set);
+        f.u32(1).u64(entry.len() as u64).bytes(&entry);
+        let mut tag = b"ADIOS-BP v2.<.1".to_vec();
+        tag.resize(24, 0);
+        f.bytes(&tag).bytes(b"2<1\0").u64(pg_start).u64(vars_start).u64(attrs_start).bytes(&[0, 0, 0, 3]);
+        f.0
+    }
+
+    /// The values a BP3 index places by payload offset are the ones the
+    /// process group before it reads in order, and the file is recognised
+    /// by its footer when the whole of it is seen and by its front when not.
+    #[test]
+    fn a_bp3_index_places_the_values_its_process_group_holds() {
+        let f = bp3_file();
+        assert_eq!(sniff(&f, f.len() as u64), Some("adiosbp3"));
+        assert_eq!(sniff(&f[..64], f.len() as u64 + 4096), Some("adiosbp3"));
+        let n = f.len() as u64;
+        let d = Document::new(MemSource(f));
+        let mut ev = Evaluator::new(adios_bp3());
+        let walked = at(&mut ev, &d, &["process_groups", "0", "variables", "0", "values"]);
+        let walked = node(&mut ev, &d, &walked);
+        assert_eq!(walked.child_count, 3);
+        let placed = at(&mut ev, &d, &["variables_index", "variables_index", "entries", "0", "sets", "0", "values", "values"]);
+        let placed_info = node(&mut ev, &d, &placed);
+        assert_eq!((placed_info.offset_bits, placed_info.child_count), (walked.offset_bits, 3));
+        assert_eq!(node(&mut ev, &d, &[&placed[..], &[2]].concat()).value, Value::Int(9));
+        let attribute = at(&mut ev, &d, &["attributes_index", "attributes_index", "entries", "0", "sets", "0", "characteristics", "3", "body"]);
+        assert_eq!(node(&mut ev, &d, &attribute).value, Value::Float(2.5));
+        let in_group = at(&mut ev, &d, &["process_groups", "0", "attributes", "0", "value", "values", "0"]);
+        assert_eq!(node(&mut ev, &d, &in_group).value, Value::Float(2.5));
+        let footer = at(&mut ev, &d, &["footer", "footer"]);
+        let footer = node(&mut ev, &d, &footer);
+        assert_eq!(footer.offset_bits + footer.size_bits, n * 8);
     }
 
     #[test]

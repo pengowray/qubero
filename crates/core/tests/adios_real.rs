@@ -273,7 +273,7 @@ fn a_bp4_index_file_places_each_step_in_the_metadata_file() {
 #[test]
 fn a_bp3_file_places_each_block_from_its_index() {
     let mut f = open_or_skip!("steps_bp3.bp.dir/steps_bp3.bp.0");
-    assert_eq!(f.int(&["footer", "footer", "subfiles"]), 0);
+    assert_eq!(f.int(&["footer", "footer", "flags"]), 0);
     assert_eq!(f.int(&["footer", "footer", "bp_version"]), 3);
     assert_eq!(f.get(&["process_groups"]).child_count, 2);
     assert_eq!(f.get(&["pg_index", "pg_index", "entries"]).child_count, 2);
@@ -312,7 +312,7 @@ fn a_bp3_file_places_each_block_from_its_index() {
 #[test]
 fn a_bp3_file_of_indices_alone_places_nothing() {
     let mut f = open_or_skip!("steps_bp3.bp");
-    assert_eq!(f.int(&["footer", "footer", "subfiles"]), 3);
+    assert_eq!(f.int(&["footer", "footer", "flags"]), 3);
     assert_eq!(f.get(&["process_groups"]).child_count, 0);
     let entries = ["variables_index", "variables_index", "entries"];
     assert_eq!(f.get(&entries).child_count, 9);
