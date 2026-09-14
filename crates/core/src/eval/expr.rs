@@ -53,6 +53,20 @@ pub(super) fn real_reading(v: &Value) -> Option<f64> {
     }
 }
 
+/// Whether an error has to reach whoever asked, rather than be taken for the
+/// answer "not here". A search passes over an element that will not read,
+/// since the one before it may still be the right answer. It must not pass
+/// over bytes that have not arrived, or a go that ran out, which are no answer
+/// at all. Nor over a read that gave up on depth: the element before is as
+/// deep again, so passing over it is the same refusal once per element, and
+/// what the search came back with at the end would be a nought nothing wrote.
+fn passes_up(e: &EvalError) -> bool {
+    match e {
+        EvalError::Failed(why) => Evaluator::is_refusal(why),
+        other => other.interrupted(),
+    }
+}
+
 /// Ten to a whole power, as near as a double holds it.
 ///
 /// Every power from nought to twenty-two is a double exactly, so those are
@@ -116,6 +130,71 @@ impl Evaluator {
     /// `Remaining` measures. It has to be passed in while a node is still being
     /// resolved, since it is not in the memo yet.
     pub(super) fn eval_expr_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        self.ask(at, e)?;
+        let out = self.whole_at(doc, at, e, here);
+        self.go.answered();
+        out
+    }
+
+    /// One more expression open inside the ones already being worked out, or
+    /// the refusal that says there are too many.
+    ///
+    /// Every question that goes from one field to another passes through an
+    /// expression: a computed value naming the field before it, a switch
+    /// keyed on a sibling, a length, a count, a search by label, the record
+    /// that placed a gathered element. Reading the field it lands on can ask
+    /// another, and that one another, with nothing on the way down finished
+    /// and so nothing remembered. Counting here counts every one of those
+    /// hops whichever of them it is, and the arithmetic between them too,
+    /// which spends the stack the same way. See `go::DEEPEST_QUESTION`.
+    fn ask(&mut self, at: &[usize], e: &Expr) -> R<()> {
+        if self.go.ask() {
+            return Ok(());
+        }
+        fail(self.asked_too_deep(at, e))
+    }
+
+    /// What a read that gave up on depth says, naming the field that was
+    /// asking and what it asked.
+    fn asked_too_deep(&self, at: &[usize], e: &Expr) -> String {
+        let field = self.memo.get(at).map(|r| r.name.text()).or_else(|| {
+            let (&last, parent) = at.split_last()?;
+            match &self.memo.get(parent)?.ty {
+                Ty::Struct(s) => s.fields.get(last).map(|f| f.name.to_string()),
+                _ => Some(format!("[{last}]")),
+            }
+        });
+        // Named for the class of trouble first, so a row cut short still says
+        // it, and never with the expression in front of "nested too deep",
+        // which would read as the expression itself being that deep. The
+        // field and expression are the deepest reached, not the one asked
+        // for, so they come last and as where it stopped rather than as what
+        // is wrong. `is_refusal` knows it by "nested too deep".
+        let expr = write_expr(e);
+        let limit = super::go::DEEPEST_QUESTION;
+        let head = format!("dependency chain nested too deep: more than {limit} expressions");
+        match (field, expr) {
+            (Some(field), Some(expr)) => format!("{head}; stopped at {field} while evaluating {expr}"),
+            (Some(field), None) => format!("{head}; stopped at {field}"),
+            (None, Some(expr)) => format!("{head}; stopped while evaluating {expr}"),
+            (None, None) => head,
+        }
+    }
+
+    /// The most expressions that have been open inside one another at once
+    /// since this evaluator was made: how close a file came to the limit.
+    /// For the probes that measure it over a collection.
+    pub fn deepest_question(&self) -> usize {
+        self.go.deepest_asked()
+    }
+
+    fn whole_at<S: Source>(
         &mut self,
         doc: &Document<S>,
         at: &[usize],
@@ -218,7 +297,7 @@ impl Evaluator {
                     Ok(Leaf::Value(v, _)) if real_reading(&v).is_some() => {
                         return fail(format!("{name} {REAL_IS_NOT_WHOLE}"))
                     }
-                    Err(err) if err.interrupted() => return Err(err),
+                    Err(err) if passes_up(&err) => return Err(err),
                     _ => return fail(format!("{name} is not a number")),
                 },
             },
@@ -537,6 +616,19 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<f64> {
+        self.ask(at, e)?;
+        let out = self.real_at(doc, at, e, here);
+        self.go.answered();
+        out
+    }
+
+    fn real_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<f64> {
         Ok(match e {
             Expr::Real(v) => *v,
             Expr::Lit(v) => *v as f64,
@@ -726,6 +818,19 @@ impl Evaluator {
     /// its default, and a name that could not be read leaves the field with
     /// the one it had.
     pub(super) fn text_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<String> {
+        self.ask(at, e)?;
+        let out = self.text_in(doc, at, e, here);
+        self.go.answered();
+        out
+    }
+
+    fn text_in<S: Source>(
         &mut self,
         doc: &Document<S>,
         at: &[usize],
@@ -996,7 +1101,7 @@ impl Evaluator {
                 match self.descend(doc, &mut elem, field) {
                     Ok(true) => return Ok(Some(elem)),
                     Ok(false) => {}
-                    Err(e) if e.interrupted() => return Err(e),
+                    Err(e) if passes_up(&e) => return Err(e),
                     // An element that will not read is not an element that
                     // answers no: it is one this search cannot see into, and
                     // the one before it may still be the right answer.
@@ -1311,12 +1416,12 @@ impl Evaluator {
                 match self.descend(doc, &mut p, key) {
                     Ok(true) => {}
                     Ok(false) => return Ok(None),
-                    Err(e) if e.interrupted() => return Err(e),
+                    Err(e) if passes_up(&e) => return Err(e),
                     Err(_) => return Ok(None),
                 }
                 match self.text_of(doc, &p) {
                     Ok(got) => Ok(Some(TagKey::Text(got.trim_end().to_string()))),
-                    Err(e) if e.interrupted() => Err(e),
+                    Err(e) if passes_up(&e) => Err(e),
                     Err(_) => Ok(None),
                 }
             }
@@ -1326,12 +1431,12 @@ impl Evaluator {
                 match self.descend(doc, &mut p, above) {
                     Ok(true) => {}
                     Ok(false) => return Ok(None),
-                    Err(e) if e.interrupted() => return Err(e),
+                    Err(e) if passes_up(&e) => return Err(e),
                     Err(_) => return Ok(None),
                 }
                 match self.child_raw_bytes(doc, &p, last) {
                     Ok(got) => Ok(Some(TagKey::Bytes(got))),
-                    Err(e) if e.interrupted() => Err(e),
+                    Err(e) if passes_up(&e) => Err(e),
                     Err(_) => Ok(None),
                 }
             }
@@ -1342,14 +1447,14 @@ impl Evaluator {
         match self.descend(doc, path, field) {
             Ok(true) => {}
             Ok(false) => return Ok(None),
-            Err(e) if e.interrupted() => return Err(e),
+            Err(e) if passes_up(&e) => return Err(e),
             Err(_) => return Ok(None),
         }
         Ok(match self.node(doc, path) {
             Ok(info) => info.value.as_int(),
             // A field that cannot be read yet is not an answer, and must not be
             // taken for the absence of one.
-            Err(e) if e.interrupted() => return Err(e),
+            Err(e) if passes_up(&e) => return Err(e),
             Err(_) => None,
         })
     }
