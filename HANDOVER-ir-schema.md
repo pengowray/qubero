@@ -212,6 +212,8 @@ types them by leaf.
 
 ## BP5: stays a side reader
 
+**Superseded 2026-09-15** (`6e078df`..`e387e87`): a BP5 directory opens as one stored ZIP, so `mmd.0` and `md.0` share a space and `adios/ffs_schema.rs` builds FFS records with `Ty::Schema`. What follows is the reasoning before that.
+
 The format table is in `mmd.0`, Qubero opens one file, and nothing can reach it
 from `md.0`: a document boundary, not a type-system gap. The FFS builder is
 still worth writing to prove `Ty::Schema` is not ROOT-shaped: every field an

@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| ADIOS2 BP5 values: `adios.rs` split into modules; an FFS `Ty::Schema` builder types each `md.0` record by the format its 12-byte ID names in `mmd.0` (fields in offset order with padding, strings and counted pointers into the variant part, nested subformats, BP5 names split into shape, type and variable); a folder opens as a stored ZIP built in the browser, read as `adioszip`, with block values placed in `data.0`. Every variable, block count, start, min/max, value and attribute matches adios2 for both steps of `adios/steps.bp5.zip`. The S9 note that BP5 stays a side reader was wrong once the files share one space. | 6e078df..e387e87 |
 | Cursor link: a stream unpacked from one run keeps where the run is (`Space::run()`), every step carries `run_offset_bits`, and `map_in` takes a file bit; byte 0 of a gzip's unpacked tab marked bits inside the magic and now marks its first literal. `crates/wasm/tests/cursor_link.rs` covers deflate, zlib in PNG, ZIP, LZ4, FastLZ, LZMA, LZMA2, RAR5, LHA, CDF Huffman and the whole-file codecs. | 718149b..700b4f8 |
 | Loose ends: census and kind totals share one `same_shape` (`eval/size.rs`), and census multiplies a run only when its last element fits (`ne/wzoom-win16.exe` claimed 21,641 icon entries in 31 bytes); a stream opened from inside a tab opens in the reading that owns the tab; the inspector's "Offset within" rows come only from structures a field starts inside (`web/src/within.ts`); `kinds_real` reports every failing sample, and dtb property names, Compact Pro forks and an NE file with no resource table no longer count twice. | 77d584c..aae8416 |
 | FITS tiles: `fits_tile.rs` split (Rice and quantizing in modules of their own, tests beside them); PLIO_1 (`pl_l2pi`, all 8 instructions) and HCOMPRESS_1 (quadtree bit planes, `undigitize`, inverse H-transform with SMOOTH, 128-bit arithmetic narrowed with a check) decode as traced steps; fallback columns tested with f64, i16 and i32. Every tile of 11 images in `fits/plio.fits`, `hcompress.fits`, `fallback.fits` matches astropy 8.0.1 bit for bit. | e23c698..35d39ea |
@@ -539,17 +540,19 @@ Closed). One dataset written by adios2 2.12.1 (under WSL; there is no Windows
 wheel) as BP3, BP4 and BP5, matched against `adios2.FileReader`, with each
 file checked against the files it points into. Left:
 
-- **BP5 values need FFS decoding**, three things the IR lacks: finding a
-  format in another file (`mmd.0`) by a record's 12-byte ID; placing a struct
-  from a layout that is itself data (subformat fields with type strings,
-  sizes, offsets, alignment, byte order, and pointer fields into the variant
-  part sized by other fields); and splitting names that carry meaning
-  (`BPG_8_10_temperature`, some parts base64).
-- BP5 `data.N` has no header or marker and is not recognised; the sample was
-  dropped so `samples_real` stays whole.
-- A BP5 metadata step with more than one writer stays bytes.
-- Qubero opens one file, so a BP4 or BP5 directory's cross-file references
-  are named as offsets, not followed.
+- BP5 values read (see Closed) when the dataset is one stored ZIP: a dropped
+  folder is bundled in the browser (`web/src/folderzip.ts`). The bundle's hex
+  addresses are the archive's, not each file's, and no row gives the offset
+  within the member file. The browser reads every byte once for CRC-32s
+  before the dataset opens; skipping that and recomputing on Save as needs an
+  "not computed" state in the inspector.
+- A step with more than one writer stays bytes; `data.N` past `data.0` and a
+  second dataset in one archive are listed as files only; `data.0`'s bytes
+  outside values (padding to 4096) are uncounted.
+- Recognition looks for a stored `md.idx` or `mmd.0` in the first 36 KiB, so
+  a `zip -0 -r` archive with a large `data.0` first opens as a plain ZIP (the
+  template menu still reads it). Reading the central directory would fix it.
+- BP4 `data.0`, a BP3 `.bp.dir` and OME-Zarr could use the same bundle.
 
 ### WMO BUFR (built 2026-09-14)
 
