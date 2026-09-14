@@ -35,6 +35,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| BGZF files named by what they hold: `bgzf_contents` unpacks up to 16 KiB of block 0 and tells BAM, CSI, VCF, BED, FASTA or text, and the toolbar reads e.g. `BAM alignments · compressed with BGZF` (it showed file(1)'s BGZF sentence before, which outranked the template label). | 4963ee3, 9d48cc0 |
+| MATLAB 7.3 files get the HDF5 contents list and B-trees tab, keyed on `h5ad::holds_hdf5` (the same search the walk uses, now reading no list contents to answer no); level 5 files get neither. `BTREES.notInListing` no longer blames a user block. | 656fd35, 5039f59, c53c702 |
 | S7. One space stitched from several runs: `Ty::Stitched` joins stored or packed runs into one lazily read space with a bounded cache and a part table. PDB scattered streams (a TPI stream joined from 11 pages), BAM records across BGZF blocks (a record cut across 17 blocks reads whole; 20 KB peak cache over 300 blocks), Godot resources across compressed blocks, the inspector showing a byte's run and BGZF virtual offset, and edits to a field inside one stored run. Also fixed Gather's resume skipping a record after a spend ran out. | f4c38e0, 174eb1d, a34ee58, 85ea109 |
 | WMO BUFR: a new template, a side reader through Table D with replication and operators, bundled WMO tables (v46, with v13 and v15 differences), and a values panel. No value differs from ecCodes on eight samples. | f4c90ef, 52765a3, e7ea846 |
 | S8. Computed values that are not integers: `Ty::ComputedReal`, `Expr::Real`, `RealText`, `Pow2`, `Pow10`, `Trunc` on a second evaluator. NIfTI voxels scaled by fractional slopes, FITS scales with fractions and exponents, GRIB simple-packed values with their worth. Matches nibabel, astropy and ecCodes within float tolerance. | 0ebc377, 4cecf62, e91ab8a, fbce36a |
@@ -360,15 +362,6 @@ Reads further than any other scientific format. Left:
 - 4-byte offsets are read wrong rather than refused.
 - Checksums on the chunk index blocks and pages are placed as fields but not
   verified: the crate has no lookup3.
-- **The B-trees panel and the HDF5 contents list still do not open for
-  `.mat` files.** The walk now works behind a user block, but three places
-  gate on the template name being `"hdf5"`: `contents` and `btree` in
-  `crates/wasm/src/lib.rs`, `syncTabs` in `web/src/overviewpanel.ts` (the
-  tab), and the `hdf5` adapter in `web/src/logicaloutline.ts`. Allowing
-  `"mat"` everywhere would offer a B-trees tab on every level 5 MAT file,
-  which has no trees, under an empty-state sentence about groups and chunked
-  datasets. It wants a cheap "this MAT file is HDF5 inside" signal (the MAT
-  template's root switch already picks a 7.3 arm) and the tab offered on that.
 - Compound members go as deep as the file nests compounds; arrays,
   enumerations and sequence element types go two levels, then keep their
   bytes. True version 3 compound bytes and version 1 member dimensions are
@@ -624,9 +617,6 @@ htslib and samtools samples, matched against bamnostic. Left:
 - **No panel.** `bam_block` is a method, not an `Explain` variant. With the
   stream now joined, a panel may no longer be needed for records; the
   inspector's Position row already shows a record's block and virtual offset.
-- **A `.bam` is labelled "BGZF gzip blocks".** The label names the container,
-  not the contents; a reader opening a BAM file wants to be told it is BAM.
-  `templateSentence` is where Fable suggested saying so.
 - A plain gzip file of several members that is not BGZF still reports a false
   CRC mismatch (its CRC compared with the last member's trailer): the gzip
   template needs a compressed run that ends where its decoder stopped.

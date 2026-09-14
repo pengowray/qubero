@@ -17,6 +17,7 @@ use crate::template::{Anchor, Encoding, Expr, Packing, StrLen, Tag, TaggedRef, T
 use crate::text::{self, Settled};
 
 mod cells;
+mod census;
 mod check;
 mod deduced;
 mod diagram;
@@ -43,6 +44,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+pub use census::{BoxCount, Census, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
@@ -713,6 +715,20 @@ impl Evaluator {
             p.push(i);
             p
         }))
+    }
+
+    /// The names of the fields of the structure at `path`, in order, or None
+    /// when what is there is not a structure.
+    ///
+    /// For a reader finding its way by the shape of what is around it rather
+    /// than by a path it already knows. `node` answers the same question and
+    /// costs more than it can afford: it counts the children of a list, and a
+    /// list that runs to the end of the file is counted by walking the file.
+    /// This resolves the one field and reads nothing inside it.
+    pub fn field_names<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Vec<String>>> {
+        self.resolve(doc, path)?;
+        let Ty::Struct(s) = self.memo[path].ty.base() else { return Ok(None) };
+        Ok(Some(s.fields.iter().map(|f| f.name.to_string()).collect()))
     }
 
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {

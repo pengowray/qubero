@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, Census, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -1060,6 +1060,10 @@ struct DiagramBoxDto {
     /// Where the walk first reached it, for the reader who wants to know how
     /// they would get there.
     path: String,
+    /// What tells this type from every other. `diagram_census` counts the open
+    /// file's nodes by the same key, so a view can say how many of this box the
+    /// file holds.
+    key: String,
     /// "seq" | "instances" | "switch"
     kind: &'static str,
     /// The type this one was written inside, for a box the template gave no
@@ -1104,6 +1108,7 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             .map(|b| DiagramBoxDto {
                 name: b.name,
                 path: b.path,
+                key: b.key,
                 kind: b.kind.as_str(),
                 parent: b.parent,
                 rows: b
@@ -1131,6 +1136,67 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             })
             .collect(),
         omitted: f64::from(d.omitted),
+    }
+}
+
+/// How many of one diagram box the open file holds, and where the first is.
+#[derive(Serialize)]
+struct BoxCountDto {
+    /// Matches `DiagramBoxDto::key`.
+    key: String,
+    count: f64,
+    /// Child indices from the root, and which reading they are in: 0 is the
+    /// file, anything else an unpacked stream.
+    first_path: Vec<f64>,
+    space: f64,
+}
+
+/// The same for one row of one box.
+#[derive(Serialize)]
+struct RowCountDto {
+    key: String,
+    row: f64,
+    count: f64,
+    first_path: Vec<f64>,
+    space: f64,
+}
+
+/// What the open file holds, against what the format can hold.
+#[derive(Serialize)]
+struct CensusDto {
+    boxes: Vec<BoxCountDto>,
+    rows: Vec<RowCountDto>,
+    /// How many nodes the walk looked at.
+    walked: f64,
+    /// True when the cap stopped it, so every count is a floor.
+    truncated: bool,
+}
+
+fn census_dto(c: Census) -> CensusDto {
+    CensusDto {
+        boxes: c
+            .boxes
+            .into_iter()
+            .map(|b| BoxCountDto {
+                key: b.key,
+                count: b.count as f64,
+                first_path: b.first_path.into_iter().map(|x| x as f64).collect(),
+                space: f64::from(b.space),
+            })
+            .collect(),
+        rows: c
+            .rows
+            .into_iter()
+            .map(|r| RowCountDto {
+                key: r.key,
+                row: r.row as f64,
+                count: r.count as f64,
+                first_path: r.first_path.into_iter().map(|x| x as f64).collect(),
+                space: f64::from(r.space),
+            })
+            .collect(),
+        walked: c.walked as f64,
+        truncated: c.truncated,
     }
 }
 
@@ -2889,6 +2955,13 @@ impl Editor {
         formats::sniff(head, file_len as u64).unwrap_or("").to_string()
     }
 
+    /// What a BGZF file holds, from the front of its first block in these
+    /// leading bytes: `bam`, `csi`, `vcf`, `bed`, `fasta` or `text`, or "" when
+    /// that cannot be told. See `formats::bgzf_contents`.
+    pub fn bgzf_contents(&self, head: &[u8]) -> String {
+        formats::bgzf_contents(head).unwrap_or("").to_string()
+    }
+
     /// Select a template by name; "" clears it. Returns false if unknown.
     ///
     /// A name starting `ksy:` is one of the bundled Kaitai Struct formats,
@@ -3295,6 +3368,24 @@ impl Editor {
         }
     }
 
+    /// The open file's nodes counted against the diagram's boxes: how many of
+    /// each the file holds, which rows they stood on, and the path to the first
+    /// of each. JSON, in the same reply shape as the rest.
+    ///
+    /// `limit` caps the nodes walked. Breadth-first, so what a cap keeps is the
+    /// top of the file, and the answer says whether it stopped short.
+    pub fn diagram_census(&mut self, space: u32, limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        match &mut sh.eval {
+            None => reply::<CensusDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.census(&sh.doc, limit as usize).map(census_dto))
+            }
+        }
+    }
+
     /// The relationships behind the shape of the field at `path`, written out:
     /// the expression as the template holds it, the same with every field's
     /// value in its place, and what it comes to. JSON, in the same reply shape
@@ -3460,26 +3551,46 @@ impl Editor {
         reply(Ok(named))
     }
 
+    /// Whether the space is read as an HDF5 file, whole or inside another
+    /// format: {status:"ok",node:true}. What every HDF5 panel is offered on,
+    /// rather than the template's name, since `mat` reads a level 5 file with
+    /// no HDF5 in it as well as a level 7.3 file that is one. See
+    /// `h5ad::holds_hdf5`.
+    ///
+    /// Pending while the few bytes near the front that decide it are still to
+    /// come, so the host asks for them and asks again when they land.
+    pub fn holds_hdf5(&mut self, space: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let Some(e) = &mut sh.eval else { return reply(Ok(false)) };
+        e.begin_slice();
+        reply(qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc))
+    }
+
     /// What an HDF5 file holds, read in the file's own terms rather than the
-    /// template's: {status:"ok",node:{objects,..}}. Empty for every other
-    /// format, since nothing else here has a group tree to walk.
+    /// template's: {status:"ok",node:{objects,..}}. Empty for a file that holds
+    /// no HDF5, since nothing else here has a group tree to walk.
     pub fn contents(&mut self, space: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "hdf5" {
-            return reply(Ok(ContentsDto {
-                objects: Vec::new(),
-                total: 0.0,
-                anndata: false,
-                encoding: String::new(),
-                rows: 0.0,
-                columns: 0.0,
-            }));
-        }
         let Some(e) = &mut sh.eval else {
             return reply::<ContentsDto>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
+        match qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc) {
+            Ok(true) => {}
+            Ok(false) => {
+                return reply(Ok(ContentsDto {
+                    objects: Vec::new(),
+                    total: 0.0,
+                    anndata: false,
+                    encoding: String::new(),
+                    rows: 0.0,
+                    columns: 0.0,
+                }))
+            }
+            Err(err) => return reply::<ContentsDto>(Err(err)),
+        }
         let found = match qubero_core::formats::h5ad::contents(e, &sh.doc) {
             Ok(c) => c,
             Err(err) => return reply::<ContentsDto>(Err(err)),
@@ -3537,14 +3648,16 @@ impl Editor {
     pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "hdf5" {
-            return reply(Ok(None::<TreeDto>));
-        }
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let Some(e) = &mut sh.eval else {
             return reply::<Option<TreeDto>>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
+        match qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc) {
+            Ok(true) => {}
+            Ok(false) => return reply(Ok(None::<TreeDto>)),
+            Err(err) => return reply::<Option<TreeDto>>(Err(err)),
+        }
         let found = match qubero_core::formats::hdf5_tree::tree(e, &sh.doc, &p, limit as usize) {
             Ok(t) => t,
             Err(err) => return reply::<Option<TreeDto>>(Err(err)),

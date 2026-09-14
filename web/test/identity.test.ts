@@ -76,6 +76,22 @@ test("a template's own sentence beats everything", () => {
   assert.equal(id.name, 'Claude Code theme "Ember", based on dark');
 });
 
+test("a BGZF file is named by what it holds, and file(1)'s container sentence still agrees", () => {
+  const bam = { name: "bgzf", label: "BGZF gzip blocks", sentence: "BAM alignments \u00b7 compressed with BGZF" };
+  const id = decide({ template: bam, file: rule("Blocked GNU Zip Format (BGZF; gzip compatible), block length 502", [], "application/x-gzip") });
+  assert.equal(id.name, "BAM alignments \u00b7 compressed with BGZF");
+  assert.equal(id.source, "template");
+  assert.equal(id.candidates.some((c) => c.disagrees), false);
+  // A rule that calls it plain gzip agrees too, by the extension.
+  const vcf = { ...bam, sentence: "VCF variant calls \u00b7 compressed with BGZF" };
+  const gz = decide({ template: vcf, file: rule("gzip compressed data, extra field", ["gz", "tgz"], "application/gzip") });
+  assert.equal(gz.name, vcf.sentence);
+  assert.equal(gz.candidates.some((c) => c.disagrees), false);
+  // And with nothing to say about the contents, the container is the name.
+  const none = decide({ template: { ...bam, sentence: null }, file: rule("Blocked GNU Zip Format (BGZF; gzip compatible), block length 28", [], "application/x-gzip") });
+  assert.equal(none.source, "file");
+});
+
 test("nothing answered yet is no name and no candidates", () => {
   const id = decide({ template: null });
   assert.equal(id.name, null);

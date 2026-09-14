@@ -1110,6 +1110,14 @@ function build(tab: Tab): Page {
    *  does not throw away where the reader had panned to. Null until the first
    *  drawing. */
   let diagramFor: string | null = null;
+  /** True while the census is waiting on bytes it asked for, so the next change
+   *  to the document asks again rather than leaving the counts blank. */
+  let censusWaiting = false;
+  /** How many of the file's fields the census walks. Enough for the counts on
+   *  a format's boxes to be the file's real ones, and capped because a file of
+   *  a million fields is a walk nobody asked to wait for; what it does not
+   *  reach, the view says it did not reach. */
+  const CENSUS_CAP = 20000;
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -1239,6 +1247,14 @@ function build(tab: Tab): Page {
         setView("hex");
         goToField(path);
       };
+      diagram.onGo = (path, space) => {
+        // Only the file's own reading has offsets the hex view understands; a
+        // field inside an unpacked stream is not offered one, and the view says
+        // so rather than moving the cursor to the wrong byte.
+        if (space !== 0) return;
+        setView("hex");
+        goToField(path);
+      };
       diagram.el.hidden = false;
       workspaceLeft.append(diagram.el);
     }
@@ -1256,6 +1272,21 @@ function build(tab: Tab): Page {
     // showing the last format's picture over an unrecognised file.
     diagramTypes = reply.status === "ok" ? reply.node.types : [];
     diagram.show(reply.status === "ok" ? reply.node : null, templateLabel(format));
+    countForDiagram();
+  };
+
+  /**
+   * Count the open file against the diagram's boxes, and hand the counts over.
+   *
+   * Unlike the drawing this reads the file, so it can come back pending while
+   * bytes are on their way; the flag has the next change to the document ask
+   * again, which is how every other panel here waits.
+   */
+  const countForDiagram = (): void => {
+    if (diagram === null || diagram.el.hidden) return;
+    const reply = doc.diagramCensus(CENSUS_CAP);
+    censusWaiting = reply.status !== "ok";
+    diagram.setCensus(reply.status === "ok" ? reply.node : null);
   };
 
   /** The `.ksy` converter, built the first time it is opened. It keeps its text
@@ -1578,6 +1609,10 @@ function build(tab: Tab): Page {
       // laying it out behind a hidden view costs a layout nobody is looking at.
       if (diagram !== null && !diagram.el.hidden) void showDiagram();
     }
+    // The counts are of the file, so they are taken again whenever it changes:
+    // bytes arriving, an edit, a stream opening.
+    if (diagram !== null && !diagram.el.hidden) countForDiagram();
+    else if (censusWaiting) censusWaiting = false;
     refresh();
     if (followWhenLoaded !== null) {
       // The first try was turned away for want of bytes, and `followCursor`

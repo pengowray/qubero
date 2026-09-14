@@ -232,8 +232,39 @@ const NOUNS: ReadonlySet<string> = new Set([
  * could be said about it; the template has read the file and can say which
  * theme it is.
  */
-export const templateSentence = (doc: Doc, name: string): string | null =>
-  name === "claudetheme" ? themeSentence(doc) : null;
+export const templateSentence = (doc: Doc, name: string): string | null => {
+  switch (name) {
+    case "claudetheme":
+      return themeSentence(doc);
+    case "bgzf":
+      return bgzfSentence(doc.bgzfContents());
+    default:
+      return null;
+  }
+};
+
+/** What a BGZF file holds, by what its first block unpacks to. */
+const BGZF_HOLDS: Record<string, string> = {
+  bam: "BAM alignments",
+  csi: "CSI index",
+  vcf: "VCF variant calls",
+  bed: "BED genomic intervals",
+  fasta: "FASTA sequences",
+  text: "Text",
+};
+const BGZF_WRAPPER = " \u00b7 compressed with BGZF";
+
+/**
+ * What the file holds, then the container after a middle dot. The container
+ * comes second, the way a packer does after a program, so the part a narrow
+ * toolbar cuts is the part a reader needs least. Null when the first block
+ * could not say: file(1)'s sentence names the container then, which is still
+ * true.
+ */
+const bgzfSentence = (holds: string): string | null => {
+  const what = BGZF_HOLDS[holds];
+  return what === undefined ? null : `${what}${BGZF_WRAPPER}`;
+};
 
 /** `Claude Code theme "Ember", based on dark, 10 colours changed`. */
 const themeSentence = (doc: Doc): string | null => {

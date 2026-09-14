@@ -868,6 +868,10 @@ export type DiagramBox = {
   /** Where the walk first reached it (`png.chunks.data.'IHDR'`). A type read in
    *  nine places has one box and this is the first of the nine ways to it. */
   readonly path: string;
+  /** What tells this type from every other. `diagramCensus` counts the open
+   *  file's nodes by the same key, so a count found there belongs to this box
+   *  and to no other. */
+  readonly key: string;
   readonly kind: DiagramBoxKind;
   /** The type this one was written inside, for a box the template gave no name
    *  of its own (`Header.entry`). Absent for a named type. */
@@ -907,11 +911,51 @@ export type TemplateDiagram = {
   readonly omitted: number;
 };
 
+/** How many of one diagram box the open file holds, and where the first is. */
+export type BoxCount = {
+  /** Matches `DiagramBox.key`. */
+  readonly key: string;
+  readonly count: number;
+  /** Child indices from the root of the reading `space` names. */
+  readonly first_path: number[];
+  /** 0 is the file; anything else is an unpacked stream, whose offsets are not
+   *  the file's. */
+  readonly space: number;
+};
+
+/** The same for one row of one box: one field, over every node of that type. */
+export type RowCount = {
+  readonly key: string;
+  readonly row: number;
+  readonly count: number;
+  readonly first_path: number[];
+  readonly space: number;
+};
+
+/**
+ * What the open file holds, against what the format can hold.
+ *
+ * `templateDiagram` draws the format, which is the same picture for every file
+ * it opens. This says which of those boxes this particular file has and how
+ * many, so a box the file has none of can be drawn quietly and one it has
+ * twelve of can say so.
+ */
+export type DiagramCensus = {
+  readonly boxes: BoxCount[];
+  readonly rows: RowCount[];
+  /** How many nodes the walk looked at. */
+  readonly walked: number;
+  /** True when the cap stopped it, so every count is a floor rather than a
+   *  total, and a view showing one has to say so. */
+  readonly truncated: boolean;
+};
+
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
-  /** Where the node is in the template. Empty for a version 2 node below the
-   *  root, which the template does not place: such a box goes to its bytes and
-   *  is not opened in the Listing, because there is no field there to open. */
+  /** Where the node is in the template. Empty where the template does not
+   *  place a node at the address the walk read it from, which no well-formed
+   *  file does: such a box goes to its bytes and is not opened in the Listing,
+   *  because there is no field there to open. */
   readonly path: readonly number[];
   /** Index into the node list, or -1 for the root. Every node but the root
    *  comes after its parent in the list. */
@@ -2143,6 +2187,19 @@ export class Doc {
     return this.template === "png" || this.template === "p8png" || this.template === "p64png";
   }
 
+  /** Whether the file is read as an HDF5 file, whole or inside another format,
+   *  which is what the B-trees tab and the HDF5 contents are offered on. Not
+   *  the template's name: `mat` reads a MATLAB 7.3 file, which is HDF5 behind
+   *  a 512-byte header, and a level 5 file, which has no groups or trees at
+   *  all. The core answers from the header and the bytes at the signature, so
+   *  this is cheap to ask on every change. False while those bytes are still
+   *  on their way; they are asked for, and the change they make asks again. */
+  get holdsHdf5(): boolean {
+    if (this.template === null) return false;
+    const r = this.handleReply<boolean>(this.editor.holds_hdf5(this.space));
+    return r.status === "ok" && r.node;
+  }
+
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
     const raw = this.editor.extent_estimate(this.space);
@@ -2219,6 +2276,22 @@ export class Doc {
     // Only once the bytes have had their say: a file that announces what it is
     // is that, whatever it happens to be called.
     return name === "" ? templateByExtension(this.name) : name;
+  }
+
+  /**
+   * What a BGZF file holds, told from the front of its first block: `bam`,
+   * `csi`, `vcf`, `bed`, `fasta` or `text`, or "" when that cannot be told.
+   *
+   * Read from the head `sniffTemplate` fetched rather than from the template,
+   * whose joined stream only knows what it holds once every block has been
+   * reached, which for a large BAM is long after the toolbar wants a name.
+   */
+  bgzfContents(): string {
+    if (this.space !== 0) return "";
+    const n = Math.min(this.editor.sniff_window(), this.lengthBytes);
+    if (n === 0) return "";
+    const { bytes, complete } = this.read(0, n);
+    return complete ? this.editor.bgzf_contents(bytes) : "";
   }
 
   /**
@@ -2560,6 +2633,19 @@ export class Doc {
    */
   templateDiagram(): TemplateReply<TemplateDiagram> {
     return this.handleReply<TemplateDiagram>(this.editor.template_diagram(this.space));
+  }
+
+  /**
+   * The open file's nodes counted against the diagram's boxes.
+   *
+   * Unlike `templateDiagram` this does read the file, so it answers pending
+   * while bytes are on their way and the caller asks again once the document
+   * says something changed.
+   *
+   * `limit` caps the nodes walked; the answer says whether it stopped short.
+   */
+  diagramCensus(limit: number): TemplateReply<DiagramCensus> {
+    return this.handleReply<DiagramCensus>(this.editor.diagram_census(this.space, limit));
   }
 
   /**
