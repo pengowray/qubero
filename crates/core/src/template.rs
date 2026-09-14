@@ -1387,6 +1387,37 @@ pub enum Step {
     /// columns in their names needs: FITS calls them `col1` to `col32`, and
     /// any of them may hold descriptors.
     Fields(Arc<[String]>),
+    /// Into the stream under the node here: the first compressed run or
+    /// joined stream found by going down through its structures and the
+    /// fields that point elsewhere, never into a list, landing on the run.
+    ///
+    /// A name will not do, because the formats a container borrows put their
+    /// run at different names and depths: a zlib stream holds it as
+    /// `compressed`, a zstd or xz stream as the one thing its `decoded` field
+    /// points at, and ROOT's own lz4 block as `block`. A ROOT record is
+    /// whichever of the four its block header names, so the walk to what came
+    /// out of it has to say "the stream in here" and let the file answer.
+    ///
+    /// A [`Step::Field`] taken from a stream goes to what the stream holds
+    /// first, the way a name always goes through a field that points
+    /// elsewhere.
+    Stream,
+    /// Every field of this name anywhere under the node here, in the order a
+    /// walk down through it meets them: into structures, into the elements of
+    /// lists of records, through fields that point elsewhere and into what a
+    /// stream holds, and never into a field it has landed on.
+    ///
+    /// What a structure that nests itself to a depth the file chooses needs. A
+    /// ROOT tree's branches hold branches, as deep as the tree was split, and
+    /// a `TBranchElement` holds its `TBranch` as a base class of its own, so the
+    /// baskets of a split tree are at no one depth and under no one run of
+    /// names. Every branch lists them in a field of the same name, and that is
+    /// what this finds.
+    ///
+    /// A list of plain numbers is not walked into, and neither is a list whose
+    /// children are placed elsewhere, since those are placed from records a
+    /// walk like this one found.
+    Deep(Arc<str>),
 }
 
 impl Step {
@@ -1403,6 +1434,117 @@ impl Step {
     }
     pub fn fields(names: &[&str]) -> Step {
         Step::Fields(names.iter().map(|s| s.to_string()).collect())
+    }
+    /// The run under the node here. See [`Step::Stream`].
+    pub fn stream() -> Step {
+        Step::Stream
+    }
+    /// Every field called `name` at any depth under the node here. See
+    /// [`Step::Deep`].
+    pub fn deep(name: &str) -> Step {
+        Step::Deep(name.into())
+    }
+}
+
+/// One part of what a [`Ty::Schema`] is looked up by, worked out in the frame
+/// the node is read in.
+///
+/// Parts rather than one expression, because what a format keys its
+/// descriptions by is rarely one thing: a ROOT class is a name and a version,
+/// and the name is text while the version is a number. A literal is here for
+/// the key a builder already knows when it writes a type holding another: the
+/// members of a `TBranch` are that class whatever the bytes say, and reading
+/// the word out of the file again to find that out would be a read for
+/// nothing.
+#[derive(Debug, Clone)]
+pub enum KeyPart {
+    /// A number the expression comes to.
+    Int(Expr),
+    /// The text of the field the expression names, the way a
+    /// [`Ty::Match`] reads its word.
+    Text(Expr),
+    /// Text the template fixed.
+    TextLit(Arc<str>),
+}
+
+/// A key part once worked out. What a builder is handed and what a built type
+/// is kept under.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KeyValue {
+    Int(i128),
+    Text(Arc<str>),
+}
+
+impl KeyValue {
+    pub fn as_int(&self) -> Option<i128> {
+        match self {
+            KeyValue::Int(v) => Some(*v),
+            KeyValue::Text(_) => None,
+        }
+    }
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            KeyValue::Text(s) => Some(s),
+            KeyValue::Int(_) => None,
+        }
+    }
+}
+
+/// What a [`SchemaBuilder`] made of one key: the type, and where in the file
+/// the description it came from is.
+///
+/// The paths are what makes a built type something a reader can question. A
+/// row typed `TBranch` because the file said so should be able to say which
+/// record of the file said so, and each member should be able to say which
+/// description of a member it was laid out from: `fBasketSeek` is eight bytes
+/// a pointer because element 19 of `TBranch`'s description says `Long64_t*`.
+#[derive(Debug, Clone)]
+pub struct Built {
+    pub ty: Ty,
+    /// The description record the type was built from. `None` for a type the
+    /// builder knows by heart and did not read from the file.
+    pub from: Option<Vec<usize>>,
+    /// For a structure, the description each field was laid out from, by the
+    /// field's index. Shorter than the fields, or `None` in a slot, where a
+    /// field is the builder's own rather than something a description wrote.
+    pub members_from: Vec<Option<Vec<usize>>>,
+}
+
+impl Built {
+    /// A type with nothing in the file behind it.
+    pub fn by_heart(ty: Ty) -> Built {
+        Built { ty, from: None, members_from: Vec::new() }
+    }
+}
+
+/// The format's own Rust for a [`Ty::Schema`]: how a description read out of
+/// the file becomes a type.
+///
+/// The builder reads nodes, not bytes. What a description says is already a
+/// structure the template placed, with names and values, and reading it again
+/// from bytes would be a second reading that could disagree with the first.
+/// So the builder is handed the descriptions through [`crate::eval::Descriptions`],
+/// which asks the evaluator, and the walk to them is taken only when the
+/// builder first asks: a key the builder answers from what it knows by heart
+/// costs nothing.
+///
+/// `Err` from the builder is a sentence the node fails with; `Pending` and
+/// `Busy` from reading a description are passed up as they are anywhere else,
+/// and the build is asked again.
+pub trait SchemaBuilder: std::fmt::Debug + Send + Sync {
+    fn build(&self, key: &[KeyValue], table: &mut dyn crate::eval::Descriptions) -> crate::eval::R<Built>;
+
+    /// The key as a reader would say it, for the relations panel and for the
+    /// refusal a description read with itself gets: `TTree v19` rather than
+    /// `"TTree", 19`. The parts joined by commas when the format has no word.
+    fn key_text(&self, key: &[KeyValue]) -> String {
+        key.iter()
+            .map(|k| match k {
+                KeyValue::Int(v) => v.to_string(),
+                KeyValue::Text(s) => s.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -2501,6 +2643,36 @@ pub enum Ty {
     /// A field inside that lies wholly in one stored run of the file writes to
     /// that run; nothing else inside is editable. See `eval/stitch.rs`.
     Stitched { from: Arc<[Step]>, part_len: Option<Expr>, len: Option<Expr>, inner: Box<Ty> },
+    /// A type whose shape is not in the template but in the file: looked up
+    /// when the node is read, from descriptions the file carries of its own
+    /// records.
+    ///
+    /// A ROOT `TTree` is the case that needs it. What the object's bytes are
+    /// is the order `TTree::Streamer` wrote them in, and that order is written
+    /// down in the same file, in the `StreamerInfo` record, as a list of
+    /// member descriptions per class and version. A template built in Rust
+    /// cannot say it, since the layout of a `TTree` of version 19 and one of
+    /// version 20 differ and the file says which it has. Everything a template
+    /// can do with a switch stops at the cases someone wrote out; this is a
+    /// switch whose cases are in the file.
+    ///
+    /// `kind` names the [`SchemaBuilder`] the format registered with
+    /// [`Template::with_schema`], which is the Rust that knows how a
+    /// description reads as a type. `table` is the walk to the description
+    /// records, the same walk a [`Ty::Gather`] takes to its records, and is
+    /// taken only if the builder asks for them: a kind whose own descriptions
+    /// are written in types it knows by heart answers those without touching
+    /// the file. `key` is which description this node is, worked out in the
+    /// frame the node is read in, the way a switch's expression is.
+    ///
+    /// What the builder makes is kept per kind and key, so a thousand branches
+    /// of one class are one build. A type it makes may hold more of these,
+    /// which is how an object holding objects is read: each is built when its
+    /// own node is read, never all at once. A description that is being read
+    /// with itself is refused by name rather than followed.
+    ///
+    /// No bits of its own: it reads as whatever it was built as.
+    Schema { kind: Arc<str>, table: Arc<[Step]>, key: Arc<[KeyPart]> },
     /// Fields laid out from what the decoder read, rather than from what a
     /// template says.
     ///
@@ -3257,6 +3429,11 @@ impl Ty {
     pub fn stitched(from: Vec<Step>, part_len: Option<Expr>, len: Option<Expr>, inner: Ty) -> Ty {
         Ty::Stitched { from: from.into(), part_len, len, inner: Box::new(inner) }
     }
+    /// A type the builder registered as `kind` makes of the description `key`
+    /// names, found by walking `table`. See [`Ty::Schema`].
+    pub fn schema(kind: &str, table: Vec<Step>, key: Vec<KeyPart>) -> Ty {
+        Ty::Schema { kind: kind.into(), table: table.into(), key: key.into() }
+    }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
@@ -3346,6 +3523,52 @@ impl Ty {
         match self {
             Ty::Nullable { inner, .. } => inner.without_sentinel(),
             other => other,
+        }
+    }
+
+    /// What a switch is, when every branch that covers bytes says the same
+    /// thing; `None` when they disagree. Disagreeing is the ordinary case: a
+    /// switch over a chunk's tag stands for a dozen unrelated shapes and no
+    /// one name is true of all of them, so the type column keeps saying
+    /// `switch` there.
+    ///
+    /// A branch that covers no bytes gets no vote. That is what
+    /// [`Ty::present_if`] writes for the case where the field is not there,
+    /// and "not there" is not a name the field could go by: an array of
+    /// optional filters is an array of filters, some of which happen to be
+    /// missing. Nothing here singles the default out, because the two ways of
+    /// writing an optional field disagree about which side it goes on:
+    /// `present_if` puts the empty branch in the default and bencode puts it
+    /// in a case. Looking at every branch reads both the same way.
+    ///
+    /// Branches are compared by the name they display rather than by shape,
+    /// since a `Ty` has no equality and the name is the whole question here:
+    /// two branches that print alike are alike as far as the column is
+    /// concerned.
+    pub fn agreed_case(&self) -> Option<&Ty> {
+        fn agree<'a>(arms: impl Iterator<Item = &'a Ty>) -> Option<&'a Ty> {
+            let mut agreed: Option<(&Ty, String)> = None;
+            for arm in arms {
+                // The zero-length filler, and only that: a branch reading
+                // `bytes(Remaining)` covers the rest of the container and is a
+                // real reading of it, so it argues for its own name like any
+                // other.
+                if matches!(arm, Ty::Bytes(Expr::Lit(0))) {
+                    continue;
+                }
+                let name = arm.display_name();
+                match &agreed {
+                    Some((_, seen)) if *seen != name => return None,
+                    Some(_) => {}
+                    None => agreed = Some((arm, name)),
+                }
+            }
+            agreed.map(|(ty, _)| ty)
+        }
+        match self {
+            Ty::Switch { cases, default, .. } => agree(cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default))),
+            Ty::Match { cases, default, .. } => agree(cases.iter().map(|(_, t)| t).chain(std::iter::once(&**default))),
+            _ => None,
         }
     }
 
@@ -3454,8 +3677,15 @@ impl Ty {
             Ty::Gather { elem, .. } => format!("descriptors \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
-            Ty::Switch { .. } => "switch".into(),
-            Ty::Match { .. } => "switch".into(),
+            // A resolved field never reaches here: `eval` picks the branch the
+            // file took and remembers that, so the column already shows the
+            // real type. What is left is the type of a list's element, which
+            // nothing resolves because no one element is it. See
+            // [`Ty::agreed_case`].
+            Ty::Switch { .. } | Ty::Match { .. } => match self.agreed_case() {
+                Some(ty) => ty.display_name(),
+                None => "switch".into(),
+            },
             // The word first, then what it would have been: a reader looking
             // at the column wants to know the field may not be here before
             // they want to know what it would have held. A node that resolved
@@ -3481,6 +3711,10 @@ impl Ty {
                 "switch" => "joined".into(),
                 name => format!("joined \u{2192} {name}"),
             },
+            // What the declaration says before the file has been read, which
+            // is only that the file will say. A node that has been read shows
+            // the type it was built as, the way a switch shows its case.
+            Ty::Schema { .. } => "schema".into(),
             Ty::Traced { part } => match part {
                 TracedPart::Blocks => "blocks".into(),
                 TracedPart::Block(_) => "block".into(),
@@ -3508,11 +3742,21 @@ pub struct Template {
     /// to answer it with. `None` for nearly all of them: a format that writes
     /// what a field is beside the field never has to ask.
     pub deducer: Option<Arc<dyn Deducer>>,
+    /// Who builds each kind of [`Ty::Schema`] this template holds, by the
+    /// kind's name. Empty for every format whose layout is its own.
+    pub schemas: HashMap<String, Arc<dyn SchemaBuilder>>,
 }
 
 impl Template {
     pub fn new(name: &str, root: Ty) -> Template {
-        Template { name: name.to_string(), root, types: HashMap::new(), deducer: None }
+        Template { name: name.to_string(), root, types: HashMap::new(), deducer: None, schemas: HashMap::new() }
+    }
+    /// Say what builds the schema kind `kind`, for a template holding a
+    /// [`Ty::Schema`] of that kind. A node of a kind nothing builds fails
+    /// saying so.
+    pub fn with_schema(mut self, kind: &str, builder: Arc<dyn SchemaBuilder>) -> Template {
+        self.schemas.insert(kind.to_string(), builder);
+        self
     }
     /// Say what runs this format, for a template holding an
     /// [`Expr::Deduced`]. A template that has one of those and no deducer has

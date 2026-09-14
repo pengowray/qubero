@@ -15,8 +15,9 @@
 //!
 //! So this keeps an index of every stretch an `At` placed, and of the field
 //! that placed it. `locate` asks the index when the bit it was given is
-//! outside what the root covers, and the descent carries on from there as it
-//! always did.
+//! outside what the root covers, or when the walk down from the root ends in a
+//! structure none of whose fields cover it, and the descent carries on from
+//! there as it always did.
 //!
 //! Four things make it affordable.
 //!
@@ -108,9 +109,9 @@ const SAME_ANSWER: usize = 64;
 pub(super) struct Index {
     /// What has been found, sorted by where it starts.
     pub(super) stretches: Vec<Placement>,
-    /// The stretches already in it, so the same one reached from a hundred
-    /// thousand places is walked into once.
-    pub(super) ranges: rustc_hash::FxHashSet<(u64, u64)>,
+    /// The stretches already in it and what each was read as, so the same one
+    /// reached from a hundred thousand places is walked into once.
+    pub(super) ranges: rustc_hash::FxHashSet<(u64, u64, String)>,
     /// Whether it is everything there is, or as far as the walk got.
     pub(super) done: bool,
     /// The walk's own stack, so it can stop after a bounded number of nodes
@@ -129,18 +130,24 @@ impl Index {
 }
 
 impl Evaluator {
-    /// The narrowest placed stretch covering `bit`, and the field that placed
-    /// it. Narrowest because placements nest: a link's name sits inside the
-    /// heap's data segment, and both were placed by an `At`.
-    pub(super) fn placement_at<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<Vec<usize>>> {
+    /// Every placed stretch covering `bit`, narrowest first, with how wide it
+    /// is and the field that placed it. Narrowest first because placements
+    /// nest: a link's name sits inside the heap's data segment, and both were
+    /// placed by an `At`. The rest are there for when the narrowest has no
+    /// field at the bit; see `locate`.
+    pub(super) fn placements_at<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<(u64, Vec<usize>)>> {
         self.index_placements(doc)?;
-        Ok(self
-            .placed
-            .stretches
+        // Sorted by where they start, so none past the bit need looking at.
+        let past = self.placed.stretches.partition_point(|p| p.start <= bit);
+        let mut covering: Vec<(u64, Vec<usize>)> = self.placed.stretches[..past]
             .iter()
-            .filter(|p| p.start <= bit && bit < p.end)
-            .min_by_key(|p| p.end - p.start)
-            .map(|p| p.path.clone()))
+            .filter(|p| bit < p.end)
+            .map(|p| (p.end - p.start, p.path.clone()))
+            .collect();
+        // Stable, so of two the same width the one that starts first is tried
+        // first, and of two over the same stretch the one the walk found first.
+        covering.sort_by_key(|(width, _)| *width);
+        Ok(covering)
     }
 
     /// Where the next placed stretch after `bit` begins, which is how far a
@@ -276,7 +283,12 @@ impl Evaluator {
         if self.memo[&stretch].space != 0 {
             return self.frame(doc, stretch);
         }
-        if !self.placed.ranges.insert((start, start + size)) {
+        // The same stretch read as the same thing is walked once. Read as
+        // something else it is another placement: an Impulse Tracker module
+        // points its instrument list, its sample list and its pattern list
+        // all at the whole file, and only the second has samples in it.
+        let key = (start, start + size, self.memo[&stretch].ty.display_name());
+        if !self.placed.ranges.insert(key) {
             return Ok(None);
         }
         self.placed.stretches.push(Placement { start, end: start + size, path });
@@ -364,8 +376,52 @@ impl Evaluator {
             Ty::Switch { cases, default, .. } => {
                 cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
             }
-            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => Self::places(inner, named),
-            _ => false,
+            // The same for a choice made by text. A ROOT key picks what its
+            // offset leads to by the class name written in it, and every
+            // RNTuple envelope and page is behind that choice: without this
+            // arm the whole key list was pruned as placing nothing.
+            Ty::Match { cases, default, .. } => {
+                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
+            }
+            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => Self::places(inner, named),
+            // Everything that holds no other type, named one by one rather
+            // than caught by a wildcard. A wildcard is how `Match` came to be
+            // answered "places nothing" when it was added, and a new type that
+            // holds others should stop the build here until someone says
+            // whether it can place anything.
+            Ty::UInt { .. }
+            | Ty::Int { .. }
+            | Ty::SignMagnitude { .. }
+            | Ty::UIntExpr { .. }
+            | Ty::F16(_)
+            | Ty::BF16(_)
+            | Ty::F32(_)
+            | Ty::F64(_)
+            | Ty::F80(_)
+            | Ty::F8 { .. }
+            | Ty::IbmF32(_)
+            | Ty::Computed(_)
+            | Ty::ComputedText(_)
+            | Ty::ComputedReal(_)
+            | Ty::Leb128 { .. }
+            | Ty::Zigzag
+            | Ty::EbmlVint { .. }
+            | Ty::Vlq
+            | Ty::Fixed { .. }
+            | Ty::Magic(_)
+            | Ty::Bytes(_)
+            | Ty::Str { .. }
+            | Ty::TextInt { .. }
+            | Ty::SqliteVarint
+            | Ty::SevenZipNumber
+            | Ty::Json(..)
+            | Ty::Insn { .. }
+            | Ty::Traced { .. }
+            | Ty::CodeBits { .. } => false,
+            // A built type is not followed, though what it builds may place
+            // things: every ROOT object sits in a decoded stream, so indexing
+            // them would unpack every object in the file to answer one byte.
+            Ty::Schema { .. } => false,
         }
     }
 }

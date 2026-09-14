@@ -37,6 +37,8 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. Six more private `Bits` copies remain (`codec/inflate.rs`, `lha.rs`, `pico8.rs`, `rar5.rs`, `fits_tile.rs`, `gwf_vect.rs`). `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| S9. A type built from a schema the file supplies: `Ty::Schema`, `Step::Stream` and `Step::Deep`, a builder over lazily read descriptions with a cache and edit handling. ROOT objects are built from `StreamerInfo` (classes match the side reader on all 8 samples), baskets are placed through lz4, lzma and zstd (Zmumu 20 per codec, sample-6.20.04 411), and 310 baskets read as typed values matching `read_basket`. DESIGN.md "A type the file describes". | 9322815..b8205b9 |
+| Hex view gaps over placed data: the placement index skipped anything behind a `Ty::Match` (every ROOT key, so RNTuple `staff` named 768 of 25,318 bytes, now 25,113), stopped at the first child past the bit (COFF symbol table), asked only outside the root (AppleDouble, netCDF, COFF relocations), and kept one list per stretch (Impulse Tracker, S3M). 26 sample files now name what the tree names; none got worse. The cause was not file order: the index walk already runs to the end. `examples/cover_probe.rs` compares the two. | c7db45b..7304837 |
 | S7 stage 4: HDF4 linked blocks joined (all 50 of `tdata.hdf`'s values match pyhdf), joined streams open as tabs under the cap, `map_out` through each part's own trace, and relations naming what cut and measured a joined stream. | ac1f83a, c15a455, 1bdc0d9, bb7f637 |
 | Engine: expression recursion refused past 88 levels instead of overflowing the stack; `ComputedText` cached on its node; a run of fixed-shape records counted once and multiplied in the kind totals (a 1M-point simply packed GRIB field: 601 goes and 14 s down to 1 go and under a millisecond). | 71634ab, 722f9bb, 849bea2 |
 | ADIOS2 BP3, BP4 and BP5: new templates for BP3 files and every file of a BP4 or BP5 directory, down to BP5's FFS records and schema fields. Matches adios2 2.12.1 on a three-version dataset. | a138f85, 8252840 |
@@ -249,22 +251,29 @@ branches, leaves, every basket with its offset, size and entry range, and the
 values of simple leaves. It shows in the Logical tab as `ROOT contents`. In
 `uproot-Zmumu-lz4.root` the baskets it lists are 206,455 of 212,813 bytes.
 
-What the *template* names is unchanged (about 2% of that file), because the
-baskets can only be placed by the template once it can read a streamed
-object, which is the corrected S4 above. Until then the hex view shows them
-as a gap while the Logical tab lists them.
+The template now reads streamed objects too (S9, see Closed): a key's object
+is built from the file's own `StreamerInfo`, and each branch's baskets are
+placed and read as their leaf's values. Zmumu-lz4 names 212,776 of 212,813
+bytes (from 6,321). Left from S9:
+
+- Stage 5, BP5's FFS formats, is not started. It needs descriptions read
+  from a second document (`mmd.0` for `md.0`), FFS field type strings such as
+  `integer[BitFieldCount]` and nested formats, and pointer bases and
+  alignment checked against adios2.
+- A parent branch's own baskets come after its sub-branches', the side
+  reader's order, not necessarily file order. `basket_refs` is added only to
+  branches described as `TBranch`.
+- The placement index does not go inside a built node, so a built type that
+  points back into the file is not found from a byte.
+- Objects streamed member-wise, and objects with no byte count, stay bytes.
+- An edit to a description a build read clears the whole evaluator. The
+  build cache is keyed by kind and key, not by which table was read.
 
 - Split `TBranchElement` branches (C++ objects) are reasoned about, not
   proven: no tree in the corpus uses one. Worth a sample.
 - Not read: variable-length entries, multi-leaf branches, strings, 2-byte
   floats, 3-byte integers, `CS` compressed blocks.
 - RNTuple reads from the anchor to every page (see Closed). Left:
-  - **The hex view shows none of it.** `spans` knows a placed field only
-    once its forward walk has resolved the field pointing at it, and the key
-    list leading to the anchor sits after all the RNTuple data, so envelopes
-    and pages show as one gap (the envelopes did before too). A `spans`
-    change, not a template one. The same shape probably affects any format
-    whose directory is at the end.
   - Page values read only when the header envelope is stored uncompressed: a
     page needs its column type from the header, and an expression cannot
     reach into a decoded run. ROOT nearly always compresses the header
