@@ -546,3 +546,59 @@ fn column_of(ev: &mut Evaluator, doc: &Document<MemSource>, page: &[usize]) -> u
     }
     panic!("{page:?} is not under a column chunk");
 }
+
+/// A column chunk names the footer entry that placed it and the fields its
+/// offset and length were read from in Parquet's own names, and keeps the path
+/// through Thrift's lists, entries and values beside each.
+///
+/// The indices in the stored paths are places in a list of fields, not field
+/// ids: `alltypes_plain.parquet` writes no `key_value_metadata` in its column
+/// metadata, so `dictionary_page_offset`, id 11, is ninth.
+#[test]
+fn a_column_chunk_names_its_footer_entry_in_parquets_own_terms() {
+    use qubero_core::eval::Role;
+    let Some(root) = parquet_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let path = root.join("alltypes_plain.parquet");
+    if !path.is_file() {
+        eprintln!("skipped: {} is not in the collection", path.display());
+        return;
+    }
+    let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("parquet").unwrap());
+    // The first column chunk of the first row group, which starts at 0x4.
+    let chunk = [4, 0, 0, 0];
+    assert_eq!(ev.node(&doc, &chunk).unwrap().offset_bits, 4 * 8);
+    let mut seen: Vec<(Role, String, Option<String>, String)> = Vec::new();
+    for o in ev.origins(&doc, &chunk).unwrap() {
+        let row = (o.role, o.label, o.stored, o.value);
+        if !seen.contains(&row) {
+            seen.push(row);
+        }
+    }
+    let row = |role, label: &str, stored: &str, value: &str| (role, label.to_string(), Some(stored.to_string()), value.to_string());
+    assert_eq!(
+        seen,
+        [
+            row(Role::Position, "footer.row_groups[0].columns[0]", "footer.fields.row_groups.value.elems[0].fields.columns.value.elems[0]", ""),
+            row(Role::Position, "meta_data.dictionary_page_offset", "fields[id = 3].value.fields[8].value", "4"),
+            row(Role::Position, "meta_data.data_page_offset", "fields[id = 3].value.fields[7].value", "49"),
+            row(Role::Length, "meta_data.total_compressed_size", "fields[id = 3].value.fields[6].value", "73"),
+        ]
+    );
+    // The formula names the same field the row above it does, and keeps the
+    // template's own spelling beside it.
+    let length = ev.relations(&doc, &chunk).unwrap().into_iter().find(|r| r.role == Role::Length).expect("a length formula");
+    assert_eq!(length.written, "max(min(descriptor.meta_data.total_compressed_size, remaining), 0)");
+    assert_eq!(length.template.as_deref(), Some("max(min(descriptor.(fields[id = 3].value.fields[id = 7].value), remaining), 0)"));
+    assert_eq!((length.substituted.as_str(), length.result.as_str()), ("max(min(73, 1064), 0)", "73"));
+    // A page's payload is read as whatever its header's type says.
+    let payload = [4, 0, 0, 0, 0, 0, 2];
+    let kind = ev.origins(&doc, &payload).unwrap().swap_remove(0);
+    assert_eq!(
+        (kind.role, kind.label.as_str(), kind.stored.as_deref(), kind.value.as_str()),
+        (Role::Type, "header.type", Some("header.fields[0].value"), "DICTIONARY_PAGE")
+    );
+}

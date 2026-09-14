@@ -462,7 +462,7 @@ impl Evaluator {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        Some(Relation { role: Role::Type, written, substituted, result: builder.key_text(&values) })
+        Some(Relation { role: Role::Type, written, template: None, substituted, result: builder.key_text(&values) })
     }
 }
 
@@ -470,7 +470,7 @@ impl Evaluator {
 /// description reads as is a count of its fields, which says nothing about why
 /// this is the type it is, and the label already names it.
 fn schema_origin(label: String, path: Vec<usize>) -> Origin {
-    Origin { role: Role::Type, label, path, value: String::new(), target_bits: None }
+    Origin { role: Role::Type, label, stored: None, path, value: String::new(), target_bits: None }
 }
 
 /// A made-up format whose records say which description lays them out, so

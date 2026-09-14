@@ -111,6 +111,11 @@ pub fn types(prefix: &str, structs: &[Struct]) -> Vec<(String, T)> {
 }
 
 /// One struct: the fields it holds, up to and including the byte that ends it.
+///
+/// The struct, each field in it and each list are how the protocol stores
+/// things rather than anything a schema names, so a path through them is
+/// named the way the schema is written: `meta_data.data_page_offset` rather
+/// than `fields[1].value.fields[7].value`. See [`crate::template::EncodingStep`].
 fn struct_ty(prefix: &str, name: &str, schema: Option<&Struct>) -> T {
     T::structure_named(
         name,
@@ -118,6 +123,7 @@ fn struct_ty(prefix: &str, name: &str, schema: Option<&Struct>) -> T {
         "fields",
         vec![("fields", T::repeat(field_ty(prefix, schema), Until::FieldValue { field: "kind".into(), value: 0 }))],
     )
+    .encoding_wrapper("fields")
 }
 
 /// One field: its header byte, what that byte says, and its value.
@@ -148,6 +154,7 @@ fn field_ty(prefix: &str, schema: Option<&Struct>) -> T {
         ],
     )
     .machinery(&["hdr", "kind"])
+    .encoding_member("id", "value")
 }
 
 /// The field id, named by the schema where the schema has a name for it.
@@ -244,6 +251,7 @@ fn list_ty(prefix: &str, schema: Option<&Struct>) -> T {
         ],
     )
     .machinery(&["hdr", "elem_kind", "short_count", "long_count"])
+    .encoding_wrapper("elems")
 }
 
 /// A map: how many pairs, then one byte holding both types, then the pairs.
@@ -270,6 +278,7 @@ fn map_ty(prefix: &str, schema: Option<&Struct>) -> T {
         ],
     )
     .machinery(&["kinds", "key_kind", "value_kind"])
+    .encoding_wrapper("entries")
 }
 
 #[cfg(test)]

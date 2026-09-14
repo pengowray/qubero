@@ -2903,6 +2903,56 @@ pub struct StructDef {
     /// What one of these reads as where a whole record has to fit on one line.
     /// Empty for a structure with no line of its own, which reads as its name.
     pub line: Vec<LinePart>,
+    /// Whether this structure is only how an encoding writes something down,
+    /// so that a path through it can be named without it. None for nearly
+    /// every structure, which is a thing the format itself names. See
+    /// [`EncodingStep`].
+    pub encoding: Option<EncodingStep>,
+}
+
+/// A structure a path can be named through without naming it, because it is
+/// how an encoding writes something down rather than something the format's
+/// own specification has a name for.
+///
+/// Thrift's compact protocol writes a struct as a list of (id, value) entries,
+/// so the field Parquet calls `meta_data.data_page_offset` is stored at
+/// `fields[1].value.fields[7].value`. Both are true, and they answer different
+/// questions: the first is the one in the specification, the second is how
+/// the bytes hold it. A label names the field the first way and keeps the
+/// second beside it (see `Origin::short` in `eval/origin.rs`).
+///
+/// The fields a mark names are usually the structure's `contents` and
+/// `named_by`, and the mark is its own thing all the same, because those two
+/// mean less. A RIFF chunk is named by its `id`, and a chunk called `LIST` is
+/// not a field called `LIST` of the list it is in; a wasm section's `body` is
+/// its contents, and `sections[9].body` without that step is `sections[9]`,
+/// which is the section. And a structure can stop saying what its contents
+/// are while the step is still only the encoding's: Parquet's `ColumnChunk`
+/// adds a field beside its Thrift `fields`, so the list of fields is no longer
+/// the whole of it, and is still how its members are stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodingStep {
+    /// Stands for the field `through`: a Thrift struct for its list of fields,
+    /// a Thrift list for its elements, a FlatBuffers offset for what it points
+    /// at. The step into that field is left out, so an index into a list sits
+    /// on the name of whatever holds the list.
+    Wrapper { through: Arc<str> },
+    /// One member of a record an encoding writes as a list of tagged entries:
+    /// a Thrift field, a bencode dictionary entry. It is named by what its
+    /// field `tag` reads as, in place of its index in the list, and the step
+    /// into its field `through` is left out. A member whose tag reads as no
+    /// name, such as a field id the schema does not know, keeps its stored
+    /// steps.
+    Member { tag: Arc<str>, through: Arc<str> },
+}
+
+impl EncodingStep {
+    /// The field a label steps through without naming.
+    pub fn through(&self) -> &str {
+        match self {
+            EncodingStep::Wrapper { through } | EncodingStep::Member { through, .. } => through,
+        }
+    }
 }
 
 impl Ty {
@@ -3058,6 +3108,7 @@ impl Ty {
             machinery: Vec::new(),
             payload: Vec::new(),
             line: Vec::new(),
+            encoding: None,
         }))
     }
     /// A structure that one of its own fields names, and one field that is
@@ -3287,6 +3338,26 @@ impl Ty {
                     .collect(),
                 ..(*s).clone()
             })),
+            other => other,
+        }
+    }
+
+    /// Says this structure stands for its field `through` wherever a path is
+    /// named. See [`EncodingStep::Wrapper`].
+    pub fn encoding_wrapper(self, through: &str) -> Ty {
+        self.encoding_step(EncodingStep::Wrapper { through: through.into() })
+    }
+
+    /// Says this structure is one tagged member of a record, named by its field
+    /// `tag` and standing for its field `through`. See
+    /// [`EncodingStep::Member`].
+    pub fn encoding_member(self, tag: &str, through: &str) -> Ty {
+        self.encoding_step(EncodingStep::Member { tag: tag.into(), through: through.into() })
+    }
+
+    fn encoding_step(self, step: EncodingStep) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { encoding: Some(step), ..(*s).clone() })),
             other => other,
         }
     }
