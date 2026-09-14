@@ -67,6 +67,11 @@ impl Evaluator {
         // that covers nothing where it is declared holds them from its anchor
         // on, as far as the room it was given.
         let lowest = if lr.declared_size.is_some() { lr.offset } else { base };
+        // All three are worked out from where the list is, so the walk has
+        // read as far as what placed the list before it reads any record.
+        let placed = self.memo.placed_from(list);
+        let g = self.gather_mut(list);
+        g.walk.reach = g.walk.reach.max(placed);
         loop {
             let found = self.list(list).gather.as_deref().map_or(0, |g| g.starts.len());
             if found > want {
@@ -97,10 +102,24 @@ impl Evaluator {
                 .filter(|at| !(skip_zero && *at == 0))
                 .map(|at| base as i128 + (at + adjust) * 8)
                 .filter(|bits| *bits >= lowest as i128 && *bits <= room as i128);
+            // How far the record reaches, which is as far as anything read
+            // from it can: the offset now, and whatever the child it places
+            // asks it with `placer` later. A record that will not be measured
+            // says nothing about how far that is.
+            let reach = match self.size_of(doc, &record) {
+                Ok(size) => match self.memo.get(&record) {
+                    Some(r) => self.memo.placed_from(&record).max(r.offset.saturating_add(size)),
+                    None => u64::MAX,
+                },
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => u64::MAX,
+            };
             let g = self.gather_mut(list);
+            g.walk.reach = g.walk.reach.max(reach);
             if let Some(bits) = start {
                 g.starts.push(bits as u64);
                 g.records.push(record);
+                g.reaches.push(g.walk.reach);
             }
             self.walk_past(list, Landing::Records);
         }
@@ -165,9 +184,14 @@ impl Evaluator {
                 Step::Deep(name) if k > 0 => self.deep_step(doc, name, &node, next, last),
                 _ => self.walk_step(doc, at, step, k, &node, next, landing),
             };
-            let got = match got {
-                Err(e) if !e.interrupted() => None,
-                other => other?,
+            // What says a step has nothing more to stand on is read too, and
+            // an edit to it could give the step more. A step that failed says
+            // nothing about how far it read.
+            let (got, spent) = match got {
+                Err(e) if !e.interrupted() => (None, u64::MAX),
+                Err(e) => return Err(e),
+                Ok(None) => (None, self.nothing_more_reach(&node, step, k, landing)),
+                Ok(got) => (got, 0),
             };
             let w = self.walk_mut(at, landing);
             // Reading a step can put nodes back and take nodes away, and a walk
@@ -188,6 +212,7 @@ impl Evaluator {
                 }
                 // Nothing more down this way, so the step above moves on.
                 None => {
+                    w.reach = w.reach.max(spent);
                     w.frames.pop();
                     if let Some(up) = w.frames.last_mut() {
                         up.next += 1;
@@ -314,6 +339,42 @@ impl Evaluator {
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
             }
+        }
+    }
+
+    /// How far the walk read to learn that step `k`, taken from `node`, has
+    /// nothing more to stand on.
+    ///
+    /// A step to a field of a structure asks the structure's type, which was
+    /// settled from what came before the structure, and so does a step over
+    /// the elements of something that is not a list, or of a list whose
+    /// elements hold no fields: nothing in the file changes those answers but
+    /// what placed the node. A step over the elements of a list asks how many
+    /// there are, which `Memo::count_reach` says. A search through the
+    /// elements' labels reaches as far as the list does. What a stream holds
+    /// is worked out from all of its run, and a search at any depth goes
+    /// wherever the fields under the node point, so neither says how far it
+    /// read.
+    fn nothing_more_reach(&self, node: &[usize], step: &Step, k: usize, landing: Landing) -> u64 {
+        let line = self.memo.placed_from(node);
+        let Some(r) = self.memo.get(node) else { return u64::MAX };
+        let listed = matches!(r.ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. });
+        let stream = matches!(r.ty, Ty::Decoded { .. } | Ty::Stitched { .. });
+        match step {
+            _ if k == 0 => line,
+            Step::Stream | Step::Deep(_) => u64::MAX,
+            Step::Field(_) | Step::Fields(_) if stream => u64::MAX,
+            _ if !listed => line,
+            Step::Field(_) | Step::Fields(_) => line,
+            Step::Each => {
+                if let Ty::Array { elem, .. } | Ty::Repeat { elem, .. } = &r.ty {
+                    if landing == Landing::Records && self.holds_no_fields(elem) {
+                        return line;
+                    }
+                }
+                line.max(self.memo.count_reach(node))
+            }
+            Step::Tagged { .. } => r.size.map_or(u64::MAX, |size| line.max(r.offset.saturating_add(size))),
         }
     }
 
