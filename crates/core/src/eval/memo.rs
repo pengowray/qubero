@@ -536,8 +536,11 @@ impl Memo {
             // and says what it said. Otherwise it starts again. The walk is a
             // stack of steps, which cannot be cut back to a child, and the
             // children before the first placed from after the edit are still
-            // held and are found again where they are.
-            if l.gather.as_deref().is_some_and(|g| !g.done || g.walk.reach > bit) {
+            // held and are found again where they are. A walk with a record
+            // it wrote no reach for starts again too: a schema's build keeps
+            // the records it reached here while it is under way, and says how
+            // far they reach only once it is built.
+            if l.gather.as_deref().is_some_and(|g| !g.done || g.walk.reach > bit || g.reaches.len() != g.records.len()) {
                 l.gather = None;
             }
             // The walk to a stitched stream's parts starts again whatever it
