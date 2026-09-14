@@ -189,6 +189,21 @@ mod tests {
         assert_eq!(ev.short_label(&d, &[], &spaced).unwrap().as_deref(), Some("info[\"piece length\"]"));
     }
 
+    #[test]
+    fn a_cbor_path_is_named_by_its_text_keys_and_indexed_by_the_others() {
+        // {"a": {"b": 2}, 7: 3}
+        let bytes = vec![0xa2, 0x61, b'a', 0xa1, 0x61, b'b', 0x02, 0x07, 0x03];
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(crate::formats::cbor());
+        // The root's pairs, the first, its value, that value's pairs, the
+        // first, its value.
+        let b = [3, 0, 1, 3, 0, 1];
+        assert_eq!(ev.node(&d, &b).unwrap().size_bits, 8);
+        assert_eq!(ev.short_label(&d, &[], &b).unwrap().as_deref(), Some("a.b"));
+        // A key that is a number is no name: the pairs keep their list.
+        assert_eq!(ev.short_label(&d, &[], &[3, 1, 1]).unwrap().as_deref(), Some("value[1]"));
+    }
+
     /// A Thrift struct with a field the schema names, one it does not, and a
     /// struct inside it.
     fn thrift() -> (Document<MemSource>, Evaluator) {

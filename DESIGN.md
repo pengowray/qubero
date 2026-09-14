@@ -1081,9 +1081,9 @@ and most of it is the encoding talking.
 `StructDef::encoding` (2026-09-15) marks a structure that is only an encoding's.
 `EncodingStep::Wrapper { through }` stands for one of its fields: a Thrift
 struct for `fields`, a Thrift list for `elems`, a FlatBuffers offset for what it
-points at, a bencode value for its body. `EncodingStep::Member { tag, through }`
+points at, a bencode or CBOR item for its body. `EncodingStep::Member { tag, through }`
 is one entry of a tagged list: a Thrift field, named by its `id`, or a bencode
-dictionary entry, named by its key. `eval/shortpath.rs` names a path through
+or CBOR map entry, named by its key. `eval/shortpath.rs` names a path through
 them without them: the step into a wrapper's field is left out, a member is
 named by what its tag reads as in place of its index, and an index sits on
 whatever holds the list. So the two labels above read
