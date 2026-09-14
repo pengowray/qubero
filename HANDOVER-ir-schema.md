@@ -1,8 +1,22 @@
 # Handover: a type built from a schema the file supplies (S9)
 
 Written 2026-09-14 from a design pass (Fable) that read the evaluator at
-`8abe6f6` and ran `dump_tree` over `uproot-Zmumu-lz4.root`. Nothing was
-built. It is the corrected S4 in `HANDOVER-science-formats.md`: ROOT TTree
+`8abe6f6` and ran `dump_tree` over `uproot-Zmumu-lz4.root`.
+
+**Built 2026-09-14, stages 1 to 4** (`9322815`..`b8205b9`). Where the code
+differs from this design: the builder takes `&mut dyn Descriptions` (a generic
+`build<S>` cannot sit behind `Arc<dyn>`) and reads descriptions lazily, since
+StreamerInfo's own classes are described by the bootstrap set; the cache is
+keyed by kind and key and does not keep failures; an edit to description
+bytes a build read invalidates the whole evaluator; a class with no
+description becomes bytes with a note; member-wise streaming is handled in
+the builder; `Step::Deep` finds baskets at any depth (split branches and
+`TBranchElement`); `placed::places` answers false for a schema node;
+`KeyPart::Bytes` was dropped. Stage 5 (FFS) is not started; what it needs is
+in `HANDOVER-science-formats.md` under ROOT.
+
+The design as first written follows. It is the corrected S4 in
+`HANDOVER-science-formats.md`: ROOT TTree
 baskets cannot be placed by the template because a streamed object's layout
 is data in the same file. Where the design is wrong, follow the code and say
 so.

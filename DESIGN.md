@@ -2807,6 +2807,139 @@ part stands for the rest: a BAM stream's Length row names
 `block_size` is one field beside the stream for every block, and is named as
 it is.
 
+### A type the file describes
+A ROOT `TTree` is a run of numbers in the order `TTree::Streamer` wrote them,
+and that order is not a fact about the format. It is written down in the same
+file, in the `StreamerInfo` record, as a description per class and version:
+each member's name, a type code, a width, and for a counted array the member
+that counts it. A `TTree` of version 19 and one of version 20 lay out
+differently, and the file says which it has. A template built in Rust can only
+switch between cases someone wrote out, so the baskets that are 97 per cent of
+a ROOT file were listed by a side reader (`root_tree.rs`) and read as gaps by
+the template.
+
+`Ty::Schema { kind, table, key }` (2026-09-14) is a switch whose cases are in
+the file. `kind` names a `SchemaBuilder` the format registers with
+`Template::with_schema`: the Rust that knows how one of its descriptions reads
+as a type. `table` is a walk of `Step`s to the description records, the
+gather's own walk. `key` is a list of `KeyPart`s worked out in the node's frame
+the way a switch's expression is: a number, the text of a field, or text the
+template fixed. `effective` meets the node, works out the key, and continues
+with whatever the builder made, as it continues with a switch's case, so the
+resolved node is the built structure and nothing downstream knows the
+difference.
+
+**The builder reads nodes, and asks for them.** A description is already a
+structure the template placed, so the builder is handed `Descriptions`, which
+reads nodes and walks to the records, rather than bytes. The handover had the
+builder generic over the source; a generic method cannot go through the
+`Arc<dyn SchemaBuilder>` the template holds, so the trait object is the
+reading instead. The walk is taken only when the builder first asks for a
+record, and that is not an economy. ROOT's descriptions are streamed objects
+typed by schema nodes of the same kind, and a walk taken before every build
+would walk to the descriptions from inside them. A builder answers the classes
+descriptions are written in by heart and never asks.
+
+**Kept per kind and key.** A thousand branches of one class are one build.
+Only builds that came out are kept: the same key read from inside the
+descriptions and from outside can see different tables, since `find_field`
+sees only fields declared before the asker, and a failure where the table is
+out of sight says nothing about a node that can see it. A key read again while
+it is being built is refused by name (`layout 1's description depends on
+itself`). With the walk lazy and names looked up only
+backwards, that takes a contrived template to reach, and it is there so that a
+builder that reads a description typed by itself fails rather than recursing.
+
+**Edits.** A built type is a claim about the bytes of a description that may
+be anywhere: ROOT keeps its descriptions at the end of the file and everything
+before them is typed by them, which `forget_after`'s rule that expressions look
+backwards cannot see. Each kept build records how far into the file what it
+read reaches, and the largest bit there is when it read inside a stream. An
+overwrite before that reach throws the whole memo away, since which nodes a
+build typed is not written down anywhere; an edit past every description keeps
+everything the old rules keep.
+
+**A stream under a field.** A ROOT record's contents are in whichever of four
+codecs its block header names, and each borrowed format keeps its run at a
+different name and depth. `Step::Stream` goes down through structures and
+pointing fields, never into a list, to the first `Decoded` or `Stitched` node,
+and a `Step::Field` taken from a stream means a field of what the stream holds.
+The IR text writes it `.(stream)`, bracketed so it cannot read as a field
+called `stream`, which ROOT's block has.
+
+**What a reader is told.** The declared type reads `schema`, and the node reads
+as what it was built as. The relations panel writes the key the way it writes a
+switch's expression, with the builder's own words for the result
+(`fClassName.text, version` = `"TTree", 19`, `TTree v19`). The origins name
+the record a type was built from and, for a member of a built structure, the
+description that member was laid out from, so a row typed a pointer can say
+which element of which class description made it one.
+
+**A build that fails inside a window.** A ROOT object's members are in the
+window its byte count gives them, and a class the file does not describe (the
+`TObjString`s of `listOfRules` inside `StreamerInfo` itself) would fail the
+members node and so the size of everything holding it. The side reader steps
+over such an object by its count. So a failed build whose node a `Sized` has
+already measured reads as that window's bytes, in a structure named by the key
+with the reason as its doc, and is not kept.
+
+**ROOT.** `formats/root/schema.rs` is the builder. `[class]` is an object
+written in place: `TObject`, `TString` and the `TArray`s as their hand-written
+streamers write them, anything else a byte count, a version and a members node
+keyed `[class, version]`. Members come from what `root_streamer` reads by hand
+(`TNamed`, `TObjArray`, `TList`), then the file's descriptions, matched the way
+`Schema::find` matches, then its bootstrap table. Elements become fields by
+`read_element`'s codes; a base class is a field named by the class, holding its
+own object, so a count named by a member of a base is reached as
+`TNamed.members.fName`. A pointer is its tag and a class name, spelled once and
+then placed back at the first spelling from an origin at the object's start, as
+the handover worked out. The header declares `streamer_info` before `directory`
+now, since the walk to the descriptions only sees fields declared before the
+object asking. Every record's `object` is a `Stitched` over what its blocks
+unpack to, each measured by its block header, so an object across blocks is
+one object. A `TTree` key points at a `TreeRecord`, whose `baskets` gathers one
+basket per `BasketRef`, a zero-size record the builder appends to `TBranch`'s
+members out of `fBasketSeek`, `fBasketBytes` and `fBasketEntry`.
+
+**A field at any depth.** The handover's walk to the baskets named each level,
+and `uproot-nesteddirs.root` has a tree split into `TBranchElement`s two levels
+deep, each keeping its baskets in its `TBranch` base. `Step::Deep(name)` lands
+on every field of that name under the node, depth first, through structures,
+lists of records, pointing fields and what a stream holds; it keeps the place it
+last landed on its frame and carries on from there, so a thousand branches are
+one search. Its order puts a split branch's sub-branches before its own
+baskets, which a split branch never has. The IR text writes it `..basket_refs`,
+the name the builder gives the list so it does not read as ROOT's own
+`fBaskets` beside it.
+
+**A basket's values.** A basket's `entries` is its blocks joined, like a
+record's object, holding `values` up to `fLast` and then, where the branch's
+entries vary in length, the table of where each starts. The values are typed by
+asking the branch that placed the basket, through `Expr::Placer`: the branch's
+class, its one leaf's class, `fLen`, `fLenType` and `fIsUnsigned`, each asked
+only once the one before held, since a question of a second leaf fails on a
+branch that has one. The cases are exactly the side reader's `how_to_read`,
+and everything else stays bytes.
+
+What the side reader and the template now agree on, over every sample: the
+class descriptions, member for member (`tests/root_real.rs`), every basket
+at the offset and length the branches list, and every basket's values (310
+read as numbers, 245 left as bytes) and entry offsets (233 tables). A tree walk of
+`uproot-Zmumu-lz4.root` names 212,776 of its 212,813 bytes where it named 6,321
+without the baskets, counting a compressed run as the field that names its
+bytes.
+
+A basket is found from a byte of it as well as by a walk. The placed index
+reaches it through the key that picks a tree's record by class name, which is a
+match on a word; the index had followed a switch on a number and not a match,
+so until it did, nothing a ROOT directory lists could be found by `locate`.
+
+What it does not do. The placed index does not walk into a schema node, since
+every ROOT object is in a stream's space and indexing one would open every
+object in the file for nothing; a built type that points back into the file
+would need that. A key is not keyed by where its table is, because one document
+has one table per kind in both formats that need this.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing

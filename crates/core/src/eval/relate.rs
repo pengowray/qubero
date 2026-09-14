@@ -121,6 +121,12 @@ impl Evaluator {
                     self.relation(doc, path, &on, Role::Type, None, &mut out);
                     break;
                 }
+                // A switch whose cases are in the file: the key as written,
+                // as read, and the description it named. See `schema.rs`.
+                Ty::Schema { .. } => {
+                    out.extend(self.schema_relation(doc, path));
+                    break;
+                }
                 _ => break,
             }
         }
