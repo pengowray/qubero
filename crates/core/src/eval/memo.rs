@@ -341,6 +341,45 @@ impl Memo {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::super::{Computed, Evaluator, Value};
+    use crate::document::Document;
+    use crate::source::MemSource;
+    use crate::template::{Expr as E, Template, Ty as T};
+
+    /// Computed text is kept on its node like a computed number, and goes
+    /// when an edit could have changed what it read: an edit after it leaves
+    /// it, and an edit to the text it copies drops it and it reads again.
+    #[test]
+    fn computed_text_is_kept_until_an_edit_could_change_it() {
+        let t = Template::new(
+            "t",
+            T::structure("S", vec![("name", T::utf8(E::lit(3))), ("copy", T::computed_text(E::field("name"))), ("tail", T::u8())]),
+        );
+        let mut d = Document::new(MemSource(b"abc!".to_vec()));
+        let mut ev = Evaluator::new(t);
+        let kept = |ev: &Evaluator| match ev.memo.get(&[1]).and_then(|r| r.computed.clone()) {
+            Some(Computed::Text(s)) => Some(s.to_string()),
+            _ => None,
+        };
+        assert_eq!(kept(&ev), None);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("abc".into()));
+        assert_eq!(kept(&ev).as_deref(), Some("abc"));
+
+        d.overwrite_bits(3 * 8, b"?", 8);
+        ev.invalidate_from(3 * 8);
+        assert_eq!(kept(&ev).as_deref(), Some("abc"));
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("abc".into()));
+
+        d.overwrite_bits(0, b"x", 8);
+        ev.invalidate_from(0);
+        assert_eq!(kept(&ev), None);
+        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("xbc".into()));
+        assert_eq!(kept(&ev).as_deref(), Some("xbc"));
+    }
+}
+
 /// Reading a node that is not there is a bug rather than a case: every caller
 /// that indexes has resolved the node first, and says so by indexing.
 impl<Q> std::ops::Index<&Q> for Memo

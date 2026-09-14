@@ -465,16 +465,20 @@ struct Resolved {
 }
 
 /// What a computed field came to, kept on its node: a whole number for a
-/// [`Ty::Computed`] and a real for a [`Ty::ComputedReal`].
+/// [`Ty::Computed`], a real for a [`Ty::ComputedReal`] and text for a
+/// [`Ty::ComputedText`].
 ///
-/// One slot for both rather than a second one beside it, since a node is one
+/// One slot for all three rather than one beside another, since a node is one
 /// type or the other, and [`Resolved`] is cloned for every element of every
 /// list: an `Option<i128>` and an `Option<f64>` side by side would widen all of
-/// them to hold a value only one kind of field ever has.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// them to hold a value only one kind of field ever has. Text is shared rather
+/// than owned for the same reason: a clone of a node holding it is a count
+/// going up, and the slot is no wider than the whole number already made it.
+#[derive(Debug, Clone, PartialEq)]
 enum Computed {
     Int(i128),
     Real(f64),
+    Text(std::sync::Arc<str>),
 }
 
 /// Where a child sits before its type is unwrapped: what it is called, what

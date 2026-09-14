@@ -496,7 +496,7 @@ impl Evaluator {
             Ty::Insn { isa } => Value::Str(self.read_insn(doc, r, *isa)?.text),
             Ty::EbmlVint { strip_marker } => Value::UInt(self.read_ebml_vint(doc, r, *strip_marker)?.0),
             Ty::Computed(e) => {
-                if let Some(Computed::Int(v)) = self.memo.get(at).and_then(|m| m.computed) {
+                if let Some(&Computed::Int(v)) = self.memo.get(at).and_then(|m| m.computed.as_ref()) {
                     return Ok(Value::Int(v));
                 }
                 let v = self.eval_expr_at(doc, at, e, Some((r.offset, r.limit)))?;
@@ -509,7 +509,7 @@ impl Evaluator {
             // slot, for the same reason: an element that asks the one before
             // it for its worth would otherwise be as deep as the list is long.
             Ty::ComputedReal(e) => {
-                if let Some(Computed::Real(v)) = self.memo.get(at).and_then(|m| m.computed) {
+                if let Some(&Computed::Real(v)) = self.memo.get(at).and_then(|m| m.computed.as_ref()) {
                     return Ok(Value::Float(v));
                 }
                 let v = self.eval_real_at(doc, at, e, Some((r.offset, r.limit)))?;
@@ -518,11 +518,23 @@ impl Evaluator {
                 }
                 Value::Float(v)
             }
-            // Text found elsewhere in the file. Not cached on the node the way
-            // a computed number is: a string on `Resolved` would be cloned for
-            // every child of every list, and nothing carries these in bulk.
+            // Text found elsewhere in the file, kept in the same slot for the
+            // same reason. A run of records each taking its text from the
+            // record before is otherwise the whole run read again for every
+            // record, even in order: a TDMS file of three thousand segments
+            // ran for minutes, and past `DEEPEST_QUESTION` records it is
+            // refused. Shared, so a node holding it clones as cheaply as one
+            // holding a number; dropped with the node, so an edit forgets it
+            // exactly when it forgets the number.
             Ty::ComputedText(e) => {
-                Value::Str(self.text_at(doc, at, &e.clone(), Some((r.offset, r.limit)))?)
+                if let Some(Computed::Text(v)) = self.memo.get(at).and_then(|m| m.computed.as_ref()) {
+                    return Ok(Value::Str(v.to_string()));
+                }
+                let v = self.text_at(doc, at, &e.clone(), Some((r.offset, r.limit)))?;
+                if let Some(m) = self.memo.get_mut(at) {
+                    m.computed = Some(Computed::Text(v.as_str().into()));
+                }
+                Value::Str(v)
             }
             // The bits themselves, in the order the decoder read them. Which
             // order that is belongs to the trace, so it is asked here rather

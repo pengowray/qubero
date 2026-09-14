@@ -141,6 +141,18 @@ fn the_same_chains_read_in_order_reach_the_end() {
                 assert_eq!(ev.node(&doc, &[i, 1]).unwrap().value, Value::Int(i as i128 + 1));
             }
 
+            // Text taken from the element before, found by a search back. Its
+            // answer is kept like a number's, so each read is one link deep;
+            // worked out afresh every time, the chain would be as deep as the
+            // element's index and refused before the hundredth.
+            let elem = T::structure("Elem", vec![("b", T::u8()), ("name", T::computed_text(E::sibling(&["name"])))]);
+            let doc = Document::new(MemSource(vec![0; LINKS]));
+            let mut ev = Evaluator::new(list(elem));
+            for i in 0..LINKS {
+                assert_eq!(ev.node(&doc, &[i, 1]).unwrap().value, Value::Str(String::new()));
+            }
+            assert!(ev.deepest_question() < 8, "{} deep", ev.deepest_question());
+
             // A chain just under the limit reads from a cold start: forty
             // computed fields, each one expression deep.
             let names: Vec<String> = (0..40).map(|i| format!("g{i}")).collect();
