@@ -217,6 +217,59 @@ fn record() -> T {
     with_key("Record", "fName", "body", vec![("body", body()), ("object", object())])
 }
 
+/// The record a tree's key points at: a record like any other, and then every
+/// basket its branches wrote.
+///
+/// A tree holds almost none of its own bytes. Its events are in baskets, one
+/// record per branch per few thousand entries, which no directory lists and
+/// nothing points at except three arrays inside each branch: where each
+/// basket is, how long, and which entry it starts at. Those arrays are members
+/// of a `TBranch` the file describes, so the walk to them goes through the
+/// tree's object as the file laid it out, and each `BasketRef` the builder
+/// adds to a branch places one basket.
+///
+/// A tree split into sub-branches keeps those in each branch's own list, as
+/// deep as it was split, and a `TBranchElement` keeps its baskets in the
+/// `TBranch` it has as a base class. So the walk does not name the way down: it
+/// finds every `baskets` under the tree's object, at whatever depth, in the
+/// order a walk down through the object meets them. That puts a split branch's
+/// sub-branches before its own baskets, which in every file that splits one is
+/// none.
+fn tree_record() -> T {
+    let to_baskets = vec![Step::field("object"), Step::deep("baskets"), Step::each()];
+    let baskets = T::gather(
+        to_baskets,
+        E::field("seek"),
+        crate::template::Anchor::File,
+        E::lit(0),
+        T::sized(E::placer(E::field("bytes")), T::Named("Basket".into())),
+    )
+    .skipping_zero();
+    with_key("TreeRecord", "fName", "body", vec![("body", body()), ("object", object()), ("baskets", baskets)])
+}
+
+/// One basket: a key whose header runs on past `fTitle` with the basket's own
+/// numbers, and then the values of the entries it holds, compressed the way
+/// any record's contents are.
+///
+/// `fNevBuf` is how many entries it holds and `fLast` where their values stop,
+/// counted from the start of the key. What is after that, for a branch whose
+/// entries vary in length, is where each entry starts.
+fn basket() -> T {
+    let mut fields = key_fields();
+    fields.extend([
+        // The version of the basket's own streamer, which is not the key's.
+        ("basket_version", T::u16(Big)),
+        ("fBufferSize", T::i32(Big)),
+        ("fNevBufSize", T::i32(Big)),
+        ("fNevBuf", T::i32(Big)),
+        ("fLast", T::i32(Big)),
+        ("flag", T::u8()),
+        ("body", body()),
+    ]);
+    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).counted_as("basket")
+}
+
 /// The object a record holds, read as the class its key names.
 ///
 /// Joined rather than read inside a block: ROOT compresses in blocks of at
@@ -356,11 +409,15 @@ fn by_class(level: usize) -> T {
         false => at_if_set("fSeekKey", T::Named("Record".into())),
     };
     let anchor = at_if_set("fSeekKey", T::Named("RNTupleRecord".into()));
+    let tree = at_if_set("fSeekKey", T::Named("TreeRecord".into()));
     T::matches(
         E::within(&["fClassName", "text"]),
         vec![
             ("TDirectory", deeper.clone()),
             ("TDirectoryFile", deeper),
+            ("TTree", tree.clone()),
+            ("TNtuple", tree.clone()),
+            ("TNtupleD", tree),
             ("ROOT::RNTuple", anchor.clone()),
             // What the class was called while the format was being settled.
             ("ROOT::Experimental::RNTuple", anchor),
@@ -526,6 +583,8 @@ pub fn root() -> Template {
         .with_schema(schema::KIND, schema::builder())
         .with_type("FileRecord", file_record())
         .with_type("Record", record())
+        .with_type("TreeRecord", tree_record())
+        .with_type("Basket", basket())
         .with_type("RNTupleRecord", rntuple_record())
         .with_type("FreeRecord", free_record())
         .with_type("Free", free())

@@ -97,9 +97,10 @@
 //!
 //! A walk is written as a path: `.name` into a field, `[]` into every element,
 //! `.{a, b}` into each of those fields, `.shown[key = tag]` into the one element
-//! labelled that way, and `.(stream)` into the compressed run or joined stream
-//! under the node, wherever the format that wrote it put it. The brackets are
-//! what keep that last one from reading as a field called `stream`.
+//! labelled that way, `.(stream)` into the compressed run or joined stream
+//! under the node, wherever the format that wrote it put it, and `..name` into
+//! every field of that name at any depth under it. The brackets are what keep
+//! the stream step from reading as a field called `stream`.
 //!
 //! Text says how it ends and what it is in: `text[expr]`,
 //! `text[expr] padded with 0x20`, `text until 0x00` (`or end` where a missing
@@ -735,6 +736,7 @@ fn step_text(s: &Step) -> String {
         Step::Each => "[]".to_string(),
         Step::Fields(names) => format!(".{{{}}}", names.join(", ")),
         Step::Stream => ".(stream)".to_string(),
+        Step::Deep(n) => format!("..{n}"),
     }
 }
 

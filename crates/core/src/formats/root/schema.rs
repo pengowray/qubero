@@ -38,6 +38,13 @@ pub(super) const KIND: &str = "root";
 /// this is the first object of the class in the record.
 const NEW_CLASS: i128 = 0xFFFF_FFFF;
 
+/// The bits of an object's two version bytes that are the version.
+const VERSION: i128 = 0x3fff;
+
+/// Bit 14 of an object's version: written one member at a time across the
+/// collection holding it, rather than object by object.
+const MEMBERWISE: i128 = 0x4000;
+
 /// How many levels of base classes a count is looked for through. A class
 /// description names its bases and each base names its own; a real file is
 /// three or four deep, and a file that is not stops here.
@@ -74,7 +81,11 @@ impl SchemaBuilder for Streamers {
     fn build(&self, key: &[KeyValue], table: &mut dyn Descriptions) -> R<Built> {
         match key {
             [KeyValue::Text(class)] => Ok(Built::by_heart(in_place(class))),
-            [KeyValue::Text(class), KeyValue::Int(version)] => members(table, class, *version as i32),
+            [KeyValue::Text(_), KeyValue::Int(version)] if version & MEMBERWISE != 0 => Ok(Built::by_heart(
+                T::structure(&self.key_text(key), vec![("bytes", T::bytes(E::Remaining))])
+                    .doc("written one member at a time across the collection holding it, which is not read here"),
+            )),
+            [KeyValue::Text(class), KeyValue::Int(version)] => members(table, class, (version & VERSION) as i32),
             _ => Err(EvalError::Failed("a ROOT object is keyed by its class, or its class and version".into())),
         }
     }
@@ -82,7 +93,7 @@ impl SchemaBuilder for Streamers {
     fn key_text(&self, key: &[KeyValue]) -> String {
         match key {
             [KeyValue::Text(class)] => class.to_string(),
-            [KeyValue::Text(class), KeyValue::Int(version)] => format!("{class} v{version}"),
+            [KeyValue::Text(class), KeyValue::Int(version)] => format!("{class} v{}", version & VERSION),
             _ => String::new(),
         }
     }
@@ -145,17 +156,13 @@ fn tarray(class: &str, elem: T) -> T {
 /// An object that says how long it is: a byte count with bit 30 set, the
 /// version of the class, and the members in the window the count leaves.
 ///
-/// An object whose version has bit 14 set was written one member at a time
-/// across a whole collection, which nothing here reads, so its members stay
-/// bytes. One whose four bytes are not a count is an older writer's, with the
-/// version and nothing to say where it ends.
+/// The members are keyed by the version as written, bit 14 and all: an object
+/// whose version has it set was written one member at a time across a whole
+/// collection, which the builder reads as bytes. One whose four bytes are not
+/// a count is an older writer's, with the version and nothing to say where it
+/// ends.
 fn counted(class: &str) -> T {
-    let version = || E::field("version");
-    let members = T::switch(
-        version().bit(14),
-        vec![(1, T::bytes(E::Remaining))],
-        T::schema(KIND, table(), vec![KeyPart::TextLit(class.into()), KeyPart::Int(version().and(E::lit(0x3fff)))]),
-    );
+    let members = T::schema(KIND, table(), vec![KeyPart::TextLit(class.into()), KeyPart::Int(E::field("version"))]);
     let with_count = T::structure_named(
         class,
         "",

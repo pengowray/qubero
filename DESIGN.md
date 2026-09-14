@@ -2783,6 +2783,48 @@ the record a type was built from and, for a member of a built structure, the
 description that member was laid out from, so a row typed a pointer can say
 which element of which class description made it one.
 
+**A build that fails inside a window.** A ROOT object's members are in the
+window its byte count gives them, and a class the file does not describe (the
+`TObjString`s of `listOfRules` inside `StreamerInfo` itself) would fail the
+members node and so the size of everything holding it. The side reader steps
+over such an object by its count. So a failed build whose node a `Sized` has
+already measured reads as that window's bytes, in a structure named by the key
+with the reason as its doc, and is not kept.
+
+**ROOT.** `formats/root/schema.rs` is the builder. `[class]` is an object
+written in place: `TObject`, `TString` and the `TArray`s as their hand-written
+streamers write them, anything else a byte count, a version and a members node
+keyed `[class, version]`. Members come from what `root_streamer` reads by hand
+(`TNamed`, `TObjArray`, `TList`), then the file's descriptions, matched the way
+`Schema::find` matches, then its bootstrap table. Elements become fields by
+`read_element`'s codes; a base class is a field named by the class, holding its
+own object, so a count named by a member of a base is reached as
+`TNamed.members.fName`. A pointer is its tag and a class name, spelled once and
+then placed back at the first spelling from an origin at the object's start, as
+the handover worked out. The header declares `streamer_info` before `directory`
+now, since the walk to the descriptions only sees fields declared before the
+object asking. Every record's `object` is a `Stitched` over what its blocks
+unpack to, each measured by its block header, so an object across blocks is
+one object. A `TTree` key points at a `TreeRecord`, whose `baskets` gathers one
+basket per `BasketRef`, a zero-size record the builder appends to `TBranch`'s
+members out of `fBasketSeek`, `fBasketBytes` and `fBasketEntry`.
+
+**A field at any depth.** The handover's walk to the baskets named each level,
+and `uproot-nesteddirs.root` has a tree split into `TBranchElement`s two levels
+deep, each keeping its baskets in its `TBranch` base. `Step::Deep(name)` lands
+on every field of that name under the node, depth first, through structures,
+lists of records, pointing fields and what a stream holds; it keeps the place it
+last landed on its frame and carries on from there, so a thousand branches are
+one search. Its order puts a split branch's sub-branches before its own
+baskets, which a split branch never has. The IR text writes it `..baskets`.
+
+What the side reader and the template now agree on, over every sample: the
+class descriptions, member for member (`tests/root_real.rs`), and every basket
+at the offset and length the branches list. A tree walk of
+`uproot-Zmumu-lz4.root` names 212,776 of its 212,813 bytes where it named 6,321
+without the baskets, counting a compressed run as the field that names its
+bytes.
+
 What it does not do. The placed index does not walk into a schema node, since
 every ROOT object is in a stream's space and indexing one would open every
 object in the file for nothing; a built type that points back into the file

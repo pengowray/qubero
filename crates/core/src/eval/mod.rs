@@ -431,6 +431,10 @@ struct Walk {
 struct GatherFrame {
     node: Vec<usize>,
     next: usize,
+    /// For a [`crate::template::Step::Deep`], which of its landings the step
+    /// stood on last and where that was. A search at any depth has no child
+    /// index to count by, so it carries on from the place instead.
+    last: Option<(usize, Vec<usize>)>,
 }
 
 /// What to call a node: the name of the field it is, or where it sits in the

@@ -1402,6 +1402,22 @@ pub enum Step {
     /// first, the way a name always goes through a field that points
     /// elsewhere.
     Stream,
+    /// Every field of this name anywhere under the node here, in the order a
+    /// walk down through it meets them: into structures, into the elements of
+    /// lists of records, through fields that point elsewhere and into what a
+    /// stream holds, and never into a field it has landed on.
+    ///
+    /// What a structure that nests itself to a depth the file chooses needs. A
+    /// ROOT tree's branches hold branches, as deep as the tree was split, and
+    /// a `TBranchElement` holds its `TBranch` as a base class of its own, so the
+    /// baskets of a split tree are at no one depth and under no one run of
+    /// names. Every branch lists them in a field of the same name, and that is
+    /// what this finds.
+    ///
+    /// A list of plain numbers is not walked into, and neither is a list whose
+    /// children are placed elsewhere, since those are placed from records a
+    /// walk like this one found.
+    Deep(Arc<str>),
 }
 
 impl Step {
@@ -1422,6 +1438,11 @@ impl Step {
     /// The run under the node here. See [`Step::Stream`].
     pub fn stream() -> Step {
         Step::Stream
+    }
+    /// Every field called `name` at any depth under the node here. See
+    /// [`Step::Deep`].
+    pub fn deep(name: &str) -> Step {
+        Step::Deep(name.into())
     }
 }
 
