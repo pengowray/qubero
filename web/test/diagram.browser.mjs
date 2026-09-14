@@ -272,6 +272,18 @@ try {
       assert(found.pickable > 0, "no row offered to take the reader to the file");
       await page.locator(".dv-row.is-pickable").first().click();
       await page.waitForSelector('.tb-view.is-on:text-is("Hex")', { timeout: 5000 });
+      // And a double click on a row of a type deeper in the file, which is the
+      // half the single click cannot reach: it goes to the first one the census
+      // found rather than to a field of the root.
+      await page.getByRole("button", { name: "Diagram", exact: true }).click();
+      await page.waitForSelector(".dv-box", { timeout: 20000 });
+      assert(found.goable > 0, "no row offered to go to the first one in the file");
+      const deep = page.locator(".dv-row.is-goable").last();
+      const before = await page.locator(".hv-offset, .status-offset, footer").first().textContent().catch(() => "");
+      await deep.dblclick();
+      await page.waitForSelector('.tb-view.is-on:text-is("Hex")', { timeout: 5000 });
+      const after = await page.locator(".hv-offset, .status-offset, footer").first().textContent().catch(() => "");
+      console.log(`  double-click went from ${JSON.stringify((before ?? "").trim().slice(0, 40))} to ${JSON.stringify((after ?? "").trim().slice(0, 40))}`);
     }
     console.log(basename(c.file), JSON.stringify(found));
     assert.deepEqual(errors, [], `page errors for ${c.file}`);
