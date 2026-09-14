@@ -2436,6 +2436,12 @@ struct SpaceDto {
     template: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refused: Option<String>,
+    /// True when the stream was joined from several runs rather than unpacked
+    /// from one, which is a different thing to call the tab.
+    joined: bool,
+    /// True when every one of those runs is stored as it sits in the file, so
+    /// a field of the stream can be edited where the file declares it.
+    stored: bool,
 }
 
 /// One step of a decoder, as the cursor link shows it.
@@ -2461,6 +2467,37 @@ struct MapStepDto {
     len: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dist: Option<f64>,
+    /// For a stream joined from several runs, where in the file the run of the
+    /// part the step belongs to starts. The step's own bits count from there,
+    /// so the file's bits are this plus them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_offset_bits: Option<f64>,
+}
+
+/// Which way a step of a space was asked for, which is how its run is found
+/// when the space was joined from several: by the byte it made, or by the bit
+/// of the file it read.
+enum AskedBy {
+    Byte(u64),
+    Bit(u64),
+}
+
+/// A step of a space, with where its run is when the space was joined from
+/// several. Nothing for a step of a run that is not in the file, which has no
+/// bits there to mark.
+fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, asked: AskedBy) -> Option<MapStepDto> {
+    let Some(sp) = e.space(space) else { return Some(step_dto(s)) };
+    if sp.runs().is_empty() {
+        return Some(step_dto(s));
+    }
+    let run = match asked {
+        AskedBy::Byte(byte) => sp.run_at(byte),
+        AskedBy::Bit(bit) => sp.run_holding(bit),
+    };
+    match run {
+        Some(run) if run.run_space == 0 => Some(MapStepDto { run_offset_bits: Some(run.run_offset_bits as f64), ..step_dto(s) }),
+        _ => None,
+    }
 }
 
 fn step_dto(s: MapStep) -> MapStepDto {
@@ -2474,6 +2511,7 @@ fn step_dto(s: MapStep) -> MapStepDto {
         value: None,
         len: None,
         dist: None,
+        run_offset_bits: None,
     };
     match s.kind {
         StepKind::Header(f, v) => {
@@ -2600,7 +2638,8 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         if let Some(i) = self.sheets.iter().position(|sh| !sh.origin.is_empty() && sh.origin == p) {
             let template = self.sheets[i].template.clone();
-            return reply(Ok(SpaceDto { space: i as f64, template, refused: None }));
+            let (joined, stored) = self.space_joined(i as u32);
+            return reply(Ok(SpaceDto { space: i as f64, template, refused: None, joined, stored }));
         }
         self.live = 0;
         let file = &mut self.sheets[0];
@@ -2618,7 +2657,7 @@ impl Editor {
             // the node, so the reply only has to say that it did not.
             Ok(None) => {
                 let why = self.refusal_at(&p);
-                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why) }));
+                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why), joined: false, stored: false }));
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
@@ -2628,13 +2667,30 @@ impl Editor {
         let sheet = Sheet::from_space(sp, p);
         let template = sheet.template.clone();
         self.sheets.push(sheet);
-        reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, template, refused: None }))
+        let space = (self.sheets.len() - 1) as u32;
+        let (joined, stored) = self.space_joined(space);
+        reply(Ok(SpaceDto { space: space as f64, template, refused: None, joined, stored }))
+    }
+
+    /// Whether one of this editor's spaces is a stream joined from several
+    /// runs, and whether every one of those runs is stored as it sits in the
+    /// file.
+    fn space_joined(&self, space: u32) -> (bool, bool) {
+        let Some(core) = self.core_space(space) else { return (false, false) };
+        let Some(sp) = self.sheets[0].eval.as_ref().and_then(|e| e.space(core)) else { return (false, false) };
+        let runs = sp.runs();
+        (!runs.is_empty(), !runs.is_empty() && runs.iter().all(|r| !r.packed && r.run_space == 0))
     }
 
     /// Why the stream at `path` would not open, in the core's own word for it.
+    /// A joined stream too long to hold whole says so only when asked, since
+    /// its node still reads.
     fn refusal_at(&mut self, path: &[usize]) -> String {
         let file = &mut self.sheets[0];
         let Some(e) = &mut file.eval else { return "failed".into() };
+        if let Some(why) = e.open_refusal(path) {
+            return why.as_str().into();
+        }
         match e.node(&file.doc, path) {
             Ok(n) => n.refused.unwrap_or_else(|| "failed".into()),
             Err(_) => "failed".into(),
@@ -2647,7 +2703,7 @@ impl Editor {
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(core, byte as u64).map(step_dto)))
+        reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
     }
 
     /// Which step read the bit at `bit` of the run `space` was unpacked from,
@@ -2655,7 +2711,7 @@ impl Editor {
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_in(core, bit as u64).map(step_dto)))
+        reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
     }
 
     /// Take the deflate symbol at `bit` of the run `space` was unpacked from

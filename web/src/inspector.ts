@@ -13,6 +13,7 @@ import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, JoinedPart, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { stepBits } from "./unpackedlink.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
@@ -2016,7 +2017,8 @@ export class Inspector {
         const row = document.createElement("div");
         row.className = "insp-origin";
         const what = document.createElement("span");
-        what.textContent = unpackedOriginRow(this.doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist, step.field);
+        const { start, end } = stepBits(step);
+        what.textContent = unpackedOriginRow(this.doc.name, start, end, step.kind, step.len, step.dist, step.field);
         row.append(what);
         rows.push(row);
       }

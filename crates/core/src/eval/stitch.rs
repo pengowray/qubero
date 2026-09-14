@@ -30,9 +30,17 @@
 use std::sync::Arc;
 
 use super::gather::Landing;
-use super::space::{Opened, Part, PartSource, Stitch};
+use super::space::{JoinedRun, Opened, Part, PartSource, Stitch};
 use super::*;
-use crate::codec::Codec;
+use crate::codec::{Codec, StepKind, Trace, TraceBuilder};
+
+/// A stitched stream held whole: its bytes, the trace of every part end to
+/// end, and where each part's run is. See [`Evaluator::join_whole`].
+pub(super) struct Whole {
+    pub(super) bytes: Vec<u8>,
+    pub(super) trace: Trace,
+    pub(super) runs: Vec<JoinedRun>,
+}
 
 /// What the walk to a stitched stream's parts has found so far.
 #[derive(Debug, Default, Clone)]
@@ -41,6 +49,14 @@ pub(super) struct StitchWalk {
     pub(super) parts: Vec<Part>,
     /// Where the next part starts in the joined bytes.
     end: u64,
+}
+
+/// Where a stitched stream's first part was measured. See
+/// [`Evaluator::first_part_frame`].
+pub(super) struct PartFrame {
+    pub(super) holder: Vec<usize>,
+    pub(super) end: Vec<usize>,
+    pub(super) here: Option<(u64, u64)>,
 }
 
 /// What came of reaching one run.
@@ -166,13 +182,7 @@ impl Evaluator {
     /// member's `original_size` is a field after its `compressed` run, and
     /// this is where that name reaches. Nothing when it will not read.
     fn claimed_len<S: Source>(&mut self, doc: &Document<S>, landing: &[usize], e: &Expr) -> R<Option<u64>> {
-        let Some(holder) = (0..landing.len())
-            .rev()
-            .find(|&k| matches!(self.memo.get(&landing[..k]).map(|r| r.ty.base()), Some(Ty::Struct(_))))
-            .map(|k| landing[..k].to_vec())
-        else {
-            return Ok(None);
-        };
+        let Some(holder) = self.part_holder(landing) else { return Ok(None) };
         let (end, here) = self.record_frame(doc, &holder)?;
         match self.eval_expr_at(doc, &end, e, here) {
             Ok(n) if n >= 0 => Ok(Some(n as u64)),
@@ -180,6 +190,33 @@ impl Evaluator {
             Err(e) if e.interrupted() => Err(e),
             Err(_) => Ok(None),
         }
+    }
+
+    /// The structure a part's claimed length is worked out in: the nearest one
+    /// above the run the walk landed on, from what the memo holds.
+    fn part_holder(&self, landing: &[usize]) -> Option<Vec<usize>> {
+        (0..landing.len())
+            .rev()
+            .find(|&k| matches!(self.memo.get(&landing[..k]).map(|r| r.ty.base()), Some(Ty::Struct(_))))
+            .map(|k| landing[..k].to_vec())
+    }
+
+    /// Where the stitched stream at `path` worked out what its first part
+    /// comes to, for saying what measured its parts: the structure that holds
+    /// the part's run, and the frame one past that structure's last field. The first part stands for the rest, which are measured the same
+    /// way in their own structures. Nothing when the stream did not open or
+    /// has no parts.
+    pub(super) fn first_part_frame<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<PartFrame>> {
+        let Opened::Space(id) = self.open_stitched_at(doc, path)? else { return Ok(None) };
+        let Some(part) = self.spaces.stitch(id).and_then(|s| s.parts.first()).map(|p| p.path.clone()) else {
+            return Ok(None);
+        };
+        for k in 0..=part.len() {
+            self.resolve(doc, &part[..k])?;
+        }
+        let Some(holder) = self.part_holder(&part) else { return Ok(None) };
+        let (end, here) = self.record_frame(doc, &holder)?;
+        Ok(Some(PartFrame { holder, end, here }))
     }
 
     /// The bytes of a packed run, unpacked. The outer error is the run's bytes
@@ -288,6 +325,111 @@ impl Evaluator {
         };
         stitch.cache.borrow_mut().put(i, bytes.clone());
         Ok(bytes)
+    }
+
+    /// The stitched stream at `path` held whole, for opening it as a document
+    /// of its own: its bytes, a trace of every part, and where each part's run
+    /// is. Refused when the stream would not open, when it comes to more than
+    /// a decoded stream may (the same cap, and the same refusal), and when a
+    /// part will not read.
+    ///
+    /// The trace is each part's laid end to end. A stored part is one step
+    /// over its own bytes; a packed part is the trace its decoder kept; and
+    /// each part is one member, the piece of the stream its container made as
+    /// a unit. The bits are counted along an axis of the trace's own, each
+    /// part's run after the one before, since the runs themselves are anywhere
+    /// and in any order and a trace's steps have to go forward.
+    /// [`JoinedRun`] is what takes a step back to the run it was read from.
+    ///
+    /// Every part is read and every packed one unpacked here, again, with its
+    /// trace: the cache a listing reads through keeps bytes and not traces,
+    /// and a trace is what a document of its own is for.
+    pub(super) fn join_whole<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Result<Whole, Refusal>> {
+        let id = match self.open_stitched_at(doc, path)? {
+            Opened::Space(id) => id,
+            Opened::Refused(why) => return Ok(Err(why)),
+        };
+        let Some(stitch) = self.spaces.stitch(id) else { return fail("this stream is no longer open") };
+        if stitch.len_bytes > self.spaces.whole_cap() as u64 {
+            return Ok(Err(Refusal::TooLarge));
+        }
+        // A read that has to wait for bytes waits; one that fails is a part
+        // that will not read, which refuses the whole as a stream that will
+        // not unpack refuses.
+        macro_rules! read {
+            ($space:expr, $at:expr, $bits:expr) => {
+                match self.read_in(doc, $space, $at, $bits) {
+                    Ok(bytes) => bytes,
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(Err(Refusal::Failed)),
+                }
+            };
+        }
+        let mut bytes = Vec::with_capacity(stitch.len_bytes as usize);
+        let mut trace = TraceBuilder::default();
+        let mut runs = Vec::with_capacity(stitch.parts.len());
+        let mut axis = 0u64;
+        for part in &stitch.parts {
+            let (space, at_bits, run_bits, packed) = match &part.source {
+                PartSource::Stored { space, at_bits } => (*space, *at_bits, part.len * 8, false),
+                PartSource::Packed { space, at_bits, size_bits, .. } => (*space, *at_bits, *size_bits, true),
+            };
+            // A trace keeps each step's start in 32 bits, which is half a
+            // gigabyte of runs laid end to end.
+            if axis + run_bits > u64::from(u32::MAX) {
+                return Ok(Err(Refusal::TooLarge));
+            }
+            let out = part.start;
+            match &part.source {
+                PartSource::Stored { .. } => {
+                    bytes.extend_from_slice(&read!(space, at_bits, run_bits));
+                    if part.len > 0 {
+                        trace.push(axis, out, StepKind::Stored);
+                    }
+                }
+                PartSource::Packed { codec, .. } => {
+                    let codec = match codec {
+                        Ok(codec) => *codec,
+                        Err(why) => return Ok(Err(*why)),
+                    };
+                    if run_bits / 8 > crate::codec::CAP_BYTES as u64 {
+                        return Ok(Err(Refusal::TooLarge));
+                    }
+                    let packed = read!(space, at_bits, run_bits);
+                    let Ok((unpacked, t)) = crate::codec::decode_traced(codec, &packed) else {
+                        return Ok(Err(Refusal::Failed));
+                    };
+                    // The same test a read of the part makes: a part that
+                    // unpacks to another length than its run claimed is not
+                    // the part the stream was measured with.
+                    if unpacked.len() as u64 != part.len {
+                        return Ok(Err(Refusal::Failed));
+                    }
+                    bytes.extend_from_slice(&unpacked);
+                    // A trace too long to keep names this part as one step,
+                    // the way a decoder past the same ceiling names a block.
+                    if trace.steps() + t.len() > crate::codec::MAX_STEPS {
+                        trace.push(axis, out, StepKind::Block);
+                        trace.coarsen();
+                    } else {
+                        trace.absorb_part(&t, axis, out);
+                    }
+                }
+            }
+            trace.member(axis..axis + run_bits, out..out + part.len);
+            runs.push(JoinedRun {
+                out_bytes: out..out + part.len,
+                path: part.path.clone(),
+                run_space: space,
+                run_offset_bits: at_bits,
+                run_bits,
+                packed,
+                in_start: axis,
+            });
+            axis += run_bits;
+        }
+        trace.finish_at(axis, stitch.len_bytes);
+        Ok(Ok(Whole { bytes, trace: trace.done(), runs }))
     }
 
     /// Part `i` as a reader would name it, for a read that failed in it: the
@@ -876,6 +1018,147 @@ mod tests {
         assert_eq!((hit.label.as_str(), hit.in_part, hit.packed), ("blocks[1].compressed", 5, true));
         assert_eq!(hit.run_offset_bits / 8, block + 18);
         assert_eq!(hit.virtual_offset, Some(block << 16 | 5));
+    }
+
+    #[test]
+    fn a_joined_stream_under_the_cap_opens_as_a_document_of_its_own() {
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let id = e.open_space(&d, 0, &[STREAM]).unwrap().expect("twenty bytes is well under the cap");
+        let space = e.space(id).unwrap();
+        assert_eq!(space.bytes(), &STREAM_BYTES[..20]);
+        assert_eq!((space.parent, space.path.as_slice(), space.codec), (0, &[STREAM][..], crate::codec::Codec::Stored));
+        // Pages 3, 1 and 2, the last cut at the length, and each where it is
+        // in the file.
+        let runs: Vec<_> = space.runs().iter().map(|r| (r.out_bytes.clone(), r.run_offset_bits / 8, r.packed)).collect();
+        assert_eq!(runs, [(0..8, 24, false), (8..16, 8, false), (16..20, 16, false)]);
+        let trace = space.trace();
+        trace.check_tiles().unwrap();
+        assert_eq!(trace.members().iter().map(|m| m.out_bytes.clone()).collect::<Vec<_>>(), [0..8, 8..16, 16..20]);
+        // Asked again, the same document.
+        assert_eq!(e.open_space(&d, 0, &[STREAM]).unwrap(), Some(id));
+        // And it reads as what the stream declared it holds.
+        assert_eq!(e.space_mut(id).unwrap().node(&[1]).unwrap().value, Value::UInt(0xaabbccdd));
+    }
+
+    #[test]
+    fn blocks_of_one_stream_open_as_one_document() {
+        let text = b"one line of a vcf\nand another that the writer cut\nand a third\n";
+        let d = Document::new(MemSource(bgzf_of(&[&text[..20], &text[20..41], &text[41..]])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let id = e.open_space(&d, 0, &[1]).unwrap().expect("the stream opens");
+        let space = e.space(id).unwrap();
+        assert_eq!(space.bytes(), text);
+        // Three blocks and the end block, each a member, each unpacked, and
+        // each decoder's own steps kept: a deflate block per member.
+        assert_eq!(space.runs().len(), 4);
+        assert!(space.runs().iter().all(|r| r.packed));
+        let trace = space.trace();
+        trace.check_tiles().unwrap();
+        assert_eq!(trace.members().len(), 4);
+        assert!(trace.blocks().len() >= 3, "{} deflate blocks", trace.blocks().len());
+    }
+
+    #[test]
+    fn a_byte_of_a_joined_document_maps_to_its_parts_own_step() {
+        use crate::codec::StepKind;
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let id = e.open_space(&d, 0, &[STREAM]).unwrap().unwrap();
+        let space = e.space(id).unwrap();
+        // Byte 9 is in the second part, page 1, which is eight bytes into the
+        // file: one stored step over that page's eight bytes, counted from the
+        // page's start.
+        let step = space.map_out(9).unwrap();
+        assert_eq!((step.in_bits.clone(), step.out_bytes.clone(), step.kind), (0..64, 8..16, StepKind::Stored));
+        let run = space.run_at(9).unwrap();
+        assert_eq!((run.run_space, run.run_offset_bits, run.path.as_slice()), (0, 8 * 8, &[PAGES, 1, 0][..]));
+        assert_eq!(e.map_out(id, 9), Some(step));
+        assert_eq!(e.run_at(id, 9), Some(run));
+        // And back: a bit of page 3, the last page of the file, is the first
+        // part; a bit of the header is no part at all.
+        let space = e.space(id).unwrap();
+        assert_eq!(space.map_in(25 * 8).map(|s| (s.in_bits, s.out_bytes)), Some((0..64, 0..8)));
+        assert_eq!(space.map_in(4 * 8), None);
+
+        // A byte of the second BGZF block is a literal of that block's own
+        // deflate, at bits counted from where that deflate starts, which is the
+        // run `part_of` names too.
+        let d = Document::new(MemSource(bgzf_of(&[&[b'x'; 40], b"the second block"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let joined = e.node(&d, &JOINED).unwrap().space;
+        let hit = e.part_of(&d, joined, 45).unwrap().unwrap();
+        let id = e.open_space(&d, 0, &[1]).unwrap().unwrap();
+        let space = e.space(id).unwrap();
+        let run = space.run_at(45).unwrap();
+        assert_eq!((run.run_offset_bits, run.path.clone(), run.packed), (hit.run_offset_bits, hit.path, true));
+        let step = space.map_out(45).unwrap();
+        assert_eq!(step.kind, StepKind::Literal(b'e'));
+        assert!(step.out_bytes.contains(&45));
+        assert!(step.in_bits.end <= run.run_bits, "{:?} is past the {} bits of the block's deflate", step.in_bits, run.run_bits);
+        // The same bit of the file leads back to the same step.
+        let back = space.map_in(run.run_offset_bits + step.in_bits.start).unwrap();
+        assert_eq!(back, step);
+        assert_eq!(space.run_holding(run.run_offset_bits + step.in_bits.start), Some(run));
+        // The end of the first block's deflate reads bits and makes nothing, so
+        // its output is where the second block's starts: the run it was read
+        // from is found by the bit, not by that output.
+        let first = &space.runs()[0];
+        let end = (first.run_offset_bits..first.run_offset_bits + first.run_bits)
+            .find(|&bit| space.map_in(bit).is_some_and(|s| s.kind == StepKind::EndOfBlock))
+            .expect("the first block's deflate ends");
+        assert_eq!(space.map_in(end).unwrap().out_bytes.start, first.out_bytes.end);
+        assert_eq!(space.run_holding(end), Some(first));
+        assert_ne!(space.run_at(first.out_bytes.end), Some(first));
+    }
+
+    #[test]
+    fn a_joined_stream_says_what_cut_it_and_what_measured_its_parts() {
+        use crate::eval::Role;
+        // A paged stream is cut by `total`, a field beside the pages.
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let origins = e.origins(&d, &[STREAM, 0]).unwrap();
+        let total: Vec<_> = origins.iter().filter(|o| o.role == Role::Length).map(|o| (o.label.as_str(), o.path.as_slice())).collect();
+        assert_eq!(total, [("total", &[4][..])], "{origins:?}");
+
+        // A BGZF stream has no total, and each block is measured by its own
+        // trailer: the first block's, named with the block in front.
+        let d = Document::new(MemSource(bgzf_of(&[b"first block", b"and the second"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let origins = e.origins(&d, &JOINED).unwrap();
+        let size = e.child_named(&d, &[0, 0], "original_size").unwrap().unwrap();
+        let measured: Vec<_> = origins.iter().filter(|o| o.role == Role::Length).map(|o| (o.label.as_str(), o.path.clone(), o.value.as_str())).collect();
+        assert_eq!(measured, [("blocks[0].original_size", size, "11")], "{origins:?}");
+        // A plain field is a name and not a formula, so the relations panel
+        // leaves it to the row above.
+        assert!(e.relations(&d, &JOINED).unwrap().iter().all(|r| r.role != Role::Length));
+    }
+
+    #[test]
+    fn a_joined_stream_over_the_cap_is_refused_as_a_document_and_still_reads() {
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        e.spaces.set_whole_cap(19);
+        assert_eq!(e.open_space(&d, 0, &[STREAM]).unwrap(), None);
+        assert_eq!(e.open_refusal(&[STREAM]), Some(crate::codec::Refusal::TooLarge));
+        // Where it is declared, it reads a part at a time as it did, and its
+        // node says nothing of the refusal.
+        assert_eq!(e.node(&d, &[STREAM]).unwrap().refused, None);
+        assert_eq!(e.node(&d, &[STREAM, 0, 1]).unwrap().value, Value::UInt(0xaabbccdd));
+        // At the cap exactly, it opens.
+        let mut e = Evaluator::new(paged(record(), false));
+        e.spaces.set_whole_cap(20);
+        assert!(e.open_space(&d, 0, &[STREAM]).unwrap().is_some());
+        assert_eq!(e.open_refusal(&[STREAM]), None);
+    }
+
+    #[test]
+    fn a_joined_stream_with_a_part_that_will_not_unpack_is_refused_as_a_document() {
+        let d = Document::new(MemSource(bam_in_blocks(|b| b[18] = 0xff)));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        assert_eq!(e.open_space(&d, 0, &[1]).unwrap(), None);
+        assert_eq!(e.open_refusal(&[1]), Some(crate::codec::Refusal::Failed));
     }
 
     #[test]

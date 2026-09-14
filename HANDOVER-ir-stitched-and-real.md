@@ -26,14 +26,22 @@ omitted where parts are measured by inflating them, and that result is not
 cached; HDF4's `first_length` is in memory only, the design's sketch holds.
 Left:
 
-- **HDF4 linked blocks** (`hdf4_real::tdata_values_kept_in_linked_blocks_match_pyhdf`):
-  needs the zero-bit `next` field accepted by `extend_chain_to` and a pyhdf
-  check on `tdata.hdf`.
-- **Tabs under the cap:** `unpack()` returns nothing for a joined stream and
-  the listing hides "Open unpacked" on joined space roots; about 30 lines
-  through `read_stitched`. `map_out` delegation waits on it.
+- Stage 4 done 2026-09-14 (`ac1f83a`..`bb7f637`): HDF4 linked blocks join
+  (all 50 of `tdata.hdf`'s values match pyhdf; an unlimited dimension that
+  grew is counted from the joined length, since the dimension record goes
+  stale), a joined stream under `CAP_BYTES` opens as a tab (`join_whole`,
+  `TraceBuilder::absorb_part`), `map_out`/`map_in` go through a part's own
+  trace with `run_offset_bits`, and relations name what cut and measured the
+  stream (`origin.rs::joined_by`).
+- The inspector's "Unpacked from" heading still shows on a joined tab, which
+  reads wrongly for PDB and HDF4; the inspector's own open button is still
+  only for single compressed runs.
+- An unused HDF4 slot (ref 0) before a used one would stand for bytes never
+  written; the join cannot make zeros, so everything after reads early.
+- The cursor on an HDF4 block's bytes lands on whichever reading placed them
+  first, not on the block's own descriptor (the vdata case already did this),
+  which contradicts `hdf4.rs`'s module doc.
 - A PDB whose stream directory is itself scattered still reads as blocks.
-- `relate.rs` shows no link from `part_len` or `len` to the joined stream.
 - The walk keeps every block's resolved fields in the memo; unmeasured on a
   gigabyte BAM.
 

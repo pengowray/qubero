@@ -21,6 +21,9 @@ fn main() {
     let mut files = Vec::new();
     collect(Path::new(&root), &mut files);
     let (mut read, mut failed) = (0, 0);
+    // How many expressions each file had open inside one another at most,
+    // which is what `DEEPEST_QUESTION` is measured against.
+    let mut deepest: Vec<(usize, String)> = Vec::new();
     // Files under the folder, and the two ways one of them can leave the
     // sweep without having been turned away: it read, or nothing read it.
     let (mut kept, mut read_anyway, mut not_checked) = (0, 0, 0);
@@ -60,6 +63,7 @@ fn main() {
         let mut ev = Evaluator::new(template);
         let mut errors = Vec::new();
         walk(&mut ev, &doc, &[], 0, depth, &mut errors);
+        deepest.push((ev.deepest_question(), format!("{} as {name}", path.display())));
         if meant_to_fail {
             if errors.is_empty() {
                 read_anyway += 1;
@@ -77,6 +81,10 @@ fn main() {
         }
     }
     println!("{read} files read, {failed} with something that does not read");
+    deepest.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    for (n, file) in deepest.iter().take(8) {
+        println!("deepest question {n}: {file}");
+    }
     if kept > 0 {
         let s = if kept == 1 { "" } else { "s" };
         println!("{kept} file{s} in {REFUSED}, {read_anyway} read anyway, {not_checked} not checked");

@@ -335,3 +335,23 @@ Open: the diagram can pick only the root type's rows (needs a core "first
 path whose type is X" query); an instance overlay on the diagram (counts per
 type, the cursor's type lit); `str` + `.to_i` lowering to `TextInt` by
 whole-program use analysis; a parser for the IR text.
+
+### Diagram, later on 2026-09-14
+
+Boxes are drawn once per structure (keyed on the type's name plus its
+`template_text` rendering, so ELF's four class/endian variants stay apart and
+ID3's thirteen TextFrame cases collapse to one; WAV went from 299 boxes to
+69). Arrows are routed by ELK (`elkjs`, EPL-2.0, in a web worker; layered,
+orthogonal, one port per row) with hop-over arcs at every crossing and a
+nudge pass for collinear runs between layers; dagre is gone. A census of the
+open file (`eval/census.rs`, `Editor::diagram_census`) puts a `×n` badge on
+every box and row, mutes what the file lacks, drives the "Only what this file
+has" toggle, and gives every row a first path for double-click. A second
+mode, Strips (`web/src/strips.ts` plans it, `diagramview.ts` draws it), shows
+each type as its fields in file order the way a format spec's syntax figure
+does: repeats as first box, dots, last box; optional fields with a dashed
+outline and their condition underneath; composites expanded in the strip
+below by dashed funnels, each type once. `diagramview.ts` is ~1,300 lines
+holding both renderers and wants splitting into `diagramarrows.ts` and
+`diagramstrips.ts`. No sample in the collection exercises `Ty::When`, so the
+dashed optional outline is proven by unit test and a forced screenshot only.

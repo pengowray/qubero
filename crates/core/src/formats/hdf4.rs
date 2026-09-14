@@ -17,8 +17,9 @@
 //! What is read here is the chain of blocks and every descriptor in it, with
 //! each descriptor's bytes placed where it says and named by its tag and ref,
 //! and then the data itself: a table's rows with its columns named, a
-//! scientific dataset's values in the shape its dimension record gives them
-//! and its labels, units and formats one per dimension, a raster image as rows
+//! scientific dataset's values in the shape its dimension record gives them,
+//! joined back together when the library moved them into linked blocks, and
+//! its labels, units and formats one per dimension, a raster image as rows
 //! of pixels, a palette as colours, and a vgroup's members and attributes as
 //! the places they point at.
 //!
@@ -582,18 +583,14 @@ fn max_and_min() -> T {
 /// those points at this rather than at the object. The first number says which
 /// of the seven ways it is kept, and the two worth reading say where the rest
 /// is: linked blocks name the first of a chain of them, and a compressed
-/// element names the run of compressed bytes and says what compressed it. The
-/// bytes themselves stay bytes either way, under the tag that holds them.
-fn special_element() -> T {
-    let linked = T::structure(
-        "Hdf4LinkedBlocks",
-        vec![
-            ("length", T::i32(Big)),
-            ("block_length", T::i32(Big)),
-            ("number_blocks", T::i32(Big)),
-            ("link_ref", u16be()),
-        ],
-    );
+/// element names the run of compressed bytes and says what compressed it.
+///
+/// Values in linked blocks are joined back into the one run they are and read
+/// as `inner`. The descriptor of a special element has nothing to say what
+/// that run holds, so it passes bytes; a scientific dataset, which knows its
+/// shape and its number type, passes those. A compressed element's bytes stay
+/// bytes under the tag that holds them.
+fn special_element(inner: T) -> T {
     let compressed = T::structure(
         "Hdf4CompressedElement",
         vec![
@@ -638,9 +635,82 @@ fn special_element() -> T {
                     ],
                 ),
             ),
-            ("kept", T::switch(E::field("kind"), vec![(1, linked), (3, compressed)], T::bytes(E::Remaining))),
+            ("kept", T::switch(E::field("kind"), vec![(1, linked_blocks(inner)), (3, compressed)], T::bytes(E::Remaining))),
         ],
     )
+}
+
+/// An object kept in linked blocks: one run of bytes cut into blocks wherever
+/// the writer found room, and joined back here into the run it is.
+///
+/// What the library does when something grows past where it was first written,
+/// which for a scientific dataset is any dataset with an unlimited dimension.
+/// The header says how long the whole run is, how long a block is, and how
+/// many blocks a link table lists, and names the first link table. A link
+/// table is a descriptor tagged 20 like the blocks it lists: the reference
+/// number of the next table, or zero, and then one reference number per block
+/// in the order the run's bytes go. A slot not yet used is zero.
+///
+/// The first block is the object as it was before it grew, so it is as long as
+/// its own descriptor says rather than a block's length. `HLIstaccess` reads it
+/// that way too: `linkinfo_t` has a `first_length`, and the file does not, so
+/// every block's length is read from its descriptor and the run is cut at
+/// `length`. Blocks written past the length, and the unused tail of the last,
+/// fall outside it.
+///
+/// The tables are a chain, and the step from one to the next is a reference
+/// number rather than an offset, so it goes through the index: `next_at` is
+/// where the descriptor named by `next_ref` is, and nought, which ends the
+/// chain, where `next_ref` is zero and names nothing. The tables and the blocks
+/// are the bytes of their own descriptors, so they are read here a second time
+/// and counted there.
+///
+/// A slot left at zero before one in use would stand for bytes never written,
+/// and joining has nothing to put in their place: that slot adds nothing and
+/// every byte after it reads early. No sample leaves one.
+fn linked_blocks(inner: T) -> T {
+    let at_ref = |r: E| look(key(20, r), &["offset"]);
+    let len_ref = |r: E| look(key(20, r), &["length"]);
+    let block_ref = || E::elem("block_refs", E::idx());
+    // An unused slot is placed where it stands and takes nothing, rather than
+    // at an offset of nought, which is the signature.
+    let block = T::switch(
+        block_ref().equals(E::lit(0)),
+        vec![(1, T::bytes(E::lit(0)))],
+        T::at(at_ref(block_ref()), T::bytes(len_ref(block_ref()))),
+    );
+    let blocks = || E::field("number_blocks").at_least(E::lit(0));
+    let table = T::structure(
+        "Hdf4LinkTable",
+        vec![
+            ("next_ref", u16be()),
+            ("block_refs", T::array(u16be(), blocks())),
+            ("next_at", T::computed(at_ref(E::field("next_ref")))),
+            ("blocks", T::array(block, blocks())),
+        ],
+    )
+    .machinery(&["next_at"]);
+    T::structure(
+        "Hdf4LinkedBlocks",
+        vec![
+            ("length", T::i32(Big)),
+            ("block_length", T::i32(Big)),
+            ("number_blocks", T::i32(Big)),
+            ("link_ref", u16be()),
+            ("tables", T::chain(at_ref(E::field("link_ref")), &["next_at"], Anchor::File, table)),
+            (
+                "values",
+                T::stitched(
+                    vec![Step::field("tables"), Step::each(), Step::field("blocks"), Step::each()],
+                    None,
+                    Some(E::field("length").at_least(E::lit(0))),
+                    inner,
+                ),
+            ),
+        ],
+    )
+    .machinery(&["tables"])
+    .field_aside("tables")
 }
 
 /// The label, unit and format records of a scientific dataset: one string for
@@ -921,8 +991,17 @@ fn column_value() -> T {
 /// The first dimension is the slowest to change. Past four dimensions the
 /// values stay bytes: the nesting is written out a rank at a time, and no
 /// expression can say how deep to go.
+///
+/// A dataset that grew, which is any with an unlimited dimension, has its
+/// values in linked blocks. The group still names them as tag 702, and the
+/// file holds no 702 with that reference number, only its special twin
+/// 0x4000 higher, pointing at the header that says where the blocks are. So
+/// the values are looked for under the plain tag and then under the twin, the
+/// way the library looks, and read through the header when that is where they
+/// are.
 fn scientific_data_group() -> T {
     let member = |t: i128| key(t, E::tagged("members", &["tag"], t, &["ref"]));
+    let special = || key(0x4000 + 702, E::tagged("members", &["tag"], 702, &["ref"]));
     // The number type is named by the dimension record rather than by the
     // group: a file written by the old interface lists it among the members
     // and one written by the SD interface gives it a reference number of its
@@ -932,15 +1011,34 @@ fn scientific_data_group() -> T {
     // The last dimension is wrapped first, so it ends up innermost and the
     // first dimension outermost, which is the order the values are written
     // in: the last index is the one that changes from one value to the next.
-    let cases: Vec<(i128, T)> = (1..=4i128)
-        .map(|rank| {
-            let mut shape = of_the_number_type();
-            for i in (0..rank).rev() {
-                shape = T::array(shape, dim(i));
-            }
-            (rank, shape)
-        })
-        .collect();
+    //
+    // A dataset that grew is counted along its first dimension by what it
+    // holds rather than by its dimension record. The record is written when
+    // the dataset is made, and growing an unlimited dimension does not write
+    // it again: two of `tdata.hdf`'s three datasets say four records and hold
+    // five, and five is what pyhdf reads and what the file's own `rec`
+    // dimension says. So there the first dimension is as many records as the
+    // joined values have room for, each one value wide times every other
+    // dimension.
+    let cases = |grown: bool| -> Vec<(i128, T)> {
+        (1..=4i128)
+            .map(|rank| {
+                let mut shape = of_the_number_type();
+                for i in (0..rank).rev() {
+                    let count = if grown && i == 0 {
+                        let width = E::within(&["number_type", "width"]).div(E::lit(8)).at_least(E::lit(1));
+                        let record = (1..rank).fold(width, |n, j| n.mul(dim(j)));
+                        E::Remaining.div(record.at_least(E::lit(1)))
+                    } else {
+                        dim(i)
+                    };
+                    shape = T::array(shape, count);
+                }
+                (rank, shape)
+            })
+            .collect()
+    };
+    let shape = |grown: bool| T::switch(E::within(&["dimensions", "rank"]), cases(grown), T::bytes(E::Remaining));
     let dataset = T::structure(
         "Hdf4ScientificDataset",
         vec![
@@ -952,9 +1050,10 @@ fn scientific_data_group() -> T {
                     found(nt()),
                     vec![(
                         1,
-                        record_at(
-                            member(702),
-                            T::switch(E::within(&["dimensions", "rank"]), cases, T::bytes(E::Remaining)),
+                        T::switch(
+                            found(member(702)),
+                            vec![(1, record_at(member(702), shape(false)))],
+                            record_at(special(), special_element(shape(true))),
                         ),
                     )],
                     T::bytes(E::lit(0)),
@@ -976,7 +1075,7 @@ fn scientific_data_group() -> T {
             (
                 "dataset",
                 T::switch(
-                    found(member(701)).mul(found(member(702))),
+                    found(member(701)).mul(found(member(702)).or(found(special()))),
                     vec![(1, dataset)],
                     T::bytes(E::lit(0)),
                 ),
@@ -1108,7 +1207,7 @@ fn contents() -> T {
         // Anything with 0x4000 added is a tag naming an object kept somewhere
         // other than in one run of bytes, and what the descriptor points at is
         // the header that says where.
-        T::switch(E::field("tag").bit(14), vec![(1, special_element())], T::bytes(E::Remaining)),
+        T::switch(E::field("tag").bit(14), vec![(1, special_element(T::bytes(E::Remaining)))], T::bytes(E::Remaining)),
     )
 }
 
@@ -1741,6 +1840,73 @@ mod tests {
         let special_at = read(&[3, 2, 2, 5, 2]).value.as_int();
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 2]).value.as_int(), special_at);
         assert_eq!(read(&[3, 0, 2, 3, 4, 0, 3, 2, 3]).value, Value::Int(linked().len() as i128));
+    }
+
+    /// A run kept in three linked blocks across two link tables, written to the
+    /// file in none of the orders it goes in: the tables are a chain whose
+    /// next is a reference number looked up in the index, the blocks are
+    /// joined in the order the tables list them, and the run is cut at the
+    /// length the header gives, short of the last block's end.
+    #[test]
+    fn values_in_linked_blocks_are_joined_across_every_link_table() {
+        let (a, b, c) = (b"first ".to_vec(), b"second".to_vec(), b" third and unused".to_vec());
+        let mut header = be16(1); // linked blocks
+        header.extend(be32(18)); // eighteen bytes of run
+        header.extend(be32(6)); // in blocks of six
+        header.extend(be32(2)); // two slots a table
+        header.extend(be16(6)); // the first table
+        let mut first_table = be16(8); // the next table
+        first_table.extend(be16(9)); // a
+        first_table.extend(be16(7)); // b
+        let mut second_table = be16(0); // no table after it
+        second_table.extend(be16(10)); // c
+        second_table.extend(be16(0)); // and a slot not used
+        let items: [(u16, u16, &Vec<u8>); 6] = [
+            (0x4000 + 702, 5, &header),
+            (20, 6, &first_table),
+            (20, 7, &b),
+            (20, 8, &second_table),
+            (20, 10, &c),
+            (20, 9, &a),
+        ];
+        let mut file = MAGIC.to_vec();
+        file.extend(be16(items.len() as i16));
+        file.extend(be32(0));
+        let mut at = (file.len() + 12 * items.len()) as u32;
+        let mut data = Vec::new();
+        for (tag, r, payload) in items {
+            file.extend(tag.to_be_bytes());
+            file.extend(r.to_be_bytes());
+            file.extend(be32(at));
+            file.extend(be32(payload.len() as u32));
+            at += payload.len() as u32;
+            data.extend_from_slice(payload);
+        }
+        file.extend_from_slice(&data);
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(hdf4());
+        let linked = [3, 0, 2, 0, 4, 0, 1];
+        assert_eq!(e.node(&d, &linked).unwrap().type_name, "Hdf4LinkedBlocks");
+        assert_eq!(e.node(&d, &[&linked[..], &[4]].concat()).unwrap().child_count, 2, "two tables, the second found by reference");
+        let values = [&linked[..], &[5, 0]].concat();
+        let node = e.node(&d, &values).unwrap();
+        assert!(node.joined);
+        assert_eq!(e.field_bytes(&d, &values, 64).unwrap().0, b"first second third");
+        // Three parts: the unused slot is past the cut, and goes with it.
+        let hit = e.part_of(&d, node.space, 12).unwrap().unwrap();
+        assert_eq!((hit.index, hit.parts, hit.label.as_str()), (2, 3, "tables[1].blocks[0]"));
+        // And the run says what cut it, as a formula and as the field.
+        let cut: Vec<_> = e
+            .relations(&d, &values)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.role == crate::eval::Role::Length)
+            .map(|r| (r.written, r.substituted, r.result))
+            .collect();
+        assert_eq!(cut.len(), 1, "{cut:?}");
+        assert!(cut[0].0.contains("length") && cut[0].1.contains("18") && cut[0].2 == "18", "{cut:?}");
+        let length = e.origins(&d, &values).unwrap().into_iter().find(|o| o.role == crate::eval::Role::Length).unwrap();
+        assert_eq!((length.label.as_str(), length.path), ("length", [&linked[..], &[0]].concat()));
     }
 
     /// The index is every block's twelve bytes read a second way, as one list,

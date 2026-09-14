@@ -5604,3 +5604,135 @@ summary.kp-group-heading:hover {
 .dv-row.is-unused {
   opacity: 0.55;
 }
+
+/* ---- diagram: strips ---- */
+/* The other picture: a type is a row of boxes, its fields left to right in the
+   order the file writes them, and what a field holds is drawn on the row below
+   and joined to it by a dashed funnel. The model is the JPEG standard's own
+   figure B.2, which is how a specification has drawn a format for forty years. */
+.dv-mode {
+  font: 12px var(--sans);
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.dv-strip {
+  position: absolute;
+  /* As wide as its boxes, not as wide as whatever room is left: an absolutely
+     positioned block shrinks to fit the space available, and the space
+     available is the stage's width from the layout before this one. */
+  width: max-content;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.dv-strip-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 3px;
+  font: 600 12px var(--sans);
+}
+.dv-strip-row {
+  display: flex;
+  align-items: stretch;
+}
+/* One field. Square corners and a shared border, so a strip reads as one run
+   of bytes divided up rather than as a row of separate things. */
+.dv-sbox {
+  min-width: 46px;
+  max-width: 150px;
+  padding: 3px 7px;
+  border: 1px solid var(--field-color);
+  border-right-width: 0;
+  background: color-mix(in srgb, var(--field-color) 5%, var(--panel));
+  overflow: hidden;
+}
+.dv-strip-row > .dv-sbox:last-child {
+  border-right-width: 1px;
+}
+/* A field that may not be there at all. Dashed all round, which is the one
+   thing on the page that means "sometimes". */
+.dv-sbox.is-optional {
+  border-style: dashed;
+  border-right-width: 1px;
+  margin-right: -1px;
+}
+.dv-sbox.is-pickable {
+  cursor: pointer;
+}
+.dv-sbox.is-pickable:hover {
+  background: color-mix(in srgb, var(--field-color) 16%, var(--panel));
+}
+.dv-sname {
+  color: color-mix(in srgb, var(--field-color) 84%, var(--fg));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dv-snote,
+.dv-ssize {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The mark on a field read at an address rather than where it is written. */
+.dv-at {
+  margin-left: 4px;
+  color: var(--accent);
+  font-weight: 600;
+}
+/* The cases of a choice, listed inside its box. */
+.dv-scases {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px dotted var(--line);
+  font-size: 9px;
+  color: var(--muted);
+}
+.dv-scases > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The stretch between the first of a run and the last. */
+.dv-band {
+  display: flex;
+  align-items: center;
+  min-width: 42px;
+  padding: 0 6px;
+  border-top: 1px dotted var(--muted);
+  border-bottom: 1px dotted var(--muted);
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+.dv-sbox.is-more {
+  display: flex;
+  align-items: center;
+  border-style: dotted;
+  color: var(--muted);
+  font-style: italic;
+}
+/* The joins. Dashed and never with an arrowhead: an arrow would claim a
+   direction, and what these say is only "this is what is in there". */
+.dv-funnel path {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.8;
+}
+.dv-funnel.is-reference path {
+  stroke: var(--accent);
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
+.dv-strip.is-unused {
+  opacity: 0.45;
+}
+.dv-sbox.is-unused {
+  opacity: 0.55;
+}

@@ -36,6 +36,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S7 stage 4: HDF4 linked blocks joined (all 50 of `tdata.hdf`'s values match pyhdf), joined streams open as tabs under the cap, `map_out` through each part's own trace, and relations naming what cut and measured a joined stream. | ac1f83a, c15a455, 1bdc0d9, bb7f637 |
+| Engine: expression recursion refused past 88 levels instead of overflowing the stack; `ComputedText` cached on its node; a run of fixed-shape records counted once and multiplied in the kind totals (a 1M-point simply packed GRIB field: 601 goes and 14 s down to 1 go and under a millisecond). | 71634ab, 722f9bb, 849bea2 |
 | ADIOS2 BP3, BP4 and BP5: new templates for BP3 files and every file of a BP4 or BP5 directory, down to BP5's FFS records and schema fields. Matches adios2 2.12.1 on a three-version dataset. | a138f85, 8252840 |
 | BGZF files named by what they hold: `bgzf_contents` unpacks up to 16 KiB of block 0 and tells BAM, CSI, VCF, BED, FASTA or text, and the toolbar reads e.g. `BAM alignments · compressed with BGZF` (it showed file(1)'s BGZF sentence before, which outranked the template label). | 4963ee3, 9d48cc0 |
 | MATLAB 7.3 files get the HDF5 contents list and B-trees tab, keyed on `h5ad::holds_hdf5` (the same search the walk uses, now reading no list contents to answer no); level 5 files get neither. `BTREES.notInListing` no longer blames a user block. | 656fd35, 5039f59, c53c702 |
@@ -338,9 +340,8 @@ with their members, and special elements (linked blocks, compressed) all read
 now, and references are found across every descriptor block (see Closed).
 Seven samples, cross-checked with pyhdf. Left:
 
-- Compressed rasters name their compression and stay bytes. `tdata.hdf`'s
-  three datasets keep their values in linked blocks, which are placed but
-  not joined into one run (the stitched-space gap).
+- Compressed rasters name their compression and stay bytes. Linked blocks
+  join (S7 stage 4).
 - No HDF-EOS2 granule: hdfeos.org's zoo now needs an Earthdata login.
 - The root's `tables` and `index` are hidden machinery rows; how the web
   listing shows them is unchecked. The index table is placed with
@@ -562,20 +563,28 @@ no value differs from ecCodes 2.48. Left:
   move to `bufr_panel.rs`. `Bits` is copied in `grib_values.rs` and
   `bufr_data.rs` and would serve both from a `crate::bits` module.
 
-### Engine: recursion the stack guard does not see
+### Engine: recursion depth (fixed 2026-09-14)
 
-Two agents hit it on 2026-09-14. `eval/go.rs` guards stack depth when sizing
-a type, but not in recursion through `Expr::Tagged`, `Expr::Placer` and chains
-of computed fields. TDMS's first design chained "same as before" lookups
-segment to segment and overflowed the real stack at 80 chained segments in a
-**release** build; Arrow needs about 2 MB of stack in debug to read one late
-buffer from a cold start. Tests run with the 64 MB stack in
-`.cargo/config.toml`, so they would not catch it, and a wasm build that
-overflows traps rather than failing a read. A depth guard on expression and
-computed-value evaluation, turning an overflow into an `EvalError`, is the
-fix. Also: `ComputedText` is not cached, so a long chain of them re-evaluates
-(TDMS changed-list chains over 3,000 segments ran past ten minutes before
-they were cut to one link).
+Evaluation now refuses a read whose expressions nest more than 88 deep
+instead of overflowing the stack (`go.rs`; the wrappers round `eval_expr_at`,
+`eval_real_at` and `text_at` count). 88 is the 640 KiB stack budget over the
+costliest shape's 7.3 KiB per expression in a release build: 1.7 times the
+deepest real reading in the collection (52, `arrow/more-types.arrow`) and 62%
+of where a 1 MiB release stack overflows. `ComputedText` values are cached on
+their node like numbers. See Closed. Left:
+
+- **A refused cold-start read cannot be retried into success**: nothing on
+  the way down is kept. A wide Arrow file opened at its last buffer could hit
+  it. On a refusal, the caller could walk the list in order and ask again.
+- A hop costs 5 to 7 KiB in release, much of it building a full `NodeInfo`
+  to read one value inside an expression; a value-only read would raise the
+  ceiling and speed chains up.
+- Debug frames are about 7 times larger, so a debug build on a 1 MiB stack
+  overflows before 88 (tests run on the stack `.cargo/config.toml` sets).
+- The wasm build gets rust-lld's default 1 MiB stack; the limit was measured
+  natively, not in the browser.
+- `exact_stride` does not look through a named struct, so a run of a named
+  fixed-shape record is still walked element by element.
 
 ### NI TDMS (built 2026-09-14)
 

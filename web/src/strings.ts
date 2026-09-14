@@ -428,6 +428,20 @@ export const JOINED = {
    *  at the top of the panel. See `DECODED_PLUS_TITLE` and `DECODED_INSIDE`. */
   plusTitleStream: "Offset within the joined stream",
   inside: "in the joined stream",
+  /** On the listing row of a joined stream short enough to hold whole, where
+   *  `UNPACKED.open` sits for a compressed run. The noun the addresses inside
+   *  already use; a PDB page and an HDF4 block were never packed. */
+  open: "Open joined stream",
+  /** Names the tab a joined stream opens in. The same shape as
+   *  `UNPACKED.tabTitle`. */
+  tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
+  /**
+   * Typing in that tab, when every run it joins is stored as it sits in the
+   * file. The tab is what refuses: a field lying wholly in one of those runs
+   * can be edited in the file's own tab. A stream with any unpacked run gets
+   * `UNPACKED.readOnly` instead, since those bytes are in no place to edit.
+   */
+  readOnly: (file: string): string => `This tab is read-only. Edit in ${file} instead`,
 } as const;
 
 export const UNPACKED = {
@@ -2826,6 +2840,30 @@ export const DIAGRAM = {
   /** A field the file has, but inside an unpacked stream, whose offsets are not
    *  the file's, so the hex cursor cannot be put on it. */
   inStream: "This one is inside an unpacked stream, which the hex view cannot go to",
+  /**
+   * The two pictures the view can draw.
+   *
+   * Named for what they look like rather than for what they are for, because a
+   * reader picking between two drawings is picking a drawing. Neither is a
+   * summary of the other: one says what decides what, the other what comes
+   * after what.
+   */
+  modeLabel: "How to draw it",
+  modeTitle: "Boxes joined by arrows, or each type as a strip of its fields in file order",
+  modeArrows: "Boxes and arrows",
+  modeStrips: "Strips",
+  /** The end of a case list too long to draw, inside a choice's box. Cases
+   *  rather than fields: what is folded away here is the rest of the list of
+   *  what the choice can pick, and a reader counting fields would go looking
+   *  for them in the strip. */
+  moreCases: (n: number): string => `… ${n} more case${n === 1 ? "" : "s"}`,
+  /** Under the name of the last box of a run, where the first box carries the
+   *  count. */
+  runLast: "last",
+  /** Under the name of a field that may not be there, with what decides it. */
+  when: (cond: string): string => `when ${cond}`,
+  /** On the mark beside a field whose contents are somewhere else. */
+  placedTitle: "Read at an address this field points to, not where it is written",
   fit: "Fit",
   fitTitle: "Fit the whole diagram in the window",
   /** What a click on a field row does. Only the format's first type can be

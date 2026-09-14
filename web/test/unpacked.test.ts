@@ -11,8 +11,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { UNPACKED, unpackedOrigin, unpackedOriginRow } from "../src/strings.ts";
-import { markFromRange, markFromStep, type Step } from "../src/unpackedlink.ts";
+import { JOINED, UNPACKED, unpackedOrigin, unpackedOriginRow } from "../src/strings.ts";
+import { markFromRange, markFromStep, stepBits, type Step } from "../src/unpackedlink.ts";
 
 /** Bit 5 of byte 0x1a3 to bit 2 of byte 0x1a4: the handover's own example. */
 const MATCH: Step = {
@@ -106,9 +106,24 @@ test("the read-only line says what cannot be done and why it is not yet", () => 
   assert.equal(UNPACKED.readOnly, "Unpacked data cannot be edited yet");
 });
 
+test("a joined stream's tab is named for the join, and sends an edit to the file", () => {
+  assert.equal(JOINED.tabTitle("values", "tdata.hdf"), "values joined from tdata.hdf");
+  assert.equal(JOINED.readOnly("tdata.hdf"), "This tab is read-only. Edit in tdata.hdf instead");
+});
+
 test("a step becomes the bits to mark in the compressed tab", () => {
   // Bits, not bytes: a deflate literal is a few bits in the middle of one.
   assert.deepEqual(markFromStep(MATCH), { startBit: 0x1a3 * 8 + 5, endBit: 0x1a4 * 8 + 2 });
+});
+
+test("a step of a joined stream marks its own part's run where the run is in the file", () => {
+  // The step's bits count from the start of the BGZF block's deflate, which
+  // is 0x4d2 bytes into the file.
+  const joined: Step = { ...MATCH, run_offset_bits: 0x4d2 * 8 };
+  assert.deepEqual(markFromStep(joined), { startBit: (0x4d2 + 0x1a3) * 8 + 5, endBit: (0x4d2 + 0x1a4) * 8 + 2 });
+  assert.deepEqual(stepBits(joined), { start: (0x4d2 + 0x1a3) * 8 + 5, end: (0x4d2 + 0x1a4) * 8 + 2 });
+  // And a step with no run of its own is as it came.
+  assert.deepEqual(stepBits(MATCH), { start: MATCH.in_start, end: MATCH.in_end });
 });
 
 test("a range becomes the bytes to mark in the unpacked tab", () => {

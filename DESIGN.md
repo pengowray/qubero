@@ -2708,12 +2708,64 @@ runs from one run into the next is refused naming both (`split across
 pages[0] and pages[1]`), since the two are apart in the file and a write is one
 stretch. A field in an unpacked run gets the refusal any unpacked field does.
 
-Not yet: a joined stream opens no tab of its own, so `map_out` has nothing to
-delegate to. HDF4 linked blocks fit the shape and are not written. HDF4's
-`linkinfo_t` does carry a `first_length`, but the file does not: `HLIstaccess`
-reads the 16-byte header as length, block length, block count and link ref,
-and takes the first block's length from that block's own descriptor. A
-template that reads every block's length from its descriptor already has it.
+HDF4 linked blocks are the fourth, and the only one whose step from one link
+table to the next is not an offset. A link table is a descriptor like the
+blocks it lists, and names the next table by reference number, so the tables
+are a chain whose `next` is a field of no bits, `next_at`, that looks the
+reference number up in the index and comes to nought when it is zero. The
+chain already read its `next` through the value rather than the bytes and
+skipped the all-ones test for a field of no width, so nothing in the evaluator
+changed. `values` joins every table's blocks and cuts them at the header's
+`length`. HDF4's `linkinfo_t` does carry a `first_length`, but the file does
+not: `HLIstaccess` reads the 16-byte header as length, block length, block
+count and link ref, and takes the first block's length from that block's own
+descriptor, which is what the template does for every block.
+
+A scientific dataset reads its values through this when the group's tag 702
+has no descriptor and its special twin does. Joining the blocks found a second
+thing wrong: a dataset that grew along its unlimited dimension keeps the
+dimension record it was made with, so two of `tdata.hdf`'s three datasets say
+four records and hold five. pyhdf reads five. A dataset in linked blocks is
+counted along its first dimension by what the joined values have room for,
+and every value of all three matches pyhdf.
+
+**A document of its own.** A joined stream no longer than an unpacked run may
+be (`CAP_BYTES`, 64 MiB) opens in a tab the way one does. `open_space` holds it
+whole: every stored part read, every packed part unpacked again with its trace,
+since the cache the listing reads through keeps bytes and not traces. The
+traces are laid end to end, one member a part. A trace's steps go forward and
+a joined stream's runs are anywhere, so the steps count bits along an axis of
+the trace's own, each part's run after the one before, and `Space::runs` says
+where each run really is. Past the cap the tab is refused as `TooLarge`, as an
+unpacked run's is, but the stream still reads a part at a time where it is
+declared, so the refusal is not put on its node: `Evaluator::open_refusal`
+says it. The listing offers "Open joined stream" on a joined stream's root when
+it is short enough. Typing in the tab is refused, and when every run is stored
+the refusal sends the reader to the file's own tab, where a field lying in one
+run is editable.
+
+A byte of that tab maps back through its part. `map_out` finds the step in the
+joined trace and gives it back with its bits counted from the start of its
+part's run, and `Space::run_at` says where the run is, so a byte of what BGZF
+block 3 unpacks to names bits of block 3's deflate and the web adds the run's
+place (`run_offset_bits` on the step) before it marks the file tab. `map_in`
+goes the other way from a bit of the space the stream was declared in: the
+part whose run holds the bit, then its step. The run is found by the bit and
+not by the step's output, since the end of a deflate block reads bits and
+makes nothing, and its output is where the next block's starts. A run that is
+not in the file, which no format here has, maps to no mark.
+
+**What measured it.** The panel about the one thing a joined stream holds says
+what its length came from, the same two the diagram draws as the stream's
+lengths. The total that cut it is worked out where the stream is declared, so
+a PDB stream's is its entry in `stream_sizes` and an HDF4 run's is its header's
+`length`. What a part
+comes to is worked out in the structure its run is a field of, and the first
+part stands for the rest: a BAM stream's Length row names
+`blocks[0].original_size`, with the block in front, since a bare
+`original_size` beside sixteen thousand blocks names none of them. Godot's
+`block_size` is one field beside the stream for every block, and is named as
+it is.
 
 ## Roadmap (not yet built)
 
@@ -2737,8 +2789,9 @@ built, and see "A stream that ends at something longer than a byte".
 
 A program database's stream directory, when its blocks are not one run, is
 still its blocks and nothing more; its streams are joined (see "One stream kept
-in several runs"). An HDF4 element in linked blocks can be joined the same
-way and is not yet.
+in several runs"). An HDF4 link table with a zero slot before a slot in use
+stands for bytes never written, and joining has nothing to put there, so the
+values after it read early.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 

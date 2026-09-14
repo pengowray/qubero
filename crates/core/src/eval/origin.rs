@@ -161,6 +161,7 @@ impl Evaluator {
         self.resolve(doc, path)?;
         self.placed_by(doc, path, out)?;
         self.placed_from(doc, path, out)?;
+        self.joined_by(doc, path, out)?;
         // Where the name on the row came from, when the file rather than the
         // template says what the field is called.
         if let Some(from) = self.name_from(path) {
@@ -326,6 +327,44 @@ impl Evaluator {
         let label = format!("{name}[{}].{}", idx - 1, next.join("."));
         let o = self.origin(doc, out.values, Role::Position, label, p);
         out.push(o);
+        Ok(())
+    }
+
+    /// What measured the one thing a joined stream holds: the total that cut
+    /// it, worked out where the stream is declared, and what a part was
+    /// claimed to come to, worked out in the structure the part's run is a
+    /// field of. The diagram draws the same two as lengths of the stream.
+    ///
+    /// The first part stands for every part, which are all measured the same
+    /// way, each in its own structure. A field named there is written with that
+    /// structure in front of it, `blocks[0].original_size`, since a bare
+    /// `original_size` beside a stream of sixteen thousand blocks names none
+    /// of them. A field the name reaches outside the structure, as Godot's
+    /// `block_size` is one field beside the stream for every block, is written
+    /// as it is.
+    fn joined_by<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Sink) -> R<()> {
+        let Some((_, parent)) = path.split_last() else { return Ok(()) };
+        let Some(Ty::Stitched { from, part_len, len, .. }) = self.memo.get(parent).map(|r| r.ty.clone()) else {
+            return Ok(());
+        };
+        if let Some(len) = &len {
+            self.from_expr(doc, parent, len, Role::Length, out)?;
+        }
+        let Some(part_len) = &part_len else { return Ok(()) };
+        let frame = match self.first_part_frame(doc, parent) {
+            Ok(Some(frame)) => frame,
+            Err(e) if e.interrupted() => return Err(e),
+            _ => return Ok(()),
+        };
+        let mut named = Sink::told(out.values);
+        self.from_expr(doc, &frame.end, part_len, Role::Length, &mut named)?;
+        let holder = self.walk_label(doc, parent, &from, &frame.holder)?;
+        for mut o in named.out {
+            if !holder.is_empty() && o.path.starts_with(&frame.holder) && !parent.starts_with(&frame.holder) {
+                o.label = format!("{holder}.{}", o.label);
+            }
+            out.push(o);
+        }
         Ok(())
     }
 
