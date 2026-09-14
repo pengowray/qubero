@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| FITS tiles: `fits_tile.rs` split (Rice and quantizing in modules of their own, tests beside them); PLIO_1 (`pl_l2pi`, all 8 instructions) and HCOMPRESS_1 (quadtree bit planes, `undigitize`, inverse H-transform with SMOOTH, 128-bit arithmetic narrowed with a check) decode as traced steps; fallback columns tested with f64, i16 and i32. Every tile of 11 images in `fits/plio.fits`, `hcompress.fits`, `fallback.fits` matches astropy 8.0.1 bit for bit. | e23c698..35d39ea |
 | Engine: a read refused at the depth limit asks again, keeping every 16th question on the way down, so the 12 of `more-types.arrow`'s 22 nodes that failed cold now read; `value_of` replaces building a `NodeInfo` inside expressions (hdf5 spans 2,956 to 2,559 ms, parquet tree 375 to 328 ms); `exact_stride` looks through named types with a `same_shape` check (whisper ggml 1,449 to 41 kind-totals goes, totals now match a full walk on all 744 samples, 11 were wrong before); stack tests on 640 KiB release / 4 MiB debug threads. | c714426..681442a |
 | Parquet on gathers: each row group is a sized `RowGroup` region over its column chunks, each `ColumnChunk` placed by an inner gather that starts at the footer record that placed its row group (`Step::Placer`), pages under it as before. Coverage identical on all 16 samples and a 3-row-group pyarrow file; an overwrite of a column chunk entry agrees with a fresh read. `wip-parquet-gather-region` is obsolete. | af58397..a92a7f5 |
 | JPEG 2000: a new `jpeg2000` template for raw codestreams (every Part 1 main and tile-part header segment, tile-parts sized by Psot including Psot 0) and JP2 boxes (XLBox, LBox 0, `jp2h`, `pclr`, `cmap`, `cdef`, `res `); GRIB2 5.40 section 7 reads as one, SIZ checked against the grid on `grib/regular_ll_jpeg.grib2`. Seven samples compared segment by segment with glymur. Four are ITU-T conformance files whose notice allows JPEG 2000 standard uses only (`jpeg2000/README.md`). | b50f472..d894c81 |
@@ -401,10 +402,11 @@ Reads further than any other scientific format. Left:
 Scaling, the column cap, axes and `CONTINUE` cards are closed (see Closed).
 Seven samples. Left:
 
-- Tile-compressed images decode (see Closed); PLIO_1 and HCOMPRESS_1 are
-  named and not decoded. The gzip fallback column is tested with f32 only.
-- `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
-  code would each make a module.
+- Tile-compressed images decode with every codec (see Closed). PLIO and
+  HCOMPRESS steps report 0 bytes out, since they make pixels, not bytes, so
+  the panel shows no unpacked size for them. Integer tiles in the fallback
+  columns were placed there by the sample script; astropy reads them back,
+  CFITSIO is unchecked.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
   its piece, and nothing in the IR reads text out of several runs at once.
   A text-joining `Ty` is the missing piece.
