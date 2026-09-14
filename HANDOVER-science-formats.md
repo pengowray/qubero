@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| Edits: a `Chain` or `Gather` element whose position was read from bytes at or after an overwrite is dropped with what follows it; everything placed from before stays. A finished gather whose reads all end before the edit keeps its walk, which it used to throw away on any edit (`comp.fits` gather re-read 157 ms to 14 ms). Checked against a fresh read of the edited bytes on HDF4, Arrow and FITS samples. | 562505a..f790d9d |
 | Codecs: `Codec::Lz4Frame` (linked and independent blocks, checksums traced not verified) opens Arrow's LZ4 bodies, all 46 buffers of `columns-lz4.arrow` byte-identical to the uncompressed file; `Codec::CdfHuffman` and `Codec::CdfAhuff` unpack whole-file compression types 2 and 3, matching NASA's `cdfhuff.c` byte for byte (samples `cdf/d103a2x.cdf`, `d103a2x-ahuff.cdf`); one `Bits` reader in both bit orders replaces the six private copies. | 916db8d..1b1b7dc |
 | S9. A type built from a schema the file supplies: `Ty::Schema`, `Step::Stream` and `Step::Deep`, a builder over lazily read descriptions with a cache and edit handling. ROOT objects are built from `StreamerInfo` (classes match the side reader on all 8 samples), baskets are placed through lz4, lzma and zstd (Zmumu 20 per codec, sample-6.20.04 411), and 310 baskets read as typed values matching `read_basket`. DESIGN.md "A type the file describes". | 9322815..b8205b9 |
 | Hex view gaps over placed data: the placement index skipped anything behind a `Ty::Match` (every ROOT key, so RNTuple `staff` named 768 of 25,318 bytes, now 25,113), stopped at the first child past the bit (COFF symbol table), asked only outside the root (AppleDouble, netCDF, COFF relocations), and kept one list per stretch (Impulse Tracker, S3M). 26 sample files now name what the tree names; none got worse. The cause was not file order: the index walk already runs to the end. `examples/cover_probe.rs` compares the two. | c7db45b..7304837 |
@@ -132,9 +133,9 @@ The FITS heap reads (see Closed). Left from the design:
 - `memo.rs` `forget_after` assumes a field depends only on what is before it.
   Since B4 it drops what an `At` declared after the edit points at, which
   should cover Parquet's pages under the footer (no Parquet edit test checks
-  it). A child a `Chain` or `Gather` placed is still kept when it and the list
-  end before the edit, though the element or record that placed it may sit
-  after the edit.
+  it). An expression naming an earlier field whose contents an `At` placed
+  after the edit is still treated as read before it (DESIGN.md "What an
+  overwrite keeps").
 - A walk into an unpacked RNTuple envelope needs a step through a `Decoded`'s
   child (S4).
 
