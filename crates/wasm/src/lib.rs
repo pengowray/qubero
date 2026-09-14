@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, Census, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -1060,6 +1060,10 @@ struct DiagramBoxDto {
     /// Where the walk first reached it, for the reader who wants to know how
     /// they would get there.
     path: String,
+    /// What tells this type from every other. `diagram_census` counts the open
+    /// file's nodes by the same key, so a view can say how many of this box the
+    /// file holds.
+    key: String,
     /// "seq" | "instances" | "switch"
     kind: &'static str,
     /// The type this one was written inside, for a box the template gave no
@@ -1104,6 +1108,7 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             .map(|b| DiagramBoxDto {
                 name: b.name,
                 path: b.path,
+                key: b.key,
                 kind: b.kind.as_str(),
                 parent: b.parent,
                 rows: b
@@ -1131,6 +1136,67 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
             })
             .collect(),
         omitted: f64::from(d.omitted),
+    }
+}
+
+/// How many of one diagram box the open file holds, and where the first is.
+#[derive(Serialize)]
+struct BoxCountDto {
+    /// Matches `DiagramBoxDto::key`.
+    key: String,
+    count: f64,
+    /// Child indices from the root, and which reading they are in: 0 is the
+    /// file, anything else an unpacked stream.
+    first_path: Vec<f64>,
+    space: f64,
+}
+
+/// The same for one row of one box.
+#[derive(Serialize)]
+struct RowCountDto {
+    key: String,
+    row: f64,
+    count: f64,
+    first_path: Vec<f64>,
+    space: f64,
+}
+
+/// What the open file holds, against what the format can hold.
+#[derive(Serialize)]
+struct CensusDto {
+    boxes: Vec<BoxCountDto>,
+    rows: Vec<RowCountDto>,
+    /// How many nodes the walk looked at.
+    walked: f64,
+    /// True when the cap stopped it, so every count is a floor.
+    truncated: bool,
+}
+
+fn census_dto(c: Census) -> CensusDto {
+    CensusDto {
+        boxes: c
+            .boxes
+            .into_iter()
+            .map(|b| BoxCountDto {
+                key: b.key,
+                count: b.count as f64,
+                first_path: b.first_path.into_iter().map(|x| x as f64).collect(),
+                space: f64::from(b.space),
+            })
+            .collect(),
+        rows: c
+            .rows
+            .into_iter()
+            .map(|r| RowCountDto {
+                key: r.key,
+                row: r.row as f64,
+                count: r.count as f64,
+                first_path: r.first_path.into_iter().map(|x| x as f64).collect(),
+                space: f64::from(r.space),
+            })
+            .collect(),
+        walked: c.walked as f64,
+        truncated: c.truncated,
     }
 }
 
@@ -3292,6 +3358,24 @@ impl Editor {
         match &sh.eval {
             None => reply::<DiagramDto>(Err(EvalError::Failed("no template".into()))),
             Some(e) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
+        }
+    }
+
+    /// The open file's nodes counted against the diagram's boxes: how many of
+    /// each the file holds, which rows they stood on, and the path to the first
+    /// of each. JSON, in the same reply shape as the rest.
+    ///
+    /// `limit` caps the nodes walked. Breadth-first, so what a cap keeps is the
+    /// top of the file, and the answer says whether it stopped short.
+    pub fn diagram_census(&mut self, space: u32, limit: u32) -> String {
+        self.go(space);
+        let sh = self.sm();
+        match &mut sh.eval {
+            None => reply::<CensusDto>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                reply(e.census(&sh.doc, limit as usize).map(census_dto))
+            }
         }
     }
 
