@@ -22,7 +22,7 @@
 import type { Doc, Span } from "./doc.ts";
 import type { OutlineHeading, Viewport } from "./outline.ts";
 import { CHIP_LINES, GUESS_TEXT, type ChipMeasure } from "./chipfit.ts";
-import { placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
+import { chipCursorBit, placeChips, type Chip, type ChipBlock } from "./chipplan.ts";
 import { ASCII_GLYPHS, glyphOf, HEX, type GlyphSet } from "./hexcell.ts";
 import { HexRows } from "./hexrows.ts";
 import { HexLinks } from "./hexlinks.ts";
@@ -407,6 +407,9 @@ export class HexView {
     chipLine: 22,
     valLine: 18,
   };
+  /** True while a press in the field column is being answered, so a cursor
+   *  move made in answer to it leaves the view where it is. See `inPlace`. */
+  private holding = false;
   /** True while a move is still settling, so `render` puts the work off to the
    *  end of it. Moving the cursor draws the rows, then tells the rest of the
    *  app, which comes straight back with the field to highlight and draws them
@@ -415,8 +418,10 @@ export class HexView {
   private settling = false;
 
   onCursorChange: (c: CursorState) => void = () => {};
-  /** A field picked in the annotation column. */
-  onPickField: (path: readonly number[], throughBit?: number) => void = () => {};
+  /** A field picked in the annotation column. `atBit`, when there is one, is
+   *  where the cursor goes: the bytes beside the chip that was pressed, which
+   *  are not always the field's first. */
+  onPickField: (path: readonly number[], throughBit?: number, atBit?: number) => void = () => {};
   /** A chip marked as holding a file was pressed twice: open those bytes as a
    *  document of their own. The same thing the listing's Open unpacked does,
    *  reached from the bytes rather than from the list of parts. */
@@ -567,10 +572,32 @@ export class HexView {
     this.ledger.setStructural(out);
   }
 
-  /** Pick the field a chip stands for. Held as one function for the life of
-   *  the view, since every chip keeps it. */
-  private readonly pickField = (path: readonly number[], throughBit?: number): void => {
-    this.onPickField(path, throughBit);
+  /**
+   * Answer a press in the field column without moving the view.
+   *
+   * A press there picks what it names and puts the cursor on the bytes beside
+   * it, which are on screen. Bringing the cursor's row wholly on screen, which
+   * every other move does, would still nudge the view when that row is cut by
+   * the top or bottom edge, and the second click of a double click would land
+   * on whatever slid under the pointer instead. A chip that opens its bytes as
+   * a document is opened by that double click.
+   */
+  private inPlace(pick: () => void): void {
+    const was = this.holding;
+    this.holding = true;
+    try {
+      pick();
+    } finally {
+      this.holding = was;
+    }
+  }
+
+  /** Pick the field a chip stands for, with the cursor on the bytes the chip is
+   *  drawn beside. Held as one function for the life of the view, since every
+   *  chip keeps it. */
+  private readonly pickField = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number): void => {
+    const at = chipCursorBit(bits.from, bits.to, this.grid.firstByte * 8);
+    this.inPlace(() => this.onPickField(path, throughBit, at));
   };
 
   /** Pick the element a value cell stands for, and stand on its first bit.
@@ -587,8 +614,10 @@ export class HexView {
    *  sends the cursor to the front of what the path names, which for a packed
    *  block is the block's scale rather than the weight that was clicked. */
   private readonly pickValue = (path: readonly number[], bit: number): void => {
-    this.onPickField(path);
-    this.setBitCursor(bit, { pane: "hex" });
+    this.inPlace(() => {
+      this.onPickField(path);
+      this.setBitCursor(bit, { pane: "hex" });
+    });
   };
 
   /** Go to the first byte of the part a heading names. Held as one function
@@ -880,7 +909,7 @@ export class HexView {
    * event is over either way.
    */
   private settle(): void {
-    this.scrollCursorIntoView();
+    if (!this.holding) this.scrollCursorIntoView();
     this.settling = true;
     try {
       this.onCursorChange(this.cursorState);
@@ -888,7 +917,7 @@ export class HexView {
       this.settling = false;
     }
     this.render();
-    this.revealCursor();
+    if (!this.holding) this.revealCursor();
   }
 
   /** Draw with the cursor on screen, for a change that moved nothing but may

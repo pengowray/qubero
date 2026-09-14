@@ -217,6 +217,10 @@ export type RowChipPlan = {
    *  height is not taken off here: a block that also holds a table of values
    *  is taller than its chips, and only the caller knows by how much. */
   readonly chipHeights: number[];
+  /** The first byte of the row still on screen: on the top row, the first one
+   *  the edge has not scrolled away, and on every other row its first byte.
+   *  What a press on a carried chip puts the cursor on. */
+  readonly firstByte: number;
 };
 
 export type RowChipOpts = {
@@ -319,13 +323,14 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
   }
 
   let pinned: ChipBlock | null = null;
+  let first = o.rowStart;
   if (o.top) {
     // Which of the carried fields reach a byte that is actually on screen.
     // A row the reader has scrolled halfway up has lost the pieces above the
     // edge, and a field whose last byte was in one of them is not continuing
     // on to anything: saying so over bytes it does not cover reads as a field
     // starting where the next one does.
-    const first = firstVisibleByte(
+    first = firstVisibleByte(
       o.rowStart,
       o.segs,
       o.segs.map((_, j) => (o.headHeights ?? [])[j] ?? 0),
@@ -355,7 +360,31 @@ export function planRowChips(o: RowChipOpts): RowChipPlan {
   // block and their lines add to it. The table of values is the caller's to
   // add: only it knows how tall the table came out.
   const extraHeight = chipHeights.reduce((n, h) => n + (o.below ? h : Math.max(0, h - o.rowHeight)), 0);
-  return { blocks, pinned, extraHeight, chipHeights };
+  return { blocks, pinned, extraHeight, chipHeights, firstByte: first };
+}
+
+/**
+ * Where pressing a chip puts the cursor: on the bytes the chip is drawn beside,
+ * which are not always the first bytes of the field it picks.
+ *
+ * `fromBit` and `toBit` are the stretch the chip stands for. Usually that is
+ * the whole field and the chip sits on the row it starts on, so this is the
+ * field's first bit, as it always was. Two chips sit somewhere else:
+ *
+ * - The rest of a structure after its last child, which the core answers as
+ *   a span of its own under the structure's path. In a PNG the padding and
+ *   checksum after the last deflate block are a chip named `data`, eight
+ *   thousand bytes below where `data` starts.
+ * - A chip carried in from above the view, in the strip pinned over the rows.
+ *   Its field started off the top of the screen, and the bytes beside it are
+ *   the first ones on screen, `firstShownBit`.
+ *
+ * The field's first bit was the wrong answer for both: the view scrolled up to
+ * it, and the second click of a double click landed on some other chip.
+ * A chip whose bytes are all above the edge keeps its own first bit.
+ */
+export function chipCursorBit(fromBit: number, toBit: number, firstShownBit: number): number {
+  return fromBit < firstShownBit && toBit > firstShownBit ? firstShownBit : fromBit;
 }
 
 /** How tall one piece of a row is drawn, from what its block holds: beside
@@ -404,9 +433,13 @@ export function valsBeforeChips(first: ChipBlock | undefined, valsEndBit: number
  *  element recycled from one to the other kept the first one's tooltip and
  *  followed its path when pressed. The path is what a chip actually is, and
  *  putting it first leaves the name and the value after a run of digits and
- *  dots that no name starts with. */
+ *  dots that no name starts with.
+ *
+ *  Where the span starts is part of it too: a structure's path names both the
+ *  chip at its front and the chip for what is left after its last child, and
+ *  a press on each puts the cursor on its own bytes. */
 function fieldKey(c: Chip | undefined): string {
-  return c === undefined ? "" : `${c.span.path.join(".")}|`;
+  return c === undefined ? "" : `${c.span.path.join(".")}@${c.span.offset_bits}|`;
 }
 
 /** What a row's chips say, as one string, so they are written again only when
