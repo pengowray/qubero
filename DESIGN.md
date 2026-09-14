@@ -2670,10 +2670,9 @@ children of a gather inside it that covers nothing (branch
 `wip-parquet-gather-region`). This arrangement does not need that, and the
 placement index already ends such a gap at the gather's elements, which
 `a_gather_covering_nothing_inside_a_structure_ends_the_gaps_around_its_elements`
-pins. A page asks
-the entry that placed its column chunk for the codec and the physical type
-with `Expr::Placer`. The offset index, column index and bloom filter stay `At`s
-under that entry, since no row group's region holds them.
+pins. A page asks the entry that placed its column chunk for the codec and the
+physical type with `Expr::Placer`. The offset index, column index and bloom
+filter stay `At`s under that entry, since no row group's region holds them.
 
 What it does not do yet. An edit to a descriptor leaves the arrays where
 they were until the memo forgets them, and the memo forgets forwards
