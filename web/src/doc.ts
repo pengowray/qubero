@@ -877,9 +877,10 @@ export type TemplateDiagram = {
 
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
-  /** Where the node is in the template. Empty for a version 2 node below the
-   *  root, which the template does not place: such a box goes to its bytes and
-   *  is not opened in the Listing, because there is no field there to open. */
+  /** Where the node is in the template. Empty where the template does not
+   *  place a node at the address the walk read it from, which no well-formed
+   *  file does: such a box goes to its bytes and is not opened in the Listing,
+   *  because there is no field there to open. */
   readonly path: readonly number[];
   /** Index into the node list, or -1 for the root. Every node but the root
    *  comes after its parent in the list. */

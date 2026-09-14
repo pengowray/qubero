@@ -1486,29 +1486,35 @@ export const BTREES = {
   /** In the readout of a node with no template path: one the template does
    *  not place at the address the walk read it from, whether it places it
    *  somewhere else or not at all (`hdf5_tree.rs`, `placed`). Every node of
-   *  a well-formed tree has a path. The one real case so far is an HDF5 file
-   *  with a user block, such as a MATLAB 7.3 `.mat` file, where the walk
-   *  ignores the base address; a malformed file can do it too.
+   *  a well-formed tree has a path, and every node of every tree in the sample
+   *  collection is checked to have one, a file behind a user block and a
+   *  MATLAB 7.3 `.mat` file included.
    *
-   *  Fact, reason, consequence, and the consequence stays: the readout comes
+   *  It used to name those two as where it happens, because the walk ignored
+   *  the base address and every file with a user block lost its nodes' paths.
+   *  With that fixed, nothing known is left but a file the template and the
+   *  walk read differently, and the code cannot say which of the two is
+   *  wrong: a malformed file and a gap in the template look the same from
+   *  here. So the reason is the two of them, and neither is called likely.
+   *  "A bug in Qubero" is the phrase the ELF template's missing-field message
+   *  already uses.
+   *
+   *  Fact, consequence, reason, and the consequence stays: the readout comes
    *  up on the first press, so this line is what stops the second one, and a
    *  reader who has just read the hint under the picture is owed the
-   *  contradiction spelled out rather than left to find it.
+   *  contradiction spelled out rather than left to find it. "On this node"
+   *  and not "here", which could be the node or the whole tab, and is the
+   *  hint's own "does nothing on those".
    *
-   *  The reason is "does not show this node at this address" and not "has no
+   *  The fact is "does not show this node at this address" and not "has no
    *  node at this address": `placed` checks the address of the template's
    *  node under the pointer the walk followed, and never whether anything
-   *  else in the Listing sits at the walk's address. It names neither side as
-   *  wrong, because on the user-block file it is the walk that is.
+   *  else in the Listing sits at the walk's address.
    *
-   *  The second sentence lists the files it happens in, in `none`'s shape, so
-   *  a programmer whose file plainly has this node does not take the line for
-   *  a bug in the picture: "user block" is the specification's term and a
-   *  MATLAB 7.3 file is where most people meet one. "In the Listing" and not
-   *  "placed", the template's word: `stripCaption` says "placed by file
-   *  address" of the strip, and one word with two meanings on one screen is
-   *  an ambiguity. */
-  notInListing: "Not in the Listing: the Listing does not show this node at this address, so double-click does nothing here. This happens for a file with a user block, such as a MATLAB 7.3 .mat file, and for a malformed file.",
+   *  "In the Listing" and not "placed", the template's word: `stripCaption`
+   *  says "placed by file address" of the strip, and one word with two
+   *  meanings on one screen is an ambiguity. */
+  notInListing: "Not in the Listing: the Listing does not show this node at this address, so double-click does nothing on this node. Either the file is malformed, or this is a bug in Qubero.",
   /** On a node whose children were not all read, in a tree that shows no key
    *  ranges at all: a version 2 group tree, one indexing something else, and
    *  any tree whose records were not read. `truncated`'s "first and last link
@@ -1536,7 +1542,8 @@ export const BTREES = {
    *  The third sentence comes when `someUnplaced`: the panel writes this line
    *  per tree, from whether any of the tree's nodes has no template path, and
    *  without it the second sentence is a promise that fails on those nodes.
-   *  `notInListing` says which files have them. Which nodes they are is not
+   *  It names no cause, since the tree's line is no place to guess at one;
+   *  `notInListing` gives what can be said. Which nodes they are is not
    *  said, because the hint speaks for the whole tree and cannot point at a
    *  box; the readout says it on the node itself at the first press. "Some"
    *  and not "all but the root": the root's path comes from the tree header
