@@ -819,6 +819,95 @@ fn a_table_that_says_zimage_is_false_is_a_table() {
     assert_eq!(ev.node(&d, &[0, 1, 3, 2]).unwrap().child_count, 3);
 }
 
+/// A compressed image of one tile, four bytes stored as they are, in a table
+/// whose `NAXIS1`, `NAXIS2` and `THEAP` cards say whatever they are given.
+/// Each of `given` takes the place of the card with its keyword, or is added.
+fn one_tile(width: usize, rows: usize, theap: Option<u64>, given: &[String]) -> Vec<u8> {
+    let mut cards = vec![
+        "TFIELDS =                    1".to_string(),
+        "TTYPE1  = 'COMPRESSED_DATA'".into(),
+        "TFORM1  = '1PB     '".into(),
+        "ZIMAGE  =                    T".into(),
+        "ZBITPIX =                    8".into(),
+        "ZNAXIS  =                    1".into(),
+        "ZNAXIS1 =                    4".into(),
+        "ZCMPTYPE= 'NOCOMPRESS'".into(),
+    ];
+    cards.extend(theap.map(|t| format!("THEAP   = {t:20}")));
+    for card in given {
+        match cards.iter_mut().find(|c| c[..8] == card[..8]) {
+            Some(c) => c.clone_from(card),
+            None => cards.push(card.clone()),
+        }
+    }
+    let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+    let mut b = primary();
+    b.extend_from_slice(&table_header(&refs, rows, width, 4));
+    let mut data = Vec::new();
+    data.extend_from_slice(&4i32.to_be_bytes());
+    data.extend_from_slice(&0i32.to_be_bytes());
+    data.extend_from_slice(&[1, 2, 3, 4]);
+    b.extend_from_slice(&padded(data));
+    b
+}
+
+/// A corrupt header can give a row width, a row count or a heap offset that is
+/// more bits than a u64 counts. The tile is refused the way it would be for a
+/// width or an offset merely past the end of the file, instead of overflowing.
+#[test]
+fn a_tile_placed_past_what_bits_can_count_is_refused() {
+    let tile = |width: usize, rows: usize, theap: Option<u64>| {
+        let (d, mut ev) = eval(one_tile(width, rows, theap, &[]));
+        ev.fits_tile(&d, &[0, 1, 3]).map(|t| t.expect("a tile")).map_err(|e| match e {
+            crate::eval::EvalError::Failed(s) => s,
+            other => panic!("not a failure: {other:?}"),
+        })
+    };
+    let fine = tile(8, 1, None).unwrap();
+    assert_eq!((fine.problem, fine.pixels), (None, vec![1.0, 2.0, 3.0, 4.0]));
+    // A row too wide: past a u64 once multiplied by eight, and only once added
+    // to where the rows start.
+    for width in [1 << 61, (1 << 61) - 1] {
+        assert_eq!(tile(width, 1, None).unwrap_err(), "runs past the end of its container", "NAXIS1 = {width}");
+    }
+    // The heap starts after the rows when no THEAP says otherwise, and here the
+    // rows are more bytes than a u64 counts. Then a THEAP past a u64 once in
+    // bits, and once added to where the data starts.
+    let past_heap = |t: crate::formats::fits_tile::Tile| t.problem.is_some_and(|p| p.starts_with("Not unpacked: the descriptor points past the end of the heap"));
+    assert!(past_heap(tile(8, 1 << 62, None).unwrap()));
+    for theap in [i64::MAX as u64, (1 << 61) - 1] {
+        assert!(past_heap(tile(8, 1, Some(theap)).unwrap()), "THEAP = {theap}");
+    }
+}
+
+/// A corrupt header can give axes and tiles whose product, or a data column
+/// whose width, is more than a count holds. The tile still reads, with the
+/// count as the largest there is, instead of overflowing.
+#[test]
+fn a_tile_whose_header_counts_past_a_u64_still_reads() {
+    let tile = |cards: &[String]| {
+        let (d, mut ev) = eval(one_tile(8, 1, None, cards));
+        ev.fits_tile(&d, &[0, 1, 3]).unwrap().expect("a tile")
+    };
+    let square = |tile: u64| -> Vec<String> {
+        let side = 1u64 << 40;
+        let mut cards = vec!["ZNAXIS  =                    2".to_string()];
+        cards.extend([1, 2].map(|n| format!("ZNAXIS{n} = {side:20}")));
+        cards.extend([1, 2].map(|n| format!("ZTILE{n}  = {tile:20}")));
+        cards
+    };
+    // Tiles of one pixel, 2^80 of them.
+    let t = tile(&square(1));
+    assert_eq!((t.tiles, t.pixel_count(), t.problem), (u64::MAX, 1, None));
+    // One tile of 2^80 pixels, which is over the limit.
+    let t = tile(&square(1 << 40));
+    assert_eq!((t.tiles, t.pixel_count()), (1, u64::MAX));
+    assert!(t.problem.unwrap().starts_with("Not unpacked: the tile is 18,446,744,073,709,551,615 pixels, over this viewer's limit"));
+    // A data column 2^64 bytes wide has no cell in the row, so no bytes.
+    let t = tile(&["TFORM1  = '2305843009213693952PB'".to_string()]);
+    assert_eq!(t.problem.as_deref(), Some("Not unpacked: this tile's row has no bytes in COMPRESSED_DATA, GZIP_COMPRESSED_DATA or UNCOMPRESSED_DATA."));
+}
+
 /// `ZNAXIS` is six letters, so its number has two bytes to be written in
 /// rather than three, and the keyword a tenth axis is found by is worked
 /// out that way.

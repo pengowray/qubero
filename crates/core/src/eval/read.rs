@@ -76,7 +76,7 @@ pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
 
 impl Evaluator {
     pub(super) fn read<S: Source>(&self, doc: &Document<S>, r: &Resolved, at: u64, n: u64) -> R<Vec<u8>> {
-        if at + n > r.limit {
+        if at.checked_add(n).is_none_or(|end| end > r.limit) {
             return fail("runs past the end of its container");
         }
         self.read_in(doc, r.space, at, n)
