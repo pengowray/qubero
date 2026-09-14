@@ -30,6 +30,7 @@ pub(crate) fn decoded_object() -> T {
     T::structure_named("DecodedObject", "", "object", vec![("object", T::bytes(E::Remaining))])
 }
 
+mod adios;
 mod aiff;
 mod ar;
 mod arrow;
@@ -185,6 +186,7 @@ mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
 
+pub use adios::{adios_bp3, adios_bp4_data, adios_bp4_index, adios_bp4_metadata, adios_bp5_index, adios_bp5_metadata, adios_bp5_metametadata};
 pub use aiff::aiff;
 pub use ar::{ar, deb};
 pub use arrow::{arrow, arrow_stream};
@@ -427,6 +429,14 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("rar5", |_| rar5()),
     ("gwf", |_| gwf()),
     ("tdms", |_| tdms()),
+    // ADIOS2: a BP3 file, and each file of a BP4 or BP5 directory.
+    ("adiosbp3", |_| adios_bp3()),
+    ("adiosbp4idx", |_| adios_bp4_index()),
+    ("adiosbp4md", |_| adios_bp4_metadata()),
+    ("adiosbp4data", |_| adios_bp4_data()),
+    ("adiosbp5idx", |_| adios_bp5_index()),
+    ("adiosbp5md", |_| adios_bp5_metadata()),
+    ("adiosbp5mmd", |_| adios_bp5_metametadata()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),
