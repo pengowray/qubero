@@ -14,11 +14,11 @@ import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY
 import { Crystal } from "./crystal.ts";
 import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
-import { markFromRange, markFromStep } from "./unpackedlink.ts";
+import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -143,7 +143,8 @@ function linkCursor(from: Tab, bitOffset: number): MapStep | null {
  *  the codec kept no trace of that byte. */
 function originLine(doc: Doc, step: MapStep | null): string {
   if (step === null) return "";
-  return unpackedOrigin(doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist, step.field);
+  const { start, end } = stepBits(step);
+  return unpackedOrigin(doc.name, start, end, step.kind, step.len, step.dist, step.field);
 }
 
 /** Follow the mark on `tab` back to the tab that put it there. */
@@ -596,7 +597,7 @@ function build(tab: Tab): Page {
     }
     tabs.add({
       doc: unpacked,
-      title: UNPACKED.tabTitle(n.node.name, doc.name),
+      title: unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name),
       origin: UNPACKED.openTitle(n.node.name),
     });
   };

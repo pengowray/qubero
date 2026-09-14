@@ -5,7 +5,7 @@ import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "
 import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
-import { UNPACKED } from "./strings.ts";
+import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
 
 /** What the signature database made of a file, and where its lists came from. */
@@ -1802,6 +1802,9 @@ export type MapStep = {
   readonly len?: number;
   /** A match's distance. */
   readonly dist?: number;
+  /** For a stream joined from several runs, where in the file the run of the
+   *  step's part starts: `in_start` and `in_end` count from there. */
+  readonly run_offset_bits?: number;
 };
 
 /**
@@ -2035,8 +2038,15 @@ export class Doc {
     /** Which address space this document is. 0 is the file; anything else is
      *  a compressed run that was unpacked and opened in its own right. */
     readonly space = 0,
-    /** For a space, the `Decoded` node of the file it was unpacked from. */
+    /** For a space, the `Decoded` node of the file it was unpacked from, or
+     *  the node that joined it from several runs. */
     readonly origin: readonly number[] = [],
+    /** True for a space joined from several runs rather than unpacked from
+     *  one. */
+    readonly joined = false,
+    /** True when every one of those runs is stored as it sits in the file, so
+     *  a field of the stream can be edited in the file's own tab. */
+    private readonly storedRuns = false,
   ) {}
 
   static async open(file: ByteSource): Promise<Doc> {
@@ -2064,8 +2074,15 @@ export class Doc {
    */
   private refusesEdit(): boolean {
     if (this.space === 0) return false;
-    this.onRefuseEdit(UNPACKED.readOnly);
+    this.onRefuseEdit(this.readOnlyText());
     return true;
+  }
+
+  /** What an edit in this space is told. A joined stream of runs stored as
+   *  they sit in the file can be edited there; anything unpacked cannot be
+   *  edited anywhere. */
+  private readOnlyText(): string {
+    return this.joined && this.storedRuns ? JOINED.readOnly(this.name) : UNPACKED.readOnly;
   }
 
   /**
@@ -2077,11 +2094,11 @@ export class Doc {
    * is already on the node, so the caller does not have to ask twice.
    */
   openSpace(path: readonly number[]): Doc | null {
-    const r = this.handleReply<{ space: number; template: string; refused?: string }>(
+    const r = this.handleReply<{ space: number; template: string; refused?: string; joined: boolean; stored: boolean }>(
       this.editor.open_space(Uint32Array.from(path)),
     );
     if (r.status !== "ok" || r.node.space === 0) return null;
-    const opened = new Doc(this.editor, this.blob, this.name, r.node.space, [...path]);
+    const opened = new Doc(this.editor, this.blob, this.name, r.node.space, [...path], r.node.joined, r.node.stored);
     // The template came with the space rather than being chosen for it, so it
     // is set here and never through `setTemplate`.
     opened.template = r.node.template === "" ? null : r.node.template;
@@ -2815,7 +2832,7 @@ export class Doc {
    * the chunks are on their way and the caller should ask again.
    */
   writeNode(path: readonly number[], text: string): TemplateReply<WrittenRange> {
-    if (this.refusesEdit()) return { status: "error", message: UNPACKED.readOnly };
+    if (this.refusesEdit()) return { status: "error", message: this.readOnlyText() };
     const r = this.handleReply<WrittenRange>(this.editor.write_node(this.space, Uint32Array.from(path), text));
     if (r.status === "ok") this.notify();
     return r;

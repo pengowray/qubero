@@ -120,6 +120,15 @@ fn a_resource_written_across_blocks_opens_as_the_resource() {
     assert_eq!(resource.type_name, "GodotResource");
     assert!(resource.joined);
     assert_eq!(resource.size_bits / 8, stream.len() as u64, "the joined resource is cut at the total, not at three whole blocks");
+    // And held whole, as a document of its own: every block unpacked with its
+    // trace, one member a block, the short last one as long as the total left.
+    let id = joined.open_space(&packed_doc, 0, &[6]).unwrap().expect("the joined resource opens as a document");
+    let whole = joined.space(id).unwrap();
+    assert_eq!(whole.bytes(), stream);
+    whole.trace().check_tiles().unwrap();
+    assert_eq!(whole.runs().len(), chunks.len());
+    assert_eq!(whole.trace().members().len(), chunks.len());
+    assert_eq!(whole.template, "godot", "{} rather than the resource", whole.template);
 
     let (mut nodes, mut offsets) = (0usize, 0usize);
     for (a, b) in [(vec![1], vec![6, 0, 0]), (vec![2], vec![6, 0, 1])] {

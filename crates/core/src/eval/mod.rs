@@ -48,7 +48,7 @@ pub use census::{BoxCount, Census, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
-pub use space::{Space, SpaceId};
+pub use space::{JoinedRun, Space, SpaceId};
 pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
@@ -96,6 +96,17 @@ pub type R<T> = Result<T, EvalError>;
 
 fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
+}
+
+/// What a stream comes to when it is opened as a document of its own: its
+/// bytes, the trace of how they were made, what made them, what it declared
+/// they hold, and, for a stream joined from several runs, where each run is.
+struct Unpacked {
+    bytes: std::sync::Arc<Vec<u8>>,
+    trace: crate::codec::Trace,
+    codec: crate::codec::Codec,
+    inner: Ty,
+    runs: Vec<JoinedRun>,
 }
 
 /// Whether a stream's declared contents say nothing about what they are.
@@ -1996,7 +2007,7 @@ impl Evaluator {
                 got?
             }
         };
-        let Some((bytes, trace, codec, inner)) = unpacked else { return Ok(None) };
+        let Some(Unpacked { bytes, trace, codec, inner, runs }) = unpacked else { return Ok(None) };
         let (template, recognised) = self.template_for(&inner, &bytes);
         let id = self.open.len() as SpaceId + 1;
         self.open.push(Some(Box::new(space::Space::new(
@@ -2006,6 +2017,7 @@ impl Evaluator {
             codec,
             bytes,
             trace,
+            runs,
             template,
             recognised,
         ))));
@@ -2015,17 +2027,27 @@ impl Evaluator {
     /// The bytes and the trace of the stream at `path`, or nothing when it
     /// would not open. The step every `open_space` starts with, whichever
     /// reading is being asked.
-    #[allow(clippy::type_complexity)]
-    fn unpack<S: Source>(
-        &mut self,
-        doc: &Document<S>,
-        path: &[usize],
-    ) -> R<Option<(std::sync::Arc<Vec<u8>>, crate::codec::Trace, crate::codec::Codec, Ty)>> {
-        // A stream joined from parts is never held in one buffer, so there is
-        // no document of its own to open it as.
+    fn unpack<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Unpacked>> {
         self.resolve(doc, path)?;
-        if matches!(self.memo[path].ty, Ty::Stitched { .. }) {
-            return Ok(None);
+        // A stream joined from parts is read a part at a time where it is
+        // declared, and held whole only here, when it is to be a document of
+        // its own. Past the cap a decoded stream has, it is refused as one of
+        // those is, and it still reads a part at a time in the listing, so the
+        // refusal is kept apart from the stream's own opening.
+        if let Ty::Stitched { inner, .. } = self.memo[path].ty.clone() {
+            return Ok(match self.join_whole(doc, path)? {
+                Ok(whole) => Some(Unpacked {
+                    bytes: std::sync::Arc::new(whole.bytes),
+                    trace: whole.trace,
+                    codec: crate::codec::Codec::Stored,
+                    inner: *inner,
+                    runs: whole.runs,
+                }),
+                Err(why) => {
+                    self.spaces.refuse_whole(path, why);
+                    None
+                }
+            });
         }
         let id = match self.open_space_at(doc, path)? {
             space::Opened::Space(id) => id,
@@ -2038,7 +2060,21 @@ impl Evaluator {
         let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
             return fail("this stream is no longer open");
         };
-        Ok(Some((bytes.clone(), trace.clone(), codec, (*inner).clone())))
+        Ok(Some(Unpacked { bytes: bytes.clone(), trace: trace.clone(), codec, inner: (*inner).clone(), runs: Vec::new() }))
+    }
+
+    /// Why the stream at `path` of the file did not open as a document of its
+    /// own, when [`Evaluator::open_space`] was asked and answered nothing.
+    ///
+    /// A `Decoded` stream says so on its node as well, since a stream that
+    /// will not unpack is not read at all. A joined stream says so only here:
+    /// one too long to hold whole is still read a part at a time where it is
+    /// declared, and its node reads as it did.
+    pub fn open_refusal(&self, path: &[usize]) -> Option<Refusal> {
+        match self.spaces.get(path) {
+            Some(space::Opened::Refused(why)) => Some(why),
+            _ => self.spaces.whole_refusal(path),
+        }
     }
 
     /// What a space's bytes read as: what the stream's own template said, or,
@@ -2082,14 +2118,24 @@ impl Evaluator {
         self.open.iter().flatten().map(|s| &**s)
     }
 
-    /// Which step of a decoding produced a byte of `space`.
+    /// Which step of a decoding produced a byte of `space`. For a stream joined
+    /// from several runs, the step is its part's own, counted in bits of that
+    /// part's run, and [`Evaluator::run_at`] says where the run is.
     pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_out(byte)
     }
 
-    /// Which step read a bit of the run `space` was unpacked from.
+    /// Which step read a bit of the run `space` was unpacked from. For a
+    /// joined stream, `bit` is a bit of the space the stream was declared in.
     pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_in(bit)
+    }
+
+    /// Which run a byte of `space` was read from, when `space` is a stream
+    /// joined from several: the run a step [`Evaluator::map_out`] gives counts
+    /// its bits from. Nothing for a stream unpacked from one run.
+    pub fn run_at(&self, space: SpaceId, byte: u64) -> Option<&JoinedRun> {
+        self.space(space)?.run_at(byte)
     }
 
     fn take(&mut self, id: SpaceId) -> Option<Box<Space>> {
