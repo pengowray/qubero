@@ -2740,9 +2740,12 @@ where each run really is. Past the cap the tab is refused as `TooLarge`, as an
 unpacked run's is, but the stream still reads a part at a time where it is
 declared, so the refusal is not put on its node: `Evaluator::open_refusal`
 says it. The listing offers "Open joined stream" on a joined stream's root when
-it is short enough. Typing in the tab is refused, and when every run is stored
-the refusal sends the reader to the file's own tab, where a field lying in one
-run is editable.
+it is short enough, and the inspector offers it on the root and on the node
+that joined it, or says the stream is too large where the button would be. A
+part that will not read is found only when the join is tried, so the core's
+refusal comes back from `open_space` and the status bar says it. Typing in
+the tab is refused, and when every run is stored the refusal sends the reader
+to the file's own tab, where a field lying in one run is editable.
 
 A byte of that tab maps back through its part. `map_out` finds the step in the
 joined trace and gives it back with its bits counted from the start of its
@@ -2754,6 +2757,16 @@ part whose run holds the bit, then its step. The run is found by the bit and
 not by the step's output, since the end of a deflate block reads bits and
 makes nothing, and its output is where the next block's starts. A run that is
 not in the file, which no format here has, maps to no mark.
+
+The tab's panel says where a byte is kept the way the file's does, from the
+same part table: `Editor::part_at` takes a byte of the tab to the node the
+stream holds in the file's reading, whose space is the stitched one, and asks
+`part_of` there. It is the byte under the cursor rather than the field's first,
+since a tab over a stream of plain bytes is one field that starts in the first
+run wherever the cursor is, and the heading says so (`Byte under the cursor is
+at`) where the file's says `Starts in`. The decoder's line follows under
+`Unpacked from` for a run that was unpacked, and not for a stored one, whose
+single step would only say again where the run is.
 
 **What measured it.** The panel about the one thing a joined stream holds says
 what its length came from, the same two the diagram draws as the stream's
