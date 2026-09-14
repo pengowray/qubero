@@ -2353,20 +2353,23 @@ export const DUMP = {
  *  See `folderzip.ts`. */
 export const FOLDER = {
   /**
-   * The welcome screen's hint, with the way to open a folder as a link in it:
-   * `or [open a folder]. You can also drag a file or folder onto this page.`
-   * The link comes first, straight under `Open a file`, where the folder had a
-   * button of its own; dragging is a sentence of its own, since `or X, or Y`
-   * reads as three choices with the button above as the first. `drag`, not
-   * `drop`: the hint is read before a drag starts, when the thing to do is
-   * drag. The overlay shown mid-drag keeps `Drop to open`, since by then
-   * letting go is the one thing left to do.
+   * The welcome screen's hint under `Open a file`, with the way to open a
+   * folder as a link at its end: `You can also drag a file onto this page, or
+   * [open a folder].` A file is the default and the button is the one thing to
+   * press, so a folder is named once, last, as the rare extra; a link leading
+   * the line under the button read as a second choice beside it. The drag
+   * names only files, so `folder` is not met twice in one line; that a folder
+   * can be dragged too is said on the link's tooltip, to the reader who cares
+   * about folders. `drag`, not `drop`: the hint is read before a drag starts.
+   * The overlay shown mid-drag keeps `Drop to open`, since by then letting go
+   * is the one thing left to do.
    */
-  hintBefore: "or ",
+  hintBefore: "You can also drag a file onto this page, or ",
   open: "open a folder",
-  hintAfter: ". You can also drag a file or folder onto this page.",
-  /** The link's tooltip. What a click does first: a picker opens. */
-  openTitle: "Pick a folder; every file in it opens as one ZIP, built in the browser",
+  hintAfter: ".",
+  /** The link's tooltip. What a click does first, a picker opening, and the
+   *  folder drag the hint leaves out. */
+  openTitle: "Pick a folder; every file in it opens as one ZIP, built in the browser. Dragging a folder onto this page does the same.",
   /** Reading a large folder's list of files, once that has taken a moment. */
   reading: (folder: string, count: number): string => `Reading ${folder}: ${count.toLocaleString()} files so far…`,
   /** Reading every byte once for the CRC-32s. */

@@ -2008,9 +2008,9 @@ function welcome(): void {
   welcomeStatus.setAttribute("role", "status");
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
-  // Opening a folder is the less common way in, so it is a link in the line
-  // under the button rather than a second button beside it. A button still,
-  // for the keyboard and a screen reader: it opens a picker, it goes nowhere.
+  // Opening a folder is a rare way in, so it is a link at the end of the hint
+  // under the one button rather than a choice beside it. A button still, for
+  // the keyboard and a screen reader: it opens a picker, it goes nowhere.
   const openFolderLink = el("button", { type: "button", textContent: FOLDER.open, title: FOLDER.openTitle, className: "welcome-link" });
   openFolderLink.addEventListener("click", () => pickFolder());
   const drop = el(

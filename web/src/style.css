@@ -155,9 +155,11 @@ button.welcome-crystal {
 .welcome .hint {
   color: var(--muted);
 }
-/* Opening a folder, as a link in the hint under `Open a file`: there to be
-   found, quieter than the button. A button underneath, since it opens a picker
-   rather than going anywhere. */
+/* Opening a folder, as a link at the end of the hint under `Open a file`: the
+   hint's own muted text with an underline, so it is there to be found and is
+   not a second thing to choose between. The only underlined words on the
+   screen, which is what marks them. A button underneath, since it opens a
+   picker rather than going anywhere, and it keeps the focus ring. */
 .welcome-link {
   border: none;
   border-radius: 0;
@@ -165,7 +167,7 @@ button.welcome-crystal {
   padding: 0;
   min-height: 0;
   font: inherit;
-  color: var(--accent);
+  color: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
