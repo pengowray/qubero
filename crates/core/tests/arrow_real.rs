@@ -398,7 +398,7 @@ fn a_whole_file_listing_settles_in_goes() {
         let mut goes = 0;
         let spans = loop {
             goes += 1;
-            assert!(goes <= 400, "{name}: the listing never settled");
+            assert!(goes <= 200, "{name}: the listing never settled");
             ev.begin_slice();
             match ev.spans(&doc, 0, len, 20_000) {
                 Ok(v) => break v,

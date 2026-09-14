@@ -904,9 +904,7 @@ fn rntuple_pages_read_as_the_values_uproot_reads() {
 
     // What the tree names of each file, with the page lists followed and as it
     // was before they were: the anchor and its envelopes and nothing they point
-    // at. `spans` cannot say this for a ROOT file, because it indexes a placed
-    // field only once its walk has passed the field that places it, and every
-    // key list is written after the records it lists.
+    // at.
     for file in ["ntpl001_staff_rntuple_v1-0-1-0.root", "rntviewer-testfile-uncomp-single-rntuple-v1-0-0-0.root"] {
         let (d, mut ev) = rntuple_sample(&folder, file);
         let before = named_bytes(&d, &mut ev, &|name, _| name == "page_list");
@@ -914,5 +912,70 @@ fn rntuple_pages_read_as_the_values_uproot_reads() {
         let after = named_bytes(&d, &mut ev, &|_, _| false);
         eprintln!("--- {file}: {before} bytes named without the page lists, {after} with, of {}", d.len_bytes());
         assert!(after > before, "{file}");
+
+        // And the annotation column names at least those bytes. It named 768
+        // of `staff`'s 25,318, because the walk that finds placed fields for it
+        // took the choice of record by class name for one that places nothing
+        // and never went into the key list. At least rather than exactly: the
+        // column names a compressed run as the run, and this count leaves out
+        // a run's own bytes where the run holds anything.
+        let (d, mut ev) = rntuple_sample(&folder, file);
+        let spans = settled_spans(&d, &mut ev, file);
+        let mut named: Vec<(u64, u64)> =
+            spans.iter().filter(|s| !s.gap).map(|s| (s.offset_bits, s.offset_bits + s.size_bits)).collect();
+        named.sort();
+        let (mut total, mut reach) = (0, 0);
+        for (start, end) in named {
+            let start = start.max(reach);
+            if end > start {
+                total += end - start;
+                reach = end;
+            }
+        }
+        assert!(total / 8 >= after, "{file}: the spans name {} bytes and the tree {after}", total / 8);
     }
+}
+
+/// The spans over a whole file, asked for the way the browser asks: in goes
+/// of 5,000, starting again from the top each time.
+fn settled_spans(d: &Document<MemSource>, ev: &mut Evaluator, name: &str) -> Vec<qubero_core::eval::Span> {
+    ev.set_slice(Some(5_000));
+    let mut goes = 0;
+    loop {
+        goes += 1;
+        assert!(goes <= 200, "{name}: the listing never settled");
+        ev.begin_slice();
+        match ev.spans(d, 0, d.len_bits(), 20_000) {
+            Ok(v) => return v,
+            Err(e) if e.interrupted() => continue,
+            Err(e) => panic!("{name}: {e:?}"),
+        }
+    }
+}
+
+/// Every sample's whole-file listing settles in goes, as the Parquet and Arrow
+/// ones do. A ROOT file is nearly all placed records, found through key lists
+/// written after the records, so this is the walk that finds placed fields
+/// having to finish, a go at a time, before the column can name anything.
+#[test]
+fn a_whole_file_listing_settles_in_goes() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let d = Document::new(MemSource(std::fs::read(&path).unwrap()));
+        let mut ev = Evaluator::new(root());
+        let spans = settled_spans(&d, &mut ev, &name);
+        let gap: u64 = spans.iter().filter(|s| s.gap).map(|s| s.size_bits / 8).sum();
+        eprintln!("{name}: {} spans, {gap} of {} bytes in gaps", spans.len(), d.len_bytes());
+        checked += 1;
+    }
+    assert!(checked > 0);
 }
