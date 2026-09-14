@@ -1723,6 +1723,28 @@ fn a_walk_inside_a_walk_keeps_nothing_its_parent_let_go_of() {
 }
 
 #[test]
+fn an_element_that_ends_a_run_leaves_none_of_its_fields_behind() {
+    // Records of a length and that many bytes. The third says nine, and nine
+    // bytes are not there: its length is read before its bytes fail, and the
+    // run ends before it.
+    let rec = || T::structure("Rec", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))]);
+    let bytes = [1, 0xa0, 2, 0xb0, 0xb1, 9, 0xc0];
+
+    // A run with no room outside it to try the element again in.
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", T::repeat(rec(), Until::End)));
+    assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+
+    // A run in a window one byte short of the file, which is tried again with
+    // that byte and fails again.
+    let t = T::structure("Root", vec![("items", T::sized(E::lit(6), T::repeat(rec(), Until::End))), ("tail", T::bytes(E::Remaining))]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 2);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+}
+
+#[test]
 fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
     // The same long list of uneven strings, asked the question the hex cursor
     // asks: what is under this bit, in the middle of ten thousand elements.

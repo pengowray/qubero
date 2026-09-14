@@ -242,6 +242,22 @@ impl Memo {
         }
     }
 
+    /// Forget one node and everything inside it.
+    ///
+    /// For an element that was placed and then could not be read, which ends
+    /// the run it is in: the fields read before it failed would otherwise
+    /// stay with nothing above them. Every node held is looked at, so this is
+    /// not for the walks, which forget an element at a time; an element that
+    /// ends a run happens a handful of times across the whole sample
+    /// collection, with fewer than a hundred nodes held each time.
+    pub(super) fn forget_under(&mut self, path: &[usize]) {
+        self.forget_node(path);
+        let inside = |p: &Vec<usize>| p.len() > path.len() && p.starts_with(path);
+        self.nodes.retain(|p, _| !inside(p));
+        self.lists.retain(|p, _| !inside(p));
+        self.json.retain(|p, _| !inside(p));
+    }
+
     /// What the list at `path` has learned about itself. A node that is not a
     /// list, or one nothing has been learned about yet, has learned nothing,
     /// which is what the default says.

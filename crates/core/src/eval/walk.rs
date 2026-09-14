@@ -159,7 +159,7 @@ impl Evaluator {
                 // in it is the failure, not a short run. Nor is the reader
                 // giving up on depth a short run: see `is_refusal`.
                 Err(EvalError::Failed(why)) if ends > 0 && !Self::is_refusal(&why) => {
-                    self.memo.forget_node(&p);
+                    self.memo.forget_under(&p);
                     match self.stretch_to(doc, path, &p)? {
                         Some(size) => size,
                         None => {
@@ -223,7 +223,7 @@ impl Evaluator {
                 Ok(Some(size))
             }
             Err(EvalError::Failed(_)) => {
-                self.memo.forget_node(elem);
+                self.memo.forget_under(elem);
                 if let Some(m) = self.memo.get_mut(path) {
                     m.limit = mine;
                 }
