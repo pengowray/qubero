@@ -32,6 +32,8 @@ type Spec = {
   kind?: TemplateNode["kind"];
   /** The template's word that this structure is one row, not a part of the file. */
   inline?: boolean;
+  /** The core's word that the children are a list's elements. */
+  list?: boolean;
 };
 
 type Fixture = { node: TemplateNode; kids: Fixture[] };
@@ -58,6 +60,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     ok: true,
     child_count: spec.count ?? kids.length,
     composite,
+    list: spec.list ?? false,
     inline: spec.inline ?? false,
     editable: false,
     space: 0,

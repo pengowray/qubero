@@ -192,6 +192,11 @@ export type TemplateNode = {
   /** What one child is called, for counting them. Absent when they are items. */
   readonly unit?: string;
   readonly composite: boolean;
+  /** True when the children are a list's elements: an array or a repeat, or
+   *  a list whose elements are placed by offsets, by a chain of links or by a
+   *  descriptor each. The type column writes those `X[]`, `offsets → X`,
+   *  `chain → X` and `descriptors → X`, so ask this rather than the type. */
+  readonly list: boolean;
   /** True when `writeNode` accepts typed text for this field. */
   readonly editable: boolean;
   /** True when the template says this structure is one row rather than one row
@@ -855,6 +860,10 @@ export type DiagramRow = {
   /** Where it starts inside its own type (`0x4`), or the address it reads its
    *  contents at. Empty when the template fixes neither. */
   readonly pos_text: string;
+  /** True when the field holds a list of elements, whichever way `type_text`
+   *  writes it. Read past a size, a name, a condition and an address, and not
+   *  into a compressed stream, whose row is the stream. */
+  readonly list: boolean;
   /** The word the listing gives a field of this type, so the same field is the
    *  same colour in both. Pass it to `fieldClass`. */
   readonly kind: string;

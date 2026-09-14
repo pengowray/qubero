@@ -68,10 +68,10 @@ function onePayload(kids: readonly TemplateNode[]): TemplateNode | null {
 
 /** A handful of scalars of one kind, as the reader would write them: a
  *  tensor's two dimensions, the four numbers of a version. A list only, and
- *  written with the brackets its type already carries: `{count, offset}` is
- *  two fields with a job each, and `[2, 64]` would call them an array. */
+ *  written in brackets because it is one: `{count, offset}` is two fields with
+ *  a job each, and `[2, 64]` would call them an array. */
 function scalarRow(node: TemplateNode, kids: readonly TemplateNode[]): string | null {
-  if (!node.type.endsWith("[]")) return null;
+  if (!node.list) return null;
   if (kids.length < 2 || kids.length > PREVIEW_ITEMS) return null;
   const first = kids[0];
   if (first === undefined) return null;

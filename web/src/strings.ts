@@ -1734,18 +1734,17 @@ export function ordinal(n: number): string {
 /**
  * What one child of a row stands for. The format names them when it has a word
  * for them: blocks, tensors, entries. Otherwise a list holds items and a
- * structure has fields, which is what the type name says: a list reads as
- * `X[]`, or as `offsets → X` when its children sit where an earlier array
- * of offsets says.
+ * structure has fields, and which of the two a node is, is the core's `list`
+ * rather than a reading of its type name.
  */
-export function childWord(n: { readonly unit?: string; readonly type: string }): string {
-  return n.unit ?? (n.type.endsWith("[]") || n.type.startsWith("offsets ") ? "item" : "field");
+export function childWord(n: { readonly unit?: string; readonly list: boolean }): string {
+  return n.unit ?? (n.list ? "item" : "field");
 }
 
 /** The same word as a heading over the children themselves: `Fields` over a
  *  structure, `Tensors` over a list the format names. One fixed word would be
  *  a third name for what the count beside it already calls tensors. */
-export function childrenHead(n: { readonly unit?: string; readonly type: string }): string {
+export function childrenHead(n: { readonly unit?: string; readonly list: boolean }): string {
   return heading(plural(childWord(n)));
 }
 

@@ -17,7 +17,7 @@ import type { DiagramBox, DiagramEdge, DiagramRow, TemplateDiagram } from "../sr
 import { plan } from "../src/strips.ts";
 
 function row(name: string, type_text: string, over: Partial<DiagramRow> = {}): DiagramRow {
-  return { name, type_text, size_text: "", pos_text: "", kind: "number", ...over };
+  return { name, type_text, size_text: "", pos_text: "", list: false, kind: "number", ...over };
 }
 
 function box(name: string, rows: DiagramRow[], over: Partial<DiagramBox> = {}): DiagramBox {
@@ -31,7 +31,7 @@ function made(types: DiagramBox[], edges: DiagramEdge[]): TemplateDiagram {
 const all = (): boolean => true;
 
 test("a run is the first of it, a band, and the last", () => {
-  const d = made([box("PNG", [row("chunks", "Chunk[]", { size_text: "until type = 'IEND'" })])], []);
+  const d = made([box("PNG", [row("chunks", "Chunk[]", { size_text: "until type = 'IEND'", list: true })])], []);
   const items = plan(d, 24, all).strips[0]?.items ?? [];
   assert.deepEqual(
     items.map((i) => i.kind),
@@ -41,6 +41,20 @@ test("a run is the first of it, a band, and the last", () => {
   // for it looks. The last box says only that it is the last.
   assert.equal(items[0]?.size, "until type = 'IEND'");
   assert.equal(items[2]?.size, "");
+});
+
+test("a run is whatever the core says is a list, not whatever ends in brackets", () => {
+  // A list placed by descriptors, whose type is written with an arrow, and a
+  // run of bytes, whose type is written with brackets.
+  const d = made(
+    [box("Heap", [row("arrays", "descriptors → u8[]", { list: true }), row("data", "bytes[]", { size_text: "len bytes" })])],
+    [],
+  );
+  const items = plan(d, 24, all).strips[0]?.items ?? [];
+  assert.deepEqual(
+    items.map((i) => `${i.kind} ${i.name}`),
+    ["first arrays", "band ", "last arrays", "field data"],
+  );
 });
 
 test("a field something decides is optional, whatever its type is called", () => {

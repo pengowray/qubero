@@ -246,8 +246,9 @@ function items(b: DiagramBox, box: number, rowCap: number, cond: Map<string, str
     if (r === undefined) return;
     // A run: the first of it, a dotted band, and the last. The count or the
     // condition it stops at goes under the first, which is where a reader
-    // looking for "how many" looks.
-    const run = r.type_text.endsWith("[]") || r.size_text.startsWith("until ") || r.size_text === "to the end";
+    // looking for "how many" looks. A size of `until …` or `to the end` is
+    // only ever a repeat's, which is a list, so `list` says all of it.
+    const run = r.list;
     // What makes a field optional is that something decides whether it is
     // there, and what says so is the condition edge: a type named in the
     // template prints as its name, so the type column cannot be relied on to

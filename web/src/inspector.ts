@@ -15,6 +15,7 @@ import { LENSES, type Lens } from "./lenses.ts";
 import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
+import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
@@ -2672,58 +2673,13 @@ export class Inspector {
     return { text: hexText(Uint8Array.from(r.node.bytes)), truncated: r.node.truncated, note: null };
   }
 
-  /**
-   * Every step from the root down, each one selectable. A list and the element
-   * taken from it are one crumb, `boxes[0]`, because two crumbs for one step
-   * doubles the length of a deep path without saying more.
-   */
+  /** The trail as crumbs. Which steps fold into one is `trailItems`'s; how
+   *  many are shown before the middle is hidden is this panel's. */
   private trail(path: readonly number[]): HTMLElement[] {
-    const items: { label: string; path: readonly number[]; here: boolean }[] = [];
-    for (let i = 0; i <= path.length; i++) {
-      const node = this.doc.templateNode(path.slice(0, i));
-      if (node.status !== "ok") {
-        items.push({ label: "?", path: path.slice(0, i), here: i === path.length });
-        continue;
-      }
-      const n = node.node;
-      // A field that reads its contents somewhere else and the thing it points
-      // at are one step, the way the listing draws them as one row: the
-      // pointer's type names what is there and says it was reached by address,
-      // and the crumb goes to the target, which is where the bytes are.
-      // Pointers nest, and the outermost type already reads `at → at → X`,
-      // so the whole run of them is the one step. See `hop` in `flatten`.
-      let at = n;
-      let past = i;
-      while (past < path.length && path[past] === 0 && at.size_bits === 0 && at.composite && at.child_count === 1) {
-        const next = this.doc.templateNode(path.slice(0, past + 1));
-        if (next.status !== "ok" || next.node.name !== at.name) break;
-        at = next.node;
-        past += 1;
-      }
-      if (past > i) {
-        items.push({ label: `${n.name} (${n.type})`, path: path.slice(0, past), here: past === path.length });
-        i = past;
-        continue;
-      }
-      const isList = n.composite && n.type.endsWith("[]");
-      if (isList && i < path.length) {
-        // Fold the element index into the list's own name.
-        const to = path.slice(0, i + 1);
-        items.push({ label: `${n.name}[${path[i]}]`, path: to, here: i + 1 === path.length });
-        i += 1;
-        continue;
-      }
-      // A struct field is often called `body`; its type says what it holds.
-      const label = n.composite && n.type !== n.name ? `${n.name} (${n.type})` : n.name;
-      const previous = items[items.length - 1];
-      if (previous !== undefined && previous.label === label) {
-        // Repeated `object`/`body` wrappers are one logical step. Keep the
-        // deepest target so following the crumb still reaches the useful one.
-        items[items.length - 1] = { label, path: path.slice(0, i), here: i === path.length };
-      } else {
-        items.push({ label, path: path.slice(0, i), here: i === path.length });
-      }
-    }
+    const items = trailItems(path, (p) => {
+      const r = this.doc.templateNode(p);
+      return r.status === "ok" ? r.node : null;
+    });
     const MAX_CRUMBS = 7;
     if (this.crumbsExpanded || items.length <= MAX_CRUMBS) {
       return items.map((item) => this.crumb(item.label, item.path, item.here));

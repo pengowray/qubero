@@ -10,16 +10,16 @@ import type { TemplateNode } from "../src/doc.ts";
 /** Enough of a node for the rules under test. The rest of `TemplateNode` is
  *  not read here, and writing it out per kid would bury what each case says. */
 function node(over: Partial<TemplateNode>): TemplateNode {
-  return { name: "f", type: "u8", kind: "uint", value: "0", composite: false, child_count: 0, consumed_by: null, ...over } as TemplateNode;
+  return { name: "f", type: "u8", kind: "uint", value: "0", composite: false, list: false, child_count: 0, consumed_by: null, ...over } as TemplateNode;
 }
 
 function struct(kids: readonly TemplateNode[], over: Partial<TemplateNode> = {}): TemplateNode {
   return node({ composite: true, kind: "composite", type: "Thing", child_count: kids.length, ...over });
 }
 
-/** The same, typed as the list it is: only a list reads as a row of values. */
+/** The same, said to be the list it is: only a list reads as a row of values. */
 function list(kids: readonly TemplateNode[], over: Partial<TemplateNode> = {}): TemplateNode {
-  return struct(kids, { type: "u64 le[]", ...over });
+  return struct(kids, { type: "u64 le[]", list: true, ...over });
 }
 
 test("a length and the string it sizes read as the string", () => {
@@ -47,6 +47,11 @@ test("a count beside the offset it places is not an array of two", () => {
 test("a short row of numbers reads as the array it is", () => {
   const kids = [node({ name: "[0]", value: "4096" }), node({ name: "[1]", value: "32000" })];
   assert.deepEqual(insideValue(list(kids), kids), { kind: "row", text: "[4096, 32000]" });
+});
+
+test("a list placed by offsets reads as a row too, whatever its type is written as", () => {
+  const kids = [node({ name: "[0]", value: "7" }), node({ name: "[1]", value: "9" })];
+  assert.deepEqual(insideValue(list(kids, { type: "offsets → u32 le" }), kids), { kind: "row", text: "[7, 9]" });
 });
 
 test("two peers that are not a list keep their count", () => {
