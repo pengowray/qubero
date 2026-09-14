@@ -20,19 +20,38 @@
 //!
 //! **Values are not read**, the way [`super::graph`] does not read them: what a
 //! field says is the expensive half of reading it and no badge shows it.
-//! Breadth-first and capped, for the reason the graph is: a cap on a
-//! depth-first walk keeps one deep spine of a file and none of its siblings,
-//! and what a reader wants counted first is the top of the file.
+//!
+//! **Kept between goes.** The walk is a [`CensusWalk`] the caller holds, the
+//! way it holds a [`super::KindWalk`], and each [`Evaluator::census_step`]
+//! carries it on until this go's allowance runs out, the bytes it needs have
+//! not arrived, or it has counted as many nodes as it was allowed. Which of
+//! those it was is [`CensusState`], because the caller does something
+//! different for each: ask again at once, ask again when bytes land, or ask the
+//! reader. The first version started from the root on every call and marked
+//! all three the same way, as "stopped short": each go spent its allowance
+//! walking the nodes the last go had already counted, and a view that only
+//! asked again on a reply that was not `ok` never asked again.
+//!
+//! **Depth-first, and forgetting behind itself.** A count that runs to the end
+//! of a file reads every node of it, and a breadth-first queue holds a whole
+//! level of the tree at once: 184,000 nodes of a 200 KB ROOT file were all in
+//! memory together. So this walks the way [`super::KindWalk`] does, one frame
+//! per open node, and gives each node back to the memo once the walk is past
+//! it. What a limit keeps is then the first part of the file in order rather
+//! than the top of all of it, which is what "the first 20,000 fields" says.
+//!
+//! **Exact, or it says it is not.** A run whose elements are all the same
+//! shape, which the template settles, is counted by walking its first element
+//! and counting what is in it once per element: a WAV's half a million samples
+//! are one sample walked. Every other run is walked element by element, since
+//! what one element holds says nothing about the next: sampling the first 32
+//! of a journal's objects badged its object box `×32` over a file of twenty
+//! thousand. A count that finished is the file's; one that did not says so.
 
 use rustc_hash::FxHashMap;
 
-use super::diagram::{box_identity, box_key, elem_of, is_choice, is_run};
+use super::diagram::{box_identity, box_key, is_choice, is_run};
 use super::*;
-
-/// How many elements of one run the walk looks inside. Past this the run is
-/// counted rather than walked: they are all the same type, so the count is
-/// known, and what is inside one of them is what is inside the first.
-const RUN_SAMPLE: usize = 32;
 
 /// How many boxes of one kind the file holds, and where the first is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,9 +59,8 @@ pub struct BoxCount {
     /// The diagram box this counts, by [`crate::eval::diagram::box_key`].
     pub key: String,
     pub count: u64,
-    /// The path to the first one the walk met, in the order the walk met them,
-    /// which breadth-first makes the shallowest rather than merely the first
-    /// found.
+    /// The path to the first one the walk met, which depth-first in file order
+    /// is the first one in the file.
     pub first_path: Vec<usize>,
     /// Which reading the path is in: 0 is the file, anything else an unpacked
     /// stream. See [`super::space`].
@@ -60,264 +78,418 @@ pub struct RowCount {
     pub space: u32,
 }
 
+/// Where a count has got to, and so what the caller does next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CensusState {
+    /// Every node was counted. The counts are the file's.
+    Done,
+    /// This go's allowance ran out. Asking again carries on at once.
+    Working,
+    /// The bytes the next node needs have not arrived. They have been asked
+    /// for (see [`Evaluator::wanted`]); asking again once they land carries on.
+    Waiting,
+    /// The walk counted as many nodes as it was allowed, with more to count.
+    /// Asking again with a higher limit carries on; asking with the same one
+    /// answers the same.
+    Capped,
+}
+
 /// What the file holds, against what the format can hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Census {
     pub boxes: Vec<BoxCount>,
     pub rows: Vec<RowCount>,
-    /// How many nodes the walk looked at.
+    /// How many nodes the walk has looked at. A run counted from its first
+    /// element counts as the nodes walked, not as the elements it stands for.
     pub walked: u64,
-    /// True when the cap stopped it, so every count is a floor rather than a
-    /// total. A view that does not say so is showing a number that looks like
-    /// an answer.
-    pub truncated: bool,
+    /// Anything but [`CensusState::Done`] makes every count a floor rather
+    /// than a total, and a view that does not say so is showing a number that
+    /// looks like an answer.
+    pub state: CensusState,
 }
 
-/// The key of a type, written out once and remembered.
+/// One node the walk is inside: its children, and how far through them it is.
+struct Frame {
+    path: Vec<usize>,
+    /// The box this node's children are rows of. None for a run, whose
+    /// children are its elements and stand on nobody's row: counting the run
+    /// as one of them would make every list in the file one longer than it is.
+    own: Option<String>,
+    /// The next child to count.
+    next: usize,
+    /// How many children to count: all of them, or one for a run whose
+    /// elements are all the same shape.
+    count: u64,
+    /// How many nodes of the file each child counted here stands for: one,
+    /// or the length of every same-shaped run above it multiplied together.
+    weight: u64,
+    /// True for a run, and for a node whose children are placed one per
+    /// offset. Those let their children go one behind the walk, since placing
+    /// an element asks the one before it where it ends; everything else gives
+    /// its children back when it closes, since one field's count or length can
+    /// be read off an earlier one.
+    guarded: bool,
+    born: Vec<Vec<usize>>,
+    prev: Option<Vec<usize>>,
+}
+
+/// The count, kept between goes.
 ///
-/// A free function rather than a closure over the evaluator: the walk needs the
-/// evaluator mutably between two of these, and a closure holding the template
-/// would keep it borrowed across both.
-fn key_for(t: &Template, ty: &Ty, keys: &mut FxHashMap<usize, Option<String>>) -> Option<String> {
-    match box_identity(t, ty) {
-        Some(id) => keys.entry(id).or_insert_with(|| box_key(t, ty)).clone(),
-        None => box_key(t, ty),
+/// Thrown away whenever the document or its template changes, for the reason a
+/// [`super::KindWalk`] is: every path in it is a path through bytes and a
+/// template that may no longer be there.
+pub struct CensusWalk {
+    stack: Vec<Frame>,
+    boxes: FxHashMap<String, BoxCount>,
+    rows: FxHashMap<(String, usize), RowCount>,
+    /// The key of a type, written out once. The key is the type written out,
+    /// and writing one out per node is what a census costs if nothing is
+    /// remembered: a WAV of five thousand nodes took two minutes before this.
+    /// Keyed by the pointer the IR already shares, with the type kept beside
+    /// it so that the pointer cannot be freed and handed to another type while
+    /// the walk still holds the key.
+    keys: FxHashMap<usize, (Ty, Option<String>)>,
+    walked: u64,
+    /// True once the root has been counted, which tells a walk that has not
+    /// begun from one that has finished: both have an empty stack.
+    started: bool,
+    done: bool,
+    /// The document's length in bits when the walk began, so a caller can tell
+    /// a walk about the document in hand from one that is not.
+    file_bits: u64,
+    /// Where the walk starts: the file's root, or the contents of a stream
+    /// opened as a tab. See [`Tab`](super::Tab).
+    root: Vec<usize>,
+}
+
+impl CensusWalk {
+    pub fn new(file_bits: u64) -> CensusWalk {
+        CensusWalk::under(file_bits, Vec::new())
+    }
+
+    /// A count of the nodes under `root`, in a document of `file_bits` bits.
+    pub fn under(file_bits: u64, root: Vec<usize>) -> CensusWalk {
+        CensusWalk {
+            stack: Vec::new(),
+            boxes: FxHashMap::default(),
+            rows: FxHashMap::default(),
+            keys: FxHashMap::default(),
+            walked: 0,
+            started: false,
+            done: false,
+            file_bits,
+            root,
+        }
+    }
+
+    pub fn file_bits(&self) -> u64 {
+        self.file_bits
+    }
+
+    pub fn done(&self) -> bool {
+        self.done
+    }
+
+    /// What has been counted so far, ready to hand over.
+    pub fn census(&self, state: CensusState) -> Census {
+        // Biggest first, so a view that shows some of them shows the ones worth
+        // showing, and so two runs over one file answer in the same order.
+        let mut boxes: Vec<BoxCount> = self.boxes.values().cloned().collect();
+        boxes.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
+        let mut rows: Vec<RowCount> = self.rows.values().cloned().collect();
+        rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| (&a.key, a.row).cmp(&(&b.key, b.row))));
+        Census { boxes, rows, walked: self.walked, state }
+    }
+
+    /// The key of a type, written out once and remembered.
+    fn key(&mut self, t: &Template, ty: &Ty) -> Option<String> {
+        match box_identity(t, ty) {
+            Some(id) => self.keys.entry(id).or_insert_with(|| (ty.clone(), box_key(t, ty))).1.clone(),
+            None => box_key(t, ty),
+        }
+    }
+
+    fn add_box(&mut self, key: &str, n: u64, path: &[usize], space: u32) {
+        let e = self.boxes.entry(key.to_string()).or_insert_with(|| BoxCount {
+            key: key.to_string(),
+            count: 0,
+            first_path: path.to_vec(),
+            space,
+        });
+        e.count = e.count.saturating_add(n);
+    }
+
+    fn add_row(&mut self, key: &str, row: usize, n: u64, path: &[usize], space: u32) {
+        let e = self.rows.entry((key.to_string(), row)).or_insert_with(|| RowCount {
+            key: key.to_string(),
+            row,
+            count: 0,
+            first_path: path.to_vec(),
+            space,
+        });
+        e.count = e.count.saturating_add(n);
     }
 }
 
-/// One node waiting to be walked, and which row of which box it stands on.
-struct Waiting {
-    path: Vec<usize>,
-    /// The box its parent is drawn as, and its index among that parent's rows.
-    /// None for the node the walk started at, which stands on nobody's row.
-    row: Option<(String, usize)>,
-    /// True when the run this came out of already counted it, so walking it is
-    /// for what is inside it and it must not be counted again.
-    counted: bool,
+/// Everything about one node that reading the file could interrupt, asked
+/// before the walk writes anything down. An interruption part-way through a
+/// node leaves the walk where it was, and the next go asks the same node again
+/// from the memo: nothing is counted twice by resuming.
+struct Seen {
+    space: u32,
+    declared: Ty,
+    resolved: Ty,
+    /// The type that makes this node a run, when it is one.
+    run: Option<Ty>,
+    /// How many children it has.
+    children: u64,
+    guarded: bool,
+}
+
+/// Whether every node of this type holds the same fields as every other, so
+/// that walking one says what walking all of them would.
+///
+/// Settled by the template alone: numbers and fixed text, structures of them,
+/// and lists of them whose length is written into the template. Not a switch,
+/// a field that may not be there, a length read from the file, or anything
+/// that points elsewhere, since each of those is where two elements of one run
+/// can differ. A fixed size is not enough on its own: a run of 4 KiB pages is
+/// all the same size and no two pages hold the same fields.
+fn same_shape(t: &Template, ty: &Ty, depth: usize) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    match ty {
+        Ty::Struct(s) => s.fields.iter().all(|f| same_shape(t, &f.ty, depth + 1)),
+        Ty::Array { elem, count: crate::template::Expr::Lit(_) } => same_shape(t, elem, depth + 1),
+        Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| same_shape(t, inner, depth + 1)),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => same_shape(t, inner, depth + 1),
+        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => true,
+        // `fixed_bits` calls these nought bits wherever they point, which is
+        // true of their size and says nothing about what is at the other end.
+        Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Stitched { .. } | Ty::Sized { .. } | Ty::Array { .. } => false,
+        other => crate::decode::fixed_bits(other).is_some(),
+    }
 }
 
 impl Evaluator {
-    /// Count the open file's nodes against the diagram's boxes, stopping after
-    /// `limit` of them.
-    ///
-    /// A node that will not read is passed over rather than taking the census
-    /// with it, the same way the graph carries on past a field it cannot place:
-    /// a count that is short by one broken record is worth more than no count.
+    /// Count the open file's nodes against the diagram's boxes in one call,
+    /// stopping after `limit` of them. For a caller with nothing to draw
+    /// meanwhile; the web app holds a [`CensusWalk`] and steps it.
     pub fn census<S: Source>(&mut self, doc: &Document<S>, limit: usize) -> R<Census> {
-        self.census_under(doc, &[], limit)
+        let mut walk = CensusWalk::new(doc.len_bits());
+        self.census_step(doc, &mut walk, limit)
     }
 
-    /// The same for the nodes under `root`, which is a stream opened as a tab
-    /// counted against the diagram of what the stream holds. See
-    /// [`Tab`](super::Tab).
-    pub(super) fn census_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], limit: usize) -> R<Census> {
-        let mut boxes: FxHashMap<String, BoxCount> = FxHashMap::default();
-        let mut rows: FxHashMap<(String, usize), RowCount> = FxHashMap::default();
-        let mut queue: std::collections::VecDeque<Waiting> = std::collections::VecDeque::new();
-        queue.push_back(Waiting { path: root.to_vec(), row: None, counted: false });
-        let mut walked: u64 = 0;
-        let mut truncated = false;
-        // The key of a type is the type written out, and writing one out per
-        // node is what a census costs if nothing is remembered: a WAV of five
-        // thousand nodes took two minutes before this. Keyed by the pointer the
-        // IR already shares, so each type is written out once.
-        let mut keys: FxHashMap<usize, Option<String>> = FxHashMap::default();
-        while let Some(at) = queue.pop_front() {
-            if walked as usize >= limit {
-                truncated = true;
-                break;
+    /// Carry the count on for one go, and say what it has found and why it
+    /// stopped. See [`CensusState`].
+    ///
+    /// `limit` is how many nodes the walk may have looked at in all, not in
+    /// this go, so raising it carries a capped walk on from where it stopped.
+    ///
+    /// A node that will not read is passed over rather than taking the count
+    /// with it, the same way the graph carries on past a field it cannot
+    /// place: a count that is short by one broken record is worth more than no
+    /// count. The root not reading is an error, since then there is nothing.
+    pub fn census_step<S: Source>(&mut self, doc: &Document<S>, walk: &mut CensusWalk, limit: usize) -> R<Census> {
+        let state = match self.census_run(doc, walk, limit) {
+            Ok(state) => state,
+            Err(EvalError::Busy { .. }) => CensusState::Working,
+            // What has been counted is true, and the bytes are on their way.
+            // Answered with the counts rather than as pending, so the view has
+            // them to draw while it waits.
+            Err(EvalError::Pending(missing)) => {
+                self.want(missing);
+                CensusState::Waiting
             }
-            walked += 1;
-            match self.count_node(doc, &at, &mut boxes, &mut rows, &mut queue, limit, &mut keys, &mut truncated) {
-                Ok(()) => {}
-                // The bytes are not here yet, or this go's allowance ran out.
-                // Neither is a reason to answer nothing: what has been counted
-                // is true, and `truncated` says it is a floor. Returning the
-                // error instead would leave a view that only ever asks once
-                // with no counts at all, which is what happened.
-                Err(e) if e.interrupted() => {
-                    truncated = true;
-                    break;
+            Err(e) => return Err(e),
+        };
+        Ok(walk.census(state))
+    }
+
+    fn census_run<S: Source>(&mut self, doc: &Document<S>, walk: &mut CensusWalk, limit: usize) -> R<CensusState> {
+        if walk.done {
+            return Ok(CensusState::Done);
+        }
+        if !walk.started {
+            if limit == 0 {
+                return Ok(CensusState::Capped);
+            }
+            let root = walk.root.clone();
+            let seen = self.see(doc, &root)?;
+            self.count_seen(walk, &root, None, 1, seen);
+            walk.started = true;
+        }
+        loop {
+            let Some(top) = walk.stack.len().checked_sub(1) else {
+                walk.done = true;
+                return Ok(CensusState::Done);
+            };
+            let f = &walk.stack[top];
+            if f.next as u64 >= f.count {
+                self.close_census_frame(walk);
+                continue;
+            }
+            if walk.walked >= limit as u64 {
+                return Ok(CensusState::Capped);
+            }
+            let idx = f.next;
+            let mut path = f.path.clone();
+            path.push(idx);
+            let row = f.own.clone().map(|k| (k, idx));
+            let weight = f.weight;
+            match self.see(doc, &path) {
+                Ok(seen) => {
+                    walk.stack[top].next += 1;
+                    self.note_census_child(walk, top, &path);
+                    self.count_seen(walk, &path, row, weight, seen);
                 }
-                Err(_) => {}
+                Err(e) if e.interrupted() => return Err(e),
+                // The first child that will not place ends the node.
+                Err(_) => walk.stack[top].count = idx as u64,
             }
         }
-        // Biggest first, so a view that shows some of them shows the ones worth
-        // showing, and so two runs over one file answer in the same order.
-        let mut boxes: Vec<BoxCount> = boxes.into_values().collect();
-        boxes.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
-        let mut rows: Vec<RowCount> = rows.into_values().collect();
-        rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| (&a.key, a.row).cmp(&(&b.key, b.row))));
-        Ok(Census { boxes, rows, walked, truncated })
     }
 
-    /// One node: which box it is, which row it stands on, and its children
-    /// queued behind it.
-    fn count_node<S: Source>(
-        &mut self,
-        doc: &Document<S>,
-        at: &Waiting,
-        boxes: &mut FxHashMap<String, BoxCount>,
-        rows: &mut FxHashMap<(String, usize), RowCount>,
-        queue: &mut std::collections::VecDeque<Waiting>,
-        limit: usize,
-        keys: &mut FxHashMap<usize, Option<String>>,
-        truncated: &mut bool,
-    ) -> R<()> {
-        self.resolve(doc, &at.path)?;
-        let r = self.memo[&at.path].clone();
-        // Charged like every other walk, so a census of a file with millions of
+    /// Ask everything about the node at `path` that could be interrupted.
+    fn see<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Seen> {
+        self.resolve(doc, path)?;
+        let (space, offset, resolved) = {
+            let r = &self.memo[path];
+            (r.space, r.offset, r.ty.clone())
+        };
+        // Charged like every other walk, so a count of a file with millions of
         // fields hands the caller their screen back.
-        self.spend(r.offset)?;
+        self.spend(offset)?;
+        // Its size, asked now so the node keeps it. Placing the sibling after
+        // this one asks where this one ends, and a node whose size was never
+        // asked answers by reading its fields again, which by then the walk
+        // has given back: they came back into the memo with nothing left to
+        // let go of them, two nodes per record of a ten-thousand-record run.
+        match self.size_of(doc, path) {
+            Err(e) if e.interrupted() => return Err(e),
+            _ => {}
+        }
         // What the row this node stands on is: the field's own declaration, and
         // not what it turned out to be. The diagram drew the declaration, so a
-        // switch is the switch box and not the case it took.
-        if let Some((key, row)) = &at.row {
-            let e = rows.entry((key.clone(), *row)).or_insert_with(|| RowCount {
-                key: key.clone(),
-                row: *row,
-                count: 0,
-                first_path: at.path.clone(),
-                space: r.space,
-            });
-            e.count += 1;
-        }
-        let declared = self.declared_ty(&at.path)?;
-        let count = |key: &str, boxes: &mut FxHashMap<String, BoxCount>| {
-            let e = boxes.entry(key.to_string()).or_insert_with(|| BoxCount {
-                key: key.to_string(),
-                count: 0,
-                first_path: at.path.clone(),
-                space: r.space,
-            });
-            e.count += 1;
-        };
-        // The choice this node made, for a node that is one: a switch is a box
-        // of its own and its row is the case taken.
-        let chose = self.case_taken(&declared, &r.ty);
-        if is_choice(&self.template, &declared) {
-            if let Some(key) = key_for(&self.template, &declared, keys) {
-                // The choice was made, whether or not which way can be named:
-                // counting it only when the case is known left the box reading
-                // "this file has none of these" over a file that takes it on
-                // every chunk.
-                count(&key, boxes);
-                if let Some(row) = chose {
-                    let e = rows.entry((key.clone(), row)).or_insert_with(|| RowCount {
-                        key: key.clone(),
-                        row,
-                        count: 0,
-                        first_path: at.path.clone(),
-                        space: r.space,
-                    });
-                    e.count += 1;
-                }
-            }
-        }
+        // switch is the switch box and not the case it took. A node with no
+        // declaration of its own, a member of a parsed JSON value, is what it
+        // turned out to be.
+        let declared = self.declared_ty(path).unwrap_or_else(|_| resolved.clone());
         // Whether this node is a run of something rather than one of it.
         //
         // Asked of what it turned out to be as well as of its declaration,
         // because a switch that picks a list is a list: a WAV's `data` chunk is
-        // declared as a choice and resolves to half a million samples, and read
-        // only off the declaration it was not a run, so its elements were
-        // neither capped nor counted in bulk. That one miss was the whole cost
-        // of a census on a WAV.
+        // declared as a choice and resolves to half a million samples.
         let run = if is_run(&self.template, &declared) {
             Some(declared.clone())
-        } else if is_run(&self.template, &r.ty) {
-            Some(r.ty.clone())
+        } else if is_run(&self.template, &resolved) {
+            Some(resolved.clone())
         } else {
             None
         };
-        // Which box this node's own children are rows of. A run's children are
-        // its elements and stand on nobody's row; counting the run as one of
-        // them would make every list in the file one longer than it is.
-        let own = match &run {
-            Some(_) => None,
-            // A node declared as a choice *is* whatever it resolved to, whether
-            // or not the case it came from could be named. Falling back to the
-            // declaration here was a quiet fault: the node then counted as the
-            // choice, and its children — the fields of the shape the choice
-            // picked — stood on the choice's rows, so a PNG's chunk header put
-            // its `width` on the row that says `'IHDR'` and the box for IHDR
-            // itself was never counted at all.
-            None if is_choice(&self.template, &declared) => key_for(&self.template, &r.ty, keys),
-            None => key_for(&self.template, &declared, keys),
+        // How many children, even of a run only walking settles the length of.
+        // The count is the listing's own, walked the way the listing walks a
+        // long run, so this counts the elements the listing shows and stops
+        // where it stops: a run that ends in a broken element ends before it.
+        // Asking for elements until one would not place instead counted one
+        // past the end, since a place at the end of the room is still a place.
+        let children = match self.child_count(doc, path) {
+            Ok(n) => n,
+            Err(e) if e.interrupted() => return Err(e),
+            // A node whose children cannot be counted is still a node: it is
+            // counted, and nothing under it is.
+            Err(_) => 0,
         };
-        if let Some(key) = &own {
-            if !at.counted {
-                count(key, boxes);
-            }
-        }
-        // The children, each knowing the row of that box it stands on. Counted
-        // against what there is room for, so a list of a million elements
-        // queues what the cap allows rather than a million paths.
-        let room = limit.saturating_sub(queue.len());
-        if room == 0 {
-            return Ok(());
-        }
-        let known = self.count_unless_walk(doc, &at.path)?;
-        let count = match known {
-            Some(n) => n,
-            // A run only walking settles the length of: ask for as many as
-            // there is room for and stop at the first that will not place.
-            None => room as u64,
+        // Whether the children go back one behind the walk or all at once when
+        // it closes, by the rule the kind totals use: a list `walk.rs` already
+        // walks with its middle dropped, and a node whose children are placed
+        // one per offset and so do not need each other. Dropping the elements
+        // of a short list one behind would only have the list place each of
+        // them twice, since it re-reads from the first one it no longer has.
+        let guarded = match &resolved {
+            Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => true,
+            Ty::Array { .. } => children > super::walk::GUARD_ABOVE as u64,
+            _ => false,
         };
-        // A long run counted rather than walked.
-        //
-        // Every element of a run is declared the same way, so a WAV's half a
-        // million samples are half a million of one box and the count is known
-        // the moment the length is. Walking them to find that out cost a
-        // hundred seconds on a five-thousand-sample file and spent the whole
-        // budget on one list, so the ones past `RUN_SAMPLE` are counted here
-        // and not walked. Their own insides stay a floor, which is what
-        // `truncated` says.
-        //
-        // Not for a run of choices: what one of those turns out to be is not
-        // settled by the declaration, so counting them all as the first one
-        // would be a number the file does not say.
-        let mut bulk = false;
-        if let (Some(n), Some(elem)) = (known, run.as_ref().and_then(|t| elem_of(&self.template, t))) {
-            if n as usize > RUN_SAMPLE && !is_choice(&self.template, elem) {
-                if let Some(key) = key_for(&self.template, elem, keys) {
-                    let e = boxes.entry(key.clone()).or_insert_with(|| BoxCount {
-                        key,
-                        count: 0,
-                        first_path: {
-                            let mut p = at.path.clone();
-                            p.push(0);
-                            p
-                        },
-                        space: r.space,
-                    });
-                    e.count += n;
-                    bulk = true;
+        Ok(Seen { space, declared, resolved, run, children, guarded })
+    }
+
+    /// Write down one node that has been seen, standing for `weight` nodes of
+    /// the file, and open a frame over its children.
+    fn count_seen(&mut self, walk: &mut CensusWalk, path: &[usize], row: Option<(String, usize)>, weight: u64, seen: Seen) {
+        let Seen { space, declared, resolved, run, children, guarded } = seen;
+        walk.walked += 1;
+        if let Some((key, i)) = &row {
+            walk.add_row(key, *i, weight, path, space);
+        }
+        // The choice this node made, for a node that is one: a switch is a box
+        // of its own and its row is the case taken. Counted whether or not
+        // which way can be named: counting it only when the case is known left
+        // the box reading "this file has none of these" over a file that takes
+        // it on every chunk.
+        let choice = is_choice(&self.template, &declared);
+        if choice {
+            if let Some(key) = walk.key(&self.template, &declared) {
+                walk.add_box(&key, weight, path, space);
+                if let Some(case) = self.case_taken(&declared, &resolved) {
+                    walk.add_row(&key, case, weight, path, space);
                 }
             }
         }
-        // A run's children are capped whatever its length turned out to be.
-        // They are all the same type, so past a handful the walk is paying per
-        // element for a fact it already has; and a run whose length only
-        // walking settles would otherwise queue the whole budget. A structure's
-        // children are its fields and are never capped: each is a different row
-        // and dropping one drops a row of the picture.
-        let cap = if run.is_some() { room.min(RUN_SAMPLE) } else { room };
-        let taken = cap.min(usize::try_from(count).unwrap_or(usize::MAX));
-        // What was not walked is what `truncated` is for. A run counted in bulk
-        // has its own count right; what is inside the elements past the sample
-        // is what is short.
-        if (taken as u64) < count || (known.is_none() && taken == cap) {
-            *truncated = true;
+        // Which box this node's own children are rows of. A node declared as a
+        // choice *is* whatever it resolved to, whether or not the case it came
+        // from could be named: its children are the fields of the shape the
+        // choice picked, and standing them on the choice's rows put a PNG's
+        // `width` on the row that says `'IHDR'`.
+        let own = match &run {
+            Some(_) => None,
+            None if choice => walk.key(&self.template, &resolved),
+            None => walk.key(&self.template, &declared),
+        };
+        if let Some(key) = &own {
+            walk.add_box(key, weight, path, space);
         }
-        for i in 0..taken {
-            let mut child = at.path.clone();
-            child.push(i);
-            if self.resolve(doc, &child).is_err() {
-                break;
-            }
-            queue.push_back(Waiting { path: child, row: own.clone().map(|k| (k, i)), counted: bulk });
+        if children == 0 {
+            return;
         }
-        Ok(())
+        // A run of elements that are all the same shape: the first one is
+        // walked and stands for every one of them. Only where the node's
+        // children are the elements themselves, which is a list and not
+        // something wrapped round one: a stream holding a list has the list
+        // as its child, not the list's elements.
+        let same = match &resolved {
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => same_shape(&self.template, elem, 0),
+            _ => false,
+        };
+        let (count, weight) = match (children, same) {
+            (n, true) => (1, weight.saturating_mul(n)),
+            (n, false) => (n, weight),
+        };
+        walk.stack.push(Frame { path: path.to_vec(), own, next: 0, count, weight, guarded, born: Vec::new(), prev: None });
+    }
+
+    /// Note a child so that the frame it belongs to can give it back.
+    fn note_census_child(&mut self, walk: &mut CensusWalk, top: usize, path: &[usize]) {
+        let f = &mut walk.stack[top];
+        if !f.guarded {
+            f.born.push(path.to_vec());
+            return;
+        }
+        if let Some(gone) = f.prev.replace(path.to_vec()) {
+            self.memo.forget_node(&gone);
+        }
+    }
+
+    /// Close the frame on top, giving its children back to the memo.
+    fn close_census_frame(&mut self, walk: &mut CensusWalk) {
+        let f = walk.stack.pop().expect("called with a frame open");
+        for path in f.born {
+            self.memo.forget_node(&path);
+        }
+        if let Some(path) = f.prev {
+            self.memo.forget_node(&path);
+        }
     }
 
     /// Which case of a switch a node took, as a row of the switch's box.
@@ -417,9 +589,9 @@ mod tests {
     #[test]
     fn a_long_run_is_counted_in_full_without_being_walked() {
         // A thousand elements, and a walk allowed a hundred nodes. The count is
-        // still a thousand, because every element of a run is the same type and
-        // the length says how many: walking them would only spend the budget
-        // arriving at a number already known.
+        // still a thousand, because every element of this run is the same
+        // shape and the length says how many: walking them would only spend
+        // the budget arriving at a number already known.
         let elem = T::structure("Sample", vec![("left", T::u8()), ("right", T::u8())]);
         let root = T::structure("root", vec![("samples", T::Array { elem: Box::new(elem), count: E::lit(1000) })]);
         let t = Template::new("test", root);
@@ -429,6 +601,7 @@ mod tests {
         let c = ev.census(&doc, 100).expect("a census");
         assert_eq!(c.boxes.iter().find(|b| b.key == sample.key).map(|b| b.count), Some(1000));
         assert!(c.walked <= 100, "walked {} nodes for a thousand samples", c.walked);
+        assert_eq!(c.state, CensusState::Done);
         // And the first is still where it is, so a reader can be taken to it.
         assert_eq!(c.boxes.iter().find(|b| b.key == sample.key).map(|b| b.first_path.clone()), Some(vec![0, 0]));
     }
@@ -445,7 +618,10 @@ mod tests {
         let Some(t) = crate::formats::builtin("p8png") else { return };
         let d = crate::eval::diagram(&t);
         let (mut ev, doc) = read(t, &bytes);
-        let c = ev.census(&doc, 20_000).expect("a census");
+        // The whole file: a count stopped part way is a floor, and depth-first
+        // it can stop inside the code of the second chunk, before the rest.
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
         let by_key: std::collections::HashMap<&str, u64> =
             c.boxes.iter().map(|b| (b.key.as_str(), b.count)).collect();
         for name in ["IHDR", "tEXt"] {
@@ -484,11 +660,161 @@ mod tests {
         let Some(t) = crate::formats::builtin("png") else { return };
         let d = crate::eval::diagram(&t);
         let (mut ev, doc) = read(t, &bytes);
-        let c = ev.census(&doc, 20_000).expect("a census");
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
         let chunk = d.types.iter().find(|b| b.name == "Chunk").expect("a Chunk box");
         let ihdr = d.types.iter().find(|b| b.name == "IHDR").expect("an IHDR box");
         let chunks = c.boxes.iter().find(|b| b.key == chunk.key).map(|b| b.count).unwrap_or(0);
         assert!(chunks >= 3, "a PNG has at least a header, some data and an end: {chunks}");
         assert_eq!(c.boxes.iter().find(|b| b.key == ihdr.key).map(|b| b.count), Some(1), "one header");
+    }
+
+    /// A record whose length its own first byte gives, so no two records of a
+    /// run need be the same shape and the run is walked one by one.
+    fn record() -> T {
+        T::structure("Record", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))])
+    }
+
+    /// `n` records of one byte of body each, in a run only walking settles the
+    /// length of.
+    fn records(n: usize) -> (Template, Vec<u8>) {
+        let t = Template::new("test", T::repeat(record(), Until::End));
+        let bytes = (0..n).flat_map(|i| [1u8, i as u8]).collect();
+        (t, bytes)
+    }
+
+    fn count_of(c: &Census, d: &crate::eval::Diagram, name: &str) -> Option<u64> {
+        let b = d.types.iter().find(|b| b.name == name)?;
+        c.boxes.iter().find(|x| x.key == b.key).map(|x| x.count)
+    }
+
+    #[test]
+    fn a_run_only_walking_settles_is_counted_to_its_end() {
+        // Fifty records. The walk once looked inside the first 32 of a run
+        // whose length it could not know, and badged a journal's object box
+        // with 32 over a file of twenty thousand.
+        let (t, bytes) = records(50);
+        let d = crate::eval::diagram(&t);
+        let (mut ev, doc) = read(t, &bytes);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
+        assert_eq!(count_of(&c, &d, "Record"), Some(50));
+    }
+
+    #[test]
+    fn a_list_that_ends_early_or_holds_only_numbers_finishes() {
+        // The two ways a finished count of a small JPEG called itself
+        // unfinished: a run of two tables asked for 32 and marked short
+        // before finding it held two, and 64 bytes of a quantisation table,
+        // which hold no box and no row, walked 32 of.
+        let table = T::structure("Table", vec![("id", T::u8()), ("values", T::array(T::u8(), E::lit(64)))]);
+        let t = Template::new("test", T::structure("root", vec![("tables", T::repeat(table, Until::End))]));
+        let d = crate::eval::diagram(&t);
+        let bytes: Vec<u8> = (0..2).flat_map(|i| std::iter::once(i).chain(std::iter::repeat_n(7, 64))).collect();
+        let (mut ev, doc) = read(t, &bytes);
+        let c = ev.census(&doc, 20_000).expect("a census");
+        assert_eq!(c.state, CensusState::Done, "walked {}", c.walked);
+        assert_eq!(count_of(&c, &d, "Table"), Some(2));
+    }
+
+    #[test]
+    fn a_same_shaped_run_counts_its_rows_once_per_element() {
+        // Every element of a run of same-shaped records has the same fields,
+        // so walking the first and counting it a thousand times is exact for
+        // its rows as well as its box.
+        let elem = T::structure("Sample", vec![("left", T::u8()), ("right", T::u8())]);
+        let root = T::structure("root", vec![("samples", T::Array { elem: Box::new(elem), count: E::lit(1000) })]);
+        let t = Template::new("test", root);
+        let d = crate::eval::diagram(&t);
+        let sample = d.types.iter().find(|b| b.name == "Sample").expect("a Sample box").key.clone();
+        let (mut ev, doc) = read(t, &vec![7u8; 2000]);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
+        let rows: Vec<u64> = (0..2).map(|i| c.rows.iter().find(|r| r.key == sample && r.row == i).map_or(0, |r| r.count)).collect();
+        assert_eq!(rows, vec![1000, 1000]);
+    }
+
+    #[test]
+    fn a_go_that_runs_out_says_working_and_the_next_carries_on() {
+        let (t, bytes) = records(400);
+        let (mut whole, doc) = read(t.clone(), &bytes);
+        let expected = whole.census(&doc, usize::MAX).expect("a census");
+
+        let mut ev = Evaluator::new(t);
+        ev.set_slice(Some(50));
+        let mut walk = CensusWalk::new(doc.len_bits());
+        let mut goes = 0;
+        let got = loop {
+            goes += 1;
+            assert!(goes < 1000, "never finished");
+            ev.begin_slice();
+            let c = ev.census_step(&doc, &mut walk, usize::MAX).expect("a step");
+            match c.state {
+                CensusState::Working => continue,
+                _ => break c,
+            }
+        };
+        assert!(goes > 1, "one go of 50 counted 400 records");
+        assert_eq!(got.state, CensusState::Done);
+        // Resuming counts nothing twice and misses nothing.
+        assert_eq!(got.boxes, expected.boxes);
+        assert_eq!(got.rows, expected.rows);
+        assert_eq!(got.walked, expected.walked);
+    }
+
+    #[test]
+    fn a_count_that_reaches_its_limit_says_capped_and_a_higher_limit_carries_on() {
+        let (t, bytes) = records(100);
+        let d = crate::eval::diagram(&t);
+        let (mut whole, doc) = read(t.clone(), &bytes);
+        let expected = whole.census(&doc, usize::MAX).expect("a census");
+
+        let mut ev = Evaluator::new(t);
+        let mut walk = CensusWalk::new(doc.len_bits());
+        let capped = ev.census_step(&doc, &mut walk, 30).expect("a step");
+        assert_eq!(capped.state, CensusState::Capped);
+        assert_eq!(capped.walked, 30);
+        assert!(count_of(&capped, &d, "Record").is_some_and(|n| n < 100));
+        // Asked again with the same limit, it stays where it is.
+        assert_eq!(ev.census_step(&doc, &mut walk, 30).expect("a step"), capped);
+        // And with more room it finishes, with the counts of a walk that was
+        // never stopped.
+        let rest = ev.census_step(&doc, &mut walk, usize::MAX).expect("a step");
+        assert_eq!(rest.state, CensusState::Done);
+        assert_eq!(rest.boxes, expected.boxes);
+        assert_eq!(rest.rows, expected.rows);
+    }
+
+    #[test]
+    fn a_count_waiting_on_bytes_says_waiting_and_names_them() {
+        use crate::source::ChunkStore;
+        let (t, bytes) = records(8);
+        let d = crate::eval::diagram(&t);
+        // Sixteen bytes in two chunks of eight, and only the first is here.
+        let mut doc = Document::new(ChunkStore::new(16, 8, 4));
+        doc.source_mut().insert(0, bytes[..8].to_vec().into_boxed_slice());
+        let mut ev = Evaluator::new(t);
+        let mut walk = CensusWalk::new(doc.len_bits());
+        ev.begin_slice();
+        let first = ev.census_step(&doc, &mut walk, usize::MAX).expect("a step");
+        assert_eq!(first.state, CensusState::Waiting);
+        assert!(ev.wanted().iter().any(|m| m.chunk == 1), "asked for {:?}", ev.wanted());
+        doc.source_mut().insert(1, bytes[8..].to_vec().into_boxed_slice());
+        ev.begin_slice();
+        let done = ev.census_step(&doc, &mut walk, usize::MAX).expect("a step");
+        assert_eq!(done.state, CensusState::Done);
+        assert_eq!(count_of(&done, &d, "Record"), Some(8));
+    }
+
+    #[test]
+    fn a_finished_count_gives_back_what_it_walked() {
+        // Ten thousand records and every one of their fields. Kept, that is
+        // thirty thousand nodes the memo holds for a count nobody reads again.
+        let (t, bytes) = records(10_000);
+        let (mut ev, doc) = read(t, &bytes);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
+        assert!(c.walked > 30_000, "walked {}", c.walked);
+        assert!(ev.memo_len() < 1_000, "{} nodes kept after the count", ev.memo_len());
     }
 }

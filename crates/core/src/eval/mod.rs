@@ -47,7 +47,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-pub use census::{BoxCount, Census, RowCount};
+pub use census::{BoxCount, Census, CensusState, CensusWalk, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
