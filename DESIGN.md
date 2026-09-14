@@ -3043,6 +3043,89 @@ object in the file for nothing; a built type that points back into the file
 would need that. A key is not keyed by where its table is, because one document
 has one table per kind in both formats that need this.
 
+### The Diagram view: this file's counts, and what a click does
+The Diagram view draws a format's types as boxes, and lays the open file's
+counts over them: a badge on each box and row saying how many of it this file
+holds, a faded box for a type it has none of, and a double click to the first
+one. The counts come from `crates/core/src/eval/census.rs`; what the view says
+about them is decided in `web/src/diagramcounts.ts`.
+
+**A count is a walk kept between goes.** `CensusWalk` is held on the sheet
+beside the kind walk and thrown away with it on an edit or a new template.
+`Evaluator::census_step` carries it on until the go's allowance runs out
+(`Working`), the next node's bytes have not arrived (`Waiting`, with the
+chunks in `wanted`), the walk has counted as many nodes as the caller allowed
+(`Capped`), or it has counted every node (`Done`). Only `Done` counts are
+totals. The first version started from the root on every call, walked a
+breadth-first queue capped at 20,000, and called all of those "stopped short"
+in one flag answered as `ok`; a view that only asked again after a reply that
+was not `ok` never asked again. A 6 KB JPEG then said "Counts cover the first
+269 fields read" over a count that had finished: the flag was also set by the
+sampling below, and by a run of two tables that had been asked for 32.
+
+**Depth-first, giving nodes back behind it,** the way the kind totals walk:
+children of a short node go back when it closes, a long list's elements one
+behind the walk, and each node's size is asked before its children are walked
+so that placing its sibling does not read them back into the memo. A count of
+the whole of `uproot-Zmumu-lz4.root` (183,000 fields) holds at most 12,700
+nodes where the breadth-first one held 184,000. What a limit keeps is the
+first part of the file in order, which is what the toolbar's "Counted the
+first 200,000 fields" says.
+
+**Exact or labelled.** A run whose element type is the same shape in every
+element, settled by the template (numbers and fixed text, structures of them,
+lists of them with a written length; not a switch, a condition, a length read
+from the file, or a pointer), is counted by walking element 0 with a weight
+of the run's length, rows included. Every other run is walked element by
+element, its length the listing's own (`child_count`). Sampling 32 elements
+of any run had badged a systemd journal's `JournalObject` box `×32`.
+
+**When the web counts.** `AUTO_COUNT` in `diagramcounts.ts`: a file under 50
+MiB is counted to the end; a larger one to 200,000 fields, then the toolbar
+offers Keep counting, which lifts the limit and carries on from the same walk.
+`main.ts` steps the count for up to `COUNT_TURN_MS` a turn, books the next turn
+itself after `working`, and leaves `waiting` to the document's change event
+when the chunks land. The drawing is laid out again at most once a second while
+a count runs (`redrawIn`), and not at all for the first second, so a small
+file's count finishes before anything is drawn.
+
+Measured natively in release on 2026-09-14 (`examples/census_probe.rs`, goes of
+5,000 elements):
+
+| File | Fields | Time | Longest go | Nodes held at most |
+|---|---|---|---|---|
+| libjpeg-turbo testorig.jpg, 6 KB | 117 | 4 ms | 4 ms | 61 |
+| beats-binary-message.journal, 8 MB | 2,874 | 19 ms | 19 ms | 4 |
+| freedm.wad, 22 MB | 19,297 | 183 ms | 106 ms | 15,429 |
+| uproot-Zmumu-lz4.root, 213 KB | 182,846 | 2.6 s | 105 ms | 12,688 |
+| llama2c stories15m q4_0.gguf, 19 MB | 160,859 | 1.8 s | 77 ms | 610 |
+| the-bird-book.epub, 48 MB | 275,093 | 1.8 s | 344 ms | 61,289 |
+
+**What the badges say.** While a count is unfinished every box badge is a
+floor, `×12+`, including `×0+` and `×1+`, and nothing is faded, since a type
+not found yet is not a type the file lacks; the hover says "at least" and
+"Still counting" or how many fields were counted. A row is badged only where
+its count differs from its box's: a field that is there once per structure
+says nothing the box has not, and the badges left are the optional fields and
+the cases taken by some. A row whose badge is dropped keeps its count on
+hover. The toggle is "Hide types not found in this file", which stays true
+while a count runs, and its hover says types not found yet are hidden too.
+
+**Clicks.** Going to the hex view switches the reader's view, so it is a double
+click: on a box title or row the count found, the first one; on a row of the first box the open file has, the field itself. One
+handler and one title per row (`offerGo`), whichever reasons apply. A single
+click marks the row and does nothing else; Escape or a click on the empty
+drawing lets go. The graph view goes on a double tap for the same reason. The
+treemap's single click marks a box and moves the cursor without switching the
+view, and its double click opens the box, so it is left as it is.
+
+**Folds.** A box, a strip, a strip's case list and the inspector's child list
+show everything when folding would hide no more than `FOLD_SLACK` (3) rows
+(`web/src/fold.ts`): the fold row takes a row's room, so hiding one row behind
+it saved nothing and read "… 1 more fields". The listing's "Show more" rows are
+a window being paged, not a fold, and the treemap pools rectangles by area, so
+neither follows this rule.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
