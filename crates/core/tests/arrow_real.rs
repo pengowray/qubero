@@ -396,6 +396,7 @@ fn every_compressed_buffer_opens_to_the_uncompressed_files_buffer() {
         let batches = ev.node(&doc, &[BATCHES]).unwrap().child_count as usize;
         assert_eq!(batches, plain.node(&plain_doc, &[BATCHES]).unwrap().child_count as usize, "{name}");
         let (mut opened, mut stored, mut empty) = (0, 0, 0);
+        let mut shapes = std::collections::BTreeSet::new();
         for batch in 0..batches {
             let count = ev.node(&doc, &[BATCHES, batch, 4]).unwrap().child_count as usize;
             assert_eq!(count, plain.node(&plain_doc, &[BATCHES, batch, 4]).unwrap().child_count as usize, "{name} batch {batch}");
@@ -422,11 +423,44 @@ fn every_compressed_buffer_opens_to_the_uncompressed_files_buffer() {
                     .unwrap()
                     .unwrap_or_else(|| panic!("{name} batch {batch} buffer {i} opens"));
                 assert_eq!(ev.space(id).unwrap().bytes(), want, "{name} batch {batch} buffer {i}");
+                ev.space(id).unwrap().trace().check_tiles().unwrap_or_else(|e| panic!("{name} batch {batch} buffer {i}: {e}"));
+                // And the blocks read as rows, the way the listing reads them.
+                // The frames here are liblz4's rather than the ones the unit
+                // tests pack, so this is where a shape those never make turns
+                // up.
+                let mut names = Vec::new();
+                walk(&doc, &mut ev, &[BATCHES, batch, 4, i, 1, 1], 3, &mut names);
+                shapes.extend(names.into_iter().filter(|n| !n.starts_with("literal ") && !n.starts_with("match ")));
                 opened += 1;
             }
         }
         assert!(opened > 20, "{name}: {opened} buffers opened");
         eprintln!("{name}: {opened} buffers opened, {stored} stored, {empty} empty, all as the uncompressed file has them");
+        eprintln!("{name}: the rows under their blocks, symbols aside, are {shapes:?}");
+    }
+}
+
+/// Every row under `at`, `depth` levels down, read one at a time the way the
+/// listing reads them, each inside the row it is under. A run of thousands of
+/// codes is read at its two ends, which is where a row that does not fit
+/// would be.
+fn walk(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], depth: u32, names: &mut Vec<String>) {
+    let node = ev.node(doc, at).unwrap_or_else(|e| panic!("{at:?}: {e:?}"));
+    names.push(node.name.clone());
+    if depth == 0 {
+        return;
+    }
+    let n = node.child_count as usize;
+    for k in (0..n.min(64)).chain(n.saturating_sub(4).max(64)..n) {
+        let path = [at, &[k]].concat();
+        let child = ev.node(doc, &path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+        assert!(
+            child.offset_bits >= node.offset_bits && child.offset_bits + child.size_bits <= node.offset_bits + node.size_bits,
+            "{path:?} ({}) is not inside {at:?} ({})",
+            child.name,
+            node.name
+        );
+        walk(doc, ev, &path, depth - 1, names);
     }
 }
 
