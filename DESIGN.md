@@ -1512,10 +1512,21 @@ A space whose template came from looking at its bytes, a gzip of a tar, is read
 by a template that needs nothing outside them, and keeps a reading of its own
 over its own bytes.
 
-The editor answers a declared stream's tab from the file's sheet
-(`Editor::tab`). An edit to the file or a change of template drops the spaces
-with the rest of the reading, so the tab's stream is opened again in the
-file's reading as it is now the next time a field of the tab is asked about,
+The editor answers a declared stream's tab from its home sheet
+(`Editor::tab`): the sheet whose reading opened the stream, which is the file's
+or a recognised stream's, since those are the two kinds with a reading of
+their own. A stream opened from a tab is opened by the tab's space and a path
+of the tab (`Editor::open_space`). From a tab over a declared stream that path
+is put under the tab's root and opened in the tab's home, so it is the same
+stream, with the same space, as the one the file's own tab opens at the longer
+path; from a tab with a reading of its own it is opened in that reading, with
+that tab as its home. The web had passed a tab's path to an editor that read it
+as a path of the file, so a stream inside a tab opened whatever the file had at
+that path, or nothing. The cursor link and the decoder's line in the status bar
+mark bits of the file, so a stream whose home is a recognised stream has
+neither. An edit to the file or a change of template drops the spaces
+with the rest of the reading, so the tab's stream is opened again in its
+home's reading as it is now the next time a field of the tab is asked about,
 and a stream that is no longer there leaves the tab empty rather than reading
 whatever the new reading has at the old path. A field of such a tab can want
 bytes of the file, for the fields outside the stream or for a joined stream's
