@@ -3084,8 +3084,10 @@ sampling below, and by a run of two tables that had been asked for 32.
 
 **Depth-first, giving nodes back behind it,** the way the kind totals walk:
 children of a short node go back when it closes, a long list's elements one
-behind the walk, and each node's size is asked before its children are walked
-so that placing its sibling does not read them back into the memo. A count of
+behind the walk, and each node's size is asked as the walk leaves it, while its
+children are still there to answer, so that placing its sibling does not read
+them back into the memo. Asked on arrival instead, sizing a list walks all of it
+before its first element is counted. A count of
 the whole of `uproot-Zmumu-lz4.root` (183,000 fields) holds at most 12,700
 nodes where the breadth-first one held 184,000. What a limit keeps is the
 first part of the file in order, which is what the toolbar's "Counted the
@@ -3114,11 +3116,17 @@ Measured natively in release on 2026-09-14 (`examples/census_probe.rs`, goes of
 | File | Fields | Time | Longest go | Nodes held at most |
 |---|---|---|---|---|
 | libjpeg-turbo testorig.jpg, 6 KB | 117 | 4 ms | 4 ms | 61 |
-| beats-binary-message.journal, 8 MB | 2,874 | 19 ms | 19 ms | 4 |
-| freedm.wad, 22 MB | 19,297 | 183 ms | 106 ms | 15,429 |
-| uproot-Zmumu-lz4.root, 213 KB | 182,846 | 2.6 s | 105 ms | 12,688 |
-| llama2c stories15m q4_0.gguf, 19 MB | 160,859 | 1.8 s | 77 ms | 610 |
-| the-bird-book.epub, 48 MB | 275,093 | 1.8 s | 344 ms | 61,289 |
+| beats-binary-message.journal, 8 MB | 2,874 | 15 ms | 15 ms | 4 |
+| freedm.wad, 22 MB | 19,297 | 152 ms | 85 ms | 15,429 |
+| uproot-Zmumu-lz4.root, 213 KB | 182,846 | 2.1 s | 114 ms | 12,725 |
+| llama2c stories15m q4_0.gguf, 19 MB | 160,859 | 1.1 s | 36 ms | 558 |
+| the-bird-book.epub, 48 MB | 275,093 | 1.3 s | 243 ms | 61,289 |
+
+In the browser the same count of the ROOT file is 1.4 s of work over 15 goes,
+the longest 116 ms, and the EPUB 0.35 s over 70 goes, 54 of them waiting on
+bytes. A 189 MiB GGUF (`Kokoro_no_espeak_Q4.gguf`) stops at 200,000 fields
+about three seconds after it is opened, and Keep counting finishes the other
+5.8 million fields in 23 s of work over 1,163 goes, none longer than 99 ms.
 
 **What the badges say.** While a count is unfinished every box badge is a
 floor, `×12+`, including `×0+` and `×1+`, and nothing is faded, since a type
