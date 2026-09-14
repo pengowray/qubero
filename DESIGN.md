@@ -3136,11 +3136,129 @@ reaches it through the key that picks a tree's record by class name, which is a
 match on a word; the index had followed a switch on a number and not a match,
 so until it did, nothing a ROOT directory lists could be found by `locate`.
 
-What it does not do. The placed index does not walk into a schema node, since
-every ROOT object is in a stream's space and indexing one would open every
-object in the file for nothing; a built type that points back into the file
-would need that. A key is not keyed by where its table is, because one document
-has one table per kind in both formats that need this.
+**FFS.** ADIOS2's BP5 metadata is the second format this reads, and the one
+that shows the IR is not shaped round ROOT. An FFS record is a C structure laid
+out as the writer's compiler laid it out, and a format in `mmd.0` says how: a
+list of subformats, each with a name, a record length, a byte order and a
+pointer size, and fields, each a name, a type written as text, a size and an
+offset. A record's `data` is a schema node keyed by its twelve-byte format ID,
+read as one 96-bit number, whose table is every block of `mmd.0`
+(`formats/adios/ffs_schema.rs`). The builder lays each field at its offset, with
+padding between, to the record length. A type is a base and dimensions:
+`integer`, `unsigned integer`, `float` and `char` are numbers of the field's
+size in the subformat's byte order, another subformat's name is that structure
+written in place (eight deep at most), and any dimension that names a field
+makes the field a pointer. A pointer reads as its offset and, where the offset
+is not nought, what it points at, counted from the start of the record (the
+node is inside a `Ty::Origin`), as many elements as the named fields multiply
+to. A `string` is a pointer to text. The count has to be a field the structure
+has read by then, which every format BP5 writes keeps to; a pointer whose count
+comes later reads as its offset alone.
+
+BP5 names its fields by what they hold. `BPG_8_10_temperature` is a global
+array of eight-byte values of `adios2::DataType` 10, double, called
+`temperature`; `BPg_step_count` is a global value; a derived variable carries
+its expression in base64 between dashes. So a field named that way gains its
+name's parts as fields placed over the name's own bytes in `mmd.0` (the shape
+letter, the size and type digits, the name), marked as second readings, and a
+list of blocks built from its subformat: each block's counts and starts out of
+`Count` and `Offset`, its bounds typed as the variable out of `MinMax`, and its
+location. The type number is `adios2::DataType`, not BP3 and BP4's
+`DataTypes`, which numbers the same types differently. An attribute's name
+starts with a character that is its type, `'0'` plus the type and 18 more for
+an array, and its values are typed by it. What the blocks' values need, the data
+file and where the step's data starts in it, is in two other files: see "A
+folder opened as one file".
+
+A record with no `mmd.0` in reach, or whose ID is not among the formats, is its
+bytes with the reason on it (`mmd.0 not opened: it holds the format this record
+is written in`, `no format 02000249dc36d3558aa04d5d in mmd.0`): the record's
+`data_length` has already sized the node. Checked against adios2 2.12.1's
+`FileReader` over every variable, block, bound and value of the sample dataset,
+and against records of every kind of field built byte by byte in both byte
+orders.
+
+**Where a built type is followed.** The placed index follows a schema node
+read in the file's own space, and still not one inside a stream: every ROOT
+object is inside a stream, and indexing those would open every object in the
+file for nothing, while a BP5 record's pointers and its blocks' values are
+offsets in the file that `locate` has to find. `places` answers for a schema
+node by where it is read, and a stream answers for its contents as read in a
+stream, so the two fixed points over named types are kept apart. A key is not
+keyed by where its table is, because one document has one table per kind in
+both formats that need this.
+
+### A folder opened as one file
+Some formats are folders. An ADIOS2 BP5 dataset is `md.idx`, `md.0`, `mmd.0`
+and `data.0`: `md.0`'s records are written in formats `mmd.0` holds, and each
+block of values is in `data.0` at an offset `md.0` gives, counted from where
+`md.idx` says that step's data starts. A Zarr store is a tree of chunks, and a
+BP3 file keeps its data in a folder beside it. Qubero reads one file.
+
+**Two ways to read several files, and the one taken.** The first is companion
+documents: `md.0` opens as its tab, and the reading holds `mmd.0` and `data.0`
+beside it, each with its own evaluator, for the schema builder to read from.
+Offsets stay each file's own, and Save as writes `md.0`. But every path, origin,
+relation, placement and edit reach in the evaluator is a path in one memo and a
+bit of one document: a member's `members_from`, the origins panel, `Kept.reach`
+and `forget_after`, the placed index and `locate` would all need a document
+beside every path. The values in `data.0` would be nodes of `md.0`'s tree whose
+bytes are in another document, which is a second mechanism again; the host would
+need a chunk feed per file.
+
+The second is one file: the folder written into a ZIP that stores each file as
+it is. Every file is then a run of bytes at a known place in one space, so a
+pointer from one file into another is an offset like any other, and none of the
+above changes. That is the one taken. What it costs: the hex view's addresses
+are the archive's, Save as writes the archive (which ADIOS2 reads once it is
+unzipped), and the archive is made before anything can be read.
+
+**The archive.** The web app makes it from a dropped folder, several dropped
+items, or a picked folder (`folderzip.ts`). Nothing is copied: it is a `Blob` of
+the headers written here and the files themselves, read when the editor asks,
+the same as a file opened alone. Entries keep the folder's name in front,
+`steps.bp5/md.idx`, so unzipping gives the folder back. The files a format is
+recognised by go first (`md.idx`, `mmd.0`, `md.0`, and Zarr's metadata),
+because recognition reads the front of a file, then the rest in path order with
+`data.N` last. Each entry carries its CRC-32, which means reading every byte of
+the folder once before it opens, with a count of how far it has got and a way to
+stop. ZIP64 records are written where a size or an offset does not fit in 32
+bits. A folder that is not a dataset opens as a ZIP, or a Zarr ZipStore.
+
+**The dataset.** A ZIP whose front stores a BP5 index or format list is
+`adioszip` (`formats/adios/dataset.rs`). It reads the archive's records as any
+ZIP's, and after them `dataset`, a schema node whose builder walks the records,
+matches entries by the last part of their names, and places the files of the
+first dataset it finds at their entries' bytes: `md_idx`, `mmd_0`, then
+`data_0_at` (where `data.0` starts, all the metadata needs of it) and `md_0`
+last, since a field finds only the fields declared before it. Each row says
+which entry it is. A step of `md_0` finds the index record whose metadata
+offset is where the step starts, and reads the step's data offset from it; a
+block's values are at `data_0_at` plus that plus the block's location. Missing
+files cost what they cost and no more: without `data.0` the blocks have no
+values and their location says why, without `mmd.0` the records are bytes saying
+so, and a file the archive compressed is bytes saying only a stored entry is
+read in place. The walk reads every record to the end record, so any edit to the
+archive builds the dataset again, and with it every type it placed.
+
+**Which reading a byte is.** Each entry's data is read twice: as the archive's
+stored bytes, and as the dataset's file. The archive's reading is marked as the
+second (`Field::aside`), so the dataset's is counted. `locate` honours that: a
+walk from the root that ends on or under a second reading tries the placed
+stretches narrower than the structure holding it, and takes one that reaches a
+field. So a byte of `md.0` is a field of its record and a byte of `data.0` is a
+value of the block placed there. That had always been what `aside` said a
+second reading was, and no second reading before this one was in place.
+
+**One file of a dataset opened alone** says so above the views: what it lacks
+the other files for, and a button to pick the folder, which then opens in its
+place. A file lifted out of an archive already open says it reads there.
+
+What it does not do. Only the first dataset in an archive is read. A step
+written by more than one writer, and data files past `data.0`, stay bytes.
+Addresses are the archive's, not each file's; the position of the cursor inside
+the file it is in is not said. A folder of millions of files is read into a list
+before anything opens.
 
 ### The Diagram view: this file's counts, and what a click does
 The Diagram view draws a format's types as boxes, and lays the open file's
