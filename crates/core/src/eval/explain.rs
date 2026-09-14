@@ -932,18 +932,16 @@ impl Evaluator {
             }
         }
 
-        // The column chunk this page was placed by, found by walking back up
-        // rather than by counting levels: the arrangement between the two is
-        // the template's business and may change.
-        let mut chunk = at.to_vec();
-        loop {
-            if self.node(doc, &chunk).map(|n| n.type_name == "ColumnChunk").unwrap_or(false) {
-                break;
-            }
-            if chunk.pop().is_none() {
-                return Ok(empty(Some("The page is not under a column chunk.".into())));
-            }
-        }
+        // The column chunk entry in the footer that placed the column chunk
+        // this page is in: the record the nearest gather around the page
+        // walked to. Found that way rather than by counting levels, since the
+        // arrangement between the two is the template's business and may
+        // change. Its index in the row group's list is the column's.
+        let Some((list, idx)) = self.gathered_in(at) else {
+            return Ok(empty(Some("The page is not under a column chunk.".into())));
+        };
+        let chunk = self.gathered_record(doc, &list, idx)?;
+        self.record_frame(doc, &chunk)?;
         let column_index = chunk.last().copied().unwrap_or(0);
         let mut chunk_fields = chunk.clone();
         chunk_fields.push(0);

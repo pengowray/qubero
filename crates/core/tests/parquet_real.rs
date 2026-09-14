@@ -65,12 +65,16 @@ fn pages_and_indexes_are_separate_in_real_files() {
         let mut pages = Vec::new();
         let mut indexes = Vec::new();
         let mut columns = Vec::new();
+        let mut row_groups = Vec::new();
         while let Some(at) = stack.pop() {
             let node = ev.node(&doc, &at).unwrap_or_else(|e| panic!("{} {at:?}: {e:?}", path.display()));
             let range = node.offset_bits..node.offset_bits + node.size_bits;
+            // A column chunk and a row group are regions of the file before
+            // the footer. The footer's entries for them carry the same names.
             match node.type_name.as_str() {
                 "Page" => pages.push((at.clone(), range.clone())),
-                "ColumnPages" => columns.push(range.clone()),
+                "ColumnChunk" if range.start < footer => columns.push(range.clone()),
+                "RowGroup" if range.start < footer => row_groups.push(range.clone()),
                 "ColumnIndex" | "OffsetIndex" | "BloomFilter" => indexes.push(range.clone()),
                 _ => {}
             }
@@ -83,9 +87,16 @@ fn pages_and_indexes_are_separate_in_real_files() {
         for (at, range) in &pages {
             assert!(range.start >= 32 && range.end <= footer);
             assert!(columns.iter().any(|c| c.start <= range.start && range.end <= c.end));
+            assert!(row_groups.iter().any(|g| g.start <= range.start && range.end <= g.end));
             assert!(!indexes.iter().any(|ix| ix.start < range.end && range.start < ix.end));
             let found = ev.locate(&doc, range.start).unwrap();
             assert!(found.starts_with(at), "{} page {at:?} located as {found:?}", path.display());
+            // The cursor's path goes through the row group, then the column
+            // chunk, then the page, and not through the footer.
+            let kinds: Vec<String> = (0..=at.len()).map(|k| ev.node(&doc, &at[..k]).unwrap().type_name).collect();
+            let place = |name: &str| kinds.iter().position(|k| k == name);
+            assert!(place("RowGroup").is_some() && place("FileMetaData").is_none(), "{} {kinds:?}", path.display());
+            assert!(place("RowGroup") < place("ColumnChunk") && place("ColumnChunk") < place("Page"), "{} {kinds:?}", path.display());
             let spans = ev.spans(&doc, range.start, range.end.min(range.start + 256), 64).unwrap();
             assert!(spans.iter().any(|s| !s.gap), "page missing from hex annotations");
         }
@@ -96,7 +107,14 @@ fn pages_and_indexes_are_separate_in_real_files() {
                 assert!(!pages.iter().any(|(p, _)| at.starts_with(p)), "index mistaken for a page");
             }
         }
-        eprintln!("{}: {} pages, {} columns, {} indexes/bloom filters", path.display(), pages.len(), columns.len(), indexes.len());
+        eprintln!(
+            "{}: {} pages, {} row groups, {} columns, {} indexes/bloom filters",
+            path.display(),
+            pages.len(),
+            row_groups.len(),
+            columns.len(),
+            indexes.len()
+        );
         checked += 1;
     }
     assert!(checked > 0);

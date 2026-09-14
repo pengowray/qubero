@@ -1361,16 +1361,28 @@ pub enum Anchor {
 /// row groups inside a list the footer tags with a number. So a step either
 /// goes down one way or fans out, and the walk is every way through.
 ///
-/// The first step is always a [`Step::Field`], found the way
-/// [`Expr::Within`] finds its first name: a field declared before the gather,
-/// in its own structure or one it sits inside. Every step after it starts from
-/// wherever the one before it landed.
+/// The first step is a [`Step::Field`], found the way [`Expr::Within`] finds
+/// its first name: a field declared before the gather, in its own structure or
+/// one it sits inside. Or it is a [`Step::Placer`], for a gather inside an
+/// element another gather placed. Every step after it starts from wherever the
+/// one before it landed.
 #[derive(Debug, Clone)]
 pub enum Step {
     /// Into the field of this name, stepping through an `At` the way a path
     /// does everywhere else: naming a field whose contents are elsewhere means
     /// the contents.
     Field(Arc<str>),
+    /// The record that placed the gathered element this walk is inside, as
+    /// [`Expr::Placer`] reads it. Only a first step.
+    ///
+    /// What a gather inside a gathered element needs. A Parquet row group is
+    /// placed from its entry in the footer, and its column chunks are placed
+    /// from the column chunk entries inside that same entry. Nothing declared
+    /// in the row group's region leads back to the footer, and a walk from the
+    /// footer's first field would reach every row group's column chunks, not
+    /// this one's. The outer gather already knows which entry placed this
+    /// element, so the walk starts there.
+    Placer,
     /// The first element of the list here whose `key` holds `tag`, the same
     /// search [`Expr::Tagged`] makes. `shown` is what the step is called in a
     /// label, since `fields[id = 4]` is a question and `row_groups` is the
@@ -1423,6 +1435,10 @@ pub enum Step {
 impl Step {
     pub fn field(name: &str) -> Step {
         Step::Field(name.into())
+    }
+    /// Start at the record that placed the gathered element around the walk.
+    pub fn placer() -> Step {
+        Step::Placer
     }
     /// The first element of the list here whose `key` holds the number `tag`,
     /// called `shown` in a label.

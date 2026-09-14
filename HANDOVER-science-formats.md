@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| Parquet on gathers: each row group is a sized `RowGroup` region over its column chunks, each `ColumnChunk` placed by an inner gather that starts at the footer record that placed its row group (`Step::Placer`), pages under it as before. Coverage identical on all 16 samples and a 3-row-group pyarrow file; an overwrite of a column chunk entry agrees with a fresh read. `wip-parquet-gather-region` is obsolete. | af58397..a92a7f5 |
 | JPEG 2000: a new `jpeg2000` template for raw codestreams (every Part 1 main and tile-part header segment, tile-parts sized by Psot including Psot 0) and JP2 boxes (XLBox, LBox 0, `jp2h`, `pclr`, `cmap`, `cdef`, `res `); GRIB2 5.40 section 7 reads as one, SIZ checked against the grid on `grib/regular_ll_jpeg.grib2`. Seven samples compared segment by segment with glymur. Four are ITU-T conformance files whose notice allows JPEG 2000 standard uses only (`jpeg2000/README.md`). | b50f472..d894c81 |
 | Edits: a `Chain` or `Gather` element whose position was read from bytes at or after an overwrite is dropped with what follows it; everything placed from before stays. A finished gather whose reads all end before the edit keeps its walk, which it used to throw away on any edit (`comp.fits` gather re-read 157 ms to 14 ms). Checked against a fresh read of the edited bytes on HDF4, Arrow and FITS samples. | 562505a..f790d9d |
 | Codecs: `Codec::Lz4Frame` (linked and independent blocks, checksums traced not verified) opens Arrow's LZ4 bodies, all 46 buffers of `columns-lz4.arrow` byte-identical to the uncompressed file; `Codec::CdfHuffman` and `Codec::CdfAhuff` unpack whole-file compression types 2 and 3, matching NASA's `cdfhuff.c` byte for byte (samples `cdf/d103a2x.cdf`, `d103a2x-ahuff.cdf`); one `Bits` reader in both bit orders replaces the six private copies. | 916db8d..1b1b7dc |
@@ -127,10 +128,11 @@ offsets are scattered through the records that hold them").
 
 The FITS heap reads (see Closed). Left from the design:
 
-- Parquet still uses the `At` per column chunk. Moving it onto a gather gives
-  the row-group region a node; the attempt stopped at making a struct's gap
-  accounting see its zero-size gathers' children, and that unfinished,
-  untested change is on branch `wip-parquet-gather-region` (`dc1c86c`).
+- Parquet's row groups and column chunks are placed by gathers (see Closed).
+  `RowGroup` and `ColumnChunk` now name both the footer's Thrift structs and
+  the file regions; the position row spells Thrift steps (`.fields`,
+  `.value`, `.elems`); the inspector's `trail()` folds a list only when its
+  type ends in `[]`, so `descriptors → …` lists do not fold.
 - `memo.rs` `forget_after` assumes a field depends only on what is before it.
   Since B4 it drops what an `At` declared after the edit points at, which
   should cover Parquet's pages under the footer (no Parquet edit test checks

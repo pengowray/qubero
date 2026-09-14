@@ -2646,11 +2646,35 @@ the way it names a pointer table's: the type column reads `descriptors →
 u8[]`, the position row reads `where descriptor rows[3].col1[0] points`, and
 a formula reads `descriptor.count`.
 
-What it does not do yet. Parquet still places its pages with the `At` per
-column chunk; moving it onto a gather would give the row-group region a node
-of its own, and the unfinished attempt (a struct's gap accounting has to see
-its zero-size gathers' scattered children) is on branch
-`wip-parquet-gather-region`. Neither the placed index nor `kinds` counts a
+**A gather inside a gathered element.** Parquet (2026-09-14) places its pages
+with two gathers, one inside the other, and the row groups have a node each.
+`row_groups`, declared after the footer, walks to every row group's `columns`
+field in the footer and places a region for that row group, from where its
+column chunks start to where they end. Inside the region a second gather walks
+to that row group's column chunk entries and places each column chunk where
+its pages start, sized by its `total_compressed_size`. The inner walk cannot
+start at a field declared before it: nothing in the region leads back to the
+footer, and a walk from the footer reaches every row group's column chunks,
+not this one's. So a walk may also start with `Step::Placer`, the record that
+placed the element the walk is inside, which the outer gather already holds.
+Its label starts from that record's own, so a column chunk says `where
+descriptor footer.fields.row_groups.value.elems[0].fields.columns.value.elems[3]
+points`.
+
+Both are regions: a `Sized` round the inner gather, and a sized structure for
+the row group. So nothing about gaps changed. The placement index records each
+row group and each column chunk as it records a FITS heap array, and a gap
+inside a row group ends at the next column chunk. An earlier attempt kept the
+row group without a region and taught a structure's gap accounting to see the
+children of a gather inside it that covers nothing (branch
+`wip-parquet-gather-region`). This arrangement does not need that, and the
+placement index already ends such a gap at the gather's elements, which
+`a_gather_covering_nothing_inside_a_structure_ends_the_gaps_around_its_elements`
+pins. A page asks the entry that placed its column chunk for the codec and the
+physical type with `Expr::Placer`. The offset index, column index and bloom
+filter stay `At`s under that entry, since no row group's region holds them.
+
+What it does not do yet. Neither the placed index nor `kinds` counts a
 gathered child twice, but a gather over records that two paths reach would.
 
 **What an overwrite keeps.** The memo forgets forwards (`forget_after`): a

@@ -17,14 +17,22 @@
 //!
 //! Everything between the opening magic and the footer is the row groups: the
 //! pages of every column, each with its own header and its own encoding. The
-//! footer is what places them. Every column chunk in it reaches, with an `At`,
-//! the run its `dictionary_page_offset` or `data_page_offset` starts and its
-//! `total_compressed_size` measures, and that run reads as pages: a header in
-//! the same Thrift, read with [`PAGE_SCHEMA`], and the payload it counts. The
-//! chunk's offset index, column index and bloom filter are placed the same way.
-//! So a page sits under the column chunk that placed it, deep in the footer's
-//! tree, and there is no node for the region between the magic and the footer
-//! as a whole.
+//! footer is what places them, and two gathers read it that way (see
+//! [`row_groups`]). The first walks to every row group's `columns` in the
+//! footer and places a region for each row group, from where its column chunks
+//! start to where they end. The second is inside that region
+//! and walks to the column chunk entries of that one row group, placing each
+//! column chunk at its `dictionary_page_offset` or `data_page_offset` and
+//! sizing it by its `total_compressed_size`. A column chunk reads as pages: a
+//! header in the same Thrift, read with [`PAGE_SCHEMA`], and the payload it
+//! counts. So a page sits under its row group and column chunk, where it is in
+//! the file, and asks the entry that placed its column chunk for the codec and
+//! the physical type.
+//!
+//! The chunk's offset index, column index and bloom filter are not in any row
+//! group's region. A writer puts them after the last row group, or a bloom
+//! filter between one row group and the next, and each is placed with an `At`
+//! under the column chunk entry in the footer that names it.
 //!
 //! A payload opens. The column chunk's `codec` says what was run over it, and
 //! the payload is declared as a run packed that way, so what is inside a page
@@ -98,7 +106,7 @@
 
 use crate::codec::Codec;
 use crate::formats::thrift::{self, Field, Struct, What::{Enum, Plain, Struct as Sub, Text}};
-use crate::template::{Endian::{Big, Little}, Expr as E, Template, Ty as T, Until};
+use crate::template::{Anchor, Endian::{Big, Little}, Expr as E, Step, Template, Ty as T, Until};
 use std::sync::Arc;
 
 /// What one of these opens with, and what an unencrypted one closes with.
@@ -545,7 +553,13 @@ fn chunk_field(id: i128) -> E {
 }
 
 fn metadata_field(id: i128) -> E {
-    E::tagged_in(E::tagged("fields", &["id"], 3, &["value", "fields"]), &["id"], id, &["value"])
+    metadata_in(E::field("fields"), id)
+}
+
+/// A numbered field of the `ColumnMetaData` of the column chunk entry whose
+/// list of fields `chunk` lands on, which need not be the entry asking.
+fn metadata_in(chunk: E, id: i128) -> E {
+    E::tagged_in(E::tagged_in(chunk, &["id"], 3, &["value", "fields"]), &["id"], id, &["value"])
 }
 
 fn header_field(id: i128) -> E {
@@ -564,11 +578,11 @@ fn v2_field(id: i128) -> E {
     E::tagged_in(header, &["id"], id, &["value"])
 }
 
-/// What the column chunk said packed its pages, read from four levels up: a
-/// page sits inside a `ColumnPages` inside the `At` that placed it, and the
-/// codec is a field of the `ColumnMetaData` that same chunk carries.
+/// What the column chunk said packed its pages. A page sits in a column chunk
+/// in the file, and the codec is a field of the `ColumnMetaData` in the footer
+/// entry that placed that column chunk, so it is asked of that entry.
 fn codec_field() -> E {
-    metadata_field(4)
+    E::placer(metadata_field(4))
 }
 
 fn page() -> T {
@@ -651,9 +665,10 @@ fn stored(len: E) -> T {
 
 /// The column's physical type, as the number the footer wrote. Field 1 of the
 /// `ColumnMetaData`, which is where a page finds out how wide one value is
-/// without going anywhere near the schema.
+/// without going anywhere near the schema. Asked of the entry that placed the
+/// column chunk, as the codec is.
 fn type_field() -> E {
-    metadata_field(1)
+    E::placer(metadata_field(1))
 }
 
 /// What the unpacked bytes of a page hold.
@@ -792,17 +807,15 @@ fn pointed(at: E, length: E, inner: T) -> T {
         T::at(at, T::sized(length.at_most(E::Remaining.sub(E::lit(8)).sub(footer_length()).at_least(E::lit(0))), inner)))
 }
 
+/// What a column chunk entry in the footer places outside the row groups: its
+/// offset index, column index and bloom filter. Its pages are in its row
+/// group's region, placed by [`row_groups`].
 fn column_data() -> T {
-    let data = metadata_field(9);
-    let first = metadata_field(11).or(data.clone()).at_most(data);
     let bloom = T::structure("BloomFilter", vec![
         ("header", T::Named("parquet.BloomFilterHeader".into())),
         ("bitset", T::bytes(header_field(1))),
     ]);
     let refs = T::structure("ColumnData", vec![
-        ("pages", pointed(first, metadata_field(7), T::structure("ColumnPages", vec![
-            ("pages", T::repeat(page(), Until::End)),
-        ]))),
         ("offset_index", pointed(chunk_field(4), chunk_field(5), T::Named("parquet.OffsetIndex".into()))),
         ("column_index", pointed(chunk_field(6), chunk_field(7), T::Named("parquet.ColumnIndex".into()))),
         // Older writers omit bloom_filter_length. Its own header still gives
@@ -812,9 +825,89 @@ fn column_data() -> T {
     // A summary file points into other files. Encrypted column headers are
     // not compact Thrift. Keep their metadata without interpreting local bytes
     // as the pages of either kind of column.
-    let external = E::tagged("fields", &["id"], 1, &["id"]);
-    let encrypted = E::tagged("fields", &["id"], 8, &["id"]);
-    T::switch(external.or(encrypted), vec![(0, refs)], T::bytes(E::lit(0)))
+    T::switch(elsewhere(E::field("fields")), vec![(0, refs)], T::bytes(E::lit(0)))
+}
+
+/// Nonzero when the column chunk entry whose fields `chunk` lands on keeps its
+/// pages in another file (`file_path`, as a summary file does) or encrypts
+/// them (`crypto_metadata`). Neither kind is read as pages here.
+fn elsewhere(chunk: E) -> E {
+    let external = E::tagged_in(chunk.clone(), &["id"], 1, &["id"]);
+    let encrypted = E::tagged_in(chunk, &["id"], 8, &["id"]);
+    external.or(encrypted)
+}
+
+/// Where the first page of a column chunk is, from its entry in the footer:
+/// the dictionary page when it has one, which comes before the data pages,
+/// and otherwise the first data page. Zero, which places nothing, for an entry
+/// whose pages are not read here and for an offset inside the opening magic.
+fn chunk_start(chunk: E) -> E {
+    let data = metadata_in(chunk.clone(), 9);
+    let first = metadata_in(chunk.clone(), 11).or(data.clone()).at_most(data);
+    E::cond(elsewhere(chunk).or(first.clone().less_than(E::lit(4))), E::lit(0), first)
+}
+
+/// Where a column chunk ends, from its entry in the footer. Zero where it has
+/// no start.
+fn chunk_end(chunk: E) -> E {
+    let start = chunk_start(chunk.clone());
+    E::cond(start.clone(), start.add(metadata_in(chunk, 7)), E::lit(0))
+}
+
+/// The lower of two starts, where a start of zero is no start at all.
+fn earliest(a: E, b: E) -> E {
+    a.clone().or(b.clone()).at_most(b.or(a))
+}
+
+/// Every row group, each a region of the file holding its column chunks.
+///
+/// Two gathers, one inside the other. This one walks to each row group's
+/// `columns` field in the footer and places a region from where its column
+/// chunks start to where they end. A writer puts a row group's column chunks
+/// one after another in the order it lists them, so the first and the last
+/// listed are the two ends; both ends are asked of both, which also reads a
+/// list written back to front. The region stops short of the footer whatever
+/// the entries say.
+///
+/// Inside it, the second gather starts from the same `columns` field and walks
+/// to each column chunk entry in it, placing that column chunk where its pages
+/// start, sized by `total_compressed_size`. A chunk that starts outside its
+/// row group's region is passed over, and one that runs past it is cut off
+/// there, so no page reads bytes that belong to another row group or to the
+/// indexes after them.
+fn row_groups() -> T {
+    let first = E::within(&["value", "elems", "0", "fields"]);
+    let last = E::elem_within(&["value", "elems"], E::within(&["value", "count"]).sub(E::lit(1)), &["fields"]);
+    let start = earliest(chunk_start(first.clone()), chunk_start(last.clone()));
+    let end = chunk_end(first).at_least(chunk_end(last));
+    let before_footer = E::Remaining.sub(E::lit(8)).sub(footer_length()).at_least(E::lit(0));
+    let span = E::placer(end.sub(start.clone()));
+    let chunks = vec![Step::placer(), Step::field("value"), Step::field("elems"), Step::each()];
+    let columns = T::gather(chunks, chunk_start(E::field("fields")), Anchor::File, E::lit(0), column_chunk()).skipping_zero();
+    let row_group = T::structure("RowGroup", vec![("columns", T::sized(E::Remaining, columns))]);
+    let entries = vec![
+        Step::field("footer"),
+        Step::field("fields"),
+        Step::tagged(&["id"], 4, "row_groups"),
+        Step::field("value"),
+        Step::field("elems"),
+        Step::each(),
+        Step::field("fields"),
+        Step::tagged(&["id"], 1, "columns"),
+    ];
+    let region = T::sized(span.at_most(before_footer).at_least(E::lit(0)), row_group);
+    T::gather(entries, start, Anchor::File, E::lit(0), region).skipping_zero()
+}
+
+/// One column chunk in the file: its pages, as many as its entry's
+/// `total_compressed_size` holds, and never past the row group it is in.
+///
+/// A structure round the pages rather than the pages alone, so that a page
+/// whose header claims more than is left reads as far as the chunk goes and
+/// no further.
+fn column_chunk() -> T {
+    let size = E::placer(metadata_field(7)).at_most(E::Remaining).at_least(E::lit(0));
+    T::sized(size, T::structure("ColumnChunk", vec![("pages", T::repeat(page(), Until::End))]))
 }
 
 /// The bytes of a plain file: the row groups, the footer, and the trailer that
@@ -840,6 +933,9 @@ fn plain() -> T {
             ),
             ("footer_length", T::at(E::Remaining.sub(E::lit(4)), T::u32(Little))),
             ("footer_magic", T::at(E::Remaining, T::magic(MAGIC))),
+            // After the footer, since the walks start from it, though the row
+            // groups come first in the file.
+            ("row_groups", row_groups()),
         ],
     )
 }
@@ -1064,6 +1160,122 @@ mod tests {
             }
         }
         panic!("page lookup failed to make progress");
+    }
+
+    /// A list of structs, however many.
+    fn many(id: u64, elements: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut list = vec![((elements.len() as u8) << 4) | 12];
+        list.extend(elements.into_iter().flatten());
+        field(id, 9, list)
+    }
+
+    /// Two row groups of two column chunks, each chunk one uncompressed data
+    /// page of two bytes, and eight bytes nothing names between the row
+    /// groups, where a writer may put a bloom filter. The column chunks of
+    /// the second row group are listed in the footer in the opposite order to
+    /// the file. Returns the bytes and where each page starts.
+    fn two_row_groups() -> (Vec<u8>, Vec<u64>) {
+        row_groups_listed(true)
+    }
+
+    /// The same file, with the second row group's column chunks listed in the
+    /// footer back to front or in file order.
+    fn row_groups_listed(backwards: bool) -> (Vec<u8>, Vec<u64>) {
+        let page = || {
+            let mut bytes = object(vec![integer(1, 0), integer(2, 2), integer(3, 2)], false);
+            bytes.extend([0xab, 0xcd]);
+            bytes
+        };
+        let mut bytes = MAGIC.to_vec();
+        let mut starts = Vec::new();
+        for group in 0..2 {
+            if group == 1 {
+                bytes.extend([0xff; 8]);
+            }
+            for _ in 0..2 {
+                starts.push(bytes.len() as u64);
+                bytes.extend(page());
+            }
+        }
+        let len = page().len() as u64;
+        let chunk = |at: u64| {
+            let metadata = object(vec![integer(9, at), integer(7, len)], false);
+            object(vec![integer(2, 0), field(3, 12, metadata)], false)
+        };
+        let rows = |columns: Vec<Vec<u8>>| object(vec![many(1, columns), integer(3, 1)], false);
+        let groups = vec![
+            rows(vec![chunk(starts[0]), chunk(starts[1])]),
+            if backwards { rows(vec![chunk(starts[3]), chunk(starts[2])]) } else { rows(vec![chunk(starts[2]), chunk(starts[3])]) },
+        ];
+        let footer = object(vec![integer(1, 1), many(4, groups), integer(3, 2)], false);
+        bytes.extend_from_slice(&footer);
+        bytes.extend_from_slice(&(footer.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(MAGIC);
+        (bytes, starts)
+    }
+
+    /// Each row group is a region of its own, holding the column chunks the
+    /// footer lists for it and nothing from the other row group.
+    #[test]
+    fn each_row_group_is_a_region_holding_its_column_chunks() {
+        let (bytes, starts) = two_row_groups();
+        let page = starts[1] - starts[0];
+        let d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let groups = e.node(&d, &[4]).unwrap();
+        assert_eq!((groups.name.as_str(), groups.child_count), ("row_groups", 2));
+        for (i, first) in [(0, starts[0]), (1, starts[2])] {
+            let group = e.node(&d, &[4, i]).unwrap();
+            assert_eq!(group.type_name, "RowGroup");
+            assert_eq!((group.offset_bits, group.size_bits), (first * 8, 2 * page * 8), "row group {i}");
+            assert_eq!(e.node(&d, &[4, i, 0]).unwrap().child_count, 2, "row group {i}");
+        }
+        // Numbered in the order the footer lists them, and placed where each
+        // entry says.
+        let chunk = |e: &mut Evaluator, i: usize, j: usize| e.node(&d, &[4, i, 0, j]).unwrap().offset_bits / 8;
+        assert_eq!([chunk(&mut e, 0, 0), chunk(&mut e, 0, 1), chunk(&mut e, 1, 0), chunk(&mut e, 1, 1)], [starts[0], starts[1], starts[3], starts[2]]);
+        // A page is found where it is, under its row group and column chunk.
+        let pages = nodes_of(&mut e, &d, "Page");
+        assert_eq!(pages.len(), 4);
+        for (path, info) in &pages {
+            assert_eq!(&path[..1], &[4]);
+            assert!(e.locate(&d, info.offset_bits).unwrap().starts_with(path));
+        }
+        assert_eq!(e.locate(&d, starts[2] * 8).unwrap()[..4], [4, 1, 0, 1]);
+        // What is between the row groups belongs to neither.
+        let between = e.spans(&d, (starts[1] + page) * 8, starts[2] * 8, 8).unwrap();
+        assert_eq!(between.len(), 1);
+        assert!(between[0].gap);
+        assert_eq!((between[0].offset_bits / 8, between[0].size_bits / 8), (starts[1] + page, 8));
+        // The column chunk says which entry placed it, starting from the row
+        // group's own entry.
+        let label = e.origins(&d, &[4, 1, 0, 1]).unwrap()[0].label.clone();
+        assert_eq!(label, "footer.fields.row_groups.value.elems[1].fields.columns.value.elems[1]");
+    }
+
+    /// The footer is after every page it places, so an overwrite of a column
+    /// chunk entry in it has to move the column chunk it placed, the way a
+    /// file read afresh has it.
+    #[test]
+    fn an_overwrite_of_a_column_chunk_entry_moves_its_column_chunk() {
+        let (bytes, _) = row_groups_listed(true);
+        let (after, starts) = row_groups_listed(false);
+        assert_eq!(bytes.len(), after.len());
+        let first = bytes.iter().zip(&after).position(|(a, b)| a != b).unwrap();
+        let last = bytes.iter().zip(&after).rposition(|(a, b)| a != b).unwrap();
+        let mut d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let before: Vec<Vec<usize>> = nodes_of(&mut e, &d, "Page").into_iter().map(|(p, _)| p).collect();
+        assert_eq!(e.node(&d, &[4, 1, 0, 0]).unwrap().offset_bits / 8, starts[3]);
+        d.overwrite_bytes(first as u64, &after[first..=last]);
+        e.invalidate_from(first as u64 * 8);
+        let mut fresh = Evaluator::new(parquet());
+        assert_eq!(e.node(&d, &[4, 1, 0, 0]).unwrap().offset_bits / 8, starts[2]);
+        for path in &before {
+            for k in 0..=path.len() {
+                assert_eq!(e.node(&d, &path[..k]), fresh.node(&d, &path[..k]), "{:?}", &path[..k]);
+            }
+        }
     }
 
     /// A file of one column chunk holding one page, with the column's physical
