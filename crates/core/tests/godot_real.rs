@@ -65,6 +65,72 @@ fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
     assert!(read > 0, "no compressed godot4 probe in {}", dir.display());
 }
 
+/// A resource written across several blocks reads as the resource, joined.
+///
+/// No engine-saved file in the collection is more than one block: Godot's
+/// blocks are 4 KB and the probe is 3 KB. So this one is made here, the way
+/// `FileAccessCompressed` makes one: the stream the engine compressed into
+/// `godot4-probe-compressed.res`, cut into blocks of 1024 bytes and each
+/// compressed with zlib, which is mode 1. Every field of the joined resource
+/// has to read as the same field of the plain file, and the fields that
+/// straddle a block boundary are the ones that would not.
+///
+/// The engine's own stream rather than the plain file less its magic: the two
+/// differ in every internal table offset, by the four bytes of that magic, and
+/// the second would be a file no engine writes.
+#[test]
+fn a_resource_written_across_blocks_opens_as_the_resource() {
+    let Some(dir) = collection() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (plain_path, saved_path) = (dir.join("godot4-probe.res"), dir.join("godot4-probe-compressed.res"));
+    if !plain_path.is_file() || !saved_path.is_file() {
+        eprintln!("skipped: no godot4-probe.res and godot4-probe-compressed.res in {}", dir.display());
+        return;
+    }
+    let plain_bytes = std::fs::read(&plain_path).unwrap();
+    let (saved_doc, mut saved) = reading(&saved_path);
+    let id = saved.open_space(&saved_doc, 0, &[5, 0]).unwrap().expect("the engine's one block opens");
+    let stream = saved.space(id).unwrap().bytes().to_vec();
+    let stream = stream.as_slice();
+    assert_eq!(stream.len() as u64 + MAGIC_BYTES, plain_bytes.len() as u64);
+    const BLOCK: usize = 1024;
+    let chunks: Vec<&[u8]> = stream.chunks(BLOCK).collect();
+    assert!(chunks.len() > 1 && stream.len() % BLOCK != 0, "the probe no longer makes several blocks with a short last one");
+    let packed: Vec<Vec<u8>> = chunks.iter().map(|c| miniz_oxide::deflate::compress_to_vec_zlib(c, 6)).collect();
+    let mut file = b"RSCC".to_vec();
+    file.extend_from_slice(&1u32.to_le_bytes());
+    file.extend_from_slice(&(BLOCK as u32).to_le_bytes());
+    file.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    for p in &packed {
+        file.extend_from_slice(&(p.len() as u32).to_le_bytes());
+    }
+    for p in &packed {
+        file.extend_from_slice(p);
+    }
+    file.extend_from_slice(b"RSCC");
+
+    let plain_doc = Document::new(MemSource(plain_bytes.clone()));
+    let mut plain = Evaluator::new(formats::builtin("godot").unwrap());
+    let packed_doc = Document::new(MemSource(file));
+    let mut joined = Evaluator::new(formats::builtin("godot").unwrap());
+    assert_eq!(joined.node(&packed_doc, &[5]).unwrap().child_count, chunks.len() as u64);
+    let resource = joined.node(&packed_doc, &[6, 0]).unwrap();
+    assert_eq!(resource.type_name, "GodotResource");
+    assert!(resource.joined);
+    assert_eq!(resource.size_bits / 8, stream.len() as u64, "the joined resource is cut at the total, not at three whole blocks");
+
+    let (mut nodes, mut offsets) = (0usize, 0usize);
+    for (a, b) in [(vec![1], vec![6, 0, 0]), (vec![2], vec![6, 0, 1])] {
+        let (mut a, mut b) = (a, b);
+        same(&mut plain, &plain_doc, &mut a, &mut joined, &packed_doc, &mut b, "", &mut nodes, &mut offsets);
+    }
+    assert!(nodes > 1000, "only {nodes} nodes compared");
+    assert!(offsets > 0, "no internal resource offsets were compared");
+    eprintln!("joined from {} blocks: {nodes} nodes read alike, {offsets} of them table offsets", chunks.len());
+}
+
 /// One compressed probe against the plain one. False when the pair is not in
 /// hand, so a collection without the newer file still says something about the
 /// older one.

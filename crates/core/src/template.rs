@@ -2462,6 +2462,45 @@ pub enum Ty {
     /// back to the file, and a stream too large or too broken to open reads as
     /// the bytes it is with a note saying why. See [`crate::codec`].
     Decoded { codec: Packing, inner: Box<Ty> },
+    /// One stream the file keeps in several runs, read as what it holds.
+    ///
+    /// A PDB stream is a list of block numbers, and the blocks are wherever
+    /// the writer found room: its bytes are in the file, in order, and are no
+    /// run of the file. A BAM is one stream of records written through BGZF,
+    /// cut every 64 KB whether or not a record ends there, so a record can
+    /// start in one gzip member and finish three members on. Neither is a
+    /// `Decoded` over one run, and neither reads as anything until the pieces
+    /// are joined. This joins them.
+    ///
+    /// Zero bits where it is declared, like a [`Ty::Gather`]. `from` walks to
+    /// the runs the same way a gather walks to its records, and each place the
+    /// walk lands is one part, in the order the walk found it. A part that
+    /// lands on a `Decoded` field is what that field unpacks to; a part that
+    /// lands on anything else is that field's own bytes. The one child,
+    /// `inner`, is read in a space of its own made of the parts end to end,
+    /// starting at zero, the way a stream's contents are.
+    ///
+    /// `part_len` is how many bytes a part comes to, worked out one past the
+    /// last field of the structure the run is a field of, which is the frame
+    /// a gather's offset is worked out in. A BGZF member writes that number in
+    /// its trailer, so a stream of sixteen thousand members is measured
+    /// without inflating any of them. Leave it out and a stored part is as
+    /// long as it is, and a packed one is unpacked to find out.
+    ///
+    /// `len` is the stream's total where the format writes one down, worked
+    /// out where the node is declared; the last part is cut there. A PDB
+    /// stream fills whole blocks and says how much of the last one is stream.
+    ///
+    /// Nothing is unpacked until it is read, and what is unpacked is kept in a
+    /// cache of a few megabytes that forgets the part read longest ago. The
+    /// total has to be known before anything inside is placed, since a run
+    /// to the end of its room needs to know where the end is, so opening one
+    /// walks to every part, which for a packed stream is every member's
+    /// header and trailer and none of its deflate.
+    ///
+    /// A field inside that lies wholly in one stored run of the file writes to
+    /// that run; nothing else inside is editable. See `eval/stitch.rs`.
+    Stitched { from: Arc<[Step]>, part_len: Option<Expr>, len: Option<Expr>, inner: Box<Ty> },
     /// Fields laid out from what the decoder read, rather than from what a
     /// template says.
     ///
@@ -3213,6 +3252,11 @@ impl Ty {
     pub fn decoded_as(size: Expr, codec: Packing, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(Ty::Decoded { codec, inner: Box::new(inner) }) }
     }
+    /// One stream kept in the runs `from` walks to, joined in walk order and
+    /// read as `inner`. See [`Ty::Stitched`].
+    pub fn stitched(from: Vec<Step>, part_len: Option<Expr>, len: Option<Expr>, inner: Ty) -> Ty {
+        Ty::Stitched { from: from.into(), part_len, len, inner: Box::new(inner) }
+    }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
@@ -3428,6 +3472,15 @@ impl Ty {
             // The codec first: what a reader wants from this column is which
             // of the five it is, and what comes out is a row of its own below.
             Ty::Decoded { codec, .. } => codec.as_str().to_string(),
+            // Not `inner` alone: the field itself is no bytes, and what it
+            // reads is joined from parts that are elsewhere. A choice made by
+            // what the joined bytes turn out to hold has no name until it is
+            // made, and `joined → switch` names the mechanism rather than the
+            // contents, so that says only how the contents were reached.
+            Ty::Stitched { inner, .. } => match inner.display_name().as_str() {
+                "switch" => "joined".into(),
+                name => format!("joined \u{2192} {name}"),
+            },
             Ty::Traced { part } => match part {
                 TracedPart::Blocks => "blocks".into(),
                 TracedPart::Block(_) => "block".into(),

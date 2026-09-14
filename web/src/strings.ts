@@ -383,6 +383,53 @@ export function timeNoteText(time: FieldTime): string | null {
   return time.state === "leap" ? TIME.leapSecond : null;
 }
 
+/**
+ * A stream joined from several runs elsewhere in the file, and the fields read
+ * inside it: a PDB stream kept in pages wherever the writer found room, a BAM
+ * cut into BGZF blocks every 64 KB whether or not a record ended there.
+ *
+ * "Joined" is the one word for the operation everywhere it shows: the type
+ * column's `joined → Bam`, the Position clause `start of joined stream`, and
+ * the `+` of every address inside. It is not "unpacked" because a PDB page
+ * was never packed. The runs themselves are named by the field each one is
+ * (`pages[12]`, `blocks[3].compressed`), which is also the stream-order index,
+ * so no "part N of M" is needed beside them.
+ */
+export const JOINED = {
+  /** Heading over the rows saying which run a field's first byte is kept in.
+   *  `Starts in` rather than `Stored in`, which is false for a BAM block, and
+   *  true of a field that crosses into the next run as well. */
+  startsIn: "Starts in",
+  /**
+   * The row itself: the field's first byte, as an offset inside what the run
+   * gives, and the run. For a run that was unpacked, the offset is inside what
+   * it unpacks to and not inside the compressed bytes, and `unpacked` says so
+   * outside the name, since it describes the output rather than the field.
+   * The same shape as `PROPERTIES.withinAt`.
+   */
+  at: (at: string, run: string, packed: boolean): string => (packed ? `${at} in unpacked ${run}` : `${at} in ${run}`),
+  /** The same words on that offset's `+`. See `DECODED_PLUS_TITLE`. */
+  plusTitle: (run: string, packed: boolean): string => (packed ? `Offset within unpacked ${run}` : `Offset within ${run}`),
+  /** For a run stored as it sits in the file, where the byte is in the file,
+   *  which is the question a reader of a PDB has first. */
+  inFile: (at: string): string => `${at} in the file`,
+  /**
+   * A BGZF block's byte as a BAI or a CSI stores it: the number, and its two
+   * halves under the names the BAI's own rows give them, so the three can be
+   * matched by eye against an index. No `@` or `+` inside: these are numbers
+   * an index holds, not addresses to go to.
+   */
+  virtualLabel: "Virtual offset",
+  virtual: (voffset: string, blockOffset: string, inBlock: string): string =>
+    `${voffset} · block_offset ${blockOffset} · in_block ${inBlock}`,
+  virtualTitle: (blockAt: string): string =>
+    `voffset = block_offset << 16 | in_block, as the BAI stores it. block_offset is where the BGZF block starts in the file (${blockAt}); in_block counts from the start of what that block unpacks to.`,
+  /** On the `+` of any address inside a joined stream, and after the address
+   *  at the top of the panel. See `DECODED_PLUS_TITLE` and `DECODED_INSIDE`. */
+  plusTitleStream: "Offset within the joined stream",
+  inside: "in the joined stream",
+} as const;
+
 export const UNPACKED = {
   /** Heading over the one row saying which decoder step produced this field's
    *  bytes. The groups above it say which fields decided the field's shape;
@@ -2457,6 +2504,11 @@ export const PROPERTIES = {
      */
     trace: (): string => "after the previous step",
     stream: (c: HowContext): string => (c.parent === undefined ? "start of the unpacked stream" : `start of unpacked ${c.parent}`),
+    /** The front of a stream joined from several runs: a PDB stream's pages, a
+     *  BAM's BGZF blocks. The same shape as `stream`, on the one word the type
+     *  column (`joined → Bam`) and the `+` of every address inside also use,
+     *  so the reader meets one word for the one operation. */
+    stitched: (c: HowContext): string => (c.parent === undefined ? "start of the joined stream" : `start of joined ${c.parent}`),
     unknown: (): string => "",
   } satisfies Record<Shape["placed"], (c: HowContext) => string>,
 

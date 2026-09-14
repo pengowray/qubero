@@ -91,7 +91,12 @@ impl Evaluator {
     /// that means something else entirely.
     ///
     /// A decoded stream is already in memory, so it never answers `Pending`.
+    /// A stitched one is read from its parts, and a stored part in the file
+    /// may: see [`Evaluator::read_stitched`].
     pub(super) fn read_in<S: Source>(&self, doc: &Document<S>, space: u32, at: u64, n: u64) -> R<Vec<u8>> {
+        if let Some(stitch) = self.spaces.stitch(space) {
+            return self.read_stitched(doc, stitch, at, n);
+        }
         let mut buf = vec![0u8; bytes_for(n)];
         if space != 0 {
             let Some(src) = self.spaces.buf(space) else { return fail("this stream is no longer open") };

@@ -236,6 +236,11 @@ export type TemplateNode = {
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
   readonly space_root: boolean;
+  /** True for a field read inside a stream joined from several runs elsewhere
+   *  in the file: a PDB stream's pages, a BAM's BGZF blocks. Its offset counts
+   *  from the front of the joined stream, which is no document of its own and
+   *  cannot be opened as one; `partOf` says which run a field starts in. */
+  readonly joined: boolean;
   /** True when the file did not write this field at all: the condition on an
    *  optional one came to nothing. Not the same as a size of zero, which a
    *  field the file did write can also have. */
@@ -712,6 +717,32 @@ export type Relation = {
  * and the view says nothing at all for it: a reason invented to fill the line
  * would read exactly like a reason the file gave.
  */
+/**
+ * The run a field of a joined stream starts in: a PDB page, or a BGZF block's
+ * compressed run. See `Doc.partOf`.
+ */
+export type JoinedPart = {
+  /** Which run, from 0 in the order the stream goes, and how many there are. */
+  readonly index: number;
+  readonly parts: number;
+  /** The run as a field to go to, and as a reader names it: `pages[12]`,
+   *  `blocks[3].compressed`. */
+  readonly path: readonly number[];
+  readonly label: string;
+  /** The field's first byte inside what the run gives, and how much that is. */
+  readonly in_part: number;
+  readonly part_len: number;
+  /** Where the run starts, in bits of the space it is in: 0 is the file. */
+  readonly run_offset_bits: number;
+  readonly run_space: number;
+  /** True when the run was unpacked to give its bytes. */
+  readonly packed: boolean;
+  /** For a BGZF block, the byte's virtual offset in halves: where the block
+   *  starts in the file, and the byte in what it unpacks to. */
+  readonly block_offset: number | null;
+  readonly in_block: number | null;
+};
+
 export type Shape = {
   /** `root` the whole file; `first` the first field of what holds it; `follows`
    *  after the field before it; `element` one element of a run; `pointer` a
@@ -719,7 +750,7 @@ export type Shape = {
    *  `gathered` a descriptor the template walked to, somewhere else in the
    *  file, placed it; `address` an address the file gave; `trace` where a
    *  decoder had got to; `stream` the front of what a compressed run unpacked
-   *  to. */
+   *  to; `stitched` the front of a stream joined from several runs. */
   readonly placed:
     | "root"
     | "first"
@@ -731,6 +762,7 @@ export type Shape = {
     | "address"
     | "trace"
     | "stream"
+    | "stitched"
     | "unknown";
   /** `type` the type's own width, which the type's name already carries and
    *  which the panel therefore says nothing about; `fixed` a length the format
@@ -1212,6 +1244,7 @@ export type TypeInfo =
   | PageInfo
   | SamplesInfo
   | TileInfo
+  | BufrInfo
   | { readonly kind: "plain" };
 
 /** What the format requires, and what is there. */
@@ -1510,6 +1543,70 @@ export type TileInfo = {
   readonly pixels: number;
   readonly element_type: string;
   readonly problem: string;
+};
+
+/** A BUFR message's section 4 read through the tables. */
+export type BufrInfo = {
+  readonly kind: "bufr";
+  readonly edition: number;
+  /** The tables version section 1 names, and the one that was used. */
+  readonly master_table_version: number;
+  readonly tables_version: number;
+  readonly subsets: number;
+  readonly compressed: boolean;
+  readonly steps: readonly string[];
+  /** Section 3's descriptors expanded through Table D, how deep each is, and
+   *  how many there are altogether. */
+  readonly descriptors: readonly BufrDescriptor[];
+  readonly descriptors_total: number;
+  /** Which subset the values are, counted from 0; where in that subset's
+   *  values the list starts; and how many values the subset has. */
+  readonly subset: number;
+  readonly values: readonly BufrValue[];
+  readonly values_start: number;
+  readonly values_total: number;
+  /** The value under the cursor, or null where the cursor is on none. */
+  readonly cursor: BufrCursor | null;
+  /** Why the reading stopped, where it did. Empty otherwise. */
+  readonly problem: string;
+};
+
+export type BufrDescriptor = {
+  readonly code: number;
+  readonly depth: number;
+  readonly name: string;
+};
+
+export type BufrValue = {
+  readonly code: number;
+  readonly role: "element" | "count" | "quality" | "associated" | "reference" | "local" | "characters" | "marker";
+  readonly name: string;
+  readonly text: string;
+  readonly unit: string;
+  readonly missing: boolean;
+  /** The element an associated field, a marker, quality information or a new
+   *  reference value is about, as its descriptor and name. Empty otherwise. */
+  readonly about: string;
+};
+
+export type BufrCursor = {
+  /** Its place in the listed values, or -1 where it is not among them. */
+  readonly index: number;
+  readonly value: BufrValue;
+  /** Where its bits start, counted from section 4's first bit, and how wide
+   *  the value is. */
+  readonly bit: number;
+  readonly width: number;
+  readonly scale: number;
+  readonly reference: number;
+  readonly numeric: boolean;
+  /** This subset's packed number, or null for text or a missing value. */
+  readonly packed: number | null;
+  /** A compressed value's smallest packed number and difference width. */
+  readonly base: number | null;
+  readonly increment_width: number | null;
+  /** Every subset's value, the first few dozen; an empty string is missing. */
+  readonly across: readonly string[];
 };
 
 /** One Steim frame: the differences its codes name, and how many samples they
@@ -2443,6 +2540,16 @@ export class Doc {
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
     return this.handleReply<Origin[]>(this.editor.origins(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * Which run the field at `path` starts in, for a field inside a stream joined
+   * from several runs. Null for every other field, and while the answer is
+   * still on its way: the panel that asks has nothing to draw meanwhile.
+   */
+  partOf(path: readonly number[]): JoinedPart | null {
+    const r = this.handleReply<JoinedPart | null>(this.editor.part_of(this.space, Uint32Array.from(path)));
+    return r.status === "ok" ? r.node : null;
   }
 
   /**

@@ -13,6 +13,7 @@ import { vectorBody, vectorNote } from "./vectorpanel.ts";
 import { gribBody, gribNote } from "./gribpanel.ts";
 import { pageBody, pageNote } from "./pagepanel.ts";
 import { tileBody, tileNote } from "./tilepanel.ts";
+import { bufrBody, bufrNote } from "./bufrpanel.ts";
 import { objstmBody, objstmNote } from "./objstmpanel.ts";
 import { rowBody, rowNote } from "./rowpanel.ts";
 import { samplesBody, samplesNote } from "./samplespanel.ts";
@@ -67,6 +68,8 @@ function headingFor(info: Shown): string {
       return "Inside this page";
     case "tile":
       return "Inside this tile";
+    case "bufr":
+      return "Values in this message";
     case "enum":
       return `Defined values (${info.cases.length})`;
   }
@@ -97,6 +100,8 @@ function headingNote(info: Shown): string {
       return pageNote(info);
     case "tile":
       return tileNote(info);
+    case "bufr":
+      return bufrNote(info);
     default:
       return "";
   }
@@ -503,6 +508,8 @@ function body(
       return pageBody(info);
     case "tile":
       return tileBody(info);
+    case "bufr":
+      return bufrBody(info);
     case "float":
       return floatBody(info);
     case "magic":
