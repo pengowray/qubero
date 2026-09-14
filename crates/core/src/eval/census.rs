@@ -327,6 +327,20 @@ impl Evaluator {
             };
             let f = &walk.stack[top];
             if f.next as u64 >= f.count {
+                // Its size, asked before its children go back, while they are
+                // still in the memo to answer it. Placing the sibling after
+                // this node asks where this one ends, and a node whose size was
+                // never asked answers by reading its fields again, which by then
+                // have been given back: they came back with nothing left to let
+                // go of them, two nodes per record of a ten-thousand-record run.
+                // Asked at the end rather than on arrival, since sizing a list
+                // on arrival walks all of it before the first element is
+                // counted.
+                let path = f.path.clone();
+                match self.size_of(doc, &path) {
+                    Err(e) if e.interrupted() => return Err(e),
+                    _ => {}
+                }
                 self.close_census_frame(walk);
                 continue;
             }
@@ -361,21 +375,23 @@ impl Evaluator {
         // Charged like every other walk, so a count of a file with millions of
         // fields hands the caller their screen back.
         self.spend(offset)?;
-        // Its size, asked now so the node keeps it. Placing the sibling after
-        // this one asks where this one ends, and a node whose size was never
-        // asked answers by reading its fields again, which by then the walk
-        // has given back: they came back into the memo with nothing left to
-        // let go of them, two nodes per record of a ten-thousand-record run.
-        match self.size_of(doc, path) {
-            Err(e) if e.interrupted() => return Err(e),
-            _ => {}
-        }
         // What the row this node stands on is: the field's own declaration, and
         // not what it turned out to be. The diagram drew the declaration, so a
         // switch is the switch box and not the case it took. A node with no
         // declaration of its own, a member of a parsed JSON value, is what it
         // turned out to be.
-        let declared = self.declared_ty(path).unwrap_or_else(|_| resolved.clone());
+        let mut declared = self.declared_ty(path).unwrap_or_else(|_| resolved.clone());
+        // A field declared as a named type is that type. A GGUF metadata
+        // value is `Value`, which is a switch, and read only as the name it
+        // was not a choice: the switch's box stayed uncounted over a file
+        // whose every metadata entry takes it.
+        for _ in 0..16 {
+            let Ty::Named(n) = &declared else { break };
+            match self.template.types.get(&**n) {
+                Some(t) => declared = t.clone(),
+                None => break,
+            }
+        }
         // Whether this node is a run of something rather than one of it.
         //
         // Asked of what it turned out to be as well as of its declaration,
@@ -510,7 +526,23 @@ impl Evaluator {
     ///
     /// Nothing for a type that is not a switch. A switch whose default was
     /// taken answers with the last row, which is where the default is drawn.
+    ///
+    /// A switch in a window is still the switch: a PNG chunk's `data` is a
+    /// switch with a size round it, and a node of it resolves to the case it
+    /// took. Asked only of the declaration as written, every case row of that
+    /// switch read as taken by no chunk at all and was drawn faded.
     fn case_taken(&self, declared: &Ty, resolved: &Ty) -> Option<usize> {
+        let mut declared = declared;
+        for _ in 0..16 {
+            declared = match declared {
+                Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => inner,
+                Ty::Named(n) => match self.template.types.get(&**n) {
+                    Some(t) => t,
+                    None => break,
+                },
+                _ => break,
+            };
+        }
         let cases: Vec<&Ty> = match declared {
             Ty::Switch { cases, default, .. } => cases.iter().map(|(_, t)| t).chain(Some(&**default)).collect(),
             Ty::Match { cases, default, .. } => cases.iter().map(|(_, t)| t).chain(Some(&**default)).collect(),
@@ -559,6 +591,54 @@ mod tests {
         let tag = c.rows.iter().find(|r| r.key == item.key && r.row == 0).expect("the tag row");
         assert_eq!(tag.count, 3);
         assert_eq!(tag.first_path, vec![1, 0, 0]);
+    }
+
+    #[test]
+    fn a_case_taken_inside_a_window_is_counted_on_its_row() {
+        // A chunk whose body is a switch with a size round it, the way a PNG
+        // chunk's data is: two chunks take the first case and one the default.
+        let a = T::structure("Present", vec![("x", T::u8())]);
+        let chunk = T::structure(
+            "Chunk",
+            vec![
+                ("kind", T::u8()),
+                ("body", T::sized(E::lit(1), T::switch(E::field("kind"), vec![(1, a)], T::bytes(E::lit(1))))),
+            ],
+        );
+        let t = Template::new("test", T::repeat(chunk, Until::End));
+        let d = crate::eval::diagram(&t);
+        let sw = d.types.iter().find(|x| x.kind == crate::eval::BoxKind::Switch).expect("a switch box").key.clone();
+        let (mut ev, doc) = read(t, &[1, 9, 2, 9, 1, 9]);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.boxes.iter().find(|b| b.key == sw).map(|b| b.count), Some(3), "three chunks made the choice");
+        let (mut ev, doc) = read(ev.template().clone(), &[1, 9, 2, 9, 1, 9]);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.state, CensusState::Done);
+        let taken: Vec<(usize, u64)> = {
+            let mut v: Vec<(usize, u64)> = c.rows.iter().filter(|r| r.key == sw).map(|r| (r.row, r.count)).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(taken, vec![(0, 2), (1, 1)]);
+    }
+
+    #[test]
+    fn a_switch_declared_by_name_is_counted_as_the_switch() {
+        // A GGUF metadata value is the named type `Value`, which is a switch.
+        let a = T::structure("Present", vec![("x", T::u8())]);
+        let entry = T::structure("Entry", vec![("kind", T::u8()), ("value", T::Named("Value".into()))]);
+        let t = Template::new("test", T::repeat(entry, Until::End))
+            .with_type("Value", T::switch(E::field("kind"), vec![(1, a)], T::u8()));
+        let d = crate::eval::diagram(&t);
+        let Some(sw) = d.types.iter().find(|x| x.kind == crate::eval::BoxKind::Switch).map(|b| b.key.clone()) else {
+            panic!("no switch box in {:?}", d.types.iter().map(|b| &b.name).collect::<Vec<_>>());
+        };
+        let (mut ev, doc) = read(t, &[1, 9, 2, 9, 1, 9]);
+        let c = ev.census(&doc, usize::MAX).expect("a census");
+        assert_eq!(c.boxes.iter().find(|b| b.key == sw).map(|b| b.count), Some(3));
+        let mut taken: Vec<(usize, u64)> = c.rows.iter().filter(|r| r.key == sw).map(|r| (r.row, r.count)).collect();
+        taken.sort();
+        assert_eq!(taken, vec![(0, 2), (1, 1)]);
     }
 
     #[test]
