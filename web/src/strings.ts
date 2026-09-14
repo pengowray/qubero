@@ -2795,7 +2795,7 @@ export const PROPERTIES = {
  */
 export const STORED_PATHS = {
   toggle: "Paths as stored",
-  title: "Also show each field's path as the file stores it, with the encoding's own lists, entries and values, and each formula as the template writes it",
+  title: "Also show, under each name, the field's path as the file stores it: the full path through the encoding's own lists, entries and values. Under each formula, show it as it is written in the template.",
   /** Before the stored path, on a muted line under the name it spells out. */
   storedAs: "stored as",
   /** The same where the row does not start with the name, so the line says
@@ -2803,7 +2803,7 @@ export const STORED_PATHS = {
   subjectStoredAs: (name: string): string => `${name} stored as`,
   /** Before the expression as the template has it, under a formula written
    *  with the short names. Not `stored as`: the expression is not in the file. */
-  inTemplate: "in the template",
+  inTemplate: "written in the template as",
 } as const;
 
 /** The arrows over the hex grid, and the graph view. Both show what the

@@ -36,7 +36,7 @@ test("a row that leads with an address says whose path the line is", () => {
 test("a formula keeps the template's own spelling under the short one, and does not call it stored", () => {
   assert.equal(templateLine(FORMULA.template, false), null);
   const line = templateLine(FORMULA.template, true);
-  assert.deepEqual(line, { word: "in the template", text: FORMULA.template });
+  assert.deepEqual(line, { word: STORED_PATHS.inTemplate, text: FORMULA.template });
   assert.ok(!line?.word.includes(STORED_PATHS.storedAs));
 });
 
