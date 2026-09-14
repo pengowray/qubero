@@ -181,11 +181,11 @@ fn every_reference_is_followed_whichever_block_holds_what_it_names() {
             "litend.hdf" => Reached { datasets: (8, 8), members: (16, 16), attributes: (0, 0), by_ref: (0, 0) },
             "swf32.hdf" => Reached { datasets: (2, 2), members: (18, 18), attributes: (0, 0), by_ref: (2, 2) },
             "ntcheck.hdf" => Reached { datasets: (8, 8), members: (36, 36), attributes: (0, 0), by_ref: (14, 14) },
-            // Every dataset's values are in linked blocks, so no dataset
-            // opens. The six members naming those values name the plain tag
-            // while the file holds only the special element's, and are found
-            // under that, the way pyhdf's library finds them.
-            "tdata.hdf" => Reached { datasets: (0, 3), members: (36, 36), attributes: (0, 0), by_ref: (3, 3) },
+            // Every dataset's values are in linked blocks. The six members
+            // naming those values name the plain tag while the file holds only
+            // the special element's, and are found under that, the way pyhdf's
+            // library finds them; so is each dataset's data.
+            "tdata.hdf" => Reached { datasets: (3, 3), members: (36, 36), attributes: (0, 0), by_ref: (3, 3) },
             // Fifteen attributes, as pyhdf counts them: eleven on two tables
             // and their columns, and two on each of two vgroups.
             "tvattr.hdf" => Reached { datasets: (0, 0), members: (2, 2), attributes: (15, 15), by_ref: (17, 17) },
@@ -294,9 +294,10 @@ fn the_data_behind_the_descriptors_is_opened() {
                 }
             }
             // Rank one, two and three, and every run of values kept in linked
-            // blocks, so no dataset opens and none of them breaks either.
+            // blocks. What the values read as is checked against pyhdf in
+            // `tdata_values_kept_in_linked_blocks_match_pyhdf`.
             "tdata.hdf" => {
-                assert_eq!(of("Hdf4ScientificDataset"), 0, "the values are in linked blocks");
+                assert_eq!(of("Hdf4ScientificDataset"), 3, "each dataset opens through its linked blocks");
                 assert!(of("Hdf4VdataRecords") >= 3, "the dimensions are vdatas");
                 let ranks: Vec<i128> = found["Hdf4SdDimensions"]
                     .iter()
@@ -307,8 +308,9 @@ fn the_data_behind_the_descriptors_is_opened() {
                     .collect();
                 assert!(ranks.contains(&3) && ranks.contains(&2) && ranks.contains(&1));
                 // Three special elements, each naming the chain of blocks its
-                // values are really in.
-                assert_eq!(of("Hdf4LinkedBlocks"), 3);
+                // values are really in, and each read twice: under its own
+                // descriptor, and under the dataset that reads the values.
+                assert_eq!(of("Hdf4LinkedBlocks"), 6);
                 for at in found["Hdf4LinkedBlocks"].clone() {
                     let blocks = number(value(&mut ev, &doc, &[at, vec![2]].concat()));
                     assert!(blocks > 0.0, "a chain of no blocks holds nothing");
@@ -368,4 +370,108 @@ fn the_data_behind_the_descriptors_is_opened() {
         checked += 1;
     }
     assert_eq!(checked, 7);
+}
+
+/// Every value of `tdata.hdf`'s three datasets, each kept in linked blocks,
+/// against what pyhdf reads out of the same file.
+///
+/// Each dataset has an unlimited first dimension, so the library moved its
+/// values into linked blocks when it grew: a first block of what was written
+/// before, and a second as long as a block, listed in a link table of 128
+/// slots. The values are the two blocks joined and cut at the length the
+/// header gives, read in the shape the dimension record gives them. The
+/// numbers below are `SD('tdata.hdf').select(i).get().ravel()` for each
+/// dataset, from pyhdf on 2026-09-14.
+#[test]
+fn tdata_values_kept_in_linked_blocks_match_pyhdf() {
+    let Some(bytes) = samples().into_iter().find(|(name, _)| name == "tdata.hdf").map(|(_, b)| b) else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let a: Vec<f64> = (0..5).flat_map(|r| (1..=6).map(move |i| (10 * r + i) as f64)).collect();
+    let b = [1, 2, 3, 2, 3, 4, 3, 4, 5, 4, 5, 6, 7, 8, 9].map(f64::from).to_vec();
+    let c = [1, 2, 3, 4, 5].map(f64::from).to_vec();
+    let want: [(&[i128], Vec<f64>); 3] = [(&[5, 2, 3], a), (&[5, 3], b), (&[5], c)];
+
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("hdf4").unwrap());
+    let found = walk(&mut ev, &doc, "tdata.hdf");
+    let under = |kind: &str, at: &[usize]| -> Vec<Vec<usize>> {
+        found.get(kind).into_iter().flatten().filter(|p| p.starts_with(at)).cloned().collect()
+    };
+    let datasets = found["Hdf4ScientificDataset"].clone();
+    assert_eq!(datasets.len(), 3);
+    let mut seen = Vec::new();
+    for dataset in datasets {
+        let [dims_at] = &under("Hdf4SdDimensions", &dataset)[..] else { panic!("{dataset:?} has one dimension record") };
+        let rank = number(value(&mut ev, &doc, &[dims_at.clone(), vec![0]].concat())) as usize;
+        let recorded: Vec<i128> =
+            (0..rank).map(|i| number(value(&mut ev, &doc, &[dims_at.clone(), vec![1, i]].concat())) as i128).collect();
+
+        let [linked] = &under("Hdf4LinkedBlocks", &dataset)[..] else {
+            panic!("{recorded:?}: the values are in one run of linked blocks")
+        };
+        let tables = ev.child_named(&doc, linked, "tables").unwrap().unwrap();
+        let values = [ev.child_named(&doc, linked, "values").unwrap().unwrap(), vec![0]].concat();
+        // The shape the values read in: how many at each level, down the first
+        // of each.
+        let dims: Vec<i128> = (0..rank)
+            .map(|k| ev.node(&doc, &[values.clone(), vec![0; k]].concat()).unwrap().child_count as i128)
+            .collect();
+        let (_, expected) =
+            want.iter().find(|(d, _)| *d == dims.as_slice()).unwrap_or_else(|| panic!("no dataset of {dims:?} in pyhdf"));
+        // The dimension record was written before the dataset grew, and says
+        // so: every dimension but the unlimited first one is what it says.
+        assert_eq!(recorded[1..], dims[1..], "{dims:?}");
+        assert!(recorded[0] <= dims[0], "{dims:?}: the record says {recorded:?}");
+
+        let length = number(value(&mut ev, &doc, &[linked.clone(), vec![0]].concat())) as u64;
+        assert_eq!(length, expected.len() as u64 * 4, "{dims:?}: int32, four bytes a value");
+        assert_eq!(ev.node(&doc, &tables).unwrap().child_count, 1, "{dims:?}: one link table, whose next is nothing");
+        let root = ev.node(&doc, &values).unwrap();
+        assert!(root.joined && root.space != 0, "{dims:?}: read in the space the blocks make");
+        assert_eq!(root.size_bits, length * 8, "{dims:?}: cut at the length, not at the end of the second block");
+
+        // Every value, in the order the leaves come, which is the order the
+        // file writes them: the last index is the one that changes fastest.
+        let mut got = Vec::new();
+        let mut stack = vec![values.clone()];
+        while let Some(at) = stack.pop() {
+            let node = ev.node(&doc, &at).unwrap();
+            if node.child_count == 0 {
+                got.push(number(node.value));
+                continue;
+            }
+            for i in (0..node.child_count as usize).rev() {
+                stack.push([at.clone(), vec![i]].concat());
+            }
+        }
+        assert_eq!(&got, expected, "{dims:?}");
+
+        // The first block is the dataset as it was before it grew, as long as
+        // its own descriptor says, and the byte after it is the first of the
+        // second block.
+        let first = ev.node(&doc, &[tables.clone(), vec![0, 3, 0, 0]].concat()).unwrap().size_bits / 8;
+        assert!(first > 0 && first < length, "{dims:?}: a first block of {first} bytes");
+        let hit = ev.part_of(&doc, root.space, first).unwrap().expect("a byte of the values");
+        assert_eq!((hit.index, hit.label.as_str(), hit.in_part), (1, "tables[0].blocks[1]", 0), "{dims:?}");
+        assert!(!hit.packed);
+        seen.push(dims);
+    }
+    seen.sort();
+    assert_eq!(seen, [vec![5], vec![5, 2, 3], vec![5, 3]]);
+
+    // The special element's own descriptor reads the same run as bytes, with
+    // nothing to say what they hold.
+    let datasets = &found["Hdf4ScientificDataset"];
+    let descriptors: Vec<Vec<usize>> =
+        found["Hdf4LinkedBlocks"].iter().filter(|p| !datasets.iter().any(|d| p.starts_with(d))).cloned().collect();
+    assert_eq!(descriptors.len(), 3);
+    for linked in descriptors {
+        let length = number(value(&mut ev, &doc, &[linked.clone(), vec![0]].concat())) as u64;
+        let values = [ev.child_named(&doc, &linked, "values").unwrap().unwrap(), vec![0]].concat();
+        let bytes = ev.field_bytes(&doc, &values, 1 << 16).unwrap().0;
+        assert_eq!(bytes.len() as u64, length);
+        assert_eq!(bytes[..4], [0, 0, 0, 1], "every dataset starts at 1");
+    }
 }

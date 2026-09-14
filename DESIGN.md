@@ -2708,12 +2708,29 @@ runs from one run into the next is refused naming both (`split across
 pages[0] and pages[1]`), since the two are apart in the file and a write is one
 stretch. A field in an unpacked run gets the refusal any unpacked field does.
 
+HDF4 linked blocks are the fourth, and the only one whose step from one link
+table to the next is not an offset. A link table is a descriptor like the
+blocks it lists, and names the next table by reference number, so the tables
+are a chain whose `next` is a field of no bits, `next_at`, that looks the
+reference number up in the index and comes to nought when it is zero. The
+chain already read its `next` through the value rather than the bytes and
+skipped the all-ones test for a field of no width, so nothing in the evaluator
+changed. `values` joins every table's blocks and cuts them at the header's
+`length`. HDF4's `linkinfo_t` does carry a `first_length`, but the file does
+not: `HLIstaccess` reads the 16-byte header as length, block length, block
+count and link ref, and takes the first block's length from that block's own
+descriptor, which is what the template does for every block.
+
+A scientific dataset reads its values through this when the group's tag 702
+has no descriptor and its special twin does. Joining the blocks found a second
+thing wrong: a dataset that grew along its unlimited dimension keeps the
+dimension record it was made with, so two of `tdata.hdf`'s three datasets say
+four records and hold five. pyhdf reads five. A dataset in linked blocks is
+counted along its first dimension by what the joined values have room for,
+and every value of all three matches pyhdf.
+
 Not yet: a joined stream opens no tab of its own, so `map_out` has nothing to
-delegate to. HDF4 linked blocks fit the shape and are not written. HDF4's
-`linkinfo_t` does carry a `first_length`, but the file does not: `HLIstaccess`
-reads the 16-byte header as length, block length, block count and link ref,
-and takes the first block's length from that block's own descriptor. A
-template that reads every block's length from its descriptor already has it.
+delegate to.
 
 ## Roadmap (not yet built)
 
@@ -2737,8 +2754,9 @@ built, and see "A stream that ends at something longer than a byte".
 
 A program database's stream directory, when its blocks are not one run, is
 still its blocks and nothing more; its streams are joined (see "One stream kept
-in several runs"). An HDF4 element in linked blocks can be joined the same
-way and is not yet.
+in several runs"). An HDF4 link table with a zero slot before a slot in use
+stands for bytes never written, and joining has nothing to put there, so the
+values after it read early.
 
 W4V covers the six-bit flavour only, and `.wac` is not read at all.
 
