@@ -48,6 +48,7 @@
 mod bp3;
 mod bp4;
 mod bp5;
+mod dataset;
 mod ffs;
 mod ffs_schema;
 mod groups;
@@ -60,5 +61,6 @@ mod tests;
 pub use bp3::adios_bp3;
 pub use bp4::{adios_bp4_data, adios_bp4_index, adios_bp4_metadata};
 pub use bp5::{adios_bp5_index, adios_bp5_metadata};
+pub use dataset::adios_zip;
 pub use ffs::adios_bp5_metametadata;
 pub use recognise::{sniff_agreeing, sniff_signed};

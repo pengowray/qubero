@@ -460,6 +460,23 @@ fn a_record_whose_format_is_not_there_says_so() {
     assert_eq!(info.doc.as_deref(), Some("no format 020000090909090909090909 in mmd.0"));
 }
 
+/// A ZIP is a BP5 dataset when it stores a BP5 index or format list, and a ZIP
+/// like any other when those are compressed.
+#[test]
+fn a_zip_storing_a_bp5_directory_is_told_from_one_that_compresses_it() {
+    let index = [header("Index Table", 5), vec![0; 16]].concat();
+    let entry = |name: &str, method: u16, data: &[u8]| {
+        let mut w = W::default();
+        w.u32(0x0403_4b50).u16(20).u16(0).u16(method).u16(0).u16(0x21).u32(0).u32(data.len() as u32).u32(data.len() as u32);
+        w.u16(name.len() as u16).u16(0).bytes(name.as_bytes()).bytes(data);
+        w.0
+    };
+    let stored = [entry("steps.bp5/", 0, &[]), entry("steps.bp5/md.idx", 0, &index)].concat();
+    assert_eq!(crate::formats::sniff(&stored, stored.len() as u64 + 100), Some("adioszip"));
+    let packed = entry("steps.bp5/md.idx", 8, &index);
+    assert_ne!(crate::formats::sniff(&packed, packed.len() as u64 + 100), Some("adioszip"));
+}
+
 /// A BP3 file of one process group, one variable of three int32s and one
 /// double attribute, with its indices and footer.
 fn bp3_file() -> Vec<u8> {

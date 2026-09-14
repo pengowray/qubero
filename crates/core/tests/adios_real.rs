@@ -11,8 +11,11 @@
 //! Every file of a directory is its own template, so what a file says about
 //! another, a set's payload offset into `data.0` or an index record's offset
 //! into `md.0`, is checked here by reading both. The BP5 directory's `data.0`
-//! is not in the collection: nothing in it says what it is, so nothing reads
-//! it, and every file there has to be read by something.
+//! is not in the collection by itself: nothing in it says what it is, so
+//! nothing reads it, and every file there has to be read by something. It is
+//! in `steps.bp5.zip`, the directory stored in a ZIP, which reads as one
+//! dataset: the records in `md.0` typed by the formats in `mmd.0`, and each
+//! block's values placed in `data.0`.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -43,11 +46,15 @@ struct Open {
 }
 
 fn open(name: &str) -> Option<Open> {
-    let bytes = std::fs::read(sample(name)?).unwrap();
+    Some(open_bytes(std::fs::read(sample(name)?).unwrap(), name))
+}
+
+/// Bytes opened with the template they are recognised as.
+fn open_bytes(bytes: Vec<u8>, name: &str) -> Open {
     let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
     let template = formats::sniff(head, bytes.len() as u64).unwrap_or_else(|| panic!("{name} is not recognised"));
     let ev = Evaluator::new(formats::builtin(template).unwrap());
-    Some(Open { doc: Document::new(MemSource(bytes.clone())), ev, bytes })
+    Open { doc: Document::new(MemSource(bytes.clone())), ev, bytes }
 }
 
 macro_rules! open_or_skip {
@@ -164,6 +171,7 @@ fn every_file_of_the_dataset_is_told_apart() {
         ("steps.bp5/md.idx", Some("adiosbp5idx")),
         ("steps.bp5/md.0", Some("adiosbp5md")),
         ("steps.bp5/mmd.0", Some("adiosbp5mmd")),
+        ("steps.bp5.zip", Some("adioszip")),
     ];
     for (name, template) in expect {
         let bytes = std::fs::read(sample(name).unwrap()).unwrap();
@@ -366,4 +374,209 @@ fn a_bp5_directory_reads_to_its_ffs_records() {
     let late = ["2", "description", "subformats", "0", "body", "fields"];
     let n = mmd.get(&late).child_count as usize;
     assert!((0..n).any(|i| mmd.text(&[&late[..], &[&i.to_string(), "name", "name"]].concat()).ends_with("_late")));
+}
+
+/// A ZIP of stored files, written the way the web app writes a dropped folder:
+/// local records in the order given, then the central directory.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in files {
+        let at = out.len() as u32;
+        let crc = qubero_core::checksum::crc32(data);
+        let fixed = |sig: u32, v: &mut Vec<u8>| {
+            v.extend(sig.to_le_bytes());
+            if sig == 0x0201_4b50 {
+                v.extend(20u16.to_le_bytes());
+            }
+            v.extend(20u16.to_le_bytes());
+            v.extend([0u8; 4]);
+            v.extend(0u16.to_le_bytes());
+            v.extend(0x21u16.to_le_bytes());
+            v.extend(crc.to_le_bytes());
+            v.extend((data.len() as u32).to_le_bytes());
+            v.extend((data.len() as u32).to_le_bytes());
+            v.extend((name.len() as u16).to_le_bytes());
+            v.extend(0u16.to_le_bytes());
+        };
+        fixed(0x0403_4b50, &mut out);
+        out.extend(name.as_bytes());
+        out.extend(*data);
+        fixed(0x0201_4b50, &mut central);
+        central.extend([0u8; 12]);
+        central.extend(at.to_le_bytes());
+        central.extend(name.as_bytes());
+    }
+    let (cd_at, cd_len) = (out.len() as u32, central.len() as u32);
+    out.extend(central);
+    out.extend(0x0605_4b50u32.to_le_bytes());
+    out.extend([0u8; 4]);
+    out.extend((files.len() as u16).to_le_bytes());
+    out.extend((files.len() as u16).to_le_bytes());
+    out.extend(cd_len.to_le_bytes());
+    out.extend(cd_at.to_le_bytes());
+    out.extend(0u16.to_le_bytes());
+    out
+}
+
+/// The field of a BP5 record's data that holds the variable `name`, which BP5
+/// names with its shape, element size and type in front: `BPG_8_10_temperature`.
+fn variable_field(f: &mut Open, data: &[&str], name: &str) -> Option<String> {
+    let p = f.at(data);
+    let n = f.node(&p).child_count as usize;
+    (0..n).map(|i| f.node(&[&p[..], &[i]].concat()).name).find(|field| field.starts_with("BP") && field.ends_with(&format!("_{name}")))
+}
+
+/// What ADIOS2 reads of one block: counts, starts, bounds and values.
+struct Block {
+    count: Vec<f64>,
+    start: Option<Vec<f64>>,
+    bounds: Option<(f64, f64)>,
+    values: Vec<f64>,
+}
+
+fn block(count: &[u64], start: Option<&[u64]>, bounds: Option<(f64, f64)>, values: Vec<f64>) -> Block {
+    let reals = |v: &[u64]| v.iter().map(|&x| x as f64).collect();
+    Block { count: reals(count), start: start.map(reals), bounds, values }
+}
+
+fn bounds(v: &[f64]) -> Option<(f64, f64)> {
+    Some((v.iter().cloned().fold(f64::MAX, f64::min), v.iter().cloned().fold(f64::MIN, f64::max)))
+}
+
+/// Checks every block of the variable `name` in step `s`'s metadata against
+/// what ADIOS2 reads.
+fn check_variable(f: &mut Open, s: usize, name: &str, shape: &str, data_type: &str, blocks: &[Block], placed: bool) {
+    let step = s.to_string();
+    let data = ["dataset", "md_0", "0", &step, "blocks", "metadata", "data"];
+    let field = variable_field(f, &data, name).unwrap_or_else(|| panic!("no {name} in step {s}"));
+    let var = [&data[..], &[field.as_str()]].concat();
+    assert_eq!(f.text(&[&var[..], &["variable", "variable"]].concat()), name);
+    let shape_value = f.get(&[&var[..], &["shape", "shape"]].concat()).value;
+    assert!(matches!(&shape_value, Value::Enum { name: Some(n), .. } if n == shape), "{name} shape {shape_value:?}");
+    let type_value = f.get(&[&var[..], &["data_type"]].concat()).value;
+    assert!(matches!(&type_value, Value::Enum { name: Some(n), .. } if n == data_type), "{name} type {type_value:?}");
+    assert_eq!(f.get(&[&var[..], &["blocks"]].concat()).child_count as usize, blocks.len(), "{name} blocks in step {s}");
+    for (b, want) in blocks.iter().enumerate() {
+        let b = b.to_string();
+        let at = [&var[..], &["blocks", &b]].concat();
+        assert_eq!(f.reals(&[&at[..], &["count"]].concat()), want.count, "{name} count");
+        let p = f.at(&at);
+        let children: Vec<NodeInfo> = (0..f.node(&p).child_count as usize).map(|i| f.node(&[&p[..], &[i]].concat())).collect();
+        match &want.start {
+            Some(start) => assert_eq!(&f.reals(&[&at[..], &["start"]].concat()), start, "{name} start"),
+            None => assert!(children.iter().all(|c| c.name != "start" || c.absent), "{name} is a local array and has no start"),
+        }
+        match want.bounds {
+            Some((min, max)) => {
+                assert_eq!(f.reals(&[&at[..], &["min"]].concat()), [min], "{name} min");
+                assert_eq!(f.reals(&[&at[..], &["max"]].concat()), [max], "{name} max");
+            }
+            None => assert!(f.get(&[&at[..], &["min"]].concat()).absent, "{name} has no bounds"),
+        }
+        match placed {
+            true => assert_eq!(f.reals(&[&at[..], &["values"]].concat()), want.values, "{name} values in step {s}"),
+            false => assert!(children.iter().all(|c| c.name != "values"), "{name} places no values"),
+        }
+    }
+}
+
+/// A BP5 directory stored in a ZIP reads as one dataset: every variable of
+/// every step as ADIOS2 reads it, with its shape and type from its name, its
+/// blocks' counts, starts and bounds from `md.0` in the formats `mmd.0` holds,
+/// and each block's values placed in `data.0` from where `md.idx` says the
+/// step's data starts.
+#[test]
+fn a_bp5_directory_in_a_zip_reads_each_variable_as_adios2_does() {
+    let mut f = open_or_skip!("steps.bp5.zip");
+    assert_eq!(f.get(&["dataset", "md_0", "0"]).child_count, 2);
+    for s in 0..2 {
+        let step = s.to_string();
+        assert_eq!(f.int(&["dataset", "md_0", "0", &step, "data_offset"]), [0, 4096][s]);
+        let t = temperature(s);
+        let halves = [block(&[2, 3], Some(&[0, 0]), bounds(&t[..6]), t[..6].to_vec()), block(&[2, 3], Some(&[2, 0]), bounds(&t[6..]), t[6..].to_vec())];
+        check_variable(&mut f, s, "temperature", "global array", "double", &halves, true);
+        let p = pressure(s);
+        check_variable(&mut f, s, "pressure", "global array", "float", &[block(&[6], Some(&[0]), bounds(&p), p.clone())], true);
+        let i = ids(s);
+        check_variable(&mut f, s, "ids", "local array", "uint64", &[block(&[5], None, bounds(&i), i.clone())], true);
+        let small = vec![-1.0, 0.0, 1.0 + s as f64];
+        check_variable(&mut f, s, "small", "global array", "char", &[block(&[3], Some(&[0]), None, small)], true);
+        let u16s = vec![1.0, 2.0, 3.0, 65535.0 - s as f64];
+        check_variable(&mut f, s, "u16", "global array", "uint16", &[block(&[2, 2], Some(&[0, 0]), bounds(&u16s), u16s.clone())], true);
+        let wave = vec![1.0, 2.0, -3.5, s as f64];
+        check_variable(&mut f, s, "wave", "global array", "complex double", &[block(&[2], Some(&[0]), None, wave)], true);
+        let data = ["dataset", "md_0", "0", &step, "blocks", "metadata", "data"];
+        assert_eq!(f.int(&[&data[..], &["BPg_step_count"]].concat()), 10 + s as i128);
+        assert_eq!(f.text(&[&data[..], &["BPg_label", "text", "text"]].concat()), format!("step {s}"));
+    }
+    // `late` is written in the second step only, in the third format.
+    assert!(variable_field(&mut f, &["dataset", "md_0", "0", "0", "blocks", "metadata", "data"], "late").is_none());
+    check_variable(&mut f, 1, "late", "global array", "int16", &[block(&[3], Some(&[0]), Some((-7.0, 9.0)), vec![-7.0, 8.0, 9.0])], true);
+
+    // The attributes, in the first step's attribute block, each named with its
+    // type in front.
+    let attrs = ["dataset", "md_0", "0", "0", "blocks", "attributes", "data"];
+    let prim = [&attrs[..], &["PrimAttrs", "values", "values"]].concat();
+    assert_eq!(f.get(&prim).child_count, 2);
+    let mut numbers = std::collections::BTreeMap::new();
+    for i in ["0", "1"] {
+        let a = [&prim[..], &[i]].concat();
+        let name = f.text(&[&a[..], &["attribute", "attribute"]].concat());
+        numbers.insert(name, f.reals(&[&a[..], &["values"]].concat()));
+    }
+    assert_eq!(numbers["grid"], [4.0, 3.0]);
+    assert_eq!(numbers["scale"], [1.5]);
+    let strs = [&attrs[..], &["StrAttrs", "values", "values"]].concat();
+    assert_eq!(f.get(&strs).child_count, 3);
+    let mut texts = std::collections::BTreeMap::new();
+    for i in ["0", "1", "2"] {
+        let a = [&strs[..], &[i]].concat();
+        let name = f.text(&[&a[..], &["attribute", "attribute"]].concat());
+        let values = [&a[..], &["Values", "values", "values"]].concat();
+        let n = f.get(&values).child_count as usize;
+        let got: Vec<String> = (0..n).map(|k| f.text(&[&values[..], &[&k.to_string(), "text", "text"]].concat())).collect();
+        texts.insert(name, got);
+    }
+    assert_eq!(texts["names"], ["alpha", "beta"]);
+    assert_eq!(texts["temperature/units"], ["kelvin"]);
+    assert_eq!(texts["units"], ["K"]);
+}
+
+/// `md.0` opened alone reads to its FFS records, and each record's data says
+/// its formats are in `mmd.0` rather than failing the file.
+#[test]
+fn a_bp5_metadata_file_alone_says_its_formats_are_in_mmd0() {
+    let mut md = open_or_skip!("steps.bp5/md.0");
+    for s in ["0", "1"] {
+        let data = md.get(&[s, "blocks", "metadata", "data"]);
+        let length = md.int(&[s, "blocks", "metadata", "data_length"]) as u64;
+        assert_eq!(data.size_bits, length * 8);
+        let doc = data.doc.unwrap_or_default();
+        assert!(doc.contains("mmd.0"), "step {s}: {doc:?}");
+        assert!(data.type_name.starts_with("FFS format 0200"), "{}", data.type_name);
+    }
+}
+
+/// Without `data.0` the dataset still reads each block's counts and bounds,
+/// and places no values; with the files under a folder, the names match by
+/// their last part. Without `mmd.0` the metadata says where its formats are.
+#[test]
+fn a_bp5_zip_without_its_data_file_reads_the_blocks_without_values() {
+    let Some(dir) = sample("steps.bp5") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let read = |n: &str| std::fs::read(dir.join(n)).unwrap();
+    let (idx, mmd, md) = (read("md.idx"), read("mmd.0"), read("md.0"));
+    let zip = stored_zip(&[("steps.bp5/md.idx", &idx), ("steps.bp5/mmd.0", &mmd), ("steps.bp5/md.0", &md)]);
+    let mut f = open_bytes(zip, "a zip without data.0");
+    assert_eq!(f.ev.template().name, "adioszip");
+    let t = temperature(0);
+    let halves = [block(&[2, 3], Some(&[0, 0]), bounds(&t[..6]), vec![]), block(&[2, 3], Some(&[2, 0]), bounds(&t[6..]), vec![])];
+    check_variable(&mut f, 0, "temperature", "global array", "double", &halves, false);
+    let zip = stored_zip(&[("md.idx", &idx), ("md.0", &md)]);
+    let mut f = open_bytes(zip, "a zip without mmd.0");
+    let data = f.get(&["dataset", "md_0", "0", "0", "blocks", "metadata", "data"]);
+    assert!(data.doc.unwrap_or_default().contains("mmd.0"));
 }

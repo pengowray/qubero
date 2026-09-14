@@ -294,6 +294,7 @@ const PROBES: &[Probe] = &[
     Probe::Is("coff", is_coff),
     Probe::Is("omf", |h, _| is_omf(h)),
     Probe::Is("msdos", is_dos),
+    Probe::Is("adioszip", |h, _| is_adios_zip(h)),
     Probe::Is("zarrzip", |h, _| is_zarr_zip(h)),
     Probe::Is("lha", |h, _| is_lha(h)),
     Probe::Is("lnk", |h, _| is_lnk(h)),
@@ -914,6 +915,27 @@ fn is_lha(head: &[u8]) -> bool {
 /// window is not recognised here. The archive still opens as a ZIP, and the
 /// contents view names the store from the entries themselves.
 fn is_zarr_zip(head: &[u8]) -> bool {
+    any_local_entry(head, |name, _, _, _| is_zarr_key(name))
+}
+
+/// Whether a ZIP holds a BP5 directory: its index or its formats, stored, and
+/// recognised as themselves from the bytes the window has of them.
+fn is_adios_zip(head: &[u8]) -> bool {
+    any_local_entry(head, |name, method, data, len| {
+        let leaf = name.rsplit(|&b| b == b'/' || b == b'\\').next().unwrap_or(name);
+        method == 0
+            && match leaf {
+                b"md.idx" => adios::sniff_signed(data, len as u64) == Some("adiosbp5idx"),
+                b"mmd.0" => adios::sniff_agreeing(data, len as u64) == Some("adiosbp5mmd"),
+                _ => false,
+            }
+    })
+}
+
+/// Whether `found` says yes of any local entry the window starts, walking from
+/// the first: its name, its method, as much of its data as the window holds,
+/// and how long the data is.
+fn any_local_entry(head: &[u8], mut found: impl FnMut(&[u8], u16, &[u8], usize) -> bool) -> bool {
     let mut at = 0usize;
     while let Some(record) = head.get(at..at.saturating_add(30)) {
         if record[..4] != *b"PK\x03\x04" {
@@ -922,6 +944,7 @@ fn is_zarr_zip(head: &[u8]) -> bool {
         let u16_at = |i: usize| u16::from_le_bytes([record[i], record[i + 1]]) as usize;
         let u32_at = |i: usize| u32::from_le_bytes([record[i], record[i + 1], record[i + 2], record[i + 3]]) as usize;
         let flags = u16_at(6);
+        let method = u16_at(8) as u16;
         let compressed = u32_at(18);
         let name_length = u16_at(26);
         let extra_length = u16_at(28);
@@ -929,7 +952,14 @@ fn is_zarr_zip(head: &[u8]) -> bool {
         let Some(name) = head.get(names_at..names_at.saturating_add(name_length)) else {
             return false;
         };
-        if is_zarr_key(name) {
+        let data_at = names_at.saturating_add(name_length).saturating_add(extra_length);
+        let known = match head.get(names_at + name_length..data_at) {
+            Some(extra) => entry_size(compressed, extra),
+            None => None,
+        };
+        let data = head.get(data_at..).unwrap_or(&[]);
+        let data = &data[..data.len().min(known.unwrap_or(0))];
+        if found(name, method, data, known.unwrap_or(0)) {
             return true;
         }
         // A streamed entry writes zero for its size here and the real one in a

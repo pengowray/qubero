@@ -195,7 +195,7 @@ mod wasm;
 pub mod wasm_disasm;
 mod wasm_opcodes;
 
-pub use adios::{adios_bp3, adios_bp4_data, adios_bp4_index, adios_bp4_metadata, adios_bp5_index, adios_bp5_metadata, adios_bp5_metametadata};
+pub use adios::{adios_bp3, adios_bp4_data, adios_bp4_index, adios_bp4_metadata, adios_bp5_index, adios_bp5_metadata, adios_bp5_metametadata, adios_zip};
 pub use aiff::aiff;
 pub use ar::{ar, deb};
 pub use arrow::{arrow, arrow_stream};
@@ -448,6 +448,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("adiosbp5idx", |_| adios_bp5_index()),
     ("adiosbp5md", |_| adios_bp5_metadata()),
     ("adiosbp5mmd", |_| adios_bp5_metametadata()),
+    ("adioszip", |_| adios_zip()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

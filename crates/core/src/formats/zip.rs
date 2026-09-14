@@ -48,7 +48,7 @@ const EXTRA_IDS: &[(i128, &str)] = &[
     (0xa11e, "alignment padding"),
     (0xa220, "growth hint"),
 ];
-const METHODS: &[(i128, &str)] = &[
+pub(crate) const METHODS: &[(i128, &str)] = &[
     (0, "stored"),
     (1, "shrunk"),
     (6, "imploded"),
@@ -74,25 +74,26 @@ pub fn zarrzip() -> Template {
 }
 
 fn archive(name: &str) -> Template {
-    Template::new(
-        name,
-        T::structure(
-            "ZIP",
-            vec![(
-                "records",
-                T::repeat(
-                    record(),
-                    Until::FieldBytes {
-                        field: "signature".into(),
-                        bytes: b"PK\x05\x06".to_vec(),
-                    },
-                ),
-            )],
-        ),
+    Template::new(name, T::structure("ZIP", vec![("records", records(false))]))
+}
+
+/// Every record of an archive to the end record, for a template that reads an
+/// archive and something the archive holds beside it.
+///
+/// `data_read_elsewhere` says that template reads each file's data as what the
+/// file is, so the entry's own reading of the bytes is the second one and is
+/// not counted.
+pub(crate) fn records(data_read_elsewhere: bool) -> T {
+    T::repeat(
+        record(data_read_elsewhere),
+        Until::FieldBytes {
+            field: "signature".into(),
+            bytes: b"PK\x05\x06".to_vec(),
+        },
     )
 }
 
-fn record() -> T {
+fn record(data_read_elsewhere: bool) -> T {
     T::structure_named(
         "ZipRecord",
         "signature",
@@ -107,7 +108,7 @@ fn record() -> T {
                 T::switch(
                     E::field("signature"),
                     vec![
-                        (0x0403_4b50, local()),
+                        (0x0403_4b50, local(data_read_elsewhere)),
                         (0x0807_4b50, descriptor()),
                         (0x0201_4b50, central()),
                         (0x0605_4b50, end()),
@@ -272,8 +273,8 @@ fn text(len: &str) -> T {
     T::text(StrLen::Fixed(E::field(len)), Encoding::Unknown)
 }
 
-fn local() -> T {
-    T::structure(
+fn local(data_read_elsewhere: bool) -> T {
+    let entry = T::structure(
         "LocalFile",
         vec![
             ("version_needed", T::u16(Little)),
@@ -351,7 +352,11 @@ fn local() -> T {
     // it. Local, since MS-DOS had no zone to record and a ZIP does not add one.
     // An archiver may also write a real timestamp in an extra field, tag 0x5455
     // or 0x000a, which nothing here reads yet.
-    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
+    .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"));
+    match data_read_elsewhere {
+        true => entry.field_aside("data"),
+        false => entry,
+    }
 }
 
 fn central() -> T {
