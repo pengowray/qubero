@@ -171,6 +171,32 @@ const COLLAPSE_COMPLEX_RUN: u64 = 32;
 /// whole megabyte says nothing about any of them.
 const COLLAPSE_ELEMENT_BYTES: u64 = 256;
 
+/// How many placed stretches covering one bit `locate` walks down from before
+/// it settles for a gap. They nest, so this is how deep the nesting has to be
+/// before an answer is missed, and each try is a descent from a stretch to the
+/// bit. An HDF5 name inside a heap inside an object header is three.
+const PLACEMENTS_TRIED: usize = 8;
+
+/// Whether a node of this type is made of other nodes, so that one with none
+/// of them covering a bit is a gap rather than the field at that bit. The
+/// same types `Evaluator::node` calls composite.
+fn holds_fields(ty: &Ty) -> bool {
+    match ty {
+        Ty::Struct(_)
+        | Ty::Array { .. }
+        | Ty::Repeat { .. }
+        | Ty::PointerList { .. }
+        | Ty::Chain { .. }
+        | Ty::Gather { .. }
+        | Ty::At { .. }
+        | Ty::Decoded { .. }
+        | Ty::Traced { .. }
+        | Ty::Stitched { .. } => true,
+        Ty::Json(shape, _) => shape.composite(),
+        _ => false,
+    }
+}
+
 /// A type that holds one number or one run of bytes, and nothing inside it.
 pub(super) fn plain(ty: &Ty) -> bool {
     match ty {
@@ -333,20 +359,64 @@ impl Evaluator {
     /// the index of those stretches is asked next and the walk carries on from
     /// whichever placed the bit. A bit nothing covers is the root, which is
     /// what a gap has always been.
+    ///
+    /// The index is asked about a bit inside the root as well, when the walk
+    /// down from the root ends in a structure none of whose fields cover it.
+    /// Being inside what the root covers is no promise that walking down finds
+    /// everything there: an AppleDouble attribute's value is placed by a field
+    /// three levels inside the entry before it, a COFF section's relocations
+    /// by a field of the section, and neither the entry nor the section covers
+    /// the bytes it points at. The descent stops at whatever does cover them,
+    /// and that reads as a gap unless the index has a narrower answer. Asking
+    /// adds no walk: a gap already asks the same index where the placed
+    /// stretches around it begin and end.
+    ///
+    /// Several placed stretches can cover one bit, and the narrowest is not
+    /// always the one with a field there. An Impulse Tracker module puts its
+    /// instruments, its samples and its patterns each in a list reaching over
+    /// the whole file, and a module with no instruments has an empty one
+    /// first. So each is tried in turn, narrowest first, until one has a field
+    /// at the bit, and when none has, the answer is where the first one led.
     pub fn locate<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<usize>> {
-        let mut path: Vec<usize> = Vec::new();
-        self.resolve(doc, &path)?;
-        let size = self.size_of(doc, &path)?;
-        let root = self.memo[&path].clone();
+        self.resolve(doc, &[])?;
+        let size = self.size_of(doc, &[])?;
+        let root = self.memo[&Vec::new()].clone();
         if bit >= doc.len_bits() {
             return fail("past the end of the file");
         }
-        if bit < root.offset || bit >= root.offset + size {
-            match self.placement_at(doc, bit)? {
-                Some(p) => path = p,
-                None => return Ok(Vec::new()),
-            }
+        let inside = root.offset <= bit && bit < root.offset + size;
+        let (found, settled) = if inside { self.walk_down_to(doc, Vec::new(), bit)? } else { (Vec::new(), false) };
+        if settled {
+            return Ok(found);
         }
+        // Only a stretch narrower than the structure the walk stopped in says
+        // more about the bit than that structure does, and a wider one would
+        // lead back down to it.
+        let widest = if inside {
+            let at = self.memo[&found].offset;
+            let size = self.size_of(doc, &found)?;
+            if at <= bit && bit < at + size { size } else { u64::MAX }
+        } else {
+            u64::MAX
+        };
+        let mut answer = if inside { Some(found) } else { None };
+        for (width, placed) in self.placements_at(doc, bit)?.into_iter().take(PLACEMENTS_TRIED) {
+            if width >= widest {
+                break;
+            }
+            let (deeper, settled) = self.walk_down_to(doc, placed, bit)?;
+            if settled {
+                return Ok(deeper);
+            }
+            answer.get_or_insert(deeper);
+        }
+        Ok(answer.unwrap_or_default())
+    }
+
+    /// Walk down from `path` to the deepest field covering `bit`, and say
+    /// whether the walk ended on a field, rather than in a structure or a
+    /// list none of whose children cover the bit.
+    fn walk_down_to<S: Source>(&mut self, doc: &Document<S>, mut path: Vec<usize>, bit: u64) -> R<(Vec<usize>, bool)> {
         loop {
             // The cursor stops at a decoded stream's *contents*: those are at
             // offsets of the decoded bytes, and no bit of the file is any one
@@ -371,7 +441,7 @@ impl Evaluator {
                         continue;
                     }
                 }
-                return Ok(path);
+                return Ok((path, true));
             }
             // How many elements a code section holds is a question only the
             // decoding of every one of them answers, and which one covers a
@@ -384,24 +454,27 @@ impl Evaluator {
                         path.push(i);
                         continue;
                     }
-                    Ok(None) => return Ok(path),
+                    Ok(None) => return Ok((path, false)),
                     Err(e) if e.interrupted() => return Err(e),
                     // The run ended on something that would not parse, which
                     // is what the bytes after the last whole element of a run
                     // look like. Counting the run would have stopped there
                     // too, and the answer for a bit past the end of it is the
                     // run itself, which reads as a gap.
-                    Err(_) => return Ok(path),
+                    Err(_) => return Ok((path, false)),
                 }
             };
             if n == 0 {
-                return Ok(path);
+                // A field with nothing inside it is the answer. A structure or
+                // a list with nothing inside it is bytes nothing describes.
+                let holds = holds_fields(&self.memo[&path].ty);
+                return Ok((path, !holds));
             }
             match self.child_at(doc, &path, n, bit)? {
                 Some(i) => path.push(i),
                 // Inside the parent but in none of its children: padding, or a
                 // struct whose fields do not fill it.
-                None => return Ok(path),
+                None => return Ok((path, false)),
             }
         }
     }
@@ -508,7 +581,15 @@ impl Evaluator {
         if let Some(end) = self.placement_end_before(doc, at)? {
             begins = begins.max(end);
         }
-        let ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits()).max(at + 8);
+        let mut ends = self.placement_after(doc, at)?.unwrap_or(doc.len_bits());
+        let (before, after) = self.scattered_around(doc, at)?;
+        if let Some(end) = before {
+            begins = begins.max(end);
+        }
+        if let Some(next) = after {
+            ends = ends.min(next);
+        }
+        let ends = ends.max(at + 8);
         span.gap = true;
         span.offset_bits = begins;
         span.size_bits = ends - begins;
@@ -536,6 +617,12 @@ impl Evaluator {
         if let Some(end) = self.placement_end_before(doc, at)? {
             begins = begins.max(end);
         }
+        // A list placed over the whole file begins where the file does, and
+        // the root's own fields are not part of a gap past them.
+        let root_end = self.memo[&Vec::new()].offset + self.size_of(doc, &[])?;
+        if root_end <= at {
+            begins = begins.max(root_end);
+        }
         let mut ends = info.offset_bits + info.size_bits;
         for k in (0..=path.len()).rev() {
             if let Some(next) = self.next_child_start(doc, &path[..k], at)? {
@@ -543,6 +630,13 @@ impl Evaluator {
             }
         }
         if let Some(next) = self.placement_after(doc, at)? {
+            ends = ends.min(next);
+        }
+        let (before, after) = self.scattered_around(doc, at)?;
+        if let Some(end) = before {
+            begins = begins.max(end);
+        }
+        if let Some(next) = after {
             ends = ends.min(next);
         }
         // A framed structure's leftovers are its own punctuation rather than
@@ -560,6 +654,41 @@ impl Evaluator {
             _ => Value::Str(String::new()),
         };
         Ok(span)
+    }
+
+    /// Where the nearest element before `at` ends and the nearest after it
+    /// begins, among the lists of scattered elements a placed stretch over
+    /// `at` holds.
+    ///
+    /// A gap is bounded by the structure it was found in and by the placed
+    /// stretches around it, and neither of those sees a list that is placed
+    /// over the gap without being the one `locate` found. An Impulse Tracker
+    /// module's instrument list, sample list and pattern list each reach over
+    /// the whole file: the bytes between the last instrument and the first
+    /// sample are in the instrument list and in none of its elements, and
+    /// ending that gap where the next placed stretch begins ran it over every
+    /// sample header to the first sample's data. Only lists that know where
+    /// their elements start in order are asked, which is a halving each.
+    fn scattered_around<S: Source>(&mut self, doc: &Document<S>, at: u64) -> R<(Option<u64>, Option<u64>)> {
+        let mut before: Option<u64> = None;
+        let mut after: Option<u64> = None;
+        for (_, mut placed) in self.placements_at(doc, at)?.into_iter().take(PLACEMENTS_TRIED) {
+            self.resolve(doc, &placed)?;
+            if matches!(self.memo[&placed].ty, Ty::At { .. }) {
+                placed.push(0);
+                self.resolve(doc, &placed)?;
+            }
+            if !matches!(self.memo[&placed].ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
+                continue;
+            }
+            if let Some(end) = self.prev_child_end(doc, &placed, at)? {
+                before = Some(before.map_or(end, |b| b.max(end)));
+            }
+            if let Some(next) = self.next_child_start(doc, &placed, at)? {
+                after = Some(after.map_or(next, |a| a.min(next)));
+            }
+        }
+        Ok((before, after))
     }
 
     /// A compressed run, as the one entry it is: the whole run, named by its

@@ -108,9 +108,9 @@ const SAME_ANSWER: usize = 64;
 pub(super) struct Index {
     /// What has been found, sorted by where it starts.
     pub(super) stretches: Vec<Placement>,
-    /// The stretches already in it, so the same one reached from a hundred
-    /// thousand places is walked into once.
-    pub(super) ranges: rustc_hash::FxHashSet<(u64, u64)>,
+    /// The stretches already in it and what each was read as, so the same one
+    /// reached from a hundred thousand places is walked into once.
+    pub(super) ranges: rustc_hash::FxHashSet<(u64, u64, String)>,
     /// Whether it is everything there is, or as far as the walk got.
     pub(super) done: bool,
     /// The walk's own stack, so it can stop after a bounded number of nodes
@@ -129,18 +129,24 @@ impl Index {
 }
 
 impl Evaluator {
-    /// The narrowest placed stretch covering `bit`, and the field that placed
-    /// it. Narrowest because placements nest: a link's name sits inside the
-    /// heap's data segment, and both were placed by an `At`.
-    pub(super) fn placement_at<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<Vec<usize>>> {
+    /// Every placed stretch covering `bit`, narrowest first, with how wide it
+    /// is and the field that placed it. Narrowest first because placements
+    /// nest: a link's name sits inside the heap's data segment, and both were
+    /// placed by an `At`. The rest are there for when the narrowest has no
+    /// field at the bit; see `locate`.
+    pub(super) fn placements_at<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Vec<(u64, Vec<usize>)>> {
         self.index_placements(doc)?;
-        Ok(self
-            .placed
-            .stretches
+        // Sorted by where they start, so none past the bit need looking at.
+        let past = self.placed.stretches.partition_point(|p| p.start <= bit);
+        let mut covering: Vec<(u64, Vec<usize>)> = self.placed.stretches[..past]
             .iter()
-            .filter(|p| p.start <= bit && bit < p.end)
-            .min_by_key(|p| p.end - p.start)
-            .map(|p| p.path.clone()))
+            .filter(|p| bit < p.end)
+            .map(|p| (p.end - p.start, p.path.clone()))
+            .collect();
+        // Stable, so of two the same width the one that starts first is tried
+        // first, and of two over the same stretch the one the walk found first.
+        covering.sort_by_key(|(width, _)| *width);
+        Ok(covering)
     }
 
     /// Where the next placed stretch after `bit` begins, which is how far a
@@ -276,7 +282,12 @@ impl Evaluator {
         if self.memo[&stretch].space != 0 {
             return self.frame(doc, stretch);
         }
-        if !self.placed.ranges.insert((start, start + size)) {
+        // The same stretch read as the same thing is walked once. Read as
+        // something else it is another placement: an Impulse Tracker module
+        // points its instrument list, its sample list and its pattern list
+        // all at the whole file, and only the second has samples in it.
+        let key = (start, start + size, self.memo[&stretch].ty.display_name());
+        if !self.placed.ranges.insert(key) {
             return Ok(None);
         }
         self.placed.stretches.push(Placement { start, end: start + size, path });
