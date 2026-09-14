@@ -1366,7 +1366,9 @@ impl Evaluator {
             if n < 0 {
                 return fail("negative offset");
             }
-            let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
+            let Some(to) = size::bits_in(n).and_then(|bits| self.anchor_base(parent, pr.offset, anchor).checked_add(bits)) else {
+                return fail("runs past the end of its container");
+            };
             let into = if anchor == Anchor::File { 0 } else { pr.space };
             self.no_ring(parent, to, into, &what)?;
             // Both of these name a place outside whatever window they were
@@ -1382,7 +1384,10 @@ impl Evaluator {
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
-            pr.offset + idx as u64 * stride
+            let Some(at) = stride.checked_mul(idx as u64).and_then(|bits| pr.offset.checked_add(bits)) else {
+                return fail("runs past the end of its container");
+            };
+            at
         } else {
             // Place after the previous sibling, walking the elements in
             // between. A long list drops what the walk moves past, so this
@@ -1756,10 +1761,9 @@ impl Evaluator {
                     if bytes < 0 {
                         return fail("negative size");
                     }
-                    let bits = bytes as u64 * 8;
-                    if offset + bits > limit {
+                    let Some(bits) = size::bits_in(bytes).filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
                         return fail(format!("size {bytes} runs past the end of its container"));
-                    }
+                    };
                     limit = offset + bits;
                     declared_size = Some(bits);
                     sized_how = Some(shape::expr_sizing(&size));
@@ -1778,10 +1782,9 @@ impl Evaluator {
                         Ty::CodeBits { width, .. } => *width,
                         _ => shape::expr_sizing(&bits),
                     });
-                    let bits = n as u64;
-                    if offset + bits > limit {
-                        return fail(format!("{bits} bits run past the end of the container"));
-                    }
+                    let Some(bits) = u64::try_from(n).ok().filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
+                        return fail(format!("{n} bits run past the end of the container"));
+                    };
                     limit = offset + bits;
                     declared_size = Some(bits);
                     ty = *inner;
