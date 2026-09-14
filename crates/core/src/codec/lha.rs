@@ -101,6 +101,7 @@
 //! reinterpreting: a highlight narrower than a byte lands where a reader
 //! reading left to right expects it.
 
+use crate::bits::Bits;
 use crate::codec::{BlockKind, Refusal, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES};
 
 /// The literal/length alphabet: 256 bytes, then the lengths 3 to 256.
@@ -122,58 +123,6 @@ const THRESHOLD: u32 = 3;
 
 /// The longest code any of the three tables may give a symbol.
 const MAX_CODE_LEN: u32 = 16;
-
-/// Reading a bit at a time, most significant first.
-struct Bits<'a> {
-    data: &'a [u8],
-    /// How many bits have been read, which is the position in the run.
-    at: u64,
-}
-
-impl<'a> Bits<'a> {
-    fn new(data: &'a [u8]) -> Bits<'a> {
-        Bits { data, at: 0 }
-    }
-
-    fn left(&self) -> u64 {
-        self.data.len() as u64 * 8 - self.at
-    }
-
-    fn bit(&mut self) -> Result<u32, Refusal> {
-        if self.at >= self.data.len() as u64 * 8 {
-            return Err(Refusal::Failed);
-        }
-        let byte = self.data[(self.at / 8) as usize];
-        let set = byte >> (7 - self.at % 8) & 1;
-        self.at += 1;
-        Ok(set as u32)
-    }
-
-    /// `bits` bits as a number, the first one read being the highest.
-    fn val(&mut self, bits: u32) -> Result<u32, Refusal> {
-        let mut val = 0u32;
-        for _ in 0..bits {
-            val = val << 1 | self.bit()?;
-        }
-        Ok(val)
-    }
-
-    /// The next sixteen bits without reading them, for the one question asked
-    /// between blocks: whether what is left is another block or the zero bits
-    /// the last byte was padded out with.
-    fn peek16(&self) -> u32 {
-        let mut val = 0u32;
-        for i in 0..16 {
-            let at = self.at + i;
-            let bit = match at < self.data.len() as u64 * 8 {
-                true => self.data[(at / 8) as usize] >> (7 - at % 8) & 1,
-                false => 0,
-            };
-            val = val << 1 | bit as u32;
-        }
-        val
-    }
-}
 
 /// One of the three tables, as the decoder reads from it.
 ///
@@ -244,7 +193,7 @@ impl Code {
         let mut first = 0u32;
         let mut index = 0u32;
         for len in 1..=MAX_CODE_LEN as usize {
-            code |= bits.bit()?;
+            code |= bits.read_bit()?;
             let count = counts[len] as u32;
             if code < first + count {
                 return Ok(symbols[(index + code - first) as usize]);
@@ -260,9 +209,9 @@ impl Code {
 /// A length written flat: three bits, and if that says seven it says seven and
 /// more, with one bits following until a zero and each adding one.
 fn length_value(bits: &mut Bits) -> Result<u8, Refusal> {
-    let mut len = bits.val(3)?;
+    let mut len = bits.read(3)?;
     if len == 7 {
-        while bits.bit()? == 1 {
+        while bits.read_bit()? == 1 {
             len += 1;
             if len > MAX_CODE_LEN {
                 return Err(Refusal::Failed);
@@ -287,12 +236,12 @@ fn flat_table(
     skip_at_three: bool,
     dist: bool,
 ) -> Result<Code, Refusal> {
-    let at = bits.at;
-    let n = bits.val(count_bits)? as usize;
+    let at = bits.pos();
+    let n = bits.read(count_bits)? as usize;
     if n == 0 {
         // One symbol, whose code is no bits. The count and the symbol are one
         // step: neither says anything without the other.
-        let sym = bits.val(count_bits)? as u16;
+        let sym = bits.read(count_bits)? as u16;
         if sym as usize >= alphabet {
             return Err(Refusal::Failed);
         }
@@ -308,7 +257,7 @@ fn flat_table(
     let mut lengths = vec![0u8; alphabet];
     let mut i = 0usize;
     while i < n {
-        let at = bits.at;
+        let at = bits.pos();
         let len = length_value(bits)?;
         lengths[i] = len;
         b.push(at, out_len, table_step(dist, i as u16, len));
@@ -316,8 +265,8 @@ fn flat_table(
         if skip_at_three && i == 3 {
             // The arbitrary one: two bits of how many of the next lengths are
             // unused. They stay zero, so this only moves the cursor on.
-            let at = bits.at;
-            let skip = bits.val(2)? as usize;
+            let at = bits.pos();
+            let skip = bits.read(2)? as usize;
             b.push(at, out_len, StepKind::Table(TableField::Repeat { code: 0, count: skip as u16, len: 0, dist }));
             i = (i + skip).min(alphabet);
         }
@@ -337,10 +286,10 @@ fn table_step(dist: bool, sym: u16, len: u8) -> StepKind {
 /// The second table: 510 code lengths, themselves written under the
 /// code-length alphabet read just before.
 fn code_table(bits: &mut Bits, b: &mut TraceBuilder, out_len: u64, temp: &Code) -> Result<Code, Refusal> {
-    let at = bits.at;
-    let n = bits.val(CBIT)? as usize;
+    let at = bits.pos();
+    let n = bits.read(CBIT)? as usize;
     if n == 0 {
-        let sym = bits.val(CBIT)? as u16;
+        let sym = bits.read(CBIT)? as u16;
         if sym as usize >= NC {
             return Err(Refusal::Failed);
         }
@@ -353,14 +302,14 @@ fn code_table(bits: &mut Bits, b: &mut TraceBuilder, out_len: u64, temp: &Code) 
     let mut lengths = vec![0u8; NC];
     let mut i = 0usize;
     while i < n {
-        let at = bits.at;
+        let at = bits.pos();
         let code = temp.decode(bits)?;
         if code <= 2 {
             // A run of symbols nothing uses: one, or a count that follows.
             let skip = match code {
                 0 => 1u32,
-                1 => bits.val(4)? + 3,
-                _ => bits.val(CBIT)? + 20,
+                1 => bits.read(4)? + 3,
+                _ => bits.read(CBIT)? + 20,
             };
             let took = (skip as usize).min(n - i);
             b.push(at, out_len, StepKind::Table(TableField::Repeat { code: code as u8, count: took as u16, len: 0, dist: false }));
@@ -411,15 +360,15 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
     loop {
         // Another block, or the end. Sixteen bits that will not fit, or a
         // count of zero, is the end: see the module doc.
-        if bits.left() < 16 || bits.peek16() == 0 {
+        if bits.left() < 16 || bits.peek(16) == 0 {
             break;
         }
-        let block_in = bits.at;
+        let block_in = bits.pos();
         let block_out = out.len() as u64;
         b.open_block(block_in, block_out);
 
-        let at = bits.at;
-        let mut left = bits.val(16)?;
+        let at = bits.pos();
+        let mut left = bits.read(16)?;
         b.push(at, out.len() as u64, StepKind::Header(StepField::BlockHeader, left));
 
         let temp = flat_table(&mut bits, &mut b, out.len() as u64, NT, TBIT, true, false)?;
@@ -429,7 +378,7 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
         // The symbols. Every one of them produces output, so the count is what
         // holds this loop rather than anything in the stream.
         let sym_start = b.steps();
-        let sym_in = bits.at;
+        let sym_in = bits.pos();
         let sym_out = out.len() as u64;
         if coarse {
             b.push(sym_in, sym_out, StepKind::Opaque);
@@ -444,7 +393,7 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
                 b.push(sym_in, sym_out, StepKind::Opaque);
             }
             left -= 1;
-            let at = bits.at;
+            let at = bits.pos();
             let sym = lit.decode(&mut bits)?;
             if (sym as usize) < 256 {
                 if out.len() >= CAP_BYTES {
@@ -469,7 +418,7 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
                     if w > 31 {
                         return Err(Refusal::Failed);
                     }
-                    (1u32 << (w - 1)) + bits.val(w - 1)? + 1
+                    (1u32 << (w - 1)) + bits.read(w - 1)? + 1
                 }
             };
             if dist as usize > out.len() {
@@ -490,15 +439,15 @@ fn run(data: &[u8], window_bits: u8, mut b: TraceBuilder) -> Result<(Vec<u8>, Tr
         }
         // Whether this was the last block, which is the same question as the
         // one at the top of the loop.
-        let last = bits.left() < 16 || bits.peek16() == 0;
-        b.close_block(bits.at, out.len() as u64, BlockKind::Dynamic, last);
+        let last = bits.left() < 16 || bits.peek(16) == 0;
+        b.close_block(bits.pos(), out.len() as u64, BlockKind::Dynamic, last);
     }
 
     // What is left is the zero bits the last byte was padded out with, and is
     // not a symbol of any block, so it sits outside them.
     let end = data.len() as u64 * 8;
-    if bits.at < end {
-        b.push(bits.at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
+    if bits.pos() < end {
+        b.push(bits.pos(), out.len() as u64, StepKind::Header(StepField::Padding, 0));
     }
     b.finish_at(end, out.len() as u64);
     Ok((out, b.done()))

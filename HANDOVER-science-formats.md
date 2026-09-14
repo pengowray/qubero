@@ -36,7 +36,8 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
-| Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. Six more private `Bits` copies remain (`codec/inflate.rs`, `lha.rs`, `pico8.rs`, `rar5.rs`, `fits_tile.rs`, `gwf_vect.rs`). `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| Codecs: `Codec::Lz4Frame` (linked and independent blocks, checksums traced not verified) opens Arrow's LZ4 bodies, all 46 buffers of `columns-lz4.arrow` byte-identical to the uncompressed file; `Codec::CdfHuffman` and `Codec::CdfAhuff` unpack whole-file compression types 2 and 3, matching NASA's `cdfhuff.c` byte for byte (samples `cdf/d103a2x.cdf`, `d103a2x-ahuff.cdf`); one `Bits` reader in both bit orders replaces the six private copies. | 916db8d..1b1b7dc |
 | S9. A type built from a schema the file supplies: `Ty::Schema`, `Step::Stream` and `Step::Deep`, a builder over lazily read descriptions with a cache and edit handling. ROOT objects are built from `StreamerInfo` (classes match the side reader on all 8 samples), baskets are placed through lz4, lzma and zstd (Zmumu 20 per codec, sample-6.20.04 411), and 310 baskets read as typed values matching `read_basket`. DESIGN.md "A type the file describes". | 9322815..b8205b9 |
 | Hex view gaps over placed data: the placement index skipped anything behind a `Ty::Match` (every ROOT key, so RNTuple `staff` named 768 of 25,318 bytes, now 25,113), stopped at the first child past the bit (COFF symbol table), asked only outside the root (AppleDouble, netCDF, COFF relocations), and kept one list per stretch (Impulse Tracker, S3M). 26 sample files now name what the tree names; none got worse. The cause was not file order: the index walk already runs to the end. `examples/cover_probe.rs` compares the two. | c7db45b..7304837 |
 | S7 stage 4: HDF4 linked blocks joined (all 50 of `tdata.hdf`'s values match pyhdf), joined streams open as tabs under the cap, `map_out` through each part's own trace, and relations naming what cut and measured a joined stream. | ac1f83a, c15a455, 1bdc0d9, bb7f637 |
@@ -318,9 +319,9 @@ the variable's data type, attribute and pad values, byte order switched on
 the CDR's encoding, gzip CVVRs and whole-file CCRs unpacked, version 2.5 to
 2.7 read at half width. Five samples, all cross-checked with cdflib. Left:
 
-- Huffman and adaptive Huffman compression (`d103a2x.cdf` in NASA's
-  distribution) identify their codec and keep their bytes; a run-length
-  compressed *block* has no signature to peek at and stays bytes.
+- A compressed *block* (CVVR) packed with run-length, Huffman or adaptive
+  Huffman coding has no signature to peek at and stays bytes. Whole-file
+  Huffman and adaptive Huffman now unpack (see Closed).
 - Sparse-record reconstruction, and multi-file variables (`example1.cdf`'s
   `.v0` to `.v3` sit in other files).
 - VAX and VMS Alpha/Itanium encodings read at the right width as IEEE and are
@@ -618,8 +619,11 @@ buffer and value matches pyarrow. Left:
 - Nested types are followed three levels; from the fourth, nodes are
   `unparsed` and their buffers are named bytes. A lookup by position in a
   flattened pre-order field tree would remove the limit and most of the walk.
-- LZ4-compressed bodies stay named bytes: Arrow uses the LZ4 *frame* format and
-  the codec layer has only `Lz4Block`. ZSTD bodies decode.
+- The `.lz4` file template still opens each block on its own, so a file
+  whose blocks are linked does not read there; `Codec::Lz4Frame` could
+  replace it. Inside a compressed LZ4 block every step after the first
+  literals lists as "codes not named one at a time" (`symbol_name` /
+  `symbol_ty` in `eval/traced.rs`); bare LZ4 blocks did the same before.
 - Dictionary batches find their field only when it is a top-level column.
 - Legacy streams without the continuation marker are not recognised.
 - Text columns' character data reads as one run, not one value per row.

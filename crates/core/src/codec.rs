@@ -15,6 +15,7 @@
 //! stream is opened whole or not at all, which is why there is a cap.
 
 pub mod bzip2;
+pub mod cdfhuff;
 pub mod cdfrle;
 pub mod compress;
 pub mod fastlz;
@@ -63,6 +64,14 @@ pub enum Codec {
     /// One LZ4 block, with no frame header and no length in front of it. What
     /// ROOT hands to LZ4 and what an LZ4 frame's blocks hold.
     Lz4Block,
+    /// One or more LZ4 frames: a magic, a descriptor, blocks each behind a
+    /// size, an end mark, and whichever checksums the descriptor asked for.
+    /// What Arrow compresses a buffer into when its body says LZ4_FRAME.
+    ///
+    /// Read whole rather than a block at a time, because a frame may link its
+    /// blocks and a linked block copies from the ones before it. See
+    /// [`crate::codec::lz4::frame`].
+    Lz4Frame,
     /// One raw Snappy block: a varint saying how many bytes come out, and then
     /// tags to the end of the run.
     ///
@@ -188,6 +197,14 @@ pub enum Codec {
     /// byte is itself. One of the four ways a CDF may be squeezed, and the one
     /// a file written by IDL usually is. See [`crate::codec::cdfrle`].
     CdfRle,
+    /// NASA CDF's Huffman coding, compression type 2: counts for the bytes
+    /// written in front, a tree built from them, and a code per byte after.
+    /// See [`crate::codec::cdfhuff`].
+    CdfHuffman,
+    /// NASA CDF's adaptive Huffman coding, compression type 3: no table in
+    /// front, and a tree that encoder and decoder both change after every
+    /// byte. See [`crate::codec::cdfhuff`].
+    CdfAhuff,
 }
 
 impl Codec {
@@ -198,6 +215,7 @@ impl Codec {
             Codec::Deflate => "deflate",
             Codec::Zstd => "zstd",
             Codec::Lz4Block => "lz4",
+            Codec::Lz4Frame => "lz4 frame",
             Codec::Snappy => "snappy",
             Codec::Brotli => "brotli",
             Codec::Xz => "xz",
@@ -217,6 +235,8 @@ impl Codec {
             Codec::Pico8Old => "pico-8 old code",
             Codec::PicotronPxu => "picotron pxu",
             Codec::CdfRle => "cdf rle",
+            Codec::CdfHuffman => "cdf huffman",
+            Codec::CdfAhuff => "cdf adaptive huffman",
         }
     }
 }
@@ -335,6 +355,16 @@ pub enum StepField {
     /// Snappy: the varint in front of a block saying how many bytes it comes
     /// to. Its value is that number.
     UnpackedSize,
+    /// CDF Huffman: the runs of byte counts in front of the codes, which the
+    /// tree the codes are read by is built from. Its value is how many byte
+    /// values were given a count.
+    FrequencyTable,
+    /// LZ4 frame: the xxHash-32 after a block, of the bytes the block holds.
+    /// Its value is the checksum as written, a little-endian word.
+    BlockChecksum,
+    /// LZ4 frame: the xxHash-32 after the end mark, of everything the frame
+    /// came to. Its value is the checksum as written.
+    ContentChecksum,
 }
 
 impl StepField {
@@ -365,6 +395,9 @@ impl StepField {
             StepField::LzmaProps => "lzma_props",
             StepField::RangeInit => "range_init",
             StepField::UnpackedSize => "unpacked_size",
+            StepField::FrequencyTable => "frequency_table",
+            StepField::BlockChecksum => "block_checksum",
+            StepField::ContentChecksum => "content_checksum",
         }
     }
 }
@@ -947,7 +980,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 24] = [
+const FIELDS: [StepField; 27] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -972,6 +1005,9 @@ const FIELDS: [StepField; 24] = [
     StepField::LzmaProps,
     StepField::RangeInit,
     StepField::UnpackedSize,
+    StepField::FrequencyTable,
+    StepField::BlockChecksum,
+    StepField::ContentChecksum,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
@@ -992,6 +1028,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Deflate => inflate::inflate(data)?,
         Codec::Zlib => inflate::zlib(data)?,
         Codec::Lz4Block => lz4::block(data)?,
+        Codec::Lz4Frame => lz4::frame(data)?,
         Codec::Snappy => snappy::block(data)?,
         Codec::Brotli => frames::brotli(data)?,
         Codec::Zstd => frames::zstd(data)?,
@@ -1012,6 +1049,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Pico8Old => pico8::old(data)?,
         Codec::PicotronPxu => pxu::pxu(data)?,
         Codec::CdfRle => cdfrle::stream(data)?,
+        Codec::CdfHuffman => cdfhuff::huffman(data)?,
+        Codec::CdfAhuff => cdfhuff::adaptive(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -1031,6 +1070,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Zlib
         | Codec::Deflate
         | Codec::Lz4Block
+        | Codec::Lz4Frame
         | Codec::Snappy
         | Codec::Brotli
         | Codec::PngUnfilter { .. }
@@ -1048,6 +1088,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Compress
         | Codec::Gzip
         | Codec::CdfRle
+        | Codec::CdfHuffman
+        | Codec::CdfAhuff
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }

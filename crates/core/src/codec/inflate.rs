@@ -13,7 +13,10 @@
 //!
 //! Bits are read the way deflate reads them, least significant bit of a byte
 //! first, and bit positions in the trace count that way too. See [`Step`].
+//! The reader is the shared one, [`LowBits`], bounded wherever the run the
+//! stream sits in ends.
 
+use crate::bits::{Bits, LowBits};
 use crate::codec::{
     BlockKind, Refusal, Step, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES,
 };
@@ -38,43 +41,6 @@ const DIST_EXTRA: [u8; 30] =
 /// The order the code-length code's own lengths are written in, which puts the
 /// ones a short table is likely to use first so the rest can be left out.
 const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
-
-/// Bits of the run, least significant first, with a hard end.
-struct Bits<'a> {
-    data: &'a [u8],
-    /// Where the next bit comes from, counted from the front of `data`.
-    pos: u64,
-    /// One past the last bit that may be read.
-    end: u64,
-}
-
-impl<'a> Bits<'a> {
-    fn bit(&mut self) -> Result<u32, Refusal> {
-        if self.pos >= self.end {
-            return Err(Refusal::Failed);
-        }
-        let byte = self.data[(self.pos / 8) as usize];
-        let b = (byte >> (self.pos % 8)) & 1;
-        self.pos += 1;
-        Ok(b as u32)
-    }
-
-    /// `n` bits as a number, the first one read being the least significant.
-    fn bits(&mut self, n: u32) -> Result<u32, Refusal> {
-        let mut v = 0u32;
-        for i in 0..n {
-            v |= self.bit()? << i;
-        }
-        Ok(v)
-    }
-
-    /// Forward to the next byte boundary, giving back how many bits that was.
-    fn align(&mut self) -> u64 {
-        let skip = (8 - self.pos % 8) % 8;
-        self.pos += skip;
-        skip
-    }
-}
 
 /// A canonical Huffman code, kept as zlib's reference decoder keeps one: how
 /// many codes there are of each length, and the symbols in canonical order.
@@ -130,12 +96,12 @@ impl Code {
         Ok(Code { counts, symbols })
     }
 
-    fn decode(&self, bits: &mut Bits) -> Result<u16, Refusal> {
+    fn decode(&self, bits: &mut LowBits) -> Result<u16, Refusal> {
         let mut code = 0i32;
         let mut first = 0i32;
         let mut index = 0i32;
         for len in 1..=MAX_BITS {
-            code |= bits.bit()? as i32;
+            code |= bits.read_bit()? as i32;
             let count = self.counts[len] as i32;
             if code - count < first {
                 return Ok(self.symbols[(index + (code - first)) as usize]);
@@ -335,19 +301,20 @@ fn run(
         return Err(Refusal::Failed);
     }
     // Said here rather than at each of the four ways in, because this is where
-    // `Bits` is made and `Bits` is the thing it is a fact about.
+    // the reader is made and the reader is the thing it is a fact about.
     b.counts_low_bit_first();
-    let mut bits = Bits { data, pos: start, end };
+    let mut bits = Bits::low_first(data).until(end as usize);
+    bits.at = start as usize;
     let mut coarse = false;
     loop {
-        let block_in = bits.pos;
+        let block_in = bits.pos();
         let block_out = out.len() as u64;
         b.open_block(block_in, block_out);
-        let at = bits.pos;
-        let last = bits.bit()? == 1;
+        let at = bits.pos();
+        let last = bits.read_bit()? == 1;
         b.push(at, out.len() as u64, StepKind::Header(StepField::Bfinal, last as u32));
-        let at = bits.pos;
-        let btype = bits.bits(2)?;
+        let at = bits.pos();
+        let btype = bits.read(2)?;
         b.push(at, out.len() as u64, StepKind::Header(StepField::Btype, btype));
         let kind = match btype {
             0 => {
@@ -366,14 +333,14 @@ fn run(
             }
             _ => return Err(Refusal::Failed),
         };
-        b.close_block(bits.pos, out.len() as u64, kind, last);
+        b.close_block(bits.pos(), out.len() as u64, kind, last);
         if last {
             break;
         }
     }
     // The bits between the last block and the byte boundary, which the format
     // does not use and a decoder reads past.
-    let at = bits.pos;
+    let at = bits.pos();
     let skipped = bits.align();
     if skipped > 0 {
         b.push(at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
@@ -381,56 +348,56 @@ fn run(
     // Anything after the stream inside the run the template named. A zlib
     // trailer arrives here as its own step; anything else is bytes nobody
     // claimed, and saying so is better than pretending the run ended early.
-    if bits.pos < end {
-        b.push(bits.pos, out.len() as u64, StepKind::Opaque);
+    if bits.pos() < end {
+        b.push(bits.pos(), out.len() as u64, StepKind::Opaque);
     }
-    b.finish_at(end.max(bits.pos), out.len() as u64);
+    b.finish_at(end.max(bits.pos()), out.len() as u64);
     Ok(())
 }
 
 /// A stored block: the rest of the byte, a length, its complement, and that
 /// many bytes as they are.
-fn stored(bits: &mut Bits, out: &mut Vec<u8>, cap: usize, b: &mut TraceBuilder) -> Result<(), Refusal> {
-    let at = bits.pos;
+fn stored(bits: &mut LowBits, out: &mut Vec<u8>, cap: usize, b: &mut TraceBuilder) -> Result<(), Refusal> {
+    let at = bits.pos();
     if bits.align() > 0 {
         b.push(at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
     }
-    let at = bits.pos;
-    let len = bits.bits(16)?;
+    let at = bits.pos();
+    let len = bits.read(16)?;
     b.push(at, out.len() as u64, StepKind::Header(StepField::StoredLen, len));
-    let at = bits.pos;
-    let nlen = bits.bits(16)?;
+    let at = bits.pos();
+    let nlen = bits.read(16)?;
     b.push(at, out.len() as u64, StepKind::Header(StepField::StoredNlen, nlen));
     if len ^ 0xffff != nlen {
         return Err(Refusal::Failed);
     }
-    let start = (bits.pos / 8) as usize;
+    let start = (bits.pos() / 8) as usize;
     let stop = start + len as usize;
-    if stop as u64 * 8 > bits.end {
+    if stop as u64 * 8 > bits.end() as u64 {
         return Err(Refusal::Failed);
     }
     if out.len() + len as usize > cap {
         return Err(Refusal::TooLarge);
     }
     if len > 0 {
-        b.push(bits.pos, out.len() as u64, StepKind::Stored);
-        out.extend_from_slice(&bits.data[start..stop]);
-        bits.pos = stop as u64 * 8;
+        b.push(bits.pos(), out.len() as u64, StepKind::Stored);
+        out.extend_from_slice(&bits.buf()[start..stop]);
+        bits.at = stop * 8;
     }
     Ok(())
 }
 
 /// A dynamic block's two tables: how many lengths there are, the code-length
 /// alphabet, and then the lengths themselves, run-length coded.
-fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<(Code, Code), Refusal> {
-    let at = bits.pos;
-    let hlit = bits.bits(5)? as usize + 257;
+fn dynamic_tables(bits: &mut LowBits, out_at: u64, b: &mut TraceBuilder) -> Result<(Code, Code), Refusal> {
+    let at = bits.pos();
+    let hlit = bits.read(5)? as usize + 257;
     b.push(at, out_at, StepKind::Header(StepField::Hlit, hlit as u32));
-    let at = bits.pos;
-    let hdist = bits.bits(5)? as usize + 1;
+    let at = bits.pos();
+    let hdist = bits.read(5)? as usize + 1;
     b.push(at, out_at, StepKind::Header(StepField::Hdist, hdist as u32));
-    let at = bits.pos;
-    let hclen = bits.bits(4)? as usize + 4;
+    let at = bits.pos();
+    let hclen = bits.read(4)? as usize + 4;
     b.push(at, out_at, StepKind::Header(StepField::Hclen, hclen as u32));
     if hlit > 286 || hdist > 30 {
         return Err(Refusal::Failed);
@@ -438,8 +405,8 @@ fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<
 
     let mut cl = [0u8; 19];
     for &slot in CL_ORDER.iter().take(hclen) {
-        let at = bits.pos;
-        let len = bits.bits(3)? as u8;
+        let at = bits.pos();
+        let len = bits.read(3)? as u8;
         cl[slot] = len;
         b.push(at, out_at, StepKind::Table(TableField::CodeLen { sym: slot as u8, len }));
     }
@@ -448,7 +415,7 @@ fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<
     let mut lengths = vec![0u8; hlit + hdist];
     let mut i = 0usize;
     while i < lengths.len() {
-        let at = bits.pos;
+        let at = bits.pos();
         let sym = cl_code.decode(bits)?;
         let in_dist = i >= hlit;
         match sym {
@@ -471,7 +438,7 @@ fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<
                 if sym == 16 && i == 0 {
                     return Err(Refusal::Failed);
                 }
-                let count = base + bits.bits(extra)? as u16;
+                let count = base + bits.read(extra)? as u16;
                 if i + count as usize > lengths.len() {
                     return Err(Refusal::Failed);
                 }
@@ -495,7 +462,7 @@ fn dynamic_tables(bits: &mut Bits, out_at: u64, b: &mut TraceBuilder) -> Result<
 
 /// The symbols of one Huffman-coded block, up to and including its end mark.
 fn symbols(
-    bits: &mut Bits,
+    bits: &mut LowBits,
     out: &mut Vec<u8>,
     cap: usize,
     b: &mut TraceBuilder,
@@ -504,7 +471,7 @@ fn symbols(
     coarse: &mut bool,
 ) -> Result<(), Refusal> {
     let sym_start = b.steps();
-    let sym_in = bits.pos;
+    let sym_in = bits.pos();
     let sym_out = out.len() as u64;
     if *coarse {
         b.push(sym_in, sym_out, StepKind::Opaque);
@@ -518,7 +485,7 @@ fn symbols(
             b.truncate(sym_start);
             b.push(sym_in, sym_out, StepKind::Opaque);
         }
-        let at = bits.pos;
+        let at = bits.pos();
         let sym = lit.decode(bits)?;
         match sym {
             0..=255 => {
@@ -538,12 +505,12 @@ fn symbols(
             }
             257..=285 => {
                 let i = sym as usize - 257;
-                let len = LEN_BASE[i] + bits.bits(LEN_EXTRA[i] as u32)? as u16;
+                let len = LEN_BASE[i] + bits.read(LEN_EXTRA[i] as u32)? as u16;
                 let dsym = dist.decode(bits)? as usize;
                 if dsym >= DIST_BASE.len() {
                     return Err(Refusal::Failed);
                 }
-                let d = DIST_BASE[dsym] + bits.bits(DIST_EXTRA[dsym] as u32)?;
+                let d = DIST_BASE[dsym] + bits.read(DIST_EXTRA[dsym] as u32)?;
                 if d as usize > out.len() {
                     return Err(Refusal::Failed);
                 }
@@ -730,10 +697,11 @@ pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedSte
     // past the bits the decoder said it read has gone wrong, and stopping is
     // better than reading a neighbour's.
     let end = s.in_bits.end.min(data.len() as u64 * 8);
-    let mut bits = Bits { data, pos: s.in_bits.start, end };
-    let start = bits.pos;
+    let mut bits = Bits::low_first(data).until(end as usize);
+    bits.at = s.in_bits.start as usize;
+    let start = bits.pos();
     let sym = lit.decode(&mut bits).ok()?;
-    let code_bits = u8::try_from(bits.pos - start).ok()?;
+    let code_bits = u8::try_from(bits.pos() - start).ok()?;
     let (lit_entry, lit_child) = entry(sym as usize);
     let mut first = DecodedCode {
         symbol: sym,
@@ -756,14 +724,14 @@ pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedSte
         257..=285 => {
             let k = sym as usize - 257;
             let extra_bits = LEN_EXTRA[k];
-            let extra = bits.bits(extra_bits as u32).ok()?;
+            let extra = bits.read(extra_bits as u32).ok()?;
             first.extra_bits = extra_bits;
             first.extra = extra;
             first.value = LEN_BASE[k] as u32 + extra;
 
-            let at = bits.pos;
+            let at = bits.pos();
             let dsym = dist.decode(&mut bits).ok()?;
-            let dcode_bits = u8::try_from(bits.pos - at).ok()?;
+            let dcode_bits = u8::try_from(bits.pos() - at).ok()?;
             // Symbols 30 and 31 are decodable out of the fixed distance code
             // and mean nothing; the decoder refuses them and so does this.
             let d = dsym as usize;
@@ -771,7 +739,7 @@ pub fn decode_step(data: &[u8], trace: &Trace, step: usize) -> Option<DecodedSte
                 return None;
             }
             let dextra_bits = DIST_EXTRA[d];
-            let dextra = bits.bits(dextra_bits as u32).ok()?;
+            let dextra = bits.read(dextra_bits as u32).ok()?;
             let (dist_entry, dist_child) = entry(hlit + d);
             let second = DecodedCode {
                 symbol: dsym,
