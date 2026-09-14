@@ -909,9 +909,10 @@ export type TemplateDiagram = {
 
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
-  /** Where the node is in the template. Empty for a version 2 node below the
-   *  root, which the template does not place: such a box goes to its bytes and
-   *  is not opened in the Listing, because there is no field there to open. */
+  /** Where the node is in the template. Empty where the template does not
+   *  place a node at the address the walk read it from, which no well-formed
+   *  file does: such a box goes to its bytes and is not opened in the Listing,
+   *  because there is no field there to open. */
   readonly path: readonly number[];
   /** Index into the node list, or -1 for the root. Every node but the root
    *  comes after its parent in the list. */
@@ -2141,6 +2142,19 @@ export class Doc {
    *  PNG carries either way. */
   get isPng(): boolean {
     return this.template === "png" || this.template === "p8png" || this.template === "p64png";
+  }
+
+  /** Whether the file is read as an HDF5 file, whole or inside another format,
+   *  which is what the B-trees tab and the HDF5 contents are offered on. Not
+   *  the template's name: `mat` reads a MATLAB 7.3 file, which is HDF5 behind
+   *  a 512-byte header, and a level 5 file, which has no groups or trees at
+   *  all. The core answers from the header and the bytes at the signature, so
+   *  this is cheap to ask on every change. False while those bytes are still
+   *  on their way; they are asked for, and the change they make asks again. */
+  get holdsHdf5(): boolean {
+    if (this.template === null) return false;
+    const r = this.handleReply<boolean>(this.editor.holds_hdf5(this.space));
+    return r.status === "ok" && r.node;
   }
 
   /** Best current projection for a variable-size array still being walked. */
