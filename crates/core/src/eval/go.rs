@@ -49,26 +49,34 @@ const STACK_BUDGET: usize = 640 << 10;
 /// between two fields counts too: a lookup written as twenty-six conditions is
 /// twenty-six deep, and spends the stack that way.
 ///
-/// Measured on 2026-09-14, in a release build like the one wasm ships, on a
-/// thread of one megabyte. The dearest shape per expression is an element
-/// whose type is a switch on the element before it, which ran out at 142
-/// expressions; a switch on a path into the element before, found by a search
-/// back, at 191; a computed field naming the one before at 202; a `prev` chain
-/// at about 300 and a search by label at about 350, which spend two
-/// expressions a link. A length taken from the element before is stopped by
-/// `STACK_BUDGET` first, at 104. So the limit is what the
-/// dearest of them fits in `STACK_BUDGET`, the room a read is given with some
-/// left for whoever called in: 640 KiB at 7.3 KiB each is 88. The deepest real
+/// The limit is what the dearest shape fits in `STACK_BUDGET`, the room a read
+/// is given with some left for whoever called in. It was set when the dearest
+/// cost 7.3 KiB an expression, found by shrinking a thread of one megabyte
+/// until a chain ran out: 640 KiB at 7.3 KiB each is 88.
+///
+/// Measured again on 2026-09-14, after an expression came to read a field's
+/// value without the rest of its `NodeInfo`, in a release build like the one
+/// wasm ships, by filling the stack with a known byte and counting how much of
+/// it a read wrote over. The dearest shapes are an element whose type is a
+/// switch on the element before it, and a switch on a path into the element
+/// before found by a search back, at 5.1 KiB an expression, and read 88 deep
+/// they wrote over 453 KiB. A length taken from the element before costs 3.5
+/// KiB, a computed field naming the one before 3.3, a `prev` chain and a
+/// search by label about 2.2, spending two expressions a link. By that
+/// arithmetic the limit could be 124, and it stays at 88: a read refused here
+/// is asked again, so a higher limit would save only some of that asking,
+/// and the frames of a wasm build have not been measured. The deepest real
 /// reading is 52, an Arrow file with many columns read from its last buffer
 /// first, the same in a sweep of every sample in `check_tree` and
-/// `spans_probe` and in the sample tests.
+/// `spans_probe` and in the sample tests. One of that file's field nodes read
+/// with nothing asked before it goes past the limit and is asked again.
 ///
 /// A debug build's frames are about seven times as large, and a megabyte
 /// carries 28 of the dearest shape there. Tests run on the stack
 /// `.cargo/config.toml` gives them, and nothing ships in debug.
 ///
-/// `cargo run --release --example stack_probe -- <levels> <shape> <KiB>` is
-/// where these numbers come from.
+/// `cargo run --release --example stack_probe -- <levels> <shape> <KiB> [paint]`
+/// is where these numbers come from.
 pub(super) const DEEPEST_QUESTION: usize = 88;
 
 /// How far apart the questions kept while a refused read is asked again are,

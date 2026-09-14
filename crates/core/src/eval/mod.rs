@@ -955,8 +955,8 @@ impl Evaluator {
     }
 
     /// The rest of `value_of`, once the field is placed and measured. Out of
-    /// line so that its copy of the node is not in the frame the chain under
-    /// `resolve` is read beneath.
+    /// line so that its copy of the node is not in `value_of`'s frame while
+    /// `resolve` and `size_of` read what they need beneath it.
     #[inline(never)]
     fn value_placed<S: Source>(&mut self, doc: &Document<S>, path: &[usize], size_bits: u64) -> R<FieldValue> {
         // A computed value already worked out is the common case for a field
@@ -1761,7 +1761,7 @@ impl Evaluator {
                     return Ok(());
                 }
                 let info = self.value_of(doc, &prev)?;
-                let offset_bits = self.memo.get(&prev).map_or(0, |r| r.offset);
+                let offset_bits = self.memo.get(&prev).expect("resolved").offset;
                 let reach = self.memo.placed_from(&prev).max(offset_bits.saturating_add(info.size_bits));
                 let v = info.value.as_int().unwrap_or(0);
                 // All ones for the width of the field it was read from: the
