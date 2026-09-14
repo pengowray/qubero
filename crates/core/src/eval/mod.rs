@@ -2093,14 +2093,24 @@ impl Evaluator {
         self.open.iter().flatten().map(|s| &**s)
     }
 
-    /// Which step of a decoding produced a byte of `space`.
+    /// Which step of a decoding produced a byte of `space`. For a stream joined
+    /// from several runs, the step is its part's own, counted in bits of that
+    /// part's run, and [`Evaluator::run_at`] says where the run is.
     pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_out(byte)
     }
 
-    /// Which step read a bit of the run `space` was unpacked from.
+    /// Which step read a bit of the run `space` was unpacked from. For a
+    /// joined stream, `bit` is a bit of the space the stream was declared in.
     pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_in(bit)
+    }
+
+    /// Which run a byte of `space` was read from, when `space` is a stream
+    /// joined from several: the run a step [`Evaluator::map_out`] gives counts
+    /// its bits from. Nothing for a stream unpacked from one run.
+    pub fn run_at(&self, space: SpaceId, byte: u64) -> Option<&JoinedRun> {
+        self.space(space)?.run_at(byte)
     }
 
     fn take(&mut self, id: SpaceId) -> Option<Box<Space>> {

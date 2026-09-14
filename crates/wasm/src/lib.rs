@@ -2401,6 +2401,27 @@ struct MapStepDto {
     len: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dist: Option<f64>,
+    /// For a stream joined from several runs, where in the file the run of the
+    /// part the step belongs to starts. The step's own bits count from there,
+    /// so the file's bits are this plus them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_offset_bits: Option<f64>,
+}
+
+/// A step of a space, with where its run is when the space was joined from
+/// several. Nothing for a step of a run that is not in the file, which has no
+/// bits there to mark.
+fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, byte: Option<u64>) -> Option<MapStepDto> {
+    let byte = byte.unwrap_or(s.out_bytes.start);
+    let run = e.space(space).and_then(|sp| if sp.runs().is_empty() { None } else { Some(sp.run_at(byte)) });
+    match run {
+        None => Some(step_dto(s)),
+        Some(Some(run)) if run.run_space == 0 => {
+            let at = run.run_offset_bits as f64;
+            Some(MapStepDto { run_offset_bits: Some(at), ..step_dto(s) })
+        }
+        Some(_) => None,
+    }
 }
 
 fn step_dto(s: MapStep) -> MapStepDto {
@@ -2414,6 +2435,7 @@ fn step_dto(s: MapStep) -> MapStepDto {
         value: None,
         len: None,
         dist: None,
+        run_offset_bits: None,
     };
     match s.kind {
         StepKind::Header(f, v) => {
@@ -2605,7 +2627,7 @@ impl Editor {
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(core, byte as u64).map(step_dto)))
+        reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, Some(byte as u64)))))
     }
 
     /// Which step read the bit at `bit` of the run `space` was unpacked from,
@@ -2613,7 +2635,7 @@ impl Editor {
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_in(core, bit as u64).map(step_dto)))
+        reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, None))))
     }
 
     /// Take the deflate symbol at `bit` of the run `space` was unpacked from

@@ -147,14 +147,37 @@ impl Space {
     }
 
     /// Which step of the decoding produced a byte of this space.
+    ///
+    /// For a joined stream, the step of the part the byte is in, with its bits
+    /// counted from the start of that part's run rather than along the trace's
+    /// own axis: a byte of what a BGZF block unpacks to names bits of that
+    /// block's deflate, and [`Space::run_at`] says where the block's deflate
+    /// is. A byte of a stored part is the one step over that part's bytes.
     pub fn map_out(&self, byte: u64) -> Option<Step> {
-        self.trace.map_out(byte)
+        let step = self.trace.map_out(byte)?;
+        if self.runs.is_empty() {
+            return Some(step);
+        }
+        Some(in_run(step, self.run_at(byte)?))
     }
 
     /// Which step read a bit of the run this space was unpacked from, and so
     /// which bytes of this space that bit produced.
+    ///
+    /// A joined stream has no one run, so there `bit` is a bit of the space
+    /// its parts' runs are in, which is where the stream was declared: the
+    /// part whose run holds the bit answers, with the step's bits counted from
+    /// that run's start as [`Space::map_out`] counts them. Nothing for a bit no
+    /// part was read from.
     pub fn map_in(&self, bit: u64) -> Option<Step> {
-        self.trace.map_in(bit)
+        if self.runs.is_empty() {
+            return self.trace.map_in(bit);
+        }
+        let run = self
+            .runs
+            .iter()
+            .find(|r| r.run_space == self.parent && (r.run_offset_bits..r.run_offset_bits + r.run_bits).contains(&bit))?;
+        Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
     }
 
     /// Which part of a joined stream byte `byte` is in, and where that part's
@@ -181,6 +204,14 @@ impl Space {
     pub fn reading(&mut self) -> (&mut super::Evaluator, &Document<ArcSource>) {
         (&mut self.ev, &self.doc)
     }
+}
+
+/// A step of a joined stream's trace with its bits counted from the start of
+/// its part's run, which is a place a reader can go, rather than along the
+/// trace's own axis, which is not.
+fn in_run(step: Step, run: &JoinedRun) -> Step {
+    let back = |bit: u64| bit.saturating_sub(run.in_start);
+    Step { in_bits: back(step.in_bits.start)..back(step.in_bits.end), ..step }
 }
 
 /// What a space's bytes are kept as.

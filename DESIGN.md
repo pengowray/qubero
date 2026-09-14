@@ -2744,8 +2744,14 @@ it is short enough. Typing in the tab is refused, and when every run is stored
 the refusal sends the reader to the file's own tab, where a field lying in one
 run is editable.
 
-Not yet: `map_out` on a joined stream's tab answers with the trace's own axis,
-which is no place in the file.
+A byte of that tab maps back through its part. `map_out` finds the step in the
+joined trace and gives it back with its bits counted from the start of its
+part's run, and `Space::run_at` says where the run is, so a byte of what BGZF
+block 3 unpacks to names bits of block 3's deflate and the web adds the run's
+place (`run_offset_bits` on the step) before it marks the file tab. `map_in`
+goes the other way from a bit of the space the stream was declared in: the
+part whose run holds the bit, then its step. A run that is not in the file,
+which no format here has, maps to no mark.
 
 ## Roadmap (not yet built)
 

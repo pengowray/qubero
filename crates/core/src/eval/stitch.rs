@@ -1031,6 +1031,48 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_of_a_joined_document_maps_to_its_parts_own_step() {
+        use crate::codec::StepKind;
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let id = e.open_space(&d, 0, &[STREAM]).unwrap().unwrap();
+        let space = e.space(id).unwrap();
+        // Byte 9 is in the second part, page 1, which is eight bytes into the
+        // file: one stored step over that page's eight bytes, counted from the
+        // page's start.
+        let step = space.map_out(9).unwrap();
+        assert_eq!((step.in_bits.clone(), step.out_bytes.clone(), step.kind), (0..64, 8..16, StepKind::Stored));
+        let run = space.run_at(9).unwrap();
+        assert_eq!((run.run_space, run.run_offset_bits, run.path.as_slice()), (0, 8 * 8, &[PAGES, 1, 0][..]));
+        assert_eq!(e.map_out(id, 9), Some(step));
+        assert_eq!(e.run_at(id, 9), Some(run));
+        // And back: a bit of page 3, the last page of the file, is the first
+        // part; a bit of the header is no part at all.
+        let space = e.space(id).unwrap();
+        assert_eq!(space.map_in(25 * 8).map(|s| (s.in_bits, s.out_bytes)), Some((0..64, 0..8)));
+        assert_eq!(space.map_in(4 * 8), None);
+
+        // A byte of the second BGZF block is a literal of that block's own
+        // deflate, at bits counted from where that deflate starts, which is the
+        // run `part_of` names too.
+        let d = Document::new(MemSource(bgzf_of(&[&[b'x'; 40], b"the second block"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let joined = e.node(&d, &JOINED).unwrap().space;
+        let hit = e.part_of(&d, joined, 45).unwrap().unwrap();
+        let id = e.open_space(&d, 0, &[1]).unwrap().unwrap();
+        let space = e.space(id).unwrap();
+        let run = space.run_at(45).unwrap();
+        assert_eq!((run.run_offset_bits, run.path.clone(), run.packed), (hit.run_offset_bits, hit.path, true));
+        let step = space.map_out(45).unwrap();
+        assert_eq!(step.kind, StepKind::Literal(b'e'));
+        assert!(step.out_bytes.contains(&45));
+        assert!(step.in_bits.end <= run.run_bits, "{:?} is past the {} bits of the block's deflate", step.in_bits, run.run_bits);
+        // The same bit of the file leads back to the same step.
+        let back = space.map_in(run.run_offset_bits + step.in_bits.start).unwrap();
+        assert_eq!(back, step);
+    }
+
+    #[test]
     fn a_joined_stream_over_the_cap_is_refused_as_a_document_and_still_reads() {
         let d = Document::new(MemSource(file(20)));
         let mut e = Evaluator::new(paged(record(), false));

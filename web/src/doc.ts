@@ -1758,6 +1758,9 @@ export type MapStep = {
   readonly len?: number;
   /** A match's distance. */
   readonly dist?: number;
+  /** For a stream joined from several runs, where in the file the run of the
+   *  step's part starts: `in_start` and `in_end` count from there. */
+  readonly run_offset_bits?: number;
 };
 
 /**

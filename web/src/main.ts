@@ -14,7 +14,7 @@ import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY
 import { Crystal } from "./crystal.ts";
 import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
-import { markFromRange, markFromStep } from "./unpackedlink.ts";
+import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
@@ -143,7 +143,8 @@ function linkCursor(from: Tab, bitOffset: number): MapStep | null {
  *  the codec kept no trace of that byte. */
 function originLine(doc: Doc, step: MapStep | null): string {
   if (step === null) return "";
-  return unpackedOrigin(doc.name, step.in_start, step.in_end, step.kind, step.len, step.dist, step.field);
+  const { start, end } = stepBits(step);
+  return unpackedOrigin(doc.name, start, end, step.kind, step.len, step.dist, step.field);
 }
 
 /** Follow the mark on `tab` back to the tab that put it there. */

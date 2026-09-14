@@ -22,6 +22,9 @@ export type Step = {
   readonly value?: number;
   readonly len?: number;
   readonly dist?: number;
+  /** For a stream joined from several runs, where in the file the run of the
+   *  step's part starts: the step's bits count from there. */
+  readonly run_offset_bits?: number;
 };
 
 /** A stretch of one document, in bits of it. */
@@ -37,7 +40,20 @@ export function markFromStep(step: Step | null): Marked | null {
   // A step that read no bits marks nothing. It is not an error: a match copies
   // from what came before and a decoder may charge its bits to the token.
   if (step.in_end <= step.in_start) return null;
-  return { startBit: step.in_start, endBit: step.in_end };
+  const { start, end } = stepBits(step);
+  return { startBit: start, endBit: end };
+}
+
+/**
+ * The bits a step read, counted the way the file tab counts them. A step of a
+ * stream joined from several runs counts from the start of its own part's run,
+ * which is block 3 of a BGZF file or page 10 of a PDB stream and not the start
+ * of anything the file tab knows, so the run's place is added back. Any other
+ * step is as it came.
+ */
+export function stepBits(step: Step): { readonly start: number; readonly end: number } {
+  const at = step.run_offset_bits ?? 0;
+  return { start: at + step.in_start, end: at + step.in_end };
 }
 
 /**
