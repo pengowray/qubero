@@ -12,6 +12,10 @@
 //! structure's bits and its children's would break the second within a few
 //! files.
 //!
+//! Every file is checked, and every one that fails is listed at the end: a
+//! test that stopped at the first would hide the rest behind it until that one
+//! was mended.
+//!
 //! It also prints what each file cost, which is the number this exists to keep
 //! honest: a run of same-sized records is meant to cost one element's walk,
 //! and a run of variable-length ones is meant to cost one go per few hundred.
@@ -22,6 +26,7 @@ use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, KindWalk};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
+use qubero_core::template::Template;
 
 /// What one go of the walk may spend, matching what the editor gives it.
 const SLICE: u64 = 5_000;
@@ -39,6 +44,8 @@ fn every_sample_adds_up() {
     let mut files = Vec::new();
     collect(&root, &mut files);
     assert!(!files.is_empty(), "no files under {}", root.display());
+    let mut failures = Vec::new();
+    let mut checked = 0;
     for path in files {
         // Files kept because Qubero refuses them have nothing to total.
         if path.components().any(|c| c.as_os_str() == "does-not-read") {
@@ -54,53 +61,72 @@ fn every_sample_adds_up() {
             },
         };
         let Some(template) = formats::template(name) else { continue };
-        let len = bytes.len() as u64 * 8;
-        let doc = Document::new(MemSource(bytes));
-        let mut ev = Evaluator::new(template);
-        ev.set_slice(Some(SLICE));
-        let mut walk = KindWalk::new(len);
-        let mut goes = 0;
-        let mut peak = 0;
-        let out = loop {
-            goes += 1;
-            assert!(goes <= GOES, "{} as {name} is still walking after {GOES} goes", path.display());
-            ev.begin_slice();
-            let out = match ev.kind_totals_step(&doc, &mut walk) {
-                Ok(out) => out,
-                // Every byte is here already, so nothing can be pending; a
-                // file the template cannot read at all is the format's
-                // business and `every_sample_still_reads` catches it.
-                Err(e) => panic!("{} as {name}: {e:?}", path.display()),
-            };
-            peak = peak.max(ev.memo_len());
-            if out.done {
-                break out;
+        checked += 1;
+        let what = format!("{} as {name}", path.display());
+        // A walk that panics is a failure of that file, not of the ones after it.
+        let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(bytes, template)));
+        let why = match got {
+            Ok(Ok(said)) => {
+                eprintln!("{what}: {said}");
+                continue;
+            }
+            Ok(Err(why)) => why,
+            Err(panic) => {
+                let said = panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()));
+                format!("panicked: {}", said.unwrap_or_default())
             }
         };
-        assert!(out.reached_bits <= len, "{} as {name} reached past the end of the file", path.display());
-        if out.covered_bits + out.unmapped_bits > out.reached_bits {
-            for t in &out.totals {
-                eprintln!("   {} {} {} bits x{}", t.kind, t.type_name, t.bits, t.count);
-            }
-        }
-        assert!(
-            out.covered_bits + out.unmapped_bits <= out.reached_bits,
-            "{} as {name}: {} covered and {} unmapped of {} reached",
-            path.display(),
-            out.covered_bits,
-            out.unmapped_bits,
-            out.reached_bits
-        );
-        let sum: u64 = out.totals.iter().map(|t| t.bits).sum();
-        assert_eq!(sum, out.covered_bits, "{} as {name}: the entries do not add up to what is covered", path.display());
-        eprintln!(
-            "{} as {name}: {goes} goes, {peak} nodes at most, {} kinds, {}% of {} bytes covered",
-            path.display(),
-            out.totals.len(),
-            out.covered_bits * 100 / len.max(1),
-            len / 8
-        );
+        eprintln!("FAILED {what}: {why}");
+        failures.push(format!("{what}: {why}"));
     }
+    assert!(failures.is_empty(), "{} of {checked} samples do not add up:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// Walk one file to the end and check that its numbers hold together: the line
+/// to print for it when they do, and why not when they do not.
+fn check(bytes: Vec<u8>, template: Template) -> Result<String, String> {
+    let len = bytes.len() as u64 * 8;
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(template);
+    ev.set_slice(Some(SLICE));
+    let mut walk = KindWalk::new(len);
+    let mut goes = 0;
+    let mut peak = 0;
+    let out = loop {
+        goes += 1;
+        if goes > GOES {
+            return Err(format!("still walking after {GOES} goes"));
+        }
+        ev.begin_slice();
+        // Every byte is here already, so nothing can be pending; a file the
+        // template cannot read at all is the format's business and
+        // `every_sample_still_reads` catches it.
+        let out = ev.kind_totals_step(&doc, &mut walk).map_err(|e| format!("{e:?}"))?;
+        peak = peak.max(ev.memo_len());
+        if out.done {
+            break out;
+        }
+    };
+    if out.reached_bits > len {
+        return Err(format!("reached {} bits, past the end of the file at {len}", out.reached_bits));
+    }
+    if out.covered_bits + out.unmapped_bits > out.reached_bits {
+        let mut why = format!("{} covered and {} unmapped of {} reached", out.covered_bits, out.unmapped_bits, out.reached_bits);
+        for t in &out.totals {
+            why.push_str(&format!("\n   {} {} {} bits x{}", t.kind, t.type_name, t.bits, t.count));
+        }
+        return Err(why);
+    }
+    let sum: u64 = out.totals.iter().map(|t| t.bits).sum();
+    if sum != out.covered_bits {
+        return Err(format!("the entries add up to {sum} bits and {} are covered", out.covered_bits));
+    }
+    Ok(format!(
+        "{goes} goes, {peak} nodes at most, {} kinds, {}% of {} bytes covered",
+        out.totals.len(),
+        out.covered_bits * 100 / len.max(1),
+        len / 8
+    ))
 }
 
 fn samples() -> Option<PathBuf> {

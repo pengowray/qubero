@@ -312,6 +312,10 @@ fn compact_folder() -> T {
     T::structure("Folder", vec![("subtree_count", T::u16(Big))])
 }
 
+/// A file's entry. Its forks are read where its offset says, which is inside
+/// the archive's `compressed_data`, so they are a second reading of bytes that
+/// field already covers and are set aside: counted in both, the forks of a
+/// 222 KB archive came to 441 KB.
 fn compact_file() -> T {
     T::structure(
         "File",
@@ -341,6 +345,7 @@ fn compact_file() -> T {
             ),
         ],
     )
+    .field_aside("forks")
     .field_times(&["created", "modified"], mac_local())
 }
 

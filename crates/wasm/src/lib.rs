@@ -30,17 +30,24 @@ use wasm_bindgen::prelude::*;
 /// under the stream, and handed back as the tab's own. See `Editor::tab`.
 struct Sheet {
     doc: Document<ChunkStore>,
-    /// Which `Decoded` node of the file this space was unpacked from. Empty for
-    /// space 0, which was unpacked from nothing.
+    /// Which sheet's reading opened this space: 0, the file, or a stream whose
+    /// bytes were recognised and so has a reading of its own. Never a stream
+    /// read where it was declared, which has none: a stream opened from a tab
+    /// of one of those is opened in the reading that tab is read in. 0 for the
+    /// file itself.
+    home: usize,
+    /// Which `Decoded` or joining node of the home sheet's reading this space
+    /// was unpacked from. Empty for space 0, which was unpacked from nothing.
     origin: Vec<usize>,
-    /// The core's number for the same space, which is what the trace behind the
-    /// cursor link is asked by. Zero for the file. The core renumbers from 1
-    /// whenever a reading is thrown away, so this is set again every time the
-    /// stream is opened again; a tab's own number never changes.
+    /// The core's number for the same space in the home sheet's reading, which
+    /// is what the trace behind the cursor link is asked by. Zero for the
+    /// file. The core renumbers from 1 whenever a reading is thrown away, so
+    /// this is set again every time the stream is opened again; a tab's own
+    /// number never changes.
     core_space: SpaceId,
     eval: Option<Evaluator>,
     /// For a stream read where it was declared, where its contents are in the
-    /// file's reading. `eval` is None for those.
+    /// home sheet's reading. `eval` is None for those.
     view: Option<Vec<usize>>,
     /// What such a stream declares it holds, which the diagram is drawn from.
     read_as: Option<qubero_core::template::Template>,
@@ -89,7 +96,7 @@ impl Sheet {
     /// the one the core settled on, which is the stream's own or, where that
     /// said only bytes, whatever the unpacked bytes were recognised as. Only
     /// the second is read here; the first is read in the file's reading.
-    fn from_space(space: &qubero_core::eval::Space, origin: Vec<usize>) -> Sheet {
+    fn from_space(space: &qubero_core::eval::Space, home: usize, origin: Vec<usize>) -> Sheet {
         let template = space.read_as().clone();
         let bytes = space.bytes();
         let n = bytes.len() as u64;
@@ -104,6 +111,7 @@ impl Sheet {
             store.insert(c, bytes[from..to].to_vec().into_boxed_slice());
         }
         let mut sheet = Sheet::new(store, origin);
+        sheet.home = home;
         sheet.core_space = space.id;
         sheet.template = template.name.clone();
         match space.view() {
@@ -124,13 +132,16 @@ impl Sheet {
     /// or would not open a second time. It holds no bytes rather than the
     /// file's, because a tab named after a stream must never quietly show
     /// something else.
-    fn empty(origin: Vec<usize>) -> Sheet {
-        Sheet::new(ChunkStore::new(0, SPACE_CHUNK, 1), origin)
+    fn empty(home: usize, origin: Vec<usize>) -> Sheet {
+        let mut sheet = Sheet::new(ChunkStore::new(0, SPACE_CHUNK, 1), origin);
+        sheet.home = home;
+        sheet
     }
 
     fn new(store: ChunkStore, origin: Vec<usize>) -> Sheet {
         Sheet {
             doc: Document::new(store),
+            home: 0,
             origin,
             core_space: 0,
             eval: None,
@@ -2664,42 +2675,52 @@ impl Editor {
         // empty space rather than falling back to the file's bytes under the
         // stream's name.
         //
+        // In the order they were opened, so a stream opened from a recognised
+        // one is opened again in that one's new reading: a sheet's home is
+        // always opened before it.
+        //
         // A stream read where it was declared is left for `tab` to open again
-        // when it is next asked about, since its fields are read in the file's
-        // reading, and the file's reading is about to change.
-        let origins: Vec<Vec<usize>> =
-            self.sheets[1..].iter().map(|sh| sh.origin.clone()).collect();
-        for (i, origin) in origins.into_iter().enumerate() {
-            if self.sheets[i + 1].view.is_some() {
+        // when it is next asked about, since its fields are read in its home's
+        // reading, and that reading is about to change.
+        for i in 1..self.sheets.len() {
+            if self.sheets[i].view.is_some() {
                 continue;
             }
-            let file = &mut self.sheets[0];
-            let opened = match &mut file.eval {
-                None => None,
-                Some(e) => {
-                    e.set_slice(None);
-                    let got = e.open_space(&file.doc, 0, &origin).ok().flatten();
-                    e.set_slice(Some(WORK_SLICE));
-                    got
-                }
-            };
-            let sheet = match opened {
-                Some(id) => match self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) {
-                    Some(sp) => Sheet::from_space(sp, origin),
-                    None => Sheet::empty(origin),
-                },
-                None => Sheet::empty(origin),
-            };
-            self.sheets[i + 1] = sheet;
+            let (home, origin) = (self.sheets[i].home, self.sheets[i].origin.clone());
+            let opened = self.open_in(home, &origin).ok().flatten();
+            self.sheets[i] = self.sheet_for(opened, home, origin);
+        }
+    }
+
+    /// Open the stream at `path` of sheet `home`'s own reading, with no
+    /// allowance: unpacking a run is not something to do by halves, since it
+    /// reads the whole run and decodes it, and a half-decoded stream is not a
+    /// document. Nothing when the sheet has no reading.
+    fn open_in(&mut self, home: usize, path: &[usize]) -> Result<Option<SpaceId>, EvalError> {
+        let Some(sh) = self.sheets.get_mut(home) else { return Ok(None) };
+        let Some(e) = &mut sh.eval else { return Ok(None) };
+        e.set_slice(None);
+        let got = e.open_space(&sh.doc, 0, path);
+        e.set_slice(Some(WORK_SLICE));
+        got
+    }
+
+    /// The sheet for a stream `open_in` opened, or an empty one for a stream
+    /// that did not open.
+    fn sheet_for(&self, opened: Option<SpaceId>, home: usize, origin: Vec<usize>) -> Sheet {
+        let space = opened.and_then(|id| self.sheets[home].eval.as_ref()?.space(id));
+        match space {
+            Some(sp) => Sheet::from_space(sp, home, origin),
+            None => Sheet::empty(home, origin),
         }
     }
 
     /// What reads the fields of `space`, lent for one call: its own reading, or
-    /// for a stream read where it was declared, the file's, under the stream.
+    /// for a stream read where it was declared, its home's, under the stream.
     /// The error is the reply to give instead, when nothing reads it.
     ///
-    /// A stream read where it was declared is opened again first when the
-    /// file's reading no longer has it open. An edit to the file and a change
+    /// A stream read where it was declared is opened again first when its
+    /// home's reading no longer has it open. An edit to the file and a change
     /// of template both drop the spaces with the rest of the reading, and the
     /// tab would otherwise read whatever the new reading has at the old path.
     fn tab(&mut self, space: u32) -> Result<Tab<'_, ChunkStore>, String> {
@@ -2716,79 +2737,76 @@ impl Editor {
                 Ok(Tab::new(e, &sh.doc, Vec::new()))
             }
             Some(root) => {
-                let file = &mut self.sheets[0];
-                let e = file.eval.as_mut().ok_or_else(no_template)?;
-                Ok(Tab::new(e, &file.doc, root))
+                let h = self.sheets[i].home;
+                let home = &mut self.sheets[h];
+                let e = home.eval.as_mut().ok_or_else(no_template)?;
+                Ok(Tab::new(e, &home.doc, root))
             }
         }
     }
 
-    /// Open the stream sheet `i` came from again, in the file's reading as it
+    /// Open the stream sheet `i` came from again, in its home's reading as it
     /// is now. A stream that no longer opens leaves an empty sheet, as
     /// `forget_spaces` does; one waiting on bytes of the file says so, and is
     /// opened when it is asked again.
     fn reopen(&mut self, i: usize) -> Result<(), String> {
-        let origin = self.sheets[i].origin.clone();
-        let file = &mut self.sheets[0];
-        let opened = match &mut file.eval {
-            None => Ok(None),
-            Some(e) => {
-                e.set_slice(None);
-                let got = e.open_space(&file.doc, 0, &origin);
-                e.set_slice(Some(WORK_SLICE));
-                got
-            }
-        };
-        let sheet = match opened {
-            Ok(Some(id)) => match self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) {
-                Some(sp) => Sheet::from_space(sp, origin),
-                None => Sheet::empty(origin),
-            },
+        let (home, origin) = (self.sheets[i].home, self.sheets[i].origin.clone());
+        let opened = match self.open_in(home, &origin) {
+            Ok(opened) => opened,
             Err(err) if err.interrupted() => return Err(reply::<()>(Err(err))),
-            Ok(None) | Err(_) => Sheet::empty(origin),
+            Err(_) => None,
         };
-        self.sheets[i] = sheet;
+        self.sheets[i] = self.sheet_for(opened, home, origin);
         Ok(())
     }
 
-    /// Open the `Decoded` stream at `path` as a document of its own, and give
-    /// back the space it became: {status:"ok",node:{space,refused}}.
+    /// Open the `Decoded` or joined stream at `path` of the tab over `space` as
+    /// a document of its own, and give back the space it became:
+    /// {status:"ok",node:{space,refused}}.
+    ///
+    /// `path` is the tab's, which is a path of the file only in the file's own
+    /// tab. A tab over a stream read where it was declared has its fields under
+    /// the stream in its home's reading, so the stream is opened there, under
+    /// the tab's root, and is then the same stream the file's own tab would
+    /// open. A tab with a reading of its own opens it in that reading.
     ///
     /// A stream already open answers with the space it already is, so a second
     /// Open unpacked focuses the tab instead of unpacking the run again.
     /// `refused` says which of the three ways a stream would not open, and the
     /// space is then 0.
-    pub fn open_space(&mut self, path: &[u32]) -> String {
+    pub fn open_space(&mut self, space: u32, path: &[u32]) -> String {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
-        if let Some(i) = self.sheets.iter().position(|sh| !sh.origin.is_empty() && sh.origin == p) {
+        let (home, at) = match self.sheets.get(space as usize) {
+            Some(sh) if space != 0 => match &sh.view {
+                Some(root) => (sh.home, [root.as_slice(), &p].concat()),
+                None => (space as usize, p),
+            },
+            _ => (0, p),
+        };
+        let known = self.sheets.iter().enumerate().skip(1).find(|(_, sh)| sh.home == home && sh.origin == at).map(|(i, _)| i);
+        if let Some(i) = known {
             let template = self.sheets[i].template.clone();
             let (joined, stored) = self.space_joined(i as u32);
             return reply(Ok(SpaceDto { space: i as f64, template, refused: None, joined, stored }));
         }
         self.live = 0;
-        let file = &mut self.sheets[0];
-        let Some(e) = &mut file.eval else {
+        if self.sheets.get(home).is_none_or(|sh| sh.eval.is_none()) {
             return reply::<SpaceDto>(Err(EvalError::Failed("no template".into())));
-        };
-        // Unpacking a run is not something to do by halves: it reads the whole
-        // run and decodes it, and a half-decoded stream is not a document.
-        e.set_slice(None);
-        let opened = e.open_space(&file.doc, 0, &p);
-        e.set_slice(Some(WORK_SLICE));
-        let id = match opened {
+        }
+        let id = match self.open_in(home, &at) {
             Ok(Some(id)) => id,
             // The stream would not open. Which of the three ways is already on
             // the node, so the reply only has to say that it did not.
             Ok(None) => {
-                let why = self.refusal_at(&p);
+                let why = self.refusal_at(home, &at);
                 return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why), joined: false, stored: false }));
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
-        let Some(sp) = self.sheets[0].eval.as_ref().and_then(|e| e.space(id)) else {
+        if self.sheets[home].eval.as_ref().and_then(|e| e.space(id)).is_none() {
             return reply::<SpaceDto>(Err(EvalError::Failed("space vanished".into())));
-        };
-        let sheet = Sheet::from_space(sp, p);
+        }
+        let sheet = self.sheet_for(Some(id), home, at);
         let template = sheet.template.clone();
         self.sheets.push(sheet);
         let space = (self.sheets.len() - 1) as u32;
@@ -2798,24 +2816,23 @@ impl Editor {
 
     /// Whether one of this editor's spaces is a stream joined from several
     /// runs, and whether every one of those runs is stored as it sits in the
-    /// file.
+    /// file, which only a stream opened in the file's reading can say.
     fn space_joined(&self, space: u32) -> (bool, bool) {
-        let Some(core) = self.core_space(space) else { return (false, false) };
-        let Some(sp) = self.sheets[0].eval.as_ref().and_then(|e| e.space(core)) else { return (false, false) };
+        let Some((home, sp)) = self.core_space_of(space) else { return (false, false) };
         let runs = sp.runs();
-        (!runs.is_empty(), !runs.is_empty() && runs.iter().all(|r| !r.packed && r.run_space == 0))
+        (!runs.is_empty(), home == 0 && !runs.is_empty() && runs.iter().all(|r| !r.packed && r.run_space == 0))
     }
 
-    /// Why the stream at `path` would not open, in the core's own word for it.
-    /// A joined stream too long to hold whole says so only when asked, since
-    /// its node still reads.
-    fn refusal_at(&mut self, path: &[usize]) -> String {
-        let file = &mut self.sheets[0];
-        let Some(e) = &mut file.eval else { return "failed".into() };
+    /// Why the stream at `path` of sheet `home`'s reading would not open, in
+    /// the core's own word for it. A joined stream too long to hold whole says
+    /// so only when asked, since its node still reads.
+    fn refusal_at(&mut self, home: usize, path: &[usize]) -> String {
+        let Some(sh) = self.sheets.get_mut(home) else { return "failed".into() };
+        let Some(e) = &mut sh.eval else { return "failed".into() };
         if let Some(why) = e.open_refusal(path) {
             return why.as_str().into();
         }
-        match e.node(&file.doc, path) {
+        match e.node(&sh.doc, path) {
             Ok(n) => n.refused.unwrap_or_else(|| "failed".into()),
             Err(_) => "failed".into(),
         }
@@ -2824,8 +2841,12 @@ impl Editor {
     /// Which bits of the compressed run the byte at `byte` of `space` came
     /// from, and by which step: {status:"ok",node:{..}} or a null node when the
     /// codec's map does not reach that far.
+    ///
+    /// Null too for a stream whose run is bits of another stream and not of
+    /// the file: one opened in a recognised stream's reading, or one declared
+    /// inside a stream the file declares.
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
-        let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
     }
@@ -2833,7 +2854,7 @@ impl Editor {
     /// Which step read the bit at `bit` of the run `space` was unpacked from,
     /// and so which of its bytes that bit produced.
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
-        let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
+        let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
     }
@@ -2866,12 +2887,12 @@ impl Editor {
         let (Some(core), Some(sh)) = (self.core_space(space), self.sheets.get(space as usize)) else {
             return none();
         };
-        let origin = sh.origin.clone();
+        let (home, origin) = (sh.home, sh.origin.clone());
         // Which step, and whether this is a codec with symbols at all. Both
         // come off the trace, so a question with no answer is answered before
         // any of the run is read.
         let (index, want_bytes) = {
-            let Some(e) = &self.sheets[0].eval else { return none() };
+            let Some(e) = &self.sheets[home].eval else { return none() };
             let Some(sp) = e.space(core) else { return none() };
             if !matches!(sp.codec, Codec::Deflate | Codec::Zlib | Codec::Gzip) {
                 return none();
@@ -2885,26 +2906,28 @@ impl Editor {
             (index, step.in_bits.end.div_ceil(8))
         };
         // The compressed bytes, which the space does not hold: what it holds is
-        // what came out. They are a field of the file, read in the file's own
-        // reading, and a read can want chunks that are not here yet.
-        self.live = 0;
-        let file = &mut self.sheets[0];
-        let Some(e) = &mut file.eval else { return none() };
+        // what came out. They are a field of the reading that opened the
+        // stream, the file's or a recognised stream's, and a read of the
+        // file's can want chunks that are not here yet.
+        self.live = home;
+        let at = &mut self.sheets[home];
+        let Some(e) = &mut at.eval else { return none() };
         e.begin_slice();
-        let run = match e.field_bytes(&file.doc, &origin, want_bytes) {
+        let run = match e.field_bytes(&at.doc, &origin, want_bytes) {
             Ok((bytes, _)) => bytes,
             Err(err) => return reply::<Option<DecodedStepDto>>(Err(err)),
         };
-        let Some(e) = &self.sheets[0].eval else { return none() };
+        let Some(e) = &self.sheets[home].eval else { return none() };
         let Some(sp) = e.space(core) else { return none() };
         reply(Ok(inflate::decode_step(&run, sp.trace(), index).map(decoded_step_dto)))
     }
 
-    /// The `Decoded` node a space was unpacked from, as a path in the file.
-    /// Empty for space 0 and for a space that is no longer open.
+    /// The `Decoded` node a space was unpacked from, as a path in the reading
+    /// that opened it: the file's, or a recognised stream's. Empty for space 0
+    /// and for a space that is no longer open.
     pub fn space_origin(&self, space: u32) -> Vec<u32> {
         match self.sheets.get(space as usize) {
-            Some(sh) if !sh.origin.is_empty() => sh.origin.iter().map(|&x| x as u32).collect(),
+            Some(sh) if space != 0 => sh.origin.iter().map(|&x| x as u32).collect(),
             _ => Vec::new(),
         }
     }
@@ -2913,22 +2936,47 @@ impl Editor {
     /// bytes rather than from what the stream declared: a gzip of a tar opens
     /// as a tar, and this is what says so.
     pub fn space_recognised(&self, space: u32) -> bool {
-        let Some(core) = self.core_space(space) else { return false };
-        self.sheets[0].eval.as_ref().and_then(|e| e.space(core)).is_some_and(|s| s.recognised)
+        self.core_space_of(space).is_some_and(|(_, s)| s.recognised)
     }
 
-    /// The core's number for one of this editor's spaces, if it is still open.
+    /// The core's space for one of this editor's spaces, if it is still open,
+    /// with the sheet whose reading holds it.
     ///
     /// Still open as the same stream: the core numbers its spaces from 1 again
     /// once a reading is thrown away, and a stream opened again since then may
     /// have been given the number this one had.
-    fn core_space(&self, space: u32) -> Option<SpaceId> {
+    fn core_space_of(&self, space: u32) -> Option<(usize, &qubero_core::eval::Space)> {
         let sh = self.sheets.get(space as usize)?;
-        if sh.core_space == 0 {
+        if space == 0 || sh.core_space == 0 {
             return None;
         }
-        let open = self.sheets[0].eval.as_ref()?.space(sh.core_space)?;
-        (open.parent == 0 && open.path == sh.origin).then_some(sh.core_space)
+        let open = self.sheets.get(sh.home)?.eval.as_ref()?.space(sh.core_space)?;
+        (open.parent == 0 && open.path == sh.origin).then_some((sh.home, open))
+    }
+
+    /// The core's number for one of this editor's spaces, if it is still open.
+    fn core_space(&self, space: u32) -> Option<SpaceId> {
+        self.core_space_of(space).map(|(_, sp)| sp.id)
+    }
+
+    /// The same, only for a space whose run is bits of the file, which is what
+    /// a step's bits are marked on: opened by the file's reading, from a field
+    /// that is not itself inside another stream. The run of a stream nested in
+    /// a stream is bits of that stream. A joined stream's runs each say which
+    /// space they are in, and `space_step_dto` asks them.
+    fn file_core_space(&mut self, space: u32) -> Option<SpaceId> {
+        let (id, joined) = match self.core_space_of(space)? {
+            (0, sp) => (sp.id, !sp.runs().is_empty()),
+            _ => return None,
+        };
+        if joined {
+            return Some(id);
+        }
+        let origin = self.sheets[space as usize].origin.clone();
+        let sh = &mut self.sheets[0];
+        let e = sh.eval.as_mut()?;
+        e.begin_slice();
+        e.node(&sh.doc, &origin).is_ok_and(|n| n.space == 0).then_some(id)
     }
 
     fn changed(&mut self) {
@@ -3402,7 +3450,7 @@ impl Editor {
     /// was unpacked from one run, and for the file.
     ///
     /// The tab's own reading knows nothing of the runs, since its bytes are
-    /// its own. The file's reading does, under the node that joined them, and
+    /// its own. The reading that opened it does, under the node that joined them, and
     /// byte `byte` of the tab is byte `byte` of the stream there: the parts are
     /// laid end to end in the same order and cut at the same length. The node
     /// the stream holds says which space that is.
@@ -3411,12 +3459,12 @@ impl Editor {
         if space == 0 || !self.space_joined(space).0 {
             return none();
         }
-        let Some(mut root) = self.sheets.get(space as usize).map(|sh| sh.origin.clone()) else { return none() };
+        let Some((home, mut root)) = self.sheets.get(space as usize).map(|sh| (sh.home, sh.origin.clone())) else { return none() };
         root.push(0);
-        let file = &mut self.sheets[0];
-        let Some(e) = &mut file.eval else { return none() };
+        let at = &mut self.sheets[home];
+        let Some(e) = &mut at.eval else { return none() };
         e.begin_slice();
-        let hit = e.node(&file.doc, &root).and_then(|n| e.part_of(&file.doc, n.space, byte as u64));
+        let hit = e.node(&at.doc, &root).and_then(|n| e.part_of(&at.doc, n.space, byte as u64));
         reply(hit.map(|h| h.map(stitched_part_dto)))
     }
 

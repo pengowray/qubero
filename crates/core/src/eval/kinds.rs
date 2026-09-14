@@ -44,6 +44,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use super::size::same_shape;
 use super::*;
 
 /// One (kind, type) pair and what the file spends on it.
@@ -677,7 +678,7 @@ impl Evaluator {
         if stride == 0 {
             return Ok(None);
         }
-        if same_shape(&self.template, &elem, 0) {
+        if same_shape(&self.template, &elem) {
             return Ok(Some(stride));
         }
         // A run of records whose fields are each a fixed number of bits or a
@@ -722,7 +723,7 @@ impl Evaluator {
 /// place one.
 fn same_in_every_record(template: &Template, s: &crate::template::StructDef) -> bool {
     s.fields.iter().all(|f| {
-        if same_shape(template, &f.ty, 0) {
+        if same_shape(template, &f.ty) {
             return true;
         }
         let Ty::UIntExpr { bits, .. } = f.ty.without_sentinel() else { return false };
@@ -732,32 +733,6 @@ fn same_in_every_record(template: &Template, s: &crate::template::StructDef) -> 
             _ => false,
         }
     })
-}
-
-/// Whether every element of a run of `ty` has the same fields, at the same
-/// places and of the same types, whatever its bytes say.
-///
-/// A fixed number of bits is not quite that, because of the fields it counts
-/// as no bits. A field pointing somewhere else is none here, and each element
-/// points somewhere different, at something of a different length: a
-/// minidump's directory is a run of twelve-byte entries, each pointing at a
-/// stream of its own. And a window of a fixed size can hold a type chosen when
-/// it is read, which is how an Arrow record batch keeps its nodes sixteen
-/// bytes while each says in a field of no bytes which column it is, or that it
-/// is none. Multiplying element 0's breakdown by the count would count the
-/// first element's stream once for every entry, and its choice for every
-/// node. So those two are left out, and a name is looked through to what it
-/// stands for.
-fn same_shape(template: &Template, ty: &Ty, hops: usize) -> bool {
-    match ty {
-        Ty::Struct(s) => s.fields.iter().all(|f| same_shape(template, &f.ty, hops)),
-        Ty::Array { elem, count: Expr::Lit(_) } => same_shape(template, elem, hops),
-        Ty::Sized { size: Expr::Lit(_), inner } => same_shape(template, inner, hops),
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => same_shape(template, inner, hops),
-        Ty::Named(n) => hops < 64 && template.types.get(&**n).is_some_and(|t| same_shape(template, t, hops + 1)),
-        Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Stitched { .. } => false,
-        other => fixed_bits(other).is_some(),
-    }
 }
 
 /// Whether the walk goes inside this type.

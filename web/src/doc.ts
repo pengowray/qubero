@@ -2061,8 +2061,9 @@ export class Doc {
     /** Which address space this document is. 0 is the file; anything else is
      *  a compressed run that was unpacked and opened in its own right. */
     readonly space = 0,
-    /** For a space, the `Decoded` node of the file it was unpacked from, or
-     *  the node that joined it from several runs. */
+    /** For a space, the `Decoded` node it was unpacked from, or the node that
+     *  joined it from several runs, as a path of the document it was opened
+     *  from. */
     readonly origin: readonly number[] = [],
     /** True for a space joined from several runs rather than unpacked from
      *  one. */
@@ -2113,6 +2114,10 @@ export class Doc {
    * document of its own, over the same editor. A stream already open comes
    * back as the document it already is rather than being unpacked again.
    *
+   * `path` is a path of this document, which is the file's only when this is
+   * the file: a stream inside a tab is opened from the tab, and the editor
+   * works out where it is.
+   *
    * A stream that would not open comes back as the core's word for why. For a
    * compressed run that word is already on the node, so the caller need not
    * say it again; a stream joined from several runs is found to be too long,
@@ -2121,7 +2126,7 @@ export class Doc {
    */
   openSpace(path: readonly number[]): Doc | { readonly refused: string } | null {
     const r = this.handleReply<{ space: number; template: string; refused?: string; joined: boolean; stored: boolean }>(
-      this.editor.open_space(Uint32Array.from(path)),
+      this.editor.open_space(this.space, Uint32Array.from(path)),
     );
     if (r.status !== "ok") return null;
     if (r.node.space === 0) return r.node.refused === undefined ? null : { refused: r.node.refused };
@@ -2152,7 +2157,7 @@ export class Doc {
    */
   decodedCode(path: readonly number[], bit: number): { readonly step: DecodedStep; readonly out: MapStep | null } | null {
     const opened = this.handleReply<{ space: number; template: string; refused?: string }>(
-      this.editor.open_space(Uint32Array.from(path)),
+      this.editor.open_space(this.space, Uint32Array.from(path)),
     );
     if (opened.status !== "ok" || opened.node.space === 0) return null;
     const space = opened.node.space;

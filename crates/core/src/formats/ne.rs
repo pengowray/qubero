@@ -277,9 +277,16 @@ fn relocation() -> T {
 
 /// The resource table: an alignment shift of its own, then a run of type
 /// blocks that ends with a type of zero.
+///
+/// A module with no resources has no table, and says so either with an offset
+/// of nought or with the offset of the resident names, the table written after
+/// it, which makes it a table of no bytes. `net-trap-win16.dll` says it the
+/// second way, and reading a table there read the start of its resident names
+/// a second time, as a resource type that was not there.
 fn resources() -> T {
+    let offset = || E::field("resource_table_offset");
     T::switch(
-        E::field("resource_table_offset"),
+        offset().not_equal(E::lit(0)).both(offset().not_equal(E::field("resident_names_offset"))),
         vec![(0, T::bytes(E::lit(0)))],
         at_header(
             E::field("resource_table_offset"),
@@ -636,6 +643,20 @@ mod tests {
         let first = ev.node(&d, &[1, 33, 0, 0, 4, 0, 0, 0]).unwrap();
         assert_eq!(first.value, Value::Str("mov ax, 0x1234".into()));
         assert_eq!(ev.node(&d, &[1, 33, 0, 0, 4, 0, 0, 1]).unwrap().value, Value::Str("retf".into()));
+    }
+
+    #[test]
+    fn a_resource_table_at_the_resident_names_is_no_table() {
+        // The sample has no resources and says so with an offset of nought.
+        // A linker can say it with the resident names' offset instead, and
+        // then there is still nothing there but the names.
+        let mut bytes = sample();
+        bytes[0x40 + 0x24..0x40 + 0x26].copy_from_slice(&0x48u16.to_le_bytes());
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(ne());
+        let resources = ev.node(&d, &[1, 34]).unwrap();
+        assert_eq!((resources.size_bits, resources.child_count), (0, 0));
+        assert_eq!(ev.node(&d, &[1, 35, 0, 0, 1]).unwrap().value, Value::Str("WIN".into()));
     }
 
     #[test]

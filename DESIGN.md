@@ -1039,7 +1039,8 @@ sixteen bytes. Multiplying either counts element 0's answer for every element,
 so `same_shape` leaves out pointers and choices. For every file in the sample
 collection that a template reads, the totals now equal what walking every
 element gives, which they did not for eleven of them before, Arrow's among
-them.
+them. The Diagram view's count multiplies element 0 the same way and asks the
+same `same_shape` (in `eval/size.rs`); see "Exact or labelled" below.
 
 **Tests keep the stack honest.** The tests run on the stack
 `.cargo/config.toml` gives them, which is far more than any reading has where
@@ -1511,10 +1512,22 @@ A space whose template came from looking at its bytes, a gzip of a tar, is read
 by a template that needs nothing outside them, and keeps a reading of its own
 over its own bytes.
 
-The editor answers a declared stream's tab from the file's sheet
-(`Editor::tab`). An edit to the file or a change of template drops the spaces
-with the rest of the reading, so the tab's stream is opened again in the
-file's reading as it is now the next time a field of the tab is asked about,
+The editor answers a declared stream's tab from its home sheet
+(`Editor::tab`): the sheet whose reading opened the stream, which is the file's
+or a recognised stream's, since those are the two kinds with a reading of
+their own. A stream opened from a tab is opened by the tab's space and a path
+of the tab (`Editor::open_space`). From a tab over a declared stream that path
+is put under the tab's root and opened in the tab's home, so it is the same
+stream, with the same space, as the one the file's own tab opens at the longer
+path; from a tab with a reading of its own it is opened in that reading, with
+that tab as its home. The web had passed a tab's path to an editor that read it
+as a path of the file, so a stream inside a tab opened whatever the file had at
+that path, or nothing. The cursor link and the decoder's line in the status bar
+mark bits of the file, so a stream whose run is bits of another stream has
+neither: one whose home is a recognised stream, or one declared inside a stream
+the file declares, whose node is not in the file's space. An edit to the file or a change of template drops the spaces
+with the rest of the reading, so the tab's stream is opened again in its
+home's reading as it is now the next time a field of the tab is asked about,
 and a stream that is no longer there leaves the tab empty rather than reading
 whatever the new reading has at the old path. A field of such a tab can want
 bytes of the file, for the fields outside the stream or for a joined stream's
@@ -3162,11 +3175,23 @@ first 200,000 fields" says.
 
 **Exact or labelled.** A run whose element type is the same shape in every
 element, settled by the template (numbers and fixed text, structures of them,
-lists of them with a written length; not a switch, a condition, a length read
-from the file, or a pointer), is counted by walking element 0 with a weight
-of the run's length, rows included. Every other run is walked element by
-element, its length the listing's own (`child_count`). Sampling 32 elements
-of any run had badged a systemd journal's `JournalObject` box `×32`.
+lists of them with a written length, a window of a written size round any of
+those; not a switch, a condition, a length read from the file, or a pointer),
+is counted by walking element 0 with a weight of the run's length, rows
+included. Every other run is walked element by element, its length the
+listing's own (`child_count`). Sampling 32 elements of any run had badged a
+systemd journal's `JournalObject` box `×32`. The rule is `same_shape`, the one
+the kind totals multiply by. The count had a stricter copy of its own that
+walked every window of a written size, even one round a fixed record; the two
+became one on 2026-09-15, and `examples/census_exact.rs`, which counts each
+file both ways, gave the same answer for 659 of the 660 samples it could
+finish walking element by element, before the change and after it, to the
+field. The one it did not was a run whose length the file gives and whose room
+does not hold it: an icon group of 31 bytes in `wzoom-win16.exe` says it holds
+21,641 entries, the walk stops where they stop fitting, and multiplying had
+counted all of them. So a same-shaped run is multiplied only when its last
+element places as well, and walked otherwise, and then all 663 agreed (the
+660 and three FITS samples added in between).
 
 **When the web counts.** `AUTO_COUNT` in `diagramcounts.ts`: a file under 50
 MiB is counted to the end; a larger one to 200,000 fields, then the toolbar
