@@ -1309,7 +1309,7 @@ fn zmumu_names_nine_tenths_of_its_bytes() {
             100.0 * before as f64 / len as f64,
             100.0 * after as f64 / len as f64
         );
-        assert!(deepest < 88, "{name}: {deepest}");
+        assert!(deepest < 110, "{name}: {deepest}");
         if name == "uproot-Zmumu-lz4.root" {
             zmumu = Some((after, len));
         }

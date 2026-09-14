@@ -994,7 +994,7 @@ megabyte rust-lld gives it, and running out of it takes the whole module down,
 so three guards stand in the way (`eval/go.rs`):
 
 - `DEEPEST_PATH`, 128 components, for the nesting of the file.
-- `DEEPEST_QUESTION`, 88 expressions open inside one another, for chains like
+- `DEEPEST_QUESTION`, 110 expressions open inside one another, for chains like
   the one above. It is counted per expression, so arithmetic between fields
   counts too.
 - `STACK_BUDGET`, 640 KiB of stack measured while a size is worked out, a
@@ -1028,11 +1028,13 @@ editability and how the text reads, all thrown away there, and its frame stays
 open while the rest of the chain is read beneath it. Measured by painting the
 stack in a release build, the dearest shape went from about 8 KiB an
 expression to 5.1 KiB: 88 of them took 453 KiB, where at 8 KiB they came to
-about 690 KiB, more than the budget. 640 KiB would carry 124 at the new rate;
-the limit stays 88, since a refusal only costs asking again, and in wasm only
-one reading has been measured. That is the last Arrow node above read first,
-88 deep and asked again, which wrote over 94 KiB of the wasm stack run in
-Node against 178 KiB of a native one.
+about 690 KiB, more than the budget. 640 KiB would carry 124 at the new rate,
+but a thread of 640 KiB gives a read only 608 to 613 KiB of it, and a chain
+read to a limit of 120 ran out there. The limit is 110, where the dearest
+shape takes 573 KiB. In wasm only one reading has been measured, while the
+limit was 88: the last Arrow node above read first, 88 deep and asked again,
+which wrote over 94 KiB of the wasm stack run in Node against 178 KiB of a
+native one.
 
 **A list of a named type has a stride.** An element written as the name of a
 type is placed and measured as the type it stands for, so a run of them is
@@ -1054,10 +1056,12 @@ same `same_shape` (in `eval/size.rs`); see "Exact or labelled" below.
 `.cargo/config.toml` gives them, which is far more than any reading has where
 it ships. `deep_questions` and the Arrow nodes read first in `arrow_real` read
 on threads of 640 KiB in a release build and 4 MiB in a debug one, whose
-frames are six to ten times as large. The dearest shape read to the limit takes
-457 KiB and 2.8 MiB, so a read whose stack per expression grows by half
-overflows `deep_questions` in either build. The Arrow read takes 178 KiB and
-2.0 MiB, and overflows a debug build when its stack about doubles.
+frames are six to ten times as large. Those threads give a read 608 to 613 KiB
+and 3.93 to 3.98 MiB. The dearest shape there, read to the limit, takes 571
+KiB and 3.5 MiB, so a read whose stack per expression grows by about a
+fifteenth overflows `deep_questions` in a release build, and by about an
+eighth in a debug one. The Arrow read takes 216 KiB and 2.5 MiB, and
+overflows a debug build when its stack grows by about three fifths.
 
 ### A structure that says which field names it
 A RIFF chunk is identified by its `id`, a PNG chunk by its `type`, a wasm
