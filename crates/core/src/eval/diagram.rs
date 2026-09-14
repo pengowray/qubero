@@ -503,32 +503,6 @@ fn lists(t: &Template, ty: &Ty) -> bool {
     }
 }
 
-/// What one element of a run is, past the wrappers. Nothing for a type that is
-/// not a run.
-///
-/// For a caller counting a file: every element of a run is declared the same
-/// way, so a run of half a million samples is half a million of whatever this
-/// answers, and knowing that without walking them is the difference between a
-/// census that takes a moment and one that takes two minutes.
-pub(crate) fn elem_of<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
-    match ty {
-        Ty::Array { elem, .. }
-        | Ty::Repeat { elem, .. }
-        | Ty::PointerList { elem, .. }
-        | Ty::Chain { elem, .. }
-        | Ty::Gather { elem, .. } => Some(elem),
-        Ty::Sized { inner, .. }
-        | Ty::SizedBits { inner, .. }
-        | Ty::Origin { inner }
-        | Ty::At { inner, .. }
-        | Ty::Nullable { inner, .. }
-        | Ty::Decoded { inner, .. }
-        | Ty::When { inner, .. } => elem_of(t, inner),
-        Ty::Named(n) => t.types.get(&**n).and_then(|inner| elem_of(t, inner)),
-        _ => None,
-    }
-}
-
 /// Whether a type is a choice, so that what one of it turns out to be is not
 /// settled by the declaration alone.
 pub(crate) fn is_choice(t: &Template, ty: &Ty) -> bool {

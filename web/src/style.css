@@ -5282,10 +5282,19 @@ table.rec tr.is-on td {
 .dv-row {
   border-left: 3px solid var(--field-color);
 }
-/* Only a row a click can actually reach in the open file. See
-   `DiagramView.canPick`. */
-.dv-row.is-pickable {
+/* A row a double click takes to the open file, and a box title the same. One
+   look for both reasons a row can go somewhere: see `DiagramView.offerGo`. */
+.dv-row.is-goable,
+.dv-box-name.is-goable,
+.dv-strip-name.is-goable {
   cursor: pointer;
+}
+/* The row a single click marked. The listing's own selected-row look, so a
+   marked field reads the same in every view. */
+.dv-row.is-selected,
+.dv-sbox.is-selected {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .dv-row:hover {
   background: color-mix(in srgb, var(--field-color) 12%, transparent);
@@ -5573,11 +5582,25 @@ summary.kp-group-heading:hover {
   color: var(--muted);
   cursor: default;
 }
-.dv-partial {
-  padding: 3px 8px;
+/* What the count is doing, at the right of the toolbar. A slot in the bar
+   rather than a line under it, so it coming and going moves nothing. */
+.dv-counts {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.dv-status {
   font: 12px var(--sans);
-  color: var(--warn);
-  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dv-keep {
+  font: 12px var(--sans);
+  white-space: nowrap;
 }
 .dv-count {
   margin-left: 6px;
@@ -5659,10 +5682,10 @@ summary.kp-group-heading:hover {
   border-right-width: 1px;
   margin-right: -1px;
 }
-.dv-sbox.is-pickable {
+.dv-sbox.is-goable {
   cursor: pointer;
 }
-.dv-sbox.is-pickable:hover {
+.dv-sbox.is-goable:hover {
   background: color-mix(in srgb, var(--field-color) 16%, var(--panel));
 }
 .dv-sname {

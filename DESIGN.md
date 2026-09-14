@@ -649,6 +649,25 @@ through it field by field, so a template being selected now shows the field
 column by default; the text column leads when no template is set, and each of
 those two states remembers what the user last chose for it.
 
+A click in the field column never moves the view. Clicking a chip selects its
+field and puts the cursor on the bytes the chip is drawn beside
+(`chipCursorBit`). For most chips that is the field's first bit. A chip carried
+in from above the view puts it on the first byte on screen instead. The chip
+for what is left of a structure after its last child, which `spans` answers
+under the structure's own path, puts it on the first bit of that rest: in a PNG
+the padding and checksum after the last deflate block are a chip named `data`,
+and a click there stays there rather than going to `data`'s first byte eight
+thousand bytes up. A value cell puts the cursor
+on its own first bit. The row the cursor lands in is not pulled wholly on screen
+either, as every other cursor move does, because a row cut by the top or bottom
+edge would still nudge the view. The reason is the double click: a chip whose
+bytes are a document of their own (the corner arrow, `hv-chip-opens`) opens
+them in a tab on a double click, and while the first click scrolled to the
+field's start, the second landed on some other chip. The keys stay on the chip's
+path and also carry where its span starts, since two chips for one path can
+stand for different bytes. A heading is the exception: it names where a part
+starts, and pressing it goes there, bringing that row on screen.
+
 `Evaluator::spans` feeds it: one call per screenful rather than one per field.
 It walks `locate` forwards from the first bit on screen, and does two things
 that are not one field each. Slack inside a structure comes back as a gap,
@@ -3108,6 +3127,97 @@ every ROOT object is in a stream's space and indexing one would open every
 object in the file for nothing; a built type that points back into the file
 would need that. A key is not keyed by where its table is, because one document
 has one table per kind in both formats that need this.
+
+### The Diagram view: this file's counts, and what a click does
+The Diagram view draws a format's types as boxes, and lays the open file's
+counts over them: a badge on each box and row saying how many of it this file
+holds, a faded box for a type it has none of, and a double click to the first
+one. The counts come from `crates/core/src/eval/census.rs`; what the view says
+about them is decided in `web/src/diagramcounts.ts`.
+
+**A count is a walk kept between goes.** `CensusWalk` is held on the sheet
+beside the kind walk and thrown away with it on an edit or a new template.
+`Evaluator::census_step` carries it on until the go's allowance runs out
+(`Working`), the next node's bytes have not arrived (`Waiting`, with the
+chunks in `wanted`), the walk has counted as many nodes as the caller allowed
+(`Capped`), or it has counted every node (`Done`). Only `Done` counts are
+totals. The first version started from the root on every call, walked a
+breadth-first queue capped at 20,000, and called all of those "stopped short"
+in one flag answered as `ok`; a view that only asked again after a reply that
+was not `ok` never asked again. A 6 KB JPEG then said "Counts cover the first
+269 fields read" over a count that had finished: the flag was also set by the
+sampling below, and by a run of two tables that had been asked for 32.
+
+**Depth-first, giving nodes back behind it,** the way the kind totals walk:
+children of a short node go back when it closes, a long list's elements one
+behind the walk, and each node's size is asked as the walk leaves it, while its
+children are still there to answer, so that placing its sibling does not read
+them back into the memo. Asked on arrival instead, sizing a list walks all of it
+before its first element is counted. A count of
+the whole of `uproot-Zmumu-lz4.root` (183,000 fields) holds at most 12,700
+nodes where the breadth-first one held 184,000. What a limit keeps is the
+first part of the file in order, which is what the toolbar's "Counted the
+first 200,000 fields" says.
+
+**Exact or labelled.** A run whose element type is the same shape in every
+element, settled by the template (numbers and fixed text, structures of them,
+lists of them with a written length; not a switch, a condition, a length read
+from the file, or a pointer), is counted by walking element 0 with a weight
+of the run's length, rows included. Every other run is walked element by
+element, its length the listing's own (`child_count`). Sampling 32 elements
+of any run had badged a systemd journal's `JournalObject` box `×32`.
+
+**When the web counts.** `AUTO_COUNT` in `diagramcounts.ts`: a file under 50
+MiB is counted to the end; a larger one to 200,000 fields, then the toolbar
+offers Keep counting, which lifts the limit and carries on from the same walk.
+`main.ts` steps the count for up to `COUNT_TURN_MS` a turn, books the next turn
+itself after `working`, and leaves `waiting` to the document's change event
+when the chunks land. The drawing is laid out again at most once a second while
+a count runs (`redrawIn`), and not at all for the first second, so a small
+file's count finishes before anything is drawn.
+
+Measured natively in release on 2026-09-14 (`examples/census_probe.rs`, goes of
+5,000 elements):
+
+| File | Fields | Time | Longest go | Nodes held at most |
+|---|---|---|---|---|
+| libjpeg-turbo testorig.jpg, 6 KB | 117 | 4 ms | 4 ms | 61 |
+| beats-binary-message.journal, 8 MB | 2,874 | 15 ms | 15 ms | 4 |
+| freedm.wad, 22 MB | 19,297 | 152 ms | 85 ms | 15,429 |
+| uproot-Zmumu-lz4.root, 213 KB | 182,846 | 2.1 s | 114 ms | 12,725 |
+| llama2c stories15m q4_0.gguf, 19 MB | 160,859 | 1.1 s | 36 ms | 558 |
+| the-bird-book.epub, 48 MB | 275,093 | 1.3 s | 243 ms | 61,289 |
+
+In the browser the same count of the ROOT file is 1.4 s of work over 15 goes,
+the longest 116 ms, and the EPUB 0.35 s over 70 goes, 54 of them waiting on
+bytes. A 189 MiB GGUF (`Kokoro_no_espeak_Q4.gguf`) stops at 200,000 fields
+about three seconds after it is opened, and Keep counting finishes the other
+5.8 million fields in 23 s of work over 1,163 goes, none longer than 99 ms.
+
+**What the badges say.** While a count is unfinished every box badge is a
+floor, `×12+`, including `×0+` and `×1+`, and nothing is faded, since a type
+not found yet is not a type the file lacks; the hover says "at least" and
+"Still counting" or how many fields were counted. A row is badged only where
+its count differs from its box's: a field that is there once per structure
+says nothing the box has not, and the badges left are the optional fields and
+the cases taken by some. A row whose badge is dropped keeps its count on
+hover. The toggle is "Hide types not found in this file", which stays true
+while a count runs, and its hover says types not found yet are hidden too.
+
+**Clicks.** Going to the hex view switches the reader's view, so it is a double
+click: on a box title or row the count found, the first one; on a row of the first box the open file has, the field itself. One
+handler and one title per row (`offerGo`), whichever reasons apply. A single
+click marks the row and does nothing else; Escape or a click on the empty
+drawing lets go. The graph view goes on a double tap for the same reason. The
+treemap's single click marks a box and moves the cursor without switching the
+view, and its double click opens the box, so it is left as it is.
+
+**Folds.** A box, a strip, a strip's case list and the inspector's child list
+show everything when folding would hide no more than `FOLD_SLACK` (3) rows
+(`web/src/fold.ts`): the fold row takes a row's room, so hiding one row behind
+it saved nothing and read "… 1 more fields". The listing's "Show more" rows are
+a window being paged, not a fold, and the treemap pools rectangles by area, so
+neither follows this rule.
 
 ## Roadmap (not yet built)
 

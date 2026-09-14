@@ -335,7 +335,7 @@ impl Image {
     /// this counts both.
     pub fn invalid(&self) -> Option<String> {
         product(&self.shape).is_none().then(|| {
-            format!("Not unpacked: the header is invalid. ZNAXISn say the image is {} pixels, more than 2^64 in all.", dims(&self.shape))
+            format!("Not unpacked: the header is invalid. ZNAXISn say the image is {} pixels, giving more than the maximum of 2^64.", dims(&self.shape))
         })
     }
 
@@ -1296,7 +1296,7 @@ mod tests {
             zblank: None,
             quantized: false,
         };
-        let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, more than 2^64 in all.";
+        let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, giving more than the maximum of 2^64.";
         // Tiles of one pixel, 2^80 of them.
         let t = decode(&square(1 << 40, 1), 5, &row, &[1, 2, 3, 4]);
         assert_eq!((t.tiles, t.pixel_count(), t.start, t.problem.as_deref()), (None, Some(1), vec![5, 0], Some(invalid)));

@@ -23,7 +23,7 @@
 //! question is passed through as it is asked.
 
 use super::*;
-use super::census::Census;
+use super::census::{Census, CensusWalk};
 use super::origin::Origin;
 
 /// What reads a tab's fields, lent for one question.
@@ -186,9 +186,14 @@ impl<'a, S: Source> Tab<'a, S> {
         Ok(g)
     }
 
-    pub fn census(&mut self, limit: usize) -> R<Census> {
-        let root = self.root.clone();
-        let mut c = self.ev.census_under(self.doc, &root, limit)?;
+    /// A count of the tab's fields against the diagram's boxes, to be carried
+    /// on a go at a time with `census_step`.
+    pub fn census_walk(&self, bits: u64) -> CensusWalk {
+        CensusWalk::under(bits, self.root.clone())
+    }
+
+    pub fn census_step(&mut self, walk: &mut CensusWalk, limit: usize) -> R<Census> {
+        let mut c = self.ev.census_step(self.doc, walk, limit)?;
         for b in &mut c.boxes {
             b.first_path = self.path_out(&b.first_path).unwrap_or_default();
             b.space = self.space_out(b.space)?;

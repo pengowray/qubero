@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, Census, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::textview;
@@ -72,6 +72,10 @@ struct Sheet {
     /// at a time. Thrown away on any edit for the same reason the scan is:
     /// every offset in it describes bytes that may have moved.
     kinds: Option<KindWalk>,
+    /// The Diagram view's count of the file's fields against the format's
+    /// boxes, run a step at a time and thrown away with the walk above: its
+    /// paths are through bytes and a template that may have changed.
+    census: Option<CensusWalk>,
     /// What the last `.ksy` conversion had to say, as the JSON the panel
     /// shows. Empty for a template that did not come from a `.ksy`.
     ksy_report: String,
@@ -140,6 +144,7 @@ impl Sheet {
             scan: None,
             focus: None,
             kinds: None,
+            census: None,
             ksy_report: String::new(),
         }
     }
@@ -1212,10 +1217,13 @@ struct RowCountDto {
 struct CensusDto {
     boxes: Vec<BoxCountDto>,
     rows: Vec<RowCountDto>,
-    /// How many nodes the walk looked at.
+    /// How many nodes the walk has looked at.
     walked: f64,
-    /// True when the cap stopped it, so every count is a floor.
-    truncated: bool,
+    /// `done` when every node was counted. Otherwise every count is a floor,
+    /// and this says what to do about it: `working` asks again at once,
+    /// `waiting` asks again when the bytes it asked for land, and `capped`
+    /// asks again only with a higher limit.
+    state: &'static str,
 }
 
 fn census_dto(c: Census) -> CensusDto {
@@ -1242,7 +1250,12 @@ fn census_dto(c: Census) -> CensusDto {
             })
             .collect(),
         walked: c.walked as f64,
-        truncated: c.truncated,
+        state: match c.state {
+            CensusState::Done => "done",
+            CensusState::Working => "working",
+            CensusState::Waiting => "waiting",
+            CensusState::Capped => "capped",
+        },
     }
 }
 
@@ -2931,6 +2944,7 @@ impl Editor {
         sh.scan = None;
         sh.focus = None;
         sh.kinds = None;
+        sh.census = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
@@ -2948,6 +2962,7 @@ impl Editor {
         sh.scan = None;
         sh.focus = None;
         sh.kinds = None;
+        sh.census = None;
     }
 
     /// One step of the byte-class scan behind the overview: at most a window
@@ -3162,6 +3177,7 @@ impl Editor {
         // use, and under another template the same path is another field. The
         // byte-class scan beside it is about bytes and stands; this does not.
         sh.kinds = None;
+        sh.census = None;
         sh.template = name.to_string();
         sh.ksy_report = String::new();
         if name.is_empty() {
@@ -3231,6 +3247,7 @@ impl Editor {
         sh.bpf_complete = false;
         sh.ne = None;
         sh.kinds = None;
+        sh.census = None;
         sh.template = converted.template.name.clone();
         let mut e = Evaluator::new(converted.template);
         e.set_slice(Some(WORK_SLICE));
@@ -3304,6 +3321,7 @@ impl Editor {
         // The paths the walk holds are paths through the template it is
         // leaving. See `set_template`.
         sh.kinds = None;
+        sh.census = None;
         sh.template = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
@@ -3531,15 +3549,36 @@ impl Editor {
     /// each the file holds, which rows they stood on, and the path to the first
     /// of each. JSON, in the same reply shape as the rest.
     ///
-    /// `limit` caps the nodes walked. Breadth-first, so what a cap keeps is the
-    /// top of the file, and the answer says whether it stopped short.
+    /// One go of a count kept between calls, so each call carries on from the
+    /// last and answers with everything counted so far. `limit` caps the nodes
+    /// walked in all, and raising it carries a capped count on. The node's
+    /// `state` says whether to ask again; bytes the count is waiting on come
+    /// back as `wanted`, so they are fetched and the change they make asks
+    /// again. An edit or a new template throws the count away, and the next
+    /// call starts it over.
     pub fn diagram_census(&mut self, space: u32, limit: u32) -> String {
+        // Taken out of the sheet for the length of the call, the way the kind
+        // walk is: see `kind_totals_step`.
+        if let Err(why) = self.tab(space) {
+            return why;
+        }
+        let sh = self.sm();
+        let len = sh.doc.len_bits();
+        let mut census = sh.census.take();
         let mut tab = match self.tab(space) {
             Ok(tab) => tab,
             Err(why) => return why,
         };
+        if !matches!(&census, Some(w) if w.file_bits() == len) {
+            census = Some(tab.census_walk(len));
+        }
+        let walk = census.as_mut().expect("just built");
         tab.ev.begin_slice();
-        reply(tab.census(limit as usize).map(census_dto))
+        let out = tab.census_step(walk, limit as usize);
+        let reached = (tab.ev.reached_bits() / 8) as f64;
+        let wanted = wanted(tab.ev);
+        self.sm().census = census;
+        reply_with(out.map(census_dto), reached, wanted)
     }
 
     /// The relationships behind the shape of the field at `path`, written out:

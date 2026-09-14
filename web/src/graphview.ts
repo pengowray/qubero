@@ -143,7 +143,8 @@ export class GraphView {
   /** What the graph is rooted at, kept so a rebuild can say it again. */
   private rootName: string | null = null;
 
-  /** The reader tapped a field. The rest of the app puts the cursor there. */
+  /** The reader double-tapped a field. The rest of the app goes to it in the
+   *  hex view. */
   onPick: (path: readonly number[]) => void = () => {};
 
   constructor() {
@@ -235,7 +236,10 @@ export class GraphView {
       textureOnViewport: true,
       wheelSensitivity: 0.2,
     });
-    this.cy.on("tap", "node[path]", (e) => {
+    // A double tap, because going to a field switches the reader to the hex
+    // view, and the app asks for a double click or a button for that. A single
+    // tap moves nothing.
+    this.cy.on("dbltap", "node[path]", (e) => {
       const id = String(e.target.id());
       const p = this.paths.get(id);
       if (p !== undefined) this.onPick(p);

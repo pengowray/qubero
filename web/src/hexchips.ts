@@ -32,11 +32,19 @@ export function chipsOf(el: HTMLElement): ChipEl[] {
 /** A chip element, with the path of the field it stands for kept on it, so one
  *  click handler serves the button for as long as the button lives. `_runEnd`
  *  is the last bit of the run a folded chip stands for, so that pressing
- *  `elements 2 values` marks both of them and not only the first. */
+ *  `elements 2 values` marks both of them and not only the first. `_from` and
+ *  `_to` are the bits the chip is drawn beside, which is where a press puts
+ *  the cursor: see `chipCursorBit`. */
 export type ChipEl = HTMLButtonElement & {
   _path?: readonly number[] | undefined;
   _runEnd?: number | undefined;
+  _from?: number | undefined;
+  _to?: number | undefined;
 };
+
+/** What pressing a chip hands on: the field, the bits the chip stands for, and
+ *  the end of the run when it folded one. */
+export type ChipPick = (path: readonly number[], bits: { readonly from: number; readonly to: number }, throughBit?: number) => void;
 
 /**
  * An empty chip, ready to be filled.
@@ -47,7 +55,7 @@ export type ChipEl = HTMLButtonElement & {
  * on it, and taking the element out from under a finger is read as the touch
  * being cancelled, which stops the drag that is scrolling the view.
  */
-export function newChip(onPick: (path: readonly number[], throughBit?: number) => void): ChipEl {
+export function newChip(onPick: ChipPick): ChipEl {
   const el = document.createElement("button") as ChipEl;
   el.type = "button";
   el.className = "hv-chip";
@@ -58,7 +66,7 @@ export function newChip(onPick: (path: readonly number[], throughBit?: number) =
   el.addEventListener("click", (e) => {
     e.stopPropagation();
     const path = el._path;
-    if (path !== undefined) onPick(path, el._runEnd);
+    if (path !== undefined) onPick(path, { from: el._from ?? 0, to: el._to ?? 0 }, el._runEnd);
   });
   return el;
 }
@@ -73,6 +81,8 @@ export function fillPlain(el: ChipEl, cls: string, text: string, title: string):
   if (el.title !== title) el.title = title;
   el._path = undefined;
   el._runEnd = undefined;
+  el._from = undefined;
+  el._to = undefined;
   el.disabled = true;
   el.removeAttribute("aria-label");
 }
@@ -149,6 +159,8 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   // nothing else falls inside it.
   const last = c.run[c.run.length - 1];
   el._runEnd = last === undefined ? undefined : last.offset_bits + last.size_bits;
+  el._from = s.offset_bits;
+  el._to = el._runEnd ?? s.offset_bits + s.size_bits;
   // Read back by the view's own listener rather than by a handler per chip:
   // there are six hundred of these on screen and they are reused across
   // redraws, so what a chip offers has to live on the element.
@@ -175,7 +187,7 @@ export function fillNote(
   b: ChipBlock | null,
   continued: boolean,
   tail: boolean,
-  onPick: (path: readonly number[], throughBit?: number) => void,
+  onPick: ChipPick,
 ): void {
   const n = b === null ? 0 : b.shown;
   const rest = b !== null && b.shown < b.entries.length;

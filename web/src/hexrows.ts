@@ -33,7 +33,7 @@ import { chipsHead, NO_TEMPLATE } from "./strings.ts";
 import type { ChipMeasure } from "./chipfit.ts";
 import { pinnedNoteKey, planRowChips, rowNoteKey, valsBeforeChips, type Chip, type ChipBlock, type Reading } from "./chipplan.ts";
 import { cellDraw, covers, HEX, highlightBits, selectionBits, setText, type Run } from "./hexcell.ts";
-import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl } from "./hexchips.ts";
+import { chipsOf, fillNote, fillPlain, newChip, readChipFonts, valsOf, type ChipEl, type ChipPick } from "./hexchips.ts";
 import { fillHeadings, rowPieces, type RowPieces } from "./hexheadings.ts";
 import { fillVals, markVals, newVals, readValFont } from "./valuecells.ts";
 import { NO_VALUES, type PlacedCell, type RowValues } from "./valuetable.ts";
@@ -42,9 +42,10 @@ import { NO_VALUES, type PlacedCell, type RowValues } from "./valuetable.ts";
  *  the view: every chip and every heading keeps the function it was built
  *  with, so a chip filled again is not a chip built again. */
 export type RowPicks = {
-  /** `throughBit` is the end of a folded run, when the chip pressed stands for
+  /** `bits` is what the chip pressed stands for, which says where the cursor
+   *  goes. `throughBit` is the end of a folded run, when the chip stands for
    *  one: the pick is the whole run and not its first element. */
-  readonly field: (path: readonly number[], throughBit?: number) => void;
+  readonly field: ChipPick;
   readonly value: (path: readonly number[], bit: number) => void;
   readonly heading: (h: OutlineHeading) => void;
 };
@@ -178,6 +179,8 @@ export class HexRows {
   /** What the top row carries in from above, found by the row that names it
    *  and read by the strip a moment later in the same `write`. */
   private carried: ChipBlock | null = null;
+  /** The first byte on screen, as the top row found it in the last `write`. */
+  private shownFrom = 0;
 
   constructor(private readonly picks: RowPicks) {
     this.header = document.createElement("div");
@@ -186,6 +189,12 @@ export class HexRows {
     this.inner.className = "hv-rows-inner";
     this.pinned = document.createElement("span");
     this.pinned.className = "hv-note hv-note-pinned hv-empty";
+  }
+
+  /** The first byte on screen when the rows were last written: the bytes a
+   *  chip in the pinned strip is drawn beside. */
+  get firstByte(): number {
+    return this.shownFrom;
   }
 
   /** The row elements in the order they are drawn, top row first, for reading
@@ -961,6 +970,7 @@ export class HexRows {
       reading: r === 0 ? this.topReading(vals) : null,
     });
     if (planned.pinned !== null) this.carried = planned.pinned;
+    if (r === 0) this.shownFrom = planned.firstByte;
     const trailer = f.more && r === this.win.length - 1;
     const key = rowNoteKey(planned.blocks, trailer);
     // The table goes in the first line's block: a heading may cut the row, but

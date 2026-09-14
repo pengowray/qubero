@@ -18,6 +18,7 @@ import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedp
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
+import { folds, shownBeforeFold } from "./fold.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
 import { typePanel } from "./typepanel.ts";
@@ -2411,7 +2412,8 @@ export class Inspector {
       this.childCapFor = key;
       this.childCap = CHILD_PAGE;
     }
-    const want = Math.min(n.child_count, this.childCap);
+    // All of them when the rest would be a button over a row or three.
+    const want = shownBeforeFold(n.child_count, this.childCap);
     const reply = n.composite && want > 0 ? this.doc.templateChildren(path, 0, want) : null;
     const kids = reply?.status === "ok" ? reply.node : null;
     const inside = kids === null ? null : insideValue(n, kids);
@@ -2959,7 +2961,9 @@ function moreButton(rest: number, noun: string): HTMLElement {
   b.type = "button";
   b.dataset["more"] = "";
   b.textContent = INSIDE.more(rest);
-  const said = rest > CHILD_PAGE ? INSIDE.moreTitle(CHILD_PAGE, rest, noun) : INSIDE.moreRest(rest, noun);
+  // The next page shows everything when what would be left after it is too
+  // little to fold, so that is when the button says it finishes the list.
+  const said = folds(rest, CHILD_PAGE) ? INSIDE.moreTitle(CHILD_PAGE, rest, noun) : INSIDE.moreRest(rest, noun);
   b.title = said;
   b.setAttribute("aria-label", said);
   return b;

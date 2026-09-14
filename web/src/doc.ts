@@ -952,12 +952,23 @@ export type RowCount = {
 export type DiagramCensus = {
   readonly boxes: BoxCount[];
   readonly rows: RowCount[];
-  /** How many nodes the walk looked at. */
+  /** How many nodes the count has looked at so far. */
   readonly walked: number;
-  /** True when the cap stopped it, so every count is a floor rather than a
-   *  total, and a view showing one has to say so. */
-  readonly truncated: boolean;
+  /** Where the count has got to. See `CensusState`. */
+  readonly state: CensusState;
 };
+
+/**
+ * Where a count of the file has got to, and so what the caller does next.
+ *
+ * `done` is the only state whose counts are totals; in every other each count
+ * is a floor, and a view showing one has to say so. `working` ran out of this
+ * go and wants asking again straight away. `waiting` needs bytes that are on
+ * their way, and the change their arrival makes is what asks again. `capped`
+ * counted as many fields as it was allowed and asks again only with a higher
+ * limit.
+ */
+export type CensusState = "done" | "working" | "waiting" | "capped";
 
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
@@ -2688,6 +2699,8 @@ export class Doc {
    *
    * `limit` caps the nodes walked; the answer says whether it stopped short.
    */
+  /** One go of the count of this file against the diagram's boxes, carried on
+   *  from the last. `limit` is how many fields it may have counted in all. */
   diagramCensus(limit: number): TemplateReply<DiagramCensus> {
     return this.handleReply<DiagramCensus>(this.editor.diagram_census(this.space, limit));
   }
