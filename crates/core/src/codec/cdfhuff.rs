@@ -42,8 +42,8 @@
 //!
 //! **What the trace says.** One block of the whole stream, called a dynamic
 //! block the way LHA's and deflate's are when the stream brings its own
-//! table. For Huffman the counts are one [`StepField::Counts`] step at its
-//! head, whose value is how many byte values were given a count. Then a
+//! table. For Huffman the counts are one [`StepField::FrequencyTable`] step at
+//! its head, whose value is how many byte values were given a count. Then a
 //! [`StepKind::Literal`] per byte out, whose bits are its code; symbol 256 is
 //! [`StepKind::EndOfBlock`]; and the rest of the run is one
 //! [`StepField::Padding`] step. For adaptive Huffman a byte sent through the
@@ -92,7 +92,7 @@ pub fn huffman(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let mut b = TraceBuilder::default();
     let mut out = Vec::new();
     b.open_block(0, 0);
-    b.push(0, 0, StepKind::Header(StepField::Counts, given));
+    b.push(0, 0, StepKind::Header(StepField::FrequencyTable, given));
     let mut bits = Bits::new(data);
     bits.at = at * 8;
     let mut coarse = false;
@@ -424,7 +424,7 @@ mod tests {
         let steps: Vec<_> = trace.steps().collect();
         // Seven byte values have counts: space, comma, a, b, c, d and r, in
         // sixteen bytes of runs and the zero that ends them.
-        assert_eq!(steps[0].kind, StepKind::Header(StepField::Counts, 7));
+        assert_eq!(steps[0].kind, StepKind::Header(StepField::FrequencyTable, 7));
         assert_eq!(steps[0].in_bits, 0..16 * 8);
         assert_eq!(steps[1].kind, StepKind::Literal(b'a'));
         assert_eq!(steps.iter().filter(|s| matches!(s.kind, StepKind::Literal(_))).count(), 24);

@@ -173,11 +173,12 @@ const STORED_BIT: u32 = 1 << 31;
 /// **What the trace says.** The magic and descriptor are one
 /// [`StepField::FrameHeader`] step, each size word a
 /// [`StepField::BlockHeader`] saying the word it holds (so the end mark says
-/// nought), each checksum a [`StepField::Footer`] saying the four bytes it
-/// takes, as an xz block's check does. A compressed block's sequences are
-/// traced as [`block`] traces them, and a stored block is one
-/// [`StepKind::Stored`] step. Each block, from its size word to its checksum,
-/// is a [`Block`](crate::codec::Block) of the trace.
+/// nought), and each checksum a [`StepField::BlockChecksum`] or
+/// [`StepField::ContentChecksum`] saying the word written there. A compressed
+/// block's sequences are traced as [`block`] traces them, and a stored block
+/// is one [`StepKind::Stored`] step. Each block, from its size word to the end
+/// of its data, is a [`Block`](crate::codec::Block) of the trace; its checksum
+/// comes after it, outside, as the frame's own header and end mark do.
 ///
 /// **What is not checked.** The checksums are named and not computed. They
 /// are xxHash-32, which nothing else here needs, and the zstd frames beside
@@ -281,20 +282,21 @@ pub fn frame(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
                 sequences(body, at, &mut out, floor, &mut b)?;
             }
             at += size;
-            if block_checksums {
-                word(at)?;
-                b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::Footer, 4));
-                at += 4;
-            }
             let kind = if stored { BlockKind::Stored } else { BlockKind::Sequences };
             // The last block is the one the end mark follows, which nothing
-            // in the block itself says.
-            let last = word(at).is_ok_and(|w| w == 0);
-            b.close_block(at as u64 * 8, out.len() as u64, kind, last);
+            // in the block itself says. Closed before its checksum, which is
+            // a word about the block rather than one of its sequences.
+            let mark = at + if block_checksums { 4 } else { 0 };
+            b.close_block(at as u64 * 8, out.len() as u64, kind, word(mark).is_ok_and(|w| w == 0));
+            if block_checksums {
+                let sum = word(at)?;
+                b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::BlockChecksum, sum));
+                at += 4;
+            }
         }
         if content_checksum {
-            word(at)?;
-            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::Footer, 4));
+            let sum = word(at)?;
+            b.push(at as u64 * 8, out.len() as u64, StepKind::Header(StepField::ContentChecksum, sum));
             at += 4;
         }
         if content_size.is_some_and(|n| n != (out.len() - start) as u64) {
@@ -475,12 +477,18 @@ mod tests {
         assert!(matches!(steps[1].kind, StepKind::Header(StepField::BlockHeader, w) if w & STORED_BIT == 0));
         assert!(matches!(steps[2].kind, StepKind::Header(StepField::Token, _)));
         let n = steps.len();
-        assert_eq!(steps[n - 3].kind, StepKind::Header(StepField::Footer, 4));
+        let word = |at: usize| u32::from_le_bytes(packed[at..at + 4].try_into().unwrap());
+        let (end, block_sum) = (packed.len() - 8, packed.len() - 12);
+        assert_eq!(steps[n - 3].kind, StepKind::Header(StepField::BlockChecksum, word(block_sum)));
         assert_eq!(steps[n - 2].kind, StepKind::Header(StepField::BlockHeader, 0));
-        assert_eq!(steps[n - 1].kind, StepKind::Header(StepField::Footer, 4));
+        assert_eq!(steps[n - 2].in_bits, end as u64 * 8..(end as u64 + 4) * 8);
+        assert_eq!(steps[n - 1].kind, StepKind::Header(StepField::ContentChecksum, word(packed.len() - 4)));
         assert_eq!(steps[n - 1].in_bits, (packed.len() as u64 - 4) * 8..packed.len() as u64 * 8);
+        // The block runs from its size word to the end of its data, and its
+        // checksum is outside it.
         assert_eq!(trace.blocks().len(), 1);
         assert!(trace.blocks()[0].last);
+        assert_eq!(trace.blocks()[0].in_bits, steps[1].in_bits.start..block_sum as u64 * 8);
     }
 
     /// Noise does not compress, so the encoder stores its blocks, and a stored

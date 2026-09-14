@@ -358,7 +358,13 @@ pub enum StepField {
     /// CDF Huffman: the runs of byte counts in front of the codes, which the
     /// tree the codes are read by is built from. Its value is how many byte
     /// values were given a count.
-    Counts,
+    FrequencyTable,
+    /// LZ4 frame: the xxHash-32 after a block, of the bytes the block holds.
+    /// Its value is the checksum as written, a little-endian word.
+    BlockChecksum,
+    /// LZ4 frame: the xxHash-32 after the end mark, of everything the frame
+    /// came to. Its value is the checksum as written.
+    ContentChecksum,
 }
 
 impl StepField {
@@ -389,7 +395,9 @@ impl StepField {
             StepField::LzmaProps => "lzma_props",
             StepField::RangeInit => "range_init",
             StepField::UnpackedSize => "unpacked_size",
-            StepField::Counts => "counts",
+            StepField::FrequencyTable => "frequency_table",
+            StepField::BlockChecksum => "block_checksum",
+            StepField::ContentChecksum => "content_checksum",
         }
     }
 }
@@ -972,7 +980,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 25] = [
+const FIELDS: [StepField; 27] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -997,7 +1005,9 @@ const FIELDS: [StepField; 25] = [
     StepField::LzmaProps,
     StepField::RangeInit,
     StepField::UnpackedSize,
-    StepField::Counts,
+    StepField::FrequencyTable,
+    StepField::BlockChecksum,
+    StepField::ContentChecksum,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
