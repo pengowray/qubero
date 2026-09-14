@@ -303,12 +303,15 @@ fn characteristic_set(e: Endian, kind: Kind, side: Side, v: Version) -> T {
     if side == Side::Index {
         fields.push(("step", T::computed(characteristic_of(TIME_INDEX, &["body"]))));
     }
-    let mut machinery = vec![];
-    if side == Side::Index && kind == Kind::Variable && v == Bp3 {
+    let placed = side == Side::Index && kind == Kind::Variable && v == Bp3;
+    if placed {
         fields.extend(indexed_values(e));
-        machinery.extend(["payload_offset", "element_count", "row_length", "width", "compressed"]);
     }
-    T::structure_named("CharacteristicSet", "step", "characteristics", fields).machinery(&machinery)
+    let set = T::structure_named("CharacteristicSet", "step", "characteristics", fields);
+    match placed {
+        true => set.machinery(&["payload_offset", "element_count", "row_length", "width", "compressed"]).field_aside("values"),
+        false => set,
+    }
 }
 
 /// The values of a block, placed from its set in a BP3 index.
@@ -317,7 +320,8 @@ fn characteristic_set(e: Endian, kind: Kind, side: Side, v: Version) -> T {
 /// they were written, and read there without the index. Placed again here they
 /// are reached by the variable's name, which is what an index is for, the way
 /// a device tree's property reaches its name in the strings block it is
-/// already read in. Only when the file holds its data: a BP3 file whose
+/// already read in, and are a second reading that nothing counts twice. Only
+/// when the file holds its data: a BP3 file whose
 /// footer says the data is in subfiles has offsets into those.
 ///
 /// A block an operator transformed is not placed, since the offset is to the
@@ -1255,7 +1259,11 @@ fn subformat_body(e: Endian) -> T {
             ("name", T::at_in_window(E::field("name_offset"), T::cstr())),
             ("type", T::at_in_window(E::field("type_offset"), T::cstr())),
         ],
-    );
+    )
+    // Readings of the strings the subformat body lists after its fields, the
+    // way an ELF section header reads its name out of the table of them.
+    .field_aside("name")
+    .field_aside("type");
     // The strings run from the end of the fields to the optional information,
     // or to the end when there is none.
     let strings = E::cond(
@@ -1285,6 +1293,7 @@ fn subformat_body(e: Endian) -> T {
             ("optional_info", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
         ],
     )
+    .field_aside("name")
 }
 
 // ---------------------------------------------------------------------------

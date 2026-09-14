@@ -10,7 +10,9 @@
 //!
 //! Every file of a directory is its own template, so what a file says about
 //! another, a set's payload offset into `data.0` or an index record's offset
-//! into `md.0`, is checked here by reading both.
+//! into `md.0`, is checked here by reading both. The BP5 directory's `data.0`
+//! is not in the collection: nothing in it says what it is, so nothing reads
+//! it, and every file there has to be read by something.
 //!
 //! The files live in the sample collection rather than here. Point
 //! `QUBERO_SAMPLES` at it, or keep it beside the repository as
@@ -162,7 +164,6 @@ fn every_file_of_the_dataset_is_told_apart() {
         ("steps.bp5/md.idx", Some("adiosbp5idx")),
         ("steps.bp5/md.0", Some("adiosbp5md")),
         ("steps.bp5/mmd.0", Some("adiosbp5mmd")),
-        ("steps.bp5/data.0", None),
     ];
     for (name, template) in expect {
         let bytes = std::fs::read(sample(name).unwrap()).unwrap();
