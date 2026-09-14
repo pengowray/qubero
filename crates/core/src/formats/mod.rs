@@ -101,6 +101,7 @@ pub mod sqlite_overflow;
 mod uf2;
 mod hackrffw;
 mod hdf4;
+mod hdf4_records;
 mod hdf5;
 mod hdf5_index;
 pub mod h5ad;
