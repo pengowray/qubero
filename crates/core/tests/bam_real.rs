@@ -344,6 +344,25 @@ fn a_records_virtual_offset_matches_the_bai() {
     }
 }
 
+/// What the toolbar says a BGZF file holds, told from the sniff window alone,
+/// is the case the template's switch on the joined stream takes.
+#[test]
+fn the_first_block_says_what_the_joined_stream_holds() {
+    for (name, holds, switch) in [
+        ("range.bam", "bam", "Bam"),
+        ("mpileup.1.bam", "bam", "Bam"),
+        ("bgzf_boundaries3.bam", "bam", "Bam"),
+        ("index.bam.csi", "csi", "Csi"),
+        ("no_hdr_sq_1.bam.csi", "csi", "Csi"),
+    ] {
+        let (d, mut ev) = skip_without!(read(name, "bgzf"));
+        let bytes = std::fs::read(sample(name).unwrap()).unwrap();
+        assert_eq!(formats::bgzf_contents(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)]), Some(holds), "{name}");
+        let p = stream(&mut ev, &d);
+        assert_eq!(ev.node(&d, &p).unwrap().type_name, switch, "{name}");
+    }
+}
+
 fn int(ev: &mut Evaluator, d: &Document<MemSource>, from: &[usize], names: &[&str]) -> i128 {
     let p = at(ev, d, from, names);
     ev.node(d, &p).unwrap().value.as_int().unwrap_or_else(|| panic!("{names:?} is not a number"))

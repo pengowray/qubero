@@ -2279,6 +2279,22 @@ export class Doc {
   }
 
   /**
+   * What a BGZF file holds, told from the front of its first block: `bam`,
+   * `csi`, `vcf`, `bed`, `fasta` or `text`, or "" when that cannot be told.
+   *
+   * Read from the head `sniffTemplate` fetched rather than from the template,
+   * whose joined stream only knows what it holds once every block has been
+   * reached, which for a large BAM is long after the toolbar wants a name.
+   */
+  bgzfContents(): string {
+    if (this.space !== 0) return "";
+    const n = Math.min(this.editor.sniff_window(), this.lengthBytes);
+    if (n === 0) return "";
+    const { bytes, complete } = this.read(0, n);
+    return complete ? this.editor.bgzf_contents(bytes) : "";
+  }
+
+  /**
    * Ask the file(1) rule database what this file is, for the files no template
    * covers. The rules and the engine that runs them outweigh the rest of the
    * editor, so they live in their own wasm module that is fetched on the first
