@@ -15,8 +15,9 @@
 //!
 //! So this keeps an index of every stretch an `At` placed, and of the field
 //! that placed it. `locate` asks the index when the bit it was given is
-//! outside what the root covers, and the descent carries on from there as it
-//! always did.
+//! outside what the root covers, or when the walk down from the root ends in a
+//! structure none of whose fields cover it, and the descent carries on from
+//! there as it always did.
 //!
 //! Four things make it affordable.
 //!
