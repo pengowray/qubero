@@ -172,6 +172,11 @@ impl Evaluator {
         // was unwrapped: that is where the deciding expressions are.
         let declared = self.declared_ty(path)?;
         self.wrapper_origins(doc, path, declared, out)?;
+        // Where the file described this node's type, when it did: the record a
+        // builder read, and the description of this member inside it.
+        for o in self.schema_origins(doc, path)? {
+            out.push(o);
+        }
         let base = self.memo[path].ty.without_sentinel().clone();
         self.base_origins(doc, path, &base, out)?;
         // A bit of the file rather than a field, so only the reader who can
@@ -456,6 +461,16 @@ impl Evaluator {
                 }
                 Ty::Switch { on, .. } | Ty::Match { on, .. } => {
                     self.from_expr(doc, path, &on, Role::Type, out)?;
+                    return Ok(());
+                }
+                // The fields the key was read from, which chose the type the
+                // way a switch's field chooses its case.
+                Ty::Schema { key, .. } => {
+                    for part in key.iter() {
+                        if let crate::template::KeyPart::Int(e) | crate::template::KeyPart::Text(e) = part {
+                            self.from_expr(doc, path, e, Role::Type, out)?;
+                        }
+                    }
                     return Ok(());
                 }
                 _ => return Ok(()),

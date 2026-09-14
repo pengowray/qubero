@@ -1387,6 +1387,21 @@ pub enum Step {
     /// columns in their names needs: FITS calls them `col1` to `col32`, and
     /// any of them may hold descriptors.
     Fields(Arc<[String]>),
+    /// Into the stream under the node here: the first compressed run or
+    /// joined stream found by going down through its structures and the
+    /// fields that point elsewhere, never into a list, landing on the run.
+    ///
+    /// A name will not do, because the formats a container borrows put their
+    /// run at different names and depths: a zlib stream holds it as
+    /// `compressed`, a zstd or xz stream as the one thing its `decoded` field
+    /// points at, and ROOT's own lz4 block as `block`. A ROOT record is
+    /// whichever of the four its block header names, so the walk to what came
+    /// out of it has to say "the stream in here" and let the file answer.
+    ///
+    /// A [`Step::Field`] taken from a stream goes to what the stream holds
+    /// first, the way a name always goes through a field that points
+    /// elsewhere.
+    Stream,
 }
 
 impl Step {
@@ -1403,6 +1418,112 @@ impl Step {
     }
     pub fn fields(names: &[&str]) -> Step {
         Step::Fields(names.iter().map(|s| s.to_string()).collect())
+    }
+    /// The run under the node here. See [`Step::Stream`].
+    pub fn stream() -> Step {
+        Step::Stream
+    }
+}
+
+/// One part of what a [`Ty::Schema`] is looked up by, worked out in the frame
+/// the node is read in.
+///
+/// Parts rather than one expression, because what a format keys its
+/// descriptions by is rarely one thing: a ROOT class is a name and a version,
+/// and the name is text while the version is a number. A literal is here for
+/// the key a builder already knows when it writes a type holding another: the
+/// members of a `TBranch` are that class whatever the bytes say, and reading
+/// the word out of the file again to find that out would be a read for
+/// nothing.
+#[derive(Debug, Clone)]
+pub enum KeyPart {
+    /// A number the expression comes to.
+    Int(Expr),
+    /// The text of the field the expression names, the way a
+    /// [`Ty::Match`] reads its word.
+    Text(Expr),
+    /// Text the template fixed.
+    TextLit(Arc<str>),
+}
+
+/// A key part once worked out. What a builder is handed and what a built type
+/// is kept under.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KeyValue {
+    Int(i128),
+    Text(Arc<str>),
+}
+
+impl KeyValue {
+    pub fn as_int(&self) -> Option<i128> {
+        match self {
+            KeyValue::Int(v) => Some(*v),
+            KeyValue::Text(_) => None,
+        }
+    }
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            KeyValue::Text(s) => Some(s),
+            KeyValue::Int(_) => None,
+        }
+    }
+}
+
+/// What a [`SchemaBuilder`] made of one key: the type, and where in the file
+/// the description it came from is.
+///
+/// The paths are what makes a built type something a reader can question. A
+/// row typed `TBranch` because the file said so should be able to say which
+/// record of the file said so, and each member should be able to say which
+/// description of a member it was laid out from: `fBasketSeek` is eight bytes
+/// a pointer because element 19 of `TBranch`'s description says `Long64_t*`.
+#[derive(Debug, Clone)]
+pub struct Built {
+    pub ty: Ty,
+    /// The description record the type was built from. `None` for a type the
+    /// builder knows by heart and did not read from the file.
+    pub from: Option<Vec<usize>>,
+    /// For a structure, the description each field was laid out from, by the
+    /// field's index. Shorter than the fields, or `None` in a slot, where a
+    /// field is the builder's own rather than something a description wrote.
+    pub members_from: Vec<Option<Vec<usize>>>,
+}
+
+impl Built {
+    /// A type with nothing in the file behind it.
+    pub fn by_heart(ty: Ty) -> Built {
+        Built { ty, from: None, members_from: Vec::new() }
+    }
+}
+
+/// The format's own Rust for a [`Ty::Schema`]: how a description read out of
+/// the file becomes a type.
+///
+/// The builder reads nodes, not bytes. What a description says is already a
+/// structure the template placed, with names and values, and reading it again
+/// from bytes would be a second reading that could disagree with the first.
+/// So the builder is handed the descriptions through [`crate::eval::Descriptions`],
+/// which asks the evaluator, and the walk to them is taken only when the
+/// builder first asks: a key the builder answers from what it knows by heart
+/// costs nothing.
+///
+/// `Err` from the builder is a sentence the node fails with; `Pending` and
+/// `Busy` from reading a description are passed up as they are anywhere else,
+/// and the build is asked again.
+pub trait SchemaBuilder: std::fmt::Debug + Send + Sync {
+    fn build(&self, key: &[KeyValue], table: &mut dyn crate::eval::Descriptions) -> crate::eval::R<Built>;
+
+    /// The key as a reader would say it, for the relations panel and for the
+    /// refusal a description read with itself gets: `TTree v19` rather than
+    /// `"TTree", 19`. The parts joined by commas when the format has no word.
+    fn key_text(&self, key: &[KeyValue]) -> String {
+        key.iter()
+            .map(|k| match k {
+                KeyValue::Int(v) => v.to_string(),
+                KeyValue::Text(s) => s.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -2501,6 +2622,36 @@ pub enum Ty {
     /// A field inside that lies wholly in one stored run of the file writes to
     /// that run; nothing else inside is editable. See `eval/stitch.rs`.
     Stitched { from: Arc<[Step]>, part_len: Option<Expr>, len: Option<Expr>, inner: Box<Ty> },
+    /// A type whose shape is not in the template but in the file: looked up
+    /// when the node is read, from descriptions the file carries of its own
+    /// records.
+    ///
+    /// A ROOT `TTree` is the case that needs it. What the object's bytes are
+    /// is the order `TTree::Streamer` wrote them in, and that order is written
+    /// down in the same file, in the `StreamerInfo` record, as a list of
+    /// member descriptions per class and version. A template built in Rust
+    /// cannot say it, since the layout of a `TTree` of version 19 and one of
+    /// version 20 differ and the file says which it has. Everything a template
+    /// can do with a switch stops at the cases someone wrote out; this is a
+    /// switch whose cases are in the file.
+    ///
+    /// `kind` names the [`SchemaBuilder`] the format registered with
+    /// [`Template::with_schema`], which is the Rust that knows how a
+    /// description reads as a type. `table` is the walk to the description
+    /// records, the same walk a [`Ty::Gather`] takes to its records, and is
+    /// taken only if the builder asks for them: a kind whose own descriptions
+    /// are written in types it knows by heart answers those without touching
+    /// the file. `key` is which description this node is, worked out in the
+    /// frame the node is read in, the way a switch's expression is.
+    ///
+    /// What the builder makes is kept per kind and key, so a thousand branches
+    /// of one class are one build. A type it makes may hold more of these,
+    /// which is how an object holding objects is read: each is built when its
+    /// own node is read, never all at once. A description that is being read
+    /// with itself is refused by name rather than followed.
+    ///
+    /// No bits of its own: it reads as whatever it was built as.
+    Schema { kind: Arc<str>, table: Arc<[Step]>, key: Arc<[KeyPart]> },
     /// Fields laid out from what the decoder read, rather than from what a
     /// template says.
     ///
@@ -3257,6 +3408,11 @@ impl Ty {
     pub fn stitched(from: Vec<Step>, part_len: Option<Expr>, len: Option<Expr>, inner: Ty) -> Ty {
         Ty::Stitched { from: from.into(), part_len, len, inner: Box::new(inner) }
     }
+    /// A type the builder registered as `kind` makes of the description `key`
+    /// names, found by walking `table`. See [`Ty::Schema`].
+    pub fn schema(kind: &str, table: Vec<Step>, key: Vec<KeyPart>) -> Ty {
+        Ty::Schema { kind: kind.into(), table: table.into(), key: key.into() }
+    }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
@@ -3481,6 +3637,10 @@ impl Ty {
                 "switch" => "joined".into(),
                 name => format!("joined \u{2192} {name}"),
             },
+            // What the declaration says before the file has been read, which
+            // is only that the file will say. A node that has been read shows
+            // the type it was built as, the way a switch shows its case.
+            Ty::Schema { .. } => "schema".into(),
             Ty::Traced { part } => match part {
                 TracedPart::Blocks => "blocks".into(),
                 TracedPart::Block(_) => "block".into(),
@@ -3508,11 +3668,21 @@ pub struct Template {
     /// to answer it with. `None` for nearly all of them: a format that writes
     /// what a field is beside the field never has to ask.
     pub deducer: Option<Arc<dyn Deducer>>,
+    /// Who builds each kind of [`Ty::Schema`] this template holds, by the
+    /// kind's name. Empty for every format whose layout is its own.
+    pub schemas: HashMap<String, Arc<dyn SchemaBuilder>>,
 }
 
 impl Template {
     pub fn new(name: &str, root: Ty) -> Template {
-        Template { name: name.to_string(), root, types: HashMap::new(), deducer: None }
+        Template { name: name.to_string(), root, types: HashMap::new(), deducer: None, schemas: HashMap::new() }
+    }
+    /// Say what builds the schema kind `kind`, for a template holding a
+    /// [`Ty::Schema`] of that kind. A node of a kind nothing builds fails
+    /// saying so.
+    pub fn with_schema(mut self, kind: &str, builder: Arc<dyn SchemaBuilder>) -> Template {
+        self.schemas.insert(kind.to_string(), builder);
+        self
     }
     /// Say what runs this format, for a template holding an
     /// [`Expr::Deduced`]. A template that has one of those and no deducer has

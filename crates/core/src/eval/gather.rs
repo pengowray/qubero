@@ -229,14 +229,28 @@ impl Evaluator {
         // the record itself: the walk skipped it.
         match step {
             Step::Field(name) => {
-                let Some(j) = self.child_index(doc, node, name)? else { return Ok(None) };
+                // A name taken from a stream is a field of what the stream
+                // holds, as a name taken from a field that points elsewhere is
+                // a field of what it points at.
+                let mut node = node.to_vec();
+                self.into_contents(doc, &mut node)?;
+                let Some(j) = self.child_index(doc, &node, name)? else { return Ok(None) };
                 if from > j {
                     return Ok(None);
                 }
-                let mut p = node.to_vec();
+                let mut p = node;
                 p.push(j);
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
+            }
+            // One candidate, found by looking rather than by name, and stood
+            // on the way a field is: as index nought, until the walk has moved
+            // past it.
+            Step::Stream => {
+                if from > 0 {
+                    return Ok(None);
+                }
+                Ok(self.stream_under(doc, node)?.map(|p| (0, p)))
             }
             Step::Tagged { key, tag, .. } => {
                 if !self.is_list(doc, node)? {
@@ -279,12 +293,13 @@ impl Evaluator {
                 Ok(Some((from, p)))
             }
             Step::Fields(names) => {
-                self.resolve(doc, node)?;
-                let Ty::Struct(s) = self.memo[node].ty.base().clone() else { return Ok(None) };
+                let mut node = node.to_vec();
+                self.into_contents(doc, &mut node)?;
+                let Ty::Struct(s) = self.memo[&node].ty.base().clone() else { return Ok(None) };
                 let Some(j) = (from..s.fields.len()).find(|&j| names.iter().any(|n| **n == *s.fields[j].name)) else {
                     return Ok(None);
                 };
-                let mut p = node.to_vec();
+                let mut p = node;
                 p.push(j);
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
@@ -439,9 +454,36 @@ impl Evaluator {
                 p = start;
                 continue;
             }
+            // What a stream holds adds no name: the step before it named the
+            // stream, and a field of its contents is a field of that.
+            if matches!(step, Step::Field(_) | Step::Fields(_))
+                && record.len() > p.len()
+                && matches!(self.memo.get(&p).map(|r| &r.ty), Some(Ty::Decoded { .. } | Ty::Stitched { .. }))
+            {
+                p.push(0);
+            }
+            // The run a stream step found, named by the fields on the way down
+            // to it, since no one name in the template says where it is.
+            if let Step::Stream = step {
+                while record.len() > p.len() {
+                    let Some(r) = self.memo.get(&p) else { break };
+                    if matches!(r.ty, Ty::Decoded { .. } | Ty::Stitched { .. }) {
+                        break;
+                    }
+                    let j = record[p.len()];
+                    if let Ty::Struct(s) = r.ty.base() {
+                        let name = s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default();
+                        let dot = if label.is_empty() { "" } else { "." };
+                        label.push_str(&format!("{dot}{name}"));
+                    }
+                    p.push(j);
+                }
+                continue;
+            }
             let Some(&j) = record.get(p.len()) else { break };
             p.push(j);
             match step {
+                Step::Stream => {}
                 Step::Field(name) => label.push_str(&format!("{dot}{name}")),
                 Step::Tagged { shown, .. } => label.push_str(&format!("{dot}{shown}")),
                 Step::Each => label.push_str(&format!("[{j}]")),

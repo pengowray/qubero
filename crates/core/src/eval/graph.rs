@@ -367,6 +367,9 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         // A resolved node has taken a case already; this is only reachable
         // from a declared type.
         Ty::Switch { .. } | Ty::Match { .. } => "switch".to_string(),
+        // The same for a type the file describes: a node that has been read
+        // is whatever it was built as.
+        Ty::Schema { .. } => "schema".to_string(),
     }
 }
 
@@ -455,6 +458,6 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Stitched { .. } => "composite",
         // A resolved node has taken a case already; reached only from a
         // declared type, where nothing yet says which shape it will be.
-        Ty::Switch { .. } | Ty::Match { .. } => "bytes",
+        Ty::Switch { .. } | Ty::Match { .. } | Ty::Schema { .. } => "bytes",
     }
 }

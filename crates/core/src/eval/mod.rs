@@ -34,6 +34,7 @@ mod placed;
 mod expr;
 mod read;
 mod relate;
+mod schema;
 mod shape;
 mod size;
 mod space;
@@ -56,6 +57,7 @@ pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECO
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
+pub use schema::Descriptions;
 
 /// A bounded walk over variable-size array elements that has enough samples to
 /// project the array's eventual extent. This is deliberately a projection,
@@ -542,6 +544,9 @@ pub struct Evaluator {
     /// one number and this says which one it means. A slot is taken out while
     /// something is being asked of it, which is why they are options.
     open: Vec<Option<Box<space::Space>>>,
+    /// The types [`Ty::Schema`] nodes were built as, by kind and key, and the
+    /// builds under way. See [`schema`].
+    schemas: schema::Schemas,
 }
 
 impl Evaluator {
@@ -555,6 +560,7 @@ impl Evaluator {
             placing_types: std::cell::OnceCell::new(),
             spaces: space::Spaces::default(),
             open: Vec::new(),
+            schemas: schema::Schemas::default(),
         }
     }
 
@@ -662,6 +668,16 @@ impl Evaluator {
     /// GGUF's weights leaves the walk over its two million metadata elements
     /// standing, where throwing everything away would do that walk again.
     pub fn invalidate_from(&mut self, bit: u64) {
+        // A type built from a description the file carries is a claim about
+        // the bytes of that description, which may be anywhere: ROOT keeps
+        // its class descriptions at the end of the file and every object
+        // before them is typed by them. An edit that could have changed one
+        // leaves no node typed by it standing, and which nodes those are is
+        // not written down anywhere, so everything goes.
+        if self.schemas.reaches_past(bit) {
+            self.invalidate();
+            return;
+        }
         self.journals.clear();
         // Every placement is where a resolved node turned out to be, and this
         // is about to drop some of those nodes. Coarse, like the memo's own
@@ -689,6 +705,7 @@ impl Evaluator {
         self.spaces.forget();
         self.open.clear();
         self.journals.clear();
+        self.forget_schemas();
         self.go.restart();
     }
 
@@ -1802,6 +1819,19 @@ impl Evaluator {
                         None => (*default).clone(),
                     };
                 }
+                // A switch whose cases are in the file. The key is worked out
+                // in the frame the node is read in, as a switch's expression
+                // is, and what the builder made of it is read here as the
+                // case would be. What it made may be another wrapper, and the
+                // loop goes on through that too.
+                Ty::Schema { kind, table, key } => {
+                    hops += 1;
+                    if hops > 64 {
+                        return fail(format!("a {kind} schema was built as another schema with nothing in between"));
+                    }
+                    let built = self.schema_type(doc, path, &kind, &table, &key, (offset, limit))?;
+                    ty = built.ty.clone();
+                }
                 other => {
                     // An LSB-first field is at the other end of its byte from
                     // where the cursor counted to, and this is the one place
@@ -2064,6 +2094,9 @@ impl Evaluator {
         // in a space of their own, so a field of them asking what the file
         // builds is asking the same question it would have asked outside.
         t.deducer = self.template.deducer.clone();
+        // And for what builds the types the file describes, which a stream
+        // holding a record typed that way asks the same way the file does.
+        t.schemas = self.template.schemas.clone();
         (t, false)
     }
 

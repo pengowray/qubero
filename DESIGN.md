@@ -2715,6 +2715,80 @@ reads the 16-byte header as length, block length, block count and link ref,
 and takes the first block's length from that block's own descriptor. A
 template that reads every block's length from its descriptor already has it.
 
+### A type the file describes
+A ROOT `TTree` is a run of numbers in the order `TTree::Streamer` wrote them,
+and that order is not a fact about the format. It is written down in the same
+file, in the `StreamerInfo` record, as a description per class and version:
+each member's name, a type code, a width, and for a counted array the member
+that counts it. A `TTree` of version 19 and one of version 20 lay out
+differently, and the file says which it has. A template built in Rust can only
+switch between cases someone wrote out, so the baskets that are 97 per cent of
+a ROOT file were listed by a side reader (`root_tree.rs`) and read as gaps by
+the template.
+
+`Ty::Schema { kind, table, key }` (2026-09-14) is a switch whose cases are in
+the file. `kind` names a `SchemaBuilder` the format registers with
+`Template::with_schema`: the Rust that knows how one of its descriptions reads
+as a type. `table` is a walk of `Step`s to the description records, the
+gather's own walk. `key` is a list of `KeyPart`s worked out in the node's frame
+the way a switch's expression is: a number, the text of a field, or text the
+template fixed. `effective` meets the node, works out the key, and continues
+with whatever the builder made, as it continues with a switch's case, so the
+resolved node is the built structure and nothing downstream knows the
+difference.
+
+**The builder reads nodes, and asks for them.** A description is already a
+structure the template placed, so the builder is handed `Descriptions`, which
+reads nodes and walks to the records, rather than bytes. The handover had the
+builder generic over the source; a generic method cannot go through the
+`Arc<dyn SchemaBuilder>` the template holds, so the trait object is the
+reading instead. The walk is taken only when the builder first asks for a
+record, and that is not an economy. ROOT's descriptions are streamed objects
+typed by schema nodes of the same kind, and a walk taken before every build
+would walk to the descriptions from inside them. A builder answers the classes
+descriptions are written in by heart and never asks.
+
+**Kept per kind and key.** A thousand branches of one class are one build.
+Only builds that came out are kept: the same key read from inside the
+descriptions and from outside can see different tables, since `find_field`
+sees only fields declared before the asker, and a failure where the table is
+out of sight says nothing about a node that can see it. A key read again while
+it is being built is refused by name (`layout 1's description is being read
+with layout 1's description`). With the walk lazy and names looked up only
+backwards, that takes a contrived template to reach, and it is there so that a
+builder that reads a description typed by itself fails rather than recursing.
+
+**Edits.** A built type is a claim about the bytes of a description that may
+be anywhere: ROOT keeps its descriptions at the end of the file and everything
+before them is typed by them, which `forget_after`'s rule that expressions look
+backwards cannot see. Each kept build records how far into the file what it
+read reaches, and the largest bit there is when it read inside a stream. An
+overwrite before that reach throws the whole memo away, since which nodes a
+build typed is not written down anywhere; an edit past every description keeps
+everything the old rules keep.
+
+**A stream under a field.** A ROOT record's contents are in whichever of four
+codecs its block header names, and each borrowed format keeps its run at a
+different name and depth. `Step::Stream` goes down through structures and
+pointing fields, never into a list, to the first `Decoded` or `Stitched` node,
+and a `Step::Field` taken from a stream means a field of what the stream holds.
+The IR text writes it `.(stream)`, bracketed so it cannot read as a field
+called `stream`, which ROOT's block has.
+
+**What a reader is told.** The declared type reads `schema`, and the node reads
+as what it was built as. The relations panel writes the key the way it writes a
+switch's expression, with the builder's own words for the result
+(`fClassName.text, version` = `"TTree", 19`, `TTree v19`). The origins name
+the record a type was built from and, for a member of a built structure, the
+description that member was laid out from, so a row typed a pointer can say
+which element of which class description made it one.
+
+What it does not do. The placed index does not walk into a schema node, since
+every ROOT object is in a stream's space and indexing one would open every
+object in the file for nothing; a built type that points back into the file
+would need that. A key is not keyed by where its table is, because one document
+has one table per kind in both formats that need this.
+
 ## Roadmap (not yet built)
 
 ### Resilient redundant editing
