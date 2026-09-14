@@ -188,17 +188,23 @@ impl Evaluator {
         // The choice this node made, for a node that is one: a switch is a box
         // of its own and its row is the case taken.
         let chose = self.case_taken(&declared, &r.ty);
-        if let Some(row) = chose {
+        if is_choice(&self.template, &declared) {
             if let Some(key) = key_for(&self.template, &declared, keys) {
+                // The choice was made, whether or not which way can be named:
+                // counting it only when the case is known left the box reading
+                // "this file has none of these" over a file that takes it on
+                // every chunk.
                 count(&key, boxes);
-                let e = rows.entry((key.clone(), row)).or_insert_with(|| RowCount {
-                    key: key.clone(),
-                    row,
-                    count: 0,
-                    first_path: at.path.clone(),
-                    space: r.space,
-                });
-                e.count += 1;
+                if let Some(row) = chose {
+                    let e = rows.entry((key.clone(), row)).or_insert_with(|| RowCount {
+                        key: key.clone(),
+                        row,
+                        count: 0,
+                        first_path: at.path.clone(),
+                        space: r.space,
+                    });
+                    e.count += 1;
+                }
             }
         }
         // Whether this node is a run of something rather than one of it.
@@ -221,9 +227,14 @@ impl Evaluator {
         // them would make every list in the file one longer than it is.
         let own = match &run {
             Some(_) => None,
-            // The shape a case picked is what the node actually is; everything
-            // else is its own declaration.
-            None if chose.is_some() => key_for(&self.template, &r.ty, keys),
+            // A node declared as a choice *is* whatever it resolved to, whether
+            // or not the case it came from could be named. Falling back to the
+            // declaration here was a quiet fault: the node then counted as the
+            // choice, and its children — the fields of the shape the choice
+            // picked — stood on the choice's rows, so a PNG's chunk header put
+            // its `width` on the row that says `'IHDR'` and the box for IHDR
+            // itself was never counted at all.
+            None if is_choice(&self.template, &declared) => key_for(&self.template, &r.ty, keys),
             None => key_for(&self.template, &declared, keys),
         };
         if let Some(key) = &own {
@@ -413,6 +424,49 @@ mod tests {
         assert!(c.walked <= 100, "walked {} nodes for a thousand samples", c.walked);
         // And the first is still where it is, so a reader can be taken to it.
         assert_eq!(c.boxes.iter().find(|b| b.key == sample.key).map(|b| b.first_path.clone()), Some(vec![0, 0]));
+    }
+
+    #[test]
+    fn a_chunk_of_a_cartridge_png_is_counted_as_the_shape_it_is() {
+        // The PICO-8 cartridge reads a PNG's chunks, and each chunk's body is a
+        // choice wrapped in a window. The node is whatever the choice picked,
+        // and its fields are that shape's rows: counted as the choice instead,
+        // a header's `width` stood on the row that says `'IHDR'`.
+        let Some(dir) = std::env::var_os("QUBERO_SAMPLES") else { return };
+        let path = std::path::Path::new(&dir).join("pico8/p8png-test.p8.png");
+        let Ok(bytes) = std::fs::read(&path) else { return };
+        let Some(t) = crate::formats::builtin("p8png") else { return };
+        let d = crate::eval::diagram(&t);
+        let (mut ev, doc) = read(t, &bytes);
+        let c = ev.census(&doc, 20_000).expect("a census");
+        let by_key: std::collections::HashMap<&str, u64> =
+            c.boxes.iter().map(|b| (b.key.as_str(), b.count)).collect();
+        for name in ["IHDR", "tEXt"] {
+            let Some(b) = d.types.iter().find(|b| b.name == name) else { continue };
+            assert_eq!(by_key.get(b.key.as_str()).copied(), Some(1), "{name} is in this file exactly once");
+        }
+        // No box is counted more often than there are chunks to hold one. A
+        // shape reached once per chunk is four; anything past that would be a
+        // node counted twice over.
+        let chunks = d
+            .types
+            .iter()
+            .find(|b| b.name == "Chunk")
+            .and_then(|b| by_key.get(b.key.as_str()).copied())
+            .unwrap_or(0);
+        for b in &d.types {
+            let got = by_key.get(b.key.as_str()).copied().unwrap_or(0);
+            assert!(got <= chunks.max(1), "{} counted {got} times in a file of {chunks} chunks", b.name);
+        }
+        // And the choice's own rows are its cases, counted once per chunk that
+        // took one, never once per field of the shape it picked.
+        let Some(sw) = d.types.iter().find(|b| b.kind == crate::eval::BoxKind::Switch && b.name.contains("type"))
+        else {
+            return;
+        };
+        let taken: u64 = c.rows.iter().filter(|r| r.key == sw.key).map(|r| r.count).sum();
+        let chunks = by_key.get(sw.key.as_str()).copied().unwrap_or(0);
+        assert!(taken <= chunks, "{taken} cases taken by {chunks} chunks");
     }
 
     #[test]

@@ -5521,3 +5521,51 @@ summary.kp-group-heading:hover {
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
+
+/* ---- diagram: what the open file has ---- */
+/* The drawing is of the format; these say which parts of it this file is an
+   example of. Quiet, because a count is a note on a box and not the box. */
+.dv-bar .dv-only {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 12px var(--sans);
+  color: var(--fg);
+  cursor: pointer;
+}
+.dv-bar .dv-only input:disabled + * ,
+.dv-bar .dv-only:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+.dv-partial {
+  padding: 3px 8px;
+  font: 12px var(--sans);
+  color: var(--warn);
+  border-bottom: 1px solid var(--line);
+}
+.dv-count {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: color-mix(in srgb, var(--accent) 70%, var(--fg));
+  font: 10px var(--sans);
+  white-space: nowrap;
+}
+/* A type this file has none of. Still drawn, because the format has it and
+   that is what the view is of; faded, because the reader is looking at one
+   file and this is not part of it. */
+.dv-box.is-unused {
+  opacity: 0.45;
+}
+.dv-box.is-unused .dv-row {
+  border-left-color: var(--muted);
+}
+.dv-box.is-unused .dv-name,
+.dv-box.is-unused .dv-case {
+  color: var(--muted);
+}
+.dv-row.is-unused {
+  opacity: 0.55;
+}

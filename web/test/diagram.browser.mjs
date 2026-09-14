@@ -83,6 +83,12 @@ try {
         ...endpointDrift(),
         worstChannel: channelLoad(),
         overlappingLabels: labelClashes(),
+        // What the census put on the drawing: how many boxes the file has none
+        // of, how many carry a count, and the biggest count shown.
+        unusedBoxes: document.querySelectorAll(".dv-box.is-unused").length,
+        badges: document.querySelectorAll(".dv-count").length,
+        goable: document.querySelectorAll(".is-goable").length,
+        partial: document.querySelector(".dv-partial")?.hidden === false,
       };
 
       // Two boxes sharing any of the same pixels. The layout places them in
@@ -180,6 +186,24 @@ try {
       }
     });
     await page.screenshot({ path: join(outDir, c.shot) });
+    // The toggle: the drawing is of the format, and this narrows it to the part
+    // this file is an example of. Photographed both ways, because which of the
+    // two a reader is looking at is the thing that must never be in doubt.
+    const onlyShot = c.shot.replace(".png", "-only.png");
+    const before = found.boxes;
+    await page.locator(".dv-only input").check();
+    await page.waitForTimeout(400);
+    const after = await page.evaluate(() => ({
+      boxes: document.querySelectorAll(".dv-box").length,
+      edges: document.querySelectorAll(".dv-edge path").length,
+    }));
+    await page.screenshot({ path: join(outDir, onlyShot) });
+    await page.locator(".dv-only input").uncheck();
+    await page.waitForTimeout(400);
+    console.log(`  only-what-this-file-has: ${before} boxes -> ${after.boxes}, ${after.edges} edges`);
+    assert(after.boxes <= before, "the toggle drew more boxes rather than fewer");
+    assert(after.boxes >= 1, "the toggle hid everything");
+
     // A close-up of the busiest channel: the place where several arrows leave
     // one box at once, which is where a bundle would show and where the lanes
     // have to be readable one at a time.
