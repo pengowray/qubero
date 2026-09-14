@@ -42,6 +42,7 @@ mod stitch;
 mod time;
 mod traced;
 mod walk;
+
 #[cfg(test)]
 mod tests;
 
@@ -113,6 +114,13 @@ struct Unpacked {
 
 /// Whether a stream's declared contents say nothing about what they are.
 ///
+/// A count of bytes read from the file, as bits, or nothing when that many
+/// bits do not fit in a `u64`. No file is that long, so a count that large
+/// runs past whatever holds it; callers say so rather than overflow.
+pub(super) fn byte_bits(bytes: i128) -> Option<u64> {
+    u64::try_from(bytes).ok()?.checked_mul(8)
+}
+
 /// A template that says a run unpacks into bytes, or into a wrapper holding
 /// one field of bytes or of text, has no opinion worth keeping: the bytes
 /// themselves know better, and a gzip of a tar should open as a tar. A
@@ -1388,7 +1396,9 @@ impl Evaluator {
             if n < 0 {
                 return fail("negative offset");
             }
-            let to = self.anchor_base(parent, pr.offset, anchor) + n as u64 * 8;
+            let Some(to) = byte_bits(n).and_then(|bits| self.anchor_base(parent, pr.offset, anchor).checked_add(bits)) else {
+                return fail("runs past the end of the file");
+            };
             let into = if anchor == Anchor::File { 0 } else { pr.space };
             self.no_ring(parent, to, into, &what)?;
             // Both of these name a place outside whatever window they were
@@ -1798,10 +1808,9 @@ impl Evaluator {
                     if bytes < 0 {
                         return fail("negative size");
                     }
-                    let bits = bytes as u64 * 8;
-                    if offset + bits > limit {
+                    let Some(bits) = byte_bits(bytes).filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
                         return fail(format!("size {bytes} runs past the end of its container"));
-                    }
+                    };
                     limit = offset + bits;
                     declared_size = Some(bits);
                     sized_how = Some(shape::expr_sizing(&size));
@@ -1820,10 +1829,9 @@ impl Evaluator {
                         Ty::CodeBits { width, .. } => *width,
                         _ => shape::expr_sizing(&bits),
                     });
-                    let bits = n as u64;
-                    if offset + bits > limit {
-                        return fail(format!("{bits} bits run past the end of the container"));
-                    }
+                    let Some(bits) = u64::try_from(n).ok().filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
+                        return fail(format!("{n} bits run past the end of the container"));
+                    };
                     limit = offset + bits;
                     declared_size = Some(bits);
                     ty = *inner;
