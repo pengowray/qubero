@@ -2939,6 +2939,65 @@ fn a_gather_places_elements_from_records_two_lists_deep() {
     );
 }
 
+/// Whether a node is a list, said the same way for all five kinds of list.
+///
+/// The type column writes them four ways: `X[]`, `offsets → X`, `chain → X`
+/// and `descriptors → X`. A view reading the column took the last two for
+/// structures, and a run of bytes, which is `bytes[]` there, for a list.
+#[test]
+fn a_node_says_it_is_a_list_whichever_way_its_type_is_written() {
+    let list = |ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize]| ev.node(d, path).unwrap().list;
+
+    // An array and a repeat, beside what is not a list: a number, a structure,
+    // a switch that took a structure, and a pointer, whose one child is named
+    // for it. A switch that took an array is a list, since the node is the
+    // case the file took.
+    let t = T::structure(
+        "Root",
+        vec![
+            ("nums", T::array(T::u8(), E::lit(2))),
+            ("kind", T::u8()),
+            ("picked", T::switch(E::field("kind"), vec![(1, T::structure("One", vec![("a", T::u8())]))], T::bytes(E::lit(0)))),
+            ("listed", T::switch(E::field("kind"), vec![(1, T::array(T::u8(), E::lit(2)))], T::bytes(E::lit(0)))),
+            ("there", T::at(E::lit(0), T::structure("Pointee", vec![("b", T::u8())]))),
+            ("rest", T::repeat(T::u8(), Until::End)),
+        ],
+    );
+    let d = doc(&[1, 2, 1, 0xaa, 3, 4, 5, 6]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert!(!list(&mut ev, &d, &[]));
+    assert!(list(&mut ev, &d, &[0]));
+    assert!(!list(&mut ev, &d, &[1]));
+    assert_eq!(ev.node(&d, &[2]).unwrap().type_name, "One");
+    assert!(!list(&mut ev, &d, &[2]));
+    assert_eq!(ev.node(&d, &[3]).unwrap().type_name, "u8[]");
+    assert!(list(&mut ev, &d, &[3]));
+    assert!(ev.node(&d, &[4]).unwrap().composite);
+    assert!(!list(&mut ev, &d, &[4]));
+    assert!(list(&mut ev, &d, &[5]));
+
+    // A list placed by a table of offsets, and its elements, which are not.
+    let d = doc(POINTED);
+    let mut ev = Evaluator::new(pointer_template());
+    assert!(list(&mut ev, &d, &[2]));
+    assert!(!list(&mut ev, &d, &[2, 0]));
+
+    // A chain of links.
+    let t = T::structure("Root", vec![("head", T::u16(Big)), ("recs", T::chain(E::field("head"), &["next"], Anchor::File, linked()))]);
+    let d = doc(&[0, 8, 0, 5, 0xaa, 0, 0, 0xbb, 0, 2, 0xcc]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().type_name, "chain \u{2192} Rec");
+    assert!(list(&mut ev, &d, &[1]));
+
+    // A descriptor each. The elements are runs of bytes, which the type column
+    // writes as `bytes[]`, and are not lists of anything.
+    let d = doc(&gathered_bytes());
+    let mut ev = Evaluator::new(Template::new("t", gathered(T::bytes(E::placer(E::field("len"))))));
+    assert!(list(&mut ev, &d, &[1]));
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().type_name, "bytes[]");
+    assert!(!list(&mut ev, &d, &[1, 0]));
+}
+
 #[test]
 fn a_gathered_element_says_which_record_placed_it() {
     let t = gathered(T::bytes(E::placer(E::field("len"))));

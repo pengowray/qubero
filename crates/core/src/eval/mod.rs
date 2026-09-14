@@ -226,6 +226,20 @@ pub struct NodeInfo {
     pub child_count: u64,
     /// True for structs, arrays and repeats.
     pub composite: bool,
+    /// True when the children are the elements of a list: all declared as one
+    /// type and named by their index. That is an array, a repeat, and the
+    /// three lists whose elements are placed rather than laid end to end: by a
+    /// table of offsets, by a chain of links, and by a descriptor each.
+    ///
+    /// A view that wants to know whether a node is a list asks this rather
+    /// than the type column, which writes the five of them four ways.
+    ///
+    /// Said of the type the file took, so a switch whose case is an array is
+    /// a list here. Not a list: a pointer (one child, named for the pointer),
+    /// a stream (one thing inside), a decoder's blocks and codes (each named
+    /// for what it is), and a JSON array, whose elements are values of any
+    /// shape and are named by their keys the way an object's are.
+    pub list: bool,
     /// True when `write` accepts text for this field.
     pub editable: bool,
     /// What an editor should start from, where that is not the value read back
@@ -886,6 +900,10 @@ impl Evaluator {
             value,
             child_count,
             composite,
+            list: matches!(
+                r.ty.base(),
+                Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            ),
             consumed_by,
             // The braces of an object and the brackets of an array are the
             // node's own, and its members account for everything between them.

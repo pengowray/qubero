@@ -85,6 +85,11 @@ pub struct Row {
     /// field before it is a fixed width. The expression instead for a field
     /// read at an address. Empty when neither.
     pub pos_text: String,
+    /// True when the field holds a list of elements: an array, a repeat, or
+    /// one of the lists whose elements are placed. The type column writes those
+    /// four ways, so a view drawing a list as one asks this instead. See
+    /// [`lists`].
+    pub list: bool,
     /// The word [`crate::eval::value_kind`] gives this field, so a view colours
     /// it the way it colours the same field in the listing: `uint`, `str`,
     /// `magic`, `enum`, `composite` and the rest.
@@ -475,6 +480,29 @@ pub(crate) fn is_run(t: &Template, ty: &Ty) -> bool {
     }
 }
 
+/// Whether a row stands for a list, which is [`is_run`] short of a stream.
+///
+/// A row is the field as declared, so it is read past what the declaration
+/// wraps round the list: a size, an origin, a name, a condition, and an address
+/// to read it at, which the row's position column already says. Not past a
+/// stream. A compressed field holding a list is the stream, and its type column
+/// names the codec; a census counting what the stream holds wants the other
+/// answer, which is why this is not `is_run`. A stream joined from parts is not
+/// looked into by either.
+fn lists(t: &Template, ty: &Ty) -> bool {
+    match ty {
+        Ty::Decoded { .. } => false,
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::At { inner, .. }
+        | Ty::Nullable { inner, .. }
+        | Ty::When { inner, .. } => lists(t, inner),
+        Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| lists(t, inner)),
+        other => is_run(t, other),
+    }
+}
+
 /// What one element of a run is, past the wrappers. Nothing for a type that is
 /// not a run.
 ///
@@ -859,6 +887,7 @@ impl<'a> Walk<'a> {
                 type_text: f.ty.display_name(),
                 size_text: size_text(self.t, &f.ty),
                 pos_text: pos,
+                list: lists(self.t, &f.ty),
                 kind: value_kind(self.t, &f.ty),
             });
             at = match (at, static_bits(self.t, &f.ty, 0)) {
@@ -985,6 +1014,7 @@ impl<'a> Walk<'a> {
                 name: key.clone(),
                 size_text: size_text(self.t, ty),
                 pos_text: String::new(),
+                list: lists(self.t, ty),
                 kind: value_kind(self.t, ty),
             });
         }
@@ -1351,6 +1381,47 @@ mod tests {
         let spellings: std::collections::HashSet<String> =
             heads.iter().map(|b| b.rows.iter().map(|r| r.type_text.clone()).collect::<Vec<_>>().join(",")).collect();
         assert_eq!(spellings.len(), heads.len(), "two of them say the same thing and should have been shared");
+    }
+
+    /// A row says whether its field holds a list, past what the declaration
+    /// wraps round it, and without reading the type column, which writes a
+    /// placed list with an arrow and a run of bytes with brackets.
+    #[test]
+    fn a_row_says_whether_its_field_holds_a_list() {
+        let root = strukt(
+            "root",
+            vec![
+                ("n", T::u8()),
+                ("nums", T::array(T::u8(), E::field("n"))),
+                ("rest", T::repeat(T::u8(), crate::template::Until::End)),
+                ("far", T::at(E::lit(0), T::array(T::u8(), E::lit(2)))),
+                ("named", T::Named("Nums".into())),
+                ("maybe", T::when(E::field("n"), T::array(T::u8(), E::lit(2)))),
+                ("recs", T::chain(E::field("n"), &["n"], crate::template::Anchor::File, strukt("rec", vec![("n", T::u8())]))),
+                ("data", T::bytes(E::field("n"))),
+                ("packed", T::decoded(E::lit(4), crate::codec::Codec::Zlib, T::array(T::u8(), E::lit(2)))),
+                ("one", strukt("one", vec![("a", T::u8())])),
+            ],
+        );
+        let t = Template::new("test", root).with_type("Nums", T::array(T::u8(), E::lit(3)));
+        let d = diagram(&t);
+        let rows: Vec<(&str, bool)> = d.types[0].rows.iter().map(|r| (r.name.as_str(), r.list)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("n", false),
+                ("nums", true),
+                ("rest", true),
+                ("far", true),
+                ("named", true),
+                ("maybe", true),
+                ("recs", true),
+                ("data", false),
+                ("packed", false),
+                ("one", false),
+            ]
+        );
+        assert_eq!(d.types[0].rows[7].type_text, "bytes[]");
     }
 
     #[test]

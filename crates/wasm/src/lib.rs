@@ -165,6 +165,9 @@ struct NodeDto {
     #[serde(skip_serializing_if = "String::is_empty")]
     unit: String,
     composite: bool,
+    /// True when the children are a list's elements, whichever of the five
+    /// kinds of list it is. See `NodeInfo::list`.
+    list: bool,
     /// True when `write_node` accepts text for this field.
     editable: bool,
     /// Bytes of the field the value occupies; less than the size for padded
@@ -1065,6 +1068,8 @@ struct DiagramRowDto {
     /// Where it starts inside its own type, or the address it reads its
     /// contents at. Empty when neither is fixed by the template.
     pos_text: String,
+    /// True when the field holds a list of elements. See `diagram::Row::list`.
+    list: bool,
     /// The word the listing gives a field of this type, so the same field is
     /// the same colour in both: "uint", "str", "magic", "composite" and the
     /// rest. See `qubero_core::eval::value_kind`.
@@ -1138,6 +1143,7 @@ fn diagram_dto(d: Diagram) -> DiagramDto {
                         type_text: r.type_text,
                         size_text: r.size_text,
                         pos_text: r.pos_text,
+                        list: r.list,
                         kind: r.kind,
                     })
                     .collect(),
@@ -2328,6 +2334,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         child_count: n.child_count as f64,
         unit: n.unit.unwrap_or_default(),
         composite: n.composite,
+        list: n.list,
         editable: n.editable,
         value_bytes: n.value_bytes as f64,
         value_offset_bits: n.value_offset_bits as f64,
