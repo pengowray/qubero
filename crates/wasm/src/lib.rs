@@ -3197,6 +3197,22 @@ impl Editor {
         formats::sniff(head, file_len as u64).unwrap_or("").to_string()
     }
 
+    /// How many trailing bytes `sniff_template_ends` wants: enough for a ZIP's
+    /// end record, its comment and a central directory of some thousands of
+    /// entries.
+    pub fn sniff_tail_window(&self) -> f64 {
+        formats::SNIFF_TAIL_WINDOW as f64
+    }
+
+    /// The same question asked of the leading bytes and the trailing ones, for
+    /// a file the leading bytes alone call a ZIP: its central directory names
+    /// every entry, and a BP5 dataset or a Zarr store whose files sit behind a
+    /// large data file is told by those names. `tail` is the last bytes of the
+    /// file.
+    pub fn sniff_template_ends(&self, head: &[u8], tail: &[u8], file_len: f64) -> String {
+        formats::sniff_ends(head, tail, file_len as u64).unwrap_or("").to_string()
+    }
+
     /// What a BGZF file holds, from the front of its first block in these
     /// leading bytes: `bam`, `csi`, `vcf`, `bed`, `fasta` or `text`, or "" when
     /// that cannot be told. See `formats::bgzf_contents`.
