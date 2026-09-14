@@ -11,8 +11,8 @@
 //! The size is chosen so the test means something both ways: ten thousand
 //! links need hundreds of megabytes of stack in a debug build and tens in a
 //! release one, so without the guard every one of these crashes; with it, the
-//! guard's 88 expressions fit with room to spare. A debug frame is about seven
-//! times a release one, so a debug build is given more.
+//! guard's 88 expressions fit, with too little room over for a read whose
+//! stack per expression grows by half. See `STACK`.
 
 use qubero_core::document::Document;
 use qubero_core::eval::{EvalError, Evaluator, NodeInfo, Value};
@@ -22,8 +22,19 @@ use qubero_core::template::{Endian, Expr as E, Template, Ty as T};
 /// Links in every chain here: far past what any stack holds unguarded.
 const LINKS: usize = 10_000;
 
-/// The stack each read gets: 8 MiB in a debug build, 1 MiB in a release one.
-const STACK: usize = if cfg!(debug_assertions) { 8 << 20 } else { 1 << 20 };
+/// The stack each read gets: 640 KiB in a release build, the room a read is
+/// given where it ships (`STACK_BUDGET` in the evaluator), and 4 MiB in a
+/// debug one, whose frames are six to ten times as large.
+///
+/// Measured on 2026-09-14 by filling the stack with a known byte and counting
+/// how much of it a read wrote over (`stack_probe <links> <shape> <KiB>
+/// paint`). Read to the limit, the dearest shape here took 457 KiB in a
+/// release build, a switch on the element before, and 2.8 MiB in a debug
+/// one, a computed field naming the one before. 640 KiB and 4 MiB are
+/// each about two fifths more than that. On a debug thread of 3 MiB these
+/// tests pass, and on one of 2.5 MiB the process overflows its stack; on a
+/// release thread of 400 KiB it overflows too.
+const STACK: usize = if cfg!(debug_assertions) { 4 << 20 } else { 640 << 10 };
 
 /// The most expressions a read may have open inside one another, which is
 /// `DEEPEST_QUESTION` in the evaluator.

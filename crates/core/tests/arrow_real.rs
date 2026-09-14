@@ -13,6 +13,20 @@ fn arrow_samples() -> Option<PathBuf> {
     roots.into_iter().map(|p| p.join("arrow")).find(|p| p.is_dir())
 }
 
+/// The stack a node read first is given: 640 KiB in a release build, the room
+/// a read is given where it ships (`STACK_BUDGET` in the evaluator), and 4 MiB
+/// in a debug one, whose frames are six to ten times as large. The same as
+/// `deep_questions` gives each read there.
+///
+/// Measured on 2026-09-14 by filling the stack with a known byte and counting
+/// how much of it a read wrote over (`cold_read <file> <KiB> paint <step>...`):
+/// the column of the last node of `more-types.arrow`, read first, took 178 KiB
+/// in a release build and 2.0 MiB in a debug one, and on a debug thread of 2
+/// MiB the test overflows its stack. A stack that runs out takes the test down
+/// with it, which is how a read that has come to need more stack per
+/// expression fails here.
+const STACK: usize = if cfg!(debug_assertions) { 4 << 20 } else { 640 << 10 };
+
 fn open(root: &std::path::Path, name: &str) -> (Document<MemSource>, Evaluator) {
     let bytes = std::fs::read(root.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64), Some("arrow"), "{name}");
@@ -556,7 +570,8 @@ fn node_walk_of(ev: &mut Evaluator, doc: &Document<MemSource>, nodes: &[usize], 
 /// before it: more expressions open at once than a read may have. Such a read
 /// is refused, then asked again a stretch of the chain at a time, and reads
 /// through. Before that was done, a field tree opened straight at the last
-/// node said "nested too deep" there.
+/// node said "nested too deep" there. Each is read on a thread with `STACK`,
+/// so that the reading keeps within the stack it has where it ships.
 #[test]
 fn every_node_read_first_says_what_it_says_in_order() {
     let Some(root) = arrow_samples() else {
@@ -570,12 +585,23 @@ fn every_node_read_first_says_what_it_says_in_order() {
     assert!(count > 20, "{count} nodes");
     let want: Vec<_> = (0..count).map(|i| node_walk_of(&mut in_order, &doc, &nodes, i)).collect();
     assert!(in_order.deepest_question() < 88, "in order: {} deep", in_order.deepest_question());
+    let bytes = std::fs::read(root.join("more-types.arrow")).unwrap();
     let mut refused_before = 0;
     for (i, want) in want.iter().enumerate() {
-        let mut first = Evaluator::new(formats::builtin("arrow").unwrap());
-        assert_eq!(&node_walk_of(&mut first, &doc, &nodes, i), want, "node {i} read first");
+        let (bytes, nodes) = (bytes.clone(), nodes.clone());
+        let (got, deepest) = std::thread::Builder::new()
+            .stack_size(STACK)
+            .spawn(move || {
+                let doc = Document::new(MemSource(bytes));
+                let mut first = Evaluator::new(formats::builtin("arrow").unwrap());
+                (node_walk_of(&mut first, &doc, &nodes, i), first.deepest_question())
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(&got, want, "node {i} read first");
         // The limit was reached on the way, which is the case this is for.
-        if first.deepest_question() == 88 {
+        if deepest == 88 {
             refused_before += 1;
         }
     }

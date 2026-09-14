@@ -71,9 +71,13 @@ const STACK_BUDGET: usize = 640 << 10;
 /// `spans_probe` and in the sample tests. One of that file's field nodes read
 /// with nothing asked before it goes past the limit and is asked again.
 ///
-/// A debug build's frames are about seven times as large, and a megabyte
-/// carries 28 of the dearest shape there. Tests run on the stack
-/// `.cargo/config.toml` gives them, and nothing ships in debug.
+/// A debug build's frames are six to ten times as large: read to the limit, a
+/// chain of computed fields wrote over 2.8 MiB there. Tests run on the stack
+/// `.cargo/config.toml` gives them, which is far more, except the ones that
+/// read to the limit on purpose: `deep_questions` and the Arrow nodes read
+/// first in `arrow_real` read on threads of 640 KiB in a release build and 4
+/// MiB in a debug one, so that a read whose stack per expression grows by half
+/// fails them.
 ///
 /// `cargo run --release --example stack_probe -- <levels> <shape> <KiB> [paint]`
 /// is where these numbers come from.
