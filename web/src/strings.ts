@@ -428,6 +428,20 @@ export const JOINED = {
    *  at the top of the panel. See `DECODED_PLUS_TITLE` and `DECODED_INSIDE`. */
   plusTitleStream: "Offset within the joined stream",
   inside: "in the joined stream",
+  /** On the listing row of a joined stream short enough to hold whole, where
+   *  `UNPACKED.open` sits for a compressed run. The noun the addresses inside
+   *  already use; a PDB page and an HDF4 block were never packed. */
+  open: "Open joined stream",
+  /** Names the tab a joined stream opens in. The same shape as
+   *  `UNPACKED.tabTitle`. */
+  tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
+  /**
+   * Typing in that tab, when every run it joins is stored as it sits in the
+   * file. The tab is what refuses: a field lying wholly in one of those runs
+   * can be edited in the file's own tab. A stream with any unpacked run gets
+   * `UNPACKED.readOnly` instead, since those bytes are in no place to edit.
+   */
+  readOnly: (file: string): string => `This tab is read-only. Edit in ${file} instead`,
 } as const;
 
 export const UNPACKED = {

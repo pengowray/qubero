@@ -437,19 +437,27 @@ function bytesButton(c: DrawContext, key: string): HTMLElement {
 function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: TemplateNode | null): void {
   if (n === null) return;
   if (n.decoded && n.refused === null) {
-    row.append(unpackedButton(item.path, n.name));
+    row.append(unpackedButton(item.path, n.name, false));
     return;
   }
-  // A stream joined from several runs is no one run to unpack, and has no
-  // document of its own to open.
-  if (!n.space_root || n.joined || item.path.length === 0) return;
+  if (!n.space_root || item.path.length === 0) return;
+  // A stream joined from several runs is held whole to be a document of its
+  // own, which the core does up to the cap an unpacked run has and refuses
+  // past it. The listing still reads a longer one a part at a time, so only
+  // the button goes.
+  if (n.joined && n.size_bits > JOINED_WHOLE_CAP_BITS) return;
   const stream = item.path.slice(0, -1);
-  if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name));
+  if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name, n.joined));
 }
 
-/** The control that opens a compressed run as a document of its own. */
-function unpackedButton(path: readonly number[], name: string): HTMLElement {
-  const b = el("button", "rp-bytes rp-unpacked", UNPACKED.open);
+/** The most a joined stream may come to and still open as a document of its
+ *  own: `CAP_BYTES` in the core's `codec.rs`, in bits. */
+const JOINED_WHOLE_CAP_BITS = 64 * 1024 * 1024 * 8;
+
+/** The control that opens a compressed run, or a stream joined from several
+ *  runs, as a document of its own. */
+function unpackedButton(path: readonly number[], name: string, joined: boolean): HTMLElement {
+  const b = el("button", "rp-bytes rp-unpacked", joined ? JOINED.open : UNPACKED.open);
   b.type = "button";
   b.title = UNPACKED.openTitle(name);
   b.dataset["unpacked"] = pathKey(path);

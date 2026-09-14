@@ -820,6 +820,25 @@ impl TraceBuilder {
         self.trace.coarse |= t.coarse;
     }
 
+    /// Take the trace of one part of a stream joined from several runs into
+    /// this one, shifted to `in_bits` and `out_bytes` as [`Self::absorb`]
+    /// shifts.
+    ///
+    /// Two things differ from `absorb`. The members inside the part are not
+    /// carried: the part is itself one member of the joined stream, which the
+    /// caller writes, and a member inside it would overlap that one. And the
+    /// order the part counted bits in is taken rather than checked, since a
+    /// joined stream's parts read none of each other's bits and a stored part
+    /// reads whole bytes, which either order counts alike.
+    pub(crate) fn absorb_part(&mut self, t: &Trace, in_bits: u64, out_bytes: u64) {
+        let members = self.trace.members.len();
+        let lsb_first = self.trace.lsb_first;
+        self.trace.lsb_first = t.lsb_first;
+        self.absorb(t, in_bits, out_bytes);
+        self.trace.members.truncate(members);
+        self.trace.lsb_first |= lsb_first;
+    }
+
     /// Say that one of the container's own pieces of this run reads from
     /// `in_bits` and comes to `out_bytes`. See [`Member`].
     ///

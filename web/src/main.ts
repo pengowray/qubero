@@ -18,7 +18,7 @@ import { markFromRange, markFromStep } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -596,7 +596,7 @@ function build(tab: Tab): Page {
     }
     tabs.add({
       doc: unpacked,
-      title: UNPACKED.tabTitle(n.node.name, doc.name),
+      title: unpacked.joined ? JOINED.tabTitle(n.node.name, doc.name) : UNPACKED.tabTitle(n.node.name, doc.name),
       origin: UNPACKED.openTitle(n.node.name),
     });
   };

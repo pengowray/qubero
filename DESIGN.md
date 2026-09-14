@@ -2729,8 +2729,23 @@ four records and hold five. pyhdf reads five. A dataset in linked blocks is
 counted along its first dimension by what the joined values have room for,
 and every value of all three matches pyhdf.
 
-Not yet: a joined stream opens no tab of its own, so `map_out` has nothing to
-delegate to.
+**A document of its own.** A joined stream no longer than an unpacked run may
+be (`CAP_BYTES`, 64 MiB) opens in a tab the way one does. `open_space` holds it
+whole: every stored part read, every packed part unpacked again with its trace,
+since the cache the listing reads through keeps bytes and not traces. The
+traces are laid end to end, one member a part. A trace's steps go forward and
+a joined stream's runs are anywhere, so the steps count bits along an axis of
+the trace's own, each part's run after the one before, and `Space::runs` says
+where each run really is. Past the cap the tab is refused as `TooLarge`, as an
+unpacked run's is, but the stream still reads a part at a time where it is
+declared, so the refusal is not put on its node: `Evaluator::open_refusal`
+says it. The listing offers "Open joined stream" on a joined stream's root when
+it is short enough. Typing in the tab is refused, and when every run is stored
+the refusal sends the reader to the file's own tab, where a field lying in one
+run is editable.
+
+Not yet: `map_out` on a joined stream's tab answers with the trace's own axis,
+which is no place in the file.
 
 ## Roadmap (not yet built)
 

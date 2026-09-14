@@ -2370,6 +2370,12 @@ struct SpaceDto {
     template: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refused: Option<String>,
+    /// True when the stream was joined from several runs rather than unpacked
+    /// from one, which is a different thing to call the tab.
+    joined: bool,
+    /// True when every one of those runs is stored as it sits in the file, so
+    /// a field of the stream can be edited where the file declares it.
+    stored: bool,
 }
 
 /// One step of a decoder, as the cursor link shows it.
@@ -2534,7 +2540,8 @@ impl Editor {
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         if let Some(i) = self.sheets.iter().position(|sh| !sh.origin.is_empty() && sh.origin == p) {
             let template = self.sheets[i].template.clone();
-            return reply(Ok(SpaceDto { space: i as f64, template, refused: None }));
+            let (joined, stored) = self.space_joined(i as u32);
+            return reply(Ok(SpaceDto { space: i as f64, template, refused: None, joined, stored }));
         }
         self.live = 0;
         let file = &mut self.sheets[0];
@@ -2552,7 +2559,7 @@ impl Editor {
             // the node, so the reply only has to say that it did not.
             Ok(None) => {
                 let why = self.refusal_at(&p);
-                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why) }));
+                return reply(Ok(SpaceDto { space: 0.0, template: String::new(), refused: Some(why), joined: false, stored: false }));
             }
             Err(err) => return reply::<SpaceDto>(Err(err)),
         };
@@ -2562,13 +2569,30 @@ impl Editor {
         let sheet = Sheet::from_space(sp, p);
         let template = sheet.template.clone();
         self.sheets.push(sheet);
-        reply(Ok(SpaceDto { space: (self.sheets.len() - 1) as f64, template, refused: None }))
+        let space = (self.sheets.len() - 1) as u32;
+        let (joined, stored) = self.space_joined(space);
+        reply(Ok(SpaceDto { space: space as f64, template, refused: None, joined, stored }))
+    }
+
+    /// Whether one of this editor's spaces is a stream joined from several
+    /// runs, and whether every one of those runs is stored as it sits in the
+    /// file.
+    fn space_joined(&self, space: u32) -> (bool, bool) {
+        let Some(core) = self.core_space(space) else { return (false, false) };
+        let Some(sp) = self.sheets[0].eval.as_ref().and_then(|e| e.space(core)) else { return (false, false) };
+        let runs = sp.runs();
+        (!runs.is_empty(), !runs.is_empty() && runs.iter().all(|r| !r.packed && r.run_space == 0))
     }
 
     /// Why the stream at `path` would not open, in the core's own word for it.
+    /// A joined stream too long to hold whole says so only when asked, since
+    /// its node still reads.
     fn refusal_at(&mut self, path: &[usize]) -> String {
         let file = &mut self.sheets[0];
         let Some(e) = &mut file.eval else { return "failed".into() };
+        if let Some(why) = e.open_refusal(path) {
+            return why.as_str().into();
+        }
         match e.node(&file.doc, path) {
             Ok(n) => n.refused.unwrap_or_else(|| "failed".into()),
             Err(_) => "failed".into(),

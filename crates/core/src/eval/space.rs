@@ -53,13 +53,22 @@ pub(crate) enum Opened {
 ///
 /// It stays connected to where it came from by the trace: `map_out` says which
 /// bits of the run made a byte of this, and `map_in` the other way.
+///
+/// A stream joined from several runs opens as one of these too, when it is
+/// small enough to hold whole. Its trace is every part's laid end to end, with
+/// each part's bits counted along an axis of the trace's own rather than at
+/// any place in a file, since the runs are scattered and a PDB's run 3 can be
+/// before its run 1. `runs` says where each part's run really is, and the two
+/// maps answer through it: a step is given in bits of its own part's run.
 pub struct Space {
     /// This space's own number, which is what everything outside calls it by.
     pub id: SpaceId,
     /// The space the run was unpacked from. 0 is the file.
     pub parent: SpaceId,
-    /// The `Decoded` node in `parent` that opened it.
+    /// The `Decoded` or `Stitched` node in `parent` that opened it.
     pub path: Vec<usize>,
+    /// What the run was unpacked with. `Stored` for a joined stream, which was
+    /// made by no one decoding: each part says what it was.
     pub codec: Codec,
     /// What the decoded bytes turned out to be, which is either what the
     /// stream's own template said or, when that said only bytes, what
@@ -72,9 +81,33 @@ pub struct Space {
     doc: Document<ArcSource>,
     ev: super::Evaluator,
     trace: Trace,
+    /// For a joined stream, where each part's run is, in the order the parts
+    /// go. Empty for a stream unpacked from one run.
+    runs: Vec<JoinedRun>,
+}
+
+/// Where one part of a joined stream opened as a document came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinedRun {
+    /// Which bytes of the document the part gives.
+    pub out_bytes: std::ops::Range<u64>,
+    /// The field the part is: a PDB page, a BGZF block's compressed run.
+    pub path: Vec<usize>,
+    /// Where that run is, in the space it is a field of, and how many bits it
+    /// is. 0 is the file.
+    pub run_space: SpaceId,
+    pub run_offset_bits: u64,
+    pub run_bits: u64,
+    /// Whether the run was unpacked to give the part, rather than read as it
+    /// sits.
+    pub packed: bool,
+    /// Where the part's bits start on the trace's own axis: every earlier
+    /// part's run, end to end. No place in any file.
+    pub(super) in_start: u64,
 }
 
 impl Space {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         id: SpaceId,
         parent: SpaceId,
@@ -82,6 +115,7 @@ impl Space {
         codec: Codec,
         bytes: Arc<Vec<u8>>,
         trace: Trace,
+        runs: Vec<JoinedRun>,
         template: crate::template::Template,
         recognised: bool,
     ) -> Space {
@@ -95,6 +129,7 @@ impl Space {
             doc: Document::new(ArcSource(bytes)),
             ev: super::Evaluator::new(template),
             trace,
+            runs,
         }
     }
 
@@ -120,6 +155,19 @@ impl Space {
     /// which bytes of this space that bit produced.
     pub fn map_in(&self, bit: u64) -> Option<Step> {
         self.trace.map_in(bit)
+    }
+
+    /// Which part of a joined stream byte `byte` is in, and where that part's
+    /// run is. Nothing for a stream unpacked from one run, and past the end.
+    pub fn run_at(&self, byte: u64) -> Option<&JoinedRun> {
+        let i = self.runs.partition_point(|r| r.out_bytes.end <= byte);
+        self.runs.get(i).filter(|r| r.out_bytes.contains(&byte))
+    }
+
+    /// Every part of a joined stream, in the order the parts go. Empty for a
+    /// stream unpacked from one run.
+    pub fn runs(&self) -> &[JoinedRun] {
+        &self.runs
     }
 
     /// This space read as its template says: the same call a file gets.
@@ -260,11 +308,24 @@ pub(super) struct Spaces {
     opened: FxHashMap<Vec<usize>, Opened>,
     /// The cap each stitched space opened from here on is given.
     cache_cap: usize,
+    /// Why a stitched stream would not open as a document of its own, for the
+    /// ones that were asked to and would not. Kept apart from `opened`, which
+    /// says the stream itself opened: one too long to hold whole still reads a
+    /// part at a time in the listing.
+    whole_refused: FxHashMap<Vec<usize>, Refusal>,
+    /// The most a stitched stream may come to and still be held whole.
+    whole_cap: usize,
 }
 
 impl Default for Spaces {
     fn default() -> Spaces {
-        Spaces { backings: Vec::new(), opened: FxHashMap::default(), cache_cap: STITCH_CACHE_BYTES }
+        Spaces {
+            backings: Vec::new(),
+            opened: FxHashMap::default(),
+            cache_cap: STITCH_CACHE_BYTES,
+            whole_refused: FxHashMap::default(),
+            whole_cap: crate::codec::CAP_BYTES,
+        }
     }
 }
 
@@ -296,6 +357,29 @@ impl Spaces {
     #[cfg(test)]
     pub(super) fn set_cache_cap(&mut self, bytes: usize) {
         self.cache_cap = bytes;
+    }
+
+    /// The most a stitched stream may come to and still open as a document of
+    /// its own. [`crate::codec::CAP_BYTES`], the cap a `Decoded` stream has.
+    pub(super) fn whole_cap(&self) -> usize {
+        self.whole_cap
+    }
+
+    /// The same cap made small, for a test that wants a stream past it without
+    /// sixty-four megabytes of file.
+    #[cfg(test)]
+    pub(super) fn set_whole_cap(&mut self, bytes: usize) {
+        self.whole_cap = bytes;
+    }
+
+    pub(super) fn refuse_whole(&mut self, path: &[usize], why: Refusal) {
+        self.whole_refused.insert(path.to_vec(), why);
+    }
+
+    /// Why the stitched stream at `path` would not open as a document of its
+    /// own, when it was asked to and would not.
+    pub(super) fn whole_refusal(&self, path: &[usize]) -> Option<Refusal> {
+        self.whole_refused.get(path).copied()
     }
 
     /// The trace of the decoding that made a space. Nothing for a stitched
@@ -350,6 +434,7 @@ impl Spaces {
     pub(super) fn forget(&mut self) {
         self.backings.clear();
         self.opened.clear();
+        self.whole_refused.clear();
     }
 }
 
