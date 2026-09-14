@@ -247,6 +247,41 @@ fn an_overwrite_inside_a_gathered_element_keeps_the_walk() {
     agrees_with_a_fresh_read(&mut ev, &d, &t, everything);
 }
 
+#[test]
+fn an_overwrite_that_moves_a_gather_walks_to_its_records_again() {
+    // Two records, a length and that many bytes, then a region whose elements
+    // are placed from its own start. The records are before the length, but
+    // where the region starts is not.
+    let from = vec![Step::field("list"), Step::each()];
+    let region = T::gather(from, E::field("off"), Anchor::SelfAligned(1), E::lit(0), T::bytes(E::placer(E::field("len"))));
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("list", T::array(placing(), E::lit(2))),
+                ("pad", T::u8()),
+                ("skip", T::bytes(E::field("pad"))),
+                ("region", T::sized(E::Remaining, region)),
+            ],
+        ),
+    );
+    let mut d = doc(&[0, 1, 2, 1, /* pad */ 1, 0xee, /* @6 */ 0xa0, 0xa1, 0xb0, 0xb1, 0xc0]);
+    let mut ev = Evaluator::new(t.clone());
+    let everything: &[&[usize]] = &[&[3], &[3, 0], &[3, 1]];
+    for path in everything {
+        ev.node(&d, path).unwrap();
+    }
+    assert_eq!(ev.node(&d, &[3, 1]).unwrap().offset_bits, 8 * 8);
+
+    // One more byte to skip moves the region, and every element with it.
+    d.overwrite_bytes(4, &[2]);
+    ev.invalidate_from(4 * 8);
+    assert!(ev.memo.list(&[3]).gather.is_none());
+    agrees_with_a_fresh_read(&mut ev, &d, &t, everything);
+    assert_eq!(ev.node(&d, &[3, 1]).unwrap().offset_bits, 9 * 8);
+}
+
 /// A block of a chain: records, then where the next block is.
 fn block() -> T {
     T::structure("Block", vec![("n", T::u8()), ("recs", T::array(placing(), E::field("n"))), ("next", T::u8())])

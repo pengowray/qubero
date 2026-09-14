@@ -2669,9 +2669,12 @@ A chain keeps the starts it found before that point and walks on from there.
 A gather's walk is a stack of steps and cannot be cut back to a child, so it
 stands only when it is over and nothing it read reaches the edit, which is an
 edit in a FITS heap after its rows; otherwise it walks again, and finds the
-children it kept where they are. An expression that names an earlier field
-whose contents an `At` placed after the edit is still taken as read before it:
-nothing writes down how far an expression read.
+children it kept where they are. A step into a stream's contents, or a search
+at any depth, says nothing about how far it read, so a ROOT walk to its
+baskets starts again after any edit, and so does the walk a schema's build
+leaves part way. An expression that names an earlier field whose contents an
+`At` placed after the edit is still taken as read before it: nothing writes
+down how far an expression read.
 
 ### One stream kept in several runs
 A PDB keeps each stream in fixed-size blocks, listed by number in the order

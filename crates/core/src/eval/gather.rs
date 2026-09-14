@@ -67,6 +67,11 @@ impl Evaluator {
         // that covers nothing where it is declared holds them from its anchor
         // on, as far as the room it was given.
         let lowest = if lr.declared_size.is_some() { lr.offset } else { base };
+        // All three are worked out from where the list is, so the walk has
+        // read as far as what placed the list before it reads any record.
+        let placed = self.memo.placed_from(list);
+        let g = self.gather_mut(list);
+        g.walk.reach = g.walk.reach.max(placed);
         loop {
             let found = self.list(list).gather.as_deref().map_or(0, |g| g.starts.len());
             if found > want {
