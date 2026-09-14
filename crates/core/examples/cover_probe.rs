@@ -85,10 +85,19 @@ fn tree(ev: &mut Evaluator, doc: &Document<MemSource>, path: &mut Vec<usize>, ou
     }
 }
 
+/// Whether this run is for timing a large file rather than measuring what is
+/// named: `COVER_TIMING=1` skips the tree walk, lets the spans take as many
+/// goes as they need, and times a window at the end of the file asked of a
+/// fresh evaluator, which is a jump to the end of a file just opened.
+fn timing() -> bool {
+    std::env::var_os("COVER_TIMING").is_some()
+}
+
 /// The named stretches over one window, clipped to it, and how many goes of
 /// 5,000 steps they took.
 fn spans(ev: &mut Evaluator, doc: &Document<MemSource>, from: u64, to: u64) -> Result<(Vec<(u64, u64)>, usize), String> {
-    for go in 1..=200 {
+    let most = if timing() { 1_000_000 } else { 200 };
+    for go in 1..=most {
         ev.begin_slice();
         match ev.spans(doc, from, to, 1_000_000) {
             Ok(v) => {
@@ -123,11 +132,32 @@ fn probe(path: &Path, rel: &str) {
     let t = qubero_core::formats::template(name).unwrap();
     let doc = Document::new(MemSource(bytes));
 
-    let mut ev = Evaluator::new(t.clone());
     let mut leaves = Vec::new();
-    let mut opened = 0;
-    tree(&mut ev, &doc, &mut Vec::new(), &mut leaves, &mut opened);
+    if !timing() {
+        let mut ev = Evaluator::new(t.clone());
+        let mut opened = 0;
+        tree(&mut ev, &doc, &mut Vec::new(), &mut leaves, &mut opened);
+    }
     let tree_bytes = union(leaves.clone()) / 8;
+
+    if timing() {
+        for (which, from) in [("middle", len / 2), ("last", len.saturating_sub(WINDOW))] {
+            let mut ev = Evaluator::new(t.clone());
+            ev.set_slice(Some(5_000));
+            let clock = Instant::now();
+            match spans(&mut ev, &doc, from * 8, (from + WINDOW).min(len) * 8) {
+                Ok((v, goes)) => println!(
+                    "{rel}\t{which} window, fresh: {} bytes named in {} ms, {goes} goes",
+                    union(v) / 8,
+                    clock.elapsed().as_millis()
+                ),
+                Err(e) => println!("{rel}\t{which} window, fresh: {e}"),
+            }
+        }
+        if std::env::var("COVER_TIMING").is_ok_and(|v| v == "last") {
+            return;
+        }
+    }
 
     let mut ev = Evaluator::new(t.clone());
     ev.set_slice(Some(5_000));
@@ -163,7 +193,11 @@ fn probe(path: &Path, rel: &str) {
             }
             Err(e) => trouble = Some(e),
         }
-        slowest = slowest.max(clock.elapsed().as_millis());
+        let ms = clock.elapsed().as_millis();
+        if timing() && ms >= 200 {
+            println!("{rel}\twindow at {at:#x}: {ms} ms");
+        }
+        slowest = slowest.max(ms);
         at += WINDOW;
     }
     let windowed = match trouble {
