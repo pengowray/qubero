@@ -2819,7 +2819,7 @@ export const DIAGRAM = {
    *  total. The number is what was looked at, which is the honest thing to
    *  report: how much is left is not known without finishing. */
   partial: (walked: number): string =>
-    `Counts are of the first ${walked.toLocaleString()} fields read, so each is a floor rather than a total.`,
+    `Counts cover the first ${walked.toLocaleString()} fields read. The rest of the file is not counted.`,
   /** What a double click does. Said on every row that has one, since a single
    *  click already does something else. */
   goTitle: "Double-click to go to the first one in this file",
