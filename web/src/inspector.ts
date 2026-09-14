@@ -15,6 +15,7 @@ import { LENSES, type Lens } from "./lenses.ts";
 import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
+import { withinGroup } from "./within.ts";
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
@@ -1981,33 +1982,13 @@ export class Inspector {
     return { text, path: to };
   }
 
-  /**
-   * Where the field sits inside the structures around it.
-   *
-   * An absolute address answers where it is in the file, which is not the
-   * question a reader of a record has: a local file header's `crc32` is at
-   * `+0xe` of that header wherever in the zip the header landed, and that is
-   * the number the specification prints. The nearest few are enough; a member
-   * eight levels down a JSON tree has eight of these and only the first are
-   * about anything the reader can hold in their head.
-   */
+  /** Where the field sits inside the structures around it. See `withinGroup`. */
   private insideRows(path: readonly number[], n: TemplateNode): Node[] {
-    const rows: Node[] = [];
-    for (let i = path.length - 1; i >= 1 && rows.length < INSIDE_LEVELS; i--) {
-      const at = path.slice(0, i);
+    const group = withinGroup(path, n, (at) => {
       const a = this.doc.templateNode(at);
-      // A stretch counted in another address space is not a distance from
-      // here: the field is at an offset of the unpacked bytes and its stream
-      // is at an offset of the file.
-      if (a.status !== "ok" || a.node.space !== n.space) continue;
-      // A structure that starts where addresses count from gives the address
-      // over again with a plus in front of it.
-      if (a.node.offset_bits === 0) continue;
-      const delta = n.offset_bits - a.node.offset_bits;
-      if (delta < 0) continue;
-      rows.push(insideRow(a.node.name, delta, at));
-    }
-    return rows.length === 0 ? [] : [roleHead(PROPERTIES.within), ...rows];
+      return a.status === "ok" ? a.node : null;
+    });
+    return group === null ? [] : groupRows(group);
   }
 
   /**
@@ -3021,23 +3002,11 @@ function encloses(above: readonly number[], path: readonly number[]): boolean {
   return above.length < path.length && above.every((step, i) => step === path[i]);
 }
 
-/** Where the field sits inside one of the structures around it. */
-function insideRow(name: string, delta: number, path: readonly number[]): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "insp-origin";
-  row.dataset["path"] = path.join("/");
-  const what = document.createElement("span");
-  what.className = "insp-origin-name";
-  what.append(...address(PROPERTIES.withinAt(name, `${ADDRESS_MARK}+${offsetDigits(delta)}`), PROPERTIES.withinPlusTitle(name)));
-  row.append(what);
-  return row;
-}
-
 /**
- * Where a byte of a joined stream is kept, as a heading and its rows: `@+0x4d2
- * in pages[12]` and the rest. A row naming a run the reader can go to carries
- * the run's path, the way an `Offset within` row carries its structure's, so
- * pointing at it marks the run and clicking goes there.
+ * A heading and its rows, drawn: where a byte of a joined stream is kept,
+ * `@+0x4d2 in pages[12]` and the rest, or where a field sits inside the
+ * structures around it. A row naming a field the reader can go to carries the
+ * field's path, so pointing at it marks the field and clicking goes there.
  */
 function groupRows(group: PartGroup): Node[] {
   const rows = group.lines.map((line) => {
@@ -3060,9 +3029,6 @@ function groupRows(group: PartGroup): Node[] {
 function originClause(o: Origin): string {
   return o.value === "" ? o.label : `${o.label} = ${grouped(o.value)}`;
 }
-
-/** How many of the structures a field sits inside are worth an offset each. */
-const INSIDE_LEVELS = 3;
 
 /** The one block that is not a property of the field: what the structures
  *  above it settled. */
