@@ -51,6 +51,7 @@
 use rustc_hash::FxHashMap;
 
 use super::diagram::{box_identity, box_key, is_choice, is_run};
+use super::size::same_shape;
 use super::*;
 
 /// How many boxes of one kind the file holds, and where the first is.
@@ -160,6 +161,9 @@ pub struct CensusWalk {
     /// Where the walk starts: the file's root, or the contents of a stream
     /// opened as a tab. See [`Tab`](super::Tab).
     root: Vec<usize>,
+    /// False to walk every element of every run, however alike the template
+    /// says they are. See [`CensusWalk::element_by_element`].
+    multiply: bool,
 }
 
 impl CensusWalk {
@@ -179,7 +183,17 @@ impl CensusWalk {
             done: false,
             file_bits,
             root,
+            multiply: true,
         }
+    }
+
+    /// The same count with every element of every run walked, even where the
+    /// template says the elements are all the same shape and the first could
+    /// stand for the rest. Slower by the length of every such run, and what
+    /// the count that multiplies is checked against.
+    pub fn element_by_element(mut self) -> CensusWalk {
+        self.multiply = false;
+        self
     }
 
     pub fn file_bits(&self) -> u64 {
@@ -244,32 +258,6 @@ struct Seen {
     /// How many children it has.
     children: u64,
     guarded: bool,
-}
-
-/// Whether every node of this type holds the same fields as every other, so
-/// that walking one says what walking all of them would.
-///
-/// Settled by the template alone: numbers and fixed text, structures of them,
-/// and lists of them whose length is written into the template. Not a switch,
-/// a field that may not be there, a length read from the file, or anything
-/// that points elsewhere, since each of those is where two elements of one run
-/// can differ. A fixed size is not enough on its own: a run of 4 KiB pages is
-/// all the same size and no two pages hold the same fields.
-fn same_shape(t: &Template, ty: &Ty, depth: usize) -> bool {
-    if depth > 16 {
-        return false;
-    }
-    match ty {
-        Ty::Struct(s) => s.fields.iter().all(|f| same_shape(t, &f.ty, depth + 1)),
-        Ty::Array { elem, count: crate::template::Expr::Lit(_) } => same_shape(t, elem, depth + 1),
-        Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| same_shape(t, inner, depth + 1)),
-        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => same_shape(t, inner, depth + 1),
-        Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => true,
-        // `fixed_bits` calls these nought bits wherever they point, which is
-        // true of their size and says nothing about what is at the other end.
-        Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Stitched { .. } | Ty::Sized { .. } | Ty::Array { .. } => false,
-        other => crate::decode::fixed_bits(other).is_some(),
-    }
 }
 
 impl Evaluator {
@@ -474,8 +462,8 @@ impl Evaluator {
         // children are the elements themselves, which is a list and not
         // something wrapped round one: a stream holding a list has the list
         // as its child, not the list's elements.
-        let same = match &resolved {
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => same_shape(&self.template, elem, 0),
+        let same = walk.multiply && match &resolved {
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => same_shape(&self.template, elem),
             _ => false,
         };
         let (count, weight) = match (children, same) {
@@ -620,6 +608,34 @@ mod tests {
             v
         };
         assert_eq!(taken, vec![(0, 2), (1, 1)]);
+    }
+
+    #[test]
+    fn a_run_of_windows_is_multiplied_only_when_what_is_inside_them_is_the_same() {
+        // Four records of a byte-sized window each: one around a fixed
+        // record, which every element holds the same way, and one around a
+        // choice, which the elements make differently. The count that walks
+        // every element is what both should come to.
+        let fixed = T::sized(E::lit(2), T::structure("Pair", vec![("a", T::u8()), ("b", T::u8())]));
+        let present = T::structure("Present", vec![("x", T::u8())]);
+        let chosen = T::structure(
+            "Chunk",
+            vec![("kind", T::u8()), ("body", T::sized(E::lit(1), T::switch(E::field("kind"), vec![(1, present)], T::bytes(E::lit(1)))))],
+        );
+        let bytes = [1, 9, 2, 9, 1, 9, 2, 9];
+        for (elem, multiplied) in [(fixed, true), (chosen, false)] {
+            let t = Template::new("test", T::structure("root", vec![("runs", T::array(elem, E::lit(4)))]));
+            let (mut ev, doc) = read(t.clone(), &bytes);
+            let fast = ev.census(&doc, usize::MAX).expect("a census");
+            let mut ev = Evaluator::new(t);
+            let mut walk = CensusWalk::new(doc.len_bits()).element_by_element();
+            let slow = ev.census_step(&doc, &mut walk, usize::MAX).expect("a census");
+            assert_eq!((fast.state, slow.state), (CensusState::Done, CensusState::Done));
+            assert_eq!(fast.boxes, slow.boxes);
+            assert_eq!(fast.rows, slow.rows);
+            // Walked once and multiplied, or walked through.
+            assert_eq!(fast.walked < slow.walked, multiplied, "{} walked against {}", fast.walked, slow.walked);
+        }
     }
 
     #[test]

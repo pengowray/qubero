@@ -451,6 +451,44 @@ impl Evaluator {
     }
 }
 
+/// Whether every element of a run of `ty` has the same fields, at the same
+/// places and of the same types, whatever its bytes say, so that walking the
+/// first says what walking all of them would. The kind totals multiply element
+/// 0's breakdown by this and the Diagram view's count multiplies element 0's
+/// boxes and rows, so it is one rule for both.
+///
+/// A same stride is not that. A run of 4 KiB pages is all the same size and no
+/// two pages hold the same fields: a window of a fixed size is the same shape
+/// only when what is inside it is. Nor is a fixed number of bits quite that,
+/// because of the fields it counts as no bits. A field pointing somewhere else
+/// is none here, and each element points somewhere different, at something of
+/// a different length: a minidump's directory is a run of twelve-byte entries,
+/// each pointing at a stream of its own. And a window of a fixed size can hold
+/// a type chosen when it is read, which is how an Arrow record batch keeps its
+/// nodes sixteen bytes while each says in a field of no bytes which column it
+/// is, or that it is none. Multiplying element 0 would count the first
+/// element's stream once for every entry, and its choice for every node. So
+/// those two are left out, and a name is looked through to what it stands for.
+///
+/// Checked against walking every element over the sample collection: for the
+/// kind totals by `KindWalk`, and for the count by `examples/census_exact.rs`.
+pub(super) fn same_shape(template: &Template, ty: &Ty) -> bool {
+    same_shape_within(template, ty, 0)
+}
+
+/// [`same_shape`], `hops` names deep into the template.
+fn same_shape_within(template: &Template, ty: &Ty, hops: usize) -> bool {
+    match ty {
+        Ty::Struct(s) => s.fields.iter().all(|f| same_shape_within(template, &f.ty, hops)),
+        Ty::Array { elem, count: Expr::Lit(_) } => same_shape_within(template, elem, hops),
+        Ty::Sized { size: Expr::Lit(_), inner } => same_shape_within(template, inner, hops),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => same_shape_within(template, inner, hops),
+        Ty::Named(n) => hops < 64 && template.types.get(&**n).is_some_and(|t| same_shape_within(template, t, hops + 1)),
+        Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Stitched { .. } => false,
+        other => fixed_bits(other).is_some(),
+    }
+}
+
 /// A length in bytes as bits, when bits can count it. The length is whatever a
 /// field of the file said, and a corrupt one can say more than eight times it
 /// fits in a u64: that is a length no container holds, not one to wrap round

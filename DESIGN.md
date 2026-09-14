@@ -1039,7 +1039,8 @@ sixteen bytes. Multiplying either counts element 0's answer for every element,
 so `same_shape` leaves out pointers and choices. For every file in the sample
 collection that a template reads, the totals now equal what walking every
 element gives, which they did not for eleven of them before, Arrow's among
-them.
+them. The Diagram view's count multiplies element 0 the same way and asks the
+same `same_shape` (in `eval/size.rs`); see "Exact or labelled" below.
 
 **Tests keep the stack honest.** The tests run on the stack
 `.cargo/config.toml` gives them, which is far more than any reading has where
@@ -3162,11 +3163,18 @@ first 200,000 fields" says.
 
 **Exact or labelled.** A run whose element type is the same shape in every
 element, settled by the template (numbers and fixed text, structures of them,
-lists of them with a written length; not a switch, a condition, a length read
-from the file, or a pointer), is counted by walking element 0 with a weight
-of the run's length, rows included. Every other run is walked element by
-element, its length the listing's own (`child_count`). Sampling 32 elements
-of any run had badged a systemd journal's `JournalObject` box `×32`.
+lists of them with a written length, a window of a written size round any of
+those; not a switch, a condition, a length read from the file, or a pointer),
+is counted by walking element 0 with a weight of the run's length, rows
+included. Every other run is walked element by element, its length the
+listing's own (`child_count`). Sampling 32 elements of any run had badged a
+systemd journal's `JournalObject` box `×32`. The rule is `same_shape`, the one
+the kind totals multiply by. The count had a stricter copy of its own that
+walked every window of a written size, even one round a fixed record; the two
+became one on 2026-09-15, and `examples/census_exact.rs`, which counts each
+file both ways, gave the same answer for 659 of the 660 samples it could
+finish walking element by element, before the change and after it, to the
+field.
 
 **When the web counts.** `AUTO_COUNT` in `diagramcounts.ts`: a file under 50
 MiB is counted to the end; a larger one to 200,000 fields, then the toolbar
