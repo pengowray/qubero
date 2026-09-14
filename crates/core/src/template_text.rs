@@ -35,6 +35,7 @@
 //!              | "pointers(" ... ")"                placed at offsets read earlier
 //!              | "chain(" ... ")"                   each element points at the next
 //!              | "gather(" ... ")"                  placed at offsets found by a walk
+//!              | "stitched(" ... ")"                one stream joined from runs a walk finds
 //! annotation  := "[" expr "]"                       a list of that many elements
 //!              | "enum" NAME "{" {int "=" NAME} "}"
 //!              | "flags" NAME "{" {"bit" int "=" NAME} "}"
@@ -89,6 +90,17 @@
 //! the shape of the value, `text[expr]` and its encoding, `computed expr`,
 //! `computed text expr` and `computed real expr` for a value with no bytes of
 //! its own. A `computed real` works its expression out as reals.
+//! `schema(kind from walk, key expr, expr)` is a type the file describes: the
+//! builder registered as `kind` makes it from the description the key names,
+//! among the records the walk reaches. A key part in double quotes is text the
+//! template fixed; any other is read where the field is.
+//!
+//! A walk is written as a path: `.name` into a field, `[]` into every element,
+//! `.{a, b}` into each of those fields, `.shown[key = tag]` into the one element
+//! labelled that way, `.(stream)` into the compressed run or joined stream
+//! under the node, wherever the format that wrote it put it, and `..name` into
+//! every field of that name at any depth under it. The brackets are what keep
+//! the stream step from reading as a field called `stream`.
 //!
 //! Text says how it ends and what it is in: `text[expr]`,
 //! `text[expr] padded with 0x20`, `text until 0x00` (`or end` where a missing
@@ -725,7 +737,27 @@ fn step_text(s: &Step) -> String {
         }
         Step::Each => "[]".to_string(),
         Step::Fields(names) => format!(".{{{}}}", names.join(", ")),
+        Step::Stream => ".(stream)".to_string(),
+        Step::Deep(n) => format!("..{n}"),
     }
+}
+
+/// A walk written as one path, without the dot in front of its first name.
+fn walk_text(from: &[Step]) -> String {
+    let walk: String = from.iter().map(step_text).collect::<Vec<_>>().join("");
+    walk.strip_prefix('.').unwrap_or(&walk).to_string()
+}
+
+/// A schema node: which builder, the walk to its descriptions, and the key.
+fn schema_text(kind: &str, table: &[Step], key: &[KeyPart]) -> String {
+    let parts: Vec<String> = key
+        .iter()
+        .map(|k| match k {
+            KeyPart::Int(e) | KeyPart::Text(e) => expr(e),
+            KeyPart::TextLit(t) => format!("{t:?}"),
+        })
+        .collect();
+    format!("schema({kind} from {}, key {})", walk_text(table), parts.join(", "))
 }
 
 /// The label a search looks for. `text` marks a key compared as text rather
@@ -842,6 +874,7 @@ fn inline(ty: &Ty) -> Option<String> {
             let (head, inner) = wrapper("", ty)?;
             format!("{head}{}", inline(inner)?)
         }
+        Ty::Schema { kind, table, key } => schema_text(kind, table, key),
         Ty::SqliteVarint => "sqlite varint".to_string(),
         Ty::SevenZipNumber => "7z number".to_string(),
         Ty::At { anchor, at, inner } => format!("at({} from {}) {}", expr(at), anchor_text(*anchor), inline(inner)?),
@@ -1397,5 +1430,34 @@ mod tests {
         let t = Template::new("demo", Ty::u32(Endian::Big));
         assert_eq!(render(&t), render(&t));
         assert_eq!(render(&t), "template demo\n\nroot u32be\n");
+    }
+
+    /// The builder, the walk to the descriptions and the key, in that order.
+    /// A key the template fixed is quoted, so it cannot read as a field of that
+    /// name, and a walk into a stream is bracketed for the same reason.
+    #[test]
+    fn a_schema_reads_as_written() {
+        let table = vec![
+            Step::field("streamer_info"),
+            Step::field("body"),
+            Step::each(),
+            Step::stream(),
+            Step::field("members"),
+            Step::field("elements"),
+            Step::each(),
+        ];
+        let read = Ty::schema(
+            "streamers",
+            table.clone(),
+            vec![KeyPart::Text(E::within(&["fClassName", "text"])), KeyPart::Int(E::field("version").and(E::lit(0x3fff)))],
+        );
+        assert_eq!(
+            inline(&read).as_deref(),
+            Some("schema(streamers from streamer_info.body[].(stream).members.elements[], key fClassName.text, version & 0x3fff)")
+        );
+        let fixed = Ty::schema("streamers", table, vec![KeyPart::TextLit("TList".into())]);
+        assert!(inline(&fixed).expect("one line").ends_with("key \"TList\")"));
+        // The declared type says only that the file will say.
+        assert_eq!(read.display_name(), "schema");
     }
 }

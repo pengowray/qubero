@@ -131,7 +131,7 @@ impl Evaluator {
             Landing::Runs => &mut state.stitch.get_or_insert_with(Default::default).walk,
         };
         if !walk.started {
-            walk.frames = vec![GatherFrame { node: at.to_vec(), next: 0 }];
+            walk.frames = vec![GatherFrame { node: at.to_vec(), next: 0, last: None }];
             walk.started = true;
         }
         walk
@@ -155,13 +155,17 @@ impl Evaluator {
     /// same one.
     pub(super) fn walk_next<S: Source>(&mut self, doc: &Document<S>, at: &[usize], from: &[Step], landing: Landing) -> R<Option<Vec<usize>>> {
         loop {
-            let (k, node, next) = {
+            let (k, node, next, last) = {
                 let w = self.walk_mut(at, landing);
                 let Some(top) = w.frames.last() else { return Ok(None) };
-                (w.frames.len() - 1, top.node.clone(), top.next)
+                (w.frames.len() - 1, top.node.clone(), top.next, top.last.clone())
             };
             let Some(step) = from.get(k) else { return Ok(None) };
-            let got = match self.walk_step(doc, at, step, k, &node, next, landing) {
+            let got = match step {
+                Step::Deep(name) if k > 0 => self.deep_step(doc, name, &node, next, last),
+                _ => self.walk_step(doc, at, step, k, &node, next, landing),
+            };
+            let got = match got {
                 Err(e) if !e.interrupted() => None,
                 other => other?,
             };
@@ -174,10 +178,13 @@ impl Evaluator {
             match got {
                 Some((j, child)) => {
                     w.frames[k].next = j;
+                    if matches!(step, Step::Deep(_)) {
+                        w.frames[k].last = Some((j, child.clone()));
+                    }
                     if k + 1 == from.len() {
                         return Ok(Some(child));
                     }
-                    w.frames.push(GatherFrame { node: child, next: 0 });
+                    w.frames.push(GatherFrame { node: child, next: 0, last: None });
                 }
                 // Nothing more down this way, so the step above moves on.
                 None => {
@@ -240,14 +247,31 @@ impl Evaluator {
         // the record itself: the walk skipped it.
         match step {
             Step::Field(name) => {
-                let Some(j) = self.child_index(doc, node, name)? else { return Ok(None) };
+                // A name taken from a stream is a field of what the stream
+                // holds, as a name taken from a field that points elsewhere is
+                // a field of what it points at.
+                let mut node = node.to_vec();
+                self.into_contents(doc, &mut node)?;
+                let Some(j) = self.child_index(doc, &node, name)? else { return Ok(None) };
                 if from > j {
                     return Ok(None);
                 }
-                let mut p = node.to_vec();
+                let mut p = node;
                 p.push(j);
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
+            }
+            // Taken by `deep_step`, which needs the frame's place as well as
+            // its count.
+            Step::Deep(_) => Ok(None),
+            // One candidate, found by looking rather than by name, and stood
+            // on the way a field is: as index nought, until the walk has moved
+            // past it.
+            Step::Stream => {
+                if from > 0 {
+                    return Ok(None);
+                }
+                Ok(self.stream_under(doc, node)?.map(|p| (0, p)))
             }
             Step::Tagged { key, tag, .. } => {
                 if !self.is_list(doc, node)? {
@@ -291,17 +315,109 @@ impl Evaluator {
             }
             Step::Placer => fail("only the first step of a walk can start at the record that placed it"),
             Step::Fields(names) => {
-                self.resolve(doc, node)?;
-                let Ty::Struct(s) = self.memo[node].ty.base().clone() else { return Ok(None) };
+                let mut node = node.to_vec();
+                self.into_contents(doc, &mut node)?;
+                let Ty::Struct(s) = self.memo[&node].ty.base().clone() else { return Ok(None) };
                 let Some(j) = (from..s.fields.len()).find(|&j| names.iter().any(|n| **n == *s.fields[j].name)) else {
                     return Ok(None);
                 };
-                let mut p = node.to_vec();
+                let mut p = node;
                 p.push(j);
                 self.through_at(doc, &mut p)?;
                 Ok(Some((j, p)))
             }
         }
+    }
+
+    /// Where a [`Step::Deep`] goes from `root`: the landing it stands on when
+    /// `from` is the count it last landed at, and otherwise the next field
+    /// called `name` after that landing, in the order a walk down through
+    /// `root` meets them. Nothing when there are no more.
+    ///
+    /// The search carries on from the place it last landed rather than from
+    /// the top, since the walk it is part of asks for one landing at a time
+    /// and a tree of a thousand branches would otherwise be searched a
+    /// thousand times. Opening a node for the first time is charged against
+    /// the go, so a search that runs out stops where it can start again: at
+    /// the landing before, with what it opened on the way still open.
+    fn deep_step<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        name: &str,
+        root: &[usize],
+        from: usize,
+        last: Option<(usize, Vec<usize>)>,
+    ) -> R<Option<(usize, Vec<usize>)>> {
+        let (count, mut stack) = match last {
+            Some((ord, p)) if from == ord => return Ok(Some((ord, p))),
+            Some((ord, p)) if from == ord + 1 && p.starts_with(root) && p.len() > root.len() => {
+                (ord + 1, (root.len()..p.len()).map(|k| (p[..k].to_vec(), p[k] + 1)).collect::<Vec<_>>())
+            }
+            None if from == 0 => (0, vec![(root.to_vec(), 0)]),
+            _ => return Ok(None),
+        };
+        while let Some((parent, next)) = stack.last().cloned() {
+            let (children, field) = self.deep_children(doc, &parent, next)?;
+            if next >= children {
+                stack.pop();
+                continue;
+            }
+            if let Some(top) = stack.last_mut() {
+                top.1 += 1;
+            }
+            let mut child = parent;
+            child.push(next);
+            if field.as_deref() == Some(name) {
+                return Ok(Some((count, child)));
+            }
+            // Only a node nothing has opened before is charged: a go that ran
+            // out starts the search again from the landing before, and paying
+            // again for the nodes it already went through would spend every
+            // go getting back to where the last one stopped.
+            if !self.memo.contains_key(&child) {
+                self.spend(0)?;
+            }
+            match self.resolve(doc, &child) {
+                Ok(()) => stack.push((child, 0)),
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => {}
+            }
+        }
+        Ok(None)
+    }
+
+    /// How many children of `parent` a search at any depth goes into, and the
+    /// name of child `idx` where `parent` is a structure. A list of plain
+    /// numbers holds no fields to find, a list placed from records elsewhere
+    /// is not the search's to walk, and of a stream only what it holds is
+    /// looked in: its second child is what the decoder read.
+    fn deep_children<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], idx: usize) -> R<(usize, Option<String>)> {
+        match self.resolve(doc, parent) {
+            Ok(()) => {}
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => return Ok((0, None)),
+        }
+        let ty = self.memo[parent].ty.clone();
+        let counted = |ev: &mut Self| -> R<usize> {
+            match ev.child_count(doc, parent) {
+                Ok(n) => Ok(n as usize),
+                Err(e) if e.interrupted() => Err(e),
+                Err(_) => Ok(0),
+            }
+        };
+        Ok(match ty.base() {
+            Ty::Struct(s) => (s.fields.len(), s.fields.get(idx).map(|f| f.name.to_string())),
+            Ty::At { .. } => (1, None),
+            Ty::Decoded { .. } | Ty::Stitched { .. } => (counted(self)?.min(1), None),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => {
+                if self.holds_no_fields(elem) {
+                    (0, None)
+                } else {
+                    (counted(self)?, None)
+                }
+            }
+            _ => (0, None),
+        })
     }
 
     /// Whether the node at `path` is a list of the template's own, which is
@@ -461,9 +577,62 @@ impl Evaluator {
                 p = start;
                 continue;
             }
+            // What a stream holds adds no name: the step before it named the
+            // stream, and a field of its contents is a field of that.
+            if matches!(step, Step::Field(_) | Step::Fields(_))
+                && record.len() > p.len()
+                && matches!(self.memo.get(&p).map(|r| &r.ty), Some(Ty::Decoded { .. } | Ty::Stitched { .. }))
+            {
+                p.push(0);
+            }
+            // A field found at any depth, named by every field on the way down
+            // to it, since the step's own name says which field and not
+            // which of the hundred it was.
+            if let Step::Deep(want) = step {
+                while record.len() > p.len() {
+                    let Some(r) = self.memo.get(&p) else { break };
+                    let j = record[p.len()];
+                    let dot = if label.is_empty() { "" } else { "." };
+                    match r.ty.base() {
+                        Ty::Struct(s) => {
+                            let name = s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default();
+                            label.push_str(&format!("{dot}{name}"));
+                            p.push(j);
+                            if *name == **want {
+                                break;
+                            }
+                        }
+                        Ty::Array { .. } | Ty::Repeat { .. } => {
+                            label.push_str(&format!("[{j}]"));
+                            p.push(j);
+                        }
+                        _ => p.push(j),
+                    }
+                }
+                continue;
+            }
+            // The run a stream step found, named by the fields on the way down
+            // to it, since no one name in the template says where it is.
+            if let Step::Stream = step {
+                while record.len() > p.len() {
+                    let Some(r) = self.memo.get(&p) else { break };
+                    if matches!(r.ty, Ty::Decoded { .. } | Ty::Stitched { .. }) {
+                        break;
+                    }
+                    let j = record[p.len()];
+                    if let Ty::Struct(s) = r.ty.base() {
+                        let name = s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default();
+                        let dot = if label.is_empty() { "" } else { "." };
+                        label.push_str(&format!("{dot}{name}"));
+                    }
+                    p.push(j);
+                }
+                continue;
+            }
             let Some(&j) = record.get(p.len()) else { break };
             p.push(j);
             match step {
+                Step::Stream | Step::Deep(_) => {}
                 Step::Field(name) => label.push_str(&format!("{dot}{name}")),
                 Step::Tagged { shown, .. } => label.push_str(&format!("{dot}{shown}")),
                 Step::Each => label.push_str(&format!("[{j}]")),
@@ -484,5 +653,90 @@ impl Evaluator {
             }
         }
         label
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::MemSource;
+    use crate::template::{Expr as E, Ty as T};
+
+    /// A node holding nodes, as deep as the file likes, each with a list of
+    /// hits; and a gather placing one byte per hit, wherever the hit is.
+    fn nested() -> Template {
+        let node = T::structure(
+            "Node",
+            vec![
+                ("n", T::u8()),
+                ("kids", T::array(T::Named("Node".into()), E::field("n"))),
+                ("hits_n", T::u8()),
+                ("hits", T::array(T::structure("Hit", vec![("off", T::u8())]), E::field("hits_n"))),
+            ],
+        );
+        let root = T::structure(
+            "Root",
+            vec![
+                ("tree", T::Named("Node".into())),
+                ("found", T::gather(vec![Step::field("tree"), Step::deep("hits"), Step::each()], E::field("off"), Anchor::File, E::lit(0), T::u8())),
+            ],
+        );
+        Template::new("t", root).with_type("Node", node)
+    }
+
+    /// A root with two kids, the first of which has a kid of its own. Five
+    /// hits between them, each pointing at a byte from 30 on.
+    fn bytes() -> Vec<u8> {
+        let mut b = vec![2];
+        b.extend([1, 0, 1, 31, 1, 32]); // kid 0: one kid with one hit, and a hit
+        b.extend([0, 2, 33, 34]); // kid 1: no kids, two hits
+        b.extend([1, 30]); // the root's own hit
+        b.resize(40, 0xee);
+        b
+    }
+
+    #[test]
+    fn a_walk_finds_a_field_at_any_depth() {
+        let d = Document::new(MemSource(bytes()));
+        let mut ev = Evaluator::new(nested());
+        let found = ev.node(&d, &[1]).unwrap();
+        assert_eq!(found.child_count, 5);
+        // In the order a walk down through the tree meets them: a node's kids
+        // before its own hits, since the kids come first in it.
+        let at: Vec<u64> = (0..5).map(|i| ev.node(&d, &[1, i]).unwrap().offset_bits / 8).collect();
+        assert_eq!(at, [31, 32, 33, 34, 30]);
+        // Each named by every field on the way down to the record.
+        let label = |ev: &mut Evaluator, i: usize| {
+            let record = ev.gathered_record(&d, &[1], i).unwrap();
+            ev.gathered_label(&d, &[1], &record).unwrap()
+        };
+        assert_eq!(label(&mut ev, 0), "tree.kids[0].kids[0].hits[0]");
+        assert_eq!(label(&mut ev, 3), "tree.kids[1].hits[1]");
+        assert_eq!(label(&mut ev, 4), "tree.hits[0]");
+    }
+
+    #[test]
+    fn a_walk_at_any_depth_carries_on_across_goes() {
+        let d = Document::new(MemSource(bytes()));
+        let mut whole = Evaluator::new(nested());
+        let want: Vec<u64> = (0..5).map(|i| whole.node(&d, &[1, i]).unwrap().offset_bits).collect();
+        let mut ev = Evaluator::new(nested());
+        ev.set_slice(Some(1));
+        let mut goes = 0;
+        let n = loop {
+            goes += 1;
+            assert!(goes < 100, "the walk is not getting any further");
+            ev.begin_slice();
+            match ev.node(&d, &[1]) {
+                Ok(info) => break info.child_count,
+                Err(EvalError::Busy { .. }) => {}
+                Err(e) => panic!("{e:?}"),
+            }
+        };
+        assert!(goes > 2, "{goes}");
+        assert_eq!(n, 5);
+        ev.set_slice(None);
+        let got: Vec<u64> = (0..5).map(|i| ev.node(&d, &[1, i]).unwrap().offset_bits).collect();
+        assert_eq!(got, want);
     }
 }
