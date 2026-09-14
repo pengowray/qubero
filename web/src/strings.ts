@@ -2352,8 +2352,21 @@ export const DUMP = {
 /** Opening a folder, or several dropped items, as one ZIP built in the browser.
  *  See `folderzip.ts`. */
 export const FOLDER = {
-  open: "Open a folder",
-  openTitle: "Open every file in the folder as one ZIP, built in the browser",
+  /**
+   * The welcome screen's hint, with the way to open a folder as a link in it:
+   * `or [open a folder]. You can also drag a file or folder onto this page.`
+   * The link comes first, straight under `Open a file`, where the folder had a
+   * button of its own; dragging is a sentence of its own, since `or X, or Y`
+   * reads as three choices with the button above as the first. `drag`, not
+   * `drop`: the hint is read before a drag starts, when the thing to do is
+   * drag. The overlay shown mid-drag keeps `Drop to open`, since by then
+   * letting go is the one thing left to do.
+   */
+  hintBefore: "or ",
+  open: "open a folder",
+  hintAfter: ". You can also drag a file or folder onto this page.",
+  /** The link's tooltip. What a click does first: a picker opens. */
+  openTitle: "Pick a folder; every file in it opens as one ZIP, built in the browser",
   /** Reading a large folder's list of files, once that has taken a moment. */
   reading: (folder: string, count: number): string => `Reading ${folder}: ${count.toLocaleString()} files so far…`,
   /** Reading every byte once for the CRC-32s. */
@@ -2361,22 +2374,67 @@ export const FOLDER = {
   cancel: "Cancel",
   stopped: (folder: string): string => `Stopped opening ${folder}.`,
   empty: (folder: string): string => `The folder ${folder} is empty.`,
-  /** The browser gave no way to read what was dropped. */
-  unreadable:
-    'Couldn\'t read the folder. Zip it with zip -0 -r and drop the .zip; if a BP5 dataset opens as a plain ZIP archive, choose "Template: ADIOS2 BP5 dataset in a ZIP" in the toolbar.',
+  /**
+   * The browser gave no way to read what was dragged in. Any ZIP of the
+   * folder reads, stored or deflated, so the way out is only to zip it. This
+   * lands in the welcome status line or the toolbar, and the toolbar has no
+   * folder link to point at.
+   */
+  unreadable: "Couldn't read the folder. Zip it and open the .zip instead.",
   files: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`,
-  /** A dataset missing a companion: what that costs, one clause each. */
-  missing: { "mmd.0": "No mmd.0 in the folder, so records stay bytes.", "data.0": "No data.0 in the folder, so values are not placed." },
+  /**
+   * A dataset's folder without a file the dataset reads, said once for the
+   * whole folder as it opens: `The folder has no mmd.0.`, `The folder has no
+   * mmd.0 and no data.0.` The bare fact, and not what it costs: that is said
+   * where it bites, on each record whose formats are missing and each block
+   * that has no values. `and no`, since `no mmd.0 or data.0` reads as
+   * neither or as one of the two.
+   */
+  missing: (files: readonly string[]): string => `The folder has no ${files.join(" and no ")}.`,
   opened: (folder: string, zip: string, files: string, missing: readonly string[]): string =>
-    missing.length === 0 ? `Opened folder ${folder} as ${zip}: ${files}, built in the browser.` : `Opened folder ${folder} as ${zip}: ${files}. ${missing.join(" ")}`,
+    missing.length === 0 ? `Opened folder ${folder} as ${zip}: ${files}, built in the browser.` : `Opened folder ${folder} as ${zip}: ${files}. ${FOLDER.missing(missing)}`,
   openedItems: (files: string, zip: string): string => `Opened ${files} as ${zip}, built in the browser.`,
   /** Only the first dataset in a folder of several is read. */
   severalDatasets: (n: number, folder: string, read: string, rest: string): string =>
-    `${n} datasets in ${folder}: ${read} is read; ${rest} is listed as files only. Drop ${rest} on its own to read it.`,
-  /** The tab's tooltip. */
+    `${n} datasets in ${folder}: ${read} is read; ${rest} is listed as files only. Open ${rest} on its own to read it.`,
+  /** The tab's tooltip. How the files arrived is not a fact about the
+   *  archive, so several loose files are only counted. */
   origin: (folder: string, files: string): string => `Built in the browser from the folder ${folder} (${files}). Not on disk; Save as writes it.`,
-  originItems: (files: string): string => `Built in the browser from ${files} dropped together. Not on disk; Save as writes it.`,
+  originItems: (files: string): string => `Built in the browser from ${files}. Not on disk; Save as writes it.`,
+  /** Added to either tooltip for a folder too large to sum before it opened.
+   *  Set once as the tab opens, so it says what stays true: the document
+   *  keeps the noughts. */
+  originUnsummed: "Its CRC-32 fields hold 0; the saved file gets the real sums.",
   saved: (size: string, zip: string): string => `Saved ${size} as ${zip}. Unzip it to get a folder ADIOS reads.`,
+} as const;
+
+/**
+ * The CRC-32 fields of an archive built from a folder too large to sum before
+ * it opened: nought in the document, the sums taken in the background, and
+ * Save as writing them. See `sumjob.ts`.
+ *
+ * `Placeholder` leads both states the Integrity slot can be in, before the sum
+ * is known and after, so the reader sees one state move on rather than two
+ * verdicts: `Not checked` already means a check that did not run, and
+ * `Mismatch` means damage. `real` rather than `calculated`, since it is true
+ * before the sum exists as well as after.
+ */
+export const ARCHIVE_SUMS = {
+  /** In the Integrity section's result slot, where `Valid` or `Mismatch` would
+   *  be, while the sum is still being taken. Nothing to press: the slot does
+   *  not update as the sum is read, and Save as waits for it. */
+  pending: "Placeholder · the real CRC-32 is being calculated in the background. Save as writes it.",
+  /** The same, once the sum is known. The value is said twice so no pronoun
+   *  has to reach back for it, and the document keeping its nought is the
+   *  one thing a reader who saves and looks again needs. */
+  known: (crc: string): string => `Placeholder · the real CRC-32 is ${crc}. This document keeps the 0; Save as writes ${crc}.`,
+  /** A plain line under the value, for the central directory's copy of the
+   *  sum, which has no Integrity section. The same words as the slot. */
+  pendingNote: "0 is a placeholder: the real CRC-32 is being calculated in the background. Save as writes it.",
+  knownNote: (crc: string): string => `0 is a placeholder; the real CRC-32 is ${crc}. This document keeps the 0; Save as writes ${crc}.`,
+  /** The toolbar while Save as waits for the sums still being taken, in place
+   *  of `Saving`, which it leads with so the save still reads as under way. */
+  saving: (done: string, total: string): string => `Saving: calculating CRC-32s, ${done} of ${total}…`,
 } as const;
 
 /** The row above the views when one file of a BP5 dataset is opened by

@@ -13,7 +13,9 @@
  * Nothing is copied. The archive is a `Blob` of the headers this writes and the
  * picked files themselves, so its bytes are read from the files when the
  * editor asks for them, the same as for a file opened on its own. The one pass
- * over every byte is the CRC-32 each entry's header carries.
+ * over every byte is the CRC-32 each entry's header carries, which is taken
+ * before the archive opens for a folder of up to `CRC_AT_OPEN_MAX_BYTES`, and
+ * after it for a larger one: see `sumjob.ts`.
  */
 
 /** A file of the folder, by its path inside the folder's parent: the folder's
@@ -38,85 +40,36 @@ export function leafOf(path: string): string {
 
 /**
  * The order the files are written in: the ones a format names itself by
- * first, in the order of `FIRST`, then the rest in path order with data files
- * (`data.0` and the like) last, since those can be most of the folder and
- * nothing is recognised by them.
+ * first, shallowest first and then in the order of `FIRST`, so a Zarr store's
+ * root metadata leads the metadata of the arrays under it; then the rest in
+ * path order with data files (`data.0` and the like) last, since those can be
+ * most of the folder and nothing is recognised by them.
  */
 export function orderForArchive(files: readonly FolderFile[]): FolderFile[] {
-  const rank = (f: FolderFile): number => {
+  const rank = (f: FolderFile): readonly [number, number, number] => {
     const leaf = leafOf(f.path);
     const first = FIRST.indexOf(leaf);
-    if (first >= 0) return first;
-    return /^data\.\d+$/.test(leaf) ? FIRST.length + 1 : FIRST.length;
+    if (first >= 0) return [0, f.path.split("/").length, first];
+    return [/^data\.\d+$/.test(leaf) ? 2 : 1, 0, 0];
   };
-  return [...files].sort((a, b) => rank(a) - rank(b) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const byPath = (a: FolderFile, b: FolderFile): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  return [...files].sort((a, b) => {
+    const [x, y] = [rank(a), rank(b)];
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || byPath(a, b);
+  });
 }
 
-/** CRC-32 tables for slicing by eight: table `k` is the CRC of a byte followed
- *  by `k` zero bytes. */
-const TABLES: Uint32Array[] = (() => {
-  const t0 = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t0[n] = c >>> 0;
-  }
-  const tables = [t0];
-  for (let k = 1; k < 8; k++) {
-    const prev = tables[k - 1] as Uint32Array;
-    const t = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) t[n] = ((prev[n] as number) >>> 8) ^ (t0[(prev[n] as number) & 0xff] as number);
-    tables.push(t);
-  }
-  return tables;
-})();
+import { crcOf } from "./crc32.ts";
 
-/** Carry a CRC-32 on over more bytes. Start from 0; the result is the CRC of
- *  everything handed in so far. */
-export function crc32Update(crc: number, bytes: Uint8Array): number {
-  const [t0, t1, t2, t3, t4, t5, t6, t7] = TABLES as [Uint32Array, Uint32Array, Uint32Array, Uint32Array, Uint32Array, Uint32Array, Uint32Array, Uint32Array];
-  let c = ~crc >>> 0;
-  let i = 0;
-  const n = bytes.length;
-  for (; i + 8 <= n; i += 8) {
-    c ^= (bytes[i] as number) | ((bytes[i + 1] as number) << 8) | ((bytes[i + 2] as number) << 16) | ((bytes[i + 3] as number) << 24);
-    c =
-      (t7[c & 0xff] as number) ^
-      (t6[(c >>> 8) & 0xff] as number) ^
-      (t5[(c >>> 16) & 0xff] as number) ^
-      (t4[c >>> 24] as number) ^
-      (t3[bytes[i + 4] as number] as number) ^
-      (t2[bytes[i + 5] as number] as number) ^
-      (t1[bytes[i + 6] as number] as number) ^
-      (t0[bytes[i + 7] as number] as number);
-  }
-  for (; i < n; i++) c = (t0[(c ^ (bytes[i] as number)) & 0xff] as number) ^ (c >>> 8);
-  return ~c >>> 0;
-}
+export { crc32Update, Stopped } from "./crc32.ts";
 
-/** The archive was not finished: the signal said stop. */
-export class Stopped extends Error {
-  constructor() {
-    super("stopped");
-  }
-}
-
-/** The CRC-32 of a file's bytes, read a piece at a time. `read` is told how
- *  many more bytes have been read after each piece. */
-async function crcOf(file: Blob, read: (bytes: number) => void, signal?: AbortSignal): Promise<number> {
-  const reader = file.stream().getReader();
-  let crc = 0;
-  for (;;) {
-    if (signal?.aborted === true) {
-      await reader.cancel();
-      throw new Stopped();
-    }
-    const { done, value } = await reader.read();
-    if (done) return crc;
-    crc = crc32Update(crc, value);
-    read(value.length);
-  }
-}
+/**
+ * The most a folder may hold for its CRC-32s to be read before it opens. Past
+ * this the archive opens at once with nought in every CRC-32 field, the sums
+ * are taken in the background, and Save as writes them: a gigabyte read before
+ * the first byte shows is a wait for a number most readers never look at.
+ */
+export const CRC_AT_OPEN_MAX_BYTES = 50 * 1024 * 1024;
 
 /** Bytes written little-endian, a field at a time. */
 class Writer {
@@ -160,27 +113,64 @@ function dosTime(ms: number | undefined): { time: number; date: number } {
  *  how many. */
 export type ArchiveProgress = { readonly done: number; readonly total: number };
 
+/** An archive built from a folder: what the editor reads, and where its sums
+ *  go. */
+export type BuiltZip = {
+  /** The archive. Its CRC-32 fields hold each file's sum when the sums were
+   *  read as it was written, and nought when they were not. */
+  readonly blob: Blob;
+  readonly files: readonly FolderFile[];
+  /** Whether the CRC-32 fields hold the sums. */
+  readonly summed: boolean;
+  /** Where each entry's two CRC-32 fields are, in bytes of the archive: the
+   *  local header's and the central directory's. */
+  readonly sumAt: readonly { readonly local: number; readonly central: number }[];
+  /** The same archive with these sums, one per file, written into both of
+   *  each entry's fields. Nothing is copied but the headers. */
+  withSums(crcs: readonly number[]): Blob;
+};
+
+/** Where a local header keeps its CRC-32, and where a central directory
+ *  record does. */
+const LOCAL_CRC = 14;
+const CENTRAL_CRC = 16;
+
+/** `bytes` with a copy of the four at `at` set to `crc`, little-endian. */
+function withCrc(bytes: Uint8Array, at: number, crc: number): void {
+  new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(at, crc >>> 0, true);
+}
+
 /**
  * The files written as a ZIP that stores each one as it is, in the order
- * given, with a CRC-32 read from each and ZIP64 records where a size or an
- * offset is past what 32 bits hold.
+ * given, with ZIP64 records where a size or an offset is past what 32 bits
+ * hold. With `sums`, a CRC-32 read from each file first; without, nought in
+ * every CRC-32 field, for `withSums` to fill in later.
  */
-export async function storedZip(files: readonly FolderFile[], progress?: (p: ArchiveProgress) => void, signal?: AbortSignal): Promise<Blob> {
+export async function storedZip(
+  files: readonly FolderFile[],
+  options: { readonly sums?: boolean; readonly progress?: (p: ArchiveProgress) => void; readonly signal?: AbortSignal } = {},
+): Promise<BuiltZip> {
+  const { progress, signal } = options;
+  const summed = options.sums ?? true;
   const total = files.reduce((n, f) => n + f.file.size, 0);
   let done = 0;
-  const parts: BlobPart[] = [];
+  const locals: Uint8Array[] = [];
+  const centralAt: number[] = [];
+  const localAt: number[] = [];
   const central = new Writer();
   let at = 0;
   const utf8 = new TextEncoder();
   for (const f of files) {
-    const crc = await crcOf(
-      f.file,
-      (n) => {
-        done += n;
-        progress?.({ done, total });
-      },
-      signal,
-    );
+    const crc = !summed
+      ? 0
+      : await crcOf(
+          f.file,
+          (n) => {
+            done += n;
+            progress?.({ done, total });
+          },
+          signal,
+        );
     const name = utf8.encode(f.path);
     const size = f.file.size;
     const { time, date } = dosTime(f.modified);
@@ -212,6 +202,7 @@ export async function storedZip(files: readonly FolderFile[], progress?: (p: Arc
       if (far) centralExtra.u64(at);
     }
     const extra = centralExtra.done();
+    centralAt.push(central.length + CENTRAL_CRC);
     central
       .u32(0x02014b50)
       .u16(needed)
@@ -232,7 +223,8 @@ export async function storedZip(files: readonly FolderFile[], progress?: (p: Arc
       .u32(far ? MAX32 : at)
       .bytes(name)
       .bytes(extra);
-    parts.push(local as BlobPart, f.file);
+    locals.push(local);
+    localAt.push(at + LOCAL_CRC);
     at += local.length + size;
   }
   const directory = central.done();
@@ -266,8 +258,32 @@ export async function storedZip(files: readonly FolderFile[], progress?: (p: Arc
     .u32(zip64 ? MAX32 : directory.length)
     .u32(zip64 ? MAX32 : at)
     .u16(0);
-  parts.push(directory as BlobPart, end.done() as BlobPart);
-  return new Blob(parts, { type: "application/zip" });
+  const tail = end.done();
+  // The headers and the directory are the only bytes written here; the files
+  // are the files.
+  const blobOf = (headers: readonly Uint8Array[], dir: Uint8Array): Blob => {
+    const parts: BlobPart[] = [];
+    files.forEach((f, i) => parts.push(headers[i] as BlobPart, f.file));
+    parts.push(dir as BlobPart, tail as BlobPart);
+    return new Blob(parts, { type: "application/zip" });
+  };
+  const directoryAt = at;
+  return {
+    blob: blobOf(locals, directory),
+    files,
+    summed,
+    sumAt: localAt.map((local, i) => ({ local, central: directoryAt + (centralAt[i] as number) })),
+    withSums(crcs: readonly number[]): Blob {
+      const headers = locals.map((local, i) => {
+        const copy = local.slice();
+        withCrc(copy, LOCAL_CRC, crcs[i] ?? 0);
+        return copy;
+      });
+      const dir = directory.slice();
+      centralAt.forEach((crcAt, i) => withCrc(dir, crcAt, crcs[i] ?? 0));
+      return blobOf(headers, dir);
+    },
+  };
 }
 
 /** A folder entry the browser hands a drop, read to its files. `under` is the

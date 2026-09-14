@@ -19,8 +19,9 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
-import { dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
+import { ARCHIVE_SUMS, DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { CRC_AT_OPEN_MAX_BYTES, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
+import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -175,7 +176,6 @@ let say: (text: string, warn?: boolean) => void = () => {};
 let dropKsy: ((text: string, name: string) => void) | null = null;
 
 const DROP_TITLE = "Drop to open";
-const DROP_HINT = "or drop a file or folder anywhere on this page";
 const discardMsg = (open: string, next: string): string =>
   `Discard unsaved edits to ${open} and open ${next}?`;
 /** Says what letting go costs: the open file closes. Not "replaces", which
@@ -368,6 +368,10 @@ function build(tab: Tab): Page {
   // file lifted out of a folder already open says where it reads instead.
   const memberBar = el("div", { className: "dumpbar" });
   memberBar.hidden = true;
+  // Sums still being taken for an archive no one can save any more are not
+  // worth reading the folder for.
+  const sums = doc.isFile ? doc.archiveSums : null;
+  if (sums !== null) tab.release.push(() => sums.job.stop());
   const showMember = (template: string | null): void => {
     const fact = template === null ? undefined : DATASET_MEMBER.facts[template];
     if (fact === undefined) return;
@@ -822,7 +826,29 @@ function build(tab: Tab): Page {
   const save = async (): Promise<void> => {
     saveBtn.disabled = true;
     saveMsg.textContent = "Saving";
-    const r = await saveDoc(doc);
+    // An archive built from a large folder saves with the CRC-32s it opened
+    // without, and waits for any still being read, saying how far they are.
+    const sums = doc.archiveSums;
+    let unwatch = (): void => {};
+    const source =
+      sums === null
+        ? undefined
+        : async (): Promise<Blob> => {
+            const job = sums.job;
+            const progress = (): void => {
+              if (!job.finished) saveMsg.textContent = ARCHIVE_SUMS.saving(formatSize(job.read), formatSize(job.total));
+            };
+            progress();
+            unwatch = job.onChange(progress);
+            try {
+              return await sums.summed();
+            } finally {
+              unwatch();
+              saveMsg.textContent = "Saving";
+            }
+          };
+    const r = await saveDoc(doc, source);
+    unwatch();
     saveBtn.disabled = false;
     // A dataset's folder saved as the ZIP it was opened as is not something
     // ADIOS2 reads until it is unzipped, and the message says so.
@@ -1904,18 +1930,31 @@ async function openFolder(name: string, read: (seen: (count: number) => void) =>
     if (dropped === null) return report(FOLDER.unreadable, true);
     if (dropped.files.length === 0) return report(FOLDER.empty(name), true);
     const files = orderForArchive(dropped.files);
-    const total = formatBytes(files.reduce((n, f) => n + f.file.size, 0));
-    show(FOLDER.checking(name, formatBytes(0), total));
-    const zip = await storedZip(files, (p) => show(FOLDER.checking(name, formatBytes(p.done), total)), stop.signal);
-    const doc = await Doc.open(new File([zip], dropped.name, { type: "application/zip" }));
+    const bytes = files.reduce((n, f) => n + f.file.size, 0);
+    const total = formatBytes(bytes);
+    // A small folder is summed before it opens, which takes no time worth
+    // mentioning. A large one opens now and is summed after, out of the way.
+    const sums = bytes <= CRC_AT_OPEN_MAX_BYTES;
+    if (sums) show(FOLDER.checking(name, formatBytes(0), total));
+    const built = await storedZip(files, { sums, progress: (p) => show(FOLDER.checking(name, formatBytes(p.done), total)), signal: stop.signal });
+    const doc = await Doc.open(new File([built.blob], dropped.name, { type: "application/zip" }));
     builtArchives.add(doc);
+    if (!built.summed) doc.archiveSums = new ArchiveSums(built, new SumJob(files.map((f) => f.file)));
     welcomeCrystal?.dispose();
     welcomeCrystal = null;
     welcomeStatus = null;
     const count = FOLDER.files(files.length);
     const origin = dropped.folder === null ? FOLDER.originItems(count) : FOLDER.origin(dropped.folder, count);
-    tabs.only({ doc, title: doc.name, origin });
+    tabs.only({ doc, title: doc.name, origin: built.summed ? origin : `${origin} ${FOLDER.originUnsummed}` });
     say(openedMessage(dropped, count));
+    // The sums start once the page has settled, so the first reads of the
+    // archive are not queued behind a read of all of it.
+    const job = doc.archiveSums?.job;
+    if (job !== undefined) {
+      const request = (window as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+      if (request !== undefined) request(() => job.start(), { timeout: 5000 });
+      else setTimeout(() => job.start(), 2000);
+    }
   } catch (error) {
     if (error instanceof Stopped) report(FOLDER.stopped(name));
     else openFailed(error);
@@ -1936,8 +1975,7 @@ function openedMessage(dropped: Dropped, count: string): string {
     const [read, rest] = [leafOf(indexes[0] as string), leafOf(indexes[1] as string)];
     return FOLDER.severalDatasets(indexes.length, dropped.folder, read, rest);
   }
-  const missing = missingFromDataset(dropped.files).map((file) => FOLDER.missing[file]);
-  return FOLDER.opened(dropped.folder, dropped.name, count, missing);
+  return FOLDER.opened(dropped.folder, dropped.name, count, missingFromDataset(dropped.files));
 }
 
 /**
@@ -1970,8 +2008,11 @@ function welcome(): void {
   welcomeStatus.setAttribute("role", "status");
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
-  const openFolderBtn = el("button", { type: "button", textContent: FOLDER.open, title: FOLDER.openTitle, className: "secondary" });
-  openFolderBtn.addEventListener("click", () => pickFolder());
+  // Opening a folder is the less common way in, so it is a link in the line
+  // under the button rather than a second button beside it. A button still,
+  // for the keyboard and a screen reader: it opens a picker, it goes nowhere.
+  const openFolderLink = el("button", { type: "button", textContent: FOLDER.open, title: FOLDER.openTitle, className: "welcome-link" });
+  openFolderLink.addEventListener("click", () => pickFolder());
   const drop = el(
     "div",
     { className: "welcome" },
@@ -1979,8 +2020,7 @@ function welcome(): void {
     el("p", { className: "welcome-tagline", textContent: "A closer look at your data." }),
     el("p", { className: "welcome-description", textContent: "A scientific hex editor for files of any size." }),
     openBtn,
-    openFolderBtn,
-    el("p", { className: "hint", textContent: DROP_HINT }),
+    el("p", { className: "hint" }, FOLDER.hintBefore, openFolderLink, FOLDER.hintAfter),
     el("p", { className: "welcome-privacy", textContent: "Your files stay on your device." }),
     welcomeStatus,
   );

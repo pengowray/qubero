@@ -4,6 +4,7 @@
 import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "./pkg/qubero_wasm.js";
 import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
+import type { ArchiveSums } from "./sumjob.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
@@ -2089,6 +2090,14 @@ export class Doc {
   onRefuseEdit: (why: string) => void = () => {};
 
   /**
+   * For an archive built from a folder too large to sum before it opened, where
+   * its CRC-32 fields are and the sums being taken for them. The fields hold
+   * nought in this document, the inspector says so, and Save as writes the
+   * sums. Null for every other document.
+   */
+  archiveSums: ArchiveSums | null = null;
+
+  /**
    * Whether this document refuses to be changed, saying so once if it does.
    *
    * Every way of changing bytes goes through here rather than through a guard
@@ -3148,10 +3157,30 @@ export class Doc {
   }
 
   /**
+   * Where byte `at` of this document is in the source it was opened from, when
+   * it is an unchanged byte of that source: the same number until an edit
+   * inserts, deletes or overwrites, and after one, wherever the unchanged
+   * stretch holding it came from. Null for a byte that was typed or pasted.
+   */
+  sourceByteOf(at: number): number | null {
+    if (!this.modified) return at;
+    const plan = this.editor.save_plan();
+    for (let i = 0; i < plan.length; i += 4) {
+      const [kind, docOff, srcOff, len] = [plan[i] ?? 0, plan[i + 1] ?? 0, plan[i + 2] ?? 0, plan[i + 3] ?? 0];
+      if (at >= docOff && at < docOff + len) return kind === 0 ? srcOff + (at - docOff) : null;
+    }
+    return null;
+  }
+
+  /**
    * Build the saved file as a Blob of lazy parts. Unchanged stretches of the
    * original are referenced, not copied, so this works for any file size.
+   *
+   * `source` stands in for the file the document was opened from, byte for
+   * byte at the same offsets: an archive built from a folder saves with the
+   * CRC-32s it opened without.
    */
-  async buildOutput(): Promise<Blob> {
+  async buildOutput(source: Pick<ByteSource, "slice"> = this.blob): Promise<Blob> {
     const plan = this.editor.save_plan();
     const add = this.editor.add_bytes();
     const parts: BlobPart[] = [];
@@ -3161,14 +3190,14 @@ export class Doc {
       const srcOff = plan[i + 2] ?? 0;
       const len = plan[i + 3] ?? 0;
       if (kind === 0) {
-        const part = this.blob.slice(srcOff, srcOff + len);
+        const part = source.slice(srcOff, srcOff + len);
         if (part instanceof Blob) {
           parts.push(part); // lazy reference, nothing copied
         } else {
           // Non-Blob sources (dev synthetic files) must be read; keep pieces bounded.
           const STEP = 16 * 1024 * 1024;
           for (let o = 0; o < len; o += STEP) {
-            parts.push(await this.blob.slice(srcOff + o, srcOff + Math.min(len, o + STEP)).arrayBuffer());
+            parts.push(await source.slice(srcOff + o, srcOff + Math.min(len, o + STEP)).arrayBuffer());
           }
         }
       } else if (kind === 1) {

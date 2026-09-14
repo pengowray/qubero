@@ -29,9 +29,41 @@ test("the files a format is recognised by go first and data files last", () => {
   assert.deepEqual(order, ["steps.bp5/md.idx", "steps.bp5/mmd.0", "steps.bp5/md.0", "steps.bp5/profiling.json", "steps.bp5/data.0"]);
 });
 
+test("a Zarr store's root metadata leads the metadata under it", () => {
+  const order = orderForArchive([
+    file("image.zarr/0/0.0", "chunk"),
+    file("image.zarr/0/.zarray", "a"),
+    file("image.zarr/labels/.zgroup", "g"),
+    file("image.zarr/.zattrs", "r"),
+    file("image.zarr/.zgroup", "g"),
+  ]).map((f) => f.path);
+  assert.deepEqual(order, ["image.zarr/.zgroup", "image.zarr/.zattrs", "image.zarr/labels/.zgroup", "image.zarr/0/.zarray", "image.zarr/0/0.0"]);
+});
+
+test("a large folder's archive holds nought for each sum until the sums are written in", async () => {
+  const files = [file("steps.bp5/md.idx", "index"), file("steps.bp5/data.0", "0123456789")];
+  const built = await storedZip(files, { sums: false });
+  assert.equal(built.summed, false);
+  const bare = new DataView(await built.blob.arrayBuffer());
+  const crcs = await Promise.all(files.map(async (f) => crc32Update(0, new Uint8Array(await f.file.arrayBuffer()))));
+  for (const at of built.sumAt) {
+    assert.equal(bare.getUint32(at.local, true), 0);
+    assert.equal(bare.getUint32(at.central, true), 0);
+  }
+  const summed = await built.withSums(crcs).arrayBuffer();
+  const view = new DataView(summed);
+  built.sumAt.forEach((at, i) => {
+    assert.equal(view.getUint32(at.local, true), crcs[i]);
+    assert.equal(view.getUint32(at.central, true), crcs[i]);
+  });
+  // Nothing else moved: the archive summed as it was written is the same bytes.
+  const whole = new Uint8Array(await (await storedZip(files)).blob.arrayBuffer());
+  assert.deepEqual(new Uint8Array(summed), whole);
+});
+
 test("a stored ZIP holds each file whole behind its header, and a directory that finds them", async () => {
   const files = [file("steps.bp5/md.idx", "index"), file("steps.bp5/data.0", "0123456789")];
-  const zip = new Uint8Array(await (await storedZip(files)).arrayBuffer());
+  const zip = new Uint8Array(await (await storedZip(files)).blob.arrayBuffer());
   const view = new DataView(zip.buffer);
   let at = 0;
   for (const f of files) {

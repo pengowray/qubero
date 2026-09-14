@@ -12,7 +12,7 @@ import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -1319,7 +1319,8 @@ export class Inspector {
   private fillSemantics(path: readonly number[], n: TemplateNode): void {
     const date = this.dateText(path);
     const plan = this.integrityPlan(path, n);
-    if (date === null && plan === null) {
+    const placeholder = this.archiveSumAt(n);
+    if (date === null && plan === null && placeholder === null) {
       this.semantics.hidden = true;
       this.semantics.replaceChildren();
       return;
@@ -1337,9 +1338,33 @@ export class Inspector {
         parts.push(note);
       }
     }
-    if (plan !== null) parts.push(this.integrityWidget(plan));
+    const crcText = (crc: number): string => `0x${crc.toString(16).padStart(8, "0")}`;
+    if (plan !== null) {
+      // A sum whose field holds a placeholder is not checked: against the
+      // nought in the field every file would read as damaged.
+      const instead = placeholder === null ? null : placeholder.crc === null ? ARCHIVE_SUMS.pending : ARCHIVE_SUMS.known(crcText(placeholder.crc));
+      parts.push(this.integrityWidget(plan, instead));
+    } else if (placeholder !== null) {
+      const note = document.createElement("div");
+      note.className = "insp-note";
+      note.textContent = placeholder.crc === null ? ARCHIVE_SUMS.pendingNote : ARCHIVE_SUMS.knownNote(crcText(placeholder.crc));
+      parts.push(note);
+    }
     this.semantics.replaceChildren(...parts);
     this.semantics.hidden = false;
+  }
+
+  /**
+   * Whether the field is a CRC-32 field of an archive built from a folder too
+   * large to sum before it opened, which holds nought until Save as writes the
+   * sum, and that sum once it is known. Only a field of the file itself, still
+   * where the archive was built with it, and not one a reader has typed over.
+   */
+  private archiveSumAt(n: TemplateNode): { readonly crc: number | null } | null {
+    const sums = this.doc.archiveSums;
+    if (sums === null || n.space !== 0 || n.size_bits !== 32 || n.offset_bits % 8 !== 0) return null;
+    const at = this.doc.sourceByteOf(n.offset_bits / 8);
+    return at === null ? null : sums.slotAt(at);
   }
 
   /**
@@ -1427,12 +1452,19 @@ export class Inspector {
   }
 
 
-  private integrityWidget(plan: IntegrityPlan): HTMLElement {
+  /** The Integrity section. `instead` is what the result slot says in place of
+   *  running the check, for a sum whose field does not hold it yet. */
+  private integrityWidget(plan: IntegrityPlan, instead: string | null = null): HTMLElement {
     const box = document.createElement("div");
     box.className = "insp-integrity";
     const result = document.createElement("div");
     result.className = "insp-check-result";
     const { element: covered, setSize } = this.coveredRows(plan);
+    if (instead !== null) {
+      result.textContent = instead;
+      box.append(subhead("Integrity"), covered, result);
+      return box;
+    }
     const run = async (): Promise<void> => {
       result.className = "insp-check-result";
       result.textContent = "Checking…";
