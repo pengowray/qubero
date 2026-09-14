@@ -590,6 +590,16 @@ function build(tab: Tab): Page {
     if (n.status !== "ok") return;
     const unpacked = doc.openSpace(path);
     if (unpacked === null) return;
+    // A compressed run that will not open says why on its own row and is not
+    // offered. A joined stream is offered while its length is under the cap,
+    // and a part that will not read is found only now, so this is where it is
+    // said, for the listing's button and the inspector's alike.
+    if ("refused" in unpacked) {
+      const first = doc.templateNode([...path, 0]);
+      const joined = first.status === "ok" && first.node.joined && first.node.space_root;
+      if (joined) say(unpacked.refused === "too-large" ? JOINED.tooLarge : JOINED.failed(JOINED.tabTitle(n.node.name, doc.name)), true);
+      return;
+    }
     const already = tabs.forSpace(unpacked.space);
     if (already >= 0) {
       tabs.focus(already);

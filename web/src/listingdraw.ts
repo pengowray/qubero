@@ -24,6 +24,7 @@ import { recordTable } from "./records.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
+import { JOINED_WHOLE_CAP_BITS } from "./joinedpart.ts";
 import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, REPORT, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
@@ -449,10 +450,6 @@ function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: Template
   const stream = item.path.slice(0, -1);
   if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name, n.joined));
 }
-
-/** The most a joined stream may come to and still open as a document of its
- *  own: `CAP_BYTES` in the core's `codec.rs`, in bits. */
-const JOINED_WHOLE_CAP_BITS = 64 * 1024 * 1024 * 8;
 
 /** The control that opens a compressed run, or a stream joined from several
  *  runs, as a document of its own. */

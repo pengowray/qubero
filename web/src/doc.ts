@@ -2090,14 +2090,18 @@ export class Doc {
    * document of its own, over the same editor. A stream already open comes
    * back as the document it already is rather than being unpacked again.
    *
-   * Null when the stream would not open. Which of the three ways it would not
-   * is already on the node, so the caller does not have to ask twice.
+   * A stream that would not open comes back as the core's word for why. For a
+   * compressed run that word is already on the node, so the caller need not
+   * say it again; a stream joined from several runs is found to be too long,
+   * or to have a part that will not read, only here, when it is joined whole.
+   * Null when there was no answer.
    */
-  openSpace(path: readonly number[]): Doc | null {
+  openSpace(path: readonly number[]): Doc | { readonly refused: string } | null {
     const r = this.handleReply<{ space: number; template: string; refused?: string; joined: boolean; stored: boolean }>(
       this.editor.open_space(Uint32Array.from(path)),
     );
-    if (r.status !== "ok" || r.node.space === 0) return null;
+    if (r.status !== "ok") return null;
+    if (r.node.space === 0) return r.node.refused === undefined ? null : { refused: r.node.refused };
     const opened = new Doc(this.editor, this.blob, this.name, r.node.space, [...path], r.node.joined, r.node.stored);
     // The template came with the space rather than being chosen for it, so it
     // is set here and never through `setTemplate`.
@@ -2625,6 +2629,17 @@ export class Doc {
    */
   partOf(path: readonly number[]): JoinedPart | null {
     const r = this.handleReply<JoinedPart | null>(this.editor.part_of(this.space, Uint32Array.from(path)));
+    return r.status === "ok" ? r.node : null;
+  }
+
+  /**
+   * The same for byte `byte` of this document, when it is a stream joined from
+   * several runs and opened as a tab of its own. The run's path is a field of
+   * the file, not of this tab. Null for every other document.
+   */
+  partAt(byte: number): JoinedPart | null {
+    if (!this.joined) return null;
+    const r = this.handleReply<JoinedPart | null>(this.editor.part_at(this.space, byte));
     return r.status === "ok" ? r.node : null;
   }
 

@@ -401,6 +401,16 @@ export const JOINED = {
    *  true of a field that crosses into the next run as well. */
   startsIn: "Starts in",
   /**
+   * The same heading in a tab of the joined stream's own, where the rows are
+   * about the byte under the cursor rather than the field's first byte: a tab
+   * over a stream of plain bytes is one field, which starts in the first run
+   * wherever the cursor is. Names the byte by what picked it, so the rows are
+   * not taken for the whole field, and `is at` reads on into every row under
+   * it. Not `Unpacked from`, which is false for a PDB page and an HDF4 block
+   * and only half true for a BGZF block, whose stream was joined.
+   */
+  underCursor: "Byte under the cursor is at",
+  /**
    * The row itself: the field's first byte, as an offset inside what the run
    * gives, and the run. For a run that was unpacked, the offset is inside what
    * it unpacks to and not inside the compressed bytes, and `unpacked` says so
@@ -413,6 +423,10 @@ export const JOINED = {
   /** For a run stored as it sits in the file, where the byte is in the file,
    *  which is the question a reader of a PDB has first. */
   inFile: (at: string): string => `${at} in the file`,
+  /** The same in a tab of the joined stream's own, which is a document and
+   *  not the file, so `the file` there could be read as the tab. Named as the
+   *  decoder's line under it names the file. */
+  inNamedFile: (at: string, file: string): string => `${at} in ${file}`,
   /**
    * A BGZF block's byte as a BAI or a CSI stores it: the number, and its two
    * halves under the names the BAI's own rows give them, so the three can be
@@ -428,10 +442,28 @@ export const JOINED = {
    *  at the top of the panel. See `DECODED_PLUS_TITLE` and `DECODED_INSIDE`. */
   plusTitleStream: "Offset within the joined stream",
   inside: "in the joined stream",
-  /** On the listing row of a joined stream short enough to hold whole, where
-   *  `UNPACKED.open` sits for a compressed run. The noun the addresses inside
-   *  already use; a PDB page and an HDF4 block were never packed. */
+  /** On the listing row and in the inspector for a joined stream short enough
+   *  to hold whole, where `UNPACKED.open` sits for a compressed run. The noun
+   *  the addresses inside already use; a PDB page and an HDF4 block were never
+   *  packed. The hover is `UNPACKED.openTitle`, which is true of both. */
   open: "Open joined stream",
+  /**
+   * Where that button would be, for a joined stream longer than a tab may
+   * hold. It still reads a part at a time where it is declared, so this is
+   * not a reason on its node the way `DECODED_REFUSED` is. The same shape as
+   * `DECODED_REFUSED`'s `too-large`, without `unpack`, and capitalised because
+   * it stands on its own line rather than after a ` · `.
+   */
+  tooLarge: "Too large to open as a document of its own (over 64 MiB)",
+  /**
+   * In the status bar, when Open joined stream was pressed and joining the
+   * whole stream failed: a part would not read, would not unpack, or unpacked
+   * to another length than its block said. The core does not say which part,
+   * so neither does this, and `read or unpacked` is true of a stored run and
+   * a packed one alike. `tab` is the title the tab would have had, which names
+   * what was pressed.
+   */
+  failed: (tab: string): string => `Couldn't open ${tab}: one of its parts couldn't be read or unpacked.`,
   /** Names the tab a joined stream opens in. The same shape as
    *  `UNPACKED.tabTitle`. */
   tabTitle: (field: string, file: string): string => `${field} joined from ${file}`,
@@ -447,7 +479,9 @@ export const JOINED = {
 export const UNPACKED = {
   /** Heading over the one row saying which decoder step produced this field's
    *  bytes. The groups above it say which fields decided the field's shape;
-   *  this says the bytes are there at all. */
+   *  this says the bytes are there at all. In a tab of a joined stream it
+   *  heads that line only for a run that was unpacked, under the rows saying
+   *  where the byte is kept (`JOINED.underCursor`). */
   originHead: "Unpacked from",
   /** Names the tab: what was unpacked, and what out of. */
   tabTitle: (field: string, file: string): string => `${field} unpacked from ${file}`,

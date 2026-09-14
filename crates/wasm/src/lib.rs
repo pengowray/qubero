@@ -883,6 +883,25 @@ struct StitchedPartDto {
     in_block: Option<f64>,
 }
 
+fn stitched_part_dto(h: qubero_core::eval::PartHit) -> StitchedPartDto {
+    StitchedPartDto {
+        index: h.index as f64,
+        parts: h.parts as f64,
+        path: h.path.iter().map(|&x| x as f64).collect(),
+        label: h.label,
+        in_part: h.in_part as f64,
+        part_len: h.part_len as f64,
+        run_offset_bits: h.run_offset_bits as f64,
+        run_space: h.run_space as f64,
+        packed: h.packed,
+        // Past 2^53 a number stops being exact in JavaScript, and a virtual
+        // offset reaches that at a block eight petabytes into the file. The
+        // halves are what a reader checks against an index anyway.
+        block_offset: h.virtual_offset.map(|v| (v >> 16) as f64),
+        in_block: h.virtual_offset.map(|v| (v & 0xffff) as f64),
+    }
+}
+
 /// How a field was placed and how it was sized, in one word each. What the
 /// panel says before any other field is named: most fields are placed and
 /// sized by the template alone and have no origins at all, and a section that
@@ -3263,27 +3282,32 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 let hit = e.node(&sh.doc, &p).and_then(|n| e.part_of(&sh.doc, n.space, n.offset_bits / 8));
-                reply(hit.map(|h| {
-                    h.map(|h| StitchedPartDto {
-                        index: h.index as f64,
-                        parts: h.parts as f64,
-                        path: h.path.iter().map(|&x| x as f64).collect(),
-                        label: h.label,
-                        in_part: h.in_part as f64,
-                        part_len: h.part_len as f64,
-                        run_offset_bits: h.run_offset_bits as f64,
-                        run_space: h.run_space as f64,
-                        packed: h.packed,
-                        // Past 2^53 a number stops being exact in JavaScript,
-                        // and a virtual offset reaches that at a block eight
-                        // petabytes into the file. The halves are what a
-                        // reader checks against an index anyway.
-                        block_offset: h.virtual_offset.map(|v| (v >> 16) as f64),
-                        in_block: h.virtual_offset.map(|v| (v & 0xffff) as f64),
-                    })
-                }))
+                reply(hit.map(|h| h.map(stitched_part_dto)))
             }
         }
+    }
+
+    /// The same answer for byte `byte` of a joined stream opened as a tab of
+    /// its own, asked by the byte rather than by a field. Null for a tab that
+    /// was unpacked from one run, and for the file.
+    ///
+    /// The tab's own reading knows nothing of the runs, since its bytes are
+    /// its own. The file's reading does, under the node that joined them, and
+    /// byte `byte` of the tab is byte `byte` of the stream there: the parts are
+    /// laid end to end in the same order and cut at the same length. The node
+    /// the stream holds says which space that is.
+    pub fn part_at(&mut self, space: u32, byte: f64) -> String {
+        let none = || reply(Ok(None::<StitchedPartDto>));
+        if space == 0 || !self.space_joined(space).0 {
+            return none();
+        }
+        let Some(mut root) = self.sheets.get(space as usize).map(|sh| sh.origin.clone()) else { return none() };
+        root.push(0);
+        let file = &mut self.sheets[0];
+        let Some(e) = &mut file.eval else { return none() };
+        e.begin_slice();
+        let hit = e.node(&file.doc, &root).and_then(|n| e.part_of(&file.doc, n.space, byte as u64));
+        reply(hit.map(|h| h.map(stitched_part_dto)))
     }
 
     /// What the field at `path` checks, or null when it checks nothing. JSON,

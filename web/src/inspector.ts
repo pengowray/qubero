@@ -10,10 +10,11 @@ import { bitCells, byteRuns } from "./codebits.ts";
 import { address } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
-import type { DecodedCode, DecodedStep, Doc, FieldGraph, JoinedPart, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
+import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
 import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
+import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { fieldClass } from "./fieldstyle.ts";
@@ -1125,16 +1126,26 @@ export class Inspector {
   private fillOpenAs(path: readonly number[], n: TemplateNode): void {
     const parts: Node[] = [];
     // A compressed run that opened can be read in its own right, in a tab that
-    // stays connected to the bytes it came from. A run that would not open has
-    // no button; the line saying why is already beside the address above.
-    if (n.decoded && n.refused === null) {
+    // stays connected to the bytes it came from, and so can a stream joined
+    // from several runs, with the words the listing offers each with. A run
+    // that would not open has no button; the line saying why is already beside
+    // the address above. A joined stream too long to hold whole has no such
+    // line, since it still reads a part at a time, so it is said here instead.
+    const first = n.composite && n.child_count > 0 ? this.doc.templateNode([...path, 0]) : null;
+    const offer = streamOffer(path, n, first?.status === "ok" ? first.node : null);
+    if (offer !== null && "open" in offer) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "insp-check-button";
-      button.textContent = UNPACKED.open;
+      button.textContent = offer.joined ? JOINED.open : UNPACKED.open;
       button.title = UNPACKED.openTitle(n.name);
-      button.addEventListener("click", () => this.onOpenUnpacked(path));
+      button.addEventListener("click", () => this.onOpenUnpacked(offer.open));
       parts.push(button);
+    } else if (offer !== null) {
+      const why = document.createElement("div");
+      why.className = "insp-detail";
+      why.textContent = JOINED.tooLarge;
+      parts.push(why);
     }
     const plan = openPlan(this.doc, path, n);
     if (plan !== null) {
@@ -2009,21 +2020,52 @@ export class Inspector {
    * and a reader who has seen it below should recognise it here.
    */
   private unpackedRows(path: readonly number[], stream: readonly Origin[]): Node[] {
-    const rows: Node[] = stream.map(originRow);
     const n = this.doc.templateNode(path);
+    // A tab of a stream joined from several runs was not unpacked from one,
+    // and some of its runs were never packed at all. What it has instead is
+    // the run the byte is kept in. A field of a stream packed inside the tab
+    // is not one of the tab's own bytes, and keeps the heading below.
+    if (this.doc.joined && n.status === "ok" && n.node.space === 0) return this.joinedTabRows(n.node);
+    const rows: Node[] = stream.map(originRow);
     if (!this.doc.isFile && n.status === "ok") {
-      const step = this.doc.mapOut(Math.floor(n.node.offset_bits / 8));
+      const step = this.stepLine(Math.floor(n.node.offset_bits / 8));
       if (step !== null) {
         const row = document.createElement("div");
         row.className = "insp-origin";
         const what = document.createElement("span");
-        const { start, end } = stepBits(step);
-        what.textContent = unpackedOriginRow(this.doc.name, start, end, step.kind, step.len, step.dist, step.field);
+        what.textContent = step;
         row.append(what);
         rows.push(row);
       }
     }
     return rows.length === 0 ? [] : [roleHead(UNPACKED.originHead), ...rows];
+  }
+
+  /** The decoder's line for byte `byte` of this tab, as the status bar says it
+   *  without its `from`. */
+  private stepLine(byte: number): string | null {
+    const step = this.doc.mapOut(byte);
+    if (step === null) return null;
+    const { start, end } = stepBits(step);
+    return unpackedOriginRow(this.doc.name, start, end, step.kind, step.len, step.dist, step.field);
+  }
+
+  /**
+   * Where a byte of a joined stream opened as a tab is kept: the byte under
+   * the cursor, or the field's first byte when the panel is pinned to a field
+   * the cursor is not in. See `tabGroups`.
+   *
+   * The byte and not the field, unlike `joinedRows`: a tab over a stream of
+   * plain bytes is one field, and that field starts in the first run wherever
+   * the cursor is. The decoder's line is for the same byte, so it is the line
+   * the status bar shows beside it.
+   */
+  private joinedTabRows(n: TemplateNode): Node[] {
+    const inside = this.offset >= n.offset_bits && this.offset < n.offset_bits + n.size_bits;
+    const byte = Math.floor((inside ? this.offset : n.offset_bits) / 8);
+    const part = this.doc.partAt(byte);
+    if (part === null) return [];
+    return tabGroups(part, this.doc.name, inside, part.packed ? this.stepLine(byte) : null).flatMap(groupRows);
   }
 
   /**
@@ -2041,17 +2083,7 @@ export class Inspector {
     if (!n.joined) return [];
     const part = this.doc.partOf(path);
     if (part === null) return [];
-    const rows: Node[] = [joinedRow(part)];
-    if (!part.packed && part.run_space === 0) {
-      rows.push(plainRow(JOINED.inFile(formatOffset(part.run_offset_bits + part.in_part * 8))));
-    }
-    if (part.block_offset !== null && part.in_block !== null) {
-      const voffset = (BigInt(part.block_offset) << 16n) | BigInt(part.in_block);
-      const row = plainRow(`${JOINED.virtualLabel} ${JOINED.virtual(voffset.toString(), String(part.block_offset), String(part.in_block))}`);
-      row.title = JOINED.virtualTitle(formatOffset(part.block_offset * 8));
-      rows.push(row);
-    }
-    return [roleHead(JOINED.startsIn), ...rows];
+    return groupRows(startsInGroup(part));
   }
 
   /**
@@ -3042,32 +3074,25 @@ function insideRow(name: string, delta: number, path: readonly number[]): HTMLEl
 }
 
 /**
- * The run a field of a joined stream starts in, and where in it: `@+0x4d2 in
- * pages[12]`. The whole row carries the run's path, the way an `Offset within`
- * row carries its structure's, so pointing at it marks the run and clicking
- * goes there.
+ * Where a byte of a joined stream is kept, as a heading and its rows: `@+0x4d2
+ * in pages[12]` and the rest. A row naming a run the reader can go to carries
+ * the run's path, the way an `Offset within` row carries its structure's, so
+ * pointing at it marks the run and clicking goes there.
  */
-function joinedRow(part: JoinedPart): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "insp-origin";
-  row.dataset["path"] = part.path.join("/");
-  const what = document.createElement("span");
-  what.className = "insp-origin-name";
-  const at = `${ADDRESS_MARK}+${offsetDigits(part.in_part * 8)}`;
-  what.append(...address(JOINED.at(at, part.label, part.packed), JOINED.plusTitle(part.label, part.packed)));
-  row.append(what);
-  return row;
-}
-
-/** A row of the same group with nowhere to go. */
-function plainRow(text: string): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "insp-origin";
-  const what = document.createElement("span");
-  what.className = "insp-origin-name";
-  what.textContent = text;
-  row.append(what);
-  return row;
+function groupRows(group: PartGroup): Node[] {
+  const rows = group.lines.map((line) => {
+    const row = document.createElement("div");
+    row.className = "insp-origin";
+    if (line.path !== null) row.dataset["path"] = line.path.join("/");
+    if (line.title !== null) row.title = line.title;
+    const what = document.createElement("span");
+    if (line.place) what.className = "insp-origin-name";
+    if (line.plus !== null) what.append(...address(line.text, line.plus));
+    else what.textContent = line.text;
+    row.append(what);
+    return row;
+  });
+  return [roleHead(group.head), ...rows];
 }
 
 /** A clause that is only the field's name and what it says: what a count or a
