@@ -115,8 +115,8 @@ fn ihdr() -> T {
             ("NC", T::u16(Big)),
             ("BPC", T::u8()),
             ("C", T::enumeration("CompressionType", T::u8(), &[(7, "wavelet")])),
-            ("UnkC", T::enumeration("ColourspaceKnown", T::u8(), &[(0, "known"), (1, "unknown")])),
-            ("IPR", T::enumeration("IntellectualProperty", T::u8(), &[(0, "no jp2i box"), (1, "jp2i box present")])),
+            ("UnkC", T::enumeration("ColourspaceKnown", T::u8(), &[(0, "colour space known"), (1, "colour space not known")])),
+            ("IPR", T::enumeration("IntellectualProperty", T::u8(), &[(0, "no intellectual property box"), (1, "intellectual property box present")])),
             ("signed", T::when(varies.clone().equal_to(E::lit(0)), T::computed(E::field("BPC").bit(7)))),
             ("depth", T::when(varies.equal_to(E::lit(0)), T::computed(depth(E::field("BPC"))))),
         ],
@@ -130,7 +130,7 @@ fn colr() -> T {
     T::structure(
         "ColourSpecification",
         vec![
-            ("METH", T::enumeration("ColourMethod", T::u8(), &[(1, "enumerated"), (2, "restricted ICC profile")])),
+            ("METH", T::enumeration("ColourMethod", T::u8(), &[(1, "enumerated colour space"), (2, "restricted ICC profile")])),
             ("PREC", T::Int { bits: 8, endian: Big }),
             ("APPROX", T::u8()),
             ("EnumCS", T::when(enumerated.clone(), T::enumeration("EnumCS", T::u32(Big), ENUM_CS))),
@@ -165,7 +165,7 @@ fn cmap() -> T {
         "ComponentMapping",
         vec![
             ("CMP", T::u16(Big)),
-            ("MTYP", T::enumeration("MappingType", T::u8(), &[(0, "direct use"), (1, "palette mapping")])),
+            ("MTYP", T::enumeration("MappingType", T::u8(), &[(0, "used directly"), (1, "mapped through the palette")])),
             ("PCOL", T::u8()),
         ],
     );
@@ -188,7 +188,7 @@ fn cdef() -> T {
                     &[(0, "colour"), (1, "opacity"), (2, "premultiplied opacity"), (65535, "unspecified")],
                 ),
             ),
-            ("Asoc", T::enumeration("ChannelAssociation", T::u16(Big), &[(0, "whole image"), (65535, "none")])),
+            ("Asoc", T::enumeration("ChannelAssociation", T::u16(Big), &[(0, "whole image"), (65535, "not associated")])),
         ],
     );
     T::structure("ChannelDefinitions", vec![("N", T::u16(Big)), ("channels", T::array(channel, E::field("N")))])

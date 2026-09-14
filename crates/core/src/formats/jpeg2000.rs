@@ -28,8 +28,8 @@
 //! against everything the main header set up; that is a job for a reader of
 //! its own, not for a layout. The SOP and EPH markers inside them are part of
 //! those bytes. So are the packed packet headers PPM and PPT carry, and a
-//! marker this does not name keeps its length and its bytes, which is what
-//! Part 2 and Part 15 add (CAP, CPF and the rest).
+//! marker segment this does not read keeps its length and its bytes, which is
+//! what the ones Part 2 and Part 15 add do here (CAP, CPF and the rest).
 //!
 //! The JP2 file format is Annex I: boxes, each a length, four letters and
 //! contents, the same shape an MP4 is. The codestream is in the `jp2c` box and
@@ -50,17 +50,17 @@ mod boxes;
 const MARKER: &[(i128, &str)] = &[
     (0xff4f, "SOC, start of codestream"),
     (0xff51, "SIZ, image and tile size"),
-    (0xff52, "COD, coding style default"),
-    (0xff53, "COC, coding style component"),
+    (0xff52, "COD, default coding style"),
+    (0xff53, "COC, coding style for one component"),
     (0xff55, "TLM, tile-part lengths"),
     (0xff57, "PLM, packet lengths in the main header"),
-    (0xff58, "PLT, packet lengths in the tile-part header"),
-    (0xff5c, "QCD, quantization default"),
-    (0xff5d, "QCC, quantization component"),
+    (0xff58, "PLT, packet lengths in a tile-part header"),
+    (0xff5c, "QCD, default quantization"),
+    (0xff5d, "QCC, quantization for one component"),
     (0xff5e, "RGN, region of interest"),
     (0xff5f, "POC, progression order change"),
     (0xff60, "PPM, packed packet headers in the main header"),
-    (0xff61, "PPT, packed packet headers in the tile-part header"),
+    (0xff61, "PPT, packed packet headers in a tile-part header"),
     (0xff63, "CRG, component registration"),
     (0xff64, "COM, comment"),
     (0xff90, "SOT, start of tile-part"),
@@ -92,14 +92,14 @@ const EOC: [u8; 2] = [0xff, 0xd9];
 /// level in the low bits, and Part 2 and Part 15 set the top two bits, so
 /// those show as the number they are.
 const RSIZ: &[(i128, &str)] = &[
-    (0, "no restrictions"),
+    (0, "Part 1, no profile"),
     (1, "profile 0"),
     (2, "profile 1"),
-    (3, "2K digital cinema"),
-    (4, "4K digital cinema"),
-    (5, "scalable 2K digital cinema"),
-    (6, "scalable 4K digital cinema"),
-    (7, "long-term storage"),
+    (3, "2K digital cinema profile"),
+    (4, "4K digital cinema profile"),
+    (5, "scalable 2K digital cinema profile"),
+    (6, "scalable 4K digital cinema profile"),
+    (7, "long-term storage profile"),
 ];
 
 /// The order packets are written in, from Table A.16: which of layer,
@@ -107,7 +107,7 @@ const RSIZ: &[(i128, &str)] = &[
 const PROGRESSION: &[(i128, &str)] = &[(0, "LRCP"), (1, "RLCP"), (2, "RPCL"), (3, "PCRL"), (4, "CPRL")];
 
 /// The wavelet, from Table A.20.
-const TRANSFORMATION: &[(i128, &str)] = &[(0, "9-7 irreversible"), (1, "5-3 reversible")];
+const TRANSFORMATION: &[(i128, &str)] = &[(0, "9-7 irreversible wavelet"), (1, "5-3 reversible wavelet")];
 
 /// How the step sizes are written, from the low five bits of `Sqcd` or
 /// `Sqcc`, Table A.28.
@@ -122,7 +122,7 @@ const CODE_BLOCK_STYLE: &[(u32, &str)] = &[
     (3, "vertically causal context"),
     (4, "predictable termination"),
     (5, "segmentation symbols"),
-    (6, "HT block coding"),
+    (6, "high-throughput block coding"),
 ];
 
 pub fn jpeg2000() -> Template {
@@ -299,7 +299,7 @@ fn cod() -> T {
         ("Lcod", T::u16(Big)),
         (
             "Scod",
-            T::flags("Scod", T::u8(), &[(0, "precincts defined"), (1, "SOP markers may be used"), (2, "EPH markers used")]),
+            T::flags("Scod", T::u8(), &[(0, "precinct sizes defined"), (1, "SOP markers may be used"), (2, "EPH markers used")]),
         ),
         ("progression_order", T::enumeration("ProgressionOrder", T::u8(), PROGRESSION)),
         ("layers", T::u16(Big)),
@@ -317,7 +317,7 @@ fn coc() -> T {
     let mut fields = vec![
         ("Lcoc", T::u16(Big)),
         ("Ccoc", component_number()),
-        ("Scoc", T::flags("Scoc", T::u8(), &[(0, "precincts defined")])),
+        ("Scoc", T::flags("Scoc", T::u8(), &[(0, "precinct sizes defined")])),
     ];
     fields.extend(coding_parameters("Scoc"));
     marker_segment("COC", fields)
@@ -494,8 +494,9 @@ fn plt() -> T {
 /// tile-part's share is `Nplm` bytes of lengths written as PLT writes them.
 ///
 /// One tile-part's share may be split across two PLM segments, and the second
-/// then goes on without an `Nplm` of its own. That reads here as a wrong
-/// count; nothing Part 1's conformance files write does it.
+/// then goes on without an `Nplm` of its own. That is not followed here: the
+/// second segment's first byte reads as an `Nplm`, and its lengths from there
+/// on are wrong.
 fn plm() -> T {
     let part = T::structure(
         "PacketLengths",
@@ -508,7 +509,9 @@ fn plm() -> T {
 /// PPM: the packet headers of every tile-part, taken out of the packets and
 /// gathered in the main header. Each tile-part's share is a length and that
 /// many bytes, and the headers inside stay bytes. A share may be split across
-/// PPM segments, as a PLM's may.
+/// PPM segments, as a PLM's may, and is not followed here either: the share
+/// is cut at the end of its segment, and the next segment reads the rest of it
+/// as an `Nppm`.
 fn ppm() -> T {
     let part = T::structure("PackedHeaders", vec![("Nppm", T::u32(Big)), ("Ippm", T::bytes(E::field("Nppm").at_most(E::Remaining)))])
         .counted_as("tile-part");
@@ -536,7 +539,7 @@ fn com() -> T {
         "COM",
         vec![
             ("Lcom", T::u16(Big)),
-            ("Rcom", T::enumeration("CommentRegistration", T::u16(Big), &[(0, "binary"), (1, "Latin text")])),
+            ("Rcom", T::enumeration("CommentRegistration", T::u16(Big), &[(0, "binary data"), (1, "ISO 8859-15 text")])),
             (
                 "Ccom",
                 T::switch(E::field("Rcom"), vec![(1, T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1))], T::bytes(E::Remaining)),
