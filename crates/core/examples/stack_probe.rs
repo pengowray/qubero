@@ -17,6 +17,8 @@
 //! - `switch`: an element whose type is a switch on the element before it.
 //! - `length`: an element as long as the element before it.
 //! - `within`: a switch on a path into the element before, found by `sibling`.
+//! - `nested`: one computed field whose expression is `levels` sums deep in
+//!   itself, with no field between one level and the next.
 //! - `refused`: `sibling` again, with the first element's value nested 200
 //!   deep in itself, so the read is refused however it is asked, and
 //!   `refused-tagged` the same through `tagged`. These are the two reads of
@@ -131,6 +133,12 @@ fn main() {
                 "switch" => {
                     let elem = T::structure("Elem", vec![("b", T::switch(E::prev("b"), vec![(0, T::u8())], T::u8()))]);
                     (list(elem), vec![0; n], vec![n - 1, 0])
+                }
+                "nested" => {
+                    // One computed field whose expression is nested `levels`
+                    // deep in itself, refused however it is asked.
+                    let e = (0..n).fold(E::lit(1), |e, _| e.add(E::lit(0)));
+                    (Template::new("nested", T::structure("Nested", vec![("v", T::computed(e))])), vec![0], vec![0])
                 }
                 "refused" | "refused-tagged" => {
                     // A search back whose far end is refused however it is
