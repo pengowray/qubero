@@ -56,9 +56,14 @@
 //!
 //! **NOCOMPRESS.** The pixels as they are.
 //!
-//! **PLIO_1 and HCOMPRESS_1** are named and not decoded. PLIO is for masks of
-//! small integers and HCOMPRESS is a wavelet transform; no sample here uses
-//! either.
+//! **PLIO_1.** IRAF's pixel lists, for masks: 16-bit words, each a run of
+//! zeros, a run of one value, a change to that value, or a pixel. See
+//! `plio.rs`.
+//!
+//! **HCOMPRESS_1.** An H-transform, whose coefficients are divided by a scale
+//! and written a bit plane at a time as quadtrees, and a `SMOOTH` option for
+//! taking the blockiness off a lossy tile while it is transformed back. The
+//! scale is in the tile's own bytes. See `hcompress.rs`.
 //!
 //! **Quantized floats.** A floating-point image is usually stored lossily as
 //! integers: the table has `ZSCALE` and `ZZERO` columns, one pair a tile, and
@@ -86,17 +91,18 @@
 //! `COMPRESSED_DATA` left empty for that row. Such a tile is read from
 //! whichever of those holds it, and is not unquantized.
 //!
-//! What is not read: the parameters of PLIO and HCOMPRESS, a `ZBLANK` on an
-//! integer image (the pixel is left as the integer it is, which is what that
-//! keyword says it is), and a tile over [`COMPRESSED_LIMIT`] or
-//! [`PIXEL_LIMIT`].
+//! What is not read: a `ZBLANK` on an integer image (the pixel is left as the
+//! integer it is, which is what that keyword says it is), and a tile over
+//! [`COMPRESSED_LIMIT`] or [`PIXEL_LIMIT`].
 //!
-//! The Rice decoder is in `rice.rs` and the unquantizing in `quantize.rs`;
-//! this keeps the cards, the table, the tile, and the steps that are one line
-//! each.
+//! The Rice, PLIO and HCOMPRESS decoders are in `rice.rs`, `plio.rs` and
+//! `hcompress.rs`, and the unquantizing in `quantize.rs`; this keeps the
+//! cards, the table, the tile, and the steps that are one line each.
 
 use crate::codec::{self, Codec};
 
+mod hcompress;
+mod plio;
 mod quantize;
 mod rice;
 #[cfg(test)]
@@ -232,6 +238,9 @@ pub struct Image {
     /// defaults where a header leaves them out.
     pub blocksize: u64,
     pub bytepix: u64,
+    /// HCOMPRESS's `SMOOTH`, 0 unless a header says otherwise. Its scale is
+    /// read from each tile's own bytes rather than from `ZVALi`.
+    pub smooth: i64,
     /// `ZQUANTIZ`, as written, or empty.
     pub quantize: String,
     pub dither0: Option<i64>,
@@ -268,12 +277,14 @@ impl Image {
         }
         let mut blocksize = 32;
         let mut bytepix = 4;
+        let mut smooth = 0;
         for i in 1..=999 {
             let Some(name) = cards.text(&format!("ZNAME{i}")) else { break };
             let value = cards.int(&format!("ZVAL{i}"));
             match (name.to_ascii_uppercase().as_str(), value) {
                 ("BLOCKSIZE", Some(v)) => blocksize = v.max(0) as u64,
                 ("BYTEPIX", Some(v)) => bytepix = v.max(0) as u64,
+                ("SMOOTH", Some(v)) => smooth = v,
                 _ => {}
             }
         }
@@ -304,6 +315,7 @@ impl Image {
             tile_shape,
             blocksize,
             bytepix,
+            smooth,
             quantize: cards.text("ZQUANTIZ").unwrap_or("").to_string(),
             dither0: cards.int("ZDITHER0"),
             zscale: cards.real("ZSCALE"),
@@ -579,11 +591,8 @@ pub fn decode(image: &Image, index: u64, row: &Row, data: &[u8]) -> Tile {
             "GZIP_1" => gzip_step(&mut tile, data, pixels, false, row.quantized),
             "GZIP_2" => gzip_step(&mut tile, data, pixels, true, row.quantized),
             "NOCOMPRESS" => stored_step(&mut tile, data, pixels, row.quantized, "taken as they are (ZCMPTYPE = NOCOMPRESS)"),
-            name @ ("PLIO_1" | "HCOMPRESS_1") => {
-                stopped(&mut tile, name, data.len());
-                tile.problem = Some(format!("Stopped at {name}: this viewer has no {name} decoder, so the pixels could not be read."));
-                return tile;
-            }
+            "PLIO_1" => plio::step(&mut tile, image, data, pixels),
+            "HCOMPRESS_1" => hcompress::step(&mut tile, image, data, pixels),
             other => {
                 let name = if other.is_empty() { "ZCMPTYPE" } else { other };
                 stopped(&mut tile, name, data.len());

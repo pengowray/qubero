@@ -163,7 +163,7 @@ fn a_quoted_value_keeps_its_escaped_quote_and_loses_its_padding() {
 
 #[test]
 fn an_algorithm_without_a_decoder_is_named() {
-    let image = Image::from_cards(&cards(&["ZBITPIX =                   16", "ZNAXIS  =                    1", "ZNAXIS1 =                    4", "ZCMPTYPE= 'HCOMPRESS_1'"])).unwrap();
+    let image = Image::from_cards(&cards(&["ZBITPIX =                   16", "ZNAXIS  =                    1", "ZNAXIS1 =                    4", "ZCMPTYPE= 'SQUASH_9'"])).unwrap();
     let row = Row {
         place: Some(Place { stored: Stored::Compressed, count: 3, offset: 0, elem: b'B' }),
         has_data_column: true,
@@ -174,5 +174,5 @@ fn an_algorithm_without_a_decoder_is_named() {
     };
     let t = decode(&image, 0, &row, &[1, 2, 3]);
     assert!(t.pixels.is_empty());
-    assert!(t.problem.unwrap().contains("HCOMPRESS_1"));
+    assert!(t.problem.unwrap().contains("SQUASH_9"));
 }
