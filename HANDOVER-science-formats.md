@@ -32,6 +32,7 @@ cases only.
 |---|---|
 | B2. A FITS table's heap failed with "unknown field cards" once a later HDU's rows had been read. A guarded walk in `walk.rs` dropped a node it had only placed again, which left the fields read inside it with no node above them, and a walk inside a walk left the element it kept behind once its list was dropped. The two walk tests check that no node is left without its parent, and `fits_real` no longer needs a fresh evaluator. | 5c0da64, deb296b |
 | B3. An element that ended a run because it could not be read was forgotten without the fields read inside it, which stayed with nothing above them (two HDF5 real-file tests and a WAV test). They go with it now. | 2e3cb9f |
+| B4. An overwrite kept the fields that ended before it and dropped the nodes they sit in when those had no size yet or ran past the edit, which the root nearly always does, so a name looked up through them was "unknown field" or a panic. `forget_after` keeps those nodes now, with their sizes worked out again. What an `At` declared after the edit points at goes, since the pointer may have changed, and so does everything a JSON parse covering the edit placed. A run stretched to take in an element that overran its room gets the room back when the edit reaches that element. | 01b88bc |
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
@@ -79,7 +80,7 @@ cases only.
 
 ## Bugs
 
-None open. B1 to B3 are in the table above.
+None open. B1 to B4 are in the table above.
 
 ## IR additions that close gaps in more than one format
 
@@ -121,9 +122,11 @@ The FITS heap reads (see Closed). Left from the design:
   the row-group region a node; the attempt stopped at making a struct's gap
   accounting see its zero-size gathers' children, and that unfinished,
   untested change is on branch `wip-parquet-gather-region` (`dc1c86c`).
-- `memo.rs` `forget_after` assumes a field depends only on what is before it;
-  a Parquet footer is after its pages, so editing a footer offset leaves
-  stale placements (true before the gather too).
+- `memo.rs` `forget_after` assumes a field depends only on what is before it.
+  Since B4 it drops what an `At` declared after the edit points at, which
+  covers Parquet's pages under the footer. A child a `Chain` or `Gather`
+  placed is still kept when it and the list end before the edit, though the
+  element or record that placed it may sit after the edit.
 - A walk into an unpacked RNTuple envelope needs a step through a `Decoded`'s
   child (S4).
 
