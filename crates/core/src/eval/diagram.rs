@@ -209,6 +209,10 @@ fn root_name(ty: &Ty) -> Option<String> {
 /// this is, is the pointer: a format that reads the same record in nine places
 /// clones one `Arc` nine times, and that is what says the nine are one type and
 /// not nine that happen to have the same fields.
+pub(crate) fn struct_of<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
+    as_struct(t, ty)
+}
+
 fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
     match ty {
         Ty::Struct(sd) => Some(sd),
@@ -466,6 +470,62 @@ pub(crate) fn is_run(t: &Template, ty: &Ty) -> bool {
         Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| is_run(t, inner)),
         _ => false,
     }
+}
+
+/// What one element of a run is, past the wrappers. Nothing for a type that is
+/// not a run.
+///
+/// For a caller counting a file: every element of a run is declared the same
+/// way, so a run of half a million samples is half a million of whatever this
+/// answers, and knowing that without walking them is the difference between a
+/// census that takes a moment and one that takes two minutes.
+pub(crate) fn elem_of<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
+    match ty {
+        Ty::Array { elem, .. }
+        | Ty::Repeat { elem, .. }
+        | Ty::PointerList { elem, .. }
+        | Ty::Chain { elem, .. }
+        | Ty::Gather { elem, .. } => Some(elem),
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::At { inner, .. }
+        | Ty::Nullable { inner, .. }
+        | Ty::Decoded { inner, .. }
+        | Ty::When { inner, .. } => elem_of(t, inner),
+        Ty::Named(n) => t.types.get(&**n).and_then(|inner| elem_of(t, inner)),
+        _ => None,
+    }
+}
+
+/// Whether a type is a choice, so that what one of it turns out to be is not
+/// settled by the declaration alone.
+pub(crate) fn is_choice(t: &Template, ty: &Ty) -> bool {
+    as_switch(t, ty).is_some()
+}
+
+/// A cheap stand-in for [`box_key`], for a caller asking the same question of
+/// thousands of nodes.
+///
+/// The key is the type written out, which costs what writing a type out costs;
+/// asked once per type that is nothing, asked once per node of a file it is the
+/// whole cost of a census. So this answers "which type is this" by the pointer
+/// the IR already shares: a structure by its `Arc`, a switch by the `Arc` its
+/// cases live in. Two types with the same identity have the same key, which is
+/// what a cache needs; two with different identities may still share a key, and
+/// the cache simply computes it twice.
+///
+/// Nothing for a type that is neither, which is the case a caller has to
+/// compute without the cache.
+pub(crate) fn box_identity(t: &Template, ty: &Ty) -> Option<usize> {
+    if let Some(sw) = as_switch(t, ty) {
+        return match sw {
+            Ty::Switch { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
+            Ty::Match { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
+            _ => None,
+        };
+    }
+    as_struct(t, ty).map(|sd| Arc::as_ptr(sd) as usize)
 }
 
 pub(crate) fn box_key(t: &Template, ty: &Ty) -> Option<String> {
