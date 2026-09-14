@@ -34,6 +34,8 @@ mod adios;
 mod aiff;
 mod ar;
 mod arrow;
+mod arrow_schema;
+mod arrow_walk;
 mod aseprite;
 mod assimp;
 pub(crate) mod bam;
