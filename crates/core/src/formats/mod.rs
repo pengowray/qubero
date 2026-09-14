@@ -43,6 +43,7 @@ mod au;
 mod bmp;
 mod bufr;
 pub mod bufr_data;
+mod bufr_panel;
 pub mod bufr_tables;
 mod bzip2;
 mod bdb;
