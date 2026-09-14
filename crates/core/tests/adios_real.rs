@@ -169,6 +169,11 @@ fn every_file_of_the_dataset_is_told_apart() {
         let bytes = std::fs::read(sample(name).unwrap()).unwrap();
         let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
         assert_eq!(formats::sniff(head, bytes.len() as u64), template, "{name}");
+        // A BP3 file too long for its footer to be seen is known by its front:
+        // a process group, or for the file of indices alone a group index.
+        if name.starts_with("steps_bp3") {
+            assert_eq!(formats::sniff(&bytes[..128], 1 << 32), template, "{name} by its front");
+        }
     }
 }
 
