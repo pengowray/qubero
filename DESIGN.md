@@ -2921,6 +2921,29 @@ bytes at most. A part that will not unpack, or unpacks to another length than
 its trailer said, fails the read that reached it with the part named, and a
 run of records inside stops there with that as its reason.
 
+A run a format declares as a stream whose codec copies, which is how a ZIP, a
+RAR and an LHA archive declare a stored entry, is a stored part and read where
+it sits (2026-09-15). Copying it into the cache first held a large stored file
+twice, and refused one past the 64 MiB a stream may unpack to. The cache keeps
+one part larger than its cap beside the parts within it, and puts that part
+back only for another as large. The case is a BP5 dataset joined from a ZIP
+(see "A folder opened as one file"): a block's counts are read from `md.0` and
+its values from `data.0` by turns, and with the old rule every read of `md.0`
+put back a deflated `data.0` of 60 MB that the next value unpacked again.
+
+**Parts named by index, and offsets from the stream's front.** Both came with
+the BP5 dataset, whose builder knows from the archive's records which entries
+the files are. `Step::Elements(indices)` lands on those elements of the list,
+in that order, passing over an index past the end; its frame counts through the
+indices rather than the list, and its label is the element's, `records[3]`. The
+IR text writes the step `[3, 0, 5]`. `Anchor::Space` counts an `At` from the
+front of the space the field is read in: the file for a field of the file, and
+the front of the stream for a field inside one. `File` means the file wherever
+it is asked, which an RNTuple anchor needs, and neither `Window` nor `Origin`
+reaches the stream's front from inside a record that has its own window or
+origin, which every FFS record has. Its room is the whole space. The IR text
+writes it `stream`.
+
 **Mapping back.** `Evaluator::part_of(space, byte)` answers which part a byte
 of a joined stream came from and where in it, from the part table alone: the
 run's path and its label (`blocks[3].compressed`, `pages[10]`, written the way
@@ -3227,40 +3250,86 @@ beside every path. The values in `data.0` would be nodes of `md.0`'s tree whose
 bytes are in another document, which is a second mechanism again; the host would
 need a chunk feed per file.
 
-The second is one file: the folder written into a ZIP that stores each file as
-it is. Every file is then a run of bytes at a known place in one space, so a
-pointer from one file into another is an offset like any other, and none of the
-above changes. That is the one taken. What it costs: the hex view's addresses
-are the archive's, Save as writes the archive (which ADIOS2 reads once it is
-unzipped), and the archive is made before anything can be read.
+The second is one file: the folder written into a ZIP. Every file is then a run
+of bytes at a known place in one space, so a pointer from one file into another
+is an offset like any other, and none of the above changes. That is the one
+taken. What it costs: the hex view's addresses are the archive's, Save as writes
+the archive (which ADIOS2 reads once it is unzipped), and the archive is made
+before anything can be read. An archive that compressed its files keeps the one
+space by another route, below.
 
 **The archive.** The web app makes it from a dropped folder, several dropped
 items, or a picked folder (`folderzip.ts`). Nothing is copied: it is a `Blob` of
 the headers written here and the files themselves, read when the editor asks,
 the same as a file opened alone. Entries keep the folder's name in front,
-`steps.bp5/md.idx`, so unzipping gives the folder back. The files a format is
-recognised by go first (`md.idx`, `mmd.0`, `md.0`, and Zarr's metadata),
-because recognition reads the front of a file, then the rest in path order with
-`data.N` last. Each entry carries its CRC-32, which means reading every byte of
-the folder once before it opens, with a count of how far it has got and a way to
-stop. ZIP64 records are written where a size or an offset does not fit in 32
-bits. A folder that is not a dataset opens as a ZIP, or a Zarr ZipStore.
+`steps.bp5/md.idx`, so unzipping gives the folder back. Each file is stored as it
+is. The files a format is recognised by go first (`md.idx`, `mmd.0`, `md.0`, and
+Zarr's metadata, shallowest first so a store's root leads), because recognition
+reads the front of a file, then the rest in path order with `data.N` last. ZIP64
+records are written where a size or an offset does not fit in 32 bits. A folder
+that is not a dataset opens as a ZIP, or as a Zarr ZipStore, which an OME-Zarr
+image read from its folder is too.
 
-**The dataset.** A ZIP whose front stores a BP5 index or format list is
-`adioszip` (`formats/adios/dataset.rs`). It reads the archive's records as any
-ZIP's, and after them `dataset`, a schema node whose builder walks the records,
-matches entries by the last part of their names, and places the files of the
-first dataset it finds at their entries' bytes: `md_idx`, `mmd_0`, then
-`data_0_at` (where `data.0` starts, all the metadata needs of it) and `md_0`
-last, since a field finds only the fields declared before it. Each row says
-which entry it is. A step of `md_0` finds the index record whose metadata
-offset is where the step starts, and reads the step's data offset from it; a
-block's values are at `data_0_at` plus that plus the block's location. Missing
-files cost what they cost and no more: without `data.0` the blocks have no
-values and their location says why, without `mmd.0` the records are bytes saying
-so, and a file the archive compressed is bytes saying only a stored entry is
-read in place. The walk reads every record to the end record, so any edit to the
-archive builds the dataset again, and with it every type it placed.
+**Its sums.** Each entry carries a CRC-32, and taking them reads every byte of
+the folder. A folder of up to `CRC_AT_OPEN_MAX_BYTES` (50 MiB) is read for them
+before it opens, with a count of how far it has got and a way to stop, which
+for that size is over before the count shows. A larger one opens at once with
+nought in every CRC-32 field (2026-09-15). `sumjob.ts` takes the sums after the
+page settles, in a worker, or a slice per idle moment where there is none, and
+Save as writes them: `BuiltZip.withSums` is the same archive with the headers
+copied and filled in, and `Doc.buildOutput` takes it in place of the file the
+document was opened from, so an unchanged stretch is read from the summed
+archive and an edit still wins. Save as asks for the file first, while the
+click still counts, then waits for any sums still being read, saying how far
+they are. The open document keeps its noughts. The inspector says what they are
+on either field, in the Integrity slot for the local header's and on a line
+under the value for the central directory's, before the sum is known and after,
+and runs no check against them; the tab's tooltip says it too. A 64 MiB folder
+opened in 144 ms, its sums done in the worker 600 ms later.
+
+**The dataset.** A ZIP is `adioszip` (`formats/adios/dataset.rs`) when its front
+holds a BP5 index or format list, stored or deflated, or when its central
+directory names `md.idx`, `mmd.0` and `md.0` in one directory. The front is
+asked first, by `sniff`; `sniff_ends` asks the last bytes of a file the front
+calls a ZIP, which the web reads only then, and finds a BP5 dataset or a Zarr
+store whose files sit behind a large data file. Names alone there, where the
+front checks each file's bytes: reading every entry's front from the end would
+be a read of the archive per entry, and an archive taken for a dataset that is
+not one still reads as an archive. It reads the archive's records as any ZIP's,
+and after them `dataset`, a schema node whose builder walks the records, matches
+entries by the last part of their names, and places the files of the first
+dataset it finds: `md_idx`, `mmd_0`, then `data_0_at` (where `data.0` starts,
+all the metadata needs of it) and `md_0` last, since a field finds only the
+fields declared before it. Each row says which entry it is. A step of `md_0`
+finds the index record whose metadata offset is where the step starts, and
+reads the step's data offset from it; a block's values are at `data_0_at` plus
+that plus the block's location, counted from the front of the space the files
+are in (`Anchor::Space`). Missing files cost what they cost and no more: without
+`data.0` the blocks have no values and their location says why, and without
+`mmd.0` the records are bytes saying so. The walk reads every record to the end
+record, so any edit to the archive builds the dataset again, and with it every
+type it placed.
+
+**Stored, or joined.** When the archive stores every file of the dataset, each
+is placed at its entry's bytes in the archive. When it compressed any, as
+Python's `zipfile` with `ZIP_DEFLATED` and `zip -r` both do, the files are
+joined into one stream instead (2026-09-15): `dataset` is a `Stitched` whose
+walk is `records[i, j, k, l].body.data`, the entries' indices in the order
+`md.idx`, `mmd.0`, `md.0`, `data.0`, so how long the data file is moves no other
+file. A deflated part is unpacked when a read reaches it and a stored part is
+read where it sits. Each part is as long as its header's unpacked size, which
+the builder places the files by and the stream measures its parts by, one past
+the last field of the entry's header; an entry written as a stream says nought
+there, and is measured by unpacking it. The files are then in one space again,
+so a pointer from `md.0` into `data.0` is still one offset, and an FFS name's
+parts are placed over its bytes in `mmd.0` from the front of that space as
+well. What the join costs is the link from a byte of the archive to the field
+it is read as, since an unpacked byte is at no place in the archive; a stored
+`data.0` beside a deflated `md.0` is joined too, and loses it the same way. A
+file packed with a method nothing here unpacks (deflate64, LZMA, PPMd), or
+encrypted, stays bytes at its entry in the archive with a note saying so. A
+deflated data file is unpacked whole, so one that comes to more than 64 MiB
+reads its blocks' counts and bounds and not their values.
 
 **Which reading a byte is.** Each entry's data is read twice: as the archive's
 stored bytes, and as the dataset's file. The archive's reading is marked as the
@@ -3279,10 +3348,12 @@ What it does not do. Only the first dataset in an archive is read. A step
 written by more than one writer, and data files past `data.0`, stay bytes.
 Addresses are the archive's, not each file's; the position of the cursor inside
 the file it is in is not said. A folder of millions of files is read into a list
-before anything opens. An archive is told to be a dataset from its front alone,
-so a ZIP made elsewhere that stores a large `data.0` ahead of `md.idx` and
-`mmd.0`, as `zip -0 -r` does when the folder lists it first, opens as a ZIP;
-the template menu reads it as a dataset.
+before anything opens. A central directory longer than the last megabyte of the
+file is not read for names, so an archive of tens of thousands of entries whose
+dataset is not at the front opens as a ZIP; the template menu reads it as a
+dataset. A sum the background job has worked out is not written into the open
+document, so the listing and the hex view show nought until the saved file is
+opened.
 
 ### The Diagram view: this file's counts, and what a click does
 The Diagram view draws a format's types as boxes, and lays the open file's
