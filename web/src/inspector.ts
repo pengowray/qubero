@@ -12,10 +12,11 @@ import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
+import { anyStored, clauseStored, readShown, storedLine, templateLine, writeShown, type StoredLine } from "./storedpath.ts";
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
 import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
@@ -301,6 +302,12 @@ export class Inspector {
   /** A row unfolded from the keyboard, whose head went with the rest of the
    *  section when it was rebuilt. Focus goes back to the row that replaced it. */
   private focusProp: string | null = null;
+  /** Whether the reader asked to see each name's path as the file stores it,
+   *  remembered across files. And whether anything the properties list is
+   *  building names a field stored another way, which is when the switch is
+   *  offered. See `storedpath.ts`. */
+  private storedShown = readShown(localStore());
+  private storedSeen = false;
   /** The dependency row the pointer is resting on, so it can be unmarked when
    *  the pointer moves off it or the section is rebuilt underneath it. */
   private hoverRow: HTMLElement | null = null;
@@ -1627,6 +1634,7 @@ export class Inspector {
       this.openPropsFor = key;
       this.openProps.clear();
     }
+    this.storedSeen = false;
     const rows = this.properties(path, n, "", false, code);
     const above = this.aboveBlocks(path);
     if (rows.length === 0 && above.length === 0) {
@@ -1634,7 +1642,7 @@ export class Inspector {
       this.origins.replaceChildren();
       return;
     }
-    const all: Node[] = [subhead(PROPERTIES.title)];
+    const all: Node[] = [this.storedSeen ? this.propertiesHead() : subhead(PROPERTIES.title)];
     for (const p of rows) all.push(this.propertyEl(p));
     if (above.length > 0) {
       const open = this.openProps.has(ABOVE_KEY);
@@ -1650,6 +1658,36 @@ export class Inspector {
       this.origins.querySelector<HTMLElement>(`[data-prop="${this.focusProp}"]`)?.focus();
       this.focusProp = null;
     }
+  }
+
+  /**
+   * The section's heading with the switch for paths as stored at its end,
+   * for a panel that names a field the file stores another way.
+   *
+   * One switch for the whole section, remembered across files, rather than a
+   * fold on each row: a reader checking a Thrift reader wants every stored
+   * path at once and wants them again on the next field, and a second fold
+   * inside a row's working is a fold nobody finds. The switch is not offered
+   * where it would change nothing, which is nearly every file.
+   */
+  private propertiesHead(): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "insp-subhead-row";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "insp-stored-toggle";
+    b.textContent = STORED_PATHS.toggle;
+    b.title = STORED_PATHS.title;
+    b.setAttribute("aria-pressed", String(this.storedShown));
+    b.dataset["prop"] = STORED_TOGGLE_KEY;
+    b.addEventListener("click", () => {
+      this.storedShown = !this.storedShown;
+      writeShown(localStore(), this.storedShown);
+      this.focusProp = STORED_TOGGLE_KEY;
+      this.render();
+    });
+    row.append(subhead(PROPERTIES.title), b);
+    return row;
   }
 
   /**
@@ -1701,6 +1739,7 @@ export class Inspector {
     const how = new Map<OriginRole, Relation[]>();
     const said = this.doc.relations(path);
     if (said.status === "ok") for (const r of said.node) push(how, r.role, r);
+    if (anyStored(reply.status === "ok" ? reply.node : [], said.status === "ok" ? said.node : [])) this.storedSeen = true;
     const shape = this.doc.shape(path);
     const said_ = (roles: readonly OriginRole[]): boolean =>
       roles.some((r) => (from.get(r)?.length ?? 0) + (how.get(r)?.length ?? 0) > 0);
@@ -1741,7 +1780,7 @@ export class Inspector {
       // The value beside the field is the half a reader checks: `from
       // compression` alone sends them to the field to find out which case this
       // was. Two fields and there is no value to show, only a count.
-      const clause = one === null ? this.fromHow(decided) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path };
+      const clause = one === null ? this.fromHow(decided) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path, stored: one.stored };
       out.push({
         key: `${prefix}type`,
         label: PROPERTIES.row.type,
@@ -1804,7 +1843,7 @@ export class Inspector {
         label: PROPERTIES.row.pointsTo,
         value: formatOffset(o.target_bits ?? 0),
         bit: o.target_bits,
-        how: { text: o.label, path: null },
+        how: { text: o.label, path: null, stored: null },
         detail: [],
       });
     }
@@ -1817,9 +1856,9 @@ export class Inspector {
    *  how many when it took more than one. */
   private fromHow(named: readonly Origin[] | undefined): How | null {
     const one = only(named);
-    if (one !== null) return { text: PROPERTIES.sized.expression({ field: one.label }), path: one.path };
+    if (one !== null) return { text: PROPERTIES.sized.expression({ field: one.label }), path: one.path, stored: one.stored };
     const count = named?.length ?? 0;
-    return count > 1 ? { text: PROPERTIES.sized.expression({ fields: count }), path: null } : null;
+    return count > 1 ? { text: PROPERTIES.sized.expression({ fields: count }), path: null, stored: null } : null;
   }
 
   /**
@@ -1860,8 +1899,8 @@ export class Inspector {
     const out: Node[] = [];
     for (const role of filled) {
       if (filled.length > 1) out.push(roleHead(ROLE_GROUP[role] ?? role));
-      for (const o of from.get(role) ?? []) out.push(originRow(o));
-      for (const r of how.get(role) ?? []) out.push(relationRow(r));
+      for (const o of from.get(role) ?? []) out.push(originRow(o, this.storedShown));
+      for (const r of how.get(role) ?? []) out.push(relationRow(r, this.storedShown));
     }
     return out;
   }
@@ -1923,7 +1962,7 @@ export class Inspector {
         : placed === "first" || placed === "element" || placed === "stream"
           ? (parent === null ? null : holder)
           : (one?.path ?? null);
-    return { text, path: to };
+    return { text, path: to, stored: one !== null && field === one.label ? one.stored : null };
   }
 
   /**
@@ -1946,7 +1985,7 @@ export class Inspector {
   ): How | null {
     if (shape.status !== "ok") return null;
     const sized = shape.node.sized;
-    if (code !== null && code.step.kind === "match") return { text: PROPERTIES.sizedMatch(), path: null };
+    if (code !== null && code.step.kind === "match") return { text: PROPERTIES.sizedMatch(), path: null, stored: null };
     // A literal or an end mark in a fixed block, where `fixed by the format`
     // is true and is as far as it goes. The block has no code-length table to
     // send the reader to, so this row says which run of RFC 1951's fixed code
@@ -1954,7 +1993,7 @@ export class Inspector {
     // the same fact for a match. `sized.fixed` stays for every other field
     // that is a fixed width because of what it is.
     if (code !== null && sized === "fixed" && code.step.block_kind === "fixed") {
-      return { text: DECODED.rfcFixed(DECODED.fixedRange(code.step.symbol.symbol, false)), path: null };
+      return { text: DECODED.rfcFixed(DECODED.fixedRange(code.step.symbol.symbol, false)), path: null, stored: null };
     }
     if (sized === "table" && code !== null) {
       // The row's own name, as the listing writes it: `code length for symbol
@@ -1963,7 +2002,7 @@ export class Inspector {
       // table entry.
       const at = this.entryPath(code, code.step.symbol);
       const field = at === null ? null : this.nameOf(at);
-      if (field !== null && at !== null) return { text: PROPERTIES.sized.table({ field }), path: at };
+      if (field !== null && at !== null) return { text: PROPERTIES.sized.table({ field }), path: at, stored: null };
     }
     // A count is settled by the counting field; every other length by the
     // fields the size expression reads. Named only where there is one of
@@ -1980,7 +2019,7 @@ export class Inspector {
     });
     if (text === "") return null;
     const to = one?.path ?? (sized === "remaining" && parent !== null ? up : null);
-    return { text, path: to };
+    return { text, path: to, stored: one !== null && text.includes(one.label) ? one.stored : null };
   }
 
   /** Where the field sits inside the structures around it. See `withinGroup`. */
@@ -1989,7 +2028,7 @@ export class Inspector {
       const a = this.doc.templateNode(at);
       return a.status === "ok" ? a.node : null;
     });
-    return group === null ? [] : groupRows(group);
+    return group === null ? [] : groupRows(group, this.storedShown);
   }
 
   /**
@@ -2010,7 +2049,7 @@ export class Inspector {
     // the run the byte is kept in. A field of a stream packed inside the tab
     // is not one of the tab's own bytes, and keeps the heading below.
     if (this.doc.joined && n.status === "ok" && n.node.space === 0) return this.joinedTabRows(n.node);
-    const rows: Node[] = stream.map(originRow);
+    const rows: Node[] = stream.map((o) => originRow(o, this.storedShown));
     if (!this.doc.isFile && n.status === "ok") {
       const step = this.stepLine(Math.floor(n.node.offset_bits / 8));
       if (step !== null) {
@@ -2049,7 +2088,8 @@ export class Inspector {
     const byte = Math.floor((inside ? this.offset : n.offset_bits) / 8);
     const part = this.doc.partAt(byte);
     if (part === null) return [];
-    return tabGroups(part, this.doc.name, inside, part.packed ? this.stepLine(byte) : null).flatMap(groupRows);
+    if (part.stored !== null) this.storedSeen = true;
+    return tabGroups(part, this.doc.name, inside, part.packed ? this.stepLine(byte) : null).flatMap((g) => groupRows(g, this.storedShown));
   }
 
   /**
@@ -2067,7 +2107,8 @@ export class Inspector {
     if (!n.joined) return [];
     const part = this.doc.partOf(path);
     if (part === null) return [];
-    return groupRows(startsInGroup(part));
+    if (part.stored !== null) this.storedSeen = true;
+    return groupRows(startsInGroup(part), this.storedShown);
   }
 
   /**
@@ -2140,6 +2181,9 @@ export class Inspector {
       if (how instanceof HTMLButtonElement) how.type = "button";
       if (p.how.path !== null) how.dataset["path"] = p.how.path.join("/");
       how.textContent = p.how.text;
+      // Inside the clause, so it points and goes where the clause does.
+      const stored = storedLine(clauseStored(p.how, foldable), this.storedShown);
+      if (stored !== null) how.append(storedEl(stored));
       box.append(how);
     }
     if (foldable && open) {
@@ -2986,8 +3030,10 @@ function plusTitle(n: TemplateNode): string {
   return n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE;
 }
 
-/** How an answer was arrived at, and the field it names, when it names one. */
-type How = { readonly text: string; readonly path: readonly number[] | null };
+/** How an answer was arrived at, and the field it names, when it names one.
+ *  `stored` is that field's path as the file stores it, where that differs
+ *  from the name in `text`. See `storedpath.ts`. */
+type How = { readonly text: string; readonly path: readonly number[] | null; readonly stored: string | null };
 
 /** The one thing in a list, or nothing: a clause naming a field can only name
  *  one, and where two fields settled something the row says so without
@@ -3009,7 +3055,7 @@ function encloses(above: readonly number[], path: readonly number[]): boolean {
  * structures around it. A row naming a field the reader can go to carries the
  * field's path, so pointing at it marks the field and clicking goes there.
  */
-function groupRows(group: PartGroup): Node[] {
+function groupRows(group: PartGroup, shown: boolean): Node[] {
   const rows = group.lines.map((line) => {
     const row = document.createElement("div");
     row.className = "insp-origin";
@@ -3020,9 +3066,30 @@ function groupRows(group: PartGroup): Node[] {
     if (line.plus !== null) what.append(...address(line.text, line.plus));
     else what.textContent = line.text;
     row.append(what);
+    const stored = storedLine(line.stored?.path ?? null, shown, line.stored?.subject ?? null);
+    if (stored !== null) row.append(storedEl(stored));
     return row;
   });
   return [roleHead(group.head), ...rows];
+}
+
+/**
+ * The muted line under a name that spells out how the file stores it, or under
+ * a formula how the template writes it: `stored as fields[id = 3].value`. A
+ * word and then the path, told apart by face as well as by the word, so the
+ * path can be read as the one it is. See `storedpath.ts`.
+ */
+function storedEl(line: StoredLine): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "insp-stored";
+  const word = document.createElement("span");
+  word.className = "insp-stored-word";
+  word.textContent = `${line.word} `;
+  const text = document.createElement("span");
+  text.className = "insp-stored-text";
+  text.textContent = line.text;
+  el.append(word, text);
+  return el;
 }
 
 /** A clause that is only the field's name and what it says: what a count or a
@@ -3034,6 +3101,20 @@ function originClause(o: Origin): string {
 /** The one block that is not a property of the field: what the structures
  *  above it settled. */
 const ABOVE_KEY = "above";
+
+/** What the switch for paths as stored is found by when focus goes back to it
+ *  after the section is rebuilt. Not a row, and never in the unfolded set. */
+const STORED_TOGGLE_KEY = "stored-paths";
+
+/** The page's storage, or null where reaching for it throws, which some
+ *  browsers do for a page whose site data is blocked. */
+function localStore(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 /** A count of four million reads as one. */
 function grouped(value: string): string {
@@ -3113,7 +3194,7 @@ function roleHead(text: string): HTMLElement {
  * of its own carries none: there is nowhere to go, and an empty path would
  * read as the root of the file.
  */
-function originRow(o: Origin): HTMLElement {
+function originRow(o: Origin, shown: boolean): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-origin";
   let name: HTMLElement;
@@ -3135,6 +3216,8 @@ function originRow(o: Origin): HTMLElement {
     v.textContent = `= ${grouped(o.value)}`;
     row.append(v);
   }
+  const stored = storedLine(o.stored, shown);
+  if (stored !== null) row.append(storedEl(stored));
   return row;
 }
 
@@ -3148,7 +3231,7 @@ function originRow(o: Origin): HTMLElement {
  * the substitution reads as a substitution: same shape, same length, numbers
  * where the names were.
  */
-function relationRow(r: Relation): HTMLElement {
+function relationRow(r: Relation, shown: boolean): HTMLElement {
   const row = document.createElement("div");
   row.className = "insp-relation";
   const written = document.createElement("code");
@@ -3157,7 +3240,11 @@ function relationRow(r: Relation): HTMLElement {
   const sums = document.createElement("code");
   sums.className = "insp-rel-sums";
   sums.textContent = `${r.substituted} = ${grouped(r.result)}`;
-  row.append(written, sums);
+  row.append(written);
+  // Directly under the line it spells another way, before the numbers.
+  const template = templateLine(r.template, shown);
+  if (template !== null) row.append(storedEl(template));
+  row.append(sums);
   return row;
 }
 

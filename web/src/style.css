@@ -1233,6 +1233,58 @@ button.welcome-crystal {
   color: var(--muted);
   margin: 10px 0 4px;
 }
+/* A heading with a switch at its end: Properties and Paths as stored. The
+   switch sits on the heading's line so it moves nothing when it comes and goes
+   with the field under the cursor. */
+.insp-subhead-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.insp-stored-toggle {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  min-height: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.insp-stored-toggle:hover {
+  color: var(--fg);
+  border-color: var(--line);
+}
+.insp-stored-toggle[aria-pressed="true"] {
+  color: var(--fg);
+  border-color: var(--line);
+  background: var(--panel);
+}
+/* The path a name is stored at, under the name: quiet, because the name above
+   it is the reading and this is how the bytes hold it. The word says what the
+   line is in the panel's own face, and the path is in the face paths are in. */
+.insp-stored {
+  display: block;
+  flex-basis: 100%;
+  padding-left: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.insp-stored-word {
+  font-family: var(--sans);
+  font-size: 11px;
+}
+.insp-stored-text {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.insp-origin:has(> .insp-stored) {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
 .insp-origins {
   margin-top: 2px;
 }

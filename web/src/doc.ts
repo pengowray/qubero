@@ -570,8 +570,13 @@ export type SearchStep =
  *  round: this field holds an offset, and that is where it points. */
 export type Origin = {
   readonly role: "length" | "count" | "type" | "position" | "value" | "name" | "width" | "condition" | "points";
-  /** The field as the reader would name it: `len`, or `tensors[3].offset`. */
+  /** The field as the reader would name it: `len`, or `tensors[3].offset`, or
+   *  `meta_data.data_page_offset` in a Parquet footer. */
   readonly label: string;
+  /** The same field named by every step the file stores on the way to it,
+   *  `fields[id = 3].value.fields[7].value`, where an encoding's own lists and
+   *  entries make that differ from `label`. Null otherwise. */
+  readonly stored: string | null;
   /** Where it is, so the reader can go there. Empty for a `points` entry. */
   readonly path: number[];
   /** What it says, in brief. Empty when it could not be read. */
@@ -701,8 +706,12 @@ export type Verdict = {
  */
 export type Relation = {
   readonly role: "length" | "count" | "type" | "value" | "name" | "width" | "position" | "condition";
-  /** The expression as the template writes it: `header_size - sizeof(header_size)`. */
+  /** The expression as the template writes it: `header_size - sizeof(header_size)`,
+   *  with a field reached through an encoding's own steps named as `label` names it. */
   readonly written: string;
+  /** The expression exactly as the template writes it, where that differs from
+   *  `written`. Null otherwise. */
+  readonly template: string | null;
   /** The same with every field's value in its place: `4 - 1`. */
   readonly substituted: string;
   /** What it comes to. */
@@ -734,6 +743,9 @@ export type JoinedPart = {
    *  `blocks[3].compressed`. */
   readonly path: readonly number[];
   readonly label: string;
+  /** The run named by every step the file stores on the way to it, where that
+   *  differs from `label`. Null otherwise. See `Origin.stored`. */
+  readonly stored: string | null;
   /** The field's first byte inside what the run gives, and how much that is. */
   readonly in_part: number;
   readonly part_len: number;

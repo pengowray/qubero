@@ -2783,6 +2783,29 @@ export const PROPERTIES = {
   },
 } as const;
 
+/**
+ * The switch over the properties list that also shows how the file stores a
+ * name, where an encoding's own lists and entries make that differ.
+ *
+ * A Parquet footer is Thrift, which keeps a struct as a list of (id, value)
+ * entries, so the field Parquet calls `meta_data.data_page_offset` is stored at
+ * `fields[id = 3].value.fields[7].value`. The list shows the first and keeps
+ * the second behind this switch. `Full paths` would read as absolute paths,
+ * and `Encoding steps` as the steps of encoding a value.
+ */
+export const STORED_PATHS = {
+  toggle: "Paths as stored",
+  title: "Also show each field's path as the file stores it, with the encoding's own lists, entries and values, and each formula as the template writes it",
+  /** Before the stored path, on a muted line under the name it spells out. */
+  storedAs: "stored as",
+  /** The same where the row does not start with the name, so the line says
+   *  whose path it is: an offset can be stored at a path too. */
+  subjectStoredAs: (name: string): string => `${name} stored as`,
+  /** Before the expression as the template has it, under a formula written
+   *  with the short names. Not `stored as`: the expression is not in the file. */
+  inTemplate: "in the template",
+} as const;
+
 /** The arrows over the hex grid, and the graph view. Both show what the
  *  properties list shows, so the words for it are here rather than in either
  *  view, and neither can drift from the other. */
