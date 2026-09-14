@@ -63,6 +63,9 @@ pub fn cbor() -> Template {
     Template::new("cbor", T::Named("Item".into())).with_type("Item", item())
 }
 
+/// One item. An item and a map's pair are how CBOR stores a thing, so a path
+/// through them is named by the map keys: `a.b` rather than
+/// `value[0].value.value[0].value`. See [`crate::template::EncodingStep`].
 fn item() -> T {
     T::structure_named(
         "Item",
@@ -75,6 +78,7 @@ fn item() -> T {
             ("value", body()),
         ],
     )
+    .encoding_wrapper("value")
 }
 
 /// What follows the first byte when the five bits said a length or a value was
@@ -150,7 +154,7 @@ fn tag_number() -> T {
 }
 
 fn pair() -> T {
-    T::inline_structure("Pair", vec![("key", T::Named("Item".into())), ("value", T::Named("Item".into()))])
+    T::inline_structure("Pair", vec![("key", T::Named("Item".into())), ("value", T::Named("Item".into()))]).encoding_member("key", "value")
 }
 
 #[cfg(test)]

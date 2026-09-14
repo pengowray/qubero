@@ -37,8 +37,12 @@ pub fn bencode() -> Template {
     Template::new("bencode", T::Named("Value".into())).with_type("Value", value())
 }
 
+/// One value. A value, a dictionary's entry and a byte string are how bencode
+/// stores a thing, so a path through them is named by the keys:
+/// `info.pieces` rather than `body[3].value.body[1].value`. See
+/// [`crate::template::EncodingStep`].
 fn value() -> T {
-    T::structure_named("Value", "marker", "body", vec![("marker", marker()), ("body", body())])
+    T::structure_named("Value", "marker", "body", vec![("marker", marker()), ("body", body())]).encoding_wrapper("body")
 }
 
 /// The letter this value opens with, where there is one. A byte string has
@@ -89,6 +93,7 @@ fn entry() -> T {
         ],
     )
     .counted_as("entry")
+    .encoding_member("key", "value")
 }
 
 /// A length in digits, a colon, and that many bytes.
@@ -107,6 +112,7 @@ fn byte_string() -> T {
             ("text", T::text(StrLen::Fixed(E::field("length")), Encoding::Unknown)),
         ],
     )
+    .encoding_wrapper("text")
 }
 
 /// How far a scan got, and whether it got there.

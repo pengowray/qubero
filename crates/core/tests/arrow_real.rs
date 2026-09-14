@@ -608,3 +608,30 @@ fn every_node_read_first_says_what_it_says_in_order() {
     assert!(refused_before > 0, "no node read first went as deep as the limit");
     eprintln!("more-types.arrow: {count} nodes read first say what they say in order, {refused_before} of them past the limit");
 }
+
+/// A block and a buffer name the FlatBuffers record that placed them the way
+/// the Arrow schema does, and keep the path through every offset, vector and
+/// table the buffer stores beside it.
+#[test]
+fn a_placed_message_names_its_record_in_the_schemas_terms() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (doc, mut ev) = open(&root, "columns-uncompressed.arrow");
+    let named = |ev: &mut Evaluator, at: &[usize]| {
+        let o = ev.origins(&doc, at).unwrap().into_iter().next().expect("a placed element names what placed it");
+        (o.label, o.stored)
+    };
+    let pair = |label: &str, stored: &str| (label.to_string(), Some(stored.to_string()));
+    assert_eq!(named(&mut ev, &[BATCHES, 0]), pair("footer.dictionaries[0]", "footer.root.table.dictionaries.vector.elements[0]"));
+    assert_eq!(named(&mut ev, &[BATCHES, 1]), pair("footer.recordBatches[0]", "footer.root.table.recordBatches.vector.elements[0]"));
+    assert_eq!(
+        named(&mut ev, &[BATCHES, 1, 4, 2]),
+        pair("metadata.header.buffers[2]", "metadata.root.table.header.table.buffers.vector.elements[2]"),
+    );
+    // A field named from inside the record is already the schema's name, and
+    // has nothing stored to say beside it.
+    let offset = ev.origins(&doc, &[BATCHES, 1, 4, 2]).unwrap().into_iter().nth(1).unwrap();
+    assert_eq!((offset.label.as_str(), offset.stored), ("offset", None));
+}

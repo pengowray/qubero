@@ -890,6 +890,9 @@ struct OriginDto {
     role: &'static str,
     /// The field as the reader would name it: `len`, or `tensors[3].offset`.
     label: String,
+    /// The same field named by every step the file stores on the way to it,
+    /// where an encoding's own steps make that differ. Null otherwise.
+    stored: Option<String>,
     /// Where it is, so the reader can go there. Empty for a bit this field
     /// points at rather than a field it came from.
     path: Vec<f64>,
@@ -906,9 +909,11 @@ struct StitchedPartDto {
     /// Which part, from 0, and how many there are.
     index: f64,
     parts: f64,
-    /// The run the part is, as a path to go to and as a reader names it.
+    /// The run the part is, as a path to go to and as a reader names it, and
+    /// as every stored step names it where that differs (null otherwise).
     path: Vec<f64>,
     label: String,
+    stored: Option<String>,
     /// The field's first byte inside what the part gives, and how much that is.
     in_part: f64,
     part_len: f64,
@@ -929,6 +934,7 @@ fn stitched_part_dto(h: qubero_core::eval::PartHit) -> StitchedPartDto {
         parts: h.parts as f64,
         path: h.path.iter().map(|&x| x as f64).collect(),
         label: h.label,
+        stored: h.stored,
         in_part: h.in_part as f64,
         part_len: h.part_len as f64,
         run_offset_bits: h.run_offset_bits as f64,
@@ -1044,8 +1050,12 @@ struct VerdictDto {
 struct RelationDto {
     /// "length" | "count" | "type" | "value" | "position"
     role: &'static str,
-    /// The expression as the template writes it.
+    /// The expression as the template writes it, with a field reached through
+    /// an encoding's own steps named the way the format names it.
     written: String,
+    /// The expression exactly as the template writes it, where that differs
+    /// from `written`. Null otherwise.
+    template: Option<String>,
     /// The same with every field's value in its place.
     substituted: String,
     /// What it comes to.
@@ -1368,6 +1378,7 @@ fn origin_dto(o: Origin) -> OriginDto {
     OriginDto {
         role: o.role.as_str(),
         label: o.label,
+        stored: o.stored,
         path: o.path.into_iter().map(|x| x as f64).collect(),
         value: o.value,
         target_bits: o.target_bits.map(|b| b as f64),
@@ -3658,7 +3669,13 @@ impl Editor {
         tab.ev.begin_slice();
         reply(tab.relations(&p).map(|v| {
             v.into_iter()
-                .map(|r| RelationDto { role: r.role.as_str(), written: r.written, substituted: r.substituted, result: r.result })
+                .map(|r| RelationDto {
+                    role: r.role.as_str(),
+                    written: r.written,
+                    template: r.template,
+                    substituted: r.substituted,
+                    result: r.result,
+                })
                 .collect::<Vec<_>>()
         }))
     }

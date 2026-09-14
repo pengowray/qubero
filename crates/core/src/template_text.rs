@@ -73,6 +73,11 @@
 //!                                                   own plumbing, whatever they decide
 //!              | "payload" NAME {NAME}              fields that are the point
 //!              | "line" part {"then" part}          how one reads on a single line
+//!              | "encoding wrapper of" NAME         a path through one is named
+//!                                                   without it or that field
+//!              | "encoding member tagged" NAME "of" NAME
+//!                                                   a path names it by the first
+//!                                                   field, without the second
 //! part        := NAME ["worded" text] ["except" text]
 //! ```
 //!
@@ -536,6 +541,11 @@ fn struct_attrs(def: &StructDef) -> Vec<String> {
     if !def.line.is_empty() {
         let parts: Vec<String> = def.line.iter().map(line_part).collect();
         a.push(format!("line {}", parts.join(" then ")));
+    }
+    match &def.encoding {
+        Some(EncodingStep::Wrapper { through }) => a.push(format!("encoding wrapper of {through}")),
+        Some(EncodingStep::Member { tag, through }) => a.push(format!("encoding member tagged {tag} of {through}")),
+        None => {}
     }
     a
 }

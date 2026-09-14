@@ -1068,6 +1068,54 @@ The label is worked out where a node is read rather than where it is resolved,
 because it means reading a sibling and resolving has to stay cheap. A naming
 field that has not streamed in yet leaves the node with the name it had.
 
+### Names through an encoding's own steps
+A label for a field another field was read from is a path. Most are already in
+the format's terms, `tensors[3].offset`. A format whose metadata is written in
+a self-describing encoding is not: Thrift's compact protocol keeps a struct as
+a list of (id, value) entries, so the field Parquet's specification calls
+`meta_data.dictionary_page_offset` was labelled
+`fields[id = 3].value.fields[8].value`, and a column chunk's descriptor
+`footer.fields.row_groups.value.elems[0].fields.columns.value.elems[0]`. True,
+and most of it is the encoding talking.
+
+`StructDef::encoding` (2026-09-15) marks a structure that is only an encoding's.
+`EncodingStep::Wrapper { through }` stands for one of its fields: a Thrift
+struct for `fields`, a Thrift list for `elems`, a FlatBuffers offset for what it
+points at, a bencode or CBOR item for its body. `EncodingStep::Member { tag, through }`
+is one entry of a tagged list: a Thrift field, named by its `id`, or a bencode
+or CBOR map entry, named by its key. `eval/shortpath.rs` names a path through
+them without them: the step into a wrapper's field is left out, a member is
+named by what its tag reads as in place of its index, and an index sits on
+whatever holds the list. So the two labels above read
+`meta_data.dictionary_page_offset` and `footer.row_groups[0].columns[0]`, an
+Arrow record batch `footer.recordBatches[0]` rather than
+`footer.root.table.recordBatches.vector.elements[0]`, and a torrent's
+`info["piece length"]`, quoted because the key is not a name. A member whose
+tag reads as no name, a Thrift field id the schema does not know, keeps its
+stored steps, `meta_data.fields[17]`, since `meta_data[17]` would read as an
+element of a list called `meta_data`.
+
+It is its own mark rather than read off `named_by` and `contents`, which mean
+less. A RIFF chunk is named by its `id`, and a chunk called `LIST` is not a
+field called `LIST`; a wasm section's `body` is its contents, and
+`sections[9].body` without that step is `sections[9]`, the section. And a
+structure can stop naming its contents while the step is still the encoding's:
+Parquet's `ColumnChunk` adds `data` beside its Thrift `fields`.
+
+The path the file stores is not thrown away. `Origin::label` is the short name
+and `Origin::stored` the stored path where they differ; a joined stream's part
+has the same pair, and `Relation::written` names its fields the short way with
+`Relation::template` keeping the expression exactly as the template writes it,
+so a formula and the row above it name one field one way. Both are worked out
+only for labels written as a path from where they were worked out (a gather's
+record, a chain's link, a pointer, a tagged search, an element of a list), and
+only for a collector that shows values, so the graph pays nothing. The panel
+shows the short names everywhere. A `Paths as stored` switch on the Properties
+heading, offered only where some name on the panel is stored another way and
+remembered across files, adds a muted `stored as` line under each such name,
+and `in the template` under a formula. A clause gets the line only when its
+row has no working, since otherwise the working's own row names the same field.
+
 ### A structure that reads on one row
 `StructDef::inline` says that a structure is one thing rather than several. A
 wasm instruction is an opcode and its immediate, and an `op` row followed by an
@@ -2833,8 +2881,9 @@ footer, and a walk from the footer reaches every row group's column chunks,
 not this one's. So a walk may also start with `Step::Placer`, the record that
 placed the element the walk is inside, which the outer gather already holds.
 Its label starts from that record's own, so a column chunk says `where
-descriptor footer.fields.row_groups.value.elems[0].fields.columns.value.elems[3]
-points`.
+descriptor footer.row_groups[0].columns[3] points`, and
+`footer.fields.row_groups.value.elems[0].fields.columns.value.elems[3]` is
+how Thrift stores it (see "Names through an encoding's own steps").
 
 Both are regions: a `Sized` round the inner gather, and a sized structure for
 the row group. So nothing about gaps changed. The placement index records each

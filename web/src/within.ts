@@ -51,6 +51,7 @@ export function withinGroup(path: readonly number[], n: TemplateNode, nodeAt: (p
       title: null,
       path: at,
       place: true,
+      stored: null,
     });
   }
   return lines.length === 0 ? null : { head: PROPERTIES.within, lines };

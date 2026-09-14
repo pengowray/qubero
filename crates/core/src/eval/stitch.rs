@@ -468,6 +468,10 @@ pub struct PartHit {
     /// That field as a reader would name it, the way a gathered element names
     /// its descriptor: `blocks[3].compressed`.
     pub label: String,
+    /// The same field named by every step the file stores on the way to it,
+    /// where an encoding's own steps make that differ from `label`. See
+    /// [`crate::eval::Origin::stored`].
+    pub stored: Option<String>,
     /// The byte's place inside what the part gives, and how much that is.
     pub in_part: u64,
     pub part_len: u64,
@@ -504,7 +508,12 @@ impl Evaluator {
         };
         self.resolve(doc, &owner)?;
         let Ty::Stitched { from, .. } = self.memo[&owner].ty.clone() else { return Ok(None) };
-        let label = self.walk_label(doc, &owner, &from, &part.path)?;
+        let walked = self.walk_label(doc, &owner, &from, &part.path)?;
+        let (label, stored) = match self.short_label(doc, &owner, &part.path) {
+            Ok(Some(short)) if short != walked => (short, Some(walked)),
+            Err(e) if e.interrupted() => return Err(e),
+            _ => (walked, None),
+        };
         let in_part = byte - part.start;
         let virtual_offset = match self.bgzf_block_of(doc, &part.path)? {
             Some(block_bits) if in_part < 1 << 16 => Some((block_bits / 8) << 16 | in_part),
@@ -515,6 +524,7 @@ impl Evaluator {
             parts,
             path: part.path,
             label,
+            stored,
             in_part,
             part_len: part.len,
             run_space,

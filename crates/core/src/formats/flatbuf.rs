@@ -179,8 +179,14 @@ pub fn types(prefix: &str, tables: &[Table], structs: &[Struct]) -> Vec<(String,
 
 /// A whole buffer: the offset to its root table, which is the first four
 /// bytes, and the table it points at.
+///
+/// The buffer, every offset, every vector and every string are how FlatBuffers
+/// stores a thing rather than a thing the schema names, so a path through them
+/// is named the way the schema is written: `footer.recordBatches[0]` rather
+/// than `footer.root.table.recordBatches.vector.elements[0]`. See
+/// [`crate::template::EncodingStep`].
 pub fn buffer(prefix: &str, root: &str) -> T {
-    T::structure_named("FlatBuffer", "", "root", vec![("root", offset("table", named(prefix, root), root))])
+    T::structure_named("FlatBuffer", "", "root", vec![("root", offset("table", named(prefix, root), root))]).encoding_wrapper("root")
 }
 
 fn named(prefix: &str, name: &str) -> T {
@@ -328,6 +334,7 @@ fn offset(target: &str, inner: T, shown: &str) -> T {
         vec![("offset", T::u32(Little)), (target, T::at_origin(at, inner))],
     )
     .machinery(&["offset"])
+    .encoding_wrapper(target)
 }
 
 /// A string: a length, that many bytes of UTF-8, and a zero byte after them
@@ -339,6 +346,7 @@ fn string_ty() -> T {
         vec![("length", T::u32(Little)), ("text", T::utf8(E::field("length"))), ("terminator", T::u8())],
     )
     .machinery(&["length", "terminator"])
+    .encoding_wrapper("text")
 }
 
 /// A vector: how many elements, and then the elements. A vector of tables or
@@ -352,6 +360,7 @@ fn vector_ty(elem: T, called: &str) -> T {
         vec![("count", T::u32(Little)), ("elements", T::array(elem, E::field("count")))],
     )
     .machinery(&["count"])
+    .encoding_wrapper("elements")
 }
 
 /// A struct, laid out as a C compiler would: each field at the next multiple

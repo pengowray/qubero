@@ -92,6 +92,7 @@ cases only.
 | NPY structured dtype field names: `[0] channel_0000` | ec4812d |
 | MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
 | B1. `spans` never settled in goes on `parquet/delta_binary_packed.parquet`. Not slow and not a loop: a whole pass is 580 ms and 11,709 steps. The list walks in `walk.rs` charged a step for every element they stepped over, placed or not, and `spans` starts again from the top of its window each go, so going back over what the last go listed (7,854 steps of it here) used up a go of 5,000 before anything new was read. Only placing an element is charged now. The same fix settles 16 more samples `spans_probe` gave up on (ELF, PE, LE, Mach-O, DOS, firmware), nearly all of them full 4,000-row windows of code. | 83aba76 |
+| Short position labels: templates mark an encoding's own steps (`Wrapper`, `Member` in `eval/shortpath.rs`), so Parquet (Thrift) and Arrow (FlatBuffers) positions, lengths and formulas read `footer.row_groups[0].columns[0]`. The full stored path stays behind a Paths as stored switch on the Properties heading. Bencode and CBOR are marked too. | 16ebc30, 627031d, d58eb68 |
 
 ## Bugs
 
@@ -135,8 +136,12 @@ The FITS heap reads (see Closed). Left from the design:
 
 - Parquet's row groups and column chunks are placed by gathers (see Closed).
   `RowGroup` and `ColumnChunk` now name both the footer's Thrift structs and
-  the file regions; the position row spells Thrift steps (`.fields`,
-  `.value`, `.elems`); the inspector's `trail()` folds a list only when its
+  the file regions; the position row names them by Thrift field name
+  (`footer.row_groups[0].columns[0]`), with the stored `.fields`, `.value`,
+  `.elems` steps behind the inspector's Paths as stored switch. The payload's
+  Length row still says "from an expression" because source collection stops
+  at a Switch, and the listing, graph and breadcrumbs still show the stored
+  steps; the inspector's `trail()` folds a list only when its
   type ends in `[]`, so `descriptors → …` lists do not fold.
 - `memo.rs` `forget_after` assumes a field depends only on what is before it.
   Since B4 it drops what an `At` declared after the edit points at, which
