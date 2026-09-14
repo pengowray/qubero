@@ -4954,3 +4954,82 @@ fn a_cell_finds_its_card_without_rewalking_the_header() {
     let long = cost_of_the_second_cell(40);
     assert_eq!(short, long, "the second cell still pays for the length of the header");
 }
+
+/// A field placed past the end of the root, by a choice made on text, is found
+/// by the placement index. ROOT picks what a key's offset leads to by the class
+/// name written in the key, and the index pruned every choice made that way as
+/// placing nothing, so an RNTuple's envelopes and pages read as one gap.
+#[test]
+fn a_placement_behind_a_choice_by_text_is_indexed() {
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("class", T::utf8(E::lit(1))),
+                ("offset", T::u8()),
+                ("pick", T::matches(E::field("class"), vec![("k", T::at(E::field("offset"), T::u32(Big)))], T::bytes(E::lit(0)))),
+            ],
+        ),
+    );
+    let d = doc(&[b'k', 8, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4]);
+    let mut ev = Evaluator::new(t);
+    let spans = ev.spans(&d, 8 * 8, 12 * 8, 100).unwrap();
+    assert_eq!(spans.len(), 1, "{spans:?}");
+    assert!(!spans[0].gap, "the placed number reads as a gap: {spans:?}");
+    assert_eq!((spans[0].offset_bits, spans[0].value.clone()), (8 * 8, Value::UInt(0x0102_0304)));
+}
+
+/// A field placed inside what the root covers, by a field nested below the
+/// structure the walk down stops in, is found by the placement index as well.
+/// An AppleDouble attribute's value is placed by the attribute, three levels
+/// inside the entry before it, and the entry does not cover it.
+#[test]
+fn a_placement_inside_the_root_by_a_nested_field_is_found() {
+    let entry = T::structure(
+        "Entry",
+        vec![("offset", T::u8()), ("len", T::u8()), ("value", T::at(E::field("offset"), T::bytes(E::field("len"))))],
+    );
+    let t = Template::new("t", T::sized(E::lit(8), T::structure("Root", vec![("entry", entry)])));
+    let d = doc(&[4, 3, 0, 0, 7, 8, 9, 0]);
+    let mut ev = Evaluator::new(t);
+    let path = ev.locate(&d, 5 * 8).unwrap();
+    let found = ev.node(&d, &path).unwrap();
+    assert_eq!((found.offset_bits, found.size_bits), (4 * 8, 3 * 8), "{path:?}");
+    let spans = ev.spans(&d, 0, 8 * 8, 100).unwrap();
+    let named: Vec<_> = spans.iter().map(|s| (s.offset_bits / 8, s.size_bits / 8, s.gap)).collect();
+    assert_eq!(named, vec![(0, 1, false), (1, 1, false), (2, 2, true), (4, 3, false), (7, 1, true)]);
+}
+
+/// Two lists placed over the same stretch are both walked, and a bit only the
+/// second has an element at is that element. An Impulse Tracker module puts
+/// its instruments, samples and patterns each in a list over the whole file,
+/// and with no instruments the first is empty: the index kept one of the
+/// three, and every sample header read as a gap.
+#[test]
+fn lists_placed_over_the_same_stretch_are_each_asked() {
+    let item = |name| T::structure(name, vec![("x", T::u16(Big))]);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("na", T::u8()),
+                ("a_offsets", T::array(T::u8(), E::field("na"))),
+                ("nb", T::u8()),
+                ("b_offsets", T::array(T::u8(), E::field("nb"))),
+                ("a", T::at(E::lit(0), T::pointer_list("a_offsets", Anchor::File, E::lit(0), item("A")))),
+                ("b", T::at(E::lit(0), T::pointer_list("b_offsets", Anchor::File, E::lit(0), item("B")))),
+            ],
+        ),
+    );
+    let d = doc(&[0, 1, 6, 0, 0, 0, 0xbe, 0xef]);
+    let mut ev = Evaluator::new(t);
+    let path = ev.locate(&d, 6 * 8).unwrap();
+    assert_eq!(ev.node(&d, &path).unwrap().value, Value::UInt(0xbeef), "{path:?}");
+    // The stretch between the root and the element is a gap, from where the
+    // root ends to where the element begins.
+    let spans = ev.spans(&d, 0, 8 * 8, 100).unwrap();
+    let gaps: Vec<_> = spans.iter().filter(|s| s.gap).map(|s| (s.offset_bits / 8, s.size_bits / 8)).collect();
+    assert_eq!(gaps, vec![(3, 3)], "{spans:?}");
+}
