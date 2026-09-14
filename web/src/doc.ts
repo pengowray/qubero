@@ -2875,16 +2875,18 @@ export class Doc {
    * costs about what one read of sixty-four kilobytes costs, and the file is
    * being walked forwards, so this is most of what makes a large file open in
    * seconds rather than minutes.
+   *
+   * Always chunks of the file, and asked about by the file's number: see
+   * `fetchChunk`.
    */
   private fetchRun(from: number, count: number): void {
-    if (this.space !== 0) return;
     const total = Math.ceil(this.blob.size / CHUNK_SIZE);
     let start = from;
-    while (start < from + count && start < total && (this.inflight.has(start) || this.editor.has_chunk(this.space, start))) {
+    while (start < from + count && start < total && (this.inflight.has(start) || this.editor.has_chunk(0, start))) {
       start += 1;
     }
     let end = start;
-    while (end < from + count && end < total && !this.inflight.has(end) && !this.editor.has_chunk(this.space, end)) {
+    while (end < from + count && end < total && !this.inflight.has(end) && !this.editor.has_chunk(0, end)) {
       end += 1;
     }
     if (end <= start) return;
@@ -2908,9 +2910,11 @@ export class Doc {
   }
 
   private fetchChunk(chunk: number): void {
-    // An unpacked stream has no file behind it: every byte it has was decoded
-    // in one go and none of it can arrive later.
-    if (this.space !== 0) return;
+    // A chunk is always the file's, whichever document asks. An unpacked
+    // stream's own bytes were all decoded in one go and none of them can
+    // arrive later, but a stream read by the template it declared is read in
+    // the file's reading, which asks for bytes of the file: the fields outside
+    // the stream that size it, and the runs a joined stream is kept in.
     // Reading ahead can run off the end, and a chunk past the end is not a
     // chunk: feeding an empty one would look like bytes that are all zero.
     if (chunk * CHUNK_SIZE >= this.blob.size) return;
