@@ -29,6 +29,7 @@ use rustc_hash::FxHashMap;
 use crate::codec::{Codec, Refusal, Step, Trace};
 use crate::document::Document;
 use crate::source::ArcSource;
+use crate::template::Template;
 
 /// Which address space something is a bit of. 0 is the file.
 pub type SpaceId = u32;
@@ -53,6 +54,16 @@ pub(crate) enum Opened {
 ///
 /// It stays connected to where it came from by the trace: `map_out` says which
 /// bits of the run made a byte of this, and `map_in` the other way.
+///
+/// Its fields are read where the stream was declared, unless the template came
+/// from looking at the bytes. What a stream holds is often sized, counted or
+/// picked by fields outside it: a PDB stream's length is an entry in a table at
+/// the front of the file, and which element of the list the stream is decides
+/// what its type is. A reading of the stream's bytes alone has none of those,
+/// so the tab reads the fields under the stream in the reading it was declared
+/// in, and [`Tab`](super::Tab) presents them as the tab's own. A stream whose
+/// bytes were recognised, a gzip of a tar, is read by a template that needs
+/// nothing outside it, and has a reading of its own. See [`View`].
 ///
 /// A stream joined from several runs opens as one of these too, when it is
 /// small enough to hold whole. Its trace is every part's laid end to end, with
@@ -79,11 +90,37 @@ pub struct Space {
     /// opens as a tar, and this is what says so.
     pub recognised: bool,
     doc: Document<ArcSource>,
-    ev: super::Evaluator,
+    reading: Reading,
     trace: Trace,
     /// For a joined stream, where each part's run is, in the order the parts
     /// go. Empty for a stream unpacked from one run.
     runs: Vec<JoinedRun>,
+}
+
+/// What reads a space's fields.
+enum Reading {
+    /// A reading of its own, over the space's bytes, for a template that came
+    /// from looking at them.
+    Own(Box<super::Evaluator>),
+    /// The reading the stream was declared in, under the stream, for the
+    /// template the stream declared. The template is kept for what is asked
+    /// of the template rather than of the file: the diagram of what the
+    /// stream holds.
+    Declared { template: Template, view: View },
+}
+
+/// Where the fields of a stream opened as a tab are read, when its template is
+/// the one the stream declared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    /// The space whose reading holds the stream: 0 for the file, or a space
+    /// whose bytes were recognised and so has a reading of its own. Never a
+    /// space read this way itself: a stream declared inside one of those is
+    /// read in the same reading, further down.
+    pub reading: SpaceId,
+    /// Where the stream's contents are in that reading. Every path of the tab
+    /// is a path under this one.
+    pub root: Vec<usize>,
 }
 
 /// Where one part of a joined stream opened as a document came from.
@@ -116,8 +153,8 @@ impl Space {
         bytes: Arc<Vec<u8>>,
         trace: Trace,
         runs: Vec<JoinedRun>,
-        template: crate::template::Template,
-        recognised: bool,
+        template: Template,
+        view: Option<View>,
     ) -> Space {
         Space {
             id,
@@ -125,9 +162,12 @@ impl Space {
             path,
             codec,
             template: template.name.clone(),
-            recognised,
+            recognised: view.is_none(),
             doc: Document::new(ArcSource(bytes)),
-            ev: super::Evaluator::new(template),
+            reading: match view {
+                None => Reading::Own(Box::new(super::Evaluator::new(template))),
+                Some(view) => Reading::Declared { template, view },
+            },
             trace,
             runs,
         }
@@ -201,16 +241,34 @@ impl Space {
         &self.runs
     }
 
-    /// This space read as its template says: the same call a file gets.
-    pub fn node(&mut self, path: &[usize]) -> super::R<super::NodeInfo> {
-        let (ev, doc) = (&mut self.ev, &self.doc);
-        ev.node(doc, path)
+    /// The reading over this space's own bytes, lent with its document, since
+    /// one is no use without the other. Nothing for a stream read where it was
+    /// declared, which has none: see [`Space::view`] and
+    /// [`Evaluator::tab_node`](super::Evaluator::tab_node).
+    pub fn reading(&mut self) -> Option<(&mut super::Evaluator, &Document<ArcSource>)> {
+        match &mut self.reading {
+            Reading::Own(ev) => Some((ev, &self.doc)),
+            Reading::Declared { .. } => None,
+        }
     }
 
-    /// The reading over this space, for everything `node` does not cover.
-    /// Lent with its document, since one is no use without the other.
-    pub fn reading(&mut self) -> (&mut super::Evaluator, &Document<ArcSource>) {
-        (&mut self.ev, &self.doc)
+    /// Where this space's fields are read, for a stream read where it was
+    /// declared. Nothing for one with a reading of its own.
+    pub fn view(&self) -> Option<&View> {
+        match &self.reading {
+            Reading::Own(_) => None,
+            Reading::Declared { view, .. } => Some(view),
+        }
+    }
+
+    /// What this space's bytes are read as: the template the stream declared,
+    /// with the file's named types beside it, or the one its bytes were
+    /// recognised as.
+    pub fn read_as(&self) -> &Template {
+        match &self.reading {
+            Reading::Own(ev) => ev.template(),
+            Reading::Declared { template, .. } => template,
+        }
     }
 }
 
@@ -590,7 +648,7 @@ mod tests {
         // Asking again is the same space, not another copy of it.
         assert_eq!(e.open_space(&d, 0, RUN).unwrap(), Some(id));
         // And it reads: the template the stream declared says text.
-        let node = e.space_mut(id).unwrap().node(&[0]).unwrap();
+        let node = e.tab_node(&d, id, &[0]).unwrap();
         assert_eq!(node.value, Value::Str("hello, this is the text inside the stream".into()));
     }
 

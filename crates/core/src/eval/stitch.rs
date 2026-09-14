@@ -1038,7 +1038,7 @@ mod tests {
         // Asked again, the same document.
         assert_eq!(e.open_space(&d, 0, &[STREAM]).unwrap(), Some(id));
         // And it reads as what the stream declared it holds.
-        assert_eq!(e.space_mut(id).unwrap().node(&[1]).unwrap().value, Value::UInt(0xaabbccdd));
+        assert_eq!(e.tab_node(&d, id, &[1]).unwrap().value, Value::UInt(0xaabbccdd));
     }
 
     #[test]

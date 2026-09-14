@@ -152,15 +152,25 @@ impl Evaluator {
 
     /// Where the next placed stretch after `bit` begins, which is how far a
     /// stretch nothing covers runs.
-    pub(super) fn placement_after<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<u64>> {
+    ///
+    /// None for the fields under a `root` other than the file's: the index is
+    /// of the file, and a bit of a stream opened as a tab is not one of its
+    /// bits. See `locate_under`.
+    pub(super) fn placement_after<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Option<u64>> {
+        if !root.is_empty() {
+            return Ok(None);
+        }
         self.index_placements(doc)?;
         Ok(self.placed.stretches.iter().map(|p| p.start).filter(|&s| s > bit).min())
     }
 
     /// Where the last placed stretch ending at or before `bit` ends, which is
     /// where a stretch nothing covers began. None when nothing placed ends
-    /// before it.
-    pub(super) fn placement_end_before<S: Source>(&mut self, doc: &Document<S>, bit: u64) -> R<Option<u64>> {
+    /// before it, and under a `root` other than the file's.
+    pub(super) fn placement_end_before<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Option<u64>> {
+        if !root.is_empty() {
+            return Ok(None);
+        }
         self.index_placements(doc)?;
         Ok(self.placed.stretches.iter().map(|p| p.end).filter(|&e| e <= bit).max())
     }

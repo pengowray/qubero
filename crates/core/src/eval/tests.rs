@@ -172,6 +172,42 @@ fn sized_switch_and_pending() {
 }
 
 #[test]
+fn a_length_too_large_to_count_in_bits_fails_rather_than_wrapping() {
+    // A u64 read from a corrupt file, then a byte. Each length is past what
+    // bits can count: the first two once multiplied by eight, the third only
+    // once added to where the field starts.
+    let failed = |ty: T, path: &[usize], n: u64| {
+        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("body", ty)]));
+        let mut bytes = n.to_le_bytes().to_vec();
+        bytes.push(0);
+        failure(Evaluator::new(t).node(&doc(&bytes), path).unwrap_err())
+    };
+    for n in [0x7fff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x1fff_ffff_ffff_ffff] {
+        let sized = T::sized(E::field("n"), T::u8());
+        assert_eq!(failed(sized, &[1], n), format!("size {n} runs past the end of its container"));
+        let sized_bits = T::SizedBits { bits: E::field("n").mul(E::lit(8)), inner: Box::new(T::u8()) };
+        assert_eq!(failed(sized_bits, &[1], n), format!("{} bits run past the end of the container", n as i128 * 8));
+        assert_eq!(failed(T::bytes(E::field("n")), &[1], n), "runs past the end of its container");
+        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "runs past the end of its container");
+        // A list of them, placed by stride when eight times the size fits and
+        // by walking the first element when it does not.
+        let each = T::sized(E::field("n"), T::u8());
+        assert!(failed(T::array(each, E::lit(2)), &[1, 1], n).ends_with("runs past the end of its container"));
+        // And a count that many elements long.
+        assert_eq!(failed(T::array(T::u16(Little), E::field("n")), &[1], n), "runs past the end of its container");
+    }
+}
+
+#[test]
+fn a_count_too_large_for_a_u64_fails_rather_than_wrapping() {
+    // The largest u64, and one more: as a u64 that count wraps round to an
+    // empty list, which is a corrupt file read as a well-formed one.
+    let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("body", T::array(T::u8(), E::field("n").add(E::lit(1))))]));
+    let got = Evaluator::new(t).node(&doc(&u64::MAX.to_le_bytes()), &[1]).map(|n| n.child_count).map_err(failure);
+    assert_eq!(got, Err("count 18446744073709551616 does not fit in a u64".into()));
+}
+
+#[test]
 fn huge_variable_size_array_does_not_recurse() {
     // 50k LEB128 elements; the count itself is a 3-byte LEB128.
     let n = 50_000u32;
@@ -1267,25 +1303,6 @@ fn a_real_has_no_place_in_a_size_or_a_count() {
     assert!(failure(ev.node(&d, &[1]).unwrap_err()).starts_with("n is a real number"));
     // And a power that is whole is the whole number it comes to.
     assert_eq!(within(E::pow2(E::lit(4))), "runs past the end of its container");
-}
-
-/// A length or an offset read from the file can be any 64-bit number, and
-/// the largest of them are more bytes than a `u64` counts in bits. Each is
-/// refused as running past what holds it, the same as a merely large one,
-/// instead of overflowing the multiplication by eight.
-#[test]
-fn a_length_too_large_to_count_in_bits_runs_past_its_container() {
-    let huge = [0xFF; 8];
-    let reading = |field: T, at: &[usize]| {
-        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("x", field)]));
-        let mut ev = Evaluator::new(t);
-        let d = doc(&[&huge[..], &[1, 2, 3, 4]].concat());
-        ev.node(&d, at).map(|n| n.size_bits).map_err(failure)
-    };
-    assert_eq!(reading(T::sized(E::field("n"), T::bytes(E::Remaining)), &[1]), Err("size 18446744073709551615 runs past the end of its container".into()));
-    assert_eq!(reading(T::bytes(E::field("n")), &[1]), Err("runs past the end of its container".into()));
-    // The pointer itself covers nothing; what it points at is refused.
-    assert_eq!(reading(T::at(E::field("n"), T::u8()), &[1, 0]), Err("runs past the end of the file".into()));
 }
 
 #[test]
@@ -5182,4 +5199,145 @@ fn lists_placed_over_the_same_stretch_are_each_asked() {
     let spans = ev.spans(&d, 0, 8 * 8, 100).unwrap();
     let gaps: Vec<_> = spans.iter().filter(|s| s.gap).map(|s| (s.offset_bits / 8, s.size_bits / 8)).collect();
     assert_eq!(gaps, vec![(3, 3)], "{spans:?}");
+}
+
+/// What the two streams of [`two_streams`] hold: a number and the rest, then
+/// a length, that many letters and a byte for each stream in the file.
+const FIRST_STREAM: [u8; 3] = [0x12, 0x34, 0xff];
+const SECOND_STREAM: [u8; 6] = [3, b'a', b'b', b'c', 7, 8];
+
+/// A file holding a list of streams the way a PDB does: the sizes are a table
+/// at the front, and each stream's contents name that table, the list's own
+/// count, and which element of the list they are in. `packed` says whether
+/// each stream is a zlib run or a run of the file joined as a stream of its
+/// own.
+///
+/// None of those names is inside the stream, so a tab over one reads only if
+/// it asks the reading of the file.
+fn two_streams(packed: bool) -> (Template, Document<MemSource>) {
+    let size = || E::elem("sizes", E::idx());
+    let inner = T::sized(
+        size(),
+        T::switch(
+            E::idx(),
+            vec![
+                (0, T::structure("First", vec![("a", T::u16(Big)), ("rest", T::bytes(E::Remaining))])),
+                (
+                    1,
+                    T::structure(
+                        "Second",
+                        vec![
+                            ("len", T::u8()),
+                            ("text", T::text(StrLen::Fixed(E::field("len")), Encoding::Ascii)),
+                            ("each", T::array(T::u8(), E::field("count"))),
+                        ],
+                    ),
+                ),
+            ],
+            T::bytes(E::Remaining),
+        ),
+    );
+    let runs: Vec<Vec<u8>> = if packed {
+        [&FIRST_STREAM[..], &SECOND_STREAM[..]].iter().map(|s| miniz_oxide::deflate::compress_to_vec_zlib(s, 6)).collect()
+    } else {
+        vec![FIRST_STREAM.to_vec(), SECOND_STREAM.to_vec()]
+    };
+    let stream = if packed {
+        vec![("stream", T::decoded(E::elem("runs", E::idx()), crate::codec::Codec::Zlib, inner))]
+    } else {
+        vec![
+            ("data", T::bytes(size())),
+            ("stream", T::stitched(vec![Step::field("data")], None, Some(size()), inner)),
+        ]
+    };
+    let t = Template::new(
+        "streams",
+        T::structure(
+            "Streams",
+            vec![
+                ("count", T::u8()),
+                ("sizes", T::array(T::u8(), E::field("count"))),
+                ("runs", T::array(T::u8(), E::field("count"))),
+                ("streams", T::array(T::structure("Stream", stream), E::field("count"))),
+            ],
+        ),
+    );
+    let mut bytes = vec![2, FIRST_STREAM.len() as u8, SECOND_STREAM.len() as u8, runs[0].len() as u8, runs[1].len() as u8];
+    bytes.extend(runs.concat());
+    (t, doc(&bytes))
+}
+
+/// The path of the stream in element `i` of [`two_streams`]' list.
+fn stream_at(packed: bool, i: usize) -> Vec<usize> {
+    vec![3, i, if packed { 0 } else { 1 }]
+}
+
+/// A stream opened as a tab reads the fields it read inside the file, names
+/// from outside it and all, and reads them as the tab's own: counted from the
+/// front of the tab, and in the tab's own bytes.
+fn a_tab_reads_names_from_outside_its_stream(packed: bool) {
+    let (t, d) = two_streams(packed);
+    let mut e = Evaluator::new(t);
+    let second = e.open_space(&d, 0, &stream_at(packed, 1)).unwrap().expect("the second stream opens");
+    assert_eq!(e.space(second).unwrap().bytes(), SECOND_STREAM);
+    let root = e.tab_node(&d, second, &[]).unwrap();
+    // Which element of the list the stream is in is what picked the type, so a
+    // tab that lost its place reads the first stream's type over the second's
+    // bytes rather than failing.
+    assert_eq!((root.type_name.as_str(), root.child_count), ("Second", 3));
+    assert_eq!((root.path.as_slice(), root.offset_bits, root.space), (&[][..], 0, 0));
+    assert!(!root.space_root, "the tab's own root is not a stream inside it");
+    let text = e.tab_node(&d, second, &[1]).unwrap();
+    assert_eq!((text.value, text.offset_bits, text.path), (Value::Str("abc".into()), 8, vec![1]));
+    // A count taken from the top of the file.
+    let each = e.tab_node(&d, second, &[2]).unwrap();
+    assert_eq!(each.child_count, 2);
+    assert_eq!(e.tab_node(&d, second, &[2, 1]).unwrap().value, Value::UInt(8));
+
+    let first = e.open_space(&d, 0, &stream_at(packed, 0)).unwrap().expect("the first stream opens");
+    assert_eq!(e.tab_node(&d, first, &[]).unwrap().type_name, "First");
+    assert_eq!(e.tab_node(&d, first, &[0]).unwrap().value, Value::UInt(0x1234));
+
+    // The views over the bytes ask by the tab's bits and are answered in the
+    // tab's paths: the byte under the cursor, and the column beside them.
+    let root = e.space(second).unwrap().view().expect("read where it was declared").root.clone();
+    assert_eq!(root, [stream_at(packed, 1), vec![0]].concat());
+    let mut tab = Tab::new(&mut e, &d, root);
+    assert_eq!(tab.locate(2 * 8).unwrap(), [1]);
+    assert_eq!(tab.locate(5 * 8).unwrap(), [2, 1]);
+    let spans: Vec<_> = tab.spans(0, 6 * 8, 16).unwrap().into_iter().map(|s| (s.path, s.offset_bits / 8, s.size_bits / 8)).collect();
+    assert_eq!(spans, [(vec![0], 0, 1), (vec![1], 1, 3), (vec![2, 0], 4, 1), (vec![2, 1], 5, 1)]);
+    // What settled a field inside the tab keeps its place; what settled it
+    // from outside keeps its name and has no row in the tab to go to.
+    let each: Vec<_> = tab.origins(&[2]).unwrap().into_iter().map(|o| (o.label, o.path)).collect();
+    assert!(each.contains(&("count".into(), vec![])), "{each:?}");
+    let text: Vec<_> = tab.origins(&[1]).unwrap().into_iter().map(|o| (o.label, o.path)).collect();
+    assert!(text.contains(&("len".into(), vec![0])), "{text:?}");
+}
+
+/// An edit to the file drops the tab with the rest of the reading, and the
+/// stream opened again reads what the edit left.
+#[test]
+fn a_tab_opened_again_after_an_edit_reads_the_edit() {
+    let (t, mut d) = two_streams(false);
+    let mut e = Evaluator::new(t);
+    let second = e.open_space(&d, 0, &stream_at(false, 1)).unwrap().expect("the second stream opens");
+    assert_eq!(e.tab_node(&d, second, &[1]).unwrap().value, Value::Str("abc".into()));
+    let at = e.node(&d, &[3, 1, 0]).unwrap().offset_bits / 8 + 1;
+    d.overwrite_bytes(at, b"z");
+    e.invalidate_from(at * 8);
+    assert!(e.space(second).is_none(), "the tab went with the reading");
+    let again = e.open_space(&d, 0, &stream_at(false, 1)).unwrap().expect("it opens again");
+    assert_eq!(e.tab_node(&d, again, &[1]).unwrap().value, Value::Str("zbc".into()));
+    assert_eq!(&e.space(again).unwrap().bytes()[1..4], b"zbc");
+}
+
+#[test]
+fn a_joined_stream_open_as_a_tab_reads_names_from_outside_it() {
+    a_tab_reads_names_from_outside_its_stream(false);
+}
+
+#[test]
+fn an_unpacked_stream_open_as_a_tab_reads_names_from_outside_it() {
+    a_tab_reads_names_from_outside_its_stream(true);
 }

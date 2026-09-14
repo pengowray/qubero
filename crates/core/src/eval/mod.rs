@@ -39,6 +39,7 @@ mod shape;
 mod size;
 mod space;
 mod stitch;
+mod tab;
 mod time;
 mod traced;
 mod walk;
@@ -50,7 +51,8 @@ pub use census::{BoxCount, Census, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
-pub use space::{JoinedRun, Space, SpaceId};
+pub use space::{JoinedRun, Space, SpaceId, View};
+pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
@@ -114,13 +116,6 @@ struct Unpacked {
 
 /// Whether a stream's declared contents say nothing about what they are.
 ///
-/// A count of bytes read from the file, as bits, or nothing when that many
-/// bits do not fit in a `u64`. No file is that long, so a count that large
-/// runs past whatever holds it; callers say so rather than overflow.
-pub(super) fn byte_bits(bytes: i128) -> Option<u64> {
-    u64::try_from(bytes).ok()?.checked_mul(8)
-}
-
 /// A template that says a run unpacks into bytes, or into a wrapper holding
 /// one field of bytes or of text, has no opinion worth keeping: the bytes
 /// themselves know better, and a gzip of a tar should open as a tar. A
@@ -655,8 +650,15 @@ impl Evaluator {
     /// element extent is projected over the declared count; callers mark the
     /// result approximate until the ordinary node succeeds.
     pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
+        self.extent_estimate_under(&[])
+    }
+
+    /// The same among the lists under `root`, which for a stream opened as a
+    /// tab are the ones inside the stream. See [`Tab`].
+    pub(super) fn extent_estimate_under(&self, root: &[usize]) -> Option<ExtentEstimate> {
         self.memo
             .lists()
+            .filter(|(path, _)| path.starts_with(root))
             .filter_map(|(path, state)| {
                 let total = state.expected_count?;
                 let (measured, at) = state.walk_at?;
@@ -1414,8 +1416,8 @@ impl Evaluator {
             if n < 0 {
                 return fail("negative offset");
             }
-            let Some(to) = byte_bits(n).and_then(|bits| self.anchor_base(parent, pr.offset, anchor).checked_add(bits)) else {
-                return fail("runs past the end of the file");
+            let Some(to) = size::bits_in(n).and_then(|bits| self.anchor_base(parent, pr.offset, anchor).checked_add(bits)) else {
+                return fail("runs past the end of its container");
             };
             let into = if anchor == Anchor::File { 0 } else { pr.space };
             self.no_ring(parent, to, into, &what)?;
@@ -1432,7 +1434,10 @@ impl Evaluator {
         } else if idx == 0 {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
-            pr.offset + idx as u64 * stride
+            let Some(at) = stride.checked_mul(idx as u64).and_then(|bits| pr.offset.checked_add(bits)) else {
+                return fail("runs past the end of its container");
+            };
+            at
         } else {
             // Place after the previous sibling, walking the elements in
             // between. A long list drops what the walk moves past, so this
@@ -1826,7 +1831,7 @@ impl Evaluator {
                     if bytes < 0 {
                         return fail("negative size");
                     }
-                    let Some(bits) = byte_bits(bytes).filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
+                    let Some(bits) = size::bits_in(bytes).filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
                         return fail(format!("size {bytes} runs past the end of its container"));
                     };
                     limit = offset + bits;
@@ -2104,24 +2109,36 @@ impl Evaluator {
             return Ok(Some(id));
         }
         // The run is unpacked by whichever reading holds it: the file's own,
-        // or the one over the space it sits in. The space is taken out of the
-        // registry for the length of the call, since it holds a reading that
-        // is about to be asked to do work.
-        let unpacked = match space {
-            0 => self.unpack(doc, path)?,
+        // or the one over the space it sits in, or, for a space read where it
+        // was declared, the reading that one is read in, further down. A space
+        // with a reading is taken out of the registry for the length of the
+        // call, since that reading is about to be asked to do work.
+        let within = match space {
+            0 => View { reading: 0, root: Vec::new() },
+            id => match self.space(id) {
+                None => return fail("no such space"),
+                Some(held) => held.view().cloned().unwrap_or(View { reading: id, root: Vec::new() }),
+            },
+        };
+        let at = [within.root.as_slice(), path].concat();
+        let unpacked = match within.reading {
+            0 => self.unpack(doc, &at)?,
             id => {
-                let mut held = match self.take(id) {
-                    Some(held) => held,
-                    None => return fail("no such space"),
+                let mut held = self.take(id).expect("a space that was just there");
+                let got = match held.reading() {
+                    Some((ev, sub)) => ev.unpack(sub, &at),
+                    None => unreachable!("a view is always into a space with a reading of its own"),
                 };
-                let (ev, sub) = held.reading();
-                let got = ev.unpack(sub, path);
                 self.put(held);
                 got?
             }
         };
         let Some(Unpacked { bytes, trace, codec, inner, runs }) = unpacked else { return Ok(None) };
         let (template, recognised) = self.template_for(&inner, &bytes);
+        // A template the stream declared reads the stream where it was
+        // declared, under the node that holds what the stream opened to. One
+        // that came from looking at the bytes needs nothing outside them.
+        let view = (!recognised).then(|| View { reading: within.reading, root: [at.as_slice(), &[0]].concat() });
         let id = self.open.len() as SpaceId + 1;
         self.open.push(Some(Box::new(space::Space::new(
             id,
@@ -2132,7 +2149,7 @@ impl Evaluator {
             trace,
             runs,
             template,
-            recognised,
+            view,
         ))));
         Ok(Some(id))
     }
@@ -2227,6 +2244,29 @@ impl Evaluator {
     /// A space this reading has opened, to ask something of.
     pub fn space_mut(&mut self, id: SpaceId) -> Option<&mut Space> {
         self.open.get_mut(id.checked_sub(1)? as usize)?.as_deref_mut()
+    }
+
+    /// The node at `path` of the tab over space `id`, as the tab reads it:
+    /// counted from the front of the stream and in the tab's own bytes. `doc`
+    /// is the file, which a stream read where it was declared is read in.
+    /// See [`Tab`].
+    pub fn tab_node<S: Source>(&mut self, doc: &Document<S>, id: SpaceId, path: &[usize]) -> R<NodeInfo> {
+        let Some(space) = self.space(id) else { return fail("no such space") };
+        match space.view().cloned() {
+            Some(View { reading: 0, root }) => Tab::new(self, doc, root).node(path),
+            // A space with a reading of its own, or a stream declared inside
+            // one, which is read in that one.
+            view => {
+                let (reading, root) = view.map_or((id, Vec::new()), |v| (v.reading, v.root));
+                let mut held = self.take(reading).expect("a space that was just there");
+                let got = match held.reading() {
+                    Some((ev, sub)) => Tab::new(ev, sub, root).node(path),
+                    None => unreachable!("a view is always into a space with a reading of its own"),
+                };
+                self.put(held);
+                got
+            }
+        }
     }
 
     /// Every space open, in the order they were opened.
@@ -2345,6 +2385,14 @@ impl Evaluator {
     /// block and have no blocks to open, so they do not get one.
     pub(super) fn has_blocks(&self, path: &[usize]) -> bool {
         self.trace_for(path).is_some_and(|(_, t)| !t.blocks().is_empty())
+    }
+
+    /// How many bits space `space` holds, which for 0 is the file's length.
+    pub(super) fn len_in<S: Source>(&self, doc: &Document<S>, space: SpaceId) -> u64 {
+        match space {
+            0 => doc.len_bits(),
+            other => self.spaces.len_bits(other),
+        }
     }
 
     /// Which address space a read at `path` belongs to.
