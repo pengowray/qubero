@@ -373,8 +373,12 @@ fn superblock_v2() -> T {
 
 /// An address, which is as wide as the superblock's offset size says and is
 /// read here as the eight bytes it always is.
+///
+/// All ones is the undefined address, the file's way of writing "nothing
+/// here", and it is named so a chip says that rather than spelling out
+/// 18446744073709551615. Every other value shows as the number it is.
 pub(super) fn addr() -> T {
-    T::u64(Little)
+    T::enumeration("Address", T::u64(Little), &[(UNDEFINED, "undefined")])
 }
 
 /// A length, which the superblock sizes separately from an address and which
@@ -3483,6 +3487,7 @@ pub(crate) mod tests {
         match ev.node(doc, at).expect("reads").value {
             Value::Int(v) => v,
             Value::UInt(v) => i128::try_from(v).expect("fits"),
+            Value::Enum { raw, .. } => raw,
             other => panic!("{at:?} holds {other:?}"),
         }
     }

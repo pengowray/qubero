@@ -395,6 +395,33 @@ several questions instead of freezing the first one. Until the walk reaches a
 stretch, the bytes there read as a gap, which is what they read as before any of
 this existed.
 
+Four holes in that were found on 2026-09-14 by setting what the annotation
+column names against what a walk of the whole tree covers, file by file
+(`crates/core/examples/cover_probe.rs`). The pruning did not know `Ty::Match`,
+so a ROOT key list, which picks what each key leads to by class name, was
+skipped whole: `spans` named 768 of an RNTuple file's 25,318 bytes. It was the
+pruning and not the order of the file, even though the key list is written
+after everything it leads to, since the walk runs to its end before any bit is
+answered from it. `places` now names every type rather than ending in a
+wildcard, so a type added later stops the build there until someone says
+whether it can place anything. The index was asked only outside the root, and a
+field nested below the structure the walk down stops in can place bytes inside
+the root that none of its ancestors cover: an AppleDouble attribute's value, a
+COFF section's relocations, a netCDF record variable's later records. `locate`
+now asks the index whenever the walk down ends in a structure none of whose
+fields cover the bit, and takes a stretch only if it is narrower than that
+structure. This adds no walk, since a gap already asked the same index where the
+stretches around it begin and end. Several stretches can cover one bit, and the
+narrowest need not have a field there: an Impulse Tracker module places its
+instrument, sample and pattern lists each over the whole file. So the stretches
+are tried narrowest first, eight at most, and the deduplication is by stretch and
+the type it was read as, not by stretch alone, which had kept the empty
+instrument list and dropped the other two. A gap ends at the next element of any
+list of scattered elements placed over it, not only at the next placed stretch.
+And `child_at` stopped at the first child starting past the bit unless the
+structure declared an `At` directly, which a switch round an `At` is not: a COFF
+symbol table placed past the section data declared after it hid every section.
+
 The inspector reads from the cursor's bit, not its byte, so its integer and float
 rows show what an unaligned read would give. Its first mode ("Field") shows what
 the template says is there instead: the trail of enclosing structures, the value
