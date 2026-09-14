@@ -593,7 +593,8 @@ pub struct Evaluator {
     /// and how far the walk that finds them has got. See [`placed`].
     placed: placed::Index,
     /// Reachability in the template's named-type graph, independent of bytes.
-    placing_types: std::cell::OnceCell<rustc_hash::FxHashSet<String>>,
+    /// Once for types read inside a stream and once for types read in the file.
+    placing_types: std::cell::OnceCell<[rustc_hash::FxHashSet<String>; 2]>,
     /// The decoded streams this reading has opened, and what each one came to.
     spaces: space::Spaces,
     /// The streams opened as documents of their own, which is what a tab is.

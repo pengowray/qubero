@@ -310,7 +310,8 @@ impl Evaluator {
     fn frame<S: Source>(&mut self, doc: &Document<S>, path: Vec<usize>) -> R<Option<Frame>> {
         self.resolve(doc, &path)?;
         let ty = self.memo[&path].ty.clone();
-        if !self.may_place(&ty) {
+        let in_file = self.memo[&path].space == 0;
+        if !self.may_place(&ty, in_file) {
             return Ok(None);
         }
         let count = self.child_count(doc, &path)?;
@@ -319,7 +320,7 @@ impl Evaluator {
         }
         let fields = match ty.base() {
             Ty::Struct(def) => {
-                Some((0..def.fields.len()).filter(|&i| self.may_place(&def.fields[i].ty)).collect())
+                Some((0..def.fields.len()).filter(|&i| self.may_place(&def.fields[i].ty, in_file)).collect())
             }
             _ => None,
         };
@@ -332,7 +333,7 @@ impl Evaluator {
             first.push(0);
             self.resolve(doc, &first)?;
             let settled = self.memo[&first].ty.clone();
-            if !self.may_place(&settled) {
+            if !self.may_place(&settled, self.memo[&first].space == 0) {
                 return Ok(None);
             }
         }
@@ -340,60 +341,70 @@ impl Evaluator {
     }
 
     /// Whether anything inside this type places its contents elsewhere. False
-    /// prunes the whole branch without reading a byte of it.
-    fn may_place(&self, ty: &Ty) -> bool {
+    /// prunes the whole branch without reading a byte of it. `in_file` says the
+    /// type is read in the file's own space rather than inside a stream.
+    fn may_place(&self, ty: &Ty, in_file: bool) -> bool {
         // Schema-generated types share a large, recursive graph. Walking all
         // branches again for each field is exponential even for a tiny footer.
         // Compute the least fixed point once: a recursive cycle places nothing
         // until one of its members reaches an actual pointer. Caching DFS
-        // negatives instead would incorrectly prune cycles with an exit.
+        // negatives instead would incorrectly prune cycles with an exit. Once
+        // for each of the two places a type can be read, since a schema node
+        // places things in one and not in the other.
         let named = self.placing_types.get_or_init(|| {
-            let mut named = rustc_hash::FxHashSet::default();
-            loop {
-                let before = named.len();
-                for (name, definition) in &self.template.types {
-                    if Self::places(definition, &named) { named.insert(name.clone()); }
+            [false, true].map(|in_file| {
+                let mut named = rustc_hash::FxHashSet::default();
+                loop {
+                    let before = named.len();
+                    for (name, definition) in &self.template.types {
+                        if Self::places(definition, &named, in_file) {
+                            named.insert(name.clone());
+                        }
+                    }
+                    if named.len() == before {
+                        return named;
+                    }
                 }
-                if named.len() == before { return named; }
-            }
+            })
         });
-        Self::places(ty, named)
+        Self::places(ty, &named[in_file as usize], in_file)
     }
 
-    fn places(ty: &Ty, named: &rustc_hash::FxHashSet<String>) -> bool {
+    fn places(ty: &Ty, named: &rustc_hash::FxHashSet<String>, in_file: bool) -> bool {
+        let places = |t: &Ty| Self::places(t, named, in_file);
         match ty {
             // The types that put something somewhere other than where it was
             // declared. A chain's elements are all elsewhere, and so are a
             // gather's.
             Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } => true,
             Ty::Named(name) => named.contains(&**name),
-            Ty::Struct(s) => s.fields.iter().any(|f| Self::places(&f.ty, named)),
+            Ty::Struct(s) => s.fields.iter().any(|f| places(&f.ty)),
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
-                Self::places(elem, named)
+                places(elem)
             }
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => {
-                Self::places(inner, named)
+                places(inner)
             }
             // A stream is walked into only when something inside it points
             // back at the file, which is exactly the RNTuple case: the anchor
             // is compressed and the envelopes it names are at file offsets.
             // Every other stream is pruned here and never unpacked by this
             // walk.
-            Ty::Decoded { inner, .. } => Self::places(inner, named),
+            Ty::Decoded { inner, .. } => Self::places(inner, named, false),
             // The same for a stream joined from parts: its contents are in a
             // space of their own, and are walked only for a pointer back out.
-            Ty::Stitched { inner, .. } => Self::places(inner, named),
+            Ty::Stitched { inner, .. } => Self::places(inner, named, false),
             Ty::Switch { cases, default, .. } => {
-                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
+                cases.iter().any(|(_, t)| places(t)) || places(default)
             }
             // The same for a choice made by text. A ROOT key picks what its
             // offset leads to by the class name written in it, and every
             // RNTuple envelope and page is behind that choice: without this
             // arm the whole key list was pruned as placing nothing.
             Ty::Match { cases, default, .. } => {
-                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
+                cases.iter().any(|(_, t)| places(t)) || places(default)
             }
-            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => Self::places(inner, named),
+            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => places(inner),
             // Everything that holds no other type, named one by one rather
             // than caught by a wildcard. A wildcard is how `Match` came to be
             // answered "places nothing" when it was added, and a new type that
@@ -428,10 +439,13 @@ impl Evaluator {
             | Ty::Insn { .. }
             | Ty::Traced { .. }
             | Ty::CodeBits { .. } => false,
-            // A built type is not followed, though what it builds may place
-            // things: every ROOT object sits in a decoded stream, so indexing
-            // them would unpack every object in the file to answer one byte.
-            Ty::Schema { .. } => false,
+            // A built type may place things, and is followed where it is read
+            // in the file's own space: a BP5 record's pointers are offsets in
+            // the file. Not inside a stream, where every ROOT object sits:
+            // indexing those would unpack every object in the file to answer
+            // one byte, and a stream is entered above only for something that
+            // points back out of it.
+            Ty::Schema { .. } => in_file,
         }
     }
 }

@@ -543,6 +543,24 @@ fn a_bp5_directory_in_a_zip_reads_each_variable_as_adios2_does() {
     assert_eq!(texts["units"], ["K"]);
 }
 
+/// A byte of the dataset is found as what the dataset reads it as, not as the
+/// archive's bytes: a byte of `md.0` is a field of its record, and a byte of
+/// `data.0` is a value of the block the metadata placed there.
+#[test]
+fn a_byte_of_a_bp5_zip_is_found_as_the_dataset_reads_it() {
+    let mut f = open_or_skip!("steps.bp5.zip");
+    let data = ["dataset", "md_0", "0", "0", "blocks", "metadata", "data"];
+    let count = f.get(&[&data[..], &["BitFieldCount"]].concat());
+    let found = f.ev.locate(&f.doc, count.offset_bits + 8).unwrap();
+    assert_eq!(found, f.at(&[&data[..], &["BitFieldCount"]].concat()));
+    let value = ["dataset", "md_0", "0", "1", "blocks", "metadata", "data", "BPG_8_10_temperature", "blocks", "1", "values", "values", "1", "2"];
+    let placed = f.get(&value);
+    assert_eq!(placed.value, Value::Float(22.5));
+    let found = f.ev.locate(&f.doc, placed.offset_bits + 3).unwrap();
+    assert_eq!(f.node(&found).value, Value::Float(22.5));
+    assert_eq!(f.node(&found).offset_bits, placed.offset_bits);
+}
+
 /// `md.0` opened alone reads to its FFS records, and each record's data says
 /// its formats are in `mmd.0` rather than failing the file.
 #[test]

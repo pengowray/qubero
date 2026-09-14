@@ -396,13 +396,25 @@ impl Evaluator {
         }
         let inside = top.offset <= bit && bit < top.offset + size;
         let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit)? } else { (root.to_vec(), false) };
-        if settled || !root.is_empty() {
+        if !root.is_empty() {
+            return Ok(found);
+        }
+        // A field the template calls a second reading is not where its bytes
+        // belong, so a field placed over the same bit that reads them as what
+        // they are is the better answer, even where the walk ended on a field.
+        // A ZIP holding a BP5 directory reads each entry as bytes and places
+        // the dataset's files over them.
+        let second = if inside { self.outermost_aside(&found) } else { None };
+        if settled && second.is_none() {
             return Ok(found);
         }
         // Only a stretch narrower than the structure the walk stopped in says
         // more about the bit than that structure does, and a wider one would
-        // lead back down to it.
-        let widest = if inside {
+        // lead back down to it. Narrower, for a second reading, than the
+        // structure holding it.
+        let widest = if let Some(holder) = second {
+            self.size_of(doc, &holder)?
+        } else if inside {
             let at = self.memo[&found].offset;
             let size = self.size_of(doc, &found)?;
             if at <= bit && bit < at + size { size } else { u64::MAX }
@@ -421,6 +433,12 @@ impl Evaluator {
             answer.get_or_insert(deeper);
         }
         Ok(answer.unwrap_or_default())
+    }
+
+    /// The structure holding the outermost field on `path` that is a second
+    /// reading of its bytes, where there is one.
+    fn outermost_aside(&self, path: &[usize]) -> Option<Vec<usize>> {
+        (1..=path.len()).find(|&k| self.aside(&path[..k])).map(|k| path[..k - 1].to_vec())
     }
 
     /// Walk down from `path` to the deepest field covering `bit`, and say
