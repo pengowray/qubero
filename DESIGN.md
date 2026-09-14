@@ -1395,7 +1395,7 @@ way, 295 of 549 failed at the root: 118 Parquet pages' values, 102 ROOT
 baskets, 13 ROOT objects, 48 Arrow buffers, 9 PDB streams in pieces, 3 HDF4
 datasets' values and the two below that still do. A deeper walk of the Parquet
 and CDF samples found 12 more Parquet pages and 2 CDF variables' data that
-failed the same way.
+failed the same way, and all of those read now.
 
 So a space whose template the stream declared keeps no reading of its own.
 `Space::view` says where its fields are, which is under the stream's node in
