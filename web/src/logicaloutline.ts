@@ -1493,7 +1493,7 @@ function wavOutline(doc: Doc): TemplateReply<LogicalOutline> {
 /** Adapters are intentionally independent of the view. GGUF, ZIP, SQLite,
  * RIFF and MP4 can add semantic nodes here without changing the table UI. */
 const ADAPTERS: readonly Adapter[] = [
-  { matches: (doc) => doc.template === "hdf5", read: (doc) => hdf5Outline(doc) },
+  { matches: (doc) => doc.holdsHdf5, read: (doc) => hdf5Outline(doc) },
   { matches: (doc) => doc.template === "root", read: rootOutline },
   { matches: (doc) => doc.template === "gguf", read: ggufOutline },
   { matches: (doc) => doc.isZip, read: archiveOutline },

@@ -540,15 +540,17 @@ export class OverviewPanel {
    * template is sniffed after the document opens, so either offer can appear,
    * or go, later.
    *
-   * The B-trees tab is offered for the one format that has them at all rather
-   * than for a file already known to have one, because knowing that is the
-   * walk itself, and a walk run to decide whether to show a hidden tab is a
-   * walk nobody asked for. A file of that format with no version 1 tree in it
-   * says so in the panel.
+   * The B-trees tab is offered for a file read as HDF5, the one format that
+   * has them at all, rather than for a file already known to have one, because
+   * knowing that is the walk itself, and a walk run to decide whether to show a
+   * hidden tab is a walk nobody asked for. A file of that format with no
+   * version 1 tree in it says so in the panel. Read as HDF5 is not the same as
+   * named `hdf5`: a MATLAB 7.3 file is HDF5 under the `mat` template, and a
+   * level 5 one under the same template has no trees to offer a tab for.
    */
   private syncTabs(): void {
     const hasLogical = hasLogicalOutline(this.doc);
-    const hasTrees = this.doc.template === "hdf5";
+    const hasTrees = this.doc.holdsHdf5;
     this.logicalTab.hidden = !hasLogical;
     this.btreesTab.hidden = !hasTrees;
     if (!hasLogical && this.tab === "logical") this.tab = "contents";

@@ -30,9 +30,14 @@ cases only.
 
 | Was | Commit |
 |---|---|
+| B2. A FITS table's heap failed with "unknown field cards" once a later HDU's rows had been read. A guarded walk in `walk.rs` dropped a node it had only placed again, which left the fields read inside it with no node above them, and a walk inside a walk left the element it kept behind once its list was dropped. The two walk tests check that no node is left without its parent, and `fits_real` no longer needs a fresh evaluator. | 5c0da64, deb296b |
+| B3. An element that ended a run because it could not be read was forgotten without the fields read inside it, which stayed with nothing above them (two HDF5 real-file tests and a WAV test). They go with it now. | 2e3cb9f |
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| MATLAB 7.3 files get the HDF5 contents list and B-trees tab, keyed on `h5ad::holds_hdf5` (the same search the walk uses, now reading no list contents to answer no); level 5 files get neither. `BTREES.notInListing` no longer blames a user block. | 656fd35, 5039f59, c53c702 |
+| S7. One space stitched from several runs: `Ty::Stitched` joins stored or packed runs into one lazily read space with a bounded cache and a part table. PDB scattered streams (a TPI stream joined from 11 pages), BAM records across BGZF blocks (a record cut across 17 blocks reads whole; 20 KB peak cache over 300 blocks), Godot resources across compressed blocks, the inspector showing a byte's run and BGZF virtual offset, and edits to a field inside one stored run. Also fixed Gather's resume skipping a record after a spend ran out. | f4c38e0, 174eb1d, a34ee58, 85ea109 |
+| WMO BUFR: a new template, a side reader through Table D with replication and operators, bundled WMO tables (v46, with v13 and v15 differences), and a values panel. No value differs from ecCodes on eight samples. | f4c90ef, 52765a3, e7ea846 |
 | S8. Computed values that are not integers: `Ty::ComputedReal`, `Expr::Real`, `RealText`, `Pow2`, `Pow10`, `Trunc` on a second evaluator. NIfTI voxels scaled by fractional slopes, FITS scales with fractions and exponents, GRIB simple-packed values with their worth. Matches nibabel, astropy and ecCodes within float tolerance. | 0ebc377, 4cecf62, e91ab8a, fbce36a |
 | NI TDMS: a new template. Segments, metadata, properties, raw data contiguous or interleaved, layouts reused from the last list and one segment back, index files. Matches npTDMS 1.11 on every channel of ten samples. | 31c731c, 5d00193, 11afb26, dea17d1 |
 | CDF time values as moments: float counts (CDF_EPOCH, EPOCH16 seconds), `Epoch::Atomic` with a leap-second table for TT2000 (IERS from 1972, the CDF library's drifting offsets 1960 to 1971), fill and pad values as no time, and `23:59:60` shown inside a leap second. 2,489 sample sites and a 34,640-count sweep match cdflib, bar two cdflib faults. | c9cfdb5, f70cf0c, 97b3565 |
@@ -73,7 +78,7 @@ cases only.
 
 ## Bugs
 
-None open. B1 is in the table above.
+None open. B1 to B3 are in the table above.
 
 ## IR additions that close gaps in more than one format
 
@@ -356,15 +361,6 @@ Reads further than any other scientific format. Left:
 - 4-byte offsets are read wrong rather than refused.
 - Checksums on the chunk index blocks and pages are placed as fields but not
   verified: the crate has no lookup3.
-- **The B-trees panel and the HDF5 contents list still do not open for
-  `.mat` files.** The walk now works behind a user block, but three places
-  gate on the template name being `"hdf5"`: `contents` and `btree` in
-  `crates/wasm/src/lib.rs`, `syncTabs` in `web/src/overviewpanel.ts` (the
-  tab), and the `hdf5` adapter in `web/src/logicaloutline.ts`. Allowing
-  `"mat"` everywhere would offer a B-trees tab on every level 5 MAT file,
-  which has no trees, under an empty-state sentence about groups and chunked
-  datasets. It wants a cheap "this MAT file is HDF5 inside" signal (the MAT
-  template's root switch already picks a 7.3 arm) and the tab offered on that.
 - Compound members go as deep as the file nests compounds; arrays,
   enumerations and sequence element types go two levels, then keep their
   bytes. True version 3 compound bytes and version 1 member dimensions are
@@ -387,10 +383,6 @@ Seven samples. Left:
 
 - Tile-compressed images decode (see Closed); PLIO_1 and HCOMPRESS_1 are
   named and not decoded. The gzip fallback column is tested with f32 only.
-- **Evaluator bug:** a table's heap fails with "unknown field cards" once a
-  later HDU's rows have been read (open `gzip2.fits`, read HDU 3's rows, and
-  HDU 1's heap no longer resolves). Also true on main before the tile work.
-  `fits_real` works round it with a fresh evaluator; a task was filed.
 - `fits_tile.rs` is about 1,370 lines; the Rice decoder and the quantization
   code would each make a module.
 - The joined value of a `CONTINUE` string is not one node: each card reads as
@@ -514,8 +506,33 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-ADIOS2 BP. BUFR was being built on 2026-09-14. DICOM is read by the bundled
-Kaitai description (`dicom.ksy`) rather than a native template.
+ADIOS2 BP. DICOM is read by the bundled Kaitai description (`dicom.ksy`)
+rather than a native template.
+
+### WMO BUFR (built 2026-09-14)
+
+Messages and sections 0 to 5 as fields (editions 2, 3 and 4), section 3's
+descriptors split into F-X-Y and named from the tables, and a side reader
+(`bufr_data.rs`) that expands Table D, applies fixed and delayed replication
+and operators 201 to 208, 221, the 222 to 237 bitmap family and 241 to 243,
+and reads uncompressed and compressed subsets, shown in a values panel (see
+Closed). Tables: WMO master table version 46 from the WMO BUFR4 repository
+(MIT), with versions 13 and 15 as differences from ecCodes (Apache-2.0),
+about 220 KB compiled in, generated by `tools/bufrtables.mjs`. Eight samples;
+no value differs from ecCodes 2.48. Left:
+
+- Unit spellings in versions 13 and 15 come from ecCodes (`deg`) and differ
+  from the WMO's (`degree true`) beside them.
+- Operators 203, 208, 221, 232 and 235 are covered only by hand-built unit
+  tests; no sample uses them.
+- A local descriptor (not in Table B) stops the reading, naming it; the
+  values before it stay.
+- A GTS envelope is recognised only when it starts with SOH.
+- Code and flag table values show as numbers; the WMO CodeFlag CSVs would
+  give their meanings.
+- `bufr_data.rs` is about 1,870 lines; the panel builder (about 200) would
+  move to `bufr_panel.rs`. `Bits` is copied in `grib_values.rs` and
+  `bufr_data.rs` and would serve both from a `crate::bits` module.
 
 ### Engine: recursion the stack guard does not see
 
@@ -592,27 +609,19 @@ references and whole records in the first block as fields; BAI and CSI with
 every virtual offset split into block and in-block halves (see Closed). Nine
 htslib and samtools samples, matched against bamnostic. Left:
 
-- **Records past the first block need a stitched space.** A record can start
-  in one block and end in another, and nothing joins several decoded members
-  into one space, so later blocks read only through the side reader
-  (`bam_records.rs`, `Evaluator::bam_block`). The addition that would fix it,
-  as the agent specified: `Ty::Stitched { from: Arc<[Step]>, inner: Box<Ty> }`,
-  a zero-width node like `Gather` whose `from` walks to Decoded nodes;
-  `open_space_at` joins their outputs in walk order, inflating lazily under
-  `CAP_BYTES`, with a part table of (start byte, member path) so a position
-  maps back to (member k, offset j), which is exactly a BGZF virtual offset.
-  PDB scattered streams, HDF4 linked blocks, Godot RSCC and FITS `CONTINUE`
-  are the same shape.
-- **No panel.** `bam_block` is a method, not an `Explain` variant, and it
-  walks from the header on every call (up to 256 MB unpacked); a panel needs
-  a variant, a `bampanel.ts` on `steplist.ts`, and a per-block cache.
+- Every record reads as a field now: the file root is `blocks` plus a
+  `stream` joined from every block's output (S7, see Closed), unpacked a block
+  at a time under a 16 MiB cache. `bam_records.rs` stays as the oracle in
+  `the_template_and_the_side_reader_agree_on_every_record`.
+- **No panel.** `bam_block` is a method, not an `Explain` variant. With the
+  stream now joined, a panel may no longer be needed for records; the
+  inspector's Position row already shows a record's block and virtual offset.
 - **A `.bam` is labelled "BGZF gzip blocks".** The label names the container,
   not the contents; a reader opening a BAM file wants to be told it is BAM.
   `templateSentence` is where Fable suggested saying so.
 - A plain gzip file of several members that is not BGZF still reports a false
   CRC mismatch (its CRC compared with the last member's trailer): the gzip
   template needs a compressed run that ends where its decoder stopped.
-- Blocks after the first read as invalid text: only block 0 knows it is BAM.
 - `bam.rs` is about 980 lines; the BAI and CSI parts would split out as
   `bam_index.rs`.
 

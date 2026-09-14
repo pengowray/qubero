@@ -159,7 +159,7 @@ impl Evaluator {
                 // in it is the failure, not a short run. Nor is the reader
                 // giving up on depth a short run: see `is_refusal`.
                 Err(EvalError::Failed(why)) if ends > 0 && !Self::is_refusal(&why) => {
-                    self.memo.forget_node(&p);
+                    self.memo.forget_under(&p);
                     match self.stretch_to(doc, path, &p)? {
                         Some(size) => size,
                         None => {
@@ -223,7 +223,7 @@ impl Evaluator {
                 Ok(Some(size))
             }
             Err(EvalError::Failed(_)) => {
-                self.memo.forget_node(elem);
+                self.memo.forget_under(elem);
                 if let Some(m) = self.memo.get_mut(path) {
                     m.limit = mine;
                 }
@@ -361,9 +361,19 @@ impl Evaluator {
     }
 
     /// Drop these nodes, except `keep` and what is inside it.
+    ///
+    /// What is kept goes into the journal of the walk this one was inside, if
+    /// it was inside one, to be dropped when that walk drops the rest of what
+    /// it placed. The list this walk went along may be one of those, and a
+    /// node kept past its list has nothing above it for a name to be looked
+    /// up in. The element the walk was for is in that journal already, since
+    /// it is placed after this walk's journal has closed.
     fn drop_nodes(&mut self, added: VecDeque<Vec<usize>>, keep: &[usize]) {
         for path in added {
             if path.starts_with(keep) {
+                if let Some(w) = self.journals.last_mut() {
+                    w.added.push_back(path);
+                }
                 continue;
             }
             self.memo.forget_node(&path);
@@ -538,9 +548,20 @@ impl Evaluator {
     }
 
     /// Record a node, and note it as droppable while a guarded walk is running.
+    ///
+    /// Only a node the memo did not hold is the walk's to drop. One that was
+    /// here already was placed by whatever asked for it, and what was read
+    /// inside it may still be here too: a walk that places it again, as
+    /// `walk_from` does with an element nothing has sized, and then drops it
+    /// would leave its fields standing with no node above them. A field asked
+    /// from in there then finds nothing when it looks up for a name. Three
+    /// FITS tables did this: reading into the third placed the first again,
+    /// and the first table's heap could no longer find its header's cards.
     pub(super) fn remember(&mut self, path: &[usize], r: Resolved) {
-        if let Some(w) = self.journals.last_mut() {
-            w.added.push_back(path.to_vec());
+        if !self.memo.contains_key(path) {
+            if let Some(w) = self.journals.last_mut() {
+                w.added.push_back(path.to_vec());
+            }
         }
         self.memo.insert(path.to_vec(), r);
     }

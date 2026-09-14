@@ -383,6 +383,53 @@ export function timeNoteText(time: FieldTime): string | null {
   return time.state === "leap" ? TIME.leapSecond : null;
 }
 
+/**
+ * A stream joined from several runs elsewhere in the file, and the fields read
+ * inside it: a PDB stream kept in pages wherever the writer found room, a BAM
+ * cut into BGZF blocks every 64 KB whether or not a record ended there.
+ *
+ * "Joined" is the one word for the operation everywhere it shows: the type
+ * column's `joined → Bam`, the Position clause `start of joined stream`, and
+ * the `+` of every address inside. It is not "unpacked" because a PDB page
+ * was never packed. The runs themselves are named by the field each one is
+ * (`pages[12]`, `blocks[3].compressed`), which is also the stream-order index,
+ * so no "part N of M" is needed beside them.
+ */
+export const JOINED = {
+  /** Heading over the rows saying which run a field's first byte is kept in.
+   *  `Starts in` rather than `Stored in`, which is false for a BAM block, and
+   *  true of a field that crosses into the next run as well. */
+  startsIn: "Starts in",
+  /**
+   * The row itself: the field's first byte, as an offset inside what the run
+   * gives, and the run. For a run that was unpacked, the offset is inside what
+   * it unpacks to and not inside the compressed bytes, and `unpacked` says so
+   * outside the name, since it describes the output rather than the field.
+   * The same shape as `PROPERTIES.withinAt`.
+   */
+  at: (at: string, run: string, packed: boolean): string => (packed ? `${at} in unpacked ${run}` : `${at} in ${run}`),
+  /** The same words on that offset's `+`. See `DECODED_PLUS_TITLE`. */
+  plusTitle: (run: string, packed: boolean): string => (packed ? `Offset within unpacked ${run}` : `Offset within ${run}`),
+  /** For a run stored as it sits in the file, where the byte is in the file,
+   *  which is the question a reader of a PDB has first. */
+  inFile: (at: string): string => `${at} in the file`,
+  /**
+   * A BGZF block's byte as a BAI or a CSI stores it: the number, and its two
+   * halves under the names the BAI's own rows give them, so the three can be
+   * matched by eye against an index. No `@` or `+` inside: these are numbers
+   * an index holds, not addresses to go to.
+   */
+  virtualLabel: "Virtual offset",
+  virtual: (voffset: string, blockOffset: string, inBlock: string): string =>
+    `${voffset} · block_offset ${blockOffset} · in_block ${inBlock}`,
+  virtualTitle: (blockAt: string): string =>
+    `voffset = block_offset << 16 | in_block, as the BAI stores it. block_offset is where the BGZF block starts in the file (${blockAt}); in_block counts from the start of what that block unpacks to.`,
+  /** On the `+` of any address inside a joined stream, and after the address
+   *  at the top of the panel. See `DECODED_PLUS_TITLE` and `DECODED_INSIDE`. */
+  plusTitleStream: "Offset within the joined stream",
+  inside: "in the joined stream",
+} as const;
+
 export const UNPACKED = {
   /** Heading over the one row saying which decoder step produced this field's
    *  bytes. The groups above it say which fields decided the field's shape;
@@ -1486,29 +1533,35 @@ export const BTREES = {
   /** In the readout of a node with no template path: one the template does
    *  not place at the address the walk read it from, whether it places it
    *  somewhere else or not at all (`hdf5_tree.rs`, `placed`). Every node of
-   *  a well-formed tree has a path. The one real case so far is an HDF5 file
-   *  with a user block, such as a MATLAB 7.3 `.mat` file, where the walk
-   *  ignores the base address; a malformed file can do it too.
+   *  a well-formed tree has a path, and every node of every tree in the sample
+   *  collection is checked to have one, a file behind a user block and a
+   *  MATLAB 7.3 `.mat` file included.
    *
-   *  Fact, reason, consequence, and the consequence stays: the readout comes
+   *  It used to name those two as where it happens, because the walk ignored
+   *  the base address and every file with a user block lost its nodes' paths.
+   *  With that fixed, nothing known is left but a file the template and the
+   *  walk read differently, and the code cannot say which of the two is
+   *  wrong: a malformed file and a gap in the template look the same from
+   *  here. So the reason is the two of them, and neither is called likely.
+   *  "A bug in Qubero" is the phrase the ELF template's missing-field message
+   *  already uses.
+   *
+   *  Fact, consequence, reason, and the consequence stays: the readout comes
    *  up on the first press, so this line is what stops the second one, and a
    *  reader who has just read the hint under the picture is owed the
-   *  contradiction spelled out rather than left to find it.
+   *  contradiction spelled out rather than left to find it. "On this node"
+   *  and not "here", which could be the node or the whole tab, and is the
+   *  hint's own "does nothing on those".
    *
-   *  The reason is "does not show this node at this address" and not "has no
+   *  The fact is "does not show this node at this address" and not "has no
    *  node at this address": `placed` checks the address of the template's
    *  node under the pointer the walk followed, and never whether anything
-   *  else in the Listing sits at the walk's address. It names neither side as
-   *  wrong, because on the user-block file it is the walk that is.
+   *  else in the Listing sits at the walk's address.
    *
-   *  The second sentence lists the files it happens in, in `none`'s shape, so
-   *  a programmer whose file plainly has this node does not take the line for
-   *  a bug in the picture: "user block" is the specification's term and a
-   *  MATLAB 7.3 file is where most people meet one. "In the Listing" and not
-   *  "placed", the template's word: `stripCaption` says "placed by file
-   *  address" of the strip, and one word with two meanings on one screen is
-   *  an ambiguity. */
-  notInListing: "Not in the Listing: the Listing does not show this node at this address, so double-click does nothing here. This happens for a file with a user block, such as a MATLAB 7.3 .mat file, and for a malformed file.",
+   *  "In the Listing" and not "placed", the template's word: `stripCaption`
+   *  says "placed by file address" of the strip, and one word with two
+   *  meanings on one screen is an ambiguity. */
+  notInListing: "Not in the Listing: the Listing does not show this node at this address, so double-click does nothing on this node. Either the file is malformed, or this is a bug in Qubero.",
   /** On a node whose children were not all read, in a tree that shows no key
    *  ranges at all: a version 2 group tree, one indexing something else, and
    *  any tree whose records were not read. `truncated`'s "first and last link
@@ -1536,7 +1589,8 @@ export const BTREES = {
    *  The third sentence comes when `someUnplaced`: the panel writes this line
    *  per tree, from whether any of the tree's nodes has no template path, and
    *  without it the second sentence is a promise that fails on those nodes.
-   *  `notInListing` says which files have them. Which nodes they are is not
+   *  It names no cause, since the tree's line is no place to guess at one;
+   *  `notInListing` gives what can be said. Which nodes they are is not
    *  said, because the hint speaks for the whole tree and cannot point at a
    *  box; the readout says it on the node itself at the first press. "Some"
    *  and not "all but the root": the root's path comes from the tree header
@@ -2450,6 +2504,11 @@ export const PROPERTIES = {
      */
     trace: (): string => "after the previous step",
     stream: (c: HowContext): string => (c.parent === undefined ? "start of the unpacked stream" : `start of unpacked ${c.parent}`),
+    /** The front of a stream joined from several runs: a PDB stream's pages, a
+     *  BAM's BGZF blocks. The same shape as `stream`, on the one word the type
+     *  column (`joined → Bam`) and the `+` of every address inside also use,
+     *  so the reader meets one word for the one operation. */
+    stitched: (c: HowContext): string => (c.parent === undefined ? "start of the joined stream" : `start of joined ${c.parent}`),
     unknown: (): string => "",
   } satisfies Record<Shape["placed"], (c: HowContext) => string>,
 
@@ -2740,6 +2799,33 @@ export const DIAGRAM = {
   /** On a box's title. The core names a type by what the format calls it, which
    *  two types in one format may share; this says which one this is. */
   boxPath: (path: string): string => `Path: ${path}`,
+  /**
+   * What the open file has, laid over the picture of what the format can have.
+   *
+   * The counts are of this file; everything else in the view is of the format,
+   * so each of these says "this file" out loud rather than leaving the reader
+   * to work out which of the two they are reading.
+   */
+  count: (n: number): string => `×${n.toLocaleString()}`,
+  countTitle: (n: number, what: string): string =>
+    n === 1 ? `This file has 1 ${what}` : `This file has ${n.toLocaleString()} of these: ${what}`,
+  /** On a box or row the file has none of. */
+  unusedTitle: "This file has none of these",
+  /** The toolbar toggle. Not "used" or "present": what the reader is asking for
+   *  is the part of the picture their own file is an example of. */
+  onlyUsed: "Only what this file has",
+  onlyUsedTitle: "Leave out the types this file has none of, and lay the rest out again",
+  /** Under the toolbar when the walk stopped short, so no count reads as a
+   *  total. The number is what was looked at, which is the honest thing to
+   *  report: how much is left is not known without finishing. */
+  partial: (walked: number): string =>
+    `Counts are of the first ${walked.toLocaleString()} fields read, so each is a floor rather than a total.`,
+  /** What a double click does. Said on every row that has one, since a single
+   *  click already does something else. */
+  goTitle: "Double-click to go to the first one in this file",
+  /** A field the file has, but inside an unpacked stream, whose offsets are not
+   *  the file's, so the hex cursor cannot be put on it. */
+  inStream: "This one is inside an unpacked stream, which the hex view cannot go to",
   fit: "Fit",
   fitTitle: "Fit the whole diagram in the window",
   /** What a click on a field row does. Only the format's first type can be

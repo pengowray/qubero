@@ -13,6 +13,33 @@ so.
 
 # S7. One space stitched from several runs
 
+**Built 2026-09-14, stages 1 to 3 and part of 4** (`f4c38e0`..`85ea109`).
+DESIGN.md has a section, "One stream kept in several runs". Where the design
+was wrong: Gather's `Field`/`Tagged` resume check was `from > 0` and skipped a
+record after a spend ran out (a latent Gather bug, fixed); PDB's inner type
+needs `T::sized(size, body())`; PDB pages are an `At[]` named `pages`, since a
+pointer list refuses pages placed before the directory; a packed part's codec
+is `Result<Codec, Refusal>` so one bad setting fails one part;
+`Explain::StitchedPart` became `Evaluator::part_of` plus `NodeInfo.joined`;
+the BGZF virtual offset counts from the member's start; `part_len` is
+omitted where parts are measured by inflating them, and that result is not
+cached; HDF4's `first_length` is in memory only, the design's sketch holds.
+Left:
+
+- **HDF4 linked blocks** (`hdf4_real::tdata_values_kept_in_linked_blocks_match_pyhdf`):
+  needs the zero-bit `next` field accepted by `extend_chain_to` and a pyhdf
+  check on `tdata.hdf`.
+- **Tabs under the cap:** `unpack()` returns nothing for a joined stream and
+  the listing hides "Open unpacked" on joined space roots; about 30 lines
+  through `read_stitched`. `map_out` delegation waits on it.
+- A PDB whose stream directory is itself scattered still reads as blocks.
+- `relate.rs` shows no link from `part_len` or `len` to the joined stream.
+- The walk keeps every block's resolved fields in the memo; unmeasured on a
+  gigabyte BAM.
+
+The design as written follows.
+
+
 ## What the evaluator fixes before any shape is chosen
 
 - A space is one buffer. `Spaces` keeps `bufs: Vec<Arc<Vec<u8>>>` beside

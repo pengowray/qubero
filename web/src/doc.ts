@@ -236,6 +236,11 @@ export type TemplateNode = {
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
   readonly space_root: boolean;
+  /** True for a field read inside a stream joined from several runs elsewhere
+   *  in the file: a PDB stream's pages, a BAM's BGZF blocks. Its offset counts
+   *  from the front of the joined stream, which is no document of its own and
+   *  cannot be opened as one; `partOf` says which run a field starts in. */
+  readonly joined: boolean;
   /** True when the file did not write this field at all: the condition on an
    *  optional one came to nothing. Not the same as a size of zero, which a
    *  field the file did write can also have. */
@@ -712,6 +717,32 @@ export type Relation = {
  * and the view says nothing at all for it: a reason invented to fill the line
  * would read exactly like a reason the file gave.
  */
+/**
+ * The run a field of a joined stream starts in: a PDB page, or a BGZF block's
+ * compressed run. See `Doc.partOf`.
+ */
+export type JoinedPart = {
+  /** Which run, from 0 in the order the stream goes, and how many there are. */
+  readonly index: number;
+  readonly parts: number;
+  /** The run as a field to go to, and as a reader names it: `pages[12]`,
+   *  `blocks[3].compressed`. */
+  readonly path: readonly number[];
+  readonly label: string;
+  /** The field's first byte inside what the run gives, and how much that is. */
+  readonly in_part: number;
+  readonly part_len: number;
+  /** Where the run starts, in bits of the space it is in: 0 is the file. */
+  readonly run_offset_bits: number;
+  readonly run_space: number;
+  /** True when the run was unpacked to give its bytes. */
+  readonly packed: boolean;
+  /** For a BGZF block, the byte's virtual offset in halves: where the block
+   *  starts in the file, and the byte in what it unpacks to. */
+  readonly block_offset: number | null;
+  readonly in_block: number | null;
+};
+
 export type Shape = {
   /** `root` the whole file; `first` the first field of what holds it; `follows`
    *  after the field before it; `element` one element of a run; `pointer` a
@@ -719,7 +750,7 @@ export type Shape = {
    *  `gathered` a descriptor the template walked to, somewhere else in the
    *  file, placed it; `address` an address the file gave; `trace` where a
    *  decoder had got to; `stream` the front of what a compressed run unpacked
-   *  to. */
+   *  to; `stitched` the front of a stream joined from several runs. */
   readonly placed:
     | "root"
     | "first"
@@ -731,6 +762,7 @@ export type Shape = {
     | "address"
     | "trace"
     | "stream"
+    | "stitched"
     | "unknown";
   /** `type` the type's own width, which the type's name already carries and
    *  which the panel therefore says nothing about; `fixed` a length the format
@@ -836,6 +868,10 @@ export type DiagramBox = {
   /** Where the walk first reached it (`png.chunks.data.'IHDR'`). A type read in
    *  nine places has one box and this is the first of the nine ways to it. */
   readonly path: string;
+  /** What tells this type from every other. `diagramCensus` counts the open
+   *  file's nodes by the same key, so a count found there belongs to this box
+   *  and to no other. */
+  readonly key: string;
   readonly kind: DiagramBoxKind;
   /** The type this one was written inside, for a box the template gave no name
    *  of its own (`Header.entry`). Absent for a named type. */
@@ -875,11 +911,51 @@ export type TemplateDiagram = {
   readonly omitted: number;
 };
 
+/** How many of one diagram box the open file holds, and where the first is. */
+export type BoxCount = {
+  /** Matches `DiagramBox.key`. */
+  readonly key: string;
+  readonly count: number;
+  /** Child indices from the root of the reading `space` names. */
+  readonly first_path: number[];
+  /** 0 is the file; anything else is an unpacked stream, whose offsets are not
+   *  the file's. */
+  readonly space: number;
+};
+
+/** The same for one row of one box: one field, over every node of that type. */
+export type RowCount = {
+  readonly key: string;
+  readonly row: number;
+  readonly count: number;
+  readonly first_path: number[];
+  readonly space: number;
+};
+
+/**
+ * What the open file holds, against what the format can hold.
+ *
+ * `templateDiagram` draws the format, which is the same picture for every file
+ * it opens. This says which of those boxes this particular file has and how
+ * many, so a box the file has none of can be drawn quietly and one it has
+ * twelve of can say so.
+ */
+export type DiagramCensus = {
+  readonly boxes: BoxCount[];
+  readonly rows: RowCount[];
+  /** How many nodes the walk looked at. */
+  readonly walked: number;
+  /** True when the cap stopped it, so every count is a floor rather than a
+   *  total, and a view showing one has to say so. */
+  readonly truncated: boolean;
+};
+
 /** One node of an HDF5 B-tree, of either version. */
 export type TreeNode = {
-  /** Where the node is in the template. Empty for a version 2 node below the
-   *  root, which the template does not place: such a box goes to its bytes and
-   *  is not opened in the Listing, because there is no field there to open. */
+  /** Where the node is in the template. Empty where the template does not
+   *  place a node at the address the walk read it from, which no well-formed
+   *  file does: such a box goes to its bytes and is not opened in the Listing,
+   *  because there is no field there to open. */
   readonly path: readonly number[];
   /** Index into the node list, or -1 for the root. Every node but the root
    *  comes after its parent in the list. */
@@ -1211,6 +1287,7 @@ export type TypeInfo =
   | PageInfo
   | SamplesInfo
   | TileInfo
+  | BufrInfo
   | { readonly kind: "plain" };
 
 /** What the format requires, and what is there. */
@@ -1509,6 +1586,70 @@ export type TileInfo = {
   readonly pixels: number;
   readonly element_type: string;
   readonly problem: string;
+};
+
+/** A BUFR message's section 4 read through the tables. */
+export type BufrInfo = {
+  readonly kind: "bufr";
+  readonly edition: number;
+  /** The tables version section 1 names, and the one that was used. */
+  readonly master_table_version: number;
+  readonly tables_version: number;
+  readonly subsets: number;
+  readonly compressed: boolean;
+  readonly steps: readonly string[];
+  /** Section 3's descriptors expanded through Table D, how deep each is, and
+   *  how many there are altogether. */
+  readonly descriptors: readonly BufrDescriptor[];
+  readonly descriptors_total: number;
+  /** Which subset the values are, counted from 0; where in that subset's
+   *  values the list starts; and how many values the subset has. */
+  readonly subset: number;
+  readonly values: readonly BufrValue[];
+  readonly values_start: number;
+  readonly values_total: number;
+  /** The value under the cursor, or null where the cursor is on none. */
+  readonly cursor: BufrCursor | null;
+  /** Why the reading stopped, where it did. Empty otherwise. */
+  readonly problem: string;
+};
+
+export type BufrDescriptor = {
+  readonly code: number;
+  readonly depth: number;
+  readonly name: string;
+};
+
+export type BufrValue = {
+  readonly code: number;
+  readonly role: "element" | "count" | "quality" | "associated" | "reference" | "local" | "characters" | "marker";
+  readonly name: string;
+  readonly text: string;
+  readonly unit: string;
+  readonly missing: boolean;
+  /** The element an associated field, a marker, quality information or a new
+   *  reference value is about, as its descriptor and name. Empty otherwise. */
+  readonly about: string;
+};
+
+export type BufrCursor = {
+  /** Its place in the listed values, or -1 where it is not among them. */
+  readonly index: number;
+  readonly value: BufrValue;
+  /** Where its bits start, counted from section 4's first bit, and how wide
+   *  the value is. */
+  readonly bit: number;
+  readonly width: number;
+  readonly scale: number;
+  readonly reference: number;
+  readonly numeric: boolean;
+  /** This subset's packed number, or null for text or a missing value. */
+  readonly packed: number | null;
+  /** A compressed value's smallest packed number and difference width. */
+  readonly base: number | null;
+  readonly increment_width: number | null;
+  /** Every subset's value, the first few dozen; an empty string is missing. */
+  readonly across: readonly string[];
 };
 
 /** One Steim frame: the differences its codes name, and how many samples they
@@ -2046,6 +2187,19 @@ export class Doc {
     return this.template === "png" || this.template === "p8png" || this.template === "p64png";
   }
 
+  /** Whether the file is read as an HDF5 file, whole or inside another format,
+   *  which is what the B-trees tab and the HDF5 contents are offered on. Not
+   *  the template's name: `mat` reads a MATLAB 7.3 file, which is HDF5 behind
+   *  a 512-byte header, and a level 5 file, which has no groups or trees at
+   *  all. The core answers from the header and the bytes at the signature, so
+   *  this is cheap to ask on every change. False while those bytes are still
+   *  on their way; they are asked for, and the change they make asks again. */
+  get holdsHdf5(): boolean {
+    if (this.template === null) return false;
+    const r = this.handleReply<boolean>(this.editor.holds_hdf5(this.space));
+    return r.status === "ok" && r.node;
+  }
+
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
     const raw = this.editor.extent_estimate(this.space);
@@ -2432,6 +2586,16 @@ export class Doc {
   }
 
   /**
+   * Which run the field at `path` starts in, for a field inside a stream joined
+   * from several runs. Null for every other field, and while the answer is
+   * still on its way: the panel that asks has nothing to draw meanwhile.
+   */
+  partOf(path: readonly number[]): JoinedPart | null {
+    const r = this.handleReply<JoinedPart | null>(this.editor.part_of(this.space, Uint32Array.from(path)));
+    return r.status === "ok" ? r.node : null;
+  }
+
+  /**
    * The same question asked of every field under `path` at once: the fields of
    * the subtree and the connections between them, ready to be laid out.
    *
@@ -2453,6 +2617,19 @@ export class Doc {
    */
   templateDiagram(): TemplateReply<TemplateDiagram> {
     return this.handleReply<TemplateDiagram>(this.editor.template_diagram(this.space));
+  }
+
+  /**
+   * The open file's nodes counted against the diagram's boxes.
+   *
+   * Unlike `templateDiagram` this does read the file, so it answers pending
+   * while bytes are on their way and the caller asks again once the document
+   * says something changed.
+   *
+   * `limit` caps the nodes walked; the answer says whether it stopped short.
+   */
+  diagramCensus(limit: number): TemplateReply<DiagramCensus> {
+    return this.handleReply<DiagramCensus>(this.editor.diagram_census(this.space, limit));
   }
 
   /**

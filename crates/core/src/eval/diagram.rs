@@ -102,6 +102,11 @@ pub struct TypeBox {
     /// to get to it, which is a different question and belongs on a second
     /// line. A type read in nine places has one of these, the first.
     pub path: String,
+    /// What tells this type from every other: the structural key the walk
+    /// shares boxes by. A caller that has counted the open file's nodes by the
+    /// same key can say how many of each box the file holds; see
+    /// [`crate::eval::census`].
+    pub key: String,
     pub kind: BoxKind,
     /// The type this one was declared inside, for a box that has no name of its
     /// own in the template. None for a named type, which may be used from
@@ -149,7 +154,7 @@ pub fn diagram(t: &Template) -> Diagram {
         t,
         boxes: Vec::new(),
         defs: Vec::new(),
-        by_ptr: HashMap::new(),
+        by_text: HashMap::new(),
         by_path: HashMap::new(),
         edges: Vec::new(),
         named_drawn: 0,
@@ -167,7 +172,8 @@ pub fn diagram(t: &Template) -> Diagram {
         None => match as_switch(t, &t.root) {
             Some(sw) => {
                 let sw = sw.clone();
-                w.switch_box(t.name.clone(), None, &sw);
+                let key = switch_key(&sw);
+                w.switch_box(t.name.clone(), None, &sw, key);
             }
             None => {
                 if let Some(sd) = as_struct(t, &t.root) {
@@ -203,6 +209,10 @@ fn root_name(ty: &Ty) -> Option<String> {
 /// this is, is the pointer: a format that reads the same record in nine places
 /// clones one `Arc` nine times, and that is what says the nine are one type and
 /// not nine that happen to have the same fields.
+pub(crate) fn struct_of<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
+    as_struct(t, ty)
+}
+
 fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
     match ty {
         Ty::Struct(sd) => Some(sd),
@@ -210,6 +220,7 @@ fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
             as_struct(t, inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_struct(t, inner),
+        Ty::Stitched { inner, .. } => as_struct(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -244,6 +255,7 @@ fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
             as_switch(t, inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(t, inner),
+        Ty::Stitched { inner, .. } => as_switch(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -264,6 +276,7 @@ fn named_target(ty: &Ty) -> Option<String> {
             named_target(inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => named_target(inner),
+        Ty::Stitched { inner, .. } => named_target(inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -409,6 +422,122 @@ fn at_text(ty: &Ty) -> Option<String> {
     }
 }
 
+/// What tells one type definition from another: its name and everything it
+/// says.
+///
+/// Two structures with the same key are the same type however many times the
+/// template built one, and are drawn once. Two with different keys are two
+/// types however alike they look, and are drawn twice. The name is in the key
+/// as well as the body because a format may give two shapes the same fields and
+/// different names, and a box is labelled by its name: sharing them would put
+/// one name on bytes the format calls something else.
+fn struct_key(sd: &Arc<StructDef>) -> String {
+    format!("struct\u{0}{}\u{0}{}", sd.name, crate::template_text::ty_text(&Ty::Struct(sd.clone())))
+}
+
+/// The same question for a switch, which the IR does not put behind an `Arc`:
+/// what it reads and what each case picks.
+fn switch_key(sw: &Ty) -> String {
+    format!("switch\u{0}{}", crate::template_text::ty_text(sw))
+}
+
+/// Which box a type is drawn as, named the way the walk names it, or nothing
+/// for a type that is drawn as a row rather than a box.
+///
+/// The one place the question is answered, because two callers ask it and a
+/// second answer would be a second opinion: the walk uses it to decide whether
+/// a type it has reached is one it has already drawn, and
+/// [`crate::eval::census`] uses it to say which box a node of the open file
+/// belongs to. A census keyed even slightly differently would count real
+/// fields against boxes that are not there.
+///
+/// A switch first, for the reason `box_for` takes one first: a switch whose
+/// cases are structures is both, and the choice is what the reader has to see.
+/// Whether a type is a run of something rather than one of it.
+///
+/// [`box_key`] answers for a field's *contents*, so a list of chunks answers
+/// with the chunk's box: that is the box the field's arrow points at, which is
+/// what the drawing wants. A census counting nodes wants the other reading. The
+/// list node itself is not a chunk; its elements are, and counting it as one
+/// would make every run one longer than the file.
+pub(crate) fn is_run(t: &Template, ty: &Ty) -> bool {
+    match ty {
+        Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => true,
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::At { inner, .. }
+        | Ty::Nullable { inner, .. }
+        | Ty::Decoded { inner, .. }
+        | Ty::When { inner, .. } => is_run(t, inner),
+        Ty::Named(n) => t.types.get(&**n).is_some_and(|inner| is_run(t, inner)),
+        _ => false,
+    }
+}
+
+/// What one element of a run is, past the wrappers. Nothing for a type that is
+/// not a run.
+///
+/// For a caller counting a file: every element of a run is declared the same
+/// way, so a run of half a million samples is half a million of whatever this
+/// answers, and knowing that without walking them is the difference between a
+/// census that takes a moment and one that takes two minutes.
+pub(crate) fn elem_of<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
+    match ty {
+        Ty::Array { elem, .. }
+        | Ty::Repeat { elem, .. }
+        | Ty::PointerList { elem, .. }
+        | Ty::Chain { elem, .. }
+        | Ty::Gather { elem, .. } => Some(elem),
+        Ty::Sized { inner, .. }
+        | Ty::SizedBits { inner, .. }
+        | Ty::Origin { inner }
+        | Ty::At { inner, .. }
+        | Ty::Nullable { inner, .. }
+        | Ty::Decoded { inner, .. }
+        | Ty::When { inner, .. } => elem_of(t, inner),
+        Ty::Named(n) => t.types.get(&**n).and_then(|inner| elem_of(t, inner)),
+        _ => None,
+    }
+}
+
+/// Whether a type is a choice, so that what one of it turns out to be is not
+/// settled by the declaration alone.
+pub(crate) fn is_choice(t: &Template, ty: &Ty) -> bool {
+    as_switch(t, ty).is_some()
+}
+
+/// A cheap stand-in for [`box_key`], for a caller asking the same question of
+/// thousands of nodes.
+///
+/// The key is the type written out, which costs what writing a type out costs;
+/// asked once per type that is nothing, asked once per node of a file it is the
+/// whole cost of a census. So this answers "which type is this" by the pointer
+/// the IR already shares: a structure by its `Arc`, a switch by the `Arc` its
+/// cases live in. Two types with the same identity have the same key, which is
+/// what a cache needs; two with different identities may still share a key, and
+/// the cache simply computes it twice.
+///
+/// Nothing for a type that is neither, which is the case a caller has to
+/// compute without the cache.
+pub(crate) fn box_identity(t: &Template, ty: &Ty) -> Option<usize> {
+    if let Some(sw) = as_switch(t, ty) {
+        return match sw {
+            Ty::Switch { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
+            Ty::Match { cases, .. } => Some(Arc::as_ptr(cases) as *const u8 as usize),
+            _ => None,
+        };
+    }
+    as_struct(t, ty).map(|sd| Arc::as_ptr(sd) as usize)
+}
+
+pub(crate) fn box_key(t: &Template, ty: &Ty) -> Option<String> {
+    if let Some(sw) = as_switch(t, ty) {
+        return Some(switch_key(sw));
+    }
+    as_struct(t, ty).map(struct_key)
+}
+
 /// One expression a row holds, and what it decides about the row.
 struct Source {
     expr: Expr,
@@ -506,6 +635,18 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
             }
             sources(inner, out, depth + 1);
         }
+        // The two lengths a stitched stream may be given, and what it holds.
+        // The walk's steps are names of places rather than expressions, the
+        // way a gather's are.
+        Ty::Stitched { part_len, len, inner, .. } => {
+            if let Some(e) = part_len {
+                add(e, Role::Length, out);
+            }
+            if let Some(e) = len {
+                add(e, Role::Length, out);
+            }
+            sources(inner, out, depth + 1);
+        }
         _ => {}
     }
 }
@@ -600,20 +741,30 @@ struct Walk<'a> {
     /// down the template is a second answer to a question already answered.
     /// None for a switch box, whose rows are cases rather than fields.
     defs: Vec<Option<StructDef>>,
-    /// Box index by the address of the `Arc<StructDef>` it was drawn from, so
-    /// one type read in nine places is one box.
+    /// Box index by what the type *says*, so one type written in nine places is
+    /// one box.
     ///
     /// This is what makes the picture the size of the format rather than the
-    /// size of the walk: an ELF declares one program-header type and reaches it
-    /// from four combinations of width and endianness, and drawn per reaching
-    /// it was four boxes saying the same thing. Filled in before the box's own
-    /// fields are walked, so a type holding itself stops.
+    /// size of the walk. An ID3 tag's `switch on id` names `TextFrame` in
+    /// thirteen cases and the template builds a fresh `StructDef` for each, so
+    /// a WAV carrying one drew ninety-six identical `TextFrame` boxes and a
+    /// hundred and four identical `switch on encoding` boxes beside them: a
+    /// column of the same picture over and over, which says nothing thirteen
+    /// times.
     ///
-    /// The address is only a key while the `Arc` is alive, which it is: the
-    /// template outlives this walk, and `defs` keeps a clone besides.
-    by_ptr: HashMap<usize, usize>,
-    /// Box index by the path it was first reached down, for the boxes an `Arc`
-    /// cannot key: a switch, which the IR does not put behind one.
+    /// Keyed on the structure's name and its rendering by
+    /// [`crate::template_text::ty_text`] rather than on the `Arc` it came in.
+    /// Pointer identity is the wrong question: it says whether two fields were
+    /// handed the same object, and what a reader wants to know is whether they
+    /// are the same type. The rendering answers that exactly, and it keeps
+    /// apart what should be kept apart — an ELF's four class-and-endianness
+    /// section headers print `u32 le` against `u32 be` and stay four boxes.
+    ///
+    /// Filled in before the box's own fields are walked, so a type holding
+    /// itself stops.
+    by_text: HashMap<String, usize>,
+    /// Box index by the path it was first reached down, for the boxes neither
+    /// key reaches.
     by_path: HashMap<String, usize>,
     edges: Vec<DiagramEdge>,
     /// How many of the template's named types got a box.
@@ -638,7 +789,7 @@ impl<'a> Walk<'a> {
             // its names. One type, one box, whichever way the walk got here
             // first; the table's name for it is recorded all the same so a
             // second `Named` lookup is answered without another search.
-            if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
+            if let Some(&at) = self.by_text.get(&struct_key(&sd)) {
                 self.by_path.insert(name.to_string(), at);
                 self.named_drawn += 1;
                 return Some(at);
@@ -657,7 +808,12 @@ impl<'a> Walk<'a> {
             }
             self.named_drawn += 1;
             let sw = sw.clone();
-            return Some(self.switch_box(name.to_string(), None, &sw));
+            let key = switch_key(&sw);
+            if let Some(&at) = self.by_text.get(&key) {
+                self.by_path.insert(name.to_string(), at);
+                return Some(at);
+            }
+            return Some(self.switch_box(name.to_string(), None, &sw, key));
         }
         None
     }
@@ -670,13 +826,15 @@ impl<'a> Walk<'a> {
     /// the reader who wants to know how they would get there.
     fn struct_box(&mut self, path: String, parent: Option<String>, sd: &Arc<StructDef>) -> usize {
         let here = self.boxes.len();
-        self.by_ptr.insert(Arc::as_ptr(sd) as usize, here);
+        let key = struct_key(sd);
+        self.by_text.insert(key.clone(), here);
         self.by_path.insert(path.clone(), here);
         let name = if sd.name.is_empty() { path.clone() } else { sd.name.clone() };
         let sd = (**sd).clone();
         self.boxes.push(TypeBox {
             name,
             path: path.clone(),
+            key,
             kind: BoxKind::Seq,
             parent,
             rows: Vec::new(),
@@ -742,18 +900,23 @@ impl<'a> Walk<'a> {
         if let Some(sw) = as_switch(self.t, ty) {
             let sw = sw.clone();
             let name = format!("{owner}.{label}");
-            if let Some(&at) = self.by_path.get(&name) {
-                return Some((at, String::new()));
+            let on = match &sw {
+                Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
+                _ => String::new(),
+            };
+            // One choice, one box, however many fields make it. Not scoped to
+            // the type it was found in: two fields that read the same value and
+            // pick between the same shapes are making one choice, and the box
+            // says what that choice is rather than who is making it.
+            let key = switch_key(&sw);
+            if let Some(&at) = self.by_text.get(&key) {
+                return Some((at, on));
             }
             if self.boxes.len() >= BOX_CAP {
                 self.capped += 1;
                 return None;
             }
-            let to = self.switch_box(name, Some(owner.to_string()), &sw);
-            let on = match &sw {
-                Ty::Switch { on, .. } | Ty::Match { on, .. } => write_expr(on).unwrap_or_default(),
-                _ => String::new(),
-            };
+            let to = self.switch_box(name, Some(owner.to_string()), &sw, key);
             return Some((to, on));
         }
         if let Some(target) = named_target(ty) {
@@ -765,7 +928,7 @@ impl<'a> Walk<'a> {
         let sd = as_struct(self.t, ty)?.clone();
         // The same structure reached a second time is the same box, whether it
         // was reached by another name or from another case.
-        if let Some(&at) = self.by_ptr.get(&(Arc::as_ptr(&sd) as usize)) {
+        if let Some(&at) = self.by_text.get(&struct_key(&sd)) {
             return Some((at, String::new()));
         }
         let name = format!("{owner}.{label}");
@@ -778,8 +941,9 @@ impl<'a> Walk<'a> {
 
     /// One switch as a box: a row per case, and an edge from each case to the
     /// type it picks.
-    fn switch_box(&mut self, name: String, parent: Option<String>, sw: &Ty) -> usize {
+    fn switch_box(&mut self, name: String, parent: Option<String>, sw: &Ty, key: String) -> usize {
         let here = self.boxes.len();
+        self.by_text.insert(key.clone(), here);
         self.by_path.insert(name.clone(), here);
         // A switch has no name of its own in the IR, so it is called what it
         // reads. Not the last step of the path: a switch reached from a case of
@@ -790,6 +954,7 @@ impl<'a> Walk<'a> {
         self.boxes.push(TypeBox {
             name: title.unwrap_or_else(|| name.rsplit_once('.').map_or(name.clone(), |(_, l)| l.to_string())),
             path: name.clone(),
+            key,
             kind: BoxKind::Switch,
             parent,
             rows: Vec::new(),
@@ -1155,6 +1320,37 @@ mod tests {
         // The field the run stops on is the element's, not the container's, so
         // the arrow leaves the element's box.
         assert!(d.edges.iter().any(|e| e.from == (chunk, 0) && e.to == (0, Some(0)) && e.role == Role::Count));
+    }
+
+    #[test]
+    fn a_type_written_out_once_per_case_is_drawn_once() {
+        // ID3 builds a fresh `StructDef` for each of the thirteen cases that
+        // name a text frame, so nothing about the objects says they are one
+        // type. What they say does.
+        let Some(t) = crate::formats::builtin("id3") else { return };
+        let d = diagram(&t);
+        let frames: Vec<_> = d.types.iter().filter(|b| b.name == "TextFrame").collect();
+        assert_eq!(frames.len(), 1, "one text frame, not {}", frames.len());
+        // And the choice inside it, which used to be drawn once per copy.
+        let under = frames[0].path.clone();
+        let inside: Vec<_> =
+            d.types.iter().filter(|b| b.kind == BoxKind::Switch && b.parent.as_deref() == Some(&under)).collect();
+        assert_eq!(inside.len(), 1, "one choice inside it, not {}", inside.len());
+    }
+
+    #[test]
+    fn an_elf_keeps_the_headers_it_reads_two_ways_apart() {
+        // The opposite case, and the one sharing must not break: an ELF's four
+        // section headers are one shape read at two widths and two byte
+        // orders, and `u32 le` is not `u32 be`. Four boxes, and their rows say
+        // why.
+        let Some(t) = crate::formats::builtin("elf") else { return };
+        let d = diagram(&t);
+        let heads: Vec<_> = d.types.iter().filter(|b| b.name == "SectionHeader").collect();
+        assert!(heads.len() > 1, "the endianness variants were merged into {}", heads.len());
+        let spellings: std::collections::HashSet<String> =
+            heads.iter().map(|b| b.rows.iter().map(|r| r.type_text.clone()).collect::<Vec<_>>().join(",")).collect();
+        assert_eq!(spellings.len(), heads.len(), "two of them say the same thing and should have been shared");
     }
 
     #[test]

@@ -1656,6 +1656,95 @@ fn a_long_list_of_uneven_elements_is_walked_without_being_remembered() {
 }
 
 #[test]
+fn a_walk_past_a_node_read_into_keeps_the_node() {
+    // Four records, each a length and then a structure whose second field is
+    // that long. The run is guarded from its first element, so every walk
+    // along it keeps a journal of what it placed and drops that at the end.
+    let mut bytes = Vec::new();
+    for i in 0..4u8 {
+        bytes.extend([i + 1, 0xa0 + i]);
+        bytes.extend(std::iter::repeat_n(0xb0 + i, i as usize + 1));
+    }
+    let inner = T::structure("Inner", vec![("a", T::u8()), ("b", T::bytes(E::field("len")))]);
+    let item = T::structure("Item", vec![("len", T::u8()), ("inner", inner)]);
+    let t = Template::new("t", T::structure("Root", vec![("items", T::repeat(item, Until::End))]));
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    // Reading into record 1 places it, with nothing asking how long it is.
+    assert_eq!(ev.node(&d, &[0, 1, 1, 0]).unwrap().value, Value::UInt(0xa1));
+    // Reaching record 3 walks over record 1 and places it again. It was here
+    // before the walk, so the walk must not take it away when it ends while
+    // what was read inside it stays.
+    ev.node(&d, &[0, 3]).unwrap();
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    // A field of record 1 read now looks up past its structure for `len`,
+    // which is only there if record 1 is.
+    let b = ev.node(&d, &[0, 1, 1, 1]).unwrap();
+    assert_eq!(b.size_bits, 2 * 8);
+}
+
+#[test]
+fn a_walk_inside_a_walk_keeps_nothing_its_parent_let_go_of() {
+    // Records of a width, seven bytes of entries, and a tail as long as the
+    // third entry says. Each entry is a count and that many values of the
+    // record's width. Sizing a record finds its third entry, which walks the
+    // entries inside the walk along the records.
+    let entry = T::structure(
+        "Entry",
+        vec![("len", T::u8()), ("body", T::array(T::sized(E::field("w"), T::bytes(E::Remaining)), E::field("len")))],
+    );
+    let item = T::structure(
+        "Item",
+        vec![
+            ("w", T::u8()),
+            ("entries", T::sized(E::lit(7), T::repeat(entry, Until::End))),
+            ("tail", T::bytes(E::elem_field("entries", E::lit(2), &["len"]))),
+        ],
+    );
+    let t = Template::new("t", T::structure("Root", vec![("items", T::repeat(item, Until::End))]));
+    let mut bytes = Vec::new();
+    for i in 0..4u8 {
+        bytes.extend([1, /* entries */ 1, 0xa0 + i, 2, 0xb0 + i, 0xb8 + i, 1, 0xc0 + i, /* tail */ 0xd0 + i]);
+    }
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    // Reaching record 3 walks over records 0 to 2, and sizing each walks its
+    // entries to the third. That inner walk keeps the second entry for the
+    // third to ask, and the outer walk then lets record 0 go. The entry must
+    // go with it: left behind, it has no record above it to look up to.
+    ev.node(&d, &[0, 3]).unwrap();
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    // A value of record 0's second entry, asked for by its path. Where it
+    // starts is worked out from `w`, which is in the record.
+    let v = ev.node(&d, &[0, 0, 1, 1, 1, 1]).unwrap();
+    assert_eq!((v.offset_bits, v.size_bits), (5 * 8, 8));
+}
+
+#[test]
+fn an_element_that_ends_a_run_leaves_none_of_its_fields_behind() {
+    // Records of a length and that many bytes. The third says nine, and nine
+    // bytes are not there: its length is read before its bytes fail, and the
+    // run ends before it.
+    let rec = || T::structure("Rec", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))]);
+    let bytes = [1, 0xa0, 2, 0xb0, 0xb1, 9, 0xc0];
+
+    // A run with no room outside it to try the element again in.
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(Template::new("t", T::repeat(rec(), Until::End)));
+    assert_eq!(ev.node(&d, &[]).unwrap().child_count, 2);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+
+    // A run in a window one byte short of the file, which is tried again with
+    // that byte and fails again.
+    let t = T::structure("Root", vec![("items", T::sized(E::lit(6), T::repeat(rec(), Until::End))), ("tail", T::bytes(E::Remaining))]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 2);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+}
+
+#[test]
 fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
     // The same long list of uneven strings, asked the question the hex cursor
     // asks: what is under this bit, in the middle of ten thousand elements.

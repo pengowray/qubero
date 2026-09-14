@@ -109,6 +109,14 @@ impl Memo {
         self.nodes.insert(path, r);
     }
 
+    /// Every node held without the node it sits in. A name is looked up
+    /// through the nodes above the one asking, and a node that is held is not
+    /// placed again, so one of these reads as a field with nothing around it.
+    #[cfg(test)]
+    pub(super) fn without_parent(&self) -> Vec<Vec<usize>> {
+        self.nodes.keys().filter(|p| p.split_last().is_some_and(|(_, parent)| !self.nodes.contains_key(parent))).cloned().collect()
+    }
+
     /// Drop every node read inside a decoded stream.
     ///
     /// `forget_after` keeps what ended before the edit, and a decoded field is
@@ -138,6 +146,12 @@ impl Memo {
             self.nodes.remove(&p);
             self.lists.remove(&p);
             self.json.remove(&p);
+        }
+        // A stitched stream's node is a field of the file and stays, but the
+        // parts its walk found were read from bytes that may be what changed,
+        // and the space they made is going. So the walk starts again.
+        for l in self.lists.values_mut() {
+            l.stitch = None;
         }
         // What a search learned about a list inside a stream goes with the
         // stream: the offsets it is keyed by count in that space, and the
@@ -228,6 +242,22 @@ impl Memo {
         }
     }
 
+    /// Forget one node and everything inside it.
+    ///
+    /// For an element that was placed and then could not be read, which ends
+    /// the run it is in: the fields read before it failed would otherwise
+    /// stay with nothing above them. Every node held is looked at, so this is
+    /// not for the walks, which forget an element at a time; an element that
+    /// ends a run happens a handful of times across the whole sample
+    /// collection, with fewer than a hundred nodes held each time.
+    pub(super) fn forget_under(&mut self, path: &[usize]) {
+        self.forget_node(path);
+        let inside = |p: &Vec<usize>| p.len() > path.len() && p.starts_with(path);
+        self.nodes.retain(|p, _| !inside(p));
+        self.lists.retain(|p, _| !inside(p));
+        self.json.retain(|p, _| !inside(p));
+    }
+
     /// What the list at `path` has learned about itself. A node that is not a
     /// list, or one nothing has been learned about yet, has learned nothing,
     /// which is what the default says.
@@ -249,6 +279,7 @@ impl Memo {
             chain_starts: Vec::new(),
             chain_done: false,
             gather: None,
+            stitch: None,
             seq_end: 0,
         };
         self.lists.get(path).unwrap_or(&NOTHING)
@@ -332,6 +363,9 @@ impl Memo {
             // the edit even when the children do not, and a Parquet footer
             // sits after every page it places. So the walk starts again.
             l.gather = None;
+            // The same for the walk to a stitched stream's parts: its runs
+            // may be anywhere, and the space it opened is gone already.
+            l.stitch = None;
             let empty = l.checkpoints.is_empty()
                 && l.walk_at.is_none()
                 && l.repeat_len == 0

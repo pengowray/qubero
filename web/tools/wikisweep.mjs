@@ -69,7 +69,7 @@ for (const f of files) {
   time += performance.now() - t;
   const n = namingMatch(m);
   if (n !== null) named++;
-  const top = m.slice(0, 3).map((x) => `${x.format.label}[${x.fixed}${x.extensionAgrees ? ",ext" : ""}]`).join("; ");
+  const top = m.slice(0, 3).map((x) => `${x.format.label}[${x.fixed}${x.worth !== x.fixed ? `~${x.worth}` : ""}${x.extensionAgrees ? ",ext" : ""}]`).join("; ");
   console.log(`${relative(root, f).padEnd(50).slice(0, 50)} ${String(m.length).padStart(4)} ${n ? "NAME " + n.format.label : "-"} | ${top}`);
 }
 console.log({ files: files.length, named, msPerFile: (time / files.length).toFixed(1) });

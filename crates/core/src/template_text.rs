@@ -295,6 +295,24 @@ fn pad(ind: usize) -> String {
 /// Wrappers push their word onto `head` and recurse, so `sized(length) switch
 /// type {` is one line rather than three, and a structure several wrappers deep
 /// still opens its brace at the end of the field's own line.
+/// One type on its own, written the way [`render`] writes it inside a template.
+///
+/// The diagram tells two type definitions apart by what they say rather than by
+/// where they are, and this is what they say: two structures that print
+/// identically are one type drawn once, and an ELF's little-endian and
+/// big-endian section headers print differently (`u32 le` against `u32 be`) and
+/// stay two. Reusing the renderer rather than writing a second one is the whole
+/// point: a distinction the IR text draws is a distinction the diagram draws,
+/// and neither can drift from the other.
+///
+/// Unwrapped and unfolded: no line is broken to a width, since nothing reads
+/// this and a fold would only make two spellings of one type.
+pub(crate) fn ty_text(ty: &Ty) -> String {
+    let mut out = Vec::new();
+    write_ty(&mut out, 0, "", ty, "");
+    out.join("\n")
+}
+
 fn write_ty(out: &mut Vec<String>, ind: usize, head: &str, ty: &Ty, tail: &str) {
     if let Some(head) = wrapper(head, ty) {
         return write_ty(out, ind, &head.0, head.1, tail);
@@ -400,6 +418,21 @@ fn wrapper<'a>(head: &str, ty: &'a Ty) -> Option<(String, &'a Ty)> {
             }
             s.push(')');
             with(s, elem)
+        }
+        // The walk to the parts, written the way a gather's is, and the two
+        // lengths only where the template gives them.
+        Ty::Stitched { from, part_len, len, inner } => {
+            let walk: String = from.iter().map(step_text).collect::<Vec<_>>().join("");
+            let walk = walk.strip_prefix('.').unwrap_or(&walk).to_string();
+            let mut s = format!("stitched(from {walk}");
+            if let Some(e) = part_len {
+                s.push_str(&format!(", each {}", expr(e)));
+            }
+            if let Some(e) = len {
+                s.push_str(&format!(", total {}", expr(e)));
+            }
+            s.push(')');
+            with(s, inner)
         }
         _ => None,
     }
@@ -800,6 +833,10 @@ fn inline(ty: &Ty) -> Option<String> {
         }
         Ty::Repeat { elem, until } => format!("repeat({}) {}", until_text(until), inline(elem)?),
         Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
+            let (head, inner) = wrapper("", ty)?;
+            format!("{head}{}", inline(inner)?)
+        }
+        Ty::Stitched { .. } => {
             let (head, inner) = wrapper("", ty)?;
             format!("{head}{}", inline(inner)?)
         }

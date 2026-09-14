@@ -16,6 +16,11 @@
 //! or does not start on a byte, and refused after the fact when the decoder
 //! will not read it. All three read as the bytes that are there, with the node
 //! saying which happened; see [`crate::codec::Refusal`].
+//!
+//! A [`Ty::Stitched`](crate::template::Ty::Stitched) field opens a space too,
+//! and that one is not a buffer: it is a table of the parts it is joined from,
+//! read a part at a time, with the parts that have to be unpacked kept in a
+//! small cache rather than all at once. See [`Backing`] and `stitch.rs`.
 
 use std::sync::Arc;
 
@@ -130,15 +135,137 @@ impl Space {
     }
 }
 
-#[derive(Default)]
+/// What a space's bytes are kept as.
+///
+/// A `Decoded` node's space is one buffer, unpacked whole the first time
+/// anything inside it is asked for. A `Stitched` node's is a table of where
+/// its parts are, and nothing more until a read reaches one: a BAM of a
+/// gigabyte is sixteen thousand parts, and holding them all unpacked is the
+/// thing a stitched space exists not to do.
+pub(super) enum Backing {
+    Whole { bytes: Arc<Vec<u8>>, trace: Trace },
+    Stitched(Box<Stitch>),
+}
+
+/// A space made of parts that are elsewhere, joined end to end.
+pub(super) struct Stitch {
+    /// The `Stitched` node that opened it, which is what knows the walk its
+    /// parts were found by.
+    pub(super) path: Vec<usize>,
+    /// Every part, by where it starts in the joined bytes. Complete before
+    /// anything inside is placed, so the total is known.
+    pub(super) parts: Vec<Part>,
+    pub(super) len_bytes: u64,
+    /// The packed parts unpacked so far, as many as fit under the cap.
+    pub(super) cache: std::cell::RefCell<PartCache>,
+}
+
+impl Stitch {
+    /// The part holding byte `at` of the joined bytes. A part of no bytes
+    /// holds nothing, so the answer is the next part along that has any.
+    pub(super) fn part_at(&self, at: u64) -> Option<usize> {
+        let i = self.parts.partition_point(|p| p.start + p.len <= at);
+        self.parts.get(i).filter(|p| p.start <= at && at < p.start + p.len).map(|_| i)
+    }
+}
+
+/// One run of a stitched space, and where in the joined bytes it goes.
+#[derive(Debug, Clone)]
+pub(super) struct Part {
+    /// Where the part starts in the joined bytes, and how many it gives.
+    pub(super) start: u64,
+    pub(super) len: u64,
+    /// The field the walk landed on, which is the run in the file (or in the
+    /// space the run is in). Kept so a byte of the joined stream can name the
+    /// field it came from, and so an unpacked part already open as a stream of
+    /// its own is read from there rather than unpacked twice.
+    pub(super) path: Vec<usize>,
+    pub(super) source: PartSource,
+}
+
+/// Where a part's bytes come from.
+#[derive(Debug, Clone)]
+pub(super) enum PartSource {
+    /// Bytes as they sit: a PDB page. `at_bits` is where they start in
+    /// `space`.
+    Stored { space: u32, at_bits: u64 },
+    /// A run that has to be unpacked first: a BGZF member's deflate. The
+    /// codec was worked out when the walk reached the run, so a read never
+    /// needs to ask the template anything. `Err` is a codec that could not be
+    /// worked out, which fails a read of this part and nothing else.
+    Packed { space: u32, at_bits: u64, size_bits: u64, codec: Result<Codec, Refusal> },
+}
+
+/// How many unpacked bytes a stitched space keeps at once, across all its
+/// parts. Two hundred and fifty-six BGZF members, which is several thousand
+/// short reads either side of wherever the reader is.
+pub(super) const STITCH_CACHE_BYTES: usize = 16 << 20;
+
+/// The parts of a stitched space that have been unpacked, kept until the cap
+/// says one has to go, and then the one read longest ago goes first.
+pub(super) struct PartCache {
+    entries: FxHashMap<usize, (Arc<Vec<u8>>, u64)>,
+    /// How many bytes the entries hold, and the most they have held at once.
+    bytes: usize,
+    pub(super) peak: usize,
+    /// A count of reads, so the entry read longest ago is the one with the
+    /// smallest.
+    clock: u64,
+    cap: usize,
+}
+
+impl PartCache {
+    pub(super) fn new(cap: usize) -> PartCache {
+        PartCache { entries: FxHashMap::default(), bytes: 0, peak: 0, clock: 0, cap }
+    }
+
+    /// Which parts are being kept, in no order, and how many bytes they hold.
+    #[cfg(test)]
+    pub(super) fn held(&self) -> (Vec<usize>, usize) {
+        (self.entries.keys().copied().collect(), self.bytes)
+    }
+
+    /// Part `i`, if it is being kept, marked as read now.
+    pub(super) fn get(&mut self, i: usize) -> Option<Arc<Vec<u8>>> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.entries.get_mut(&i).map(|(bytes, read)| {
+            *read = clock;
+            bytes.clone()
+        })
+    }
+
+    /// Keep part `i`, putting back the parts read longest ago until it fits.
+    /// A part larger than the whole cap is still kept, alone: the read that
+    /// asked for it needs it, and the next read of another part puts it back.
+    pub(super) fn put(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
+        while self.bytes + bytes.len() > self.cap && !self.entries.is_empty() {
+            let oldest = self.entries.iter().min_by_key(|(_, (_, read))| *read).map(|(k, _)| *k).expect("not empty");
+            if let Some((gone, _)) = self.entries.remove(&oldest) {
+                self.bytes -= gone.len();
+            }
+        }
+        self.clock += 1;
+        self.bytes += bytes.len();
+        self.peak = self.peak.max(self.bytes);
+        self.entries.insert(i, (bytes, self.clock));
+    }
+}
+
 pub(super) struct Spaces {
-    /// The bytes of space `i + 1`. Space 0 is the file and is not here.
-    bufs: Vec<Arc<Vec<u8>>>,
-    /// What the decoder did to produce `bufs[i]`.
-    traces: Vec<Trace>,
-    /// What each `Decoded` node came to, so a stream is opened once however
-    /// many times its children are asked for.
+    /// What space `i + 1` is made of. Space 0 is the file and is not here.
+    backings: Vec<Backing>,
+    /// What each `Decoded` or `Stitched` node came to, so a stream is opened
+    /// once however many times its children are asked for.
     opened: FxHashMap<Vec<usize>, Opened>,
+    /// The cap each stitched space opened from here on is given.
+    cache_cap: usize,
+}
+
+impl Default for Spaces {
+    fn default() -> Spaces {
+        Spaces { backings: Vec::new(), opened: FxHashMap::default(), cache_cap: STITCH_CACHE_BYTES }
+    }
 }
 
 impl Spaces {
@@ -148,31 +275,67 @@ impl Spaces {
 
     /// Keep a decoded buffer and its trace, and hand back the space it became.
     pub(super) fn add(&mut self, path: &[usize], bytes: Vec<u8>, trace: Trace) -> u32 {
-        self.bufs.push(Arc::new(bytes));
-        self.traces.push(trace);
-        let id = self.bufs.len() as u32;
+        self.backings.push(Backing::Whole { bytes: Arc::new(bytes), trace });
+        let id = self.backings.len() as u32;
         self.opened.insert(path.to_vec(), Opened::Space(id));
         id
     }
 
-    /// The trace of the decoding that made a space.
+    /// Keep the part table of a stitched space, and hand back the space it
+    /// became.
+    pub(super) fn add_stitched(&mut self, path: &[usize], parts: Vec<Part>, len_bytes: u64) -> u32 {
+        let cache = std::cell::RefCell::new(PartCache::new(self.cache_cap));
+        self.backings.push(Backing::Stitched(Box::new(Stitch { path: path.to_vec(), parts, len_bytes, cache })));
+        let id = self.backings.len() as u32;
+        self.opened.insert(path.to_vec(), Opened::Space(id));
+        id
+    }
+
+    /// How many unpacked bytes a stitched space opened after this may keep.
+    /// For a test that wants to see the cap at work without a gigabyte file.
+    #[cfg(test)]
+    pub(super) fn set_cache_cap(&mut self, bytes: usize) {
+        self.cache_cap = bytes;
+    }
+
+    /// The trace of the decoding that made a space. Nothing for a stitched
+    /// space, which was not made by one decoding.
     pub(super) fn trace(&self, space: u32) -> Option<&Trace> {
-        self.traces.get(space as usize - 1)
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Whole { trace, .. } => Some(trace),
+            Backing::Stitched(_) => None,
+        }
     }
 
     pub(super) fn refuse(&mut self, path: &[usize], why: Refusal) {
         self.opened.insert(path.to_vec(), Opened::Refused(why));
     }
 
-    /// The bytes of a space. `space` is never 0 here: the file is read through
-    /// the document, not through this.
+    /// The bytes of a space held whole. `space` is never 0 here: the file is
+    /// read through the document, not through this. Nothing for a stitched
+    /// space, whose bytes are nowhere in one piece.
     pub(super) fn buf(&self, space: u32) -> Option<&Arc<Vec<u8>>> {
-        self.bufs.get(space as usize - 1)
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Whole { bytes, .. } => Some(bytes),
+            Backing::Stitched(_) => None,
+        }
+    }
+
+    /// The part table of a stitched space.
+    pub(super) fn stitch(&self, space: u32) -> Option<&Stitch> {
+        match self.backings.get(space.checked_sub(1)? as usize)? {
+            Backing::Stitched(s) => Some(s),
+            Backing::Whole { .. } => None,
+        }
     }
 
     /// How many bits a space holds.
     pub(super) fn len_bits(&self, space: u32) -> u64 {
-        self.buf(space).map_or(0, |b| b.len() as u64 * 8)
+        match space.checked_sub(1).and_then(|i| self.backings.get(i as usize)) {
+            Some(Backing::Whole { bytes, .. }) => bytes.len() as u64 * 8,
+            Some(Backing::Stitched(s)) => s.len_bytes * 8,
+            None => 0,
+        }
     }
 
     /// Whether any stream has been opened at all. Most files hold none, and
@@ -185,8 +348,7 @@ impl Spaces {
     /// the file, so any change to the file or the template drops it: see
     /// `Memo::forget`.
     pub(super) fn forget(&mut self) {
-        self.bufs.clear();
-        self.traces.clear();
+        self.backings.clear();
         self.opened.clear();
     }
 }
