@@ -896,7 +896,7 @@ fn a_tile_whose_header_counts_past_a_u64_is_described_and_not_unpacked() {
         cards.extend([1, 2].map(|n| format!("ZTILE{n}  = {tile:20}")));
         cards
     };
-    let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 Ã— 1,099,511,627,776 pixels, more than 2^64 in all.";
+    let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, more than 2^64 in all.";
     // Tiles of one pixel, 2^80 of them.
     let t = tile(&square(1));
     assert_eq!((t.tiles, t.pixel_count(), t.shape, t.packed_bytes, t.problem.as_deref()), (None, Some(1), vec![1, 1], 4, Some(invalid)));

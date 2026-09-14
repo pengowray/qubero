@@ -1074,9 +1074,9 @@ fn product(along: &[u64]) -> Option<u64> {
     along.iter().try_fold(1u64, |n, a| n.checked_mul(*a))
 }
 
-/// Lengths along each axis as a panel writes them: `440 Ã— 300`.
+/// Lengths along each axis as a panel writes them: `440 × 300`.
 fn dims(along: &[u64]) -> String {
-    along.iter().map(|n| commas(*n)).collect::<Vec<_>>().join(" Ã— ")
+    along.iter().map(|n| commas(*n)).collect::<Vec<_>>().join(" × ")
 }
 
 fn be_u32(b: &[u8]) -> u32 {
@@ -1294,7 +1294,7 @@ mod tests {
             zblank: None,
             quantized: false,
         };
-        let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 Ã— 1,099,511,627,776 pixels, more than 2^64 in all.";
+        let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, more than 2^64 in all.";
         // Tiles of one pixel, 2^80 of them.
         let t = decode(&square(1 << 40, 1), 5, &row, &[1, 2, 3, 4]);
         assert_eq!((t.tiles, t.pixel_count(), t.start, t.problem.as_deref()), (None, Some(1), vec![5, 0], Some(invalid)));
