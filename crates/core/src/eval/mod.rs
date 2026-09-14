@@ -16,6 +16,7 @@ use crate::source::{Missing, Source};
 use crate::template::{Anchor, Encoding, Expr, Packing, StrLen, Tag, TaggedRef, Template, TracedPart, Ty, Until};
 use crate::text::{self, Settled};
 
+mod again;
 mod cells;
 mod census;
 mod check;

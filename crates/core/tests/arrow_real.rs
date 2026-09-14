@@ -511,3 +511,74 @@ fn a_whole_file_listing_settles_in_goes() {
     }
     assert!(checked > 0);
 }
+
+/// Where `steps` lead from the root, by field name. A name that is not a child
+/// of the node reached is looked for inside the one thing that node holds,
+/// which is how a pointer is stepped through.
+fn path_to(ev: &mut Evaluator, doc: &Document<MemSource>, steps: &[&str]) -> Vec<usize> {
+    let mut path = Vec::new();
+    for step in steps {
+        if let Ok(i) = step.parse::<usize>() {
+            path.push(i);
+            continue;
+        }
+        path = match ev.child_named(doc, &path, step).unwrap() {
+            Some(p) => p,
+            None => {
+                path.push(0);
+                ev.child_named(doc, &path, step).unwrap().unwrap_or_else(|| panic!("no {step} under {path:?}"))
+            }
+        };
+    }
+    path
+}
+
+/// What three of the fields the node walk adds say for node `i`, by name and
+/// value.
+fn node_walk_of(ev: &mut Evaluator, doc: &Document<MemSource>, nodes: &[usize], i: usize) -> Vec<(String, Value)> {
+    ["first_buffer", "depth", "column"]
+        .iter()
+        .map(|field| {
+            let mut p = nodes.to_vec();
+            p.push(i);
+            let p = ev.child_named(doc, &p, field).unwrap().unwrap_or_else(|| panic!("node {i} has no {field}"));
+            let n = ev.node(doc, &p).unwrap_or_else(|e| panic!("node {i} {field}: {e:?}"));
+            (n.name, n.value)
+        })
+        .collect()
+}
+
+/// The nodes of a record batch, each read first with nothing asked before it,
+/// say what they say when the nodes are read in order.
+///
+/// A node works out which schema field it stands for from the node before, so
+/// read first, a late node of this file asks its way back through every node
+/// before it: more expressions open at once than a read may have. Such a read
+/// is refused, then asked again a stretch of the chain at a time, and reads
+/// through. Before that was done, a field tree opened straight at the last
+/// node said "nested too deep" there.
+#[test]
+fn every_node_read_first_says_what_it_says_in_order() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let steps = ["batches", "0", "metadata", "root", "table", "header", "table", "nodes", "vector", "elements"];
+    let (doc, mut in_order) = open(&root, "more-types.arrow");
+    let nodes = path_to(&mut in_order, &doc, &steps);
+    let count = in_order.node(&doc, &nodes).unwrap().child_count as usize;
+    assert!(count > 20, "{count} nodes");
+    let want: Vec<_> = (0..count).map(|i| node_walk_of(&mut in_order, &doc, &nodes, i)).collect();
+    assert!(in_order.deepest_question() < 88, "in order: {} deep", in_order.deepest_question());
+    let mut refused_before = 0;
+    for (i, want) in want.iter().enumerate() {
+        let mut first = Evaluator::new(formats::builtin("arrow").unwrap());
+        assert_eq!(&node_walk_of(&mut first, &doc, &nodes, i), want, "node {i} read first");
+        // The limit was reached on the way, which is the case this is for.
+        if first.deepest_question() == 88 {
+            refused_before += 1;
+        }
+    }
+    assert!(refused_before > 0, "no node read first went as deep as the limit");
+    eprintln!("more-types.arrow: {count} nodes read first say what they say in order, {refused_before} of them past the limit");
+}

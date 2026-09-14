@@ -8,6 +8,8 @@
 //! question asked of one go, so they are kept together and away from what the
 //! reading has worked out, which outlives any number of goes.
 
+use crate::template::Expr;
+
 use super::{EvalError, Missing, R, fail};
 
 /// How much of the stack one read may spend, in bytes.
@@ -37,6 +39,12 @@ const STACK_BUDGET: usize = 640 << 10;
 /// being worked out. In wasm a stack that runs out takes the whole module
 /// with it.
 ///
+/// A read refused here is not the end of it. Its outermost expression asks it
+/// again a stretch of the chain at a time, from the bottom up, so that each
+/// stretch finds the one below it answered; see `eval::again`. What stays
+/// refused is what no order of asking helps: an expression nested this deep
+/// in itself.
+///
 /// Counted per expression rather than per field reached, so the arithmetic
 /// between two fields counts too: a lookup written as twenty-six conditions is
 /// twenty-six deep, and spends the stack that way.
@@ -63,6 +71,34 @@ const STACK_BUDGET: usize = 640 << 10;
 /// where these numbers come from.
 pub(super) const DEEPEST_QUESTION: usize = 88;
 
+/// How far apart the questions kept while a refused read is asked again are,
+/// counted in expressions. Asking one of them again reads down to the one kept
+/// below it, which by then has its answer, so this is how deep that asking
+/// goes: far enough under `DEEPEST_QUESTION` to leave room for the arithmetic
+/// around a field, and far enough apart that a chain ten thousand long keeps a
+/// few hundred copies of an expression rather than ten thousand.
+pub(super) const KEPT_EVERY: usize = 16;
+
+/// Which of the three readings of an expression a question asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Asked {
+    Whole,
+    Real,
+    Text,
+}
+
+/// One expression a read was working out when it was refused for depth,
+/// kept so that it can be asked again on its own: where it was asked, what,
+/// the frame it was asked in, and how many expressions were open around it.
+#[derive(Clone, Debug)]
+pub(super) struct Question {
+    pub(super) at: Vec<usize>,
+    pub(super) expr: Expr,
+    pub(super) here: Option<(u64, u64)>,
+    pub(super) asked: Asked,
+    pub(super) depth: usize,
+}
+
 #[derive(Default)]
 pub(super) struct Go {
     /// Elements left before this go has to hand back, and how many each go is
@@ -84,6 +120,19 @@ pub(super) struct Go {
     /// `DEEPEST_QUESTION`.
     asking: usize,
     deepest_asked: usize,
+    /// True while a refused read is being asked again. Then every expression
+    /// open at a depth that is a multiple of `KEPT_EVERY` is kept on
+    /// `trail`, shallowest first, and taken off again when it is answered;
+    /// and no expression starts a second round of asking again inside it.
+    /// See `Evaluator::outermost`. Nothing is kept otherwise, so a read that
+    /// is never refused pays for none of this but the test of the flag.
+    asking_again: bool,
+    trail: Vec<Question>,
+    /// A refusal for depth has been met, so the trail is left as it stood
+    /// when it was, rather than emptied as the refusal passes out. An
+    /// expression opened after it means the refusal was passed over, and
+    /// lets the trail go on.
+    held: bool,
 }
 
 impl Go {
@@ -103,6 +152,9 @@ impl Go {
         // through the last one may have left behind.
         self.nest = 0;
         self.asking = 0;
+        self.asking_again = false;
+        self.trail.clear();
+        self.held = false;
     }
 
     /// The same, and back to the start of the file, for when what was worked
@@ -181,18 +233,91 @@ impl Go {
         }
         self.asking += 1;
         self.deepest_asked = self.deepest_asked.max(self.asking);
+        if self.asking_again {
+            self.opened();
+        }
         true
     }
 
     /// That expression has its answer, or its error. Only ever called where
     /// `ask` said yes.
-    pub(super) fn answered(&mut self) {
+    #[inline]
+    pub(super) fn answered<T>(&mut self, out: &R<T>) {
+        if self.asking_again {
+            let refused = matches!(out, Err(EvalError::Failed(why)) if super::Evaluator::is_refusal(why));
+            self.closed(refused);
+        }
         self.asking -= 1;
     }
 
     /// The most expressions that have been open inside one another at once.
     pub(super) fn deepest_asked(&self) -> usize {
         self.deepest_asked
+    }
+
+    /// Whether an expression about to be worked out is the outermost one of
+    /// its read, and not one being asked again for a refused read.
+    pub(super) fn outermost(&self) -> bool {
+        self.asking == 0 && !self.asking_again
+    }
+
+    /// Whether the expression just opened is one the trail keeps.
+    pub(super) fn keeps_this_one(&self) -> bool {
+        self.asking_again && self.asking % KEPT_EVERY == 0
+    }
+
+    /// Keep the expression just opened on the trail.
+    pub(super) fn keep(&mut self, at: &[usize], expr: &Expr, here: Option<(u64, u64)>, asked: Asked) {
+        let depth = self.asking;
+        self.trail.push(Question { at: at.to_vec(), expr: expr.clone(), here, asked, depth });
+    }
+
+    /// An expression has been opened while asking again. One opened after a
+    /// refusal means the refusal was passed over, so what the trail held for
+    /// it goes.
+    #[cold]
+    fn opened(&mut self) {
+        if self.held {
+            self.held = false;
+            let depth = self.asking;
+            self.trail.retain(|q| q.depth < depth);
+        }
+    }
+
+    /// An expression has been answered while asking again: taken off the
+    /// trail if it was kept, or the trail held as it stands if the answer is a
+    /// refusal for depth, whether that started here or further in.
+    #[cold]
+    fn closed(&mut self, refused: bool) {
+        if refused {
+            self.held = true;
+        } else if !self.held && self.trail.last().is_some_and(|q| q.depth == self.asking) {
+            self.trail.pop();
+        }
+    }
+
+    /// The expression that would have been one too many, which is where a
+    /// refusal for depth starts: kept on the trail as its deepest question.
+    pub(super) fn refused_here(&mut self, at: &[usize], expr: &Expr, here: Option<(u64, u64)>, asked: Asked) {
+        if !self.asking_again {
+            return;
+        }
+        let depth = self.asking + 1;
+        self.trail.retain(|q| q.depth < depth);
+        self.trail.push(Question { at: at.to_vec(), expr: expr.clone(), here, asked, depth });
+        self.held = true;
+    }
+
+    /// The trail as the last refusal left it, shallowest first, and none left
+    /// behind.
+    pub(super) fn take_trail(&mut self) -> Vec<Question> {
+        self.held = false;
+        std::mem::take(&mut self.trail)
+    }
+
+    /// Say whether the questions of a refused read are being asked again.
+    pub(super) fn set_asking_again(&mut self, again: bool) {
+        self.asking_again = again;
     }
 
     /// Say that the reading started at the very top of memory, so that the

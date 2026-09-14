@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use super::go::Asked;
 use super::memo::TagKey;
 use super::*;
 
@@ -136,9 +137,37 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<i128> {
-        self.ask(at, e)?;
+        if self.go.outermost() {
+            return self.outermost_whole(doc, at, e, here);
+        }
+        self.whole_question(doc, at, e, here)
+    }
+
+    /// The outermost expression of a read, asked so that a refusal for depth
+    /// is asked again. One of these for each reading rather than a closure
+    /// handed over where the expression is asked, since what that closure
+    /// holds would sit in the frame of every expression inside another.
+    #[inline(never)]
+    fn outermost_whole<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<i128> {
+        self.outermost(doc, |ev| ev.whole_question(doc, at, e, here))
+    }
+
+    #[inline(never)]
+    fn outermost_real<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<f64> {
+        self.outermost(doc, |ev| ev.real_question(doc, at, e, here))
+    }
+
+    #[inline(never)]
+    fn outermost_text<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<String> {
+        self.outermost(doc, |ev| ev.text_question(doc, at, e, here))
+    }
+
+    /// The whole-number reading of an expression, counted as one more open.
+    #[inline(always)]
+    fn whole_question<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<i128> {
+        self.ask(at, e, here, Asked::Whole)?;
         let out = self.whole_at(doc, at, e, here);
-        self.go.answered();
+        self.go.answered(&out);
         out
     }
 
@@ -153,10 +182,33 @@ impl Evaluator {
     /// and so nothing remembered. Counting here counts every one of those
     /// hops whichever of them it is, and the arithmetic between them too,
     /// which spends the stack the same way. See `go::DEEPEST_QUESTION`.
-    fn ask(&mut self, at: &[usize], e: &Expr) -> R<()> {
-        if self.go.ask() {
-            return Ok(());
+    #[inline(always)]
+    fn ask(&mut self, at: &[usize], e: &Expr, here: Option<(u64, u64)>, asked: Asked) -> R<()> {
+        if !self.go.ask() {
+            return self.refused_here(at, e, here, asked);
         }
+        if self.go.keeps_this_one() {
+            self.keep(at, e, here, asked);
+        }
+        Ok(())
+    }
+
+    /// Keep the expression just opened on the trail of a read being asked
+    /// again. Out of line, since it is rare and every expression's frame would
+    /// otherwise carry it.
+    #[cold]
+    #[inline(never)]
+    fn keep(&mut self, at: &[usize], e: &Expr, here: Option<(u64, u64)>, asked: Asked) {
+        self.go.keep(at, e, here, asked);
+    }
+
+    /// The refusal for one expression too many, with the question kept as the
+    /// deepest on the trail when there is one. Out of line for the reason
+    /// `keep` is.
+    #[cold]
+    #[inline(never)]
+    fn refused_here(&mut self, at: &[usize], e: &Expr, here: Option<(u64, u64)>, asked: Asked) -> R<()> {
+        self.go.refused_here(at, e, here, asked);
         fail(self.asked_too_deep(at, e))
     }
 
@@ -616,9 +668,18 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<f64> {
-        self.ask(at, e)?;
+        if self.go.outermost() {
+            return self.outermost_real(doc, at, e, here);
+        }
+        self.real_question(doc, at, e, here)
+    }
+
+    /// The real reading of an expression, counted as one more open.
+    #[inline(always)]
+    fn real_question<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<f64> {
+        self.ask(at, e, here, Asked::Real)?;
         let out = self.real_at(doc, at, e, here);
-        self.go.answered();
+        self.go.answered(&out);
         out
     }
 
@@ -824,9 +885,18 @@ impl Evaluator {
         e: &Expr,
         here: Option<(u64, u64)>,
     ) -> R<String> {
-        self.ask(at, e)?;
+        if self.go.outermost() {
+            return self.outermost_text(doc, at, e, here);
+        }
+        self.text_question(doc, at, e, here)
+    }
+
+    /// The text an expression reaches, counted as one more open.
+    #[inline(always)]
+    fn text_question<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr, here: Option<(u64, u64)>) -> R<String> {
+        self.ask(at, e, here, Asked::Text)?;
         let out = self.text_in(doc, at, e, here);
-        self.go.answered();
+        self.go.answered(&out);
         out
     }
 
