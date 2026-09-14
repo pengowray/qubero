@@ -915,27 +915,54 @@ fn is_lha(head: &[u8]) -> bool {
 /// window is not recognised here. The archive still opens as a ZIP, and the
 /// contents view names the store from the entries themselves.
 fn is_zarr_zip(head: &[u8]) -> bool {
-    any_local_entry(head, |name, _, _, _| is_zarr_key(name))
+    any_local_entry(head, |entry| is_zarr_key(entry.name))
 }
 
-/// Whether a ZIP holds a BP5 directory: its index or its formats, stored, and
-/// recognised as themselves from the bytes the window has of them.
+/// Whether a ZIP holds a BP5 directory: its index or its formats, recognised
+/// as themselves from the bytes the window has of them, stored or deflated.
 fn is_adios_zip(head: &[u8]) -> bool {
-    any_local_entry(head, |name, method, data, len| {
-        let leaf = name.rsplit(|&b| b == b'/' || b == b'\\').next().unwrap_or(name);
-        method == 0
-            && match leaf {
-                b"md.idx" => adios::sniff_signed(data, len as u64) == Some("adiosbp5idx"),
-                b"mmd.0" => adios::sniff_agreeing(data, len as u64) == Some("adiosbp5mmd"),
-                _ => false,
-            }
+    any_local_entry(head, |entry| {
+        let sniff: fn(&[u8], u64) -> Option<&'static str> = match leaf_of(entry.name) {
+            b"md.idx" => adios::sniff_signed,
+            b"mmd.0" => adios::sniff_agreeing,
+            _ => return false,
+        };
+        let want = if leaf_of(entry.name) == b"md.idx" { "adiosbp5idx" } else { "adiosbp5mmd" };
+        match entry.method {
+            0 => sniff(entry.data, entry.unpacked) == Some(want),
+            // As much of the file as the window's share of the deflate comes
+            // to, which for the few dozen bytes these are told by is a few
+            // dozen more.
+            8 => sniff(&crate::codec::inflate::inflate_raw_prefix(entry.data, ZIP_SNIFF_UNPACK), entry.unpacked) == Some(want),
+            _ => false,
+        }
     })
 }
 
+/// The most of a deflated entry a sniff unpacks.
+const ZIP_SNIFF_UNPACK: usize = 1 << 16;
+
+/// The last part of an archive entry's name.
+fn leaf_of(name: &[u8]) -> &[u8] {
+    name.rsplit(|&b| b == b'/' || b == b'\\').next().unwrap_or(name)
+}
+
+/// One local entry the window starts, as far as a sniff looks at it.
+struct LocalEntry<'a> {
+    name: &'a [u8],
+    method: u16,
+    /// As much of the entry's data as the window holds: to the end of the data
+    /// where its size is known, and to the end of the window for an entry that
+    /// wrote its sizes after the data.
+    data: &'a [u8],
+    /// How long the file is once unpacked, or the most a length can be where
+    /// the header does not say.
+    unpacked: u64,
+}
+
 /// Whether `found` says yes of any local entry the window starts, walking from
-/// the first: its name, its method, as much of its data as the window holds,
-/// and how long the data is.
-fn any_local_entry(head: &[u8], mut found: impl FnMut(&[u8], u16, &[u8], usize) -> bool) -> bool {
+/// the first.
+fn any_local_entry(head: &[u8], mut found: impl FnMut(&LocalEntry) -> bool) -> bool {
     let mut at = 0usize;
     while let Some(record) = head.get(at..at.saturating_add(30)) {
         if record[..4] != *b"PK\x03\x04" {
@@ -946,6 +973,7 @@ fn any_local_entry(head: &[u8], mut found: impl FnMut(&[u8], u16, &[u8], usize) 
         let flags = u16_at(6);
         let method = u16_at(8) as u16;
         let compressed = u32_at(18);
+        let uncompressed = u32_at(22);
         let name_length = u16_at(26);
         let extra_length = u16_at(28);
         let names_at = at + 30;
@@ -953,13 +981,17 @@ fn any_local_entry(head: &[u8], mut found: impl FnMut(&[u8], u16, &[u8], usize) 
             return false;
         };
         let data_at = names_at.saturating_add(name_length).saturating_add(extra_length);
-        let known = match head.get(names_at + name_length..data_at) {
-            Some(extra) => entry_size(compressed, extra),
-            None => None,
-        };
+        let extra = head.get(names_at + name_length..data_at);
+        let known = extra.and_then(|extra| entry_size(compressed, extra));
+        let unpacked = extra.and_then(|extra| unpacked_size(uncompressed, extra));
+        let streamed = flags & 8 != 0;
         let data = head.get(data_at..).unwrap_or(&[]);
-        let data = &data[..data.len().min(known.unwrap_or(0))];
-        if found(name, method, data, known.unwrap_or(0)) {
+        let data = if streamed { data } else { &data[..data.len().min(known.unwrap_or(0))] };
+        let unpacked = match (streamed, unpacked) {
+            (false, Some(n)) => n as u64,
+            _ => u64::MAX,
+        };
+        if found(&LocalEntry { name, method, data, unpacked }) {
             return true;
         }
         // A streamed entry writes zero for its size here and the real one in a
@@ -988,6 +1020,17 @@ fn any_local_entry(head: &[u8], mut found: impl FnMut(&[u8], u16, &[u8], usize) 
 /// there and no extra field answers it, since there is then no way on to the
 /// next record from here.
 fn entry_size(size: usize, extra: &[u8]) -> Option<usize> {
+    zip64_local_size(size, extra, 8)
+}
+
+/// How long a local entry's file is once unpacked, the same way.
+fn unpacked_size(size: usize, extra: &[u8]) -> Option<usize> {
+    zip64_local_size(size, extra, 0)
+}
+
+/// A local header's size field, or the eight bytes at `at` in its ZIP64 extra
+/// field where the size field holds the placeholder.
+fn zip64_local_size(size: usize, extra: &[u8], at_in_record: usize) -> Option<usize> {
     if size != 0xFFFF_FFFF {
         return Some(size);
     }
@@ -999,12 +1042,98 @@ fn entry_size(size: usize, extra: &[u8]) -> Option<usize> {
         // The local header's record holds the unpacked size and then the
         // compressed one, both eight bytes, both always written.
         if id == 1 {
-            let packed = body.get(8..16)?;
-            return usize::try_from(u64::from_le_bytes(packed.try_into().ok()?)).ok();
+            let size = body.get(at_in_record..at_in_record + 8)?;
+            return usize::try_from(u64::from_le_bytes(size.try_into().ok()?)).ok();
         }
         at += 4 + len;
     }
     None
+}
+
+/// How much of the end of a file [`sniff_ends`] wants: the end of central
+/// directory record, a comment of the longest a ZIP allows before it, and a
+/// central directory of some thousands of entries before that.
+pub const SNIFF_TAIL_WINDOW: usize = 1 << 20;
+
+/// Pick a built-in template from the first bytes of a file and its last ones.
+///
+/// The front says most of what a file is, and for a ZIP it says only as much as
+/// the entries the window starts: a BP5 dataset or a Zarr store whose files a
+/// writer put after a large data file opens as a plain archive by its front
+/// alone. The central directory at the end lists every entry by name, so an
+/// archive the front calls a ZIP is asked again of that. `tail` is the last
+/// bytes of the file, [`SNIFF_TAIL_WINDOW`] of them or the whole file when it is
+/// shorter.
+pub fn sniff_ends(head: &[u8], tail: &[u8], len: u64) -> Option<&'static str> {
+    match sniff(head, len) {
+        Some("zip") => Some(zip_directory_names(tail, len).map_or("zip", |names| archive_by_names(&names))),
+        other => other,
+    }
+}
+
+/// What an archive holding entries of these names is: a BP5 dataset when one
+/// directory holds `md.idx`, `mmd.0` and `md.0`, a Zarr store when any entry is
+/// a Zarr metadata key, and otherwise a ZIP.
+///
+/// Names alone, where the front is asked of the files' bytes. Those three
+/// names together are what ADIOS2 writes and nothing else is known to, and
+/// reading each file's front from here would be a read of the archive per
+/// entry before it opens. An archive that is taken for a dataset and is not
+/// one still reads as an archive, with a dataset that says what it lacks.
+fn archive_by_names(names: &[&[u8]]) -> &'static str {
+    let dir_of = |name: &[u8]| -> Vec<u8> { name[..name.len() - leaf_of(name).len()].to_vec() };
+    let dataset = names.iter().filter(|n| leaf_of(n) == b"md.idx").any(|index| {
+        let dir = dir_of(index);
+        [b"mmd.0".as_slice(), b"md.0"].iter().all(|leaf| names.iter().any(|n| leaf_of(n) == *leaf && dir_of(n) == dir))
+    });
+    if dataset {
+        return "adioszip";
+    }
+    if names.iter().any(|n| is_zarr_key(n)) {
+        return "zarrzip";
+    }
+    "zip"
+}
+
+/// The name of every entry in the central directory, when the end of the file
+/// holds the end record and the whole directory before it. Nothing otherwise.
+fn zip_directory_names(tail: &[u8], len: u64) -> Option<Vec<&[u8]>> {
+    let u16_at = |at: usize| tail.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32_at = |at: usize| tail.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64);
+    let u64_at = |at: usize| tail.get(at..at + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
+    // The end record is the last thing in the file but its comment, and says
+    // how long that comment is, which is what tells it from the same four
+    // bytes inside a comment.
+    let lowest = tail.len().saturating_sub(22 + 0xFFFF);
+    let end = (lowest..=tail.len().checked_sub(22)?).rev().find(|&i| tail[i..i + 4] == *b"PK\x05\x06" && u16_at(i + 20) == Some(tail.len() - 22 - i))?;
+    let (mut count, mut size, mut before) = (u16_at(end + 10)? as u64, u32_at(end + 12)?, end);
+    // A ZIP64 archive says the numbers that did not fit in a record of its own,
+    // which a locator right before the end record finds. The directory ends
+    // where that record starts.
+    if count == 0xFFFF || size == 0xFFFF_FFFF {
+        let locator = end.checked_sub(20)?;
+        if tail[locator..locator + 4] != *b"PK\x06\x07" {
+            return None;
+        }
+        // Where the record is in the file, and so in the tail.
+        let starts = len.checked_sub(tail.len() as u64)?;
+        let record = usize::try_from(u64_at(locator + 8)?.checked_sub(starts)?).ok()?;
+        if tail.get(record..record + 4)? != b"PK\x06\x06" {
+            return None;
+        }
+        (count, size, before) = (u64_at(record + 32)?, u64_at(record + 40)?, record);
+    }
+    let mut at = before.checked_sub(usize::try_from(size).ok()?)?;
+    let mut names = Vec::new();
+    while at < before && (names.len() as u64) < count {
+        if tail.get(at..at + 4)? != b"PK\x01\x02" {
+            return None;
+        }
+        let (name_length, extra_length, comment_length) = (u16_at(at + 28)?, u16_at(at + 30)?, u16_at(at + 32)?);
+        names.push(tail.get(at + 46..at + 46 + name_length)?);
+        at += 46 + name_length + extra_length + comment_length;
+    }
+    Some(names)
 }
 
 /// Whether an archive entry's name is one of a Zarr store's metadata keys.
@@ -1561,6 +1690,94 @@ mod tests {
         let mut wide = zip64_entry(b"image.zarr/0/0.0.0", b"chunkbytes");
         wide.extend_from_slice(&zip64_entry(b"image.zarr/.zgroup", br#"{"zarr_format":2}"#));
         assert_eq!(sniffed(&wide), Some("zarrzip"));
+    }
+
+    /// A central directory of entries with these names and nothing else, and the
+    /// end records after it: ZIP64 ones when `wide`, and a comment when there is
+    /// one. What a sniff of the end reads; no entry's data is in it.
+    fn directory_tail(names: &[&[u8]], wide: bool, comment: &[u8], before: usize) -> (Vec<u8>, u64) {
+        let mut v = Vec::new();
+        for name in names {
+            v.extend_from_slice(b"PK\x01\x02");
+            v.extend_from_slice(&[0; 24]);
+            v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            v.extend_from_slice(&[0; 16]);
+            v.extend_from_slice(name);
+        }
+        let size = v.len() as u64;
+        let len_before_end = before as u64 + size;
+        if wide {
+            v.extend_from_slice(b"PK\x06\x06");
+            v.extend_from_slice(&44u64.to_le_bytes());
+            v.extend_from_slice(&[0; 12]);
+            v.extend_from_slice(&(names.len() as u64).to_le_bytes());
+            v.extend_from_slice(&(names.len() as u64).to_le_bytes());
+            v.extend_from_slice(&size.to_le_bytes());
+            v.extend_from_slice(&(before as u64).to_le_bytes());
+            v.extend_from_slice(b"PK\x06\x07");
+            v.extend_from_slice(&0u32.to_le_bytes());
+            v.extend_from_slice(&len_before_end.to_le_bytes());
+            v.extend_from_slice(&1u32.to_le_bytes());
+        }
+        v.extend_from_slice(b"PK\x05\x06");
+        v.extend_from_slice(&[0; 4]);
+        let count: u16 = if wide { 0xFFFF } else { names.len() as u16 };
+        v.extend_from_slice(&count.to_le_bytes());
+        v.extend_from_slice(&count.to_le_bytes());
+        v.extend_from_slice(&(if wide { 0xFFFF_FFFF } else { size as u32 }).to_le_bytes());
+        v.extend_from_slice(&(if wide { 0xFFFF_FFFF } else { before as u32 }).to_le_bytes());
+        v.extend_from_slice(&(comment.len() as u16).to_le_bytes());
+        v.extend_from_slice(comment);
+        let len = before as u64 + v.len() as u64;
+        (v, len)
+    }
+
+    #[test]
+    fn a_zip_the_front_calls_an_archive_is_named_by_its_central_directory() {
+        let head = zip_entry(b"steps.bp5/data.0", &[7; 64], false);
+        let names: [&[u8]; 4] = [b"steps.bp5/data.0", b"steps.bp5/md.idx", b"steps.bp5/mmd.0", b"steps.bp5/md.0"];
+        // Far into a file too long for the front to see its end, with a comment
+        // holding the end record's own four bytes, and with ZIP64 records.
+        for (wide, comment) in [(false, &b""[..]), (false, &b"PK\x05\x06 in a comment"[..]), (true, &b""[..])] {
+            let (tail, len) = directory_tail(&names, wide, comment, 5_000_000_000);
+            assert_eq!(sniff_ends(&head, &tail, len), Some("adioszip"), "wide {wide}, comment {comment:?}");
+        }
+        let (tail, len) = directory_tail(&[b"a.zarr/0.0", b"a.zarr/.zarray"], false, b"", 90_000);
+        assert_eq!(sniff_ends(&head, &tail, len), Some("zarrzip"));
+        let (tail, len) = directory_tail(&[b"notes.txt"], false, b"", 90_000);
+        assert_eq!(sniff_ends(&head, &tail, len), Some("zip"));
+        // A directory that starts before the tail is not guessed at.
+        let (tail, len) = directory_tail(&names, false, b"", 90_000);
+        assert_eq!(sniff_ends(&head, &tail[10..], len), Some("zip"));
+        // And a file the front names otherwise is not asked of its end.
+        assert_eq!(sniff_ends(b"%PDF-1.7", &tail, len), Some("pdf"));
+    }
+
+    /// A deflated `md.idx` at the front is told by what its first deflate
+    /// block comes to.
+    #[test]
+    fn a_deflated_bp5_index_at_the_front_of_a_zip_is_told_by_its_header() {
+        let mut index = b"ADIOS-BP v2.12.1 Index Table".to_vec();
+        index.resize(64, 0);
+        index[37] = 5;
+        index.resize(187, 0x11);
+        let packed = miniz_oxide::deflate::compress_to_vec(&index, 6);
+        let mut v = b"PK\x03\x04".to_vec();
+        v.extend_from_slice(&20u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&8u16.to_le_bytes());
+        v.extend_from_slice(&[0; 8]);
+        v.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+        v.extend_from_slice(&(index.len() as u32).to_le_bytes());
+        v.extend_from_slice(&16u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(b"steps.bp5/md.idx");
+        v.extend_from_slice(&packed);
+        assert_eq!(sniffed(&v), Some("adioszip"));
+        // The same bytes under another name are an archive.
+        let at = v.len() - packed.len() - 16;
+        v[at..at + 16].copy_from_slice(b"steps.bp5/md.xyz");
+        assert_eq!(sniffed(&v), Some("zip"));
     }
 
     /// The files a Linux system leaves lying about, none of which look like

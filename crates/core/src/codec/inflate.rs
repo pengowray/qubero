@@ -283,6 +283,17 @@ pub fn inflate_prefix(data: &[u8], cap: usize) -> Vec<u8> {
     out
 }
 
+/// The same for a raw deflate stream with no zlib header, which is what a ZIP
+/// entry holds: a sniff that sees a deflated `md.idx` in the front of an
+/// archive reads the few dozen bytes it is told by out of this.
+pub fn inflate_raw_prefix(data: &[u8], cap: usize) -> Vec<u8> {
+    let mut b = TraceBuilder::default();
+    let mut out = Vec::new();
+    let _ = run(data, 0, data.len() as u64 * 8, cap, &mut out, &mut b);
+    out.truncate(cap);
+    out
+}
+
 /// The blocks between `start` and `end`, bits of `data`, written into `out`.
 ///
 /// The bytes go into a vector the caller owns rather than one made here, so

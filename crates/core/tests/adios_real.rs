@@ -49,12 +49,20 @@ fn open(name: &str) -> Option<Open> {
     Some(open_bytes(std::fs::read(sample(name)?).unwrap(), name))
 }
 
-/// Bytes opened with the template they are recognised as.
+/// Bytes opened with the template they are recognised as, from their front and
+/// their end.
 fn open_bytes(bytes: Vec<u8>, name: &str) -> Open {
-    let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
-    let template = formats::sniff(head, bytes.len() as u64).unwrap_or_else(|| panic!("{name} is not recognised"));
+    let template = sniffed(&bytes).unwrap_or_else(|| panic!("{name} is not recognised"));
     let ev = Evaluator::new(formats::builtin(template).unwrap());
     Open { doc: Document::new(MemSource(bytes.clone())), ev, bytes }
+}
+
+/// What a file is recognised as, from the window at its front and the one at
+/// its end, as the web app asks.
+fn sniffed(bytes: &[u8]) -> Option<&'static str> {
+    let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
+    let tail = &bytes[bytes.len().saturating_sub(formats::SNIFF_TAIL_WINDOW)..];
+    formats::sniff_ends(head, tail, bytes.len() as u64)
 }
 
 macro_rules! open_or_skip {
@@ -403,7 +411,8 @@ fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
         out.extend(name.as_bytes());
         out.extend(*data);
         fixed(0x0201_4b50, &mut central);
-        central.extend([0u8; 12]);
+        // The comment's length, the disk, and the two attribute fields.
+        central.extend([0u8; 10]);
         central.extend(at.to_le_bytes());
         central.extend(name.as_bytes());
     }
@@ -444,11 +453,29 @@ fn bounds(v: &[f64]) -> Option<(f64, f64)> {
     Some((v.iter().cloned().fold(f64::MAX, f64::min), v.iter().cloned().fold(f64::MIN, f64::max)))
 }
 
+/// Where the dataset's files are: `dataset` itself when the archive stores
+/// every file, and the stream they are joined in, which keeps the node's name,
+/// when it packed any.
+fn dataset_at(f: &mut Open) -> Vec<&'static str> {
+    match joined(f) {
+        true => vec!["dataset", "dataset"],
+        false => vec!["dataset"],
+    }
+}
+
+/// Whether the dataset's files are joined into one stream, whose one child
+/// keeps the stream's name, rather than placed in the archive.
+fn joined(f: &mut Open) -> bool {
+    let at = f.at(&["dataset"]);
+    f.node(&at).child_count == 1 && f.node(&[&at[..], &[0]].concat()).name == "dataset"
+}
+
 /// Checks every block of the variable `name` in step `s`'s metadata against
 /// what ADIOS2 reads.
 fn check_variable(f: &mut Open, s: usize, name: &str, shape: &str, data_type: &str, blocks: &[Block], placed: bool) {
     let step = s.to_string();
-    let data = ["dataset", "md_0", "0", &step, "blocks", "metadata", "data"];
+    let dataset = dataset_at(f);
+    let data = [&dataset[..], &["md_0", "0", &step, "blocks", "metadata", "data"]].concat();
     let field = variable_field(f, &data, name).unwrap_or_else(|| panic!("no {name} in step {s}"));
     let var = [&data[..], &[field.as_str()]].concat();
     assert_eq!(f.text(&[&var[..], &["variable", "variable"]].concat()), name);
@@ -489,34 +516,41 @@ fn check_variable(f: &mut Open, s: usize, name: &str, shape: &str, data_type: &s
 #[test]
 fn a_bp5_directory_in_a_zip_reads_each_variable_as_adios2_does() {
     let mut f = open_or_skip!("steps.bp5.zip");
-    assert_eq!(f.get(&["dataset", "md_0", "0"]).child_count, 2);
+    check_dataset(&mut f);
+}
+
+/// Every variable and attribute of `steps.bp5` read out of an archive of it,
+/// as ADIOS2 reads them.
+fn check_dataset(f: &mut Open) {
+    let ds = dataset_at(f);
+    assert_eq!(f.get(&[&ds[..], &["md_0", "0"]].concat()).child_count, 2);
     for s in 0..2 {
         let step = s.to_string();
-        assert_eq!(f.int(&["dataset", "md_0", "0", &step, "data_offset"]), [0, 4096][s]);
+        assert_eq!(f.int(&[&ds[..], &["md_0", "0", &step, "data_offset"]].concat()), [0, 4096][s]);
         let t = temperature(s);
         let halves = [block(&[2, 3], Some(&[0, 0]), bounds(&t[..6]), t[..6].to_vec()), block(&[2, 3], Some(&[2, 0]), bounds(&t[6..]), t[6..].to_vec())];
-        check_variable(&mut f, s, "temperature", "global array", "double", &halves, true);
+        check_variable(f, s, "temperature", "global array", "double", &halves, true);
         let p = pressure(s);
-        check_variable(&mut f, s, "pressure", "global array", "float", &[block(&[6], Some(&[0]), bounds(&p), p.clone())], true);
+        check_variable(f, s, "pressure", "global array", "float", &[block(&[6], Some(&[0]), bounds(&p), p.clone())], true);
         let i = ids(s);
-        check_variable(&mut f, s, "ids", "local array", "uint64", &[block(&[5], None, bounds(&i), i.clone())], true);
+        check_variable(f, s, "ids", "local array", "uint64", &[block(&[5], None, bounds(&i), i.clone())], true);
         let small = vec![-1.0, 0.0, 1.0 + s as f64];
-        check_variable(&mut f, s, "small", "global array", "char", &[block(&[3], Some(&[0]), None, small)], true);
+        check_variable(f, s, "small", "global array", "char", &[block(&[3], Some(&[0]), None, small)], true);
         let u16s = vec![1.0, 2.0, 3.0, 65535.0 - s as f64];
-        check_variable(&mut f, s, "u16", "global array", "uint16", &[block(&[2, 2], Some(&[0, 0]), bounds(&u16s), u16s.clone())], true);
+        check_variable(f, s, "u16", "global array", "uint16", &[block(&[2, 2], Some(&[0, 0]), bounds(&u16s), u16s.clone())], true);
         let wave = vec![1.0, 2.0, -3.5, s as f64];
-        check_variable(&mut f, s, "wave", "global array", "complex double", &[block(&[2], Some(&[0]), None, wave)], true);
-        let data = ["dataset", "md_0", "0", &step, "blocks", "metadata", "data"];
+        check_variable(f, s, "wave", "global array", "complex double", &[block(&[2], Some(&[0]), None, wave)], true);
+        let data = [&ds[..], &["md_0", "0", &step, "blocks", "metadata", "data"]].concat();
         assert_eq!(f.int(&[&data[..], &["BPg_step_count"]].concat()), 10 + s as i128);
         assert_eq!(f.text(&[&data[..], &["BPg_label", "text", "text"]].concat()), format!("step {s}"));
     }
     // `late` is written in the second step only, in the third format.
-    assert!(variable_field(&mut f, &["dataset", "md_0", "0", "0", "blocks", "metadata", "data"], "late").is_none());
-    check_variable(&mut f, 1, "late", "global array", "int16", &[block(&[3], Some(&[0]), Some((-7.0, 9.0)), vec![-7.0, 8.0, 9.0])], true);
+    assert!(variable_field(f, &[&ds[..], &["md_0", "0", "0", "blocks", "metadata", "data"]].concat(), "late").is_none());
+    check_variable(f, 1, "late", "global array", "int16", &[block(&[3], Some(&[0]), Some((-7.0, 9.0)), vec![-7.0, 8.0, 9.0])], true);
 
     // The attributes, in the first step's attribute block, each named with its
     // type in front.
-    let attrs = ["dataset", "md_0", "0", "0", "blocks", "attributes", "data"];
+    let attrs = [&ds[..], &["md_0", "0", "0", "blocks", "attributes", "data"]].concat();
     let prim = [&attrs[..], &["PrimAttrs", "values", "values"]].concat();
     assert_eq!(f.get(&prim).child_count, 2);
     let mut numbers = std::collections::BTreeMap::new();
@@ -597,4 +631,261 @@ fn a_bp5_zip_without_its_data_file_reads_the_blocks_without_values() {
     let mut f = open_bytes(zip, "a zip without mmd.0");
     let data = f.get(&["dataset", "md_0", "0", "0", "blocks", "metadata", "data"]);
     assert!(data.doc.unwrap_or_default().contains("mmd.0"));
+}
+
+/// The files of `steps.bp5` as the stored sample archive holds them, in its
+/// order: `md.idx`, `mmd.0`, `md.0` and `data.0`, each under the folder's name.
+fn bp5_files() -> Option<Vec<(String, Vec<u8>)>> {
+    let bytes = std::fs::read(sample("steps.bp5.zip")?).unwrap();
+    let (mut out, mut at) = (Vec::new(), 0usize);
+    while bytes[at..at + 4] == *b"PK\x03\x04" {
+        let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]) as usize;
+        let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+        let (size, name_length, extra_length) = (u32_at(at + 18), u16_at(at + 26), u16_at(at + 28));
+        let name = String::from_utf8(bytes[at + 30..at + 30 + name_length].to_vec()).unwrap();
+        let data_at = at + 30 + name_length + extra_length;
+        out.push((name, bytes[data_at..data_at + size].to_vec()));
+        at = data_at + size;
+    }
+    Some(out)
+}
+
+macro_rules! files_or_skip {
+    () => {
+        match bp5_files() {
+            Some(files) => files,
+            None => {
+                eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+                return;
+            }
+        }
+    };
+}
+
+/// How a test archive writes an entry.
+#[derive(Clone, Copy, PartialEq)]
+enum Method {
+    Stored,
+    /// Deflated, with its sizes and sum in the header.
+    Deflated,
+    /// Deflated as a stream: nought in the header, and the sizes and sum in a
+    /// data descriptor after the data, as a writer piping its output does.
+    Streamed,
+}
+
+/// A ZIP of `files`, each written as `Method` says, in the order given, then
+/// the central directory and the end record.
+fn zip_of(files: &[(&str, &[u8], Method)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, data, how) in files {
+        let at = out.len() as u32;
+        let crc = qubero_core::checksum::crc32(data);
+        let packed = match how {
+            Method::Stored => data.to_vec(),
+            _ => miniz_oxide::deflate::compress_to_vec(data, 6),
+        };
+        let (flags, method): (u16, u16) = match how {
+            Method::Stored => (0, 0),
+            Method::Deflated => (0, 8),
+            Method::Streamed => (8, 8),
+        };
+        let streamed = *how == Method::Streamed;
+        let header = |v: &mut Vec<u8>, sizes: bool| {
+            v.extend(flags.to_le_bytes());
+            v.extend(method.to_le_bytes());
+            v.extend(0u16.to_le_bytes());
+            v.extend(0x21u16.to_le_bytes());
+            let (c, p, u) = if sizes { (crc, packed.len() as u32, data.len() as u32) } else { (0, 0, 0) };
+            v.extend(c.to_le_bytes());
+            v.extend(p.to_le_bytes());
+            v.extend(u.to_le_bytes());
+            v.extend((name.len() as u16).to_le_bytes());
+            v.extend(0u16.to_le_bytes());
+        };
+        out.extend(0x0403_4b50u32.to_le_bytes());
+        out.extend(20u16.to_le_bytes());
+        header(&mut out, !streamed);
+        out.extend(name.as_bytes());
+        out.extend(&packed);
+        if streamed {
+            out.extend(0x0807_4b50u32.to_le_bytes());
+            out.extend(crc.to_le_bytes());
+            out.extend((packed.len() as u32).to_le_bytes());
+            out.extend((data.len() as u32).to_le_bytes());
+        }
+        central.extend(0x0201_4b50u32.to_le_bytes());
+        central.extend(20u16.to_le_bytes());
+        central.extend(20u16.to_le_bytes());
+        header(&mut central, true);
+        // The comment's length, the disk, and the two attribute fields.
+        central.extend([0u8; 10]);
+        central.extend(at.to_le_bytes());
+        central.extend(name.as_bytes());
+    }
+    let (cd_at, cd_len) = (out.len() as u32, central.len() as u32);
+    out.extend(central);
+    out.extend(0x0605_4b50u32.to_le_bytes());
+    out.extend([0u8; 4]);
+    out.extend((files.len() as u16).to_le_bytes());
+    out.extend((files.len() as u16).to_le_bytes());
+    out.extend(cd_len.to_le_bytes());
+    out.extend(cd_at.to_le_bytes());
+    out.extend(0u16.to_le_bytes());
+    out
+}
+
+/// `bytes` with `n` bytes that do not compress added at the end. A data file
+/// longer than it needs to be reads the same: every block is at the offset the
+/// metadata gives, and nothing reads past the last.
+fn padded(bytes: &[u8], n: usize) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    out.extend((0..n).map(|_| {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x as u8
+    }));
+    out
+}
+
+/// A BP5 directory whose files a ZIP deflated reads as the stored one does:
+/// every variable, block, bound and value, from the files unpacked and joined.
+#[test]
+fn a_bp5_directory_in_a_deflated_zip_reads_each_variable_as_adios2_does() {
+    let files = files_or_skip!();
+    let entries: Vec<_> = files.iter().map(|(n, d)| (n.as_str(), d.as_slice(), Method::Deflated)).collect();
+    let zip = zip_of(&entries);
+    let head = &zip[..zip.len().min(formats::SNIFF_WINDOW)];
+    assert_eq!(formats::sniff(head, zip.len() as u64), Some("adioszip"), "a deflated md.idx is told from the front");
+    let mut f = open_bytes(zip, "a deflated zip");
+    assert!(joined(&mut f), "the files are joined into one stream");
+    check_dataset(&mut f);
+}
+
+/// Entries written as streams, whose headers say nothing of their sizes, read
+/// the same: each file is as long as the descriptor after it says.
+#[test]
+fn a_bp5_directory_in_a_streamed_zip_reads_each_variable_as_adios2_does() {
+    let files = files_or_skip!();
+    let entries: Vec<_> = files.iter().map(|(n, d)| (n.as_str(), d.as_slice(), Method::Streamed)).collect();
+    let mut f = open_bytes(zip_of(&entries), "a streamed zip");
+    assert_eq!(f.ev.template().name, "adioszip");
+    check_dataset(&mut f);
+}
+
+/// A data file larger than the window recognition reads, written first as a
+/// writer that lists the folder in name order does: the front shows nothing of
+/// the dataset, and the central directory names it. Stored or deflated, with
+/// the other files deflated after it.
+#[test]
+fn a_bp5_zip_with_a_large_data_file_first_is_told_from_its_central_directory() {
+    let files = files_or_skip!();
+    let data = padded(&files[3].1, 3 * formats::SNIFF_WINDOW);
+    for data_method in [Method::Stored, Method::Deflated] {
+        let mut entries = vec![(files[3].0.as_str(), data.as_slice(), data_method)];
+        entries.extend(files[..3].iter().map(|(n, d)| (n.as_str(), d.as_slice(), Method::Deflated)));
+        let zip = zip_of(&entries);
+        let head = &zip[..formats::SNIFF_WINDOW];
+        assert_eq!(formats::sniff(head, zip.len() as u64), Some("zip"), "the front is all data.0");
+        assert_eq!(sniffed(&zip), Some("adioszip"));
+        let mut f = open_bytes(zip, "a zip with data.0 first");
+        check_dataset(&mut f);
+    }
+    // And with every file stored, the dataset is read where the archive keeps
+    // it, so a byte of the archive is still a field of the dataset.
+    let mut entries = vec![(files[3].0.as_str(), data.as_slice(), Method::Stored)];
+    entries.extend(files[..3].iter().map(|(n, d)| (n.as_str(), d.as_slice(), Method::Stored)));
+    let mut f = open_bytes(zip_of(&entries), "a stored zip with data.0 first");
+    assert!(!joined(&mut f), "every file is stored, so none is joined");
+    check_dataset(&mut f);
+}
+
+/// Archives of `steps.bp5` made by other writers read as the stored one does:
+/// Python's `zipfile` deflating every file in sorted order, `data.0` first,
+/// and Info-ZIP's `zip -r`, which adds an entry for the folder itself and, on
+/// Windows, a security descriptor to every file.
+#[test]
+fn a_bp5_directory_zipped_by_other_writers_reads_each_variable_as_adios2_does() {
+    for name in ["steps.bp5.deflated.zip", "steps.bp5.info-zip.zip"] {
+        let mut f = open_or_skip!(name);
+        assert_eq!(f.ev.template().name, "adioszip", "{name}");
+        assert!(joined(&mut f), "{name} deflates its files");
+        check_dataset(&mut f);
+    }
+}
+
+/// `zip -r` of a dataset whose data file is a megabyte, written first and
+/// deflated to more than the front recognition reads: the central directory
+/// names the dataset, and every value of both steps reads as ADIOS2 wrote it.
+#[test]
+fn a_bp5_zip_whose_data_file_hides_the_rest_from_the_front_reads_every_value() {
+    let Some(path) = sample("grid.bp5.info-zip.zip") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(formats::sniff(&bytes[..formats::SNIFF_WINDOW], bytes.len() as u64), Some("zip"));
+    let mut f = open_bytes(bytes, "grid.bp5.info-zip.zip");
+    assert_eq!(f.ev.template().name, "adioszip");
+    let ds = dataset_at(&mut f);
+    for s in 0..2 {
+        let step = s.to_string();
+        let data = [&ds[..], &["md_0", "0", &step, "blocks", "metadata", "data"]].concat();
+        // One number written as an array of one, which is a global array.
+        let n = 100.0 + s as f64;
+        check_variable(&mut f, s, "count", "global array", "int32", &[block(&[1], Some(&[0]), Some((n, n)), vec![n])], true);
+        let field = variable_field(&mut f, &data, "field").expect("a field variable");
+        let block = [&data[..], &[field.as_str(), "blocks", "0"]].concat();
+        assert_eq!(f.reals(&[&block[..], &["count"]].concat()), [256.0, 256.0]);
+        let (min, max) = (s as f64, 65535.0 * 0.5 + s as f64);
+        assert_eq!((f.reals(&[&block[..], &["min"]].concat()), f.reals(&[&block[..], &["max"]].concat())), (vec![min], vec![max]));
+        let values = [&block[..], &["values", "values"]].concat();
+        assert_eq!(f.get(&values).child_count, 256, "rows");
+        for row in [0usize, 97, 255] {
+            let want: Vec<f64> = (0..256).map(|c| (row * 256 + c) as f64 * 0.5 + s as f64).collect();
+            assert_eq!(f.reals(&[&values[..], &[&row.to_string()]].concat()), want, "step {s} row {row}");
+        }
+    }
+}
+
+/// An archive of files that only share names with a dataset's is not taken
+/// for one by its end, and one folder's `md.idx` does not make a dataset of
+/// another folder's `mmd.0` and `md.0`.
+#[test]
+fn names_in_the_central_directory_make_a_dataset_only_together() {
+    let big = padded(&[], 2 * formats::SNIFF_WINDOW);
+    let zip = zip_of(&[("big.bin", &big, Method::Stored), ("a/md.idx", b"x", Method::Stored), ("b/mmd.0", b"x", Method::Stored), ("a/md.0", b"x", Method::Stored)]);
+    assert_eq!(sniffed(&zip), Some("zip"));
+    let zip = zip_of(&[("big.bin", &big, Method::Stored), ("a/md.idx", b"x", Method::Stored), ("a/mmd.0", b"x", Method::Stored), ("a/md.0", b"x", Method::Stored)]);
+    assert_eq!(sniffed(&zip), Some("adioszip"));
+    let zip = zip_of(&[("big.bin", &big, Method::Stored), ("store.zarr/.zgroup", b"{}", Method::Deflated)]);
+    assert_eq!(sniffed(&zip), Some("zarrzip"));
+}
+
+/// A file of the dataset packed with a method nothing here unpacks stays bytes
+/// at its entry in the archive, saying so, and the files that do read still
+/// read: here `md.0` claims deflate64, so its records are not read, while the
+/// index and the formats are.
+#[test]
+fn a_bp5_file_packed_with_a_method_not_unpacked_stays_bytes_saying_why() {
+    let files = files_or_skip!();
+    let entries: Vec<_> = files.iter().map(|(n, d)| (n.as_str(), d.as_slice(), Method::Deflated)).collect();
+    let mut zip = zip_of(&entries);
+    // The third local header is md.0's, and its method is at byte 8. The
+    // central directory's copy is left: the dataset reads the local records.
+    let mut at = 0usize;
+    for _ in 0..2 {
+        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
+        let name = u16::from_le_bytes([zip[at + 26], zip[at + 27]]) as usize;
+        at += 30 + name + size;
+    }
+    zip[at + 8..at + 10].copy_from_slice(&9u16.to_le_bytes());
+    let mut f = open_bytes(zip, "a zip with a deflate64 md.0");
+    let ds = dataset_at(&mut f);
+    let unread = f.get(&[&ds[..], &["md_0", "md_0"]].concat());
+    let doc = unread.doc.unwrap_or_default();
+    assert!(doc.contains("deflate64"), "{doc:?} on {}", unread.type_name);
+    assert_eq!(f.get(&[&ds[..], &["md_idx", "md_idx", "records"]].concat()).child_count, 3);
 }

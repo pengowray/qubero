@@ -170,8 +170,11 @@ struct Member {
     /// The field's description, which is what its row says it was laid out
     /// from.
     path: Vec<usize>,
-    /// Where the name's own bytes are, in bits of the first space, when they
-    /// are in it: what a BP5 name's parts are read from.
+    /// Where the name's own bytes are, in bits of the space `mmd.0` is read in:
+    /// what a BP5 name's parts are read from. A dataset reads `md.0` in the
+    /// same space as `mmd.0`, the archive or the stream its files are joined
+    /// in, so the parts are placed from the front of the space the record is
+    /// in.
     name_at: Option<u64>,
 }
 
@@ -203,7 +206,7 @@ fn read_formats(table: &mut dyn Descriptions, list: &[usize]) -> R<Vec<Format>> 
                 let ty = table.text(&type_path)?;
                 let size = int_at(table, &f, &["size"])?.unwrap_or(0);
                 let offset = int_at(table, &f, &["offset"])?.unwrap_or(-1);
-                let name_at = (named.space == 0).then_some(named.offset_bits);
+                let name_at = Some(named.offset_bits);
                 members.push(Member { name, ty, size, offset, path: f, name_at });
             }
         }
@@ -404,7 +407,7 @@ impl Builder<'_> {
             let len = if compressed { nth("DataBlockSize", index()) } else { E::field("element_count").mul(E::lit(size)) };
             let values = if compressed { T::bytes(E::Remaining) } else { shaped(vt, E::field("element_count"), E::field("row_length")) };
             let at = E::field(DATA_AT).add(E::field(DATA_OFFSET)).add(E::field("location"));
-            fields.push(("values", T::at(at, T::sized(len, values))));
+            fields.push(("values", T::at_space(at, T::sized(len, values))));
         }
         let mut block = T::structure_named("Bp5Block", "", "", fields)
             .machinery(&["index", "element_count", "row_length"])
@@ -559,7 +562,7 @@ impl Variable {
     /// The name's parts as fields reading the name's own bytes.
     fn parts(&self) -> Vec<(&'static str, T)> {
         let Some(at) = self.at else { return Vec::new() };
-        let place = |from: usize, ty: T| T::at(E::lit(at + from as i128), ty);
+        let place = |from: usize, ty: T| T::at_space(E::lit(at + from as i128), ty);
         let mut out = vec![("shape", place(self.shape, T::enumeration("Bp5Shape", T::u8(), SHAPES)))];
         if let Some((from, n)) = self.expression {
             out.push(("expression", place(from, T::utf8(E::lit(n as i128)))));
