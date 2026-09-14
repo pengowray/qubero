@@ -355,11 +355,13 @@ impl Image {
     /// and blank value it was quantized with where the table has columns for
     /// them.
     pub fn row(&self, bytes: &[u8]) -> Row {
+        // A cell too short for one element, as a repeat of 0 leaves it, is no
+        // cell.
         let descriptor = |c: &Column| -> Option<(u64, u64)> {
             let cell = c.cell(bytes)?;
             match c.code {
-                b'P' => Some((u64::from(be_u32(&cell[0..4])), u64::from(be_u32(&cell[4..8])))),
-                b'Q' => Some((be_u64(&cell[0..8]), be_u64(&cell[8..16]))),
+                b'P' => Some((u64::from(be_u32(cell.get(0..4)?)), u64::from(be_u32(cell.get(4..8)?)))),
+                b'Q' => Some((be_u64(cell.get(0..8)?), be_u64(cell.get(8..16)?))),
                 _ => None,
             }
         };
@@ -367,17 +369,17 @@ impl Image {
             let c = self.column(name)?;
             let cell = c.cell(bytes)?;
             match c.code {
-                b'D' => Some(f64::from_bits(be_u64(cell))),
-                b'E' => Some(f64::from(f32::from_bits(be_u32(cell)))),
+                b'D' => Some(f64::from_bits(be_u64(cell.get(0..8)?))),
+                b'E' => Some(f64::from(f32::from_bits(be_u32(cell.get(0..4)?)))),
                 _ => None,
             }
         };
         let blank = self.column("ZBLANK").and_then(|c| {
             let cell = c.cell(bytes)?;
             match c.code {
-                b'J' => Some(i64::from(be_u32(cell) as i32)),
-                b'K' => Some(be_u64(cell) as i64),
-                b'I' => Some(i64::from(u16::from_be_bytes([cell[0], cell[1]]) as i16)),
+                b'J' => Some(i64::from(be_u32(cell.get(0..4)?) as i32)),
+                b'K' => Some(be_u64(cell.get(0..8)?) as i64),
+                b'I' => Some(i64::from(i16::from_be_bytes(cell.get(0..2)?.try_into().ok()?))),
                 _ => None,
             }
         });
@@ -1305,6 +1307,45 @@ mod tests {
         assert_eq!((after.place, after.zscale), (None, None));
         assert_eq!(place(&["99999999999999999999PB".into()]).place, None);
         assert_eq!(place(&["1PB".into()]).place, Some(Place { stored: Stored::Compressed, count: 4, offset: 4, elem: b'B' }));
+    }
+
+    /// A corrupt header can give a column a repeat of 0, so its cell has no
+    /// bytes. That is no cell: the row has no place in it, and its scale, zero
+    /// point and blank are the header's keywords.
+    #[test]
+    fn a_cell_too_short_for_one_element_is_no_cell() {
+        // Every four bytes of the row say 4.
+        let bytes: Vec<u8> = [0, 0, 0, 4].repeat(16);
+        let row = |columns: &[(&str, &str)]| {
+            let mut lines = vec![
+                "ZBITPIX =                  -32".to_string(),
+                "ZSCALE  =                  2.5".into(),
+                "ZZERO   =                  1.5".into(),
+                "ZBLANK  =                   -5".into(),
+                format!("TFIELDS = {:20}", columns.len()),
+            ];
+            for (n, (name, form)) in columns.iter().enumerate() {
+                lines.push(format!("TTYPE{}  = '{name}'", n + 1));
+                lines.push(format!("TFORM{}  = '{form}'", n + 1));
+            }
+            let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+            Image::from_cards(&cards(&refs)).unwrap().row(&bytes)
+        };
+        for form in ["0PB", "0QB"] {
+            let r = row(&[("COMPRESSED_DATA", form)]);
+            assert_eq!((r.place, r.has_data_column), (None, true), "{form}");
+        }
+        // An empty column takes no bytes, so the next one starts where it does.
+        let r = row(&[("COMPRESSED_DATA", "0PB"), ("GZIP_COMPRESSED_DATA", "1PB")]);
+        assert_eq!(r.place, Some(Place { stored: Stored::Gzip, count: 4, offset: 4, elem: b'B' }));
+        for form in ["0D", "0E"] {
+            let r = row(&[("ZSCALE", form), ("ZZERO", form)]);
+            assert_eq!((r.zscale, r.zzero), (Some(2.5), Some(1.5)), "{form}");
+        }
+        for form in ["0J", "0K", "0I"] {
+            assert_eq!(row(&[("ZBLANK", form)]).zblank, Some(-5), "{form}");
+        }
+        assert_eq!(row(&[("ZBLANK", "1J")]).zblank, Some(4));
     }
 
     /// `ZDITHER0` can be any 64-bit number, and the first random number a tile
