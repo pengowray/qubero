@@ -24,8 +24,10 @@ use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats::{root, root_tree};
 use qubero_core::source::MemSource;
 
-/// The header's fields, and the record each of the last three places.
-const DIRECTORY: [usize; 2] = [16, 0];
+/// The header's fields, and the record each of the last three places. The
+/// class descriptions are declared before the directory, so that every object
+/// under the directory can walk back to them.
+const DIRECTORY: [usize; 2] = [17, 0];
 /// A record's own fields: twelve of key, and then whatever it holds.
 const K_FIELDS: usize = 12;
 
@@ -915,4 +917,174 @@ fn rntuple_pages_read_as_the_values_uproot_reads() {
         eprintln!("--- {file}: {before} bytes named without the page lists, {after} with, of {}", d.len_bytes());
         assert!(after > before, "{file}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Streamed objects, read by the template with the class descriptions the file
+// carries. The side reader above is the oracle: it reads the same bytes with
+// hand-written code, and the two have to agree wherever both answer.
+
+/// Where the header places the `StreamerInfo` record.
+const STREAMER: [usize; 2] = [16, 0];
+
+/// Down from `from` a name at a time, through a field that points elsewhere
+/// and into what a stream holds, the way a path in the template goes. A list's
+/// element is named by its index.
+fn go(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> Option<Vec<usize>> {
+    let mut p = from.to_vec();
+    for name in names {
+        inside(d, ev, &mut p);
+        match name.parse::<usize>() {
+            Ok(i) => p.push(i),
+            Err(_) => p = ev.child_named(d, &p, name).ok()??,
+        }
+    }
+    inside(d, ev, &mut p);
+    Some(p)
+}
+
+/// Step from a field of no bits to the one thing it holds, where it is one.
+fn inside(d: &Document<MemSource>, ev: &mut Evaluator, p: &mut Vec<usize>) {
+    while let Ok(node) = ev.node(d, p) {
+        let pointing = node.type_name.starts_with("at \u{2192}") || node.type_name.starts_with("joined");
+        if !pointing || node.child_count != 1 {
+            break;
+        }
+        p.push(0);
+    }
+}
+
+fn text(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> String {
+    let Some(p) = go(d, ev, from, names) else { return String::new() };
+    match ev.node(d, &p).map(|n| n.value) {
+        Ok(Value::Str(s)) => s,
+        _ => String::new(),
+    }
+}
+
+fn int(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> Option<i128> {
+    let p = go(d, ev, from, names)?;
+    ev.node(d, &p).ok()?.value.as_int()
+}
+
+/// The class descriptions as the template reads them, in the shape the side
+/// reader lists them in.
+fn template_classes(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<root_tree::Class> {
+    let list = go(d, ev, &STREAMER, &["object", "members", "elements"]).expect("the StreamerInfo list");
+    let n = ev.node(d, &list).unwrap().child_count as usize;
+    let mut out = Vec::new();
+    for i in 0..n {
+        let entry = [list.as_slice(), &[i]].concat();
+        if text(d, ev, &entry, &["class_name"]) != "TStreamerInfo" {
+            continue;
+        }
+        let info = go(d, ev, &entry, &["object", "members"]).expect("a description");
+        let name = text(d, ev, &info, &["TNamed", "members", "fName", "text"]);
+        let version = int(d, ev, &info, &["fClassVersion"]).unwrap_or(0) as i32;
+        let checksum = int(d, ev, &info, &["fCheckSum"]).unwrap_or(0) as u32;
+        let mut members = Vec::new();
+        if let Some(elements) = go(d, ev, &info, &["fElements", "object", "members", "elements"]) {
+            let m = ev.node(d, &elements).unwrap().child_count as usize;
+            for j in 0..m {
+                let item = [elements.as_slice(), &[j]].concat();
+                let kind = text(d, ev, &item, &["class_name"]);
+                let own = go(d, ev, &item, &["object", "members"]).expect("an element");
+                // What every element class has, which is in its base.
+                let base: &[&str] = match kind.as_str() {
+                    "TStreamerSTLstring" => &["TStreamerSTL", "members", "TStreamerElement", "members"],
+                    _ => &["TStreamerElement", "members"],
+                };
+                fn joined<'a>(base: &[&'a str], more: &[&'a str]) -> Vec<&'a str> {
+                    base.iter().chain(more).copied().collect()
+                }
+                let at = |more: &[&'static str]| joined(base, more);
+                let type_name = text(d, ev, &own, &at(&["fTypeName", "text"]));
+                let is_base = kind == "TStreamerBase" || type_name == "BASE";
+                let dims = match is_base {
+                    true => Vec::new(),
+                    false => {
+                        let n = int(d, ev, &own, &at(&["fArrayDim"])).unwrap_or(0).clamp(0, 5) as usize;
+                        (0..n)
+                            .map(|k| {
+                                let k = k.to_string();
+                                int(d, ev, &own, &joined(base, &["fMaxIndex", &k])).unwrap_or(0) as i32
+                            })
+                            .collect()
+                    }
+                };
+                members.push(root_tree::Member {
+                    name: text(d, ev, &own, &at(&["TNamed", "members", "fName", "text"])),
+                    type_name,
+                    code: int(d, ev, &own, &at(&["fType"])).unwrap_or(-1) as i32,
+                    size: int(d, ev, &own, &at(&["fSize"])).unwrap_or(0) as i32,
+                    dims,
+                    base: is_base,
+                    comment: text(d, ev, &own, &at(&["TNamed", "members", "fTitle", "text"])),
+                });
+            }
+        }
+        out.push(root_tree::Class { name, version, checksum, members });
+    }
+    out
+}
+
+/// Every sample's class descriptions, read by the template as the streamed
+/// objects they are, come to what the side reader lists. That is the bootstrap
+/// classes (`TList`, `TStreamerInfo` and the element classes, which no file
+/// describes) checked against `root_streamer`'s hand-written reading of the
+/// same bytes, and it is what every object the file describes is built from.
+#[test]
+fn the_streamer_info_record_reads_as_the_classes_the_side_reader_lists() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (d, contents) = contents_of(&folder, &name);
+        let mut ev = Evaluator::new(root());
+        let classes = template_classes(&d, &mut ev);
+        assert!(!classes.is_empty(), "{name}: no classes");
+        assert_eq!(classes.len(), contents.classes.len(), "{name}");
+        for (got, want) in classes.iter().zip(&contents.classes) {
+            assert_eq!(got, want, "{name}: {}", want.name);
+        }
+        eprintln!("--- {name}: {} classes read the same both ways", classes.len());
+        checked += 1;
+    }
+    assert!(checked >= 8, "only {checked} samples read");
+}
+
+/// The first `TStreamerInfo` in the list spells its class out; the second
+/// writes where that spelling is, counted from the start of the key, and the
+/// template reads that as a field placed back at the first one's name.
+#[test]
+fn a_second_object_of_a_class_reads_its_name_from_where_the_first_spelled_it() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (d, mut ev) = rntuple_sample(&folder, "uproot-Zmumu-lz4.root");
+    let list = go(&d, &mut ev, &STREAMER, &["object", "members", "elements"]).expect("the list");
+    let first = ev.child_named(&d, &[list.as_slice(), &[0]].concat(), "class_name").unwrap().expect("a name");
+    let spelled = ev.node(&d, &first).unwrap();
+    assert_eq!(spelled.value, Value::Str("TStreamerInfo".into()));
+    assert_eq!(spelled.type_name, "cstr");
+
+    let second = ev.child_named(&d, &[list.as_slice(), &[1]].concat(), "class_name").unwrap().expect("a name");
+    let pointer = ev.node(&d, &second).unwrap();
+    assert!(pointer.type_name.starts_with("at \u{2192}"), "{}", pointer.type_name);
+    assert_eq!(pointer.size_bits, 0);
+    let named = ev.node(&d, &[second.as_slice(), &[0]].concat()).unwrap();
+    assert_eq!(named.value, Value::Str("TStreamerInfo".into()));
+    // The same bytes the first entry spelled, in the same space.
+    assert_eq!((named.offset_bits, named.space), (spelled.offset_bits, spelled.space));
+    // And the object is read as that class for it.
+    let object = go(&d, &mut ev, &list, &["1", "object"]).expect("an object");
+    assert_eq!(ev.node(&d, &object).unwrap().type_name, "TStreamerInfo");
 }

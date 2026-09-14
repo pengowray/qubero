@@ -27,27 +27,34 @@
 //! fixed depth: nothing in a ROOT file stops a directory pointing back at one
 //! that holds it, and a template has no memory of where it has been.
 //!
-//! What is left as bytes. A record's contents, once past the compression
-//! header, are the streamed form of whatever C++ class wrote them, and reading
-//! those needs the class descriptions in `StreamerInfo`, which are themselves
-//! written that way. So a `TTree`'s branches and baskets are not taken apart
-//! here: the record is placed, named, measured, and what is inside the
-//! compressed stream is left whole. The stream itself is not: a `ZL` block
-//! holds a zlib stream, an `XZ` block a whole xz stream with its own index and
-//! footer, a `ZS` block a zstd frame, and each is read by the template that
-//! format already has here. `L4` is the odd one, and is read here rather than
-//! borrowed: ROOT writes an eight-byte checksum and then a bare LZ4 block, not
-//! an LZ4 frame, so there is no magic number and no frame header to read.
+//! A record's contents, once past the compression header, are the streamed
+//! form of whatever C++ class wrote them, and reading those needs the class
+//! descriptions in `StreamerInfo`, which are themselves written that way. The
+//! blocks are read as the streams they are: a `ZL` block holds a zlib stream,
+//! an `XZ` block a whole xz stream with its own index and footer, a `ZS` block
+//! a zstd frame, and each is read by the template that format already has
+//! here. `L4` is the odd one, and is read here rather than borrowed: ROOT
+//! writes an eight-byte checksum and then a bare LZ4 block, not an LZ4 frame,
+//! so there is no magic number and no frame header to read.
+//!
+//! What the blocks come to, joined, is the record's `object`, and that is read
+//! with the descriptions: every object is a [`Ty::Schema`](crate::template::Ty::Schema)
+//! node, and [`schema`] is the builder that makes a structure of a class out
+//! of what `StreamerInfo` says about it. Which is why `streamer_info` is
+//! declared before `directory` in the header: a walk to the descriptions
+//! starts from a field declared before the object asking, and every object in
+//! the file is under the directory.
 //!
 //! An RNTuple is the exception to all of that. Its anchor is the one streamed
 //! object in it, and everything the anchor points at is a format of its own
 //! with a published layout, read field by field in [`rntuple`]: the header and
 //! footer envelopes, the page lists, and every page, placed in the file.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Endian::*, Expr as E, Step, Template, Ty as T, Until};
 use super::{xz, zlib, zstd};
 
 mod rntuple;
+mod schema;
 
 /// The two letters a compressed block opens with, read as one big-endian
 /// sixteen-bit number. `CS` is the zlib of ROOT 3 and before, which nothing
@@ -204,9 +211,41 @@ fn body() -> T {
     )
 }
 
-/// Any record reached by a key: the key, and the bytes it covers.
+/// Any record reached by a key: the key, the bytes it covers, and the object
+/// those bytes come to.
 fn record() -> T {
-    with_key("Record", "fName", "body", vec![("body", body())])
+    with_key("Record", "fName", "body", vec![("body", body()), ("object", object())])
+}
+
+/// The object a record holds, read as the class its key names.
+///
+/// Joined rather than read inside a block: ROOT compresses in blocks of at
+/// most sixteen mebibytes unpacked, so a large object runs across several and
+/// only the blocks joined are the object. What each block comes to is the
+/// part, measured by the size its header gives rather than by unpacking it, and
+/// the whole is cut at `fObjlen`. A record written as it stands is one part,
+/// its own body.
+///
+/// The object is where the positions in it count from. A class name written
+/// once and referred back to later is referred to by where it was in these
+/// bytes, which is what the origin says.
+fn object() -> T {
+    let size = E::field("fNbytes").sub(E::field("fKeylen"));
+    let packed = size.less_than(E::field("fObjlen"));
+    let object = || T::origin(schema::object_of(E::within(&["fClassName", "text"])));
+    T::switch(
+        packed,
+        vec![(
+            1,
+            T::stitched(
+                vec![Step::field("body"), Step::each(), Step::stream()],
+                Some(E::field("uncompressed_size")),
+                Some(E::field("fObjlen")),
+                object(),
+            ),
+        )],
+        T::stitched(vec![Step::field("body")], None, Some(E::field("fObjlen")), object()),
+    )
 }
 
 /// The record at `fBEGIN`. Its contents are the file's own name and title
@@ -471,14 +510,20 @@ pub fn root() -> Template {
             // anyone has written, so what is between them reads as a gap. The
             // three fields below take up no room where they stand: each one
             // places a record somewhere else in the file.
-            ("directory", T::at(E::field("fBEGIN"), T::Named("FileRecord".into()))),
+            //
+            // The class descriptions come first although they are near the end
+            // of the file, because every object under the directory is read
+            // with them and a walk to them starts from a field declared before
+            // the object asking.
             ("streamer_info", at_if_set("fSeekInfo", T::Named("Record".into()))),
+            ("directory", T::at(E::field("fBEGIN"), T::Named("FileRecord".into()))),
             ("free_list", at_if_set("fSeekFree", T::Named("FreeRecord".into()))),
         ],
     )
     .machinery(&["large", "fUnits"]);
 
     let mut t = Template::new("root", header)
+        .with_schema(schema::KIND, schema::builder())
         .with_type("FileRecord", file_record())
         .with_type("Record", record())
         .with_type("RNTupleRecord", rntuple_record())
@@ -670,8 +715,8 @@ pub(super) mod tests {
     /// record as its one child, which is the extra `0` in every path here.
     const F_VERSION: usize = 1;
     const F_UUID: usize = 15;
-    const DIRECTORY: [usize; 2] = [16, 0];
-    const STREAMER: [usize; 2] = [17, 0];
+    const STREAMER: [usize; 2] = [16, 0];
+    const DIRECTORY: [usize; 2] = [17, 0];
     const FREE: [usize; 2] = [18, 0];
     /// A record's own fields: twelve of key, and then whatever it holds.
     const K_FIELDS: usize = 12;

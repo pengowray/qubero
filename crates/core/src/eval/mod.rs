@@ -1829,7 +1829,7 @@ impl Evaluator {
                     if hops > 64 {
                         return fail(format!("a {kind} schema was built as another schema with nothing in between"));
                     }
-                    let built = self.schema_type(doc, path, &kind, &table, &key, (offset, limit))?;
+                    let built = self.schema_type(doc, path, &kind, &table, &key, (offset, limit), declared_size.is_some())?;
                     ty = built.ty.clone();
                 }
                 other => {

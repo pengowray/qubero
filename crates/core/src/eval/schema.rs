@@ -182,7 +182,9 @@ impl Evaluator {
 
     /// What the builder of `kind` makes of the node at `path`, which starts at
     /// `offset` and may read to `limit`: kept from before where it was built
-    /// before, and built now where it was not.
+    /// before, and built now where it was not. `windowed` says a `Sized` round
+    /// the node has settled how long it is, which is what lets a build that
+    /// fails read as bytes rather than fail the node.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn schema_type<S: Source>(
         &mut self,
@@ -192,6 +194,7 @@ impl Evaluator {
         table: &Arc<[Step]>,
         key: &[KeyPart],
         here: (u64, u64),
+        windowed: bool,
     ) -> R<Arc<Built>> {
         let Some(builder) = self.template.schemas.get(&**kind).cloned() else {
             return fail(format!("nothing in this template builds a {kind} schema"));
@@ -221,6 +224,19 @@ impl Evaluator {
             // Waiting for bytes, or out of go: the walk is kept and the build
             // is asked again.
             Err(e) if e.interrupted() => return Err(e),
+            // A node whose room is already settled reads as that room's bytes,
+            // with the reason on it, rather than failing: the window was
+            // measured by something outside the description, and what is
+            // after it is still where it was. A ROOT object's members are
+            // this, inside the byte count that says how long the object is,
+            // and a class the file does not describe is one object's worth of
+            // bytes and not a broken record. Not kept, since a build asked
+            // from somewhere that can see more of the file may come out.
+            Err(EvalError::Failed(why)) if windowed => {
+                self.list_mut(path).gather = None;
+                let unbuilt = Ty::structure(&builder.key_text(&key), vec![("bytes", Ty::bytes(Expr::Remaining))]).doc(&why);
+                return Ok(Arc::new(Built::by_heart(unbuilt)));
+            }
             Err(e) => {
                 self.list_mut(path).gather = None;
                 return Err(e);
