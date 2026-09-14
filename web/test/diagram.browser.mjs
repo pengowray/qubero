@@ -33,6 +33,10 @@ const cases = [
   { file: join(samples, "cdrom/hello-mode1.bin"), template: "iso9660", shot: "diagram-iso.png", fitShot: "diagram-iso-fit.png" },
 ];
 
+/** How much of its end two arrows into one row may share. Past this they are
+ *  two lines drawn over each other rather than a fan into one place. */
+const MERGE_STUB = 14;
+
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 try {
   for (const c of cases) {
@@ -59,15 +63,28 @@ try {
       return boxes.length > 1 && new Set(boxes.map((b) => b.style.left)).size > 1;
     }, { timeout: 20000 });
     // The fonts settle in a rebuild of their own; measuring before that would
-    // measure the fallback font's rows.
+    // measure the fallback font's rows. The layout runs in a worker, so the
+    // boxes are on screen before the arrows are: wait for the arrows too, and
+    // for the picture to stop changing, before measuring any of it.
     await page.evaluate(() => document.fonts.ready);
-    await page.waitForTimeout(300);
+    // Settled, not merely started: the census arriving and the fonts loading
+    // each set the whole picture off again, and the layout runs in a worker, so
+    // a count taken the moment the first arrows appear is a count of a drawing
+    // about to be thrown away.
+    let was = -1;
+    for (let tries = 0; tries < 60; tries++) {
+      await page.waitForTimeout(500);
+      const now = await page.evaluate(() => document.querySelectorAll(".dv-edge path").length);
+      if (now > 0 && now === was) break;
+      was = now;
+    }
     const found = await page.evaluate(() => {
       const boxes = [...document.querySelectorAll(".dv-box")];
       const rows = [...document.querySelectorAll(".dv-row")];
       const edges = [...document.querySelectorAll(".dv-edge path")];
       const labels = [...document.querySelectorAll(".dv-edge-label")];
       const stage = document.querySelector(".dv-stage");
+      const all = shapes();
       return {
         boxes: boxes.length,
         rows: rows.length,
@@ -80,8 +97,9 @@ try {
         note: document.querySelector(".dv-note")?.textContent ?? "",
         stage: stage === null ? null : [stage.style.width, stage.style.height],
         overlaps: overlapping(boxes),
-        ...endpointDrift(),
-        worstChannel: channelLoad(),
+        ...endpointDrift(all),
+        ...crossings(all),
+        ...worstShared(all),
         overlappingLabels: labelClashes(),
         // What the census put on the drawing: how many boxes the file has none
         // of, how many carry a count, and the biggest count shown.
@@ -112,11 +130,52 @@ try {
         return n;
       }
 
+      // Every arrow as the straight pieces it is made of, plus the little
+      // arcs where it steps over another. The paths are `M`, `L` and `A` only,
+      // which is what an orthogonal route with hops looks like.
+      function shapes() {
+        const out = [];
+        for (const [i, path] of [...document.querySelectorAll(".dv-edge path")].entries()) {
+          const d = (path.getAttribute("d") || "").trim();
+          const pts = [];
+          const hops = [];
+          let at = null;
+          for (const m of d.matchAll(/([MLA])\s+([-\d.\s]+)/g)) {
+            const n = m[2].trim().split(/\s+/).map(Number);
+            if (m[1] === "A") {
+              // `A r r 0 0 sweep x y`: the arc is the hop, and where it lands
+              // is where the line carries on from.
+              const to = { x: n[5], y: n[6] };
+              if (at !== null) hops.push({ x: (at.x + to.x) / 2, y: at.y });
+              at = to;
+              pts.push(to);
+              continue;
+            }
+            at = { x: n[0], y: n[1] };
+            pts.push(at);
+          }
+          const segs = [];
+          for (let k = 1; k < pts.length; k++) {
+            const a = pts[k - 1];
+            const b = pts[k];
+            const horizontal = Math.abs(a.y - b.y) <= 0.6;
+            const vertical = Math.abs(a.x - b.x) <= 0.6;
+            // A piece that is neither is the arc's own chord, which is not a
+            // run and is not counted as one.
+            if (!horizontal && !vertical) continue;
+            if (Math.abs(a.x - b.x) < 0.6 && Math.abs(a.y - b.y) < 0.6) continue;
+            segs.push({ owner: i, horizontal, a, b });
+          }
+          out.push({ owner: i, pts, segs, hops });
+        }
+        return out;
+      }
+
       // How far each arrow's ends sit from the nearest row middle of the box
       // they touch, in stage units. An arrow that leaves two rows above the row
       // it is about says a connection the format does not have, and that is a
       // number rather than something to spot in a picture.
-      function endpointDrift() {
+      function endpointDrift(all) {
         const stage = document.querySelector(".dv-stage");
         if (stage === null) return { worstDrift: -1, driftOver3: -1 };
         const k = new DOMMatrixReadOnly(getComputedStyle(stage).transform).a || 1;
@@ -131,17 +190,9 @@ try {
         });
         let worst = 0;
         let over = 0;
-        for (const path of document.querySelectorAll(".dv-edge path")) {
-          const d = (path.getAttribute("d") || "").replace(/\s+/g, " ");
-          const start = /^M ([-\d.]+) ([-\d.]+)/.exec(d);
-          const end = /H ([-\d.]+)$/.exec(d);
-          const vs = [...d.matchAll(/V ([-\d.]+)/g)];
-          const lastV = vs[vs.length - 1];
-          if (start === null) continue;
-          const ends = [{ x: +start[1], y: +start[2] }];
-          if (end !== null && lastV !== undefined) ends.push({ x: +end[1], y: +lastV[1] });
-          for (const p of ends) {
-            if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+        for (const e of all) {
+          for (const p of [e.pts[0], e.pts[e.pts.length - 1]]) {
+            if (p === undefined || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
             let best = Infinity;
             for (const b of geom) {
               // The box this end touches: the one whose left or right edge it
@@ -157,18 +208,80 @@ try {
         return { worstDrift: Math.round(worst * 10) / 10, driftOver3: over };
       }
 
-      // The most arrows sharing one vertical run. One lane per edge is the
-      // point of the lane allocation; several on one x is the bundle it
-      // replaced.
-      function channelLoad() {
-        const at = new Map();
-        for (const path of document.querySelectorAll(".dv-edge path")) {
-          for (const m of (path.getAttribute("d") || "").matchAll(/H ([-\d.]+) V/g)) {
-            const x = Math.round(parseFloat(m[1]));
-            at.set(x, (at.get(x) ?? 0) + 1);
+      // The longest stretch two different arrows run along together, counted
+      // twice: for arrows that end in different places, and for arrows that end
+      // in the same one.
+      //
+      // The first is the fault the lanes never fixed, and is what must not
+      // happen: two lines on the same y for a hundred pixels are one line as
+      // far as a reader is concerned, and they are going to different places.
+      // The second is a fan into one row, which is several arrows arriving at
+      // one field and is a true picture of that; they have to share the
+      // approach because the field is one place.
+      function worstShared(all) {
+        let apart = 0;
+        let together = 0;
+        const segs = all.flatMap((e) => e.segs.map((x) => ({ ...x, start: e.pts[0], end: e.pts[e.pts.length - 1] })));
+        for (let i = 0; i < segs.length; i++) {
+          for (let j = i + 1; j < segs.length; j++) {
+            const a = segs[i];
+            const b = segs[j];
+            if (a.owner === b.owner || a.horizontal !== b.horizontal) continue;
+            let run = 0;
+            if (a.horizontal) {
+              if (Math.abs(a.a.y - b.a.y) > 1) continue;
+              const lo = Math.max(Math.min(a.a.x, a.b.x), Math.min(b.a.x, b.b.x));
+              const hi = Math.min(Math.max(a.a.x, a.b.x), Math.max(b.a.x, b.b.x));
+              run = hi - lo;
+            } else {
+              if (Math.abs(a.a.x - b.a.x) > 1) continue;
+              const lo = Math.max(Math.min(a.a.y, a.b.y), Math.min(b.a.y, b.b.y));
+              const hi = Math.min(Math.max(a.a.y, a.b.y), Math.max(b.a.y, b.b.y));
+              run = hi - lo;
+            }
+            if (run <= 0) continue;
+            // Sharing a run is a fan when the two arrows also share the place
+            // they leave from or the place they arrive at: several arrows out
+            // of one field, or into one field, have to share that end.
+            const near = (u, v) => u !== undefined && v !== undefined && Math.abs(u.x - v.x) < 1.5 && Math.abs(u.y - v.y) < 1.5;
+            const same = near(a.end, b.end) || near(a.start, b.start);
+            if (same) together = Math.max(together, run);
+            else apart = Math.max(apart, run);
           }
         }
-        return at.size === 0 ? 0 : Math.max(...at.values());
+        return {
+          worstShared: Math.round(Math.max(0, apart) * 10) / 10,
+          worstSharedFanIn: Math.round(Math.max(0, together) * 10) / 10,
+        };
+      }
+
+      // Every place a horizontal run of one arrow crosses a vertical run of
+      // another, and whether the horizontal one steps over it. A crossing drawn
+      // as two lines meeting reads as a join, which on this diagram is the one
+      // thing it must never say.
+      function crossings(all) {
+        let total = 0;
+        let missing = 0;
+        for (const e of all) {
+          for (const h of e.segs.filter((x) => x.horizontal)) {
+            const y = h.a.y;
+            const lo = Math.min(h.a.x, h.b.x);
+            const hi = Math.max(h.a.x, h.b.x);
+            for (const other of all) {
+              if (other.owner === e.owner) continue;
+              for (const v of other.segs.filter((x) => !x.horizontal)) {
+                const x = v.a.x;
+                if (x <= lo + 1 || x >= hi - 1) continue;
+                if (y <= Math.min(v.a.y, v.b.y) + 1 || y >= Math.max(v.a.y, v.b.y) - 1) continue;
+                total++;
+                // Within one arc's width: two crossings closer than that share
+                // a single hop, which is the drawing's own rule.
+                if (!e.hops.some((p) => Math.abs(p.x - x) <= 9 && Math.abs(p.y - y) < 3)) missing++;
+              }
+            }
+          }
+        }
+        return { crossings: total, crossingsWithoutHop: missing };
       }
 
       // Pairs of role words drawn over each other.
@@ -296,6 +409,14 @@ try {
     // the wrong field.
     assert(found.worstDrift >= 0 && found.worstDrift <= 3, `arrow ends drift ${found.worstDrift} from their rows`);
     assert.equal(found.driftOver3, 0, "some arrow ends are not on a row");
+    // Two arrows running along each other for longer than the stub two sharing
+    // one row port are allowed: that is the fault the lanes never fixed.
+    assert(
+      found.worstShared <= MERGE_STUB,
+      `two arrows going to different places share ${found.worstShared} units of one line`,
+    );
+    // And every crossing steps over, so none of them reads as a join.
+    assert.equal(found.crossingsWithoutHop, 0, `${found.crossingsWithoutHop} of ${found.crossings} crossings have no hop`);
     await page.close();
   }
   console.log("screenshots in", outDir);
