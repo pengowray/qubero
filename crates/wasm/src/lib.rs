@@ -780,11 +780,11 @@ enum ExplainDto {
     },
     Tile {
         /// Which tile of a FITS compressed image, counted from 0 as its row
-        /// is, of how many; where it starts in the image, from 0 along each
-        /// axis with the first axis first; how many pixels along each; and the
-        /// image's shape.
+        /// is, of how many (null for more than a u64 counts); where it starts
+        /// in the image, from 0 along each axis with the first axis first; how
+        /// many pixels along each; and the image's shape.
         index: f64,
-        count: f64,
+        count: Option<f64>,
         start: Vec<f64>,
         shape: Vec<f64>,
         image_shape: Vec<f64>,
@@ -796,11 +796,11 @@ enum ExplainDto {
         decoded: f64,
         /// Each step in order. `skipped` is never set.
         steps: Vec<PageStepDto>,
-        /// The first pixels, how many were decoded, how many the tile has,
-        /// and what one pixel is.
+        /// The first pixels, how many were decoded, how many the tile has
+        /// (null for more than a u64 counts), and what one pixel is.
         values: Vec<String>,
         total: f64,
-        pixels: f64,
+        pixels: Option<f64>,
         element_type: String,
         problem: String,
     },
@@ -1481,7 +1481,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             problem,
         } => ExplainDto::Tile {
             index: index as f64,
-            count: tiles as f64,
+            count: tiles.map(|n| n as f64),
             start: floats(start),
             shape: floats(shape),
             image_shape: floats(image_shape),
@@ -1491,7 +1491,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
             decoded: decoded_bytes as f64,
             values,
             total: total as f64,
-            pixels: pixels as f64,
+            pixels: pixels.map(|n| n as f64),
             element_type,
             problem: problem.unwrap_or_default(),
             steps: steps

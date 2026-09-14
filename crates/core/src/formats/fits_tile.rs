@@ -320,12 +320,23 @@ impl Image {
         self.shape.iter().zip(&self.tile_shape).map(|(n, t)| n.div_ceil((*t).max(1))).collect()
     }
 
-    /// How many tiles the image is cut into, or `u64::MAX` for more than that.
-    pub fn tiles(&self) -> u64 {
+    /// How many tiles the image is cut into, or `None` for more than a `u64`
+    /// counts, which only an [invalid](Image::invalid) header says.
+    pub fn tiles(&self) -> Option<u64> {
         if self.shape.is_empty() {
-            return 0;
+            return Some(0);
         }
-        self.tiles_along().iter().fold(1, |n, along| n.saturating_mul(*along))
+        product(&self.tiles_along())
+    }
+
+    /// Why no file could hold the image the header describes, when none could:
+    /// it is more pixels than a `u64` counts. A tile is no more pixels than the
+    /// image and there are no more tiles than pixels, so a header that passes
+    /// this counts both.
+    pub fn invalid(&self) -> Option<String> {
+        product(&self.shape).is_none().then(|| {
+            format!("Not unpacked: the header is invalid. ZNAXISn say the image is {} pixels, more than 2^64 in all.", dims(&self.shape))
+        })
     }
 
     /// Where tile `index` starts, counted from 0 along each axis, and how many
@@ -488,9 +499,9 @@ pub enum Kind {
 /// A tile, decompressed, and what it took.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tile {
-    /// Which tile, of how many.
+    /// Which tile, of how many: `None` for more than a `u64` counts.
     pub index: u64,
-    pub tiles: u64,
+    pub tiles: Option<u64>,
     /// Where it starts in the image, from 0 along each axis, and how many
     /// pixels it has along each. And how many the whole image has along each.
     pub start: Vec<u64>,
@@ -516,9 +527,9 @@ pub struct Tile {
 
 impl Tile {
     /// How many pixels the tile has, whether or not they were all decoded, or
-    /// `u64::MAX` for more than that, which is over [`PIXEL_LIMIT`].
-    pub fn pixel_count(&self) -> u64 {
-        self.shape.iter().fold(1, |n, along| n.saturating_mul(*along))
+    /// `None` for more than a `u64` counts.
+    pub fn pixel_count(&self) -> Option<u64> {
+        product(&self.shape)
     }
 
     /// One pixel as a panel writes it.
@@ -536,15 +547,14 @@ impl Tile {
 /// read from where the row's descriptor points, are `data`.
 pub fn decode(image: &Image, index: u64, row: &Row, data: &[u8]) -> Tile {
     let mut tile = unread(image, index, row, data.len(), None);
-    let pixels = tile.pixel_count();
-    if pixels > PIXEL_LIMIT {
-        tile.problem = Some(format!(
-            "Not unpacked: the tile is {}, over this viewer's limit of {} pixels.",
-            pixel_word(pixels),
-            commas(PIXEL_LIMIT)
-        ));
+    if tile.problem.is_some() {
         return tile;
     }
+    let Some(pixels) = tile.pixel_count().filter(|n| *n <= PIXEL_LIMIT) else {
+        let pixels = tile.pixel_count().map_or_else(|| format!("{} pixels", dims(&tile.shape)), pixel_word);
+        tile.problem = Some(format!("Not unpacked: the tile is {pixels}, over this viewer's limit of {} pixels.", commas(PIXEL_LIMIT)));
+        return tile;
+    };
     let pixels = pixels as usize;
     let Some(place) = row.place else {
         tile.problem = Some(if row.has_data_column {
@@ -609,7 +619,9 @@ fn stopped(tile: &mut Tile, what: &str, in_bytes: usize) {
 
 /// A tile whose bytes were not decompressed: where it is and what it is, and
 /// `problem` to say why not. What a caller answers with for a tile it would
-/// not read, so that a panel still says which tile and how large.
+/// not read, so that a panel still says which tile and how large. An
+/// [invalid](Image::invalid) header is the problem instead, since whatever else
+/// went wrong follows from it.
 pub fn unread(image: &Image, index: u64, row: &Row, packed_bytes: usize, problem: Option<String>) -> Tile {
     let (start, shape) = image.tile_box(index);
     let (kind, element_type) = image_type(image.zbitpix);
@@ -627,7 +639,7 @@ pub fn unread(image: &Image, index: u64, row: &Row, packed_bytes: usize, problem
         kind,
         pixels: Vec::new(),
         element_type: element_type.to_string(),
-        problem,
+        problem: image.invalid().or(problem),
     }
 }
 
@@ -635,7 +647,7 @@ pub fn unread(image: &Image, index: u64, row: &Row, packed_bytes: usize, problem
 pub fn unreadable(problem: String) -> Tile {
     Tile {
         index: 0,
-        tiles: 0,
+        tiles: Some(0),
         start: Vec::new(),
         shape: Vec::new(),
         image_shape: Vec::new(),
@@ -1053,6 +1065,20 @@ fn pixel_word(n: u64) -> String {
     plural(n, "pixel", "pixels")
 }
 
+/// How many there are of something counted along each axis, or `None` for
+/// more than a `u64` counts. None along any axis is none at all.
+fn product(along: &[u64]) -> Option<u64> {
+    if along.contains(&0) {
+        return Some(0);
+    }
+    along.iter().try_fold(1u64, |n, a| n.checked_mul(*a))
+}
+
+/// Lengths along each axis as a panel writes them: `440 Ã— 300`.
+fn dims(along: &[u64]) -> String {
+    along.iter().map(|n| commas(*n)).collect::<Vec<_>>().join(" Ã— ")
+}
+
 fn be_u32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
@@ -1235,19 +1261,18 @@ mod tests {
             "END",
         ]);
         let image = Image::from_cards(&c).unwrap();
-        assert_eq!(image.tiles(), 12);
+        assert_eq!(image.tiles(), Some(12));
         assert_eq!(image.tile_box(0), (vec![0, 0], vec![20, 16]));
         assert_eq!(image.tile_box(2), (vec![40, 0], vec![10, 16]));
         assert_eq!(image.tile_box(11), (vec![40, 48], vec![10, 12]));
         assert_eq!((image.blocksize, image.bytepix), (32, 4));
     }
 
-    /// A corrupt header can give axes and tiles, or a column's repeat, that
-    /// multiply to more than a count holds. The count is then the largest
-    /// there is: more tiles than can be numbered, a tile over the pixel limit,
-    /// and a cell past the end of its row.
+    /// A corrupt header can give axes that multiply to more pixels than a
+    /// `u64` counts, and so tiles, or a tile, of more than one counts. The
+    /// header is invalid, and the tile is still placed and described.
     #[test]
-    fn a_count_too_large_to_hold_is_the_largest_there_is() {
+    fn an_image_of_more_pixels_than_a_u64_counts_is_invalid() {
         let square = |side: u64, tile: u64| {
             let lines = [
                 "ZBITPIX =                    8".to_string(),
@@ -1269,15 +1294,27 @@ mod tests {
             zblank: None,
             quantized: false,
         };
+        let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 Ã— 1,099,511,627,776 pixels, more than 2^64 in all.";
         // Tiles of one pixel, 2^80 of them.
-        let image = square(1 << 40, 1);
-        assert_eq!(image.tiles(), u64::MAX);
-        assert_eq!(unread(&image, 0, &row, 4, None).tiles, u64::MAX);
-        // One tile of 2^80 pixels.
-        let t = decode(&square(1 << 40, 1 << 40), 0, &row, &[1, 2, 3, 4]);
-        assert_eq!((t.tiles, t.pixel_count()), (1, u64::MAX));
-        assert_eq!(t.problem.as_deref(), Some("Not unpacked: the tile is 18,446,744,073,709,551,615 pixels, over this viewer's limit of 16,777,216 pixels."));
+        let t = decode(&square(1 << 40, 1), 5, &row, &[1, 2, 3, 4]);
+        assert_eq!((t.tiles, t.pixel_count(), t.start, t.problem.as_deref()), (None, Some(1), vec![5, 0], Some(invalid)));
+        assert!(t.pixels.is_empty());
+        // One tile of 2^80 pixels, and a problem found after the header.
+        let t = unread(&square(1 << 40, 1 << 40), 0, &row, 4, Some("past the heap".into()));
+        assert_eq!((t.tiles, t.pixel_count(), t.problem.as_deref()), (Some(1), None, Some(invalid)));
+        // A header that stays inside a u64, whose tile is over the limit.
+        let t = decode(&square(1 << 31, 1 << 31), 0, &row, &[1, 2, 3, 4]);
+        assert_eq!((t.tiles, t.pixel_count()), (Some(1), Some(1 << 62)));
+        assert_eq!(t.problem.as_deref(), Some("Not unpacked: the tile is 4,611,686,018,427,387,904 pixels, over this viewer's limit of 16,777,216 pixels."));
+        // None along an axis is no pixels, however many the others multiply to.
+        assert_eq!(product(&[1 << 40, 1 << 40, 0]), Some(0));
+    }
 
+    /// A corrupt header can give a column's repeat that is more bytes than a
+    /// count holds. The column is as wide as a count goes, so its cell is past
+    /// the end of the row.
+    #[test]
+    fn a_column_too_wide_to_count_has_no_cell_in_the_row() {
         // A column whose repeat is more bytes than a count holds, of each
         // width, as the data column and as a column before it. And one whose
         // repeat is more than a count holds before it is multiplied at all.

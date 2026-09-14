@@ -250,7 +250,7 @@ fn every_tile(doc: &Document<MemSource>, ev: &mut Evaluator, hdu: usize) -> (u64
     for t in 0..rows as usize {
         let tile = ev.fits_tile(doc, &[0, hdu, 3, ROWS, t]).unwrap().expect("a tile");
         assert_eq!(tile.problem, None, "hdu {hdu} tile {t}: {:?}", tile.steps);
-        assert_eq!(tile.pixels.len() as u64, tile.pixel_count(), "hdu {hdu} tile {t}");
+        assert_eq!(Some(tile.pixels.len() as u64), tile.pixel_count(), "hdu {hdu} tile {t}");
         if image.is_empty() {
             let n = ev.node(doc, &[0, hdu, 3, 1]).unwrap().child_count as usize;
             shape = (0..n).map(|i| ev.node(doc, &[0, hdu, 3, 1, i]).unwrap().value.as_int().unwrap() as u64).collect();
@@ -404,9 +404,9 @@ fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
         else {
             panic!("not a tile at {path:?}");
         };
-        assert_eq!((index, tiles, start, shape, image_shape), (1, 6, vec![25, 0], vec![25, 20], vec![50, 60]));
+        assert_eq!((index, tiles, start, shape, image_shape), (1, Some(6), vec![25, 0], vec![25, 20], vec![50, 60]));
         assert_eq!((algorithm.as_str(), column, element_type.as_str(), problem), ("RICE_1", Some("COMPRESSED_DATA"), "f32", None));
-        assert_eq!((values.len(), total, pixels), (32, 500, 500));
+        assert_eq!((values.len(), total, pixels), (32, 500, Some(500)));
         assert_eq!(steps.len(), 3);
         // The pixels are written as the 32-bit floats they are, the way
         // astropy prints them.

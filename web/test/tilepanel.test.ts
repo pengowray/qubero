@@ -44,6 +44,22 @@ test("the tile's index counts from 0 and its ordinal and coordinates from 1", ()
   assert.equal(tileNote(info({ pixels: 1, shape: [1, 1] })), "1 pixel");
 });
 
+test("an invalid header's tile is still placed, without a count it cannot hold", () => {
+  const side = 2 ** 40;
+  const problem = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, more than 2^64 in all.";
+  // Tiles of one pixel, more of them than a 64-bit count holds.
+  const tiles = info({ count: null, index: 5, start: [5, 0], shape: [1, 1], image_shape: [side, side], pixels: 1, problem });
+  assert.equal(
+    tileLine(tiles),
+    "Tile [5]: 1 × 1 pixels, first pixel at (6, 1) in the 1,099,511,627,776 × 1,099,511,627,776 image (pixel coordinates: axis 1 first, counting from 1)",
+  );
+  assert.equal(tileNote(tiles), "1 pixel");
+  // One tile of more pixels than a 64-bit count holds.
+  const pixels = info({ count: 1, index: 0, start: [0, 0], shape: [side, side], image_shape: [side, side], pixels: null, problem });
+  assert.equal(tileNote(pixels), "");
+  assert.match(tileLine(pixels) ?? "", /^Tile \[0\], the 1st of 1: 1,099,511,627,776 × 1,099,511,627,776 pixels, /);
+});
+
 test("an image whose header would not read says only why", () => {
   const bad = info({ count: 0, problem: "Not unpacked: the header has no ZBITPIX keyword, so the pixel type is unknown." });
   assert.equal(tileLine(bad), null);

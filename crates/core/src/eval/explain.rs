@@ -285,9 +285,9 @@ pub enum Explain {
     /// file as it stands. See [`fits_tile`].
     FitsTile {
         /// Which tile, counted from 0 as its row is, and how many the image
-        /// has.
+        /// has: `None` for more than a `u64` counts, which the problem says.
         index: u64,
-        tiles: u64,
+        tiles: Option<u64>,
         /// Where the tile starts in the image, from 0 along each axis, how
         /// many pixels it has along each, and the image's own shape.
         start: Vec<u64>,
@@ -303,10 +303,10 @@ pub enum Explain {
         /// Every step, in the order it was done.
         steps: Vec<fits_tile::Step>,
         /// The first pixels, as text, how many pixels were decoded, and how
-        /// many the tile has.
+        /// many the tile has: `None` for more than a `u64` counts.
         values: Vec<String>,
         total: u64,
-        pixels: u64,
+        pixels: Option<u64>,
         /// What one pixel is: `i16`, `f32`.
         element_type: String,
         /// Why fewer pixels than the tile has came out, or none.

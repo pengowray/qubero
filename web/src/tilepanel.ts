@@ -15,23 +15,26 @@ import { countText, ordinal } from "./strings.ts";
 import { bytesChange, firstValues, line, problemLine, stepList } from "./steplist.ts";
 
 /** How many pixels the tile has, for the note beside the heading. From the
- *  tile's shape, so it shows even when nothing was decompressed. */
+ *  tile's shape, so it shows even when nothing was decompressed. Nothing when
+ *  there are too many to count; the problem says why. */
 export function tileNote(info: TileInfo): string {
-  if (info.count === 0) return "";
+  if (info.count === 0 || info.pixels === null) return "";
   return countText(info.pixels, "pixel");
 }
 
 /** Which tile, and where it sits in the image. The index is the listing's
  *  own, counted from 0 as the rows are; the ordinal beside it counts from 1,
- *  as do the pixel coordinates. Null for an image whose header would not
- *  read. */
+ *  as do the pixel coordinates. The ordinal is left out, rather than written
+ *  without its total, when there are more tiles than a count holds. Null for
+ *  an image whose header would not read. */
 export function tileLine(info: TileInfo): string | null {
   if (info.count === 0) return null;
   const shape = info.shape.map((n) => n.toLocaleString()).join(" × ");
   const at = info.start.map((n) => (n + 1).toLocaleString()).join(", ");
   const image = info.image_shape.map((n) => n.toLocaleString()).join(" × ");
+  const which = info.count === null ? "" : `, the ${ordinal(info.index + 1)} of ${info.count.toLocaleString()}`;
   return (
-    `Tile [${info.index}], the ${ordinal(info.index + 1)} of ${info.count.toLocaleString()}: ` +
+    `Tile [${info.index}]${which}: ` +
     `${shape} pixels, first pixel at (${at}) in the ${image} image (pixel coordinates: axis 1 first, counting from 1)`
   );
 }

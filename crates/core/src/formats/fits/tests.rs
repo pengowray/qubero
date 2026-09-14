@@ -880,11 +880,11 @@ fn a_tile_placed_past_what_bits_can_count_is_refused() {
     }
 }
 
-/// A corrupt header can give axes and tiles whose product, or a data column
-/// whose width, is more than a count holds. The tile still reads, with the
-/// count as the largest there is, instead of overflowing.
+/// A corrupt header can give axes whose product is more pixels, and so tiles
+/// or a tile of more, than a u64 counts, or a data column wider than one
+/// counts bytes. The tile is still placed and described, and not unpacked.
 #[test]
-fn a_tile_whose_header_counts_past_a_u64_still_reads() {
+fn a_tile_whose_header_counts_past_a_u64_is_described_and_not_unpacked() {
     let tile = |cards: &[String]| {
         let (d, mut ev) = eval(one_tile(8, 1, None, cards));
         ev.fits_tile(&d, &[0, 1, 3]).unwrap().expect("a tile")
@@ -896,13 +896,13 @@ fn a_tile_whose_header_counts_past_a_u64_still_reads() {
         cards.extend([1, 2].map(|n| format!("ZTILE{n}  = {tile:20}")));
         cards
     };
+    let invalid = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 Ã— 1,099,511,627,776 pixels, more than 2^64 in all.";
     // Tiles of one pixel, 2^80 of them.
     let t = tile(&square(1));
-    assert_eq!((t.tiles, t.pixel_count(), t.problem), (u64::MAX, 1, None));
-    // One tile of 2^80 pixels, which is over the limit.
+    assert_eq!((t.tiles, t.pixel_count(), t.shape, t.packed_bytes, t.problem.as_deref()), (None, Some(1), vec![1, 1], 4, Some(invalid)));
+    // One tile of 2^80 pixels.
     let t = tile(&square(1 << 40));
-    assert_eq!((t.tiles, t.pixel_count()), (1, u64::MAX));
-    assert!(t.problem.unwrap().starts_with("Not unpacked: the tile is 18,446,744,073,709,551,615 pixels, over this viewer's limit"));
+    assert_eq!((t.tiles, t.pixel_count(), t.problem.as_deref()), (Some(1), None, Some(invalid)));
     // A data column 2^64 bytes wide has no cell in the row, so no bytes.
     let t = tile(&["TFORM1  = '2305843009213693952PB'".to_string()]);
     assert_eq!(t.problem.as_deref(), Some("Not unpacked: this tile's row has no bytes in COMPRESSED_DATA, GZIP_COMPRESSED_DATA or UNCOMPRESSED_DATA."));
