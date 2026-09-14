@@ -231,12 +231,12 @@ fn record() -> T {
 /// A tree split into sub-branches keeps those in each branch's own list, as
 /// deep as it was split, and a `TBranchElement` keeps its baskets in the
 /// `TBranch` it has as a base class. So the walk does not name the way down: it
-/// finds every `baskets` under the tree's object, at whatever depth, in the
+/// finds every `basket_refs` under the tree's object, at whatever depth, in the
 /// order a walk down through the object meets them. That puts a split branch's
 /// sub-branches before its own baskets, which in every file that splits one is
 /// none.
 fn tree_record() -> T {
-    let to_baskets = vec![Step::field("object"), Step::deep("baskets"), Step::each()];
+    let to_baskets = vec![Step::field("object"), Step::deep("basket_refs"), Step::each()];
     let baskets = T::gather(
         to_baskets,
         E::field("seek"),
@@ -342,7 +342,7 @@ fn leaf_values() -> T {
                 then(
                     // A leaf counted by another points at it; nothing, or the
                     // object holding it, is the tag 0 or 1.
-                    leaf(&["object", "members", "TLeaf", "members", "fLeafCount", "first"]).less_than(E::lit(2)),
+                    leaf(&["object", "members", "TLeaf", "members", "fLeafCount", "count_or_tag"]).less_than(E::lit(2)),
                     then(
                         E::lit(0).less_than(tleaf("fLen")).both(E::lit(0).less_than(width())),
                         width().mul(count()).less_or_equal(E::Remaining),

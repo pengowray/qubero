@@ -1445,15 +1445,15 @@ mod tests {
             Step::each(),
         ];
         let read = Ty::schema(
-            "root",
+            "streamers",
             table.clone(),
             vec![KeyPart::Text(E::within(&["fClassName", "text"])), KeyPart::Int(E::field("version").and(E::lit(0x3fff)))],
         );
         assert_eq!(
             inline(&read).as_deref(),
-            Some("schema(root from streamer_info.body[].(stream).members.elements[], key fClassName.text, version & 0x3fff)")
+            Some("schema(streamers from streamer_info.body[].(stream).members.elements[], key fClassName.text, version & 0x3fff)")
         );
-        let fixed = Ty::schema("root", table, vec![KeyPart::TextLit("TList".into())]);
+        let fixed = Ty::schema("streamers", table, vec![KeyPart::TextLit("TList".into())]);
         assert!(inline(&fixed).expect("one line").ends_with("key \"TList\")"));
         // The declared type says only that the file will say.
         assert_eq!(read.display_name(), "schema");

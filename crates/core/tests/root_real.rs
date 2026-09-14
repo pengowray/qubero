@@ -1214,7 +1214,7 @@ fn a_baskets_type_names_the_streamer_element_it_came_from() {
     let (_, _, e1) = &baskets[3];
     let origins = ev.origins(&d, e1).unwrap();
     let placed = origins.iter().find(|o| o.role == qubero_core::eval::Role::Position).expect("placed by a record");
-    assert_eq!(placed.label, "object.members.fBranches.members.elements[3].object.members.baskets[0]");
+    assert_eq!(placed.label, "object.members.fBranches.members.elements[3].object.members.basket_refs[0]");
     let record = placed.path.clone();
     assert_eq!(int(&d, &mut ev, &record, &["seek"]), Some(13371));
 

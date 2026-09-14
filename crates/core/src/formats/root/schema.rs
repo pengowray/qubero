@@ -32,7 +32,7 @@ use crate::formats::root_streamer::{bootstrap, Element};
 use crate::template::{Built, Endian::Big, Expr as E, KeyPart, KeyValue, SchemaBuilder, Step, Ty as T};
 
 /// The name the template's schema nodes give this builder.
-pub(super) const KIND: &str = "root";
+pub(super) const KIND: &str = "streamers";
 
 /// The tag a pointer writes in front of a class name it spells out, because
 /// this is the first object of the class in the record.
@@ -83,10 +83,10 @@ impl SchemaBuilder for Streamers {
             [KeyValue::Text(class)] => Ok(Built::by_heart(in_place(class))),
             [KeyValue::Text(_), KeyValue::Int(version)] if version & MEMBERWISE != 0 => Ok(Built::by_heart(
                 T::structure(&self.key_text(key), vec![("bytes", T::bytes(E::Remaining))])
-                    .doc("written one member at a time across the collection holding it, which is not read here"),
+                    .doc("Streamed member-wise by the collection holding it (each member for every element in turn). Not decoded; left as bytes."),
             )),
             [KeyValue::Text(class), KeyValue::Int(version)] => members(table, class, (version & VERSION) as i32),
-            _ => Err(EvalError::Failed("a ROOT object is keyed by its class, or its class and version".into())),
+            _ => Err(EvalError::Failed("a ROOT schema key must be a class name, or a class name and a version".into())),
         }
     }
 
@@ -123,8 +123,9 @@ fn tobject() -> T {
         "TObject",
         vec![
             ("version", T::u16(Big)),
-            // Bit 14 says four more bytes were written after the version.
-            ("extra", T::when(E::field("version").bit(14), T::bytes(E::lit(4)))),
+            // Bit 14 says the two bytes read as the version were the top of
+            // a byte count, and these are the rest of it and the version.
+            ("byte_count_rest", T::when(E::field("version").bit(14), T::bytes(E::lit(4)))),
             ("fUniqueID", T::u32(Big)),
             ("fBits", T::u32(Big)),
             // Bit 4 of the bits: something else holds a reference to this
@@ -132,7 +133,7 @@ fn tobject() -> T {
             ("pidf", T::when(E::field("fBits").and(E::lit(0x10)), T::u16(Big))),
         ],
     )
-    .machinery(&["extra", "pidf"])
+    .machinery(&["byte_count_rest", "pidf"])
 }
 
 /// What one element of a `TArray` is, by the letter the class ends with.
@@ -168,13 +169,13 @@ fn counted(class: &str) -> T {
         "",
         "members",
         vec![
-            ("count_raw", T::u32(Big)),
-            ("byte_count", T::computed(E::field("count_raw").and(E::lit(0x3fff_ffff)))),
+            ("byte_count_raw", T::u32(Big)),
+            ("byte_count", T::computed(E::field("byte_count_raw").and(E::lit(0x3fff_ffff)))),
             ("version", T::u16(Big)),
             ("members", T::sized(E::field("byte_count").sub(E::lit(2)), members.clone())),
         ],
     )
-    .machinery(&["count_raw", "byte_count"]);
+    .machinery(&["byte_count_raw", "byte_count"]);
     let without = T::structure_named(class, "", "members", vec![("version", T::u16(Big)), ("members", members)]);
     T::switch(E::peek(32, Big).bit(30), vec![(1, with_count)], without)
 }
@@ -192,11 +193,11 @@ fn counted(class: &str) -> T {
 /// A reference to an object is its four bytes and nothing more. Placing what
 /// is in a record never needs one followed.
 fn pointer_fields() -> Vec<(&'static str, T)> {
-    let first = || E::field("first");
+    let first = || E::field("count_or_tag");
     let counted = || first().bit(30).both(first().not_equal(E::lit(NEW_CLASS)));
     let tag = || E::cond(counted(), E::field("tag"), first());
     vec![
-        ("first", T::u32(Big)),
+        ("count_or_tag", T::u32(Big)),
         ("tag", T::when(counted(), T::u32(Big))),
         (
             "class_name",
@@ -215,7 +216,7 @@ fn pointer_fields() -> Vec<(&'static str, T)> {
         // so does this. Nothing a writer makes has one, since a reference is
         // written as its four bytes alone.
         (
-            "skipped",
+            "skipped_bytes",
             T::when(
                 counted().both(tag().bit(31).equal_to(E::lit(0))).both(E::lit(1).less_than(tag())),
                 T::bytes(first().and(E::lit(0x3fff_ffff)).sub(E::lit(4))),
@@ -226,7 +227,7 @@ fn pointer_fields() -> Vec<(&'static str, T)> {
 
 /// A pointer to an object, named by the class it points at.
 fn pointer() -> T {
-    T::structure_named("ObjectRef", "class_name", "object", pointer_fields()).machinery(&["first", "tag"])
+    T::structure_named("ObjectPtr", "class_name", "object", pointer_fields()).machinery(&["count_or_tag", "tag"])
 }
 
 /// One entry of a `TList`: a pointer, and the option string every entry
@@ -235,7 +236,7 @@ fn list_entry() -> T {
     let mut fields = pointer_fields();
     fields.push(("option_len", T::u8()));
     fields.push(("option", T::utf8(E::field("option_len"))));
-    T::structure_named("ListEntry", "class_name", "object", fields).machinery(&["first", "tag", "option_len"])
+    T::structure_named("ListEntry", "class_name", "object", fields).machinery(&["count_or_tag", "tag", "option_len"])
 }
 
 /// The members of a class written in place, which is a structure named by the
@@ -302,7 +303,7 @@ fn members(table: &mut dyn Descriptions, class: &str, version: i32) -> R<Built> 
             vec![("seek", at("fBasketSeek")), ("bytes", at("fBasketBytes")), ("first_entry", at("fBasketEntry"))],
         );
         let written = E::field("fWriteBasket").at_most(E::field("fMaxBaskets")).at_least(E::lit(0));
-        fields.push(("baskets".into(), T::array(entry, written)));
+        fields.push(("basket_refs".into(), T::array(entry, written)));
     }
     let ty = T::structure(&name, fields.iter().map(|(n, t)| (n.as_str(), t.clone())).collect());
     Ok(Built { ty, from, members_from })
@@ -325,17 +326,17 @@ fn member_ty(table: &mut dyn Descriptions, el: &Element, before: &[(Element, Opt
     };
     if basic >= 0 {
         let Some(one) = basic_ty(basic) else {
-            return unread(format!("{} is basic type {basic} ({}), which is not read here", el.name, el.type_name));
+            return unread(format!("{} and the members after it are not decoded: type code {code} ({}) is not supported.", el.name, el.type_name));
         };
         return Ok(Ok(match shape {
             0 => one,
             1 => T::array(one, E::lit(el.array_length.max(0))),
             _ => {
                 let Some(count) = count_of(table, &el.count_name, before)? else {
-                    return unread(format!("{} is counted by {}, which is not a member before it", el.name, el.count_name));
+                    return unread(format!("{} and the members after it are not decoded: its counter {} is not one of the members before it.", el.name, el.count_name));
                 };
-                T::inline_structure(&el.type_name, vec![("marker", T::u8()), ("values", T::array(one, count.at_least(E::lit(0))))])
-                    .machinery(&["marker"])
+                T::inline_structure(&el.type_name, vec![("isArray", T::u8()), ("values", T::array(one, count.at_least(E::lit(0))))])
+                    .machinery(&["isArray"])
             }
         }));
     }
@@ -345,7 +346,7 @@ fn member_ty(table: &mut dyn Descriptions, el: &Element, before: &[(Element, Opt
         // A pointer, which may be nothing and may be a reference back.
         64 | 69 | 70 => Ok(pointer()),
         65 => Ok(super::tstring()),
-        _ => Err(format!("{} has type code {code} ({}), which is not read here", el.name, el.type_name)),
+        _ => Err(format!("{} and the members after it are not decoded: type code {code} ({}) is not supported.", el.name, el.type_name)),
     })
 }
 

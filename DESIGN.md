@@ -2753,8 +2753,8 @@ Only builds that came out are kept: the same key read from inside the
 descriptions and from outside can see different tables, since `find_field`
 sees only fields declared before the asker, and a failure where the table is
 out of sight says nothing about a node that can see it. A key read again while
-it is being built is refused by name (`layout 1's description is being read
-with layout 1's description`). With the walk lazy and names looked up only
+it is being built is refused by name (`layout 1's description depends on
+itself`). With the walk lazy and names looked up only
 backwards, that takes a contrived template to reach, and it is there so that a
 builder that reads a description typed by itself fails rather than recursing.
 
@@ -2816,11 +2816,23 @@ on every field of that name under the node, depth first, through structures,
 lists of records, pointing fields and what a stream holds; it keeps the place it
 last landed on its frame and carries on from there, so a thousand branches are
 one search. Its order puts a split branch's sub-branches before its own
-baskets, which a split branch never has. The IR text writes it `..baskets`.
+baskets, which a split branch never has. The IR text writes it `..basket_refs`,
+the name the builder gives the list so it does not read as ROOT's own
+`fBaskets` beside it.
+
+**A basket's values.** A basket's `entries` is its blocks joined, like a
+record's object, holding `values` up to `fLast` and then, where the branch's
+entries vary in length, the table of where each starts. The values are typed by
+asking the branch that placed the basket, through `Expr::Placer`: the branch's
+class, its one leaf's class, `fLen`, `fLenType` and `fIsUnsigned`, each asked
+only once the one before held, since a question of a second leaf fails on a
+branch that has one. The cases are exactly the side reader's `how_to_read`,
+and everything else stays bytes.
 
 What the side reader and the template now agree on, over every sample: the
-class descriptions, member for member (`tests/root_real.rs`), and every basket
-at the offset and length the branches list. A tree walk of
+class descriptions, member for member (`tests/root_real.rs`), every basket
+at the offset and length the branches list, and every basket's values (310
+read as numbers, 245 left as bytes) and entry offsets (233 tables). A tree walk of
 `uproot-Zmumu-lz4.root` names 212,776 of its 212,813 bytes where it named 6,321
 without the baskets, counting a compressed run as the field that names its
 bytes.

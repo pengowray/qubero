@@ -197,7 +197,7 @@ impl Evaluator {
         windowed: bool,
     ) -> R<Arc<Built>> {
         let Some(builder) = self.template.schemas.get(&**kind).cloned() else {
-            return fail(format!("nothing in this template builds a {kind} schema"));
+            return fail(format!("this template does not build a {kind} schema"));
         };
         let key = self.key_values(doc, path, key, Some(here))?;
         let slot = (kind.clone(), key.clone());
@@ -206,7 +206,7 @@ impl Evaluator {
         }
         if self.schemas.building.contains(&slot) {
             let named = builder.key_text(&key);
-            return fail(format!("{named}'s description is being read with {named}'s description"));
+            return fail(format!("{named}'s description depends on itself"));
         }
         self.schemas.building.insert(slot.clone());
         // The walk the builder may ask for is kept on the node's own list
