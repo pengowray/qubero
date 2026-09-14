@@ -101,17 +101,18 @@ fn a_grid_this_reads_and_one_it_does_not_both_keep_their_extent() {
         assert_eq!(u64::from(message.size_bits), total as u64 * 8);
     }
     // A reduced Gaussian grid packed as JPEG 2000: the grid is template 40,
-    // which reads, and the packing is 5.40, whose header reads and whose data
-    // stays bytes.
+    // which reads, and the packing is 5.40. The field is a constant, zero
+    // bits a value, so ECMWF's template writes no codestream at all and
+    // section 7 is its five-byte header and nothing else.
     if let Some((d, mut ev)) = read("reduced_gg_sfc_jpeg.grib2") {
         assert_eq!(ev.node(&d, &[0, 1, 4, 1, 2, 5]).unwrap().type_name, "GaussianGrid");
         assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "Jpeg2000Packing");
-        // Section 7 says which codestream it holds and stops there: there is
-        // no JPEG 2000 template here to open it with.
+        assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2, 3]).unwrap().value.as_int(), Some(0));
         assert_eq!(ev.node(&d, &[0, 1, 4, 5, 2]).unwrap().type_name, "Jpeg2000PackedData");
         let data = ev.node(&d, &[0, 1, 4, 5, 2, 0]).unwrap();
-        assert_eq!((data.name.as_str(), data.type_name.as_str()), ("codestream", "bytes[]"));
-        // And it covers the whole of the section after the header.
+        assert_eq!((data.name.as_str(), data.size_bits), ("codestream", 0));
+        // And it covers the whole of the section after the header, which is
+        // none of it.
         let section = ev.node(&d, &[0, 1, 4, 5]).unwrap();
         assert_eq!(data.offset_bits + data.size_bits, section.offset_bits + section.size_bits);
     }
@@ -447,6 +448,61 @@ fn a_png_packed_section_opens_as_a_png() {
     let space = ev.space(id).expect("just opened");
     assert_eq!(space.template, "png", "section 7 opened as {:?}", space.template);
     assert_eq!(space.len_bytes() as u64, u64::from(run.size_bits) / 8);
+}
+
+/// A section 7 that holds a JPEG 2000 codestream opens as one, and the image
+/// that codestream describes is the grid: as many samples as section 5 packed,
+/// each as deep as section 5 said.
+///
+/// The file is ECMWF's edition 2 sample repacked by ecCodes as `grid_jpeg`,
+/// which hands the grid to OpenJPEG: a 16 by 31 latitude/longitude grid of
+/// 496 points, every one with a value, at 12 bits a value.
+#[test]
+fn a_jpeg2000_packed_section_opens_as_a_codestream_the_size_of_the_grid() {
+    let Some((d, mut ev)) = read("regular_ll_jpeg.grib2") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let sections = sections(&d, &mut ev);
+    let path = |n: i128| sections.iter().find(|(m, _)| *m == n).map(|(_, p)| p.clone()).unwrap();
+    let int = |ev: &mut Evaluator, p: &[usize]| ev.node(&d, p).unwrap().value.as_int().unwrap();
+    // Section 3's grid, and section 5's count and width.
+    let grid = [&path(3)[..], &[2, 5]].concat();
+    let (ni, nj) = (int(&mut ev, &[&grid[..], &[7]].concat()), int(&mut ev, &[&grid[..], &[8]].concat()));
+    let packing = [&path(5)[..], &[2]].concat();
+    assert_eq!(ev.node(&d, &[&packing[..], &[2]].concat()).unwrap().type_name, "Jpeg2000Packing");
+    let count = int(&mut ev, &[&packing[..], &[0]].concat());
+    let bits = int(&mut ev, &[&packing[..], &[2, 3]].concat());
+    assert_eq!((ni, nj, count, bits), (16, 31, 496, 12));
+
+    // Section 7 opens as a JPEG 2000 codestream.
+    let at = [&path(7)[..], &[2, 0]].concat();
+    let run = ev.node(&d, &at).unwrap();
+    let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the codestream opens");
+    let space = ev.space(id).expect("just opened");
+    assert_eq!(space.template, "jpeg2000", "section 7 opened as {:?}", space.template);
+    assert_eq!(space.len_bytes(), u64::from(run.size_bits) / 8);
+
+    // And read with that template, its SIZ is the grid.
+    let codestream = Document::new(MemSource(space.bytes().to_vec()));
+    let mut j2k = Evaluator::new(formats::builtin("jpeg2000").unwrap());
+    let siz = [1, 0, 1];
+    assert_eq!(j2k.node(&codestream, &[1, 0, 0]).unwrap().value.as_int(), Some(0xff51));
+    let field = |j2k: &mut Evaluator, name: &str| {
+        let n = j2k.node(&codestream, &siz).unwrap().child_count as usize;
+        let i = (0..n).find(|i| j2k.node(&codestream, &[&siz[..], &[*i]].concat()).unwrap().name == name).unwrap();
+        j2k.node(&codestream, &[&siz[..], &[i]].concat()).unwrap().value.as_int().unwrap()
+    };
+    let (width, height) = (field(&mut j2k, "width"), field(&mut j2k, "height"));
+    assert_eq!((width, height), (ni, nj), "the image is the grid's shape");
+    assert_eq!(width * height, count);
+    assert_eq!(field(&mut j2k, "Csiz"), 1);
+    // One component, whose depth is section 5's bits a value.
+    let component = [&siz[..], &[11, 0]].concat();
+    let depth = j2k.node(&codestream, &[&component[..], &[4]].concat()).unwrap();
+    assert_eq!(depth.name, "depth");
+    assert_eq!(depth.value.as_int(), Some(bits));
+    assert_eq!(j2k.node(&codestream, &[&component[..], &[3]].concat()).unwrap().value.as_int(), Some(0), "unsigned");
 }
 
 #[test]

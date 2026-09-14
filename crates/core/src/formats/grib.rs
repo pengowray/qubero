@@ -38,9 +38,11 @@
 //! it. See [`data`] for the formula and [`grib_values`](super::grib_values)
 //! for the reading that carries it out for both.
 //!
-//! The image packings hold a whole codestream of another format. A PNG one
-//! (5.41) opens as a PNG, since that is a format this crate reads; a JPEG 2000
-//! one (5.40) is named and stays bytes, since it is not.
+//! The image packings hold a whole codestream of another format, and it opens
+//! as that format: a PNG one (5.41) as a PNG, and a JPEG 2000 one (5.40) as a
+//! JPEG 2000 codestream, markers and tile-parts, whose SIZ says how many
+//! values it packs and how many bits each one takes. See
+//! [`jpeg2000_packed_data`].
 //!
 //! Edition 1 is still published and is a different layout: three-byte lengths,
 //! no section numbers, and the sections identified by their order and by flags
@@ -793,9 +795,8 @@ fn bitmap() -> T {
 /// So it is a reading in Rust, next to the template rather than in it. See
 /// [`grib_values`](super::grib_values).
 ///
-/// An image-packed section holds a whole codestream of another format. The PNG
-/// one opens as a PNG, since that is a format this already reads; the JPEG 2000
-/// one is named and stays bytes, since it is not.
+/// An image-packed section holds a whole codestream of another format, and
+/// opens as it: the PNG one as a PNG, the JPEG 2000 one as a codestream.
 fn data() -> T {
     T::switch(
         // Which packing, from the nearest earlier section that says: section
@@ -1012,13 +1013,25 @@ fn png_packed_data() -> T {
 
 /// Section 7 for data template 5.40: the grid as a JPEG 2000 codestream.
 ///
-/// Named and left as bytes. There is no JPEG 2000 template in this crate to
-/// open it with, so sniffing it would find nothing, and a codestream is not a
-/// run of values with a stride: it is wavelet coefficients in code blocks,
-/// arithmetic coded. The section says which format it is holding and stops
-/// there.
+/// A raw codestream, SOC to EOC, with no JP2 boxes around it, whose one
+/// component is the packed values, so its width times its height is section
+/// 5's `number_of_values` and each sample is `bits_per_value` deep. The
+/// writers make the image the shape of the grid when every point has a value,
+/// and one row of values when a bitmap leaves some out or the grid's rows
+/// differ in length, as a reduced Gaussian grid's do. It opens the way the PNG
+/// one does, as a
+/// run that is already what it is, and the JPEG 2000 template reads its
+/// markers and tile-parts. The packets stay bytes there: they are wavelet
+/// coefficients in code-blocks, arithmetic coded, not a run of values with a
+/// stride.
+///
+/// A field whose values are all the same writes a width of zero and no
+/// codestream at all, and the run is then empty.
 fn jpeg2000_packed_data() -> T {
-    T::structure("Jpeg2000PackedData", vec![("codestream", T::bytes(E::Remaining))])
+    T::structure(
+        "Jpeg2000PackedData",
+        vec![("codestream", T::decoded(E::Remaining, crate::codec::Codec::Stored, super::decoded_text()))],
+    )
 }
 
 #[cfg(test)]

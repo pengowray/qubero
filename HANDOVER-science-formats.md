@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| JPEG 2000: a new `jpeg2000` template for raw codestreams (every Part 1 main and tile-part header segment, tile-parts sized by Psot including Psot 0) and JP2 boxes (XLBox, LBox 0, `jp2h`, `pclr`, `cmap`, `cdef`, `res `); GRIB2 5.40 section 7 reads as one, SIZ checked against the grid on `grib/regular_ll_jpeg.grib2`. Seven samples compared segment by segment with glymur. Four are ITU-T conformance files whose notice allows JPEG 2000 standard uses only (`jpeg2000/README.md`). | b50f472..d894c81 |
 | Edits: a `Chain` or `Gather` element whose position was read from bytes at or after an overwrite is dropped with what follows it; everything placed from before stays. A finished gather whose reads all end before the edit keeps its walk, which it used to throw away on any edit (`comp.fits` gather re-read 157 ms to 14 ms). Checked against a fresh read of the edited bytes on HDF4, Arrow and FITS samples. | 562505a..f790d9d |
 | Codecs: `Codec::Lz4Frame` (linked and independent blocks, checksums traced not verified) opens Arrow's LZ4 bodies, all 46 buffers of `columns-lz4.arrow` byte-identical to the uncompressed file; `Codec::CdfHuffman` and `Codec::CdfAhuff` unpack whole-file compression types 2 and 3, matching NASA's `cdfhuff.c` byte for byte (samples `cdf/d103a2x.cdf`, `d103a2x-ahuff.cdf`); one `Bits` reader in both bit orders replaces the six private copies. | 916db8d..1b1b7dc |
 | S9. A type built from a schema the file supplies: `Ty::Schema`, `Step::Stream` and `Step::Deep`, a builder over lazily read descriptions with a cache and edit handling. ROOT objects are built from `StreamerInfo` (classes match the side reader on all 8 samples), baskets are placed through lz4, lzma and zstd (Zmumu 20 per codec, sample-6.20.04 411), and 310 baskets read as typed values matching `read_basket`. DESIGN.md "A type the file describes". | 9322815..b8205b9 |
@@ -431,8 +432,11 @@ Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
   GFS reads `101124.03` where ecCodes prints `101124.03125`. The arithmetic
   matches ecCodes; showing the full double is a one-function change
   (`Packing::text`). Needs the user's call.
-- JPEG 2000 (5.40) names its codestream and stays bytes; there is no JPEG
-  2000 template.
+- JPEG 2000 packing (5.40) opens section 7 as a codestream (see Closed).
+  Packet headers and entropy-coded data stay bytes, so the values are not
+  decoded. A HTJ2K Rsiz (bit 14 set) shows as a number; code-block style
+  bit 7 (Part 15) is unnamed; a PLM or PPM share split across two segments
+  is not followed.
 - Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
   only; anything else is bytes.
 - ecCodes has no wheel for Python 3.14; the cross-check used a uv Python 3.11
