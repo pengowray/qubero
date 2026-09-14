@@ -64,10 +64,22 @@ fn a_stream_inside_a_declared_stream_opens_from_the_stream_tab() {
     // And it is the same stream the file's tab opens, not a second one.
     assert_eq!(opened(&mut ed, 0, &[1, 1, 2, 0, 0, 0, 6, 3]), code);
     assert_eq!(opened(&mut ed, pixels, &[6, 3]), code);
+    // The cursor link marks bits of the file. The IDAT's run is bits of the
+    // file; the cart's is bits of the pixels, so it marks nothing there.
+    assert!(maps(&ed.map_out(zlib, 0.0)));
+    assert!(!maps(&ed.map_out(code, 0.0)));
+    assert!(!maps(&ed.map_in(code, 0.0)));
     // An edit to the file opens every stream again, and each tab still reads
     // the stream its title names.
     same_byte_again(&mut ed);
     assert_eq!(node(&mut ed, code, &[]), file);
+}
+
+/// Whether a `map_out` or `map_in` reply found a step.
+fn maps(reply: &str) -> bool {
+    let reply: Value = serde_json::from_str(reply).unwrap();
+    assert_eq!(reply["status"], "ok", "{reply}");
+    !reply["node"].is_null()
 }
 
 /// Write the file's first byte over itself: an edit that changes nothing,
@@ -89,10 +101,23 @@ fn a_declared_stream_inside_a_recognised_stream_opens_from_its_tab() {
     assert_ne!(run, entry);
     assert_eq!(node(&mut ed, run, &[]), inner);
     assert_eq!(opened(&mut ed, entry, &[6]), run);
+    assert!(!maps(&ed.map_out(run, 0.0)));
     // The entry is opened again in the file's new reading, and the run in the
     // entry's new reading.
     same_byte_again(&mut ed);
     assert_eq!(node(&mut ed, run, &[]), inner);
+}
+
+#[test]
+fn a_joined_stream_the_file_declares_still_marks_the_file() {
+    let Some(mut ed) = editor("pdb/msvc-x64-260-modules.pdb", "pdb") else { return };
+    // The type stream, joined from the pages the directory lists. Its runs
+    // are pages of the file wherever they are, so it still marks the file.
+    let tpi = [11, 0, 2, 2, 4, 1];
+    let reply: Value = serde_json::from_str(&ed.open_space(0, &tpi)).unwrap();
+    assert_eq!(reply["node"]["joined"], true, "{reply}");
+    let space = opened(&mut ed, 0, &tpi);
+    assert!(maps(&ed.map_out(space, 0.0)));
 }
 
 fn samples() -> Option<PathBuf> {

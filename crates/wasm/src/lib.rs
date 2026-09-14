@@ -2842,8 +2842,9 @@ impl Editor {
     /// from, and by which step: {status:"ok",node:{..}} or a null node when the
     /// codec's map does not reach that far.
     ///
-    /// Null too for a stream opened in a recognised stream's reading, whose
-    /// run is bits of that stream and not of the file.
+    /// Null too for a stream whose run is bits of another stream and not of
+    /// the file: one opened in a recognised stream's reading, or one declared
+    /// inside a stream the file declares.
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
@@ -2958,10 +2959,24 @@ impl Editor {
         self.core_space_of(space).map(|(_, sp)| sp.id)
     }
 
-    /// The same, only for a space the file's reading opened, whose run is bits
-    /// of the file's reading and whose number is the file's evaluator's.
-    fn file_core_space(&self, space: u32) -> Option<SpaceId> {
-        self.core_space_of(space).and_then(|(home, sp)| (home == 0).then_some(sp.id))
+    /// The same, only for a space whose run is bits of the file, which is what
+    /// a step's bits are marked on: opened by the file's reading, from a field
+    /// that is not itself inside another stream. The run of a stream nested in
+    /// a stream is bits of that stream. A joined stream's runs each say which
+    /// space they are in, and `space_step_dto` asks them.
+    fn file_core_space(&mut self, space: u32) -> Option<SpaceId> {
+        let (id, joined) = match self.core_space_of(space)? {
+            (0, sp) => (sp.id, !sp.runs().is_empty()),
+            _ => return None,
+        };
+        if joined {
+            return Some(id);
+        }
+        let origin = self.sheets[space as usize].origin.clone();
+        let sh = &mut self.sheets[0];
+        let e = sh.eval.as_mut()?;
+        e.begin_slice();
+        e.node(&sh.doc, &origin).is_ok_and(|n| n.space == 0).then_some(id)
     }
 
     fn changed(&mut self) {

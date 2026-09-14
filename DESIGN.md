@@ -1523,8 +1523,9 @@ path; from a tab with a reading of its own it is opened in that reading, with
 that tab as its home. The web had passed a tab's path to an editor that read it
 as a path of the file, so a stream inside a tab opened whatever the file had at
 that path, or nothing. The cursor link and the decoder's line in the status bar
-mark bits of the file, so a stream whose home is a recognised stream has
-neither. An edit to the file or a change of template drops the spaces
+mark bits of the file, so a stream whose run is bits of another stream has
+neither: one whose home is a recognised stream, or one declared inside a stream
+the file declares, whose node is not in the file's space. An edit to the file or a change of template drops the spaces
 with the rest of the reading, so the tab's stream is opened again in its
 home's reading as it is now the next time a field of the tab is asked about,
 and a stream that is no longer there leaves the tab empty rather than reading

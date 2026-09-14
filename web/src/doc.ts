@@ -2061,8 +2061,9 @@ export class Doc {
     /** Which address space this document is. 0 is the file; anything else is
      *  a compressed run that was unpacked and opened in its own right. */
     readonly space = 0,
-    /** For a space, the `Decoded` node of the file it was unpacked from, or
-     *  the node that joined it from several runs. */
+    /** For a space, the `Decoded` node it was unpacked from, or the node that
+     *  joined it from several runs, as a path of the document it was opened
+     *  from. */
     readonly origin: readonly number[] = [],
     /** True for a space joined from several runs rather than unpacked from
      *  one. */
