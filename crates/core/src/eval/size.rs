@@ -351,8 +351,9 @@ impl Evaluator {
                 if n < 0 {
                     return fail("negative count");
                 }
-                self.list_mut(path).expected_count = Some(n as u64);
-                Ok(n as u64)
+                let Ok(n) = u64::try_from(n) else { return fail(format!("count {n} does not fit in a u64")) };
+                self.list_mut(path).expected_count = Some(n);
+                Ok(n)
             }
             // As long as the chain turns out to be, which is only knowable by
             // following it to the end. See [`Ty::Chain`].
@@ -366,7 +367,8 @@ impl Evaluator {
                 if n < 0 {
                     return fail("negative count");
                 }
-                Ok(n as u64)
+                let Ok(n) = u64::try_from(n) else { return fail(format!("count {n} does not fit in a u64")) };
+                Ok(n)
             }
             // A run of same-sized elements filling its container is as
             // long as the room divides. Anything left over at the end is less

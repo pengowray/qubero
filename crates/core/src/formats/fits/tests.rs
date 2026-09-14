@@ -819,6 +819,60 @@ fn a_table_that_says_zimage_is_false_is_a_table() {
     assert_eq!(ev.node(&d, &[0, 1, 3, 2]).unwrap().child_count, 3);
 }
 
+/// A compressed image of one tile, four bytes stored as they are, in a table
+/// whose `NAXIS1`, `NAXIS2` and `THEAP` cards say whatever they are given.
+fn one_tile(width: usize, rows: usize, theap: Option<u64>) -> Vec<u8> {
+    let mut cards = vec![
+        "TFIELDS =                    1".to_string(),
+        "TTYPE1  = 'COMPRESSED_DATA'".into(),
+        "TFORM1  = '1PB     '".into(),
+        "ZIMAGE  =                    T".into(),
+        "ZBITPIX =                    8".into(),
+        "ZNAXIS  =                    1".into(),
+        "ZNAXIS1 =                    4".into(),
+        "ZCMPTYPE= 'NOCOMPRESS'".into(),
+    ];
+    cards.extend(theap.map(|t| format!("THEAP   = {t:20}")));
+    let refs: Vec<&str> = cards.iter().map(|s| s.as_str()).collect();
+    let mut b = primary();
+    b.extend_from_slice(&table_header(&refs, rows, width, 4));
+    let mut data = Vec::new();
+    data.extend_from_slice(&4i32.to_be_bytes());
+    data.extend_from_slice(&0i32.to_be_bytes());
+    data.extend_from_slice(&[1, 2, 3, 4]);
+    b.extend_from_slice(&padded(data));
+    b
+}
+
+/// A corrupt header can give a row width, a row count or a heap offset that is
+/// more bits than a u64 counts. The tile is refused the way it would be for a
+/// width or an offset merely past the end of the file, instead of overflowing.
+#[test]
+fn a_tile_placed_past_what_bits_can_count_is_refused() {
+    let tile = |width: usize, rows: usize, theap: Option<u64>| {
+        let (d, mut ev) = eval(one_tile(width, rows, theap));
+        ev.fits_tile(&d, &[0, 1, 3]).map(|t| t.expect("a tile")).map_err(|e| match e {
+            crate::eval::EvalError::Failed(s) => s,
+            other => panic!("not a failure: {other:?}"),
+        })
+    };
+    let fine = tile(8, 1, None).unwrap();
+    assert_eq!((fine.problem, fine.pixels), (None, vec![1.0, 2.0, 3.0, 4.0]));
+    // A row too wide: past a u64 once multiplied by eight, and only once added
+    // to where the rows start.
+    for width in [1 << 61, (1 << 61) - 1] {
+        assert_eq!(tile(width, 1, None).unwrap_err(), "runs past the end of its container", "NAXIS1 = {width}");
+    }
+    // The heap starts after the rows when no THEAP says otherwise, and here the
+    // rows are more bytes than a u64 counts. Then a THEAP past a u64 once in
+    // bits, and once added to where the data starts.
+    let past_heap = |t: crate::formats::fits_tile::Tile| t.problem.is_some_and(|p| p.starts_with("Not unpacked: the descriptor points past the end of the heap"));
+    assert!(past_heap(tile(8, 1 << 62, None).unwrap()));
+    for theap in [i64::MAX as u64, (1 << 61) - 1] {
+        assert!(past_heap(tile(8, 1, Some(theap)).unwrap()), "THEAP = {theap}");
+    }
+}
+
 /// `ZNAXIS` is six letters, so its number has two bytes to be written in
 /// rather than three, and the keyword a tenth axis is found by is worked
 /// out that way.

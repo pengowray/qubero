@@ -199,6 +199,15 @@ fn a_length_too_large_to_count_in_bits_fails_rather_than_wrapping() {
 }
 
 #[test]
+fn a_count_too_large_for_a_u64_fails_rather_than_wrapping() {
+    // The largest u64, and one more: as a u64 that count wraps round to an
+    // empty list, which is a corrupt file read as a well-formed one.
+    let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("body", T::array(T::u8(), E::field("n").add(E::lit(1))))]));
+    let got = Evaluator::new(t).node(&doc(&u64::MAX.to_le_bytes()), &[1]).map(|n| n.child_count).map_err(failure);
+    assert_eq!(got, Err("count 18446744073709551616 does not fit in a u64".into()));
+}
+
+#[test]
 fn huge_variable_size_array_does_not_recurse() {
     // 50k LEB128 elements; the count itself is a 3-byte LEB128.
     let n = 50_000u32;

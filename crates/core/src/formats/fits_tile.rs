@@ -286,7 +286,9 @@ impl Image {
         }
         let row_bytes = cards.int("NAXIS1").unwrap_or(0).max(0) as usize;
         let rows = cards.int("NAXIS2").unwrap_or(0).max(0) as u64;
-        let heap_start = cards.int("THEAP").map_or(row_bytes as u64 * rows, |t| t.max(0) as u64);
+        // Rows too many to count in bytes put the heap past the end of any
+        // file, which is where the largest count leaves it too.
+        let heap_start = cards.int("THEAP").map_or_else(|| (row_bytes as u64).checked_mul(rows).unwrap_or(u64::MAX), |t| t.max(0) as u64);
         Ok(Image {
             algorithm: cards.text("ZCMPTYPE").unwrap_or("").to_string(),
             zbitpix,
