@@ -2362,7 +2362,8 @@ export const FOLDER = {
   stopped: (folder: string): string => `Stopped opening ${folder}.`,
   empty: (folder: string): string => `The folder ${folder} is empty.`,
   /** The browser gave no way to read what was dropped. */
-  unreadable: "Couldn't read the folder. Zip it with zip -0 -r and drop the .zip.",
+  unreadable:
+    'Couldn\'t read the folder. Zip it with zip -0 -r and drop the .zip; if a BP5 dataset opens as a plain ZIP archive, choose "Template: ADIOS2 BP5 dataset in a ZIP" in the toolbar.',
   files: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`,
   /** A dataset missing a companion: what that costs, one clause each. */
   missing: { "mmd.0": "No mmd.0 in the folder, so records stay bytes.", "data.0": "No data.0 in the folder, so values are not placed." },

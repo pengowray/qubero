@@ -806,6 +806,9 @@ function build(tab: Tab): Page {
   });
 
   const fileLabel = el("span", { className: "tb-file" });
+  // Where the tab came from, as its tab says it; a page opened alone has no
+  // tab strip to say it on.
+  if (tab.origin !== null) fileLabel.title = tab.origin;
   const posLabel = el("span", { className: "tb-pos" });
   const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
   const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });

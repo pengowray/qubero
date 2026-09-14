@@ -3269,7 +3269,7 @@ walk from the root that ends on or under a second reading tries the placed
 stretches narrower than the structure holding it, and takes one that reaches a
 field. So a byte of `md.0` is a field of its record and a byte of `data.0` is a
 value of the block placed there. That had always been what `aside` said a
-second reading was, and no second reading before this one was in place.
+second reading was.
 
 **One file of a dataset opened alone** says so above the views: what it lacks
 the other files for, and a button to pick the folder, which then opens in its
@@ -3279,7 +3279,10 @@ What it does not do. Only the first dataset in an archive is read. A step
 written by more than one writer, and data files past `data.0`, stay bytes.
 Addresses are the archive's, not each file's; the position of the cursor inside
 the file it is in is not said. A folder of millions of files is read into a list
-before anything opens.
+before anything opens. An archive is told to be a dataset from its front alone,
+so a ZIP made elsewhere that stores a large `data.0` ahead of `md.idx` and
+`mmd.0`, as `zip -0 -r` does when the folder lists it first, opens as a ZIP;
+the template menu reads it as a dataset.
 
 ### The Diagram view: this file's counts, and what a click does
 The Diagram view draws a format's types as boxes, and lays the open file's
