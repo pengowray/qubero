@@ -785,8 +785,14 @@ impl Evaluator {
         };
         index = index.min(image.rows.saturating_sub(1));
 
-        let row_bits = image.row_bytes as u64 * 8;
-        let row_bytes = self.read(doc, r, r.offset + index * row_bits, row_bits)?;
+        // A row width or a heap offset in a corrupt header can be more bits
+        // than a u64 counts. That is past the end of the file, and is refused
+        // the way a place merely past the end is.
+        let Some(row_bits) = (image.row_bytes as u64).checked_mul(8) else { return fail("runs past the end of its container") };
+        let Some(row_at) = index.checked_mul(row_bits).and_then(|bits| r.offset.checked_add(bits)) else {
+            return fail("runs past the end of its container");
+        };
+        let row_bytes = self.read(doc, r, row_at, row_bits)?;
         let row = image.row(&row_bytes);
         let Some(place) = row.place else { return Ok(fits_tile::decode(&image, index, &row, &[])) };
         let bytes = place.bytes();
@@ -795,10 +801,10 @@ impl Evaluator {
             let problem = format!("Not unpacked: the tile is over this viewer's {mb} MB limit.");
             return Ok(fits_tile::unread(&image, index, &row, bytes as usize, Some(problem)));
         }
-        let from = r.offset + (image.heap_start + place.offset) * 8;
-        match self.read(doc, r, from, bytes * 8) {
-            Ok(data) => Ok(fits_tile::decode(&image, index, &row, &data)),
-            Err(_) => {
+        let from = image.heap_start.checked_add(place.offset).and_then(|at| at.checked_mul(8)).and_then(|bits| r.offset.checked_add(bits));
+        match from.map(|from| self.read(doc, r, from, bytes * 8)) {
+            Some(Ok(data)) => Ok(fits_tile::decode(&image, index, &row, &data)),
+            _ => {
                 let heap_bytes = (self.size_of(doc, at)? / 8).saturating_sub(image.heap_start);
                 let problem = format!(
                     "Not unpacked: the descriptor points past the end of the heap ({} bytes at offset {}; the heap is {} bytes).",
