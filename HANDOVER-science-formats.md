@@ -544,7 +544,7 @@ file checked against the files it points into. Left:
   folder is bundled in the browser (`web/src/folderzip.ts`). The bundle's hex
   addresses are the archive's, not each file's, and no row gives the offset
   within the member file. The browser reads every byte once for CRC-32s
-  before the dataset opens; skipping that and recomputing on Save as needs an
+  before the dataset opens; skipping that and recomputing on Save as needs a
   "not computed" state in the inspector.
 - A step with more than one writer stays bytes; `data.N` past `data.0` and a
   second dataset in one archive are listed as files only; `data.0`'s bytes
