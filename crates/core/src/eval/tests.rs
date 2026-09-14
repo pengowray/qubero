@@ -1745,6 +1745,108 @@ fn an_element_that_ends_a_run_leaves_none_of_its_fields_behind() {
 }
 
 #[test]
+fn an_overwrite_keeps_the_nodes_above_what_it_keeps() {
+    // A length, three records of a byte and that many bytes in a room of
+    // three each, and a tail for the edit to land in.
+    let rec = T::sized(E::lit(3), T::structure("Rec", vec![("a", T::u8()), ("b", T::bytes(E::field("n")))]));
+    let t = T::structure("Root", vec![("n", T::u8()), ("items", T::array(rec, E::lit(3))), ("tail", T::bytes(E::Remaining))]);
+    let mut d = doc(&[2, 0xa0, 0xa1, 0xa2, 0xb0, 0xb1, 0xb2, 0xc0, 0xc1, 0xc2, 0xee, 0xee]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // Record 1 is placed and sized by its room, with nothing inside it read
+    // and nothing above it sized.
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().offset_bits, 4 * 8);
+
+    d.overwrite_bytes(11, &[0x55]);
+    ev.invalidate_from(11 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    // How long its second field is comes from `n`, found through the root.
+    let b = ev.node(&d, &[1, 1, 1]).unwrap();
+    assert_eq!((b.offset_bits, b.size_bits), (5 * 8, 2 * 8));
+}
+
+#[test]
+fn a_node_kept_above_an_overwrite_is_measured_again() {
+    // Records of a length and that many bytes, then a tail.
+    let rec = T::structure("Rec", vec![("a", T::u8()), ("b", T::bytes(E::field("a")))]);
+    let t = || Template::new("t", T::structure("Root", vec![("n", T::u8()), ("items", T::array(rec.clone(), E::lit(3))), ("tail", T::bytes(E::Remaining))]));
+    let mut d = doc(&[3, 1, 0xa0, 2, 0xb0, 0xb1, 1, 0xc0, 0xee, 0xee, 0xee, 0xee]);
+    let mut ev = Evaluator::new(t());
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, 8 * 8);
+
+    // Records 1 and 2 shorter. Record 0 ended before them and stays, and so
+    // do the list and the root, but the list is not the length it was.
+    d.overwrite_bytes(3, &[1, 0xb0, 0]);
+    ev.invalidate_from(3 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    assert!(ev.memo.contains_key(&[1, 0]));
+    let mut fresh = Evaluator::new(t());
+    for path in [&[1][..], &[2], &[1, 2, 1], &[]] {
+        assert_eq!(ev.node(&d, path).unwrap(), fresh.node(&d, path).unwrap(), "{path:?}");
+    }
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 5 * 8);
+}
+
+#[test]
+fn an_overwrite_of_a_pointer_drops_what_it_pointed_at() {
+    // A byte, a pointer to a byte, and the pointed-at byte, declared after the
+    // pointer but lying before it.
+    let t = T::structure("Root", vec![("hdr", T::u8()), ("p", T::u8()), ("pad", T::u8()), ("t", T::at(E::field("p"), T::u8()))]);
+    let mut d = doc(&[0x11, 0, 0x33]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[3, 0]).unwrap().value, Value::UInt(0x11));
+
+    // The byte it points at ended before the edit, but where it is was read
+    // after it.
+    d.overwrite_bytes(1, &[2]);
+    ev.invalidate_from(8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    let pointed = ev.node(&d, &[3, 0]).unwrap();
+    assert_eq!((pointed.offset_bits, pointed.value), (2 * 8, Value::UInt(0x33)));
+}
+
+#[test]
+fn an_overwrite_of_an_element_that_overran_its_room_gives_the_room_back() {
+    // Records of a length and that many bytes, in a room one byte short of the
+    // second one, which is read past the room since there is file outside it.
+    let rec = T::structure("Rec", vec![("len", T::u8()), ("body", T::bytes(E::field("len")))]);
+    let t = || Template::new("t", T::structure("Root", vec![("items", T::sized(E::lit(4), T::repeat(rec.clone(), Until::End))), ("tail", T::bytes(E::Remaining))]));
+    let mut d = doc(&[1, 0xa0, 2, 0xb0, 0xb1, 0xee, 0xee, 0xee]);
+    let mut ev = Evaluator::new(t());
+    assert_eq!(ev.node(&d, &[0]).unwrap().child_count, 2);
+    assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits, 5 * 8);
+
+    // The second record now fits the room, so the room is what the template
+    // said it was.
+    d.overwrite_bytes(2, &[1]);
+    ev.invalidate_from(2 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    let mut fresh = Evaluator::new(t());
+    for path in [&[0][..], &[1], &[0, 1]] {
+        assert_eq!(ev.node(&d, path).unwrap(), fresh.node(&d, path).unwrap(), "{path:?}");
+    }
+    assert_eq!(ev.node(&d, &[1]).unwrap().offset_bits, 4 * 8);
+}
+
+#[test]
+fn an_overwrite_inside_json_drops_every_value_the_parse_placed() {
+    // The first element of `a` ends before the edit, but where `a` ends is
+    // where the member after it starts, and the edit moves that.
+    let text = br#"{"a":[1,2,3],"c":4}"#;
+    let mut d = doc(text);
+    let mut ev = Evaluator::new(Template::new("json", T::json()));
+    ev.node(&d, &[0]).unwrap();
+    ev.node(&d, &[0, 0]).unwrap();
+
+    d.overwrite_bytes(9, br#"],"d":5}  "#);
+    ev.invalidate_from(9 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    let mut fresh = Evaluator::new(Template::new("json", T::json()));
+    for path in [&[0][..], &[0, 0], &[1]] {
+        assert_eq!(ev.node(&d, path).unwrap(), fresh.node(&d, path).unwrap(), "{path:?}");
+    }
+}
+
+#[test]
 fn the_field_under_a_bit_is_found_without_the_list_coming_back() {
     // The same long list of uneven strings, asked the question the hex cursor
     // asks: what is under this bit, in the middle of ten thousand elements.
@@ -1809,6 +1911,7 @@ fn an_overwrite_keeps_what_it_could_not_have_changed() {
     // still holds, so asking where the tail starts does not walk it again.
     d.overwrite_bytes(list_end + 8, &[0x22]);
     ev.invalidate_from((list_end + 8) * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     assert!(ev.memo_len() >= after_sizing / 2, "the edit threw away work it did not have to");
     assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, list_end * 8);
     assert!(ev.memo_len() < 200, "and it is still not the whole list: {}", ev.memo_len());
@@ -1823,6 +1926,7 @@ fn an_overwrite_keeps_what_it_could_not_have_changed() {
     // An overwrite inside the list drops what came after it and keeps the rest.
     let kept = ev.memo_len();
     ev.invalidate_from(8 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     assert!(ev.memo_len() < kept);
     assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, list_end * 8);
 }
@@ -3681,6 +3785,7 @@ fn an_edit_drops_the_fields_the_trace_laid_down() {
     // since they all end before it. They still have to go, because the trace
     // they were laid out from does.
     ev.invalidate_from(u64::MAX);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     assert!(ev.memo_len() < before, "{before} nodes kept, trace or no trace");
     // And asking again works: the stream is opened again and the fields come
     // back the same.
@@ -3729,6 +3834,7 @@ fn editing_the_file_reopens_the_stream_rather_than_keeping_what_it_said() {
     // afresh: a stale buffer would have been freed and the read would fail.
     d.overwrite_bits(0, &[0xcc], 8);
     ev.invalidate_from(0);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     assert_eq!(ev.node(&d, &[0]).unwrap().value.as_int(), Some(0xccbb));
     let a = ev.node(&d, &[1, 0, 0]).unwrap();
     assert_eq!(a.value.as_int(), Some(0x1122));
@@ -3738,6 +3844,7 @@ fn editing_the_file_reopens_the_stream_rather_than_keeping_what_it_said() {
     // what it holds is worked out again rather than remembered.
     d.overwrite_bits(5 * 8, &[0x5a], 8);
     ev.invalidate_from(5 * 8);
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     let stream = ev.node(&d, &[1]).unwrap();
     assert!(stream.child_count == 0 || ev.node(&d, &[1, 0, 0]).is_ok());
 }

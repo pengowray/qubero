@@ -220,6 +220,8 @@ impl Evaluator {
                     m.limit = end;
                     m.declared_size = Some(end - m.offset);
                 }
+                // The room it had, which an edit to this element puts back.
+                self.list_mut(path).stretched.push((mine, declared));
                 Ok(Some(size))
             }
             Err(EvalError::Failed(_)) => {

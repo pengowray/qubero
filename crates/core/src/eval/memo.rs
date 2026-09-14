@@ -10,17 +10,18 @@
 //! that hold JSON.
 //!
 //! They go together because they go stale together. An edit at a byte leaves
-//! everything that ended before it standing and drops the rest, and what
-//! counts as "the rest" is the same question for all three: see `forget_after`,
-//! which is the reason this is one type and not three fields.
+//! everything that ended before it standing, with the nodes it sits in, and
+//! drops the rest, and what counts as "the rest" is the same question for all
+//! three: see `forget_after`, which is the reason this is one type and not
+//! three fields.
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{ListState, Resolved};
 use crate::json;
-use crate::template::Deduced;
+use crate::template::{Deduced, Ty};
 
 /// A label a tagged search looks for, in the form a map can be keyed by.
 ///
@@ -280,6 +281,7 @@ impl Memo {
             chain_done: false,
             gather: None,
             stitch: None,
+            stretched: Vec::new(),
             seq_end: 0,
         };
         self.lists.get(path).unwrap_or(&NOTHING)
@@ -327,11 +329,68 @@ impl Memo {
     /// rest. What makes that safe is in `Evaluator::invalidate_from`, which is
     /// the only caller; what it comes to for each of the three is here.
     pub(super) fn forget_after(&mut self, bit: u64) {
-        // A node with no size worked out yet goes: nothing says where it ends,
-        // so nothing says it ended before the edit.
-        self.nodes.retain(|_, r| r.size.is_some_and(|size| r.offset + size <= bit));
-        // The parsed text of a JSON field goes when the field itself does.
-        self.json.retain(|path, _| self.nodes.contains_key(path));
+        // A node with no size worked out yet has not ended before the edit:
+        // nothing says where it ends, so nothing says it ended before it.
+        let ended = |r: &Resolved| r.size.is_some_and(|size| r.offset + size <= bit);
+        // A node that ended before the edit is kept with every node above it,
+        // since a name is looked up through those and a node that is held is
+        // not placed again. One kept for that alone is as good as one that
+        // ended, bar its size: where it starts, the room it has and what type
+        // it is were worked out from what came before it. Two kinds of node
+        // are not, and what is under them goes instead. One that starts after
+        // the edit: only a pointer puts a node before the one it sits in, and
+        // a pointer read after the edit may say somewhere else now. And JSON:
+        // where a value in it ends is where the parse found the next one, and
+        // the parse covers the edit.
+        let holds = |r: &Resolved| ended(r) || (r.cursor <= bit && !matches!(r.ty, Ty::Json(..)));
+        let (nodes, lists) = (&self.nodes, &self.lists);
+        let mut judged = FxHashMap::default();
+        let mut above = FxHashSet::default();
+        let mut cut_off = FxHashSet::default();
+        for (path, r) in nodes {
+            if !ended(r) {
+                continue;
+            }
+            if !line_holds(path, &mut judged, |p| nodes.get(p).is_some_and(holds)) {
+                cut_off.insert(path.clone());
+                continue;
+            }
+            // Up to the first one already counted, whose line was counted
+            // with it.
+            for k in (0..path.len()).rev() {
+                if !above.insert(&path[..k]) {
+                    break;
+                }
+            }
+        }
+        let structure: FxHashSet<Vec<usize>> = above.into_iter().filter(|p| !ended(&nodes[*p])).map(<[usize]>::to_vec).collect();
+        // What a list learned goes with anything on its line that was placed
+        // from after the edit, since the list may be somewhere else now. A
+        // node that is not held is passed over rather than counted against
+        // it: what a list learned outlives the elements a walk let go of.
+        let mut judged = FxHashMap::default();
+        let misplaced: FxHashSet<Vec<usize>> = lists
+            .keys()
+            .filter(|path| !line_holds(path, &mut judged, |p| nodes.get(p).is_none_or(holds)))
+            .cloned()
+            .collect();
+        self.nodes.retain(|path, r| if ended(r) { !cut_off.contains(path) } else { structure.contains(path) });
+        for path in &structure {
+            let Some(r) = self.nodes.get_mut(path) else { continue };
+            r.size = None;
+            // A run stretched to take in an element that overran its room
+            // has the room back from before any element that reaches past the
+            // edit, which may not overrun it now.
+            if let Some(l) = self.lists.get_mut(path) {
+                while r.limit > bit {
+                    let Some((limit, declared)) = l.stretched.pop() else { break };
+                    (r.limit, r.declared_size) = (limit, declared);
+                }
+            }
+        }
+        // The parsed text of a JSON field stands only if the field ended
+        // before the edit.
+        self.json.retain(|path, _| self.nodes.get(path).is_some_and(ended));
         // A run over the whole file says nothing about which half of it an
         // edit touched, so an edit anywhere means running it again.
         self.deduced = None;
@@ -343,6 +402,9 @@ impl Memo {
         self.tag_entries = self.tags.values().map(|t| t.found.len()).sum();
         let nodes = &self.nodes;
         self.lists.retain(|path, l| {
+            if misplaced.contains(path) {
+                return false;
+            }
             l.checkpoints.retain(|(_, at)| *at <= bit);
             if l.walk_at.is_some_and(|(_, at)| at > bit) {
                 l.walk_at = None;
@@ -366,13 +428,40 @@ impl Memo {
             // The same for the walk to a stitched stream's parts: its runs
             // may be anywhere, and the space it opened is gone already.
             l.stitch = None;
+            // A run that is gone is placed again in the room the template
+            // gives it, and stretched again if it needs to be.
+            let node = nodes.get(path);
+            if node.is_none() {
+                l.stretched.clear();
+            }
             let empty = l.checkpoints.is_empty()
                 && l.walk_at.is_none()
                 && l.repeat_len == 0
-                && !l.repeat_done;
-            !empty || nodes.contains_key(path)
+                && !l.repeat_done
+                && l.stretched.is_empty();
+            // A list kept only for what is under it has not ended, so it
+            // keeps what the rules above leave and no more.
+            !empty || node.is_some_and(ended)
         });
     }
+}
+
+/// Whether `holds` is true of every path from the root down to `path`. What
+/// was found for each is kept in `judged`, since paths share their lines: the
+/// elements of a list would otherwise each ask again about everything above.
+fn line_holds<'a>(path: &'a [usize], judged: &mut FxHashMap<&'a [usize], bool>, holds: impl Fn(&[usize]) -> bool) -> bool {
+    let (mut from, mut ok) = (0, true);
+    for k in (0..=path.len()).rev() {
+        if let Some(&known) = judged.get(&path[..k]) {
+            (from, ok) = (k + 1, known);
+            break;
+        }
+    }
+    for k in from..=path.len() {
+        ok = ok && holds(&path[..k]);
+        judged.insert(&path[..k], ok);
+    }
+    ok
 }
 
 /// Reading a node that is not there is a bug rather than a case: every caller

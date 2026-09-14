@@ -371,6 +371,11 @@ struct ListState {
     /// walk is over and the parts become a space. Boxed for the reason
     /// `gather` is.
     stitch: Option<Box<stitch::StitchWalk>>,
+    /// For a run whose room was stretched to take in an element that overran
+    /// it: the room it had before each stretch, `(limit, declared_size)`, the
+    /// first one being what the template gave it. An edit to an element that
+    /// overran puts back the room from before it. See `stretch_to`.
+    stretched: Vec<(u64, Option<u64>)>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
