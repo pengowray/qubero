@@ -41,47 +41,61 @@ pub(super) fn step(tile: &mut Tile, image: &Image, data: &[u8], pixels: usize) -
         Err(Refused::Header) => {
             stopped(tile, name, data.len());
             tile.problem = Some(format!(
-                "Stopped at {name}: the list is {}, too short for its header.",
+                "Stopped at {name}: the list is {}, shorter than its header (3 or 7 words).",
                 plural(words.len() as u64, "word", "words")
             ));
             return None;
         }
-        Err(Refused::Start(at)) => {
+        Err(Refused::Start(raw)) => {
             stopped(tile, name, data.len());
-            tile.problem = Some(format!("Stopped at {name}: the header says the instructions start at word {at}, before the list does."));
+            tile.problem = Some(format!("Stopped at {name}: the list's second word gives the header length as {raw}, which is negative."));
             return None;
         }
     };
-    let made = list.values.len();
-    let mut note = format!(
-        "{} of {} ({}-word header); {} zero-runs, {} value-runs, {} zero-runs ending in the value, {} values set whole, {} changes to the value, {} single pixels",
-        plural(list.used as u64, "word", "words"),
-        commas(list.length.max(0) as u64),
-        list.header,
-        commas(list.zero_runs as u64),
-        commas(list.value_runs as u64),
-        commas(list.ending_runs as u64),
-        commas(list.set as u64),
-        commas(list.changes as u64),
-        commas(list.singles as u64),
-    );
-    if list.passed_over > 0 {
-        note.push_str(&format!(", {} not instructions", plural(list.passed_over as u64, "word", "words")));
-    }
-    if list.filled > 0 {
-        note.push_str(&format!("; {} after the list's end, 0", pixel_word(list.filled as u64)));
-    }
-    tile.steps.push(Step { what: name.into(), in_bytes: data.len(), out_bytes: 0, note });
+    tile.steps.push(Step { what: name.into(), in_bytes: data.len(), out_bytes: 0, note: note(&list, pixels) });
     if list.ran_out {
         tile.problem = Some(format!(
-            "Stopped at {name}: the list says it is {} and the data ran out after {}, at {} of {}.",
+            "Stopped at {name}: the data ran out after {} of {}; the list says it is {}, but the tile holds only {}.",
+            commas(list.values.len() as u64),
+            pixel_word(pixels as u64),
             plural(list.length.max(0) as u64, "word", "words"),
-            plural(words.len() as u64, "word", "words"),
-            commas(made as u64),
-            pixel_word(pixels as u64)
+            plural(words.len() as u64, "word", "words")
         ));
     }
     Some(Values::Ints(list.values))
+}
+
+/// What the list was made of, for the step's note.
+fn note(list: &List, pixels: usize) -> String {
+    let count = |n: usize, one: &str, many: &str| plural(n as u64, one, many);
+    let instructions = list.zero_runs + list.value_runs + list.ending_runs + list.set + list.changes + list.singles;
+    let mut note = format!(
+        "pixel list, {}; a {}-word header, then {}: {}, {}, {}, {}, {}, {}",
+        count(list.length.max(0) as usize, "word of 16 bits", "words of 16 bits"),
+        list.header,
+        count(instructions, "instruction", "instructions"),
+        count(list.zero_runs, "run of zeros", "runs of zeros"),
+        count(list.value_runs, "run of the current value", "runs of the current value"),
+        count(list.ending_runs, "run of zeros ending in the value", "runs of zeros ending in the value"),
+        count(list.set, "value set from two words", "values set from two words"),
+        count(list.changes, "change to the value with no pixel written", "changes to the value with no pixel written"),
+        count(list.singles, "change to the value with one pixel written", "changes to the value with one pixel written"),
+    );
+    if list.passed_over > 0 {
+        note.push_str(&format!(", and {} (unknown opcode)", count(list.passed_over, "word skipped", "words skipped")));
+    }
+    let left = list.length.saturating_sub(list.used as i64);
+    if list.finished_early && left > 0 {
+        note.push_str(&format!("; all pixels written by word {}, the last {} not read", commas(list.used as u64), count(left as usize, "word", "words")));
+    }
+    if list.filled == pixels && pixels > 0 {
+        note.push_str(&format!("; the list writes no pixels, so all {} are 0", commas(pixels as u64)));
+    } else if list.filled == 1 {
+        note.push_str("; the list covers all but the last pixel, which is 0");
+    } else if list.filled > 0 {
+        note.push_str(&format!("; the list covers all but the last {}, which are 0", pixel_word(list.filled as u64)));
+    }
+    note
 }
 
 /// Why a list could not be read at all.
@@ -89,8 +103,8 @@ pub(super) fn step(tile: &mut Tile, image: &Image, data: &[u8], pixels: usize) -
 enum Refused {
     /// Fewer words than the header needs.
     Header,
-    /// A header saying the instructions start before the list, at this word
-    /// counted from 1.
+    /// A header whose second word, the header's length, is negative, which
+    /// would start the instructions before the list.
     Start(i64),
 }
 
@@ -116,6 +130,8 @@ struct List {
     /// Whether the words ran out before the list's length or the tile's
     /// pixels did.
     ran_out: bool,
+    /// Whether every pixel was made before the list's length was reached.
+    finished_early: bool,
 }
 
 /// `pl_l2pi`, reading every pixel of the tile from the start. See the module
@@ -139,7 +155,7 @@ fn read(words: &[i16], pixels: usize) -> Result<List, Refused> {
         list.header = 7;
         list.length = (high << 15) + low;
         if header < 0 {
-            return Err(Refused::Start(header + 1));
+            return Err(Refused::Start(header));
         }
         header as usize
     };
@@ -216,6 +232,7 @@ fn read(words: &[i16], pixels: usize) -> Result<List, Refused> {
             _ => list.passed_over += 1,
         }
         if x1 > npix {
+            list.finished_early = true;
             break;
         }
         ip += 1;
@@ -228,7 +245,58 @@ fn read(words: &[i16], pixels: usize) -> Result<List, Refused> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::cards;
+    use super::super::{decode, Place, Row, Stored};
     use super::*;
+
+    /// A one-row image of 32-bit integers, `pixels` long, compressed as the
+    /// list `words`, decoded the way the panel decodes it.
+    fn decoded(words: &[i16], pixels: usize) -> Tile {
+        let lines = ["ZBITPIX =                   32".to_string(), "ZNAXIS  =                    1".into(), format!("ZNAXIS1 = {pixels:20}"), "ZCMPTYPE= 'PLIO_1  '".into()];
+        let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let image = Image::from_cards(&cards(&refs)).unwrap();
+        let data: Vec<u8> = words.iter().flat_map(|w| w.to_be_bytes()).collect();
+        let row = Row {
+            place: Some(Place { stored: Stored::Compressed, count: words.len() as u64, offset: 0, elem: b'I' }),
+            has_data_column: true,
+            zscale: None,
+            zzero: None,
+            zblank: None,
+            quantized: false,
+        };
+        decode(&image, 0, &row, &data)
+    }
+
+    #[test]
+    fn the_note_says_what_the_list_did_not_write_and_did_not_read() {
+        let note = |words: &[i16], pixels: usize| decoded(words, pixels).steps[0].note.clone();
+        assert_eq!(
+            note(&list(&[op(4, 2)]), 5),
+            "pixel list, 8 words of 16 bits; a 7-word header, then 1 instruction: 0 runs of zeros, 1 run of the current value, 0 runs of zeros ending in the value, 0 values set from two words, 0 changes to the value with no pixel written, 0 changes to the value with one pixel written; the list covers all but the last 3 pixels, which are 0"
+        );
+        assert!(note(&list(&[op(4, 2)]), 3).ends_with("; the list covers all but the last pixel, which is 0"));
+        let mut empty = list(&[op(4, 2)]);
+        empty[3] = 0;
+        assert!(note(&empty, 3).ends_with("; the list writes no pixels, so all 3 are 0"));
+        assert!(note(&list(&[op(4, 5), op(4, 5)]), 5).ends_with("; all pixels written by word 8, the last 1 word not read"));
+        assert!(note(&list(&[0xf000, op(4, 1)]), 1).ends_with(", and 1 word skipped (unknown opcode)"));
+    }
+
+    #[test]
+    fn a_list_that_is_refused_or_runs_out_says_why() {
+        let problem = |words: &[i16], pixels: usize| decoded(words, pixels).problem.unwrap_or_default();
+        assert_eq!(problem(&[0, 7], 4), "Stopped at PLIO_1: the list is 2 words, shorter than its header (3 or 7 words).");
+        assert_eq!(problem(&[0, -3, -100, 9, 0, 0, 0], 4), "Stopped at PLIO_1: the list's second word gives the header length as -3, which is negative.");
+        let mut short = list(&[op(4, 2), op(0, 2)]);
+        short[3] = 40;
+        short.pop();
+        let t = decoded(&short, 8);
+        assert_eq!(t.pixels, [1.0, 1.0]);
+        assert_eq!(
+            t.problem.as_deref(),
+            Some("Stopped at PLIO_1: the data ran out after 2 of 8 pixels; the list says it is 40 words, but the tile holds only 8 words.")
+        );
+    }
 
     /// A list with the seven-word header CFITSIO writes, round these
     /// instructions.
@@ -297,7 +365,7 @@ mod tests {
     fn a_broken_list_is_refused_or_stops_where_its_words_do() {
         assert_eq!(read(&[0, 7], 4).unwrap_err(), Refused::Header);
         assert_eq!(read(&[0, 7, -100, 9], 4).unwrap_err(), Refused::Header);
-        assert_eq!(read(&[0, -3, -100, 9, 0, 0, 0], 4).unwrap_err(), Refused::Start(-2));
+        assert_eq!(read(&[0, -3, -100, 9, 0, 0, 0], 4).unwrap_err(), Refused::Start(-3));
         // A list that says it is longer than its words.
         let mut words = list(&[op(4, 2), op(0, 2)]);
         words[3] = 40;

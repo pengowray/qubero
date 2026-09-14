@@ -11,10 +11,11 @@
 //! coefficients is written as a quadtree, and the signs after.
 //!
 //! **The stream.** Two bytes `DD 99`; `nx`, `ny` and `scale` as big-endian
-//! 32-bit integers; the sum of every pixel as a big-endian 64-bit integer,
-//! which is the one coefficient not coded in bit planes; and three bytes, how
-//! many bit planes the first quadrant, the second and third, and the fourth
-//! have. Bits after that are read from the top of each byte down.
+//! 32-bit integers; the first coefficient, the coarsest sum, as a big-endian
+//! 64-bit integer, which is the one coefficient not coded in bit planes
+//! (CFITSIO calls it the sum of all pixels, though each level after the first
+//! halves it); and three bytes, how many bit planes the first quadrant, the
+//! second and third, and the fourth have. Bits after that are read from the top of each byte down.
 //!
 //! **Quadrants.** The coefficients are split in four: rows up to `(nx+1)/2`
 //! and columns up to `(ny+1)/2`, which holds the coarse sums; the rest of
@@ -38,7 +39,7 @@
 //!
 //! After the last plane four bits of 0 end the planes. Signs start on the
 //! next byte: one bit for each non-zero coefficient in order, 1 for negative.
-//! The first coefficient is then the sum from the header.
+//! The first coefficient is then the one from the header.
 //!
 //! **Undigitizing** multiplies every coefficient by `scale`, when `scale` is
 //! over 1.
@@ -82,18 +83,22 @@ pub(super) fn step(tile: &mut Tile, image: &Image, data: &[u8], pixels: usize) -
         }
     };
     let Coefficients { nx, ny, scale, sum, planes, quadtree, direct, signs, .. } = coefficients;
+    let loss = if scale <= 1 { "lossless" } else { "lossy" };
+    let all_planes = u64::from(planes[0]) + 2 * u64::from(planes[1]) + u64::from(planes[2]);
     tile.steps.push(Step {
         what: name.into(),
         in_bytes: data.len(),
         out_bytes: 0,
         note: format!(
-            "{ny} × {nx} coefficients, scale {scale}, sum of all pixels {sum}; bit planes by quadrant {}, {}, {}: {} as quadtrees, {} written directly; {} sign bits",
+            "{ny} × {nx} coefficients, scale {scale} ({loss}); coarsest coefficient {}, stored whole in the header, not in the bit planes; {} ({} for quadrant 1, {} each for quadrants 2 and 3, {} for quadrant 4): {} as quadtrees, {} written directly; {}, one per non-zero coefficient",
+            signed_commas(sum),
+            plural(all_planes, "bit plane", "bit planes"),
             planes[0],
             planes[1],
             planes[2],
             commas(quadtree as u64),
             commas(direct as u64),
-            commas(signs as u64)
+            plural(signs as u64, "sign bit", "sign bits")
         ),
     });
     if scale > 1 {
@@ -102,24 +107,24 @@ pub(super) fn step(tile: &mut Tile, image: &Image, data: &[u8], pixels: usize) -
             what: "undigitize".into(),
             in_bytes: 0,
             out_bytes: 0,
-            note: format!("each coefficient × {scale}, the scale it was divided by"),
+            note: format!("each coefficient × {scale}, the scale it was divided by when compressed"),
         });
         if scaled.is_err() {
-            tile.problem = Some(format!("Stopped at undigitize: a coefficient times {scale} is more than a 64-bit integer holds."));
+            tile.problem = Some(format!("Stopped at undigitize: a coefficient × {scale} overflowed a 64-bit integer."));
             return None;
         }
     }
     let smooth = image.smooth != 0 && scale >= 2;
     let levels = ceil_log2(nx.max(ny));
-    let mut note = format!("inverse H-transform over {}", plural(u64::from(levels), "level", "levels"));
+    let mut note = format!("inverse H-transform (a 2-D Haar wavelet) over {}, coarsest first", plural(u64::from(levels), "level", "levels"));
     if smooth {
-        note.push_str(&format!(", smoothed as it went (SMOOTH = {}), each difference moved by at most {}", image.smooth, scale >> 1));
+        note.push_str(&format!("; smoothed at every level (SMOOTH = {}): each level's differences adjusted by at most {}", image.smooth, scale >> 1));
     } else if image.smooth != 0 {
-        note.push_str(&format!("; SMOOTH = {} does nothing at a scale of {scale}", image.smooth));
+        note.push_str(&format!("; SMOOTH = {} ignored: smoothing needs a scale of 2 or more", image.smooth));
     }
     tile.steps.push(Step { what: "H-transform".into(), in_bytes: 0, out_bytes: 0, note });
     if hinv(&mut coefficients.values, nx, ny, smooth, i64::from(scale)).is_err() {
-        tile.problem = Some("Stopped at H-transform: a coefficient came to more than a 64-bit integer holds.".into());
+        tile.problem = Some("Stopped at H-transform: a coefficient overflowed a 64-bit integer.".into());
         return None;
     }
     // What `fits_hdecompress64` hands back: each pixel as a C `int`.
@@ -130,23 +135,32 @@ pub(super) fn step(tile: &mut Tile, image: &Image, data: &[u8], pixels: usize) -
 fn problem(name: &str, why: &Broken, bytes: usize, pixels: usize) -> String {
     match why {
         Broken::Short => format!(
-            "Stopped at {name}: the tile is {}, too short for the {HEADER}-byte header.",
+            "Stopped at {name}: the tile is {}, too short for its own {HEADER}-byte header.",
             plural(bytes as u64, "byte", "bytes")
         ),
         Broken::Magic(m) => format!("Stopped at {name}: the tile starts with {:02X} {:02X}, not DD 99.", m[0], m[1]),
         Broken::Size { nx, ny } => format!(
-            "Stopped at {name}: the header says {ny} × {nx} pixels, and the tile is {}.",
+            "Stopped at {name}: the tile's own header says {ny} × {nx} pixels, but the tile is {}.",
             pixel_word(pixels as u64)
         ),
-        Broken::TooSmall => format!("Stopped at {name}: the tile is 1 × 1 pixel, and the H-transform needs 2 pixels along one axis at least."),
-        Broken::Planes(p) => format!("Stopped at {name}: a quadrant has {p} bit planes, and a 64-bit coefficient holds at most {MOST_PLANES}."),
+        Broken::TooSmall => format!("Stopped at {name}: the tile is 1 × 1, and the H-transform needs a tile at least 2 pixels wide or tall."),
+        Broken::Planes { count, which } => format!(
+            "Stopped at {name}: the tile's own header gives {} to {}, and a 64-bit coefficient holds at most {MOST_PLANES}.",
+            plural(u64::from(*count), "bit plane", "bit planes"),
+            ["quadrant 1", "each of quadrants 2 and 3", "quadrant 4"][*which]
+        ),
         Broken::Code { quadrant, plane, code } => format!(
-            "Stopped at {name}: bit plane {plane} of quadrant {} opens with {code}, and only 0 and 15 are allowed.",
+            "Stopped at {name}: bit plane {plane} of quadrant {} starts with format code {code}; only 0 (direct) and 15 (quadtree) are allowed.",
             quadrant + 1
         ),
-        Broken::End(code) => format!("Stopped at {name}: after the last bit plane comes {code}, not the 0 that ends them."),
+        Broken::End(code) => format!("Stopped at {name}: the 4 bits after the last bit plane are {code}, not the 0 that ends the planes."),
         Broken::RanOut => format!("Stopped at {name}: the data ran out before every coefficient was read."),
     }
+}
+
+/// A signed count as people read one: -5980 as `-5,980`.
+fn signed_commas(n: i64) -> String {
+    if n < 0 { format!("-{}", commas(n.unsigned_abs())) } else { commas(n.unsigned_abs()) }
 }
 
 /// Why a stream could not be read.
@@ -160,8 +174,9 @@ enum Broken {
     Size { nx: i32, ny: i32 },
     /// A tile of one pixel, which has no H-transform.
     TooSmall,
-    /// A quadrant of more bit planes than a coefficient holds.
-    Planes(u8),
+    /// More bit planes than a coefficient holds, and which of the header's
+    /// three counts said so, from 0.
+    Planes { count: u8, which: usize },
     /// A bit plane opening with neither 0 nor 15. The quadrant counts from 0,
     /// the plane from the lowest.
     Code { quadrant: usize, plane: u32, code: u64 },
@@ -211,8 +226,8 @@ fn decode(data: &[u8], pixels: usize) -> Result<Coefficients, Broken> {
     if nx.max(ny) < 2 {
         return Err(Broken::TooSmall);
     }
-    if let Some(p) = planes.iter().find(|p| **p > MOST_PLANES) {
-        return Err(Broken::Planes(*p));
+    if let Some((which, count)) = planes.iter().enumerate().find(|(_, p)| **p > MOST_PLANES) {
+        return Err(Broken::Planes { count: *count, which });
     }
     let (nx, ny) = (nx as usize, ny as usize);
     let mut out = Coefficients { nx, ny, scale, sum, planes, values: vec![0; pixels], quadtree: 0, direct: 0, signs: 0 };
@@ -750,7 +765,45 @@ mod tests {
         // 2^32 pixels, which a tile of none is not.
         assert_eq!(decode(&header(65536, 65536, 0, 0, [0; 3]), 0).unwrap_err(), Broken::Size { nx: 65536, ny: 65536 });
         assert_eq!(decode(&header(1, 1, 0, 0, [0; 3]), 1).unwrap_err(), Broken::TooSmall);
-        assert_eq!(decode(&header(2, 2, 0, 0, [0, 64, 0]), 4).unwrap_err(), Broken::Planes(64));
+        assert_eq!(decode(&header(2, 2, 0, 0, [0, 64, 0]), 4).unwrap_err(), Broken::Planes { count: 64, which: 1 });
+    }
+
+    #[test]
+    fn a_refused_stream_says_why() {
+        let problem = |data: &[u8], nx: u64, ny: u64| decoded(data, nx, ny, 0).problem.unwrap_or_default();
+        assert_eq!(problem(&two_by_two()[..10], 2, 2), "Stopped at HCOMPRESS_1: the tile is 10 bytes, too short for its own 25-byte header.");
+        let mut bad = two_by_two();
+        bad[0] = 0x1f;
+        assert_eq!(problem(&bad, 2, 2), "Stopped at HCOMPRESS_1: the tile starts with 1F 99, not DD 99.");
+        assert_eq!(problem(&two_by_two(), 2, 3), "Stopped at HCOMPRESS_1: the tile's own header says 2 × 2 pixels, but the tile is 6 pixels.");
+        let mut one = header(1, 1, 0, 0, [0; 3]);
+        one.push(0);
+        assert_eq!(problem(&one, 1, 1), "Stopped at HCOMPRESS_1: the tile is 1 × 1, and the H-transform needs a tile at least 2 pixels wide or tall.");
+        assert_eq!(
+            problem(&header(2, 2, 0, 0, [0, 0, 70]), 2, 2),
+            "Stopped at HCOMPRESS_1: the tile's own header gives 70 bit planes to quadrant 4, and a 64-bit coefficient holds at most 63."
+        );
+        bad = two_by_two();
+        bad[HEADER] = 0b0111_0110;
+        assert_eq!(
+            problem(&bad, 2, 2),
+            "Stopped at HCOMPRESS_1: bit plane 0 of quadrant 2 starts with format code 7; only 0 (direct) and 15 (quadtree) are allowed."
+        );
+        bad = two_by_two();
+        bad[HEADER + 1] = 0b0001_0001;
+        assert_eq!(problem(&bad, 2, 2), "Stopped at HCOMPRESS_1: the 4 bits after the last bit plane are 8, not the 0 that ends the planes.");
+        assert_eq!(problem(&two_by_two()[..28], 2, 2), "Stopped at HCOMPRESS_1: the data ran out before every coefficient was read.");
+    }
+
+    #[test]
+    fn the_notes_say_how_the_stream_was_written_and_what_smoothing_did() {
+        let t = decoded(&two_by_two(), 2, 2, 1);
+        assert_eq!(
+            t.steps[0].note,
+            "2 × 2 coefficients, scale 0 (lossless); coarsest coefficient 400, stored whole in the header, not in the bit planes; 2 bit planes (0 for quadrant 1, 1 each for quadrants 2 and 3, 0 for quadrant 4): 1 as quadtrees, 1 written directly; 2 sign bits, one per non-zero coefficient"
+        );
+        assert_eq!(t.steps[1].note, "inverse H-transform (a 2-D Haar wavelet) over 1 level, coarsest first; SMOOTH = 1 ignored: smoothing needs a scale of 2 or more");
+        assert_eq!(signed_commas(-1_234_567), "-1,234,567");
     }
 
     #[test]
