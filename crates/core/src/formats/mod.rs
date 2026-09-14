@@ -88,6 +88,7 @@ pub mod grib_values;
 mod grubenv;
 mod gdbm;
 mod gwf;
+mod gwf_classes;
 pub mod gwf_vect;
 mod gzip;
 mod recognise;
