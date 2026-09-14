@@ -148,6 +148,9 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   ico: ["ico", "cur"],
   psd: ["psd", "psb"],
   jxr: ["jxr", "wdp"],
+  // A bare codestream, a JP2 file, and the JPX and JPM files that open with
+  // the same boxes.
+  jpeg2000: ["jp2", "j2k", "j2c", "jpc", "jpx", "jpf", "jpm"],
   dng: ["dng"],
   cr2: ["cr2"],
   nef: ["nef"],
