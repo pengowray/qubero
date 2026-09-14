@@ -51,8 +51,13 @@ walk(root);
 let named = 0;
 let time = 0;
 for (const f of files) {
-  const size = statSync(f).size;
-  const fd = openSync(f, "r");
+  let size, fd;
+  try {
+    size = statSync(f).size;
+    fd = openSync(f, "r");
+  } catch {
+    continue; // A temporary file a writer in the samples folder has already renamed.
+  }
   const head = Buffer.alloc(Math.min(WINDOW, size));
   readSync(fd, head, 0, head.length, 0);
   const tailLen = Math.min(TAIL, size);
@@ -64,7 +69,7 @@ for (const f of files) {
   time += performance.now() - t;
   const n = namingMatch(m);
   if (n !== null) named++;
-  const top = m.slice(0, 3).map((x) => `${x.format.label}[${x.fixed}${x.extensionAgrees ? ",ext" : ""}]`).join("; ");
+  const top = m.slice(0, 3).map((x) => `${x.format.label}[${x.fixed}${x.worth !== x.fixed ? `~${x.worth}` : ""}${x.extensionAgrees ? ",ext" : ""}]`).join("; ");
   console.log(`${relative(root, f).padEnd(50).slice(0, 50)} ${String(m.length).padStart(4)} ${n ? "NAME " + n.format.label : "-"} | ${top}`);
 }
 console.log({ files: files.length, named, msPerFile: (time / files.length).toFixed(1) });

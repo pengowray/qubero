@@ -127,8 +127,12 @@ fn a_real_binary_tables_columns_are_typed_by_its_header() {
     assert_eq!(c2.size_bits, 3 * 8);
     assert!(matches!(&c2.value, Value::Str(s) if s.trim() == "abc"), "{:?}", c2.value);
 
-    // `TFORM3 = '1E'`: one float.
-    assert_eq!(ev.node(&doc, &at(&[3, 1, 0, 0, 2, 0])).unwrap().value, Value::Float(1.1));
+    // `TFORM3 = '1E'`: one float, which `TSCAL3 = 3` and `TZERO3 = 0.4` say
+    // is worth 3.7, as astropy reads it to within a millionth.
+    assert_eq!(ev.node(&doc, &at(&[3, 1, 0, 0, 2])).unwrap().type_name, "Scaled column");
+    assert_eq!(ev.node(&doc, &at(&[3, 1, 0, 0, 2, 2, 0, 0])).unwrap().value, Value::Float(1.1));
+    let Value::Float(worth) = ev.node(&doc, &at(&[3, 1, 0, 0, 2, 2, 0, 1])).unwrap().value else { panic!("not a real") };
+    assert!((worth - 3.7000000715255736).abs() < 1e-6, "{worth}");
 
     // `TFORM4 = '1L'`: a logical, written as the letter T or F; the first row says F.
     let c4 = ev.node(&doc, &at(&[3, 1, 0, 0, 3])).unwrap();
@@ -166,9 +170,14 @@ fn a_real_table_of_forty_columns_reads_every_one_of_them() {
 
 /// `scaled.fits` says what its columns and its pixels are worth. Two of the
 /// three columns are the unsigned convention, one each way, and the third is a
-/// genuine scaling that stays the float it is written as.
+/// genuine scaling with fractions in it, over floats. Every worth checked here
+/// is what astropy 7 reads for the same cell.
+///
+/// The collection holds no file whose scale is written with an exponent over
+/// data it scales, so that is checked by
+/// `formats::fits::tests::a_scale_written_with_an_exponent_scales_the_column`.
 #[test]
-fn a_real_scaled_table_reads_the_convention_as_a_type_and_a_scaling_as_a_note() {
+fn a_fractional_scale_scales_the_column_as_astropy_reads_it() {
     let Some((doc, mut ev)) = read("fits/scaled.fits") else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
@@ -186,15 +195,24 @@ fn a_real_scaled_table_reads_the_convention_as_a_type_and_a_scaling_as_a_note() 
     // type unsigned, so -128 is written as the unsigned 0.
     assert_eq!(ev.node(&doc, &[0, 1, 3, 1, 0, 0, 2, 2, 0, 0]).unwrap().value, Value::UInt(0));
     assert_eq!(ev.node(&doc, &[0, 1, 3, 1, 0, 0, 2, 2, 0, 1]).unwrap().value, Value::Int(-128));
-    // The middle column is a scaling, not a type: the float stays a float and
-    // the column says what its numbers are worth.
+    // The middle column is a scaling by 2.5 with a zero point of 0.4: each
+    // float is the float on disk, and what it is worth beside it.
     let flux = ev.node(&doc, &[0, 1, 3, 1, 0, 0, 1]).unwrap();
-    assert_eq!(flux.type_name, "f32 be[]");
-    let mut said = |i: usize| match &ev.node(&doc, &[0, 1, 3, 0, 1, i]).unwrap().value {
-        Value::Str(s) => s.trim().to_string(),
-        other => panic!("not text: {other:?}"),
-    };
-    assert_eq!((said(2), said(3)), ("2.5".to_string(), "0.4".to_string()));
+    assert_eq!(flux.type_name, "Scaled column");
+    let mut said = |i: usize| ev.node(&doc, &[0, 1, 3, 0, 1, i]).unwrap().value;
+    assert_eq!((said(2), said(3)), (Value::Float(2.5), Value::Float(0.4)));
+    // astropy works from the float's exact bits, and this from the float as
+    // its row reads, so the two meet within a millionth and not at the bit.
+    for (row, stored, astropy) in [(0, 0.24000001, 1.0000000238418578), (1, 0.64, 1.999999964237213), (2, 1.04, 2.9999999046325683), (3, 1.4399999, 3.9999998450279235)] {
+        assert_eq!(ev.node(&doc, &[0, 1, 3, 1, row, 0, 1, 2, 0, 0]).unwrap().value, Value::Float(stored), "row {row}");
+        let worth = ev.node(&doc, &[0, 1, 3, 1, row, 0, 1, 2, 0, 1]).unwrap();
+        assert_eq!(worth.type_name, "computed real");
+        let Value::Float(got) = worth.value else { panic!("row {row} is worth {:?}", worth.value) };
+        assert!((got - astropy).abs() < 1e-6, "row {row}: {got} against astropy's {astropy}");
+    }
+    // And the sum a reader is shown for the first of them.
+    let rel = ev.relations(&doc, &[0, 1, 3, 1, 0, 0, 1, 2, 0, 1]).unwrap();
+    assert_eq!((rel[0].written.as_str(), rel[0].substituted.as_str()), ("stored * scale + zero", "0.24000001 * 2.5 + 0.4"));
     // And the image after it says what its pixels are worth, by `BZERO`.
     let pixels = ev.node(&doc, &[0, 2, 3]).unwrap();
     assert_eq!(pixels.type_name, "Scaled[]");

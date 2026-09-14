@@ -40,6 +40,9 @@ pub mod bam_records;
 mod appledouble;
 mod au;
 mod bmp;
+mod bufr;
+pub mod bufr_data;
+pub mod bufr_tables;
 mod bzip2;
 mod bdb;
 mod bencode;
@@ -160,6 +163,7 @@ mod sevenzip;
 mod swf;
 mod tap;
 mod tar;
+mod tdms;
 mod tga;
 mod tiff;
 mod thumbsdb;
@@ -221,6 +225,7 @@ pub use godot_pck::godot_pck;
 pub use godot_text::godot_text;
 pub use gif::gif;
 pub use grib::grib;
+pub use bufr::bufr;
 pub use grubenv::grubenv;
 pub use gdbm::gdbm;
 pub use gwf::gwf;
@@ -286,6 +291,7 @@ pub use sevenzip::sevenzip;
 pub use swf::swf;
 pub use tap::tap;
 pub use tar::tar;
+pub use tdms::tdms;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
@@ -398,6 +404,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("p64png", |_| p64png()),
     ("netcdf", |_| netcdf()),
     ("grib", |_| grib()),
+    ("bufr", |_| bufr()),
     ("npy", |_| npy()),
     ("ogg", |_| ogg()),
     ("fits", |_| fits()),
@@ -419,6 +426,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("rar4", |_| rar4()),
     ("rar5", |_| rar5()),
     ("gwf", |_| gwf()),
+    ("tdms", |_| tdms()),
     ("uf2", |_| uf2()),
     ("hackrffw", |_| hackrffw()),
     ("gif", |_| gif()),

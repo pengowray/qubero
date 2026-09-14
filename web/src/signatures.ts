@@ -7,8 +7,9 @@
 // from TrID and PRONOM, and hundreds of formats share a prefix: every format
 // that is XML underneath starts `<?xml`, every one that is ZIP starts `PK\3\4`,
 // and 140 of them are identified by nothing more than a first byte of `<`. So a
-// match is ranked by how many bytes it pinned down, with the file's extension
-// counting for some more when the format lists it.
+// match is ranked by how many bytes it pinned down, a zero counting for half,
+// with the file's extension counting for some more when the format lists it,
+// and a match worth less than two bytes is dropped unless the extension agrees.
 
 /** One pattern: canonical PRONOM syntax, its offset, and whether that offset
  *  counts back from the end of the file. */
@@ -52,11 +53,25 @@ export type SigMatch = {
   readonly fromEnd: boolean;
   /** Bytes the pattern pins to a value. */
   readonly fixed: number;
+  /** Those bytes as the ranking counts them, a zero for `ZERO_WORTH`. */
+  readonly worth: number;
   /** The file's own extension is one the format lists. */
   readonly extensionAgrees: boolean;
-  /** What the ranking sorts by: the bytes, and `EXTENSION_WORTH` more when the extension agrees. */
+  /** What the ranking sorts by: the worth, and `EXTENSION_WORTH` more when the extension agrees. */
   readonly score: number;
 };
+
+/**
+ * What a pinned zero byte counts for, where any other pinned byte counts one.
+ * Zero is the commonest byte in a binary file: padding, reserved fields, the
+ * high bytes of small numbers. Set by sweeping the sample collection. Counting
+ * zeros in full, KDC (`4D4D002A0000000800`) named a Canon DNG, a Nikon NEF and
+ * a big-endian TIFF, and Delta RPM (`EDABEEDB0300000000`) named four plain
+ * RPMs. A half puts all seven right. Three quarters leaves Delta RPM tied with
+ * RPM, so the RPMs go unnamed, and a quarter leaves an ICO's `00000100` too
+ * little to name it even with the extension.
+ */
+export const ZERO_WORTH = 0.5;
 
 /**
  * How many pinned bytes an agreeing extension is worth. Set by sweeping the
@@ -66,6 +81,17 @@ export type SigMatch = {
  * an extension outrank a long signature.
  */
 export const EXTENSION_WORTH = 4;
+
+/**
+ * The least worth that counts as a match without the extension behind it,
+ * which a zero byte alone, or a `0001`, falls short of.
+ * One byte says nothing about a file: "Vue D'Esprit 4 Atmosphere Preset"
+ * is a zero at offset 12, which 132 of the 592 sample files have, HDF5 among
+ * them, and a lone `M` or `P` at offset 0 made every big-endian TIFF a DMIS
+ * file and every ZIP a PrintFox bitmap. With its extension, a one-byte match
+ * stays: a `{` in a .json is at least consistent with GeoJSON.
+ */
+export const LISTING_BYTES_ALONE = 2;
 
 /** A compiled pattern. Gaps have a minimum and maximum length. */
 type Token =
@@ -189,6 +215,17 @@ export function fixedBytes(tokens: readonly Token[]): number {
   return n;
 }
 
+/** The pinned bytes as the ranking counts them: `ZERO_WORTH` for a zero, one
+ *  for anything else, and the least of the alternatives. */
+export function pinnedWorth(tokens: readonly Token[]): number {
+  let n = 0;
+  for (const t of tokens) {
+    if (t.k === "lit") for (const b of t.b) n += b === 0 ? ZERO_WORTH : 1;
+    else if (t.k === "alt") n += Math.min(...t.opts.map(pinnedWorth));
+  }
+  return n;
+}
+
 /** The shortest run of bytes the pattern can match, to know where to start
  *  looking for one measured from the end. */
 function minLength(tokens: readonly Token[]): number {
@@ -207,8 +244,9 @@ export type Compiled = {
   readonly sig: Sig;
   readonly tokens: Token[];
   readonly fixed: number;
+  readonly worth: number;
   /** Where this sits in the order `compileAll` built, which breaks a tie
-   *  between two signatures of one format that pin the same number of bytes.
+   *  between two signatures of one format that are worth the same.
    *  Without it the answer would depend on which way the index was walked. */
   readonly seq: number;
 };
@@ -219,7 +257,7 @@ export function compileAll(data: SigData): Compiled[] {
   for (const format of data.formats) {
     for (const sig of format.sigs) {
       const tokens = compile(sig[0]);
-      out.push({ format, sig, tokens, fixed: fixedBytes(tokens), seq: out.length });
+      out.push({ format, sig, tokens, fixed: fixedBytes(tokens), worth: pinnedWorth(tokens), seq: out.length });
     }
   }
   return out;
@@ -311,9 +349,9 @@ function bestOf(ext: string): Best {
   return {
     offer(c: Compiled): void {
       const prev = byFormat.get(c.format.id);
-      // The most bytes wins; the earliest signature breaks a tie, so that the
+      // The most worth wins; the earliest signature breaks a tie, so that the
       // answer does not depend on the order the index happened to be walked.
-      if (prev !== undefined && (prev.fixed > c.fixed || (prev.fixed === c.fixed && prev.seq <= c.seq))) return;
+      if (prev !== undefined && (prev.worth > c.worth || (prev.worth === c.worth && prev.seq <= c.seq))) return;
       byFormat.set(c.format.id, c);
     },
     matches(): SigMatch[] {
@@ -321,17 +359,19 @@ function bestOf(ext: string): Best {
       for (const c of byFormat.values()) {
         const f = c.format;
         const agrees = ext !== "" && ((f.ext?.includes(ext) ?? false) || (f.wpExt?.includes(ext) ?? false));
+        if (c.worth < LISTING_BYTES_ALONE && !agrees) continue;
         out.push({
           format: f,
           pattern: c.sig[0],
           offset: c.sig[1],
           fromEnd: c.sig[2] === "eof",
           fixed: c.fixed,
+          worth: c.worth,
           extensionAgrees: agrees,
-          score: c.fixed + (agrees ? EXTENSION_WORTH : 0),
+          score: c.worth + (agrees ? EXTENSION_WORTH : 0),
         });
       }
-      return out.sort((a, b) => b.score - a.score || b.fixed - a.fixed || a.format.label.localeCompare(b.format.label));
+      return out.sort((a, b) => b.score - a.score || b.worth - a.worth || a.format.label.localeCompare(b.format.label));
     },
   };
 }
@@ -396,12 +436,16 @@ export function matchFormatsSlowly(compiled: readonly Compiled[], file: FileByte
  * A match good enough to name a file nothing else could, or null. It must be
  * the only format with the best score, and either have the file's extension
  * behind it (and more than one byte: a `{` names nothing, even in a .json) or
- * pin down eight bytes on its own. Four unexplained bytes were not enough in
+ * be worth seven bytes on its own. Four unexplained bytes were not enough in
  * the sample sweep: they called a MATLAB file LiteDB and a PowerShell script
- * an ArtCAM model.
+ * an ArtCAM model. Seven would have been too low while a zero counted in full:
+ * seven bytes called another MATLAB file AceMoney (`00000001000000`, now worth
+ * four). Eight is too high now that a zero counts for half: an EDID dump's
+ * `00FFFFFFFFFFFF00` is worth seven. At seven, UnityFS bundles and StuffIt 5
+ * archives are named too.
  */
 export const NAMING_BYTES_WITH_EXTENSION = 2;
-export const NAMING_BYTES_ALONE = 8;
+export const NAMING_BYTES_ALONE = 7;
 export function namingMatch(matches: readonly SigMatch[]): SigMatch | null {
   const top = matches[0];
   if (top === undefined) return null;
@@ -416,10 +460,10 @@ export function namingMatch(matches: readonly SigMatch[]): SigMatch | null {
     if (fromRules.length !== 1 || fromWikidata.length !== tied.length - 1) return null;
     const [rule] = fromRules;
     if (rule === undefined) return null;
-    const enough = rule.extensionAgrees ? rule.fixed >= NAMING_BYTES_WITH_EXTENSION : rule.fixed >= NAMING_BYTES_ALONE;
+    const enough = rule.extensionAgrees ? rule.worth >= NAMING_BYTES_WITH_EXTENSION : rule.worth >= NAMING_BYTES_ALONE;
     return enough ? rule : null;
   }
-  const enough = top.extensionAgrees ? top.fixed >= NAMING_BYTES_WITH_EXTENSION : top.fixed >= NAMING_BYTES_ALONE;
+  const enough = top.extensionAgrees ? top.worth >= NAMING_BYTES_WITH_EXTENSION : top.worth >= NAMING_BYTES_ALONE;
   return enough ? top : null;
 }
 

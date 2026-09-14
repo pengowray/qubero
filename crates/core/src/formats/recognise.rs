@@ -53,9 +53,16 @@ const MAGIC: &[(&[u8], &str)] = &[
     // A gravitational wave frame file, whose fifth byte is the nul that ends
     // the four letters.
     (b"IGWD\0", "gwf"),
+    // A National Instruments measurement file, and the index file written
+    // beside one, whose segments open with `TDSh` instead.
+    (b"TDSm", "tdms"),
+    (b"TDSh", "tdms"),
     // A weather field, of either edition: the template reads the edition byte
     // and picks the layout, so one name serves both.
     (b"GRIB", "grib"),
+    // Weather observations, GRIB's sibling. A message saved off the GTS has
+    // an envelope in front of these letters and is a probe instead.
+    (b"BUFR", "bufr"),
     (npy::MAGIC, "npy"),
     // A columnar table. The same four bytes close the file, and the eight
     // before those are what finds everything in it.
@@ -296,6 +303,9 @@ const PROBES: &[Probe] = &[
     Probe::Is("tar", |h, _| tar::is_tar(h)),
     Probe::Which(assimp_format),
     Probe::Is("bgzf", |h, _| bam::is_bgzf(h)),
+    // A weather bulletin saved off the GTS, whose BUFR message is behind the
+    // envelope's heading rather than at the front.
+    Probe::Is("bufr", bufr::in_envelope),
     Probe::Signatures,
     // The Amiga container, whose form type says which format it holds.
     Probe::Which(|h, _| match h.len() >= 12 && h.starts_with(b"FORM") {

@@ -23,6 +23,88 @@ fn tag_key(tag: &Tag) -> Option<TagKey> {
     }
 }
 
+/// What a whole-number expression says when it meets a real, which is a
+/// template asking for a size, a count or an address in a number with a
+/// fraction. The one way through is named, since it is the fix.
+const REAL_IN_WHOLE: &str = "a real number where a whole number is needed; trunc(...) drops the fraction";
+
+/// The same said of a field, after its name: a float asked for as a whole
+/// number is not "not a number", which would send a reader looking for text.
+const REAL_IS_NOT_WHOLE: &str = "is a real number, but a whole number is needed here; trunc(...) drops the fraction";
+
+/// What a leaf that names a field found: the field's value and what to call it
+/// in a refusal, or no field at all. See [`Evaluator::field_value`].
+pub(super) enum Leaf {
+    Value(Value, String),
+    Nothing,
+}
+
+/// A value read as a real, for the values that are numbers: a float as itself
+/// and a whole number as the real it is. Not text or bytes, whose second
+/// reading as a big-endian number is for a switch keying on a tag and would be
+/// nonsense multiplied by a scale; [`Expr::RealText`] reads the number text
+/// spells.
+pub(super) fn real_reading(v: &Value) -> Option<f64> {
+    match v {
+        Value::Float(f) => Some(*f),
+        Value::Unset(inner) => real_reading(inner),
+        Value::Str(_) | Value::Bytes { .. } => None,
+        other => other.as_int().map(|i| i as f64),
+    }
+}
+
+/// Ten to a whole power, as near as a double holds it.
+///
+/// Every power from nought to twenty-two is a double exactly, so those are
+/// multiplied out and a negative one is a single division, which a double
+/// rounds correctly. Past that the product would pick up the rounding of each
+/// step, so the power is written out and read back, which rounds once.
+fn ten_to(n: i128) -> f64 {
+    match n {
+        0..=22 => 10f64.powi(n as i32),
+        -22..=-1 => 1.0 / 10f64.powi(-n as i32),
+        _ => format!("1e{}", n.clamp(-100_000, 100_000)).parse().unwrap_or(if n > 0 { f64::INFINITY } else { 0.0 }),
+    }
+}
+
+/// The real number a run of text spells, the way FITS writes one: blanks
+/// around it, an exponent after `E` or Fortran's `D`, and digits on only one
+/// side of the point, `.5` and `1.`, allowed. Nothing at all is nought, so a
+/// card that is not there can be given a default by `Or`.
+///
+/// Not a number and infinity are refused: Rust would read `nan` and `inf`, and
+/// no format that writes a scale as text means either.
+pub(super) fn real_from_text(text: &str) -> R<f64> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(0.0);
+    }
+    let spelled: String = t.chars().map(|c| match c {
+        'D' => 'E',
+        'd' => 'e',
+        c => c,
+    }).collect();
+    match spelled.parse::<f64>() {
+        Ok(v) if v.is_finite() => Ok(v),
+        _ => fail(format!("{t:?} is not a number")),
+    }
+}
+
+/// The whole part of a real, towards nought, for a real that has to become a
+/// size, a count or an address. See [`Expr::Trunc`].
+fn whole_part(v: f64) -> R<i128> {
+    if v.is_nan() {
+        return fail("trunc(...) of NaN");
+    }
+    // 2^127 is a double exactly, and so is its negative, which is the least
+    // an i128 holds; anything from there up is past the most it holds.
+    let limit = 2f64.powi(127);
+    if !(-limit..limit).contains(&v) {
+        return fail(if v.is_infinite() { "trunc(...) of infinity" } else { "trunc(...) of a number too large to hold" });
+    }
+    Ok(v.trunc() as i128)
+}
+
 impl Evaluator {
 
     pub(super) fn eval_expr<S: Source>(&mut self, doc: &Document<S>, at: &[usize], e: &Expr) -> R<i128> {
@@ -131,7 +213,14 @@ impl Evaluator {
             }
             Expr::Ref(name) => match self.lookup(doc, at, name)? {
                 (Some(v), _) => v,
-                (None, _) => return fail(format!("{name} is not a number")),
+                // Said apart from text for the reason `int_at` says it.
+                (None, _) => match self.field_value(doc, at, e, here) {
+                    Ok(Leaf::Value(v, _)) if real_reading(&v).is_some() => {
+                        return fail(format!("{name} {REAL_IS_NOT_WHOLE}"))
+                    }
+                    Err(err) if err.interrupted() => return Err(err),
+                    _ => return fail(format!("{name} is not a number")),
+                },
             },
             Expr::SizeOf(name) => self.lookup(doc, at, name)?.1,
             Expr::BitsOf(name) => self.lookup_bits(doc, at, name)?.1,
@@ -397,7 +486,183 @@ impl Evaluator {
                 }
                 i128::from(n.ilog2())
             }
+            // A real where a whole number is wanted is a template saying
+            // something it cannot mean, and rounding it quietly would place
+            // bytes at an offset nobody wrote. `trunc` is the way in.
+            Expr::Real(_) | Expr::RealText(_) => return fail(REAL_IN_WHOLE),
+            // In a whole number these are the shift and the power they would
+            // be. A negative power is a fraction, and says so rather than
+            // pointing at `trunc`, which would make it nought.
+            Expr::Pow2(a) => {
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                if n < 0 {
+                    return fail("two to a negative power is not a whole number");
+                }
+                if n >= 127 {
+                    return fail(format!("two to the power {n} is too large to hold"));
+                }
+                1i128 << n
+            }
+            Expr::Pow10(a) => {
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                if n < 0 {
+                    return fail("ten to a negative power is not a whole number");
+                }
+                if n > 38 {
+                    return fail(format!("ten to the power {n} is too large to hold"));
+                }
+                10i128.pow(n as u32)
+            }
+            Expr::Trunc(a) => {
+                let v = self.eval_real_at(doc, at, a, here)?;
+                whole_part(v)?
+            }
         })
+    }
+
+    /// The same expression worked out as reals, for a [`Ty::ComputedReal`].
+    ///
+    /// One language and two readings of it, chosen by the field asking rather
+    /// than by the expression: `stored * scale` is a whole number in a
+    /// `computed` field and a real in a `computed real` one. What is real is
+    /// the arithmetic that makes the value. What decides something inside it
+    /// stays whole: which branch a condition takes, what power of two or ten
+    /// to scale by. Anything this has no real reading of is worked out whole
+    /// and then taken as a real, which is every leaf that is not a field: a
+    /// size, a count, an index.
+    pub(super) fn eval_real_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<f64> {
+        Ok(match e {
+            Expr::Real(v) => *v,
+            Expr::Lit(v) => *v as f64,
+            Expr::Add(a, b) => self.eval_real_at(doc, at, a, here)? + self.eval_real_at(doc, at, b, here)?,
+            Expr::Sub(a, b) => self.eval_real_at(doc, at, a, here)? - self.eval_real_at(doc, at, b, here)?,
+            Expr::Mul(a, b) => self.eval_real_at(doc, at, a, here)? * self.eval_real_at(doc, at, b, here)?,
+            // Dividing by nought fails here as it does in a whole number,
+            // rather than answering with an infinity nobody wrote.
+            Expr::Div(a, b) => {
+                let d = self.eval_real_at(doc, at, b, here)?;
+                if d == 0.0 {
+                    return fail("division by zero");
+                }
+                self.eval_real_at(doc, at, a, here)? / d
+            }
+            Expr::Min(a, b) => self.eval_real_at(doc, at, a, here)?.min(self.eval_real_at(doc, at, b, here)?),
+            Expr::Max(a, b) => self.eval_real_at(doc, at, a, here)?.max(self.eval_real_at(doc, at, b, here)?),
+            // The left side, or the right when the left comes to nought, and
+            // the nought is the real one: a scale of 0.5 is an answer.
+            Expr::Or(a, b) => match self.eval_real_at(doc, at, a, here)? {
+                v if v == 0.0 => self.eval_real_at(doc, at, b, here)?,
+                v => v,
+            },
+            // Which branch is a whole-number question; the branch is not.
+            Expr::Cond { when, then, otherwise } => {
+                let taken = match self.eval_expr_at(doc, at, when, here)? {
+                    0 => otherwise,
+                    _ => then,
+                };
+                self.eval_real_at(doc, at, taken, here)?
+            }
+            // The power is a whole number, and what it comes to is not.
+            Expr::Pow2(a) => {
+                let n = self.eval_expr_at(doc, at, a, here)?;
+                2f64.powi(n.clamp(-4096, 4096) as i32)
+            }
+            Expr::Pow10(a) => ten_to(self.eval_expr_at(doc, at, a, here)?),
+            Expr::RealText(inner) => {
+                let text = self.text_at(doc, at, &inner.clone(), here)?;
+                real_from_text(&text)?
+            }
+            Expr::Ref(_)
+            | Expr::Within(_)
+            | Expr::Elem { .. }
+            | Expr::ElemWithin { .. }
+            | Expr::Tagged(_)
+            | Expr::Placer(_)
+            | Expr::Sibling(_)
+            | Expr::Prev(_) => match self.field_value(doc, at, e, here)? {
+                Leaf::Value(v, what) => match real_reading(&v) {
+                    Some(f) => f,
+                    None if matches!(v, Value::Str(_) | Value::Bytes { .. }) => {
+                        return fail(format!("{what} is text; real(...) reads the number it spells"))
+                    }
+                    None => return fail(format!("{what} is not a number")),
+                },
+                Leaf::Nothing => 0.0,
+            },
+            other => self.eval_expr_at(doc, at, other, here)? as f64,
+        })
+    }
+
+    /// What a leaf that names a field lands on, read as the value it is rather
+    /// than as a whole number: a real reads a float field as the float, and
+    /// the relations panel writes one in as it reads.
+    ///
+    /// `Nothing` is a search or a walk back that found no field, which a
+    /// whole number reads as nought and so does a real. A field that is there
+    /// and the file did not write fails, for the reason [`Evaluator::int_at`]
+    /// gives.
+    pub(super) fn field_value<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        e: &Expr,
+        here: Option<(u64, u64)>,
+    ) -> R<Leaf> {
+        let (path, what) = match e {
+            Expr::Ref(name) => match self.find_field(at, name) {
+                Some(p) => (p, name.to_string()),
+                None => return fail(format!("unknown field {name}")),
+            },
+            Expr::Within(field) => (self.within_path(doc, at, &field.clone())?, field.join(".")),
+            Expr::Elem { array, index, field } => (self.elem_path(doc, at, array, index, field, here)?, array.to_string()),
+            Expr::ElemWithin { path, index, field } => {
+                (self.elem_within_path(doc, at, path, index, field, here)?, path.join("."))
+            }
+            Expr::Tagged(t) => {
+                let t = t.clone();
+                match self.tagged_path(doc, at, &t, here)? {
+                    Some((p, label)) => (p, label),
+                    None => return Ok(Leaf::Nothing),
+                }
+            }
+            // Asked of the record that placed this element, from the frame its
+            // offset was worked out in.
+            Expr::Placer(inner) => {
+                let (end, frame) = self.placer_frame(doc, at)?;
+                return self.field_value(doc, &end, &inner.clone(), frame);
+            }
+            Expr::Sibling(field) => match self.sibling_field_path(doc, at, &field.clone())? {
+                Some(p) => (p, field.join(".")),
+                None => return Ok(Leaf::Nothing),
+            },
+            // The element before this one in the nearest list, and nothing for
+            // the first, the way `previous` reads as a whole number.
+            Expr::Prev(name) => {
+                let Some((list, idx)) = self.enclosing_lists(at).into_iter().next() else { return Ok(Leaf::Nothing) };
+                if idx == 0 {
+                    return Ok(Leaf::Nothing);
+                }
+                let mut elem = list;
+                elem.push(idx - 1);
+                self.resolve(doc, &elem)?;
+                let Ty::Struct(s) = self.memo[&elem].ty.base() else { return Ok(Leaf::Nothing) };
+                let Some(j) = s.fields.iter().position(|f| *f.name == **name) else { return Ok(Leaf::Nothing) };
+                elem.push(j);
+                (elem, name.to_string())
+            }
+            _ => return fail("that expression names no field"),
+        };
+        let info = self.node(doc, &path)?;
+        if info.absent {
+            return fail(format!("{what} is not in this file"));
+        }
+        Ok(Leaf::Value(info.value, what))
     }
 
     /// The number the node at `path` holds, for an expression that reached it
@@ -411,6 +676,12 @@ impl Evaluator {
         let info = self.node(doc, path)?;
         if info.absent {
             return fail(format!("{what} is not in this file"));
+        }
+        // A float is a number, and what is wrong is where it was asked for:
+        // the same field reads as the float it is in a `computed real`. So
+        // the refusal says which, rather than calling it not a number.
+        if real_reading(&info.value).is_some() && info.value.as_int().is_none() {
+            return fail(format!("{what} {REAL_IS_NOT_WHOLE}"));
         }
         Ok(info.value.as_int())
     }
