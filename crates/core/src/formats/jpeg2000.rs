@@ -54,13 +54,13 @@ const MARKER: &[(i128, &str)] = &[
     (0xff53, "COC, coding style for one component"),
     (0xff55, "TLM, tile-part lengths"),
     (0xff57, "PLM, packet lengths in the main header"),
-    (0xff58, "PLT, packet lengths in a tile-part header"),
+    (0xff58, "PLT, packet lengths in the tile-part header"),
     (0xff5c, "QCD, default quantization"),
     (0xff5d, "QCC, quantization for one component"),
     (0xff5e, "RGN, region of interest"),
     (0xff5f, "POC, progression order change"),
     (0xff60, "PPM, packed packet headers in the main header"),
-    (0xff61, "PPT, packed packet headers in a tile-part header"),
+    (0xff61, "PPT, packed packet headers in the tile-part header"),
     (0xff63, "CRG, component registration"),
     (0xff64, "COM, comment"),
     (0xff90, "SOT, start of tile-part"),
@@ -92,7 +92,7 @@ const EOC: [u8; 2] = [0xff, 0xd9];
 /// level in the low bits, and Part 2 and Part 15 set the top two bits, so
 /// those show as the number they are.
 const RSIZ: &[(i128, &str)] = &[
-    (0, "Part 1, no profile"),
+    (0, "no profile restrictions"),
     (1, "profile 0"),
     (2, "profile 1"),
     (3, "2K digital cinema profile"),
@@ -107,11 +107,11 @@ const RSIZ: &[(i128, &str)] = &[
 const PROGRESSION: &[(i128, &str)] = &[(0, "LRCP"), (1, "RLCP"), (2, "RPCL"), (3, "PCRL"), (4, "CPRL")];
 
 /// The wavelet, from Table A.20.
-const TRANSFORMATION: &[(i128, &str)] = &[(0, "9-7 irreversible wavelet"), (1, "5-3 reversible wavelet")];
+const TRANSFORMATION: &[(i128, &str)] = &[(0, "9-7 irreversible filter"), (1, "5-3 reversible filter")];
 
 /// How the step sizes are written, from the low five bits of `Sqcd` or
 /// `Sqcc`, Table A.28.
-const QUANTIZATION: &[(i128, &str)] = &[(0, "no quantization"), (1, "scalar derived"), (2, "scalar expounded")];
+const QUANTIZATION: &[(i128, &str)] = &[(0, "no quantization"), (1, "scalar derived, one step size given"), (2, "scalar expounded, one step size per subband")];
 
 /// The code-block style bits, Table A.19. Bit 6 is Part 15's: the code-blocks
 /// are HT coded.
@@ -122,7 +122,7 @@ const CODE_BLOCK_STYLE: &[(u32, &str)] = &[
     (3, "vertically causal context"),
     (4, "predictable termination"),
     (5, "segmentation symbols"),
-    (6, "high-throughput block coding"),
+    (6, "HTJ2K code-blocks"),
 ];
 
 pub fn jpeg2000() -> Template {
@@ -299,7 +299,7 @@ fn cod() -> T {
         ("Lcod", T::u16(Big)),
         (
             "Scod",
-            T::flags("Scod", T::u8(), &[(0, "precinct sizes defined"), (1, "SOP markers may be used"), (2, "EPH markers used")]),
+            T::flags("Scod", T::u8(), &[(0, "custom precinct sizes"), (1, "SOP markers allowed"), (2, "EPH markers used")]),
         ),
         ("progression_order", T::enumeration("ProgressionOrder", T::u8(), PROGRESSION)),
         ("layers", T::u16(Big)),
@@ -317,7 +317,7 @@ fn coc() -> T {
     let mut fields = vec![
         ("Lcoc", T::u16(Big)),
         ("Ccoc", component_number()),
-        ("Scoc", T::flags("Scoc", T::u8(), &[(0, "precinct sizes defined")])),
+        ("Scoc", T::flags("Scoc", T::u8(), &[(0, "custom precinct sizes")])),
     ];
     fields.extend(coding_parameters("Scoc"));
     marker_segment("COC", fields)
@@ -427,7 +427,7 @@ fn rgn() -> T {
         vec![
             ("Lrgn", T::u16(Big)),
             ("Crgn", component_number()),
-            ("Srgn", T::enumeration("RoiStyle", T::u8(), &[(0, "implicit")])),
+            ("Srgn", T::enumeration("RoiStyle", T::u8(), &[(0, "implicit ROI, Maxshift method")])),
             ("SPrgn", T::u8()),
         ],
     )
@@ -539,7 +539,7 @@ fn com() -> T {
         "COM",
         vec![
             ("Lcom", T::u16(Big)),
-            ("Rcom", T::enumeration("CommentRegistration", T::u16(Big), &[(0, "binary data"), (1, "ISO 8859-15 text")])),
+            ("Rcom", T::enumeration("CommentRegistration", T::u16(Big), &[(0, "binary"), (1, "ISO 8859-15 text")])),
             (
                 "Ccom",
                 T::switch(E::field("Rcom"), vec![(1, T::text(StrLen::Fixed(E::Remaining), Encoding::Latin1))], T::bytes(E::Remaining)),

@@ -104,7 +104,8 @@ fn ftyp() -> T {
 
 /// `ihdr`: the image, as the codestream's SIZ says it. `BPC` is written the
 /// way `Ssiz` is, or is 255 when the components differ and a `bpcc` box says
-/// each one's depth. `C` is always 7, the wavelet.
+/// each one's depth. `C` is always 7, which says the codestream is JPEG 2000
+/// Part 1; JPX gives other numbers to other codings.
 fn ihdr() -> T {
     let varies = E::field("BPC").equal_to(E::lit(255));
     T::structure(
@@ -114,9 +115,9 @@ fn ihdr() -> T {
             ("WIDTH", T::u32(Big)),
             ("NC", T::u16(Big)),
             ("BPC", T::u8()),
-            ("C", T::enumeration("CompressionType", T::u8(), &[(7, "wavelet")])),
-            ("UnkC", T::enumeration("ColourspaceKnown", T::u8(), &[(0, "colour space known"), (1, "colour space not known")])),
-            ("IPR", T::enumeration("IntellectualProperty", T::u8(), &[(0, "no intellectual property box"), (1, "intellectual property box present")])),
+            ("C", T::enumeration("CompressionType", T::u8(), &[(7, "JPEG 2000")])),
+            ("UnkC", T::enumeration("ColourspaceKnown", T::u8(), &[(0, "colourspace known"), (1, "colourspace unknown")])),
+            ("IPR", T::enumeration("IntellectualProperty", T::u8(), &[(0, "no jp2i box"), (1, "jp2i box present")])),
             ("signed", T::when(varies.clone().equal_to(E::lit(0)), T::computed(E::field("BPC").bit(7)))),
             ("depth", T::when(varies.equal_to(E::lit(0)), T::computed(depth(E::field("BPC"))))),
         ],
@@ -130,7 +131,7 @@ fn colr() -> T {
     T::structure(
         "ColourSpecification",
         vec![
-            ("METH", T::enumeration("ColourMethod", T::u8(), &[(1, "enumerated colour space"), (2, "restricted ICC profile")])),
+            ("METH", T::enumeration("ColourMethod", T::u8(), &[(1, "enumerated colourspace"), (2, "restricted ICC profile")])),
             ("PREC", T::Int { bits: 8, endian: Big }),
             ("APPROX", T::u8()),
             ("EnumCS", T::when(enumerated.clone(), T::enumeration("EnumCS", T::u32(Big), ENUM_CS))),
@@ -165,7 +166,7 @@ fn cmap() -> T {
         "ComponentMapping",
         vec![
             ("CMP", T::u16(Big)),
-            ("MTYP", T::enumeration("MappingType", T::u8(), &[(0, "used directly"), (1, "mapped through the palette")])),
+            ("MTYP", T::enumeration("MappingType", T::u8(), &[(0, "direct use"), (1, "palette mapping")])),
             ("PCOL", T::u8()),
         ],
     );
@@ -188,7 +189,7 @@ fn cdef() -> T {
                     &[(0, "colour"), (1, "opacity"), (2, "premultiplied opacity"), (65535, "unspecified")],
                 ),
             ),
-            ("Asoc", T::enumeration("ChannelAssociation", T::u16(Big), &[(0, "whole image"), (65535, "not associated")])),
+            ("Asoc", T::enumeration("ChannelAssociation", T::u16(Big), &[(0, "whole image"), (65535, "none")])),
         ],
     );
     T::structure("ChannelDefinitions", vec![("N", T::u16(Big)), ("channels", T::array(channel, E::field("N")))])
