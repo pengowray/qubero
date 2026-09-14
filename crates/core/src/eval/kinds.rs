@@ -661,19 +661,23 @@ impl Evaluator {
     /// database of 4 KiB pages is written. Every page is 4 KiB and no two
     /// pages hold the same fields, so multiplying the first page's breakdown
     /// by two hundred thousand would invent a split the file does not have.
-    /// What holds is either that the element is a fixed number of bits, which
-    /// pins every field in it, or that it holds one value and nothing inside
-    /// it, in which case there is nothing to get wrong.
+    /// What holds is either that the element is a fixed number of bits with
+    /// nothing in it that points elsewhere or is chosen as it is read, which
+    /// pins every field in it (see [`same_shape`]), or that it holds one value
+    /// and nothing inside it, in which case there is nothing to get wrong.
     fn exact_stride<S: Source>(&mut self, doc: &Document<S>, path: &[usize], ty: &Ty) -> R<Option<u64>> {
         let elem = match ty {
-            Ty::Array { elem, .. } | Ty::Repeat { elem, until: Until::End } => (**elem).clone(),
+            Ty::Array { elem, .. } | Ty::Repeat { elem, until: Until::End } => elem,
             _ => return Ok(None),
         };
+        // A record written as the name of its type is that type, the same way
+        // `stride` places it.
+        let Some(elem) = self.through_names(elem) else { return Ok(None) };
         let Some(stride) = self.stride(doc, path, ty)? else { return Ok(None) };
         if stride == 0 {
             return Ok(None);
         }
-        if fixed_bits(&elem).is_some() {
+        if same_shape(&self.template, &elem, 0) {
             return Ok(Some(stride));
         }
         // A run of records whose fields are each a fixed number of bits or a
@@ -684,7 +688,7 @@ impl Evaluator {
         // times the count is what walking all of them would add up to.
         // Walked instead, a field of a million points is two million frames.
         if let Ty::Struct(s) = &elem {
-            if same_in_every_record(s) {
+            if same_in_every_record(&self.template, s) {
                 return Ok(Some(stride));
             }
         }
@@ -704,7 +708,8 @@ impl Evaluator {
 }
 
 /// Whether every record of a run of `s` has the same fields at the same widths,
-/// whatever its bytes say: each field is a fixed number of bits, or a number
+/// whatever its bytes say: each field is the same in every record by
+/// [`same_shape`], or a number
 /// whose width is a literal or names a field that is not one of the record's
 /// own, and so is answered by the field around the list for every record
 /// alike.
@@ -715,9 +720,9 @@ impl Evaluator {
 /// shape, which is the stronger claim the walk multiplies by, and it should
 /// not start holding for some other record just because `stride` learns to
 /// place one.
-fn same_in_every_record(s: &crate::template::StructDef) -> bool {
+fn same_in_every_record(template: &Template, s: &crate::template::StructDef) -> bool {
     s.fields.iter().all(|f| {
-        if fixed_bits(&f.ty).is_some() {
+        if same_shape(template, &f.ty, 0) {
             return true;
         }
         let Ty::UIntExpr { bits, .. } = f.ty.without_sentinel() else { return false };
@@ -727,6 +732,32 @@ fn same_in_every_record(s: &crate::template::StructDef) -> bool {
             _ => false,
         }
     })
+}
+
+/// Whether every element of a run of `ty` has the same fields, at the same
+/// places and of the same types, whatever its bytes say.
+///
+/// A fixed number of bits is not quite that, because of the fields it counts
+/// as no bits. A field pointing somewhere else is none here, and each element
+/// points somewhere different, at something of a different length: a
+/// minidump's directory is a run of twelve-byte entries, each pointing at a
+/// stream of its own. And a window of a fixed size can hold a type chosen when
+/// it is read, which is how an Arrow record batch keeps its nodes sixteen
+/// bytes while each says in a field of no bytes which column it is, or that it
+/// is none. Multiplying element 0's breakdown by the count would count the
+/// first element's stream once for every entry, and its choice for every
+/// node. So those two are left out, and a name is looked through to what it
+/// stands for.
+fn same_shape(template: &Template, ty: &Ty, hops: usize) -> bool {
+    match ty {
+        Ty::Struct(s) => s.fields.iter().all(|f| same_shape(template, &f.ty, hops)),
+        Ty::Array { elem, count: Expr::Lit(_) } => same_shape(template, elem, hops),
+        Ty::Sized { size: Expr::Lit(_), inner } => same_shape(template, inner, hops),
+        Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => same_shape(template, inner, hops),
+        Ty::Named(n) => hops < 64 && template.types.get(&**n).is_some_and(|t| same_shape(template, t, hops + 1)),
+        Ty::At { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Stitched { .. } => false,
+        other => fixed_bits(other).is_some(),
+    }
 }
 
 /// Whether the walk goes inside this type.
@@ -811,5 +842,65 @@ mod tests {
         // One record walked rather than two hundred, each of which is three
         // steps: the record and its two fields.
         assert!(fast_goes <= 2 && slow_goes >= 60, "{fast_goes} goes against {slow_goes}");
+    }
+
+    #[test]
+    fn a_run_of_records_written_as_a_type_name_is_multiplied_too() {
+        // The records of the grid made fixed, eight bits and what they are
+        // worth, and listed by the name of their type. Before a name was
+        // looked through, this was walked record by record.
+        let record = T::inline_structure(
+            "Record",
+            vec![("stored", T::u8()), ("worth", T::computed_real(E::field("stored").mul(E::real(0.5))))],
+        );
+        let run = |named: bool| {
+            let elem = if named { T::Named("Record".into()) } else { record.clone() };
+            let fields = vec![("count", T::u8()), ("values", T::array(elem, E::field("count")))];
+            let t = Template::new("run", T::structure("Run", fields)).with_type("Record", record.clone());
+            let mut bytes = vec![200];
+            bytes.extend(0..200);
+            totals((t, bytes))
+        };
+        let (named, named_goes) = run(true);
+        let (inline, inline_goes) = run(false);
+        assert_eq!(named, inline);
+        assert_eq!((named.covered_bits, named.unmapped_bits, named.reached_bits), (201 * 8, 0, 201 * 8));
+        assert!(named_goes <= 2 && inline_goes <= 2, "{named_goes} goes named, {inline_goes} written out");
+    }
+
+    #[test]
+    fn a_run_of_fixed_records_that_differ_inside_is_walked_rather_than_multiplied() {
+        // Three records of two bytes each, laid out as a list that divides and
+        // again as one only walking settles. The walked one is what the totals
+        // should come to.
+        let run = |record: T, walked: bool, tail: &[u8]| {
+            let records = match walked {
+                true => T::sized(E::lit(6), T::repeat(record, Until::Cond(E::lit(0)))),
+                false => T::array(record, E::lit(3)),
+            };
+            let t = Template::new("run", T::structure("Run", vec![("records", records), ("rest", T::bytes(E::Remaining))]));
+            totals((t, tail.to_vec()))
+        };
+        // Each record points at bytes of its own, one, two and three long.
+        let pointing = T::inline_structure("Pointing", vec![("len", T::u8()), ("off", T::u8()), ("to", T::at(E::field("off"), T::bytes(E::field("len"))))]);
+        let bytes = [1, 6, 2, 7, 3, 9, 0xa, 0xb, 0xb, 0xc, 0xc, 0xc];
+        let (fast, _) = run(pointing.clone(), false, &bytes);
+        let (slow, _) = run(pointing, true, &bytes);
+        assert_eq!(fast, slow);
+        // Each record chooses what its field of no bytes is when it is read.
+        let chosen = T::structure(
+            "Chosen",
+            vec![
+                ("tag", T::u8()),
+                ("what", T::sized(E::lit(0), T::switch(E::field("tag"), vec![(1, T::computed(E::lit(1)))], T::computed_real(E::real(0.5))))),
+                ("pad", T::u8()),
+            ],
+        );
+        let bytes = [1, 0, 0, 0, 0, 0];
+        let (fast, _) = run(chosen.clone(), false, &bytes);
+        let (slow, _) = run(chosen, true, &bytes);
+        assert_eq!(fast, slow);
+        let count = |name: &str| fast.totals.iter().find(|t| t.type_name == name).map(|t| t.count);
+        assert_eq!((count("computed"), count("computed real")), (Some(1), Some(2)));
     }
 }

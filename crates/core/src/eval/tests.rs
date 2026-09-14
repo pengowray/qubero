@@ -1159,6 +1159,36 @@ fn a_fixed_stride_array_is_sized_without_touching_its_elements() {
 }
 
 #[test]
+fn an_array_of_a_named_record_is_sized_without_touching_its_elements() {
+    // The same run, each element a record of two u16s written as the name of
+    // its type, which is how an Arrow batch lists its nodes and how a Kaitai
+    // format lists anything it declared under `types`. Resolving a name is
+    // resolving the type it stands for, so the stride is the same as the
+    // record written out in place.
+    let t = Template::new(
+        "t",
+        T::structure("Root", vec![("n", T::u32(Little)), ("pairs", T::array(T::Named("Pair".into()), E::field("n")))]),
+    )
+    .with_type("Pair", T::structure("Pair", vec![("a", T::u16(Little)), ("b", T::u16(Little))]));
+    let n: u32 = 100_000;
+    let mut bytes = n.to_le_bytes().to_vec();
+    bytes.resize(4 + n as usize * 4, 0);
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+    // A go of a thousand elements. A long walk keeps few nodes, so what shows
+    // the walk is the go running out before the list is sized.
+    ev.set_slice(Some(1_000));
+    ev.begin_slice();
+    let arr = ev.node(&d, &[1]).unwrap();
+    assert_eq!((arr.size_bits, arr.child_count), (n as u64 * 32, n as u64));
+    assert_eq!(ev.node(&d, &[1, 75_000]).unwrap().offset_bits, (4 + 300_000) * 8);
+    // A name with no type behind it is no stride, and the walk says what is wrong.
+    let t = Template::new("t", T::structure("Root", vec![("pairs", T::array(T::Named("Missing".into()), E::lit(2)))]));
+    let mut ev = Evaluator::new(t);
+    assert!(ev.node(&d, &[0]).is_err());
+}
+
+#[test]
 fn a_narrow_float_reads_at_the_width_it_was_stored_in() {
     // The same number in sixteen bits and in thirty-two. Widening either to an
     // f64 and printing that gives a dozen digits the file never held.

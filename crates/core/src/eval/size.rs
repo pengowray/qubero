@@ -32,6 +32,20 @@ impl Evaluator {
             Ty::Repeat { elem, until: Until::End } => elem,
             _ => return Ok(None),
         };
+        // An element written as the name of a type is placed as the type the
+        // name stands for, so it takes the same room that type would written
+        // out in place.
+        let named;
+        let elem: &Ty = match &**elem {
+            Ty::Named(_) => match self.through_names(elem) {
+                Some(ty) => {
+                    named = ty;
+                    &named
+                }
+                None => return Ok(None),
+            },
+            elem => elem,
+        };
         if let Some(f) = fixed_bits(elem) {
             return Ok(Some(f));
         }
@@ -68,7 +82,7 @@ impl Evaluator {
         // of the record's own fields: asked of the list, a name finds the
         // field around the list, and a width the record says of itself would
         // be answered by the wrong field or by none.
-        if let Ty::Struct(s) = &**elem {
+        if let Ty::Struct(s) = elem {
             let mut total = 0u64;
             for f in &s.fields {
                 if let Some(bits) = fixed_bits(&f.ty) {
@@ -94,7 +108,7 @@ impl Evaluator {
             }
             return Ok(Some(total));
         }
-        let Ty::Sized { size, .. } = &**elem else { return Ok(None) };
+        let Ty::Sized { size, .. } = elem else { return Ok(None) };
         if !uniform(size) {
             return Ok(None);
         }
@@ -105,6 +119,19 @@ impl Evaluator {
         // which says why.
         let n = self.eval_expr(doc, path, size)?;
         Ok(if n > 0 { bits_in(n) } else { None })
+    }
+
+    /// The type `ty` stands for once every name in front of it is looked up,
+    /// or `ty` itself when it is not a name. `None` when a name has no type in
+    /// this template, or when the names go on longer than resolving a field
+    /// follows them, which is a name that comes back to itself.
+    pub(super) fn through_names(&self, ty: &Ty) -> Option<Ty> {
+        let mut ty = ty;
+        for _ in 0..=64 {
+            let Ty::Named(n) = ty else { return Some(ty.clone()) };
+            ty = self.template.types.get(&**n)?;
+        }
+        None
     }
 
     pub(super) fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {

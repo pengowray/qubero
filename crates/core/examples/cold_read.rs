@@ -9,8 +9,9 @@
 //! the end is what is read cold.
 //!
 //! Prints what came back, how many expressions were open inside one another
-//! at most, and how long the read took. A stack that runs out takes the
-//! process with it, which is the answer too.
+//! at most, how long the read took, and how many nodes the evaluator
+//! remembers afterwards. A stack that runs out takes the process with it,
+//! which is the answer too.
 //!
 //! With `paint`, the stack below the read is filled with a known byte first,
 //! and how much of it the read wrote over is printed as `stack: <bytes>`, the
@@ -91,6 +92,7 @@ fn main() {
             println!("template {name}, path {path:?}");
             println!("{:?}", got.map(|n| (n.name, n.value)));
             println!("deepest: {}, {:.3} ms", ev.deepest_question(), took.as_secs_f64() * 1000.0);
+            println!("nodes remembered: {}", ev.memo_len());
         })
         .unwrap();
     let _ = h.join();
