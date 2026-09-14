@@ -24,7 +24,7 @@ import { recordTable } from "./records.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, REPORT, UNPACKED } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, REPORT, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -221,7 +221,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // the sign is the part that changes meaning, so the sign is what answers for
   // it. This column has no room for a second line saying so, which is why the
   // hover is the only place that fact can live here.
-  if (written) at.append(...address(formatAddress(n.offset_bits, n.space), DECODED_PLUS_TITLE));
+  if (written) at.append(...address(formatAddress(n.offset_bits, n.space), n.joined ? JOINED.plusTitleStream : DECODED_PLUS_TITLE));
   row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
@@ -440,7 +440,9 @@ function offerUnpacked(c: DrawContext, row: HTMLElement, item: Item, n: Template
     row.append(unpackedButton(item.path, n.name));
     return;
   }
-  if (!n.space_root || item.path.length === 0) return;
+  // A stream joined from several runs is no one run to unpack, and has no
+  // document of its own to open.
+  if (!n.space_root || n.joined || item.path.length === 0) return;
   const stream = item.path.slice(0, -1);
   if (!c.streams.has(pathKey(stream))) row.append(unpackedButton(stream, n.name));
 }

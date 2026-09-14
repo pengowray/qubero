@@ -34,6 +34,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| S7. One space stitched from several runs: `Ty::Stitched` joins stored or packed runs into one lazily read space with a bounded cache and a part table. PDB scattered streams (a TPI stream joined from 11 pages), BAM records across BGZF blocks (a record cut across 17 blocks reads whole; 20 KB peak cache over 300 blocks), Godot resources across compressed blocks, the inspector showing a byte's run and BGZF virtual offset, and edits to a field inside one stored run. Also fixed Gather's resume skipping a record after a spend ran out. | f4c38e0, 174eb1d, a34ee58, 85ea109 |
 | WMO BUFR: a new template, a side reader through Table D with replication and operators, bundled WMO tables (v46, with v13 and v15 differences), and a values panel. No value differs from ecCodes on eight samples. | f4c90ef, 52765a3, e7ea846 |
 | S8. Computed values that are not integers: `Ty::ComputedReal`, `Expr::Real`, `RealText`, `Pow2`, `Pow10`, `Trunc` on a second evaluator. NIfTI voxels scaled by fractional slopes, FITS scales with fractions and exponents, GRIB simple-packed values with their worth. Matches nibabel, astropy and ecCodes within float tolerance. | 0ebc377, 4cecf62, e91ab8a, fbce36a |
 | NI TDMS: a new template. Segments, metadata, properties, raw data contiguous or interleaved, layouts reused from the last list and one segment back, index files. Matches npTDMS 1.11 on every channel of ten samples. | 31c731c, 5d00193, 11afb26, dea17d1 |
@@ -615,27 +616,19 @@ references and whole records in the first block as fields; BAI and CSI with
 every virtual offset split into block and in-block halves (see Closed). Nine
 htslib and samtools samples, matched against bamnostic. Left:
 
-- **Records past the first block need a stitched space.** A record can start
-  in one block and end in another, and nothing joins several decoded members
-  into one space, so later blocks read only through the side reader
-  (`bam_records.rs`, `Evaluator::bam_block`). The addition that would fix it,
-  as the agent specified: `Ty::Stitched { from: Arc<[Step]>, inner: Box<Ty> }`,
-  a zero-width node like `Gather` whose `from` walks to Decoded nodes;
-  `open_space_at` joins their outputs in walk order, inflating lazily under
-  `CAP_BYTES`, with a part table of (start byte, member path) so a position
-  maps back to (member k, offset j), which is exactly a BGZF virtual offset.
-  PDB scattered streams, HDF4 linked blocks, Godot RSCC and FITS `CONTINUE`
-  are the same shape.
-- **No panel.** `bam_block` is a method, not an `Explain` variant, and it
-  walks from the header on every call (up to 256 MB unpacked); a panel needs
-  a variant, a `bampanel.ts` on `steplist.ts`, and a per-block cache.
+- Every record reads as a field now: the file root is `blocks` plus a
+  `stream` joined from every block's output (S7, see Closed), unpacked a block
+  at a time under a 16 MiB cache. `bam_records.rs` stays as the oracle in
+  `the_template_and_the_side_reader_agree_on_every_record`.
+- **No panel.** `bam_block` is a method, not an `Explain` variant. With the
+  stream now joined, a panel may no longer be needed for records; the
+  inspector's Position row already shows a record's block and virtual offset.
 - **A `.bam` is labelled "BGZF gzip blocks".** The label names the container,
   not the contents; a reader opening a BAM file wants to be told it is BAM.
   `templateSentence` is where Fable suggested saying so.
 - A plain gzip file of several members that is not BGZF still reports a false
   CRC mismatch (its CRC compared with the last member's trailer): the gzip
   template needs a compressed run that ends where its decoder stopped.
-- Blocks after the first read as invalid text: only block 0 knows it is BAM.
 - `bam.rs` is about 980 lines; the BAI and CSI parts would split out as
   `bam_index.rs`.
 

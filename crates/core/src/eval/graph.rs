@@ -358,6 +358,8 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::Gather { .. } => "descriptors".to_string(),
         Ty::At { .. } => "at".to_string(),
         Ty::Decoded { .. } => "stream".to_string(),
+        // A stream too, joined rather than unpacked from one run.
+        Ty::Stitched { .. } => "stream".to_string(),
         // The parts of a decoder's trace are one kind here, the codes in a
         // block included: what a reader wants to know is that these nodes came
         // out of a decoding rather than out of the file.
@@ -450,6 +452,7 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         | Ty::At { .. }
         | Ty::Decoded { .. }
         | Ty::Traced { .. } => "composite",
+        Ty::Stitched { .. } => "composite",
         // A resolved node has taken a case already; reached only from a
         // declared type, where nothing yet says which shape it will be.
         Ty::Switch { .. } | Ty::Match { .. } => "bytes",

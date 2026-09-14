@@ -358,6 +358,9 @@ impl Evaluator {
             // Every other stream is pruned here and never unpacked by this
             // walk.
             Ty::Decoded { inner, .. } => Self::places(inner, named),
+            // The same for a stream joined from parts: its contents are in a
+            // space of their own, and are walked only for a pointer back out.
+            Ty::Stitched { inner, .. } => Self::places(inner, named),
             Ty::Switch { cases, default, .. } => {
                 cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
             }

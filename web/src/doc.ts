@@ -236,6 +236,11 @@ export type TemplateNode = {
    *  one per space and it is always drawn, which the stream itself need not be,
    *  so this is where the listing offers Open unpacked. */
   readonly space_root: boolean;
+  /** True for a field read inside a stream joined from several runs elsewhere
+   *  in the file: a PDB stream's pages, a BAM's BGZF blocks. Its offset counts
+   *  from the front of the joined stream, which is no document of its own and
+   *  cannot be opened as one; `partOf` says which run a field starts in. */
+  readonly joined: boolean;
   /** True when the file did not write this field at all: the condition on an
    *  optional one came to nothing. Not the same as a size of zero, which a
    *  field the file did write can also have. */
@@ -712,6 +717,32 @@ export type Relation = {
  * and the view says nothing at all for it: a reason invented to fill the line
  * would read exactly like a reason the file gave.
  */
+/**
+ * The run a field of a joined stream starts in: a PDB page, or a BGZF block's
+ * compressed run. See `Doc.partOf`.
+ */
+export type JoinedPart = {
+  /** Which run, from 0 in the order the stream goes, and how many there are. */
+  readonly index: number;
+  readonly parts: number;
+  /** The run as a field to go to, and as a reader names it: `pages[12]`,
+   *  `blocks[3].compressed`. */
+  readonly path: readonly number[];
+  readonly label: string;
+  /** The field's first byte inside what the run gives, and how much that is. */
+  readonly in_part: number;
+  readonly part_len: number;
+  /** Where the run starts, in bits of the space it is in: 0 is the file. */
+  readonly run_offset_bits: number;
+  readonly run_space: number;
+  /** True when the run was unpacked to give its bytes. */
+  readonly packed: boolean;
+  /** For a BGZF block, the byte's virtual offset in halves: where the block
+   *  starts in the file, and the byte in what it unpacks to. */
+  readonly block_offset: number | null;
+  readonly in_block: number | null;
+};
+
 export type Shape = {
   /** `root` the whole file; `first` the first field of what holds it; `follows`
    *  after the field before it; `element` one element of a run; `pointer` a
@@ -719,7 +750,7 @@ export type Shape = {
    *  `gathered` a descriptor the template walked to, somewhere else in the
    *  file, placed it; `address` an address the file gave; `trace` where a
    *  decoder had got to; `stream` the front of what a compressed run unpacked
-   *  to. */
+   *  to; `stitched` the front of a stream joined from several runs. */
   readonly placed:
     | "root"
     | "first"
@@ -731,6 +762,7 @@ export type Shape = {
     | "address"
     | "trace"
     | "stream"
+    | "stitched"
     | "unknown";
   /** `type` the type's own width, which the type's name already carries and
    *  which the panel therefore says nothing about; `fixed` a length the format
@@ -2494,6 +2526,16 @@ export class Doc {
    */
   origins(path: readonly number[]): TemplateReply<Origin[]> {
     return this.handleReply<Origin[]>(this.editor.origins(this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * Which run the field at `path` starts in, for a field inside a stream joined
+   * from several runs. Null for every other field, and while the answer is
+   * still on its way: the panel that asks has nothing to draw meanwhile.
+   */
+  partOf(path: readonly number[]): JoinedPart | null {
+    const r = this.handleReply<JoinedPart | null>(this.editor.part_of(this.space, Uint32Array.from(path)));
+    return r.status === "ok" ? r.node : null;
   }
 
   /**

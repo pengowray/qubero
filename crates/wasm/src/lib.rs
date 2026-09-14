@@ -207,6 +207,9 @@ struct NodeDto {
     /// True for the one node a stream holds. Its parent is the stream, so this
     /// is where the listing offers Open unpacked.
     space_root: bool,
+    /// True for a field read inside a stream joined from several runs, which
+    /// is not unpacked from one and has no document of its own to open.
+    joined: bool,
     /// True when the file did not write this field: the condition on an
     /// optional one came to nothing. Told apart from a size of zero, which
     /// several kinds of field that are there also have.
@@ -854,6 +857,30 @@ struct OriginDto {
     value: String,
     /// For "points": the bit this field's value points at.
     target_bits: Option<f64>,
+}
+
+/// The part of a joined stream a field starts in. See
+/// [`qubero_core::eval::PartHit`].
+#[derive(Serialize)]
+struct StitchedPartDto {
+    /// Which part, from 0, and how many there are.
+    index: f64,
+    parts: f64,
+    /// The run the part is, as a path to go to and as a reader names it.
+    path: Vec<f64>,
+    label: String,
+    /// The field's first byte inside what the part gives, and how much that is.
+    in_part: f64,
+    part_len: f64,
+    /// Where the run starts, in the space it is a field of: 0 is the file.
+    run_offset_bits: f64,
+    run_space: f64,
+    /// True when the run was unpacked to give the part.
+    packed: bool,
+    /// For a BGZF block: the two halves of the byte's virtual offset, the
+    /// block's place in the file and the byte in what it unpacks to.
+    block_offset: Option<f64>,
+    in_block: Option<f64>,
 }
 
 /// How a field was placed and how it was sized, in one word each. What the
@@ -2229,6 +2256,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         refused: n.refused,
         decoded: n.decoded,
         space_root: n.space_root,
+        joined: n.joined,
         absent: n.absent,
         doc: n.doc,
     }
@@ -3084,6 +3112,47 @@ impl Editor {
             Some(e) => {
                 e.begin_slice();
                 reply(e.shape(&sh.doc, &p).map(|s| ShapeDto { placed: s.placed.as_str(), sized: s.sized.as_str() }))
+            }
+        }
+    }
+
+    /// Which part of a stream joined from several runs the field at `path`
+    /// starts in, or null for a field that is not inside one. JSON, in the
+    /// same reply shape as the rest.
+    ///
+    /// A PDB stream in pieces and a BAM read through its BGZF blocks are the
+    /// two such streams. What comes back names the run the field's first byte
+    /// is kept in, which is a field of the file with a place to go to, and how
+    /// far into what that run gives the byte is; for a BGZF block, the virtual
+    /// offset an index would name the byte by. Nothing is unpacked to answer.
+    pub fn part_of(&mut self, space: u32, path: &[u32]) -> String {
+        self.go(space);
+        let sh = self.sm();
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match &mut sh.eval {
+            None => reply::<Option<StitchedPartDto>>(Err(EvalError::Failed("no template".into()))),
+            Some(e) => {
+                e.begin_slice();
+                let hit = e.node(&sh.doc, &p).and_then(|n| e.part_of(&sh.doc, n.space, n.offset_bits / 8));
+                reply(hit.map(|h| {
+                    h.map(|h| StitchedPartDto {
+                        index: h.index as f64,
+                        parts: h.parts as f64,
+                        path: h.path.iter().map(|&x| x as f64).collect(),
+                        label: h.label,
+                        in_part: h.in_part as f64,
+                        part_len: h.part_len as f64,
+                        run_offset_bits: h.run_offset_bits as f64,
+                        run_space: h.run_space as f64,
+                        packed: h.packed,
+                        // Past 2^53 a number stops being exact in JavaScript,
+                        // and a virtual offset reaches that at a block eight
+                        // petabytes into the file. The halves are what a
+                        // reader checks against an index anyway.
+                        block_offset: h.virtual_offset.map(|v| (v >> 16) as f64),
+                        in_block: h.virtual_offset.map(|v| (v & 0xffff) as f64),
+                    })
+                }))
             }
         }
     }

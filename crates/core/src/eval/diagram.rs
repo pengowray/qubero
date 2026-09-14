@@ -210,6 +210,7 @@ fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
             as_struct(t, inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_struct(t, inner),
+        Ty::Stitched { inner, .. } => as_struct(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -244,6 +245,7 @@ fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
             as_switch(t, inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(t, inner),
+        Ty::Stitched { inner, .. } => as_switch(t, inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -264,6 +266,7 @@ fn named_target(ty: &Ty) -> Option<String> {
             named_target(inner)
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => named_target(inner),
+        Ty::Stitched { inner, .. } => named_target(inner),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -503,6 +506,18 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
                     add(dictionary, Role::Length, out);
                     add(unpacked, Role::Length, out);
                 }
+            }
+            sources(inner, out, depth + 1);
+        }
+        // The two lengths a stitched stream may be given, and what it holds.
+        // The walk's steps are names of places rather than expressions, the
+        // way a gather's are.
+        Ty::Stitched { part_len, len, inner, .. } => {
+            if let Some(e) = part_len {
+                add(e, Role::Length, out);
+            }
+            if let Some(e) = len {
+                add(e, Role::Length, out);
             }
             sources(inner, out, depth + 1);
         }
