@@ -689,6 +689,20 @@ impl Evaluator {
         }))
     }
 
+    /// The names of the fields of the structure at `path`, in order, or None
+    /// when what is there is not a structure.
+    ///
+    /// For a reader finding its way by the shape of what is around it rather
+    /// than by a path it already knows. `node` answers the same question and
+    /// costs more than it can afford: it counts the children of a list, and a
+    /// list that runs to the end of the file is counted by walking the file.
+    /// This resolves the one field and reads nothing inside it.
+    pub fn field_names<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Vec<String>>> {
+        self.resolve(doc, path)?;
+        let Ty::Struct(s) = self.memo[path].ty.base() else { return Ok(None) };
+        Ok(Some(s.fields.iter().map(|f| f.name.to_string()).collect()))
+    }
+
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;

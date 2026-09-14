@@ -134,6 +134,28 @@ pub fn contents<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Contents>
     Ok(out)
 }
 
+/// Whether the document is read as an HDF5 file, whole or inside a format that
+/// carries one, which is the question every HDF5 panel has to ask before it
+/// offers itself.
+///
+/// Asked of the reading rather than of the template's name, because the name
+/// answers it wrongly both ways round. A MATLAB file is read by `mat` whether
+/// it is level 5, which is a run of elements with no group or tree anywhere in
+/// it, or level 7.3, which is an HDF5 file behind a 512-byte user block. Which
+/// of the two it is was settled when the template's switch picked an arm from
+/// the header's version, and what that arm reads is the signature and
+/// superblock this looks for. A NetCDF-4 file and an `.h5ad` are read by
+/// `hdf5` itself and need nothing more, and so will any other format that
+/// takes in HDF5's vocabulary to read one.
+///
+/// Cheap enough to ask on every change to the document: it reads a handful of
+/// fields near the front and never opens a list, so a level 5 file of a
+/// million elements answers after reading its header. Pending while those
+/// bytes have not arrived.
+pub fn holds_hdf5<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<bool> {
+    Ok(file_root(ev, doc)?.is_some())
+}
+
 /// The object header of the root group, which every other object hangs under.
 pub(crate) fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
     let Some(file) = file_root(ev, doc)? else { return Ok(None) };
@@ -159,9 +181,12 @@ pub(crate) fn root_header<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R
 /// "nothing in it" here and "no B-tree" to a cursor that had not moved.
 ///
 /// Searched two levels down and only through a structure of a handful of
-/// fields, which is what a wrapper around one embedded file is. A list of
-/// elements is not opened on the way, so a template whose root is a long run
-/// of records costs a few questions here and not one per record.
+/// fields, which is what a wrapper around one embedded file is. Nothing but a
+/// structure is looked inside, and a structure is known by its field names
+/// alone: asking `node` instead counted the children of whatever it was asked
+/// about, and a level 5 MATLAB file's elements are a list that runs to the end
+/// of the file, so the question [`holds_hdf5`] asks on every change walked the
+/// whole of it to answer no.
 pub(crate) fn file_root<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<Option<Vec<usize>>> {
     let mut level: Vec<Vec<usize>> = vec![Vec::new()];
     for _ in 0..3 {
@@ -169,23 +194,19 @@ pub(crate) fn file_root<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<O
         for at in level {
             // A field that will not read is not the file, and the one beside
             // it may be.
-            let named = |ev: &mut Evaluator, name: &str| match ev.child_named(doc, &at, name) {
-                Ok(found) => Ok(found.is_some()),
-                Err(e) if e.interrupted() => Err(e),
-                Err(_) => Ok(false),
-            };
-            if named(ev, "superblock")? && named(ev, "signature")? {
-                return Ok(Some(at));
-            }
-            let node = match ev.node(doc, &at) {
-                Ok(node) => node,
+            let names = match ev.field_names(doc, &at) {
+                Ok(Some(names)) => names,
+                Ok(None) => continue,
                 Err(e) if e.interrupted() => return Err(e),
                 Err(_) => continue,
             };
-            if !node.composite || node.child_count > 4 {
+            if names.iter().any(|n| n == "superblock") && names.iter().any(|n| n == "signature") {
+                return Ok(Some(at));
+            }
+            if names.len() > 4 {
                 continue;
             }
-            for i in 0..node.child_count as usize {
+            for i in 0..names.len() {
                 let mut one = at.clone();
                 one.push(i);
                 below.push(one);

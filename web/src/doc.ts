@@ -2046,6 +2046,19 @@ export class Doc {
     return this.template === "png" || this.template === "p8png" || this.template === "p64png";
   }
 
+  /** Whether the file is read as an HDF5 file, whole or inside another format,
+   *  which is what the B-trees tab and the HDF5 contents are offered on. Not
+   *  the template's name: `mat` reads a MATLAB 7.3 file, which is HDF5 behind
+   *  a 512-byte header, and a level 5 file, which has no groups or trees at
+   *  all. The core answers from the header and the bytes at the signature, so
+   *  this is cheap to ask on every change. False while those bytes are still
+   *  on their way; they are asked for, and the change they make asks again. */
+  get holdsHdf5(): boolean {
+    if (this.template === null) return false;
+    const r = this.handleReply<boolean>(this.editor.holds_hdf5(this.space));
+    return r.status === "ok" && r.node;
+  }
+
   /** Best current projection for a variable-size array still being walked. */
   extentEstimate(): ExtentEstimate | null {
     const raw = this.editor.extent_estimate(this.space);
