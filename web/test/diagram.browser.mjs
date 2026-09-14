@@ -96,7 +96,7 @@ try {
         // screenshot cannot be trusted to show.
         badPaths: edges.filter((p) => /NaN|undefined/.test(p.getAttribute("d") || "")).length,
         labels: labels.length,
-        pickable: document.querySelectorAll(".dv-row.is-pickable").length,
+        pickable: document.querySelectorAll(".dv-box:first-of-type .dv-row.is-goable").length,
         note: document.querySelector(".dv-note")?.textContent ?? "",
         stage: stage === null ? null : [stage.style.width, stage.style.height],
         overlaps: overlapping(boxes),
@@ -109,7 +109,7 @@ try {
         unusedBoxes: document.querySelectorAll(".dv-box.is-unused").length,
         badges: document.querySelectorAll(".dv-count").length,
         goable: document.querySelectorAll(".is-goable").length,
-        partial: document.querySelector(".dv-partial")?.hidden === false,
+        status: document.querySelector(".dv-status")?.textContent ?? "",
       };
 
       // Two boxes sharing any of the same pixels. The layout places them in
@@ -386,7 +386,14 @@ try {
     // ones that cannot are not offering.
     if (c.pick === true) {
       assert(found.pickable > 0, "no row offered to take the reader to the file");
-      await page.locator(".dv-row.is-pickable").first().click();
+      // A single click marks the row and leaves the reader where they are; the
+      // double click is what goes.
+      const first = page.locator(".dv-row.is-goable").first();
+      await first.click();
+      await page.waitForTimeout(300);
+      assert(await page.locator('.tb-view.is-on:text-is("Diagram")').count() === 1, "a single click left the diagram");
+      assert(await first.evaluate((el) => el.classList.contains("is-selected")), "a single click did not mark the row");
+      await first.dblclick();
       await page.waitForSelector('.tb-view.is-on:text-is("Hex")', { timeout: 5000 });
       // And a double click on a row of a type deeper in the file, which is the
       // half the single click cannot reach: it goes to the first one the census

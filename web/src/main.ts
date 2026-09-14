@@ -4,6 +4,7 @@ import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexvi
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
 import type { GraphView } from "./graphview.ts";
 import type { DiagramView } from "./diagramview.ts";
+import { COUNT_TURN_MS, countLimit } from "./diagramcounts.ts";
 import { Inspector } from "./inspector.ts";
 import { saveDoc } from "./save.ts";
 import { parseSize, syntheticFile } from "./synthetic.ts";
@@ -1121,14 +1122,12 @@ function build(tab: Tab): Page {
    *  does not throw away where the reader had panned to. Null until the first
    *  drawing. */
   let diagramFor: string | null = null;
-  /** True while the census is waiting on bytes it asked for, so the next change
-   *  to the document asks again rather than leaving the counts blank. */
-  let censusWaiting = false;
-  /** How many of the file's fields the census walks. Enough for the counts on
-   *  a format's boxes to be the file's real ones, and capped because a file of
-   *  a million fields is a walk nobody asked to wait for; what it does not
-   *  reach, the view says it did not reach. */
-  const CENSUS_CAP = 20000;
+  /** True once the reader has asked a count that stopped at its limit to carry
+   *  on. See `AUTO_COUNT`. */
+  let keepCounting = false;
+  /** True while the next step of a running count is booked, so two changes to
+   *  the document in one turn do not book two. */
+  let countBooked = false;
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
@@ -1192,6 +1191,7 @@ function build(tab: Tab): Page {
       const { GraphView, NODE_CAP } = await import("./graphview.ts");
       graph = new GraphView();
       graphCap = NODE_CAP;
+      // A double tap, since it switches the view: see `DiagramView.offerGo`.
       graph.onPick = (path) => {
         setView("hex");
         goToField(path);
@@ -1252,6 +1252,12 @@ function build(tab: Tab): Page {
       const { DiagramView } = await import("./diagramview.ts");
       diagram = new DiagramView();
       diagram.canPick = (box, row) => diagramFieldPath(box, row) !== null;
+      // Both of these are a double click on the drawing: a single click only
+      // marks a row, and going to the hex view is a view switch.
+      diagram.onKeepCounting = () => {
+        keepCounting = true;
+        countForDiagram();
+      };
       diagram.onPick = (box, row) => {
         const path = diagramFieldPath(box, row);
         if (path === null) return;
@@ -1275,6 +1281,9 @@ function build(tab: Tab): Page {
     const format = doc.template ?? "";
     if (diagramFor === format) {
       diagram.relayout();
+      // A count left running when the view was hidden carries on from where
+      // it stopped.
+      countForDiagram();
       return;
     }
     diagramFor = format;
@@ -1287,17 +1296,38 @@ function build(tab: Tab): Page {
   };
 
   /**
-   * Count the open file against the diagram's boxes, and hand the counts over.
+   * Carry the count of the open file against the diagram's boxes on, and hand
+   * over what it has so far.
    *
-   * Unlike the drawing this reads the file, so it can come back pending while
-   * bytes are on their way; the flag has the next change to the document ask
-   * again, which is how every other panel here waits.
+   * The count is kept by the core between calls, so each call is the next
+   * stretch of one walk. As many goes as fit in a turn, then the page gets the
+   * turn back. What asks again depends on why it stopped: a go that ran out
+   * books the next turn itself, since nothing else will wake it; a count
+   * waiting on bytes has asked for them, and their arrival changes the
+   * document, which calls this; a count stopped at its limit waits for the
+   * reader. An edit or a new template throws the count away in the core, and
+   * the change it makes starts it again here.
    */
   const countForDiagram = (): void => {
     if (diagram === null || diagram.el.hidden) return;
-    const reply = doc.diagramCensus(CENSUS_CAP);
-    censusWaiting = reply.status !== "ok";
-    diagram.setCensus(reply.status === "ok" ? reply.node : null);
+    const limit = countLimit(doc.lengthBytes, keepCounting);
+    const until = performance.now() + COUNT_TURN_MS;
+    let reply = doc.diagramCensus(limit);
+    while (reply.status === "ok" && reply.node.state === "working" && performance.now() < until) {
+      reply = doc.diagramCensus(limit);
+    }
+    // An error is an answer: there is nothing to count against. A reply that is
+    // not ready leaves the counts already drawn where they are, and the
+    // document asks again when it is.
+    if (reply.status === "ok") diagram.setCensus(reply.node);
+    else if (reply.status === "error") diagram.setCensus(null);
+    if (reply.status === "ok" && reply.node.state === "working" && !countBooked) {
+      countBooked = true;
+      setTimeout(() => {
+        countBooked = false;
+        countForDiagram();
+      }, 0);
+    }
   };
 
   /** The `.ksy` converter, built the first time it is opened. It keeps its text
@@ -1623,7 +1653,6 @@ function build(tab: Tab): Page {
     // The counts are of the file, so they are taken again whenever it changes:
     // bytes arriving, an edit, a stream opening.
     if (diagram !== null && !diagram.el.hidden) countForDiagram();
-    else if (censusWaiting) censusWaiting = false;
     refresh();
     if (followWhenLoaded !== null) {
       // The first try was turned away for want of bytes, and `followCursor`

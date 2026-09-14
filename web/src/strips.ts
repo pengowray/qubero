@@ -16,6 +16,7 @@
  * lets this be read and tested on its own.
  */
 import type { DiagramBox, DiagramEdge, TemplateDiagram } from "./doc.ts";
+import { folds } from "./fold.ts";
 
 /** How many strips the plan may hold. A format whose types run past this is a
  *  picture nobody can read anyway, and the drawing says what it left out. */
@@ -239,7 +240,7 @@ function items(b: DiagramBox, box: number, rowCap: number, cond: Map<string, str
   // box saying how many are hidden, and the last, so the end of the type is
   // still on the page. A strip that ran off the side would be worse than one
   // that says it did.
-  const many = b.rows.length > rowCap;
+  const many = folds(b.rows.length, rowCap);
   const upto = many ? rowCap - 1 : b.rows.length;
   const draw = (i: number): void => {
     const r = b.rows[i];

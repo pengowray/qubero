@@ -34,6 +34,19 @@ import type { DiagramBox, DiagramCensus, DiagramEdge, TemplateDiagram } from "./
 import { plan as stripPlan, type Item, type Strip } from "./strips.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { DIAGRAM, roleLabel } from "./strings.ts";
+import { folds, shownBeforeFold } from "./fold.ts";
+import {
+  boxBadge,
+  caseCountTitle,
+  countStatus,
+  countTitle,
+  goTarget,
+  isUnused,
+  joinTitle,
+  onlyUsedTitle,
+  redrawIn,
+  rowBadge,
+} from "./diagramcounts.ts";
 
 /**
  * How many fields a box shows before the rest are folded behind one row.
@@ -41,9 +54,14 @@ import { DIAGRAM, roleLabel } from "./strings.ts";
  * A box is read in one glance or not at all. Past a couple of dozen rows it is
  * a column of text that happens to have a border, and every box beside it has
  * been pushed off the screen to make room for fields nobody is reading. The
- * fold is one click, and what it hides is counted rather than hinted at.
+ * fold is one click, and what it hides is counted rather than hinted at. A box
+ * only a few rows over is shown whole: see `FOLD_SLACK`.
  */
 export const ROW_CAP = 24;
+
+/** How many cases a choice's box in a strip lists before the rest are
+ *  counted. */
+const CASE_CAP = 8;
 
 /** How far the drawing may be scaled by the wheel, either way. */
 const MIN_SCALE = 0.15;
@@ -356,18 +374,36 @@ export class DiagramView {
    *  against once they are laid out. */
   private laid: { strip: Strip; el: HTMLElement; boxes: HTMLElement[] }[] = [];
   private readonly onlyBtn: HTMLInputElement;
-  private readonly partial: HTMLElement;
+  private readonly onlyLabel: HTMLLabelElement;
+  /** What the count is doing, at the right of the toolbar, and the button that
+   *  carries a stopped count on. */
+  private readonly status: HTMLElement;
+  private readonly keepBtn: HTMLButtonElement;
+  /** Whether a count has been asked for, so the toolbar can say it is counting
+   *  before the first answer is drawn. */
+  private counting = false;
+  /** When the count began and when the drawing was last laid out for it, and
+   *  the layout booked for later, so a running count redraws once a second
+   *  rather than once a step. See `redrawIn`. */
+  private countingSince = 0;
+  private lastDrawn = 0;
+  private redrawTimer = 0;
+  /** The row a single click marked, as `box:row`, kept across a rebuild. */
+  private selected: string | null = null;
 
-  /** The reader clicked a field. `main.ts` puts the cursor on it where the open
-   *  file has one. */
+  /** The reader double-clicked a field of the first box. `main.ts` puts the
+   *  cursor on it where the open file has one. */
   onPick: (box: number, row: number) => void = () => {};
 
   /** The reader double-clicked a box title or a row and wants the first one
    *  this file holds. `main.ts` has the file and does the going. */
   onGo: (path: readonly number[], space: number) => void = () => {};
 
+  /** The reader asked a stopped count to carry on. */
+  onKeepCounting: () => void = () => {};
+
   /**
-   * Whether a click on this row would reach the open file.
+   * Whether a double click on this row would reach the open file.
    *
    * Asked of every row as the box is built, because a row that does nothing
    * must not say it does: a pointer and a tooltip promising to move the cursor,
@@ -400,6 +436,7 @@ export class DiagramView {
     const only = document.createElement("label");
     only.className = "dv-only";
     only.title = DIAGRAM.onlyUsedTitle;
+    this.onlyLabel = only;
     this.onlyBtn = document.createElement("input");
     this.onlyBtn.type = "checkbox";
     this.onlyBtn.addEventListener("change", () => {
@@ -430,10 +467,24 @@ export class DiagramView {
       localStorage.setItem(MODE_KEY, this.mode);
       void this.build().then(() => this.home());
     });
-    bar.append(fit, this.modeBtn, only);
-    this.partial = document.createElement("div");
-    this.partial.className = "dv-partial";
-    this.partial.hidden = true;
+    // What the count is doing, in the toolbar rather than on a line of its own
+    // under it: a line that comes and goes moves the drawing as it does, and
+    // the button that carries a stopped count on belongs beside what it acts
+    // on. Every badge already says the count is a floor; this says why.
+    this.status = document.createElement("span");
+    this.status.className = "dv-status";
+    this.status.setAttribute("role", "status");
+    this.keepBtn = document.createElement("button");
+    this.keepBtn.type = "button";
+    this.keepBtn.className = "dv-keep";
+    this.keepBtn.textContent = DIAGRAM.keepCounting;
+    this.keepBtn.title = DIAGRAM.keepCountingTitle;
+    this.keepBtn.hidden = true;
+    this.keepBtn.addEventListener("click", () => this.onKeepCounting());
+    const counts = document.createElement("span");
+    counts.className = "dv-counts";
+    counts.append(this.status, this.keepBtn);
+    bar.append(fit, this.modeBtn, only, counts);
 
     this.board = document.createElement("div");
     this.board.className = "dv-board";
@@ -442,8 +493,18 @@ export class DiagramView {
     this.lines = svg("svg", { class: "dv-lines" });
     this.stage.append(this.lines);
     this.board.append(this.stage);
-    this.el.append(this.note, bar, this.partial, this.board);
+    this.el.append(this.note, bar, this.board);
     this.bindPanZoom();
+    // A press on the picture that lands on no row lets go of the marked one,
+    // and so does Escape, the way a selection is let go of anywhere else.
+    this.board.addEventListener("click", (ev) => {
+      if (this.dragged) return;
+      if (ev.target instanceof Element && ev.target.closest(".dv-row, .dv-sbox") !== null) return;
+      this.select(null);
+    });
+    this.el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && this.selected !== null) this.select(null);
+    });
   }
 
   /**
@@ -457,10 +518,42 @@ export class DiagramView {
    * taken is nothing.
    */
   setCensus(c: DiagramCensus | null): void {
-    this.census = c;
-    this.boxCount = new Map(c?.boxes.map((b) => [b.key, b.count]) ?? []);
-    this.rowCount = new Map(c?.rows.map((r) => [rowKey(r.key, r.row), r.count]) ?? []);
-    if (this.diagram !== null) void this.build();
+    const now = performance.now();
+    if (c !== null && c.state !== "done" && !this.counting) this.countingSince = now;
+    this.counting = c !== null && c.state !== "done";
+    // The toolbar's line moves with every step; the drawing only as often as a
+    // reader can follow, since each layout moves every box a badge widens.
+    this.showStatus(c);
+    const wait = redrawIn(this.census, c, now, this.lastDrawn, this.countingSince);
+    window.clearTimeout(this.redrawTimer);
+    this.redrawTimer = 0;
+    if (wait === null) return;
+    const apply = (): void => {
+      this.redrawTimer = 0;
+      this.census = c;
+      this.boxCount = new Map(c?.boxes.map((b) => [b.key, b.count]) ?? []);
+      this.rowCount = new Map(c?.rows.map((r) => [rowKey(r.key, r.row), r.count]) ?? []);
+      this.lastDrawn = performance.now();
+      if (this.diagram !== null) void this.build();
+    };
+    if (wait === 0) apply();
+    else this.redrawTimer = window.setTimeout(apply, wait);
+  }
+
+  /** What the count is doing, said in the toolbar. Asked of the newest count,
+   *  which may be ahead of the one the drawing shows. */
+  private showStatus(c: DiagramCensus | null): void {
+    const s = countStatus(c, this.counting);
+    this.status.textContent = s.text;
+    this.keepBtn.hidden = !s.keep;
+  }
+
+  /** Mark one row as the one the reader clicked, or none. */
+  private select(key: string | null): void {
+    this.selected = key;
+    for (const el of this.stage.querySelectorAll(".is-selected")) el.classList.remove("is-selected");
+    if (key === null) return;
+    for (const el of this.stage.querySelectorAll(`[data-row="${key}"]`)) el.classList.add("is-selected");
   }
 
   /** Put a diagram on screen, replacing whatever was there. */
@@ -499,14 +592,13 @@ export class DiagramView {
       const omitted = document.createElement("span");
       omitted.className = "dv-omitted";
       omitted.textContent = DIAGRAM.omitted(d.omitted);
-      this.note.append(" ", omitted);
+      this.note.append(DIAGRAM.noteJoin, omitted);
     }
-    // What the census says was walked, when it did not get to the end: said
-    // once, over the drawing, because every count under it is a floor and a
-    // number that looks like a total is worse than no number.
-    this.partial.hidden = this.census === null || !this.census.truncated;
-    this.partial.textContent = this.census === null ? "" : DIAGRAM.partial(this.census.walked);
+    // The toggle hides what has not been found. While the count runs that is
+    // also what has not been found yet, and the hover says so rather than
+    // letting "not found" stand for "not there".
     this.onlyBtn.disabled = this.census === null;
+    this.onlyLabel.title = onlyUsedTitle(this.census);
     // Which boxes are drawn at all. With the toggle off, all of them: the view
     // is a picture of the format. With it on, the ones this file has, and the
     // edges between two of those; an edge to a box that is not there would
@@ -553,35 +645,60 @@ export class DiagramView {
   }
 
   /** How many of a thing this file holds, small and beside its name. */
-  private badge(n: number, what: string): HTMLElement {
+  private badge(text: string, title: string): HTMLElement {
     const el = document.createElement("span");
     el.className = "dv-count";
-    el.textContent = DIAGRAM.count(n);
-    el.title = DIAGRAM.countTitle(n, what);
+    el.textContent = text;
+    el.title = title;
     return el;
   }
 
   /**
-   * Double-clicking this takes the reader to the first one in the file.
+   * What a double click on this does, and the one handler that does it.
    *
-   * Double rather than single because a single click already does something
-   * else on a row, and because going somewhere is the heavier of the two: a
-   * reader who wanted to read the box should not lose their place in it.
+   * Double rather than single because going to the hex view switches the
+   * reader's view, and the app asks for a double click or a button for that: a
+   * reader who clicked a row to read it should not lose the drawing. A single
+   * click marks the row instead (see `selectable`).
    *
-   * A field inside an unpacked stream is left alone and says why: its offsets
-   * are the stream's and not the file's, so the hex cursor cannot be put on it.
+   * One handler and one title however many reasons a row has to go somewhere:
+   * a field of the file's first structure goes to itself, anything the count
+   * found goes to the first one found, and a first one inside an unpacked
+   * stream goes nowhere and says why, since its offsets are the stream's and
+   * the hex cursor cannot be put on it. `said` is what the hover says before
+   * that.
    */
-  private goOnDoubleClick(el: HTMLElement, path: number[], space: number): void {
-    if (space !== 0) {
-      el.title = `${el.title === "" ? "" : `${el.title}. `}${DIAGRAM.inStream}`;
+  private offerGo(el: HTMLElement, pick: { box: number; row: number } | null, first: { first_path: number[]; space: number } | undefined, said: string): void {
+    const target = goTarget(pick !== null, first);
+    if (target === null) {
+      el.title = said;
+      return;
+    }
+    if (target.kind === "stream") {
+      el.title = joinTitle(said, DIAGRAM.inStream);
       return;
     }
     el.classList.add("is-goable");
-    el.title = el.title === "" ? DIAGRAM.goTitle : `${el.title}. ${DIAGRAM.goTitle}`;
+    el.title = joinTitle(said, DIAGRAM.goTitle);
     el.addEventListener("dblclick", (ev) => {
       ev.preventDefault();
       if (this.dragged) return;
-      this.onGo(path, space);
+      if (target.kind === "pick" && pick !== null) this.onPick(pick.box, pick.row);
+      else if (target.kind === "path") this.onGo(target.path, 0);
+    });
+  }
+
+  /** A single click marks the row, and does nothing else: no cursor moves and
+   *  no view changes, so reading a box never costs the reader their place. */
+  private selectable(el: HTMLElement, box: number, row: number): void {
+    const key = `${box}:${row}`;
+    el.dataset["row"] = key;
+    if (this.selected === key) el.classList.add("is-selected");
+    // Marks rather than toggles: a double click is two clicks first, and a
+    // toggle would leave the row it went from unmarked.
+    el.addEventListener("click", () => {
+      if (this.dragged) return;
+      this.select(key);
     });
   }
 
@@ -604,13 +721,15 @@ export class DiagramView {
     // How many of this type the open file holds. Only once a census has been
     // taken: before that the drawing says nothing about the file, which is
     // what it knows.
-    const has = this.census === null ? null : (this.boxCount.get(box.key) ?? 0);
-    if (has !== null) {
-      el.classList.toggle("is-unused", has === 0);
-      if (has === 0) el.title = DIAGRAM.unusedTitle;
-      if (has > 1) head.append(this.badge(has, box.name));
-      const first = this.census?.boxes.find((b) => b.key === box.key);
-      if (first !== undefined) this.goOnDoubleClick(head, first.first_path, first.space);
+    const c = this.census;
+    const has = c === null ? 0 : (this.boxCount.get(box.key) ?? 0);
+    if (c !== null) {
+      el.classList.toggle("is-unused", isUnused(has, c.state));
+      if (isUnused(has, c.state)) el.title = DIAGRAM.unusedTitle;
+      const said = countTitle(has, box.name, c);
+      const text = boxBadge(has, c.state);
+      if (text !== null) head.append(this.badge(text, said));
+      this.offerGo(head, null, c.boxes.find((b) => b.key === box.key), "");
     }
     // No tag beside the name. A switch says what it is in its own title
     // (`switch on class`) and in its heading colour; whether a structure has a
@@ -621,7 +740,7 @@ export class DiagramView {
     table.className = "dv-table";
     const body = document.createElement("tbody");
     const open = this.opened.has(index);
-    const shown = open ? box.rows.length : Math.min(box.rows.length, ROW_CAP);
+    const shown = open ? box.rows.length : shownBeforeFold(box.rows.length, ROW_CAP);
     const rows: HTMLElement[] = [];
     for (let i = 0; i < shown; i++) {
       const r = box.rows[i];
@@ -654,37 +773,39 @@ export class DiagramView {
         if (text !== "") td.title = `${label}: ${text}`;
         tr.append(td);
       }
-      // The same for one field, over every node of this type the file holds.
-      const held = this.census === null ? null : (this.rowCount.get(rowKey(box.key, i)) ?? 0);
-      if (held !== null) {
-        tr.classList.toggle("is-unused", held === 0);
-        if (held > 1) {
-          const cell = tr.lastElementChild;
-          if (cell !== null) cell.append(this.badge(held, r.name));
-        }
-        const first = this.census?.rows.find((x) => x.key === box.key && x.row === i);
-        if (first !== undefined) this.goOnDoubleClick(tr, first.first_path, first.space);
+      // The same for one field, over every node of this type the file holds,
+      // badged only where it differs from the box: a field that is there once
+      // per structure says nothing the box's own count has not.
+      const pick = box.kind !== "switch" && this.canPick(index, i) ? { box: index, row: i } : null;
+      let said = "";
+      if (c !== null) {
+        const held = this.rowCount.get(rowKey(box.key, i)) ?? 0;
+        tr.classList.toggle("is-unused", isUnused(held, c.state));
+        said = box.kind === "switch" ? caseCountTitle(r.name, held, c) : countTitle(held, r.name, c);
+        const text = rowBadge(held, has, c.state);
+        const cell = tr.lastElementChild;
+        if (text !== null && cell !== null) cell.append(this.badge(text, said));
       }
-      if (box.kind !== "switch" && this.canPick(index, i)) {
-        tr.classList.add("is-pickable");
-        tr.title = DIAGRAM.pickTitle;
-        tr.addEventListener("click", () => {
-          if (this.dragged) return;
-          this.onPick(index, i);
-        });
-      }
+      this.offerGo(tr, pick, c?.rows.find((x) => x.key === box.key && x.row === i), said);
+      // The hover is on the row, and every cell has one of its own that would
+      // hide it: the last cell, where a badge would be, says both.
+      const last = tr.lastElementChild;
+      if (last instanceof HTMLElement && tr.title !== "") last.title = joinTitle(last.title, tr.title);
+      this.selectable(tr, index, i);
       body.append(tr);
       rows.push(tr);
     }
     // What the fold hides, counted. The row is not a field, so no arrow ever
     // lands on it and it is not in `rows`.
-    if (box.rows.length > ROW_CAP) {
+    if (folds(box.rows.length, ROW_CAP)) {
       const tr = document.createElement("tr");
       tr.className = "dv-more";
       const td = document.createElement("td");
-      td.colSpan = box.kind === "switch" ? 2 : 4;
-      td.textContent = open ? DIAGRAM.less : DIAGRAM.more(box.rows.length - ROW_CAP);
-      td.title = open ? DIAGRAM.less : DIAGRAM.moreTitle;
+      const cases = box.kind === "switch";
+      td.colSpan = cases ? 2 : 4;
+      const hidden = box.rows.length - shownBeforeFold(box.rows.length, ROW_CAP);
+      td.textContent = open ? (cases ? DIAGRAM.lessCases : DIAGRAM.less) : cases ? DIAGRAM.moreCases(hidden) : DIAGRAM.more(hidden);
+      td.title = open ? td.textContent : cases ? DIAGRAM.moreCasesTitle : DIAGRAM.moreTitle;
       tr.append(td);
       tr.addEventListener("click", () => {
         if (this.dragged) return;
@@ -858,13 +979,15 @@ export class DiagramView {
     label.textContent = strip.name;
     label.title = DIAGRAM.boxPath(strip.path);
     head.append(label);
-    const has = this.census === null ? null : (this.boxCount.get(strip.key) ?? 0);
-    if (has !== null) {
-      el.classList.toggle("is-unused", has === 0);
-      if (has === 0) el.title = DIAGRAM.unusedTitle;
-      if (has > 1) head.append(this.badge(has, strip.name));
-      const first = this.census?.boxes.find((b) => b.key === strip.key);
-      if (first !== undefined) this.goOnDoubleClick(head, first.first_path, first.space);
+    const c = this.census;
+    if (c !== null) {
+      const has = this.boxCount.get(strip.key) ?? 0;
+      el.classList.toggle("is-unused", isUnused(has, c.state));
+      if (isUnused(has, c.state)) el.title = DIAGRAM.unusedTitle;
+      const said = countTitle(has, strip.name, c);
+      const text = boxBadge(has, c.state);
+      if (text !== null) head.append(this.badge(text, said));
+      this.offerGo(head, null, c.boxes.find((b) => b.key === strip.key), "");
     }
     const line = document.createElement("div");
     line.className = "dv-strip-row";
@@ -925,34 +1048,36 @@ export class DiagramView {
     if (item.cases.length > 0) {
       const list = document.createElement("div");
       list.className = "dv-scases";
-      for (const c of item.cases.slice(0, 8)) {
-        const one = document.createElement("div");
-        one.textContent = c;
-        list.append(one);
+      list.title = DIAGRAM.caseListTitle;
+      const listed = shownBeforeFold(item.cases.length, CASE_CAP);
+      for (const one of item.cases.slice(0, listed)) {
+        const line = document.createElement("div");
+        line.textContent = one;
+        list.append(line);
       }
-      if (item.cases.length > 8) {
+      if (listed < item.cases.length) {
         const rest = document.createElement("div");
         rest.className = "dv-snote";
-        rest.textContent = DIAGRAM.moreCases(item.cases.length - 8);
+        rest.textContent = DIAGRAM.moreCases(item.cases.length - listed);
         list.append(rest);
       }
       el.append(list);
     }
-    // The census again, on the field this time.
-    const held = this.census === null || item.row < 0 ? null : (this.rowCount.get(rowKey(strip.key, item.row)) ?? 0);
-    if (held !== null) {
-      el.classList.toggle("is-unused", held === 0);
-      if (held > 1) name.append(this.badge(held, item.name));
-      const first = this.census?.rows.find((x) => x.key === strip.key && x.row === item.row);
-      if (first !== undefined) this.goOnDoubleClick(el, first.first_path, first.space);
+    // The count again, on the field this time, and badged only where it
+    // differs from the strip's.
+    const c = this.census;
+    const pick = item.row >= 0 && this.canPick(strip.box, item.row) ? { box: strip.box, row: item.row } : null;
+    let said = "";
+    if (c !== null && item.row >= 0) {
+      const held = this.rowCount.get(rowKey(strip.key, item.row)) ?? 0;
+      el.classList.toggle("is-unused", isUnused(held, c.state));
+      said = countTitle(held, item.name, c);
+      const text = rowBadge(held, this.boxCount.get(strip.key) ?? 0, c.state);
+      if (text !== null) name.append(this.badge(text, said));
     }
-    if (this.canPick(strip.box, item.row)) {
-      el.classList.add("is-pickable");
-      el.title = DIAGRAM.pickTitle;
-      el.addEventListener("click", () => {
-        if (this.dragged) return;
-        this.onPick(strip.box, item.row);
-      });
+    if (item.row >= 0) {
+      this.offerGo(el, pick, c?.rows.find((x) => x.key === strip.key && x.row === item.row), said);
+      this.selectable(el, strip.box, item.row);
     }
     into.append(el);
     return el;

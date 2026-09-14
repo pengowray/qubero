@@ -2769,7 +2769,7 @@ export const GRAPH = {
   button: "Graph",
   /** Kept on screen rather than shown once. A note about a slow layout that
    *  has already gone by the time the layout is slow is no warning at all. */
-  experimental: "Experimental. Laying out a large file may be slow, or may not finish.",
+  experimental: "Experimental. Laying out a large file may be slow, or may not finish. Double-click a field to go to its bytes.",
   /**
    * More fields under the cursor than the view will lay out.
    *
@@ -2830,7 +2830,9 @@ export const DIAGRAM = {
   regionLabel: "The format as boxes and arrows",
   /** Under the title, once, so a reader knows what they are looking at before
    *  they look for their file in it. */
-  about: (format: string): string => `${format} file structure: every part the format can have, not what this file holds.`,
+  about: (format: string): string => `${format} file structure`,
+  /** Between the line above and what it says was left out of the drawing. */
+  noteJoin: " · ",
   noTemplate: "No format chosen. Pick one above to draw its structure.",
   /**
    * Types the picture leaves out.
@@ -2843,9 +2845,12 @@ export const DIAGRAM = {
   omitted: (n: number): string => (n === 1 ? "1 type not drawn" : `${n.toLocaleString()} types not drawn`),
   /** The row that stands for the fields a long type's box does not show.
    *  Clicking it shows them. */
-  more: (n: number): string => `… ${n.toLocaleString()} more fields`,
+  more: (n: number): string => `… ${n.toLocaleString()} more field${n === 1 ? "" : "s"}`,
   moreTitle: "Show the rest of this type's fields",
   less: "Show fewer fields",
+  /** The same fold on a switch's box, whose rows are cases rather than fields. */
+  moreCasesTitle: "Show the rest of this switch's cases",
+  lessCases: "Show fewer cases",
   /** On a box's title. The core names a type by what the format calls it, which
    *  two types in one format may share; this says which one this is. */
   boxPath: (path: string): string => `Path: ${path}`,
@@ -2857,25 +2862,66 @@ export const DIAGRAM = {
    * to work out which of the two they are reading.
    */
   count: (n: number): string => `×${n.toLocaleString()}`,
+  /** The same while the count is not finished, which makes every number a
+   *  floor: `+` is the standard "at least". Shown for 0 and 1 too, which a
+   *  finished count leaves bare, since bare means exactly that many. */
+  countSoFar: (n: number): string => `×${n.toLocaleString()}+`,
   countTitle: (n: number, what: string): string =>
     n === 1 ? `This file has 1 ${what}` : `This file has ${n.toLocaleString()} of these: ${what}`,
-  /** On a box or row the file has none of. */
+  /** The hover while the count is still running, the finished sentence with
+   *  "at least" in it and the state after it. */
+  countTitleCounting: (n: number, what: string): string =>
+    n === 1
+      ? `This file has at least 1 ${what}. Still counting.`
+      : `This file has at least ${n.toLocaleString()} of these: ${what}. Still counting.`,
+  /** The same once the count has stopped at its limit and waits to be told to
+   *  go on. */
+  countTitleStopped: (n: number, what: string, walked: number): string =>
+    n === 1
+      ? `This file has at least 1 ${what}. Only the first ${walked.toLocaleString()} fields are counted.`
+      : `This file has at least ${n.toLocaleString()} of these: ${what}. Only the first ${walked.toLocaleString()} fields are counted.`,
+  /** None found by a count that has not finished. Never drawn faded, since
+   *  that says the file has none. */
+  noneYet: "None of these found yet. Still counting.",
+  noneInFirst: (walked: number): string =>
+    `None of these in the first ${walked.toLocaleString()} fields. The rest of this file is not counted.`,
+  /** On a box or row the file has none of, once the count is finished. */
   unusedTitle: "This file has none of these",
-  /** The toolbar toggle. Not "used" or "present": what the reader is asking for
-   *  is the part of the picture their own file is an example of. */
-  onlyUsed: "Only what this file has",
-  onlyUsedTitle: "Leave out the types this file has none of, and lay the rest out again",
-  /** Under the toolbar when the walk stopped short, so no count reads as a
-   *  total. The number is what was looked at, which is the honest thing to
-   *  report: how much is left is not known without finishing. */
-  partial: (walked: number): string =>
-    `Counts cover the first ${walked.toLocaleString()} fields read. The rest of the file is not counted.`,
-  /** What a double click does. Said on every row that has one, since a single
-   *  click already does something else. */
+  /** A switch's row is a case, and what is counted is how often it was taken. */
+  caseTitle: (value: string, n: number): string =>
+    n === 1 ? `Case ${value} taken once in this file` : `Case ${value} taken ${n.toLocaleString()} times in this file`,
+  caseTitleCounting: (value: string, n: number): string =>
+    n === 1
+      ? `Case ${value} taken at least once in this file. Still counting.`
+      : `Case ${value} taken at least ${n.toLocaleString()} times in this file. Still counting.`,
+  caseTitleStopped: (value: string, n: number, walked: number): string =>
+    n === 1
+      ? `Case ${value} taken at least once in this file. Only the first ${walked.toLocaleString()} fields are counted.`
+      : `Case ${value} taken at least ${n.toLocaleString()} times in this file. Only the first ${walked.toLocaleString()} fields are counted.`,
+  /** The toolbar toggle. It hides boxes, which are types, and "not found"
+   *  is a fact about the count that stays true while the count runs, where
+   *  "has none of" would be a claim about the file. */
+  onlyUsed: "Hide types not found in this file",
+  onlyUsedTitle: "Leave out the types not found in this file, and lay the rest out again.",
+  /** Added to the title while the count is not finished. */
+  onlyUsedTitleSoFar: " Types not found yet are left out too.",
+  /** At the right of the toolbar while the count runs. The number is how many
+   *  fields have been looked at, which is the one that moves; how many there
+   *  are is not known until the end. */
+  counting: (walked: number): string => (walked === 0 ? "Counting…" : `Counting… ${walked.toLocaleString()} fields so far`),
+  /** The same once a count has stopped at its limit, beside the button that
+   *  carries it on. */
+  stopped: (walked: number): string => `Counted the first ${walked.toLocaleString()} fields of this file.`,
+  keepCounting: "Keep counting",
+  keepCountingTitle: "Continue the count in the background. The counts on the drawing update as it goes.",
+  /** What a double click does. One title for every row that has one, whether
+   *  the row is a field of the file's first structure or a type the count
+   *  found: "the first one" is true of a field there is only one of. */
   goTitle: "Double-click to go to the first one in this file",
   /** A field the file has, but inside an unpacked stream, whose offsets are not
-   *  the file's, so the hex cursor cannot be put on it. */
-  inStream: "This one is inside an unpacked stream, which the hex view cannot go to",
+   *  the file's, so the hex cursor cannot be put on it. Follows a count
+   *  sentence on hover, so it names what it is about. */
+  inStream: "No double-click here: the first one is inside an unpacked stream, which the hex view cannot go to",
   /**
    * The two pictures the view can draw.
    *
@@ -2902,9 +2948,9 @@ export const DIAGRAM = {
   placedTitle: "Read at an address this field points to, not where it is written",
   fit: "Fit",
   fitTitle: "Fit the whole diagram in the window",
-  /** What a click on a field row does. Only the format's first type can be
-   *  found in the file so far, so the promise is kept narrow. */
-  pickTitle: "Go to this field in the open file",
+  /** On the list of a choice's cases inside a strip's box, whose leading
+   *  numbers are the values the choice reads and not counts. */
+  caseListTitle: "Case value → the type it picks",
   /** The columns, as a screen reader reads them out. The table itself shows no
    *  header row: four of them repeated per box is more ink than the words are
    *  worth. */
