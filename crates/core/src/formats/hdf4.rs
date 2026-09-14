@@ -1895,6 +1895,18 @@ mod tests {
         // Three parts: the unused slot is past the cut, and goes with it.
         let hit = e.part_of(&d, node.space, 12).unwrap().unwrap();
         assert_eq!((hit.index, hit.parts, hit.label.as_str()), (2, 3, "tables[1].blocks[0]"));
+        // And the run says what cut it, as a formula and as the field.
+        let cut: Vec<_> = e
+            .relations(&d, &values)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.role == crate::eval::Role::Length)
+            .map(|r| (r.written, r.substituted, r.result))
+            .collect();
+        assert_eq!(cut.len(), 1, "{cut:?}");
+        assert!(cut[0].0.contains("length") && cut[0].1.contains("18") && cut[0].2 == "18", "{cut:?}");
+        let length = e.origins(&d, &values).unwrap().into_iter().find(|o| o.role == crate::eval::Role::Length).unwrap();
+        assert_eq!((length.label.as_str(), length.path), ("length", [&linked[..], &[0]].concat()));
     }
 
     /// The index is every block's twelve bytes read a second way, as one list,

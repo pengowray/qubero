@@ -62,6 +62,24 @@ impl Evaluator {
                         }
                     }
                 }
+                // The one thing a joined stream holds is as long as the parts
+                // it is joined from, cut where the stream says it ends. Both
+                // lengths are written against where they were worked out: the
+                // total where the stream is declared, and a part's length in
+                // the structure its run is a field of, for which the first
+                // part stands, since every part is measured the same way.
+                Some(Ty::Stitched { part_len, len, .. }) => {
+                    if let Some(len) = len {
+                        self.relation(doc, parent, &len, Role::Length, None, &mut out);
+                    }
+                    if let Some(part_len) = part_len {
+                        match self.first_part_frame(doc, parent) {
+                            Ok(Some(frame)) => self.relation(doc, &frame.end, &part_len, Role::Length, frame.here, &mut out),
+                            Err(e) if e.interrupted() => return Err(e),
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }

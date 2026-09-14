@@ -2750,8 +2750,22 @@ part's run, and `Space::run_at` says where the run is, so a byte of what BGZF
 block 3 unpacks to names bits of block 3's deflate and the web adds the run's
 place (`run_offset_bits` on the step) before it marks the file tab. `map_in`
 goes the other way from a bit of the space the stream was declared in: the
-part whose run holds the bit, then its step. A run that is not in the file,
-which no format here has, maps to no mark.
+part whose run holds the bit, then its step. The run is found by the bit and
+not by the step's output, since the end of a deflate block reads bits and
+makes nothing, and its output is where the next block's starts. A run that is
+not in the file, which no format here has, maps to no mark.
+
+**What measured it.** The panel about the one thing a joined stream holds says
+what its length came from, the same two the diagram draws as the stream's
+lengths. The total that cut it is worked out where the stream is declared, so
+a PDB stream's is its entry in `stream_sizes` and an HDF4 run's is its header's
+`length`. What a part
+comes to is worked out in the structure its run is a field of, and the first
+part stands for the rest: a BAM stream's Length row names
+`blocks[0].original_size`, with the block in front, since a bare
+`original_size` beside sixteen thousand blocks names none of them. Godot's
+`block_size` is one field beside the stream for every block, and is named as
+it is.
 
 ## Roadmap (not yet built)
 

@@ -51,6 +51,14 @@ pub(super) struct StitchWalk {
     end: u64,
 }
 
+/// Where a stitched stream's first part was measured. See
+/// [`Evaluator::first_part_frame`].
+pub(super) struct PartFrame {
+    pub(super) holder: Vec<usize>,
+    pub(super) end: Vec<usize>,
+    pub(super) here: Option<(u64, u64)>,
+}
+
 /// What came of reaching one run.
 enum Reached {
     Part(Part),
@@ -174,13 +182,7 @@ impl Evaluator {
     /// member's `original_size` is a field after its `compressed` run, and
     /// this is where that name reaches. Nothing when it will not read.
     fn claimed_len<S: Source>(&mut self, doc: &Document<S>, landing: &[usize], e: &Expr) -> R<Option<u64>> {
-        let Some(holder) = (0..landing.len())
-            .rev()
-            .find(|&k| matches!(self.memo.get(&landing[..k]).map(|r| r.ty.base()), Some(Ty::Struct(_))))
-            .map(|k| landing[..k].to_vec())
-        else {
-            return Ok(None);
-        };
+        let Some(holder) = self.part_holder(landing) else { return Ok(None) };
         let (end, here) = self.record_frame(doc, &holder)?;
         match self.eval_expr_at(doc, &end, e, here) {
             Ok(n) if n >= 0 => Ok(Some(n as u64)),
@@ -188,6 +190,33 @@ impl Evaluator {
             Err(e) if e.interrupted() => Err(e),
             Err(_) => Ok(None),
         }
+    }
+
+    /// The structure a part's claimed length is worked out in: the nearest one
+    /// above the run the walk landed on, from what the memo holds.
+    fn part_holder(&self, landing: &[usize]) -> Option<Vec<usize>> {
+        (0..landing.len())
+            .rev()
+            .find(|&k| matches!(self.memo.get(&landing[..k]).map(|r| r.ty.base()), Some(Ty::Struct(_))))
+            .map(|k| landing[..k].to_vec())
+    }
+
+    /// Where the stitched stream at `path` worked out what its first part
+    /// comes to, for saying what measured its parts: the structure that holds
+    /// the part's run, and the frame one past that structure's last field. The first part stands for the rest, which are measured the same
+    /// way in their own structures. Nothing when the stream did not open or
+    /// has no parts.
+    pub(super) fn first_part_frame<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<PartFrame>> {
+        let Opened::Space(id) = self.open_stitched_at(doc, path)? else { return Ok(None) };
+        let Some(part) = self.spaces.stitch(id).and_then(|s| s.parts.first()).map(|p| p.path.clone()) else {
+            return Ok(None);
+        };
+        for k in 0..=part.len() {
+            self.resolve(doc, &part[..k])?;
+        }
+        let Some(holder) = self.part_holder(&part) else { return Ok(None) };
+        let (end, here) = self.record_frame(doc, &holder)?;
+        Ok(Some(PartFrame { holder, end, here }))
     }
 
     /// The bytes of a packed run, unpacked. The outer error is the run's bytes
@@ -1081,6 +1110,29 @@ mod tests {
         assert_eq!(space.map_in(end).unwrap().out_bytes.start, first.out_bytes.end);
         assert_eq!(space.run_holding(end), Some(first));
         assert_ne!(space.run_at(first.out_bytes.end), Some(first));
+    }
+
+    #[test]
+    fn a_joined_stream_says_what_cut_it_and_what_measured_its_parts() {
+        use crate::eval::Role;
+        // A paged stream is cut by `total`, a field beside the pages.
+        let d = Document::new(MemSource(file(20)));
+        let mut e = Evaluator::new(paged(record(), false));
+        let origins = e.origins(&d, &[STREAM, 0]).unwrap();
+        let total: Vec<_> = origins.iter().filter(|o| o.role == Role::Length).map(|o| (o.label.as_str(), o.path.as_slice())).collect();
+        assert_eq!(total, [("total", &[4][..])], "{origins:?}");
+
+        // A BGZF stream has no total, and each block is measured by its own
+        // trailer: the first block's, named with the block in front.
+        let d = Document::new(MemSource(bgzf_of(&[b"first block", b"and the second"])));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        let origins = e.origins(&d, &JOINED).unwrap();
+        let size = e.child_named(&d, &[0, 0], "original_size").unwrap().unwrap();
+        let measured: Vec<_> = origins.iter().filter(|o| o.role == Role::Length).map(|o| (o.label.as_str(), o.path.clone(), o.value.as_str())).collect();
+        assert_eq!(measured, [("blocks[0].original_size", size, "11")], "{origins:?}");
+        // A plain field is a name and not a formula, so the relations panel
+        // leaves it to the row above.
+        assert!(e.relations(&d, &JOINED).unwrap().iter().all(|r| r.role != Role::Length));
     }
 
     #[test]
