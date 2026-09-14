@@ -1571,9 +1571,11 @@ export type TileInfo = {
   readonly kind: "tile";
   /** Which tile of a FITS compressed image, counted from 0 as its row is, and
    *  how many the image has. Zero tiles is an image whose header would not
-   *  read. */
+   *  read, and nothing else is set. Null is more tiles than a 64-bit count
+   *  holds: the header is invalid, the problem says so, and the tile is still
+   *  described. */
   readonly index: number;
-  readonly count: number;
+  readonly count: number | null;
   /** Where it starts, from 0 along each axis with axis 1 first; how many
    *  pixels along each; and the image's shape. */
   readonly start: readonly number[];
@@ -1588,11 +1590,12 @@ export type TileInfo = {
   readonly decoded: number;
   /** Every step, in the order it was done. */
   readonly steps: readonly PageStep[];
-  /** The first pixels, how many were decoded, how many the tile has, and what
-   *  one pixel is. */
+  /** The first pixels, how many were decoded, how many the tile has (null for
+   *  more than a 64-bit count holds, from an invalid header), and what one
+   *  pixel is. */
   readonly values: readonly string[];
   readonly total: number;
-  readonly pixels: number;
+  readonly pixels: number | null;
   readonly element_type: string;
   readonly problem: string;
 };
