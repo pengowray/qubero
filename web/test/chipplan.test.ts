@@ -11,6 +11,7 @@ import type { ChipMeasure } from "../src/chipfit.ts";
 import {
   bucketChips,
   carriedName,
+  chipCursorBit,
   chipLabel,
   chipText,
   continuedDetail,
@@ -341,6 +342,41 @@ test("chips hanging under a piece do not keep its bytes on screen", () => {
   assert.equal(at(60), 0xb8);
 });
 
+test("the plan says which byte of the row is the first on screen", () => {
+  const cut = { segs: [0, 8], rowStart: 0xb0, headHeights: [0, 20] };
+  assert.equal(plan([], { ...cut, top: true, topPx: 0 }).firstByte, 0xb0);
+  assert.equal(plan([], { ...cut, top: true, topPx: 24 }).firstByte, 0xb8);
+  // Only the top row has an edge to scroll past.
+  assert.equal(plan([], { ...cut, top: false, topPx: 24 }).firstByte, 0xb0);
+});
+
+// ----- where pressing a chip puts the cursor -----
+
+test("a chip on the row its field starts on puts the cursor on the field's first bit", () => {
+  // `length` at 0x21, on screen from 0x20.
+  assert.equal(chipCursorBit(0x21 * 8, 0x25 * 8, 0x20 * 8), 0x21 * 8);
+});
+
+test("a chip for the rest of a structure puts the cursor on its own bytes, not the structure's first", () => {
+  // The PNG case: `data` starts at 0x29, but the chip after its last deflate
+  // block stands for 37 bits from 0x21a1+3b. The view is on 0x2170 onwards,
+  // and 0x29 would scroll it eight thousand bytes up.
+  const from = 0x21a1 * 8 + 3;
+  assert.equal(chipCursorBit(from, from + 37, 0x2170 * 8), from);
+});
+
+test("a chip carried in from above puts the cursor on the first byte on screen", () => {
+  // `dynamic block` runs from 0x50 to 0x5630, and the view starts at 0x12a0.
+  assert.equal(chipCursorBit(0x50 * 8, 0x5630 * 8, 0x12a0 * 8), 0x12a0 * 8);
+});
+
+test("a chip whose bytes have all scrolled off the top keeps its field's first bit", () => {
+  // Below the bytes, a chip can still show after the bytes it names have gone.
+  assert.equal(chipCursorBit(0xb0 * 8, 0xb4 * 8, 0xb8 * 8), 0xb0 * 8);
+  // A field ending exactly where the screen starts has no byte on it either.
+  assert.equal(chipCursorBit(0xb0 * 8, 0xb8 * 8, 0xb8 * 8), 0xb0 * 8);
+});
+
 test("beside the bytes the chips share the row's own line; below them every line adds", () => {
   // Three chips of about 30 characters each in a 40-wide column: three lines.
   const chips: Chip[] = Array.from({ length: 3 }, (_, i) => ({
@@ -420,6 +456,17 @@ test("the key names the first field that did not fit, so a changed tooltip is re
   const b = plan(chips("cccccccccccccccccccccccccccccc"), { noteWidth: 40, maxLines: 1 });
   assert.equal(a.blocks[0]?.shown, 1);
   assert.notEqual(rowNoteKey(a.blocks, false), rowNoteKey(b.blocks, false));
+});
+
+test("two chips for one path at different places are not the same key", () => {
+  // A structure's front and the rest after its last child share a path, a
+  // name and a value, and a press on each goes to different bytes.
+  const at = (offset_bits: number): Chip => ({ span: span({ path: [1, 1, 2], name: "data", offset_bits, size_bits: 37, value: "1" }), carried: false, run: [] });
+  assert.notEqual(rowNoteKey(plan([at(0x29 * 8)]).blocks, false), rowNoteKey(plan([at(0x21a1 * 8 + 3)]).blocks, false));
+  const pinned = (offset_bits: number): ChipBlock | null =>
+    plan([{ span: span({ path: [1, 1, 2], name: "data", offset_bits, size_bits: 0x800 * 8, value: "1" }), carried: true, run: [] }], { top: true, rowStart: 0x400 }).pinned;
+  assert.equal(pinned(0x10 * 8)?.shown, 1);
+  assert.notEqual(pinnedNoteKey(pinned(0x10 * 8)), pinnedNoteKey(pinned(0x20 * 8)));
 });
 
 test("a carried chip and the same chip drawn plainly are not the same key", () => {

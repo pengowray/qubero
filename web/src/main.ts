@@ -489,14 +489,17 @@ function build(tab: Tab): Page {
   /** `throughBit` marks a stretch rather than one field: the end of the run a
    *  folded chip stands for. The cursor and the inspector still go to the
    *  field the path names, which is the first of the run and the byte the chip
-   *  sits over; what widens is the mark over the bytes. */
-  const goToField = (path: readonly number[], throughBit?: number): void => {
+   *  sits over; what widens is the mark over the bytes. `atBit` is where a
+   *  pressed chip sits when that is not the field's first bit: the rest of a
+   *  structure after its last child, or a field carried in from above the
+   *  view. */
+  const goToField = (path: readonly number[], throughBit?: number, atBit?: number): void => {
     const n = doc.templateNode(path);
     if (n.status !== "ok") return;
     const end = n.node.offset_bits + n.node.size_bits;
     view.setHighlight({ startBit: n.node.offset_bits, endBit: Math.max(end, throughBit ?? end) });
     picking = true;
-    view.setBitCursor(n.node.offset_bits, { pane: "hex" });
+    view.setBitCursor(atBit ?? n.node.offset_bits, { pane: "hex" });
     picking = false;
     inspector.setPath(path);
     linkPath = path;
@@ -618,8 +621,8 @@ function build(tab: Tab): Page {
   // a second press, which is what a second press means on every other picture
   // in this app.
   view.onOpenUnpacked = openUnpacked;
-  view.onPickField = (path, throughBit) => {
-    goToField(path, throughBit);
+  view.onPickField = (path, throughBit, atBit) => {
+    goToField(path, throughBit, atBit);
     overview.reveal(path);
   };
   // What the other tabs may do to this one: mark the stretch their cursor
