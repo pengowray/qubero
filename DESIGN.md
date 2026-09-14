@@ -2837,6 +2837,11 @@ read as numbers, 245 left as bytes) and entry offsets (233 tables). A tree walk 
 without the baskets, counting a compressed run as the field that names its
 bytes.
 
+A basket is found from a byte of it as well as by a walk. The placed index
+reaches it through the key that picks a tree's record by class name, which is a
+match on a word; the index had followed a switch on a number and not a match,
+so until it did, nothing a ROOT directory lists could be found by `locate`.
+
 What it does not do. The placed index does not walk into a schema node, since
 every ROOT object is in a stream's space and indexing one would open every
 object in the file for nothing; a built type that points back into the file

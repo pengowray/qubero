@@ -364,6 +364,13 @@ impl Evaluator {
             Ty::Switch { cases, default, .. } => {
                 cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
             }
+            // A choice made by a word places what any of its cases would. A
+            // ROOT key picks its record by class name this way, and without it
+            // nothing a directory lists, a tree's baskets included, could be
+            // found from a byte of it.
+            Ty::Match { cases, default, .. } => {
+                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
+            }
             Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => Self::places(inner, named),
             _ => false,
         }

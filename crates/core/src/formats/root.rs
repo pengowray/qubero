@@ -1066,14 +1066,18 @@ pub(super) mod tests {
         assert_eq!((held.offset_bits, held.space), (0, 1));
         assert!(!held.editable);
 
-        // The cursor never lands inside the stream. Whatever it names for a
-        // byte of the run, it is a field of the file: this file reaches its
-        // records by address, and what it answers here is whatever the index
-        // of placements has got to.
+        // The cursor never lands inside the stream. This file reaches its
+        // records by address, through a key that picks its record by class
+        // name, and the index of placements follows that to the run: a byte of
+        // it is a byte of what the decoder read, which is a field of the file,
+        // and never the object on the other side.
         let at = ev.node(&d, &run).unwrap().offset_bits;
+        let contents = down(&run, &[0]);
         for bit in [at, at + 8] {
             let found = ev.locate(&d, bit).unwrap();
-            assert!(!found.starts_with(&run) || found == run, "landed inside the stream: {found:?}");
+            assert!(found.starts_with(&run), "not found in the run: {found:?}");
+            assert!(!found.starts_with(&contents), "landed inside the stream: {found:?}");
+            assert_eq!(ev.node(&d, &found).unwrap().space, 0, "{found:?}");
         }
     }
 

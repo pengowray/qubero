@@ -1241,6 +1241,25 @@ fn a_baskets_type_names_the_streamer_element_it_came_from() {
     assert!(branch.iter().any(|r| r.result == "TBranch v12"), "{branch:?}");
 }
 
+/// A byte of a basket, asked for by where it is in the file with nothing read
+/// before, lands in that basket: the hex view finds it without a tree walk
+/// having placed it first.
+#[test]
+fn a_byte_of_a_basket_locates_to_the_basket() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (d, contents) = contents_of(&folder, "uproot-Zmumu-lz4.root");
+    let mut walked = Evaluator::new(root());
+    let baskets = template_baskets(&d, &mut walked, &contents.trees[0].path);
+    for (offset, size, p) in [&baskets[0], &baskets[7], &baskets[19]] {
+        let mut ev = Evaluator::new(root());
+        let at = ev.locate(&d, (offset + size / 2) * 8).unwrap();
+        assert!(at.starts_with(p), "@{offset}: {at:?} is not under {p:?}");
+    }
+}
+
 /// A tree walk of the file names most of its bytes once the baskets are
 /// placed, where before them it named the header, the directory and the
 /// records the directory lists: a few per cent. Every sample says both, and
