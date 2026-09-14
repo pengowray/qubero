@@ -659,6 +659,18 @@ impl Evaluator {
         if fixed_bits(&elem).is_some() {
             return Ok(Some(stride));
         }
+        // A run of records whose fields are each a fixed number of bits or a
+        // number as wide as a field outside the record says, which is how a
+        // GRIB value is written: the packed integer and, taking no bits, what
+        // it is worth. The width is asked of the list once, so every record
+        // has the same fields at the same widths, and element 0's breakdown
+        // times the count is what walking all of them would add up to.
+        // Walked instead, a field of a million points is two million frames.
+        if let Ty::Struct(s) = &elem {
+            if same_in_every_record(s) {
+                return Ok(Some(stride));
+            }
+        }
         // A run of numbers packed to a width the header named, or of text, or
         // of raw bytes: one value each, so every element is the same kind and
         // the same type however wide the file made it.
@@ -672,6 +684,32 @@ impl Evaluator {
         }
         Ok(super::listing::plain(settled).then_some(stride))
     }
+}
+
+/// Whether every record of a run of `s` has the same fields at the same widths,
+/// whatever its bytes say: each field is a fixed number of bits, or a number
+/// whose width is a literal or names a field that is not one of the record's
+/// own, and so is answered by the field around the list for every record
+/// alike.
+///
+/// The same test `Evaluator::stride` makes before it will place such a run by
+/// arithmetic, asked again here rather than taken from its answer. A stride
+/// says every record takes the same room; this says every record is the same
+/// shape, which is the stronger claim the walk multiplies by, and it should
+/// not start holding for some other record just because `stride` learns to
+/// place one.
+fn same_in_every_record(s: &crate::template::StructDef) -> bool {
+    s.fields.iter().all(|f| {
+        if fixed_bits(&f.ty).is_some() {
+            return true;
+        }
+        let Ty::UIntExpr { bits, .. } = f.ty.without_sentinel() else { return false };
+        match &**bits {
+            Expr::Lit(_) => true,
+            Expr::Ref(name) => !s.fields.iter().any(|g| *g.name == **name),
+            _ => false,
+        }
+    })
 }
 
 /// Whether the walk goes inside this type.
@@ -694,5 +732,67 @@ fn descends(ty: &Ty) -> bool {
         | Ty::At { .. } => true,
         Ty::Json(shape, _) => shape.composite(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::document::Document;
+    use crate::eval::{Evaluator, KindTotals, KindWalk};
+    use crate::source::MemSource;
+    use crate::template::{Endian, Expr as E, Template, Ty as T, Until};
+
+    /// A grid of `n` values packed as GRIB packs them: a width named once in
+    /// front, then each value the packed integer and, taking no bits, what it
+    /// is worth. `walked` lays the same records out as a run that only
+    /// walking settles, which is the element-by-element walk the shortcut
+    /// stands in for.
+    fn grid(n: u8, walked: bool) -> (Template, Vec<u8>) {
+        let value = T::inline_structure(
+            "Packed",
+            vec![
+                ("stored", T::uint_expr(E::field("bits_per_value"), Endian::Big)),
+                ("worth", T::computed_real(E::field("stored").mul(E::real(0.5)))),
+            ],
+        );
+        let values = match walked {
+            true => T::sized(E::field("count"), T::repeat(value, Until::Cond(E::lit(0)))),
+            false => T::array(value, E::field("count")),
+        };
+        let fields = vec![("bits_per_value", T::u8()), ("count", T::u8()), ("values", values)];
+        let mut bytes = vec![8, n];
+        bytes.extend(0..n);
+        (Template::new("grid", T::structure("PackedData", fields)), bytes)
+    }
+
+    /// What the walk comes to, and how many goes of ten elements it took.
+    fn totals((t, bytes): (Template, Vec<u8>)) -> (KindTotals, usize) {
+        let len = bytes.len() as u64 * 8;
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(t);
+        ev.set_slice(Some(10));
+        let mut walk = KindWalk::new(len);
+        for goes in 1..10_000 {
+            ev.begin_slice();
+            let out = ev.kind_totals_step(&doc, &mut walk).unwrap();
+            if out.done {
+                return (out, goes);
+            }
+        }
+        panic!("the walk did not finish");
+    }
+
+    #[test]
+    fn a_run_of_packed_records_is_counted_once_and_multiplied() {
+        let (fast, fast_goes) = totals(grid(200, false));
+        let (slow, slow_goes) = totals(grid(200, true));
+        assert_eq!(fast, slow);
+        let find = |name: &str| fast.totals.iter().find(|t| t.type_name == name).map(|t| (t.bits, t.count));
+        assert_eq!(find("u bits_per_value be"), Some((200 * 8, 200)));
+        assert_eq!(find("computed real"), Some((0, 200)));
+        assert_eq!((fast.covered_bits, fast.unmapped_bits, fast.reached_bits), (202 * 8, 0, 202 * 8));
+        // One record walked rather than two hundred, each of which is three
+        // steps: the record and its two fields.
+        assert!(fast_goes <= 2 && slow_goes >= 60, "{fast_goes} goes against {slow_goes}");
     }
 }
