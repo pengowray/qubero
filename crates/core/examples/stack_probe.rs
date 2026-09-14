@@ -21,19 +21,58 @@
 //! Prints the answer, or the error, and how many expressions were open at
 //! most. A stack that runs out takes the process with it, which is the answer
 //! too: run it again with fewer levels.
+//!
+//! With `paint` after the size, the stack below the read is filled with a
+//! known byte first and looked at afterwards, and how much of it the read
+//! wrote over is printed as `stack: <bytes>`. Two of those at two numbers of
+//! levels, both under the limit, give what one level costs to the byte, where
+//! finding where a stack runs out gives it to a level. The size has to be
+//! larger than `PAINT`.
 use qubero_core::document::Document;
 use qubero_core::eval::Evaluator;
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 use qubero_core::template::{Endian, Expr as E, Template, Ty as T, Until};
 
+/// How much of the stack `paint` fills, in bytes.
+const PAINT: usize = 6 << 20;
+
+/// The byte the stack is filled with.
+const MARK: u8 = 0xA5;
+
+/// Fill `PAINT` bytes of the stack below the caller with `MARK`, and say
+/// where they start and end. They are left behind when this returns, under
+/// whatever the caller calls next.
+#[inline(never)]
+fn paint() -> (usize, usize) {
+    let mut block = [0u8; PAINT];
+    block.fill(MARK);
+    let low = std::hint::black_box(&mut block).as_ptr() as usize;
+    (low, low + PAINT)
+}
+
+/// How many bytes at the top of what `paint` filled no longer hold `MARK`:
+/// the most stack anything called since has had open at once.
+#[inline(never)]
+fn written_over(low: usize, high: usize) -> usize {
+    let mut at = low;
+    // SAFETY: the bytes are the stack this thread committed for `paint`, and
+    // nothing has been freed; they are only read.
+    while at < high && unsafe { std::ptr::read_volatile(at as *const u8) } == MARK {
+        at += 1;
+    }
+    high - at
+}
+
 fn main() {
     let n: usize = std::env::args().nth(1).unwrap().parse().unwrap();
     let shape = std::env::args().nth(2).unwrap_or_else(|| "array".into());
     let kib: usize = std::env::args().nth(3).and_then(|d| d.parse().ok()).unwrap_or(1024);
+    let painting = std::env::args().nth(4).is_some_and(|a| a == "paint");
     let h = std::thread::Builder::new()
         .stack_size(kib << 10)
         .spawn(move || {
+            let painted = painting.then(paint);
             let names: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
             let chain = |first: T, next: &dyn Fn(&str) -> T| {
                 let mut fields = vec![(names[0].as_str(), first)];
@@ -108,7 +147,11 @@ fn main() {
             };
             let doc = Document::new(MemSource(bytes));
             let mut ev = Evaluator::new(t);
-            println!("{:?}", ev.node(&doc, &path).map(|x| (x.size_bits, x.value)));
+            let got = ev.node(&doc, &path).map(|x| (x.size_bits, x.value));
+            if let Some((low, high)) = painted {
+                println!("stack: {}", written_over(low, high));
+            }
+            println!("{got:?}");
             println!("deepest: {}", ev.deepest_question());
         })
         .unwrap();
