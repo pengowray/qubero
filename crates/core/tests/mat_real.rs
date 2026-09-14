@@ -479,6 +479,20 @@ fn a_level_7_3_file_is_hdf5_behind_the_same_header() {
     assert_eq!(text(&d, &mut ev, &name), "testdouble");
 }
 
+/// The HDF5 panels are offered on whether the reading holds an HDF5 file, not
+/// on the template's name, since `mat` reads both kinds of file. A level 7.3
+/// file does and a level 5 one does not.
+#[test]
+fn only_a_level_7_3_file_holds_hdf5() {
+    use qubero_core::formats::h5ad::holds_hdf5;
+    let (d, mut ev) = open!("testhdf5_7.4_GLNX86.mat");
+    assert!(holds_hdf5(&mut ev, &d).unwrap(), "level 7.3");
+    for name in ["testdouble_7.1_GLNX86.mat", "teststructnest_7.4_GLNX86.mat", "testdouble_6.1_SOL2.mat", "testvec_4_GLNX86.mat"] {
+        let (d, mut ev) = open!(name);
+        assert!(!holds_hdf5(&mut ev, &d).unwrap(), "{name}");
+    }
+}
+
 /// A file whose element runs past the end of it is refused rather than read
 /// as far as it goes. It lives in `does-not-read` for that reason.
 #[test]

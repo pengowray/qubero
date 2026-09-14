@@ -1293,6 +1293,24 @@ mod tests {
         assert!(!is_mat5(&wrong));
     }
 
+    /// A level 5 file holds no HDF5, and saying so reads the header and not the
+    /// elements. The question is asked on every change to the document, so a
+    /// file of many elements that answered it by counting them would be walked
+    /// end to end each time a chunk of it arrived.
+    #[test]
+    fn a_level_5_file_says_it_holds_no_hdf5_without_reading_its_elements() {
+        let mut v = header_bytes(b"IM", [0, 1]);
+        // Ten thousand short miINT8 elements, each a tag and four bytes.
+        for _ in 0..10_000 {
+            v.extend(((1u32 << 16) | 1).to_le_bytes());
+            v.extend([7, 0, 0, 0]);
+        }
+        let doc = Document::new(MemSource(v));
+        let mut ev = Evaluator::new(mat());
+        assert!(!crate::formats::h5ad::holds_hdf5(&mut ev, &doc).unwrap());
+        assert!(ev.memo_len() < 64, "asking walked {} fields", ev.memo_len());
+    }
+
     #[test]
     fn a_level_5_file_reads_its_header_and_its_elements() {
         let mut v = header_bytes(b"IM", [0, 1]);
