@@ -124,9 +124,10 @@ The FITS heap reads (see Closed). Left from the design:
   untested change is on branch `wip-parquet-gather-region` (`dc1c86c`).
 - `memo.rs` `forget_after` assumes a field depends only on what is before it.
   Since B4 it drops what an `At` declared after the edit points at, which
-  covers Parquet's pages under the footer. A child a `Chain` or `Gather`
-  placed is still kept when it and the list end before the edit, though the
-  element or record that placed it may sit after the edit.
+  should cover Parquet's pages under the footer (no Parquet edit test checks
+  it). A child a `Chain` or `Gather` placed is still kept when it and the list
+  end before the edit, though the element or record that placed it may sit
+  after the edit.
 - A walk into an unpacked RNTuple envelope needs a step through a `Decoded`'s
   child (S4).
 

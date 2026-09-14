@@ -342,7 +342,7 @@ impl Memo {
         // a pointer read after the edit may say somewhere else now. And JSON:
         // where a value in it ends is where the parse found the next one, and
         // the parse covers the edit.
-        let holds = |r: &Resolved| ended(r) || (r.cursor <= bit && !matches!(r.ty, Ty::Json(..)));
+        let holds = |r: &Resolved| ended(r) || (r.offset <= bit && !matches!(r.ty, Ty::Json(..)));
         let (nodes, lists) = (&self.nodes, &self.lists);
         let mut judged = FxHashMap::default();
         let mut above = FxHashSet::default();
