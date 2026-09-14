@@ -91,6 +91,9 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   rar4: ["rar"],
   rar5: ["rar"],
   gzip: ["gz", "tgz"],
+  // A `.vcf.gz`, `.bed.gz` or `.fa.gz` is `gz` to the rules, which name one
+  // extension each.
+  bgzf: ["bam", "csi", "gz", "bgz"],
   compress: ["z"],
   bzip2: ["bz2"],
   lzip: ["lz"],

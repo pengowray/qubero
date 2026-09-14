@@ -35,6 +35,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| BGZF files named by what they hold: `bgzf_contents` unpacks up to 16 KiB of block 0 and tells BAM, CSI, VCF, BED, FASTA or text, and the toolbar reads e.g. `BAM alignments · compressed with BGZF` (it showed file(1)'s BGZF sentence before, which outranked the template label). | 4963ee3, 9d48cc0 |
 | MATLAB 7.3 files get the HDF5 contents list and B-trees tab, keyed on `h5ad::holds_hdf5` (the same search the walk uses, now reading no list contents to answer no); level 5 files get neither. `BTREES.notInListing` no longer blames a user block. | 656fd35, 5039f59, c53c702 |
 | S7. One space stitched from several runs: `Ty::Stitched` joins stored or packed runs into one lazily read space with a bounded cache and a part table. PDB scattered streams (a TPI stream joined from 11 pages), BAM records across BGZF blocks (a record cut across 17 blocks reads whole; 20 KB peak cache over 300 blocks), Godot resources across compressed blocks, the inspector showing a byte's run and BGZF virtual offset, and edits to a field inside one stored run. Also fixed Gather's resume skipping a record after a spend ran out. | f4c38e0, 174eb1d, a34ee58, 85ea109 |
 | WMO BUFR: a new template, a side reader through Table D with replication and operators, bundled WMO tables (v46, with v13 and v15 differences), and a values panel. No value differs from ecCodes on eight samples. | f4c90ef, 52765a3, e7ea846 |
@@ -616,9 +617,6 @@ htslib and samtools samples, matched against bamnostic. Left:
 - **No panel.** `bam_block` is a method, not an `Explain` variant. With the
   stream now joined, a panel may no longer be needed for records; the
   inspector's Position row already shows a record's block and virtual offset.
-- **A `.bam` is labelled "BGZF gzip blocks".** The label names the container,
-  not the contents; a reader opening a BAM file wants to be told it is BAM.
-  `templateSentence` is where Fable suggested saying so.
 - A plain gzip file of several members that is not BGZF still reports a false
   CRC mismatch (its CRC compared with the last member's trailer): the gzip
   template needs a compressed run that ends where its decoder stopped.

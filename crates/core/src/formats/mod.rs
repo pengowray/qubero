@@ -191,7 +191,7 @@ pub use arrow::{arrow, arrow_stream};
 pub use appledouble::{appledouble, applesingle};
 pub use aseprite::aseprite;
 pub use au::au;
-pub use bam::{bai, bam, bgzf, csi};
+pub use bam::{bai, bam, bgzf, bgzf_contents, csi};
 pub use bmp::bmp;
 pub use bzip2::bzip2;
 pub use cab::cab;

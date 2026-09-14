@@ -476,20 +476,133 @@ fn virtual_offset() -> T {
 /// field. A plain gzip file has no such subfield, and this is what tells the
 /// two apart; both open with the same three bytes.
 pub(crate) fn is_bgzf(head: &[u8]) -> bool {
+    bc_number_at(head).is_some()
+}
+
+/// Where the first block's `BC` number is, in bytes from the start of the
+/// file, when the file opens with a BGZF block.
+fn bc_number_at(head: &[u8]) -> Option<usize> {
     if head.len() < 18 || head[..3] != [0x1f, 0x8b, 8] || head[3] & 4 == 0 {
-        return false;
+        return None;
     }
     let xlen = u16::from_le_bytes([head[10], head[11]]) as usize;
-    let Some(extra) = head.get(12..12 + xlen) else { return false };
+    let extra = head.get(12..12 + xlen)?;
     let mut at = 0;
     while at + 4 <= extra.len() {
         let len = u16::from_le_bytes([extra[at + 2], extra[at + 3]]) as usize;
         if extra[at..at + 2] == *BC && len == 2 {
-            return true;
+            return Some(12 + at + 4);
         }
         at += 4 + len;
     }
-    false
+    None
+}
+
+/// How much of the first block [`bgzf_contents`] unpacks: enough for the
+/// header lines a BED file may open with and a few of its intervals after.
+const CONTENTS_LOOK: usize = 16 * 1024;
+
+/// What a BGZF file holds, told from the front of its first block without
+/// walking to the others: `bam` or `csi` by the magic number
+/// [`stream_contents`] switches on, and for the text that switch reads
+/// everything else as, `vcf`, `bed` or `fasta` where the first lines say so
+/// and `text` where they do not.
+///
+/// `head` is the front of the file and need not hold the whole block: what
+/// the deflate in it comes to is enough, which is how a sniff window of the
+/// file answers for a block longer than the window.
+///
+/// None when the file does not open with a BGZF block, when the block will
+/// not unpack, when it unpacks to too little to tell (a file of nothing but
+/// its end block), and when what it unpacks to is not text. A BCF is that
+/// last: written through BGZF, and neither of the magic numbers the stream
+/// knows.
+pub fn bgzf_contents(head: &[u8]) -> Option<&'static str> {
+    let bsize_at = bc_number_at(head)?;
+    // BGZF writes the extra field and nothing else; a block with a name or a
+    // comment in its header was not written by anything that reads BGZF.
+    if head[3] != 4 {
+        return None;
+    }
+    let block = u16::from_le_bytes([*head.get(bsize_at)?, *head.get(bsize_at + 1)?]) as usize + 1;
+    let from = 12 + u16::from_le_bytes([head[10], head[11]]) as usize;
+    // The deflate ends where the eight-byte trailer starts, or where the head
+    // does, whichever comes first.
+    let to = block.checked_sub(8)?.min(head.len());
+    let deflate = head.get(from..to)?;
+    let unpacked = inflate_front(deflate, CONTENTS_LOOK)?;
+    if unpacked.len() < BAM_MAGIC.len() {
+        return None;
+    }
+    if unpacked.starts_with(BAM_MAGIC) {
+        return Some("bam");
+    }
+    if unpacked.starts_with(CSI_MAGIC) {
+        return Some("csi");
+    }
+    let text = text_front(&unpacked)?;
+    Some(if text.starts_with("##fileformat=VCF") {
+        "vcf"
+    } else if text.starts_with('>') {
+        "fasta"
+    } else if is_bed(text) {
+        "bed"
+    } else {
+        "text"
+    })
+}
+
+/// As much of a raw deflate stream as `data` comes to, up to `cap` bytes,
+/// with no complaint about a stream cut off partway. None when what is there
+/// is not deflate.
+fn inflate_front(data: &[u8], cap: usize) -> Option<Vec<u8>> {
+    use miniz_oxide::inflate::core::{decompress, inflate_flags, DecompressorOxide};
+    use miniz_oxide::inflate::TINFLStatus;
+    let mut out = vec![0; cap];
+    let mut state = Box::<DecompressorOxide>::default();
+    // More input may follow, so a stream that runs out of bytes stops and
+    // says how far it got rather than failing.
+    let flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF | inflate_flags::TINFL_FLAG_HAS_MORE_INPUT;
+    let (status, _, written) = decompress(&mut state, data, &mut out, 0, flags);
+    match status {
+        TINFLStatus::Done | TINFLStatus::NeedsMoreInput | TINFLStatus::HasMoreOutput => {
+            out.truncate(written);
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// The bytes as text, when they are: UTF-8, allowing a character cut off at
+/// the end, with no control characters but tabs and line ends.
+fn text_front(bytes: &[u8]) -> Option<&str> {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) if e.error_len().is_none() => std::str::from_utf8(&bytes[..e.valid_up_to()]).ok()?,
+        Err(_) => return None,
+    };
+    let control = |c: char| c.is_control() && !matches!(c, '\t' | '\n' | '\r');
+    (!text.contains(control)).then_some(text)
+}
+
+/// Whether the text reads as BED: past any `#`, `track` and `browser` lines,
+/// every whole line is tab-separated with at least three columns, the second
+/// and third of them a start and an end that is not before it. Only whole
+/// lines are asked, since the last one may have been cut off.
+fn is_bed(text: &str) -> bool {
+    let Some((whole, _)) = text.rsplit_once('\n') else { return false };
+    let mut intervals = whole
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("track") && !line.starts_with("browser"))
+        .peekable();
+    let interval = |line: &str| {
+        let mut cols = line.split('\t');
+        let (_, start, end) = (cols.next(), cols.next(), cols.next());
+        let number = |s: Option<&str>| s.filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())).and_then(|s| s.parse::<u64>().ok());
+        matches!((number(start), number(end)), (Some(s), Some(e)) if s <= e)
+    };
+    intervals.peek().is_some() && intervals.all(interval)
 }
 
 #[cfg(test)]
@@ -937,5 +1050,67 @@ pub(crate) mod tests {
         other.extend_from_slice(&[0; 8]);
         assert!(!is_bgzf(&other));
         assert_eq!(super::super::sniff(&other, other.len() as u64), Some("gzip"));
+    }
+
+    /// What the first block says the file holds agrees with the case the
+    /// template's switch on the joined stream takes, and names the text
+    /// formats inside the text case.
+    #[test]
+    fn a_bgzf_file_says_what_it_holds_from_its_first_block() {
+        let vcf = b"##fileformat=VCFv4.2\n##source=test\n#CHROM\tPOS\tID\tREF\tALT\nchr1\t100\t.\tA\tG\n".as_slice();
+        let bed = b"track name=peaks\n# a comment\nchr1\t100\t200\tpeak1\nchr2\t0\t50\n".as_slice();
+        let fasta = b">chr1 the first\nACGTACGTACGT\n".as_slice();
+        let gff = b"##gff-version 3\nchr1\tsource\tgene\t100\t200\t.\t+\t.\tID=g1\n".as_slice();
+        let header = bam_header("@HD\tVN:1.6\n", &[("chr1", 1000)]);
+        let csi = csi_stream_bytes(2, 1);
+        for (stream, holds, switch) in [
+            (header.as_slice(), Some("bam"), "Bam"),
+            (csi.as_slice(), Some("csi"), "Csi"),
+            (vcf, Some("vcf"), "DecodedText"),
+            (bed, Some("bed"), "DecodedText"),
+            (fasta, Some("fasta"), "DecodedText"),
+            (gff, Some("text"), "DecodedText"),
+            // A BCF, which the stream reads as text and is not.
+            (b"BCF\x02\x02\x00\x00\x01\x00".as_slice(), None, "DecodedText"),
+        ] {
+            let mut file = bgzf_block(stream);
+            file.extend_from_slice(&EOF_BLOCK);
+            assert_eq!(bgzf_contents(&file), holds, "{holds:?}");
+            let d = Document::new(MemSource(file));
+            let mut ev = Evaluator::new(bgzf());
+            let contents = joined(&mut ev, &d);
+            assert_eq!(ev.node(&d, &contents).unwrap().type_name, switch, "{holds:?}");
+        }
+        // Not intervals: a start after its end, and a column that is a name.
+        let mut file = bgzf_block(b"chr1\t200\t100\n");
+        assert_eq!(bgzf_contents(&file), Some("text"));
+        file = bgzf_block(b"chr1\tsource\t100\n");
+        assert_eq!(bgzf_contents(&file), Some("text"));
+        // Nothing but the end block, a plain gzip, and not gzip at all.
+        assert_eq!(bgzf_contents(&EOF_BLOCK), None);
+        let mut plain = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        plain.extend_from_slice(&miniz_oxide::deflate::compress_to_vec(vcf, 6));
+        assert_eq!(bgzf_contents(&plain), None);
+        assert_eq!(bgzf_contents(b"##fileformat=VCFv4.2\n"), None);
+    }
+
+    /// The front of a block is enough, whether the head stops partway through
+    /// its deflate or partway through a stored block.
+    #[test]
+    fn a_bgzf_block_longer_than_the_head_still_says_what_it_holds() {
+        let mut bed = String::new();
+        for i in 0..4000u32 {
+            bed.push_str(&format!("chr{}\t{}\t{}\tfeature{:08x}\n", i % 23, i * 37, i * 37 + i % 991, i.wrapping_mul(2_654_435_761)));
+        }
+        let bed = &bed.as_bytes()[..60_000];
+        let packed = bgzf_block(bed);
+        assert!(packed.len() > 4096);
+        assert_eq!(bgzf_contents(&packed[..4096]), Some("bed"));
+        // A block written without packing, the way `bgzip -l 0` writes one.
+        let stored = miniz_oxide::deflate::compress_to_vec(bed, 0);
+        let mut block = vec![0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, b'B', b'C', 2, 0];
+        block.extend_from_slice(&((18 + stored.len() + 8 - 1) as u16).to_le_bytes());
+        block.extend_from_slice(&stored);
+        assert_eq!(bgzf_contents(&block[..4096]), Some("bed"));
     }
 }
