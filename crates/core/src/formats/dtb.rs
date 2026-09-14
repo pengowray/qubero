@@ -112,6 +112,10 @@ fn begin_node() -> T {
 /// value. The name is not here at all. Every property in the tree that says
 /// `compatible` says it by pointing at one `compatible` in the strings block,
 /// which is what keeps a tree of a thousand nodes small.
+///
+/// So the name is a second reading of bytes the strings block already covers,
+/// and is set aside: counted in both, a tree's names came to more of the file
+/// than the file has.
 fn property() -> T {
     T::structure(
         "Property",
@@ -123,6 +127,7 @@ fn property() -> T {
             ("padding", T::bytes(E::field("len").pad_to(4))),
         ],
     )
+    .field_aside("name")
 }
 
 #[cfg(test)]
