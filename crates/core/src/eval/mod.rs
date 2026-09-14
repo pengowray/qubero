@@ -328,6 +328,14 @@ pub struct NodeInfo {
     pub doc: Option<String>,
 }
 
+/// What an expression reads of a field. See [`Evaluator::value_of`].
+pub(super) struct FieldValue {
+    pub(super) value: Value,
+    pub(super) size_bits: u64,
+    /// True when the file did not write the field. See [`NodeInfo::absent`].
+    pub(super) absent: bool,
+}
+
 /// Bits to write, and where. Produced by `Evaluator::prepare_write`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Write {
@@ -818,38 +826,7 @@ impl Evaluator {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
         let r = self.memo.get(path).expect("resolved").clone();
-        let (value, child_count, composite) = match &r.ty {
-            // A field the file left out. No children to count and no bytes to
-            // read a value from, and not a composite either: there is nothing
-            // to open. `absent` below is what says so.
-            Ty::When { .. } => (Value::Composite { count: 0 }, 0, false),
-            Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
-                let n = self.child_count(doc, path)?;
-                (Value::Composite { count: n }, n, true)
-            }
-            Ty::Json(shape, _) if shape.composite() => {
-                let n = self.child_count(doc, path)?;
-                (Value::Composite { count: n }, n, true)
-            }
-            // A stream holds one thing when it opens and nothing when it does
-            // not, so asking about the node opens it. That is a read of the
-            // whole run, done once and kept: what stops it from being a read
-            // per row is that `locate` stops at the run, so only a stream
-            // something is actually drawing is ever unpacked, and the row has
-            // to say whether it opened.
-            Ty::Decoded { .. } | Ty::Traced { .. } => {
-                let n = self.child_count(doc, path)?;
-                (Value::Composite { count: n }, n, true)
-            }
-            // The same for a stream joined from parts, whose opening is a walk
-            // to every part and no unpacking.
-            Ty::Stitched { .. } => {
-                let n = self.child_count(doc, path)?;
-                (Value::Composite { count: n }, n, true)
-            }
-            _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
-        };
+        let (value, child_count, composite) = self.value_parts(doc, path, &r, size)?;
         let reading = self.reading(doc, &r, size)?;
         // A field that is more than its value says where the value is: a JSON
         // member covers its key and the comma after it, and the value the
@@ -919,6 +896,86 @@ impl Evaluator {
             absent: matches!(r.ty, Ty::When { .. }),
             doc: self.doc_of(path, &r.ty),
         })
+    }
+
+    /// What a node holds, how many children it has, and whether it has any to
+    /// open: the part of [`Evaluator::node`] that an expression reading the
+    /// field needs too. `r` is the node at `path`, placed and `size` bits long.
+    fn value_parts<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved, size: u64) -> R<(Value, u64, bool)> {
+        Ok(match &r.ty {
+            // A field the file left out. No children to count and no bytes to
+            // read a value from, and not a composite either: there is nothing
+            // to open. `absent` is what says so.
+            Ty::When { .. } => (Value::Composite { count: 0 }, 0, false),
+            Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            Ty::Json(shape, _) if shape.composite() => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            // A stream holds one thing when it opens and nothing when it does
+            // not, so asking about the node opens it. That is a read of the
+            // whole run, done once and kept: what stops it from being a read
+            // per row is that `locate` stops at the run, so only a stream
+            // something is actually drawing is ever unpacked, and the row has
+            // to say whether it opened.
+            Ty::Decoded { .. } | Ty::Traced { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            // The same for a stream joined from parts, whose opening is a walk
+            // to every part and no unpacking.
+            Ty::Stitched { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
+            _ => (self.primitive_value(doc, path, r, &r.ty, size)?, 0, false),
+        })
+    }
+
+    /// The value of the field at `path`, how many bits it takes, and whether
+    /// the file left it out: what an expression reads of a field, and nothing
+    /// else [`Evaluator::node`] works out.
+    ///
+    /// A field one expression names can be a field whose own value names
+    /// another, as deep as a chain goes, and every link of that chain is a
+    /// call of this with the rest of the chain under it. Building a whole
+    /// `NodeInfo` for each link works out its name, its type's name, its unit,
+    /// its prose, whether it can be edited and how its text reads, all to be
+    /// thrown away, and working out the name can read another field. So this
+    /// places the field, measures it and reads its value, and the frame that
+    /// stays open while the rest of the chain is read holds no more than that.
+    pub(super) fn value_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<FieldValue> {
+        self.resolve(doc, path)?;
+        let size_bits = self.size_of(doc, path)?;
+        self.value_placed(doc, path, size_bits)
+    }
+
+    /// The rest of `value_of`, once the field is placed and measured. Out of
+    /// line so that its copy of the node is not in the frame the chain under
+    /// `resolve` is read beneath.
+    #[inline(never)]
+    fn value_placed<S: Source>(&mut self, doc: &Document<S>, path: &[usize], size_bits: u64) -> R<FieldValue> {
+        // A computed value already worked out is the common case for a field
+        // an expression names, since a list read in order asks each element's
+        // the moment the next element needs it, and it needs no copy of the
+        // node to hand back.
+        let r = self.memo.get(path).expect("resolved");
+        let kept = match (&r.ty, &r.computed) {
+            (Ty::Computed(_), Some(Computed::Int(v))) => Some(Value::Int(*v)),
+            (Ty::ComputedReal(_), Some(Computed::Real(v))) => Some(Value::Float(*v)),
+            (Ty::ComputedText(_), Some(Computed::Text(v))) => Some(Value::Str(v.to_string())),
+            _ => None,
+        };
+        if let Some(value) = kept {
+            return Ok(FieldValue { value, size_bits, absent: false });
+        }
+        let r = r.clone();
+        let (value, _, _) = self.value_parts(doc, path, &r, size_bits)?;
+        Ok(FieldValue { value, size_bits, absent: matches!(r.ty, Ty::When { .. }) })
     }
 
     /// What the format says this field is: the declaration's own prose, and
@@ -1703,8 +1760,9 @@ impl Evaluator {
                     self.end_chain(list, u64::MAX);
                     return Ok(());
                 }
-                let info = self.node(doc, &prev)?;
-                let reach = self.memo.placed_from(&prev).max(info.offset_bits.saturating_add(info.size_bits));
+                let info = self.value_of(doc, &prev)?;
+                let offset_bits = self.memo.get(&prev).map_or(0, |r| r.offset);
+                let reach = self.memo.placed_from(&prev).max(offset_bits.saturating_add(info.size_bits));
                 let v = info.value.as_int().unwrap_or(0);
                 // All ones for the width of the field it was read from: the
                 // other way a format writes "no more". Judged by that field's
@@ -2456,7 +2514,7 @@ impl Evaluator {
         let Some(idx) = idx else { return fail(format!("no field named {field}")) };
         let mut p = path.to_vec();
         p.push(idx);
-        Ok(self.node(doc, &p)?.value.as_int())
+        Ok(self.value_of(doc, &p)?.value.as_int())
     }
 
     /// Raw bytes of a named field directly inside the struct at `path`.

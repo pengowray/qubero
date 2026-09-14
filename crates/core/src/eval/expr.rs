@@ -312,7 +312,7 @@ impl Evaluator {
             Expr::Tagged(t) => {
                 let t = t.clone();
                 match self.tagged_path(doc, at, &t, here)? {
-                    Some((p, _)) => self.node(doc, &p)?.value.as_int().unwrap_or(0),
+                    Some((p, _)) => self.value_of(doc, &p)?.value.as_int().unwrap_or(0),
                     None => 0,
                 }
             }
@@ -811,7 +811,7 @@ impl Evaluator {
             }
             _ => return fail("that expression names no field"),
         };
-        let info = self.node(doc, &path)?;
+        let info = self.value_of(doc, &path)?;
         if info.absent {
             return fail(format!("{what} is not in this file"));
         }
@@ -826,7 +826,7 @@ impl Evaluator {
     /// see the note in [`Evaluator::lookup_bits`], which is the same trap one
     /// name further out.
     fn int_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], what: &str) -> R<Option<i128>> {
-        let info = self.node(doc, path)?;
+        let info = self.value_of(doc, path)?;
         if info.absent {
             return fail(format!("{what} is not in this file"));
         }
@@ -1010,7 +1010,7 @@ impl Evaluator {
             let bytes = self.read(doc, &r, r.offset, shown * 8)?;
             return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
-        match self.node(doc, path)?.value {
+        match self.value_of(doc, path)?.value {
             Value::Str(s) => Ok(s),
             other => fail(format!("{other:?} is not text")),
         }
@@ -1024,7 +1024,7 @@ impl Evaluator {
         let mut child = path.to_vec();
         for i in 0..n as usize {
             child.push(i);
-            let v = self.node(doc, &child)?.value.as_int();
+            let v = self.value_of(doc, &child)?.value.as_int();
             child.pop();
             let Some(v) = v else { return fail(format!("{what} holds no number there")) };
             let Some(next) = total.checked_mul(v) else { return fail("shape too large to count") };
@@ -1044,7 +1044,7 @@ impl Evaluator {
         let mut child = path.to_vec();
         for i in 0..n as usize {
             child.push(i);
-            let v = self.node(doc, &child)?.value.as_int();
+            let v = self.value_of(doc, &child)?.value.as_int();
             child.pop();
             let Some(v) = v else { return fail(format!("{what} holds no number there")) };
             let Some(next) = total.checked_add(v) else { return fail("too many to count") };
@@ -1087,7 +1087,7 @@ impl Evaluator {
         let mut child = path.to_vec();
         for i in 0..n as usize {
             child.push(i);
-            let value = self.node(doc, &child)?.value.as_int();
+            let value = self.value_of(doc, &child)?.value.as_int();
             child.pop();
             let Some(value) = value else { return fail(format!("{what} holds no number there")) };
             largest = largest.max(value);
@@ -1115,7 +1115,7 @@ impl Evaluator {
             let Ty::Struct(s) = self.memo[&elem].ty.base() else { return Ok(0) };
             let Some(j) = s.fields.iter().position(|f| *f.name == *name) else { return Ok(0) };
             elem.push(j);
-            return Ok(self.node(doc, &elem)?.value.as_int().unwrap_or(0));
+            return Ok(self.value_of(doc, &elem)?.value.as_int().unwrap_or(0));
         }
         Ok(0)
     }
@@ -1520,7 +1520,7 @@ impl Evaluator {
             Err(e) if passes_up(&e) => return Err(e),
             Err(_) => return Ok(None),
         }
-        Ok(match self.node(doc, path) {
+        Ok(match self.value_of(doc, path) {
             Ok(info) => info.value.as_int(),
             // A field that cannot be read yet is not an answer, and must not be
             // taken for the absence of one.
@@ -1623,7 +1623,7 @@ impl Evaluator {
                     if pointing {
                         p.push(0);
                     }
-                    let info = self.node(doc, &p)?;
+                    let info = self.value_of(doc, &p)?;
                     // A field the file did not write holds nothing, and
                     // nothing is not zero. Left to read as the empty node it
                     // is, a switch keyed on an absent field would quietly

@@ -149,6 +149,14 @@ impl<S: Source> Descriptions for Reader<'_, S> {
         Ok(info)
     }
 
+    /// The number alone, without the rest of what `node` works out: a build
+    /// reads a count or a version out of every description it walks.
+    fn int(&mut self, path: &[usize]) -> R<Option<i128>> {
+        let value = self.ev.value_of(self.doc, path)?.value;
+        self.note(path)?;
+        Ok(value.as_int())
+    }
+
     fn find(&mut self, from: &[usize], names: &[&str]) -> R<Option<Vec<usize>>> {
         let mut p = from.to_vec();
         for name in names {
