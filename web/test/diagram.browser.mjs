@@ -20,8 +20,10 @@ await mkdir(outDir, { recursive: true });
 
 // One drawing per format, because each exercises a different shape: PNG is a
 // chunk switch with a case per type, ELF a header pointing at two tables, WAV
-// the format whose ID3 frames used to be drawn ninety-six times over, and
-// ISO 9660 a box with several type edges leaving it at once.
+// the format whose ID3 frames used to be drawn ninety-six times over, ISO 9660
+// a box with several type edges leaving it at once, and JPEG the figure the
+// strip mode is modelled on, whose segment body is a choice of two dozen types
+// and so the one drawing where a box opens onto a rail rather than a funnel.
 //
 // `template` picks the format from the toolbar rather than relying on a sample
 // that happens to sniff as it. The diagram is a picture of the template, so
@@ -31,6 +33,7 @@ const cases = [
   { file: join(samples, "elf/busybox-x86_64"), shot: "diagram-elf.png", fitShot: "diagram-elf-fit.png" },
   { file: join(samples, "wav/pcm-s16le-stereo-44100.wav"), template: "wav", shot: "diagram-wav.png", fitShot: "diagram-wav-fit.png" },
   { file: join(samples, "cdrom/hello-mode1.bin"), template: "iso9660", shot: "diagram-iso.png", fitShot: "diagram-iso-fit.png" },
+  { file: join(samples, "jpeg/libjpeg-turbo-testorig-baseline.jpg"), shot: "diagram-jpeg.png", fitShot: "diagram-jpeg-fit.png", rail: true },
 ];
 
 /** How much of its end two arrows into one row may share. Past this they are
@@ -440,6 +443,10 @@ try {
       badPaths: [...document.querySelectorAll(".dv-funnel path")].filter((q) =>
         /NaN|undefined/.test(q.getAttribute("d") || ""),
       ).length,
+      widestJoin: Math.max(
+        0,
+        ...[...document.querySelectorAll(".dv-funnel")].map((g) => g.querySelectorAll("path").length),
+      ),
     }));
     await page.screenshot({ path: join(outDir, c.shot.replace(".png", "-strips.png")) });
     if (c.darkShot !== undefined) {
@@ -452,6 +459,10 @@ try {
     assert(strips.boxes >= 1, "no field boxes drawn in a strip");
     assert.equal(strips.overlaps, 0, "strips overlap each other");
     assert.equal(strips.badPaths, 0, "a funnel was drawn with a broken path");
+    // The rail: one box opening onto two dozen types is drawn as a line over
+    // the lot of them with a tick into each, and the check that it is there is
+    // that one join holds more lines than a funnel's two.
+    if (c.rail === true) assert(strips.widestJoin > 4, `the widest join has ${strips.widestJoin} lines, so no rail was drawn`);
     // The census belongs to the drawing, not to one way of drawing it.
     if (found.badges > 0) assert(strips.badges > 0, "the counts went away with the mode");
     if (found.goable > 0) assert(strips.goable > 0, "nothing offered to go to the file any more");

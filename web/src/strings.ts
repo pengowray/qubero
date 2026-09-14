@@ -2838,6 +2838,11 @@ export const DIAGRAM = {
   modeTitle: "Boxes joined by arrows, or each type as a strip of its fields in file order",
   modeArrows: "Boxes and arrows",
   modeStrips: "Strips",
+  /** The end of a case list too long to draw, inside a choice's box. Cases
+   *  rather than fields: what is folded away here is the rest of the list of
+   *  what the choice can pick, and a reader counting fields would go looking
+   *  for them in the strip. */
+  moreCases: (n: number): string => `… ${n} more case${n === 1 ? "" : "s"}`,
   /** Under the name of the last box of a run, where the first box carries the
    *  count. */
   runLast: "last",

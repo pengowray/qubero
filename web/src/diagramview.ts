@@ -88,7 +88,8 @@ const STRIP_APART = 56;
 const STRIP_DROP = 64;
 
 /** How many strips one box may open onto before the funnels give way to a rail
- *  over the lot of them. Three fans read as three; a dozen reads as hatching. */
+ *  over the lot of them. Two funnels side by side read as two; three already
+ *  cross each other, and a dozen read as hatching. */
 const BUS = 3;
 
 /** A point in stage units. */
@@ -932,7 +933,7 @@ export class DiagramView {
       if (item.cases.length > 8) {
         const rest = document.createElement("div");
         rest.className = "dv-snote";
-        rest.textContent = DIAGRAM.more(item.cases.length - 8);
+        rest.textContent = DIAGRAM.moreCases(item.cases.length - 8);
         list.append(rest);
       }
       el.append(list);
