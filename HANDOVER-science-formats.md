@@ -36,6 +36,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| ADIOS2 BP3, BP4 and BP5: new templates for BP3 files and every file of a BP4 or BP5 directory, down to BP5's FFS records and schema fields. Matches adios2 2.12.1 on a three-version dataset. | a138f85, 8252840 |
 | BGZF files named by what they hold: `bgzf_contents` unpacks up to 16 KiB of block 0 and tells BAM, CSI, VCF, BED, FASTA or text, and the toolbar reads e.g. `BAM alignments · compressed with BGZF` (it showed file(1)'s BGZF sentence before, which outranked the template label). | 4963ee3, 9d48cc0 |
 | MATLAB 7.3 files get the HDF5 contents list and B-trees tab, keyed on `h5ad::holds_hdf5` (the same search the walk uses, now reading no list contents to answer no); level 5 files get neither. `BTREES.notInListing` no longer blames a user block. | 656fd35, 5039f59, c53c702 |
 | S7. One space stitched from several runs: `Ty::Stitched` joins stored or packed runs into one lazily read space with a bounded cache and a part table. PDB scattered streams (a TPI stream joined from 11 pages), BAM records across BGZF blocks (a record cut across 17 blocks reads whole; 20 KB peak cache over 300 blocks), Godot resources across compressed blocks, the inspector showing a byte's run and BGZF virtual offset, and edits to a field inside one stored run. Also fixed Gather's resume skipping a record after a spend ran out. | f4c38e0, 174eb1d, a34ee58, 85ea109 |
@@ -511,8 +512,30 @@ HDF5's are small synthetic files; nothing from a real instrument.
 
 ## Not built
 
-ADIOS2 BP. DICOM is read by the bundled Kaitai description (`dicom.ksy`)
-rather than a native template.
+Nothing from the original list. DICOM is read by the bundled Kaitai description
+(`dicom.ksy`) rather than a native template.
+
+### ADIOS2 BP (built 2026-09-14)
+
+BP3 files, and each file of a BP4 or BP5 directory as its own template:
+indexes, metadata with characteristic sets read by tag, BP3 and BP4 data
+blocks with values typed by their dimensions, BP5 metadata as FFS records and
+`mmd.0` down to its subformats' field names, types, sizes and offsets (see
+Closed). One dataset written by adios2 2.12.1 (under WSL; there is no Windows
+wheel) as BP3, BP4 and BP5, matched against `adios2.FileReader`, with each
+file checked against the files it points into. Left:
+
+- **BP5 values need FFS decoding**, three things the IR lacks: finding a
+  format in another file (`mmd.0`) by a record's 12-byte ID; placing a struct
+  from a layout that is itself data (subformat fields with type strings,
+  sizes, offsets, alignment, byte order, and pointer fields into the variant
+  part sized by other fields); and splitting names that carry meaning
+  (`BPG_8_10_temperature`, some parts base64).
+- BP5 `data.N` has no header or marker and is not recognised; the sample was
+  dropped so `samples_real` stays whole.
+- A BP5 metadata step with more than one writer stays bytes.
+- Qubero opens one file, so a BP4 or BP5 directory's cross-file references
+  are named as offsets, not followed.
 
 ### WMO BUFR (built 2026-09-14)
 
