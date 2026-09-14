@@ -33,9 +33,13 @@ Left:
   `TraceBuilder::absorb_part`), `map_out`/`map_in` go through a part's own
   trace with `run_offset_bits`, and relations name what cut and measured the
   stream (`origin.rs::joined_by`).
-- The inspector's "Unpacked from" heading still shows on a joined tab, which
-  reads wrongly for PDB and HDF4; the inspector's own open button is still
-  only for single compressed runs.
+- Done 2026-09-14 (`8b13143`): a joined tab's inspector says `Byte under
+  the cursor is at` with the part the byte sits in, keeps `Unpacked from` for
+  runs that were unpacked, and has its own `Open joined stream` button.
+- A joined tab's template is the stream's inner type, which still names
+  fields of the structure that declared it: PDB streams fail with `unknown
+  field stream_sizes` and HDF4 dataset `values` tabs with `unknown field
+  dimensions` (`template_for`, `eval/mod.rs`).
 - An unused HDF4 slot (ref 0) before a used one would stand for bytes never
   written; the join cannot make zeros, so everything after reads early.
 - The cursor on an HDF4 block's bytes lands on whichever reading placed them
