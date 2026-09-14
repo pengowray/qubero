@@ -46,7 +46,7 @@ test("the tile's index counts from 0 and its ordinal and coordinates from 1", ()
 
 test("an invalid header's tile is still placed, without a count it cannot hold", () => {
   const side = 2 ** 40;
-  const problem = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, more than 2^64 in all.";
+  const problem = "Not unpacked: the header is invalid. ZNAXISn say the image is 1,099,511,627,776 × 1,099,511,627,776 pixels, giving more than the maximum of 2^64.";
   // Tiles of one pixel, more of them than a 64-bit count holds.
   const tiles = info({ count: null, index: 5, start: [5, 0], shape: [1, 1], image_shape: [side, side], pixels: 1, problem });
   assert.equal(
