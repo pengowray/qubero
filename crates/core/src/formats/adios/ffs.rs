@@ -26,25 +26,16 @@ pub(super) fn format_id() -> T {
 /// One FFS-encoded record: the ID of the format it is written in, eight bytes
 /// saying how much follows the header, padding to eight, and the record.
 ///
-/// The record stays bytes, and this is what reading it would take. It is a
-/// C structure laid out as the writer's compiler would: the format with this
-/// ID, found in `mmd.0` of the same directory, lists its fields with a name, a
-/// type, a size and an offset, and the base structure is that format's record
-/// length. A field typed `integer[BitFieldCount]` or `MetaArrayMM8` is a
-/// pointer, written as an offset to its array in the variable part after the
-/// base, the array as long as another field of the record says and made of
-/// the subformat of that name. BP5 then encodes what each field is in its
-/// name: `BPG_8_10_temperature` is a global array of eight-byte values of
-/// ADIOS type 10 called `temperature`, whose count, shape, offsets and data
-/// block location follow in that subformat. Three things are missing from the
-/// IR for it: a format looked up in another file by its ID, a field placed at
-/// an offset read from a structure whose layout is itself data, and a name
-/// split into the parts a variable is described by.
+/// The record is a C structure laid out as the writer's compiler would, and
+/// the format with this ID says how: see [`ffs_schema`](super::ffs_schema),
+/// which builds it from `mmd.0`. `kind` is which of that builder's two kinds
+/// the record is read as. A record read where `mmd.0` is not stays bytes,
+/// saying why.
 ///
 /// Only a format with variable parts writes the length, and every format BP5
 /// writes has them. A record whose length does not fit the block is left as
 /// bytes after its ID.
-pub(super) fn ffs_record(e: Endian) -> T {
+pub(super) fn ffs_record(e: Endian, kind: &str) -> T {
     let fits = E::lit(24).less_or_equal(E::Remaining).both(E::peek_at(E::lit(96), 64, e).add(E::lit(24)).less_or_equal(E::Remaining));
     let body = T::structure(
         "FfsRecord",
@@ -52,7 +43,7 @@ pub(super) fn ffs_record(e: Endian) -> T {
             ("format_id", format_id()),
             ("data_length", T::u64(e)),
             ("padding", T::bytes(E::lit(4))),
-            ("data", T::bytes(clamp(E::field("data_length")))),
+            ("data", T::sized(clamp(E::field("data_length")), super::ffs_schema::record_data(kind))),
             ("alignment", T::when(E::lit(0).less_than(E::Remaining), T::bytes(E::Remaining))),
         ],
     );
@@ -75,7 +66,13 @@ pub(super) fn ffs_record(e: Endian) -> T {
 /// metadata holds reads as field names and types even while the metadata
 /// itself is bytes.
 pub fn adios_bp5_metametadata() -> Template {
-    let root = plausible_order(|e| {
+    Template::new("adiosbp5mmd", metametadata_root())
+}
+
+/// What [`adios_bp5_metametadata`] reads, for a template that reads `md.0`
+/// with it.
+pub(super) fn metametadata_root() -> T {
+    plausible_order(|e| {
         let block = T::structure(
             "Bp5MetaMetadata",
             vec![
@@ -86,8 +83,7 @@ pub fn adios_bp5_metametadata() -> Template {
             ],
         );
         T::repeat(block, Until::End)
-    });
-    Template::new("adiosbp5mmd", root)
+    })
 }
 
 /// FFS's server representation of a format, wire format 1: its length, byte

@@ -1,6 +1,7 @@
 //! BP5: an index of records by kind and length, and metadata of FFS records.
 
 use super::ffs::*;
+use super::ffs_schema;
 use super::shared::*;
 use crate::template::{Endian, Endian::*, Expr as E, Template, Ty as T, Until};
 
@@ -19,6 +20,12 @@ pub(super) const RECORD_KIND: &[(i128, &str)] = &[(b's' as i128, "step"), (b'w' 
 /// the writer map record before it, and is worked out here from the length
 /// instead, so a step record reads without that one.
 pub fn adios_bp5_index() -> Template {
+    Template::new("adiosbp5idx", index_root())
+}
+
+/// What [`adios_bp5_index`] reads, for a template that reads it beside the
+/// directory's other files.
+pub(super) fn index_root() -> T {
     let step = |e: Endian| {
         let flush = T::structure("Flush", vec![("offset", T::u64(e)), ("size", T::u64(e))]);
         let per_writer = E::field("flush_count").mul(E::lit(16)).add(E::lit(8));
@@ -73,15 +80,21 @@ pub fn adios_bp5_index() -> Template {
             ],
         )
     };
-    let root = T::structure(
+    T::structure(
         "Bp5Index",
         vec![
             ("header", header(true)),
             ("records", by_byte_order(E::within(&["header", "byte_order"]), |e| T::repeat(record(e), Until::End))),
         ],
-    );
-    Template::new("adiosbp5idx", root)
+    )
 }
+
+/// Why a step's blocks stay bytes when the index says how many writers wrote it.
+const SEVERAL_WRITERS: &str = "written by more than one writer; only one-writer steps are read";
+
+/// Why a step's blocks stay bytes when nothing read with it says how many
+/// writers wrote it.
+const NOT_ONE_WRITER: &str = "not a one-writer step (sizes do not add up); how many writers is in md.idx, not opened";
 
 /// The byte order of a BP5 file with no header, which is written in the
 /// writer's own. Little-endian unless the first eight bytes only make sense
@@ -100,7 +113,20 @@ pub(super) fn plausible_order(make: impl Fn(Endian) -> T) -> T {
 /// sixteen bytes coming to the total, and read into its two blocks; a step of
 /// several writers is left as bytes.
 pub fn adios_bp5_metadata() -> Template {
-    let root = plausible_order(|e| {
+    ffs_schema::register(Template::new("adiosbp5md", metadata_root(false, false)))
+}
+
+/// The steps of a `md.0`. Each FFS record is typed by the format its ID names
+/// in `mmd.0`, which only a template that reads `mmd.0` before this can find;
+/// read alone, a record says that and stays bytes.
+///
+/// `index` is for a template that reads `md.idx` before this as `md_idx`, and
+/// `placed` for one that reads the data file too. With both, each step says
+/// where its data starts, from the index record that says where the step
+/// starts, and each variable's blocks are placed in the data file from there.
+pub(super) fn metadata_root(index: bool, placed: bool) -> T {
+    let kind = if placed { ffs_schema::FORMATS_PLACED } else { ffs_schema::FORMATS };
+    plausible_order(|e| {
         let one_writer = E::lit(16)
             .less_or_equal(E::Remaining)
             .both(E::peek(64, e).add(E::peek_at(E::lit(64), 64, e)).add(E::lit(16)).equal_to(E::Remaining));
@@ -109,21 +135,35 @@ pub fn adios_bp5_metadata() -> Template {
             vec![
                 ("metadata_size", T::u64(e)),
                 ("attributes_size", T::u64(e)),
-                ("metadata", T::sized(clamp(E::field("metadata_size")), ffs_record(e))),
+                ("metadata", T::sized(clamp(E::field("metadata_size")), ffs_record(e, kind))),
                 (
                     "attributes",
-                    T::when(E::lit(0).less_than(E::field("attributes_size")), T::sized(clamp(E::field("attributes_size")), ffs_record(e))),
+                    T::when(E::lit(0).less_than(E::field("attributes_size")), T::sized(clamp(E::field("attributes_size")), ffs_record(e, kind))),
                 ),
             ],
         );
-        let step = T::structure(
-            "Bp5StepMetadata",
-            vec![
-                ("total_size", T::u64(e)),
-                ("blocks", T::sized(clamp(E::field("total_size")), T::switch(one_writer, vec![(1, blocks)], T::bytes(E::Remaining)))),
-            ],
-        );
-        T::repeat(step, Until::End)
-    });
-    Template::new("adiosbp5md", root)
+        // The index record whose metadata offset is where this step starts.
+        let record = |field: &[&str]| E::tagged_in_by(E::within(&["md_idx", "records"]), &["body", "metadata_offset"], E::Pos, field);
+        let indexed = || record(&["kind"]).equal_to(E::lit(b's' as i128));
+        let mut fields = Vec::new();
+        if index {
+            fields.push(("writers", T::when(indexed(), T::computed(record(&["body", "writer_count"])))));
+        }
+        if index && placed {
+            // Where its one writer's data starts.
+            fields.push((ffs_schema::DATA_OFFSET, T::when(indexed(), T::computed(record(&["body", "writers", "0", "data_offset"])))));
+        }
+        // A step of several writers is not read, and says so: with the index
+        // there is a count to show beside that, and without it only sizes that
+        // did not add up for one.
+        let several = match index {
+            true => T::structure("Bp5WritersBlocks", vec![("bytes", T::bytes(E::Remaining))]).doc(SEVERAL_WRITERS),
+            false => T::structure("Bp5UnknownBlocks", vec![("bytes", T::bytes(E::Remaining))]).doc(NOT_ONE_WRITER),
+        };
+        fields.extend([
+            ("total_size", T::u64(e)),
+            ("blocks", T::sized(clamp(E::field("total_size")), T::switch(one_writer, vec![(1, blocks)], several))),
+        ]);
+        T::repeat(T::structure("Bp5StepMetadata", fields), Until::End)
+    })
 }

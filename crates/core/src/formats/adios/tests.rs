@@ -254,10 +254,210 @@ fn a_bp5_step_of_one_writer_reads_its_ffs_blocks() {
     let d = Document::new(MemSource(w.0));
     let mut ev = Evaluator::new(adios_bp5_metadata());
     assert_eq!(node(&mut ev, &d, &[]).child_count, 2);
+    // With no formats read beside it, a record's data is its bytes, saying
+    // where the formats are.
     let data = at(&mut ev, &d, &["0", "blocks", "metadata", "data"]);
-    assert_eq!(node(&mut ev, &d, &data).size_bits, 40 * 8);
+    let data = node(&mut ev, &d, &data);
+    assert_eq!(data.size_bits, 40 * 8);
+    assert!(data.doc.unwrap_or_default().starts_with("mmd.0 not opened"));
     let second = at(&mut ev, &d, &["1", "blocks"]);
-    assert_eq!(node(&mut ev, &d, &second).type_name, "bytes[]");
+    let second = node(&mut ev, &d, &second);
+    assert_eq!((second.type_name.as_str(), second.child_count), ("Bp5UnknownBlocks", 1));
+    assert!(second.doc.unwrap_or_default().contains("md.idx"));
+}
+
+/// Writes an FFS format's representation the way `mmd.0` keeps it, and records
+/// written in it.
+mod ffs_bytes {
+    /// One subformat: its name, its fields as name, type, size and offset,
+    /// its record length, and whether it is big-endian.
+    pub fn subformat(name: &str, fields: &[(&str, &str, i32, i32)], length: i32, big: bool) -> Vec<u8> {
+        let n16 = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let n32 = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+        let mut strings = Vec::new();
+        let base = 28 + 16 * fields.len();
+        let offset_of = |s: &str, strings: &mut Vec<u8>| {
+            let at = base + strings.len();
+            strings.extend(s.as_bytes());
+            strings.push(0);
+            at as u32
+        };
+        let name_at = offset_of(name, &mut strings);
+        let mut table = Vec::new();
+        for (field, ty, size, offset) in fields {
+            let (f, t) = (offset_of(field, &mut strings), offset_of(ty, &mut strings));
+            table.extend(n32(f));
+            table.extend(n32(t));
+            table.extend(n32(*size as u32));
+            table.extend(n32(*offset as u32));
+        }
+        let total = base + strings.len();
+        let mut out = Vec::new();
+        out.extend((total as u16).to_be_bytes());
+        out.extend([2, big as u8]);
+        out.extend(n32(name_at));
+        out.extend(n32(fields.len() as u32));
+        out.extend(n32(length as u32));
+        out.extend([8, 28]);
+        out.extend(n16(if big { 1 } else { 2 }));
+        out.extend(n16(0));
+        out.extend([0, 8]);
+        out.extend(0u16.to_be_bytes());
+        out.extend(n16(0));
+        out.extend(table);
+        out.extend(strings);
+        out
+    }
+
+    /// A block of `mmd.0`: the ID, and the format, its subformats after it.
+    pub fn format(id: [u8; 12], subformats: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = subformats.concat();
+        let mut rep = Vec::new();
+        rep.extend(((8 + body.len()) as u16).to_be_bytes());
+        rep.extend([0, 2, (subformats.len() - 1) as u8, 0]);
+        rep.extend(0u16.to_be_bytes());
+        rep.extend(body);
+        while rep.len() % 8 != 0 {
+            rep.push(0);
+        }
+        let mut out = Vec::new();
+        out.extend(12u64.to_le_bytes());
+        out.extend((rep.len() as u64).to_le_bytes());
+        out.extend(id);
+        out.extend(rep);
+        out
+    }
+
+    /// An encoded record: the ID, the length of the data, padding, the data.
+    pub fn record(id: [u8; 12], data: &[u8]) -> Vec<u8> {
+        let mut out = id.to_vec();
+        out.extend((data.len() as u64).to_le_bytes());
+        out.extend([0; 4]);
+        out.extend(data);
+        out
+    }
+}
+
+/// A made-up template reading formats and then records, the way the dataset
+/// reads `mmd.0` before `md.0`.
+fn formats_then_records(formats: &[u8]) -> crate::template::Template {
+    let root = T::structure(
+        "Joined",
+        vec![
+            ("mmd_0", T::sized(E::lit(formats.len() as i128), super::ffs::metametadata_root())),
+            ("records", T::repeat(super::ffs::ffs_record(crate::template::Endian::Little, super::ffs_schema::FORMATS), Until::End)),
+        ],
+    );
+    super::ffs_schema::register(crate::template::Template::new("joined", root))
+}
+
+use crate::template::{Expr as E, Ty as T, Until};
+
+const RECORD_ID: [u8; 12] = [2, 0, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8];
+
+/// A format of every kind of field FFS writes: a count, a pointer to that
+/// many integers, a string, a subformat written in place, a fixed run of
+/// characters, a pointer whose count comes after it, and a list of strings.
+fn record_format(big: bool) -> Vec<u8> {
+    let rec = ffs_bytes::subformat(
+        "Rec",
+        &[
+            ("count", "integer", 4, 0),
+            ("values", "integer[count]", 8, 8),
+            ("label", "string", 8, 16),
+            ("inner", "Inner", 16, 24),
+            ("tag", "char[4]", 1, 40),
+            ("early", "float[later]", 8, 48),
+            ("later", "unsigned integer", 8, 56),
+            ("names", "string[count]", 8, 64),
+        ],
+        72,
+        big,
+    );
+    let inner = ffs_bytes::subformat("Inner", &[("a", "unsigned integer", 2, 0), ("b", "float", 8, 8)], 16, big);
+    ffs_bytes::format(RECORD_ID, &[rec, inner])
+}
+
+fn record_data(big: bool) -> Vec<u8> {
+    let (u16b, u32b, u64b) = (
+        |v: u16, big: bool| if big { v.to_be_bytes() } else { v.to_le_bytes() },
+        |v: u32, big: bool| if big { v.to_be_bytes() } else { v.to_le_bytes() },
+        |v: u64, big: bool| if big { v.to_be_bytes() } else { v.to_le_bytes() },
+    );
+    let mut d = Vec::new();
+    d.extend(u32b(2, big));
+    d.extend([0; 4]);
+    d.extend(u64b(72, big));
+    d.extend(u64b(88, big));
+    d.extend(u16b(0x1234, big));
+    d.extend([0; 6]);
+    d.extend(if big { 2.5f64.to_be_bytes() } else { 2.5f64.to_le_bytes() });
+    d.extend(b"abcd");
+    d.extend([0; 4]);
+    d.extend(u64b(96, big));
+    d.extend(u64b(3, big));
+    d.extend(u64b(104, big));
+    // The variable part: the integers, the string, and the strings.
+    d.extend(u64b(7, big));
+    d.extend(u64b((-8i64) as u64, big));
+    d.extend(b"hi\0\0\0\0\0\0");
+    d.extend([0; 8]);
+    d.extend(u64b(120, big));
+    d.extend(u64b(0, big));
+    d.extend(b"x\0\0\0\0\0\0\0");
+    d
+}
+
+/// A record reads as the format its ID names: each field at its offset, a
+/// pointer as its offset and what it points at, counted by the field its type
+/// names, a subformat in place, and the byte order the format says.
+#[test]
+fn an_ffs_record_reads_by_the_format_its_id_names() {
+    for big in [false, true] {
+        let formats = record_format(big);
+        let mut file = formats.clone();
+        file.extend(ffs_bytes::record(RECORD_ID, &record_data(big)));
+        let d = Document::new(MemSource(file));
+        let mut ev = Evaluator::new(formats_then_records(&formats));
+        let data = at(&mut ev, &d, &["records", "0", "data"]);
+        let info = node(&mut ev, &d, &data);
+        assert_eq!(info.type_name, "Rec", "big-endian {big}: {:?}", info.doc);
+        let get = |ev: &mut Evaluator, names: &[&str]| {
+            let p = at(ev, &d, &[&["records", "0", "data"][..], names].concat());
+            node(ev, &d, &p)
+        };
+        assert_eq!(get(&mut ev, &["count"]).value, Value::Int(2));
+        assert_eq!(get(&mut ev, &["values", "offset"]).value, Value::UInt(72));
+        assert_eq!(get(&mut ev, &["values", "values", "values", "1"]).value, Value::Int(-8));
+        assert_eq!(get(&mut ev, &["label", "text", "text"]).value, Value::Str("hi".into()));
+        assert_eq!(get(&mut ev, &["inner", "a"]).value, Value::UInt(0x1234));
+        assert_eq!(get(&mut ev, &["inner", "b"]).value, Value::Float(2.5));
+        assert_eq!(get(&mut ev, &["tag"]).size_bits, 32);
+        // A pointer whose count is read after it stays the offset it is.
+        assert_eq!(get(&mut ev, &["early"]).value, Value::UInt(96));
+        assert_eq!(get(&mut ev, &["later"]).value, Value::UInt(3));
+        assert_eq!(get(&mut ev, &["names", "values", "values", "0", "text", "text"]).value, Value::Str("x".into()));
+        assert!(get(&mut ev, &["names", "values", "values", "1", "text"]).absent, "a pointer of nought points at nothing");
+        // Padding where the format leaves a gap, to the record length.
+        assert_eq!(get(&mut ev, &["padding"]).size_bits, 32);
+        assert_eq!(info.size_bits, 128 * 8);
+    }
+}
+
+/// A record whose ID is not among the formats, and a record read with no
+/// formats at all, stay bytes and say which.
+#[test]
+fn a_record_whose_format_is_not_there_says_so() {
+    let formats = record_format(false);
+    let mut file = formats.clone();
+    let other = [2, 0, 0, 9, 9, 9, 9, 9, 9, 9, 9, 9];
+    file.extend(ffs_bytes::record(other, &record_data(false)));
+    let d = Document::new(MemSource(file));
+    let mut ev = Evaluator::new(formats_then_records(&formats));
+    let data = at(&mut ev, &d, &["records", "0", "data"]);
+    let info = node(&mut ev, &d, &data);
+    assert_eq!(info.size_bits, 128 * 8);
+    assert_eq!(info.doc.as_deref(), Some("no format 020000090909090909090909 in mmd.0"));
 }
 
 /// A BP3 file of one process group, one variable of three int32s and one

@@ -49,6 +49,7 @@ mod bp3;
 mod bp4;
 mod bp5;
 mod ffs;
+mod ffs_schema;
 mod groups;
 mod indices;
 mod recognise;
