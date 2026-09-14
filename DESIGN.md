@@ -1013,6 +1013,14 @@ the limit in itself. Nothing is kept on a read that is not refused, because
 keeping would cost every expression; the count check on the way in is all an
 ordinary read pays, about 150 bytes of stack per expression.
 
+**A refusal is written out at the top.** A refused read says which field and
+expression it stopped at, but where it stopped is the deepest the stack gets,
+and writing an expression out costs a frame for every level of it. Written
+there, the rest of an expression two hundred sums deep took more than a
+megabyte of stack in a debug build. So the refusal names only the field where
+it stops and keeps a copy of the expression, and the outermost expression
+writes it in once the read has come back up.
+
 **An expression reads a value, not a node.** A field an expression names goes
 through `value_of`, which places the field, measures it and reads its value.
 The whole `NodeInfo` also works out a name, a type name, a unit, prose,

@@ -118,6 +118,15 @@ pub(super) struct Question {
     pub(super) depth: usize,
 }
 
+/// Where the last refusal for depth started: what it said there, and the
+/// field and expression it stopped at, for `Evaluator::outermost` to write
+/// the expression into what it says once the read has come back up.
+pub(super) struct Refused {
+    pub(super) said: String,
+    pub(super) at: Vec<usize>,
+    pub(super) expr: Expr,
+}
+
 #[derive(Default)]
 pub(super) struct Go {
     /// Elements left before this go has to hand back, and how many each go is
@@ -152,6 +161,9 @@ pub(super) struct Go {
     /// expression opened after it means the refusal was passed over, and
     /// lets the trail go on.
     held: bool,
+    /// The last refusal for depth, until the outermost expression of its
+    /// read takes it. See `Refused`.
+    refused: Option<Refused>,
 }
 
 impl Go {
@@ -174,6 +186,7 @@ impl Go {
         self.asking_again = false;
         self.trail.clear();
         self.held = false;
+        self.refused = None;
     }
 
     /// The same, and back to the start of the file, for when what was worked
@@ -325,6 +338,16 @@ impl Go {
         self.trail.retain(|q| q.depth < depth);
         self.trail.push(Question { at: at.to_vec(), expr: expr.clone(), here, asked, depth });
         self.held = true;
+    }
+
+    /// Note where a refusal for depth started and what it said there.
+    pub(super) fn refused_at(&mut self, said: &str, at: &[usize], expr: &Expr) {
+        self.refused = Some(Refused { said: said.to_string(), at: at.to_vec(), expr: expr.clone() });
+    }
+
+    /// Where the last refusal for depth started, and none kept after.
+    pub(super) fn take_refused(&mut self) -> Option<Refused> {
+        self.refused.take()
     }
 
     /// The trail as the last refusal left it, shallowest first, and none left

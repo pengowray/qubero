@@ -205,30 +205,47 @@ impl Evaluator {
     /// The refusal for one expression too many, with the question kept as the
     /// deepest on the trail when there is one. Out of line for the reason
     /// `keep` is.
+    ///
+    /// What it says here names the field and not the expression. Writing an
+    /// expression out costs a frame for every level of it, and this is the
+    /// deepest the stack gets: written here, the rest of an expression two
+    /// hundred sums deep took more than a megabyte of stack in a debug build.
+    /// So the expression is kept, and `Evaluator::outermost` writes it into
+    /// the refusal once the read has come back up.
     #[cold]
     #[inline(never)]
     fn refused_here(&mut self, at: &[usize], e: &Expr, here: Option<(u64, u64)>, asked: Asked) -> R<()> {
         self.go.refused_here(at, e, here, asked);
-        fail(self.asked_too_deep(at, e))
+        let said = Self::too_deep(self.asking_field(at), None);
+        self.go.refused_at(&said, at, e);
+        fail(said)
     }
 
     /// What a read that gave up on depth says, naming the field that was
-    /// asking and what it asked.
-    fn asked_too_deep(&self, at: &[usize], e: &Expr) -> String {
-        let field = self.memo.get(at).map(|r| r.name.text()).or_else(|| {
+    /// asking and what it asked. For the top of a read: see `refused_here`.
+    pub(super) fn asked_too_deep(&self, at: &[usize], e: &Expr) -> String {
+        Self::too_deep(self.asking_field(at), write_expr(e).as_deref())
+    }
+
+    /// The field an expression at `at` belongs to, by name, or by its index
+    /// in a list.
+    fn asking_field(&self, at: &[usize]) -> Option<String> {
+        self.memo.get(at).map(|r| r.name.text()).or_else(|| {
             let (&last, parent) = at.split_last()?;
             match &self.memo.get(parent)?.ty {
                 Ty::Struct(s) => s.fields.get(last).map(|f| f.name.to_string()),
                 _ => Some(format!("[{last}]")),
             }
-        });
+        })
+    }
+
+    fn too_deep(field: Option<String>, expr: Option<&str>) -> String {
         // Named for the class of trouble first, so a row cut short still says
         // it, and never with the expression in front of "nested too deep",
         // which would read as the expression itself being that deep. The
         // field and expression are the deepest reached, not the one asked
         // for, so they come last and as where it stopped rather than as what
         // is wrong. `is_refusal` knows it by "nested too deep".
-        let expr = write_expr(e);
         let limit = super::go::DEEPEST_QUESTION;
         let head = format!("dependency chain nested too deep: more than {limit} expressions");
         match (field, expr) {

@@ -165,6 +165,22 @@ fn an_expression_nested_past_the_limit_in_itself_is_refused() {
     assert!(why.contains("88"), "{why}");
 }
 
+/// A refusal says what expression it stopped at, and that is written once the
+/// read has come back up, not where it stopped. Writing an expression out
+/// costs a frame for every level of it. Here four hundred levels are left
+/// when the read is refused: written where it stopped, on top of every
+/// expression open, they overflow a debug build's thread, and written at the
+/// top they fit. A release build fits both ways, so only a debug build tests
+/// this.
+#[test]
+fn a_refusal_writes_its_expression_after_the_read_comes_back_up() {
+    let t = Template::new("deep", T::structure("Deep", vec![("v", T::computed(nested(E::lit(1), LIMIT + 400)))]));
+    let why = refused(read_small(t, vec![0], vec![0]));
+    // All of what was left, not a part of it.
+    assert!(why.contains("; stopped at v while evaluating 1 + 0 + 0"), "{why}");
+    assert_eq!(why.matches(" + 0").count(), 400, "{why}");
+}
+
 /// A search back through the list passes over an element that will not read,
 /// and must not pass over one that was refused: that answer would be the
 /// default after the `or`, which nothing in the file says. The first element

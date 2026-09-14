@@ -29,7 +29,7 @@
 //! than `DEEPEST_PATH` is as long the second time; a question refused a
 //! second time after everything under it was answered is where it stops.
 
-use super::go::{Asked, Question};
+use super::go::{Asked, Question, Refused};
 use super::*;
 
 /// The most questions kept waiting to be asked again at once. A chain long
@@ -50,15 +50,22 @@ impl Evaluator {
     ///
     /// Out of line and asked only at the top of a read, so none of it sits in
     /// the frame of an expression inside another.
+    ///
+    /// A refusal that comes back from here says what expression it stopped
+    /// at, written here rather than where it stopped: see `refused_here`.
     #[inline(never)]
     pub(super) fn outermost<S: Source, T>(&mut self, doc: &Document<S>, ask: impl Fn(&mut Self) -> R<T>) -> R<T> {
         let first = ask(self);
+        // Where this one stopped, or one passed over on the way: either way
+        // nobody reads what it said.
+        self.go.take_refused();
         if !refused(&first) {
             return first;
         }
         self.go.take_trail();
         self.go.set_asking_again(true);
         let second = ask(self);
+        let second_stopped = self.go.take_refused();
         let worked = match refused(&second) {
             true => {
                 let trail = self.go.take_trail();
@@ -70,10 +77,27 @@ impl Evaluator {
         };
         self.go.take_trail();
         self.go.set_asking_again(false);
+        self.go.take_refused();
         match worked {
-            Ok(true) => ask(self),
-            Ok(false) => second,
+            Ok(true) => {
+                let last = ask(self);
+                let stopped = self.go.take_refused();
+                self.say_where(last, stopped)
+            }
+            Ok(false) => self.say_where(second, second_stopped),
             Err(e) => Err(e),
+        }
+    }
+
+    /// A refusal for depth, with the expression it stopped at written into
+    /// what it says. Anything else as it is.
+    fn say_where<T>(&self, out: R<T>, stopped: Option<Refused>) -> R<T> {
+        match (out, stopped) {
+            (Err(EvalError::Failed(why)), Some(stopped)) if Self::is_refusal(&why) => {
+                let full = self.asked_too_deep(&stopped.at, &stopped.expr);
+                Err(EvalError::Failed(why.replacen(&stopped.said, &full, 1)))
+            }
+            (out, _) => out,
         }
     }
 
