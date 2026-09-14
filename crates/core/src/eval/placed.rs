@@ -364,8 +364,48 @@ impl Evaluator {
             Ty::Switch { cases, default, .. } => {
                 cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
             }
-            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } => Self::places(inner, named),
-            _ => false,
+            // The same for a choice made by text. A ROOT key picks what its
+            // offset leads to by the class name written in it, and every
+            // RNTuple envelope and page is behind that choice: without this
+            // arm the whole key list was pruned as placing nothing.
+            Ty::Match { cases, default, .. } => {
+                cases.iter().any(|(_, t)| Self::places(t, named)) || Self::places(default, named)
+            }
+            Ty::Enum { inner, .. } | Ty::Flags { inner, .. } | Ty::Nullable { inner, .. } => Self::places(inner, named),
+            // Everything that holds no other type, named one by one rather
+            // than caught by a wildcard. A wildcard is how `Match` came to be
+            // answered "places nothing" when it was added, and a new type that
+            // holds others should stop the build here until someone says
+            // whether it can place anything.
+            Ty::UInt { .. }
+            | Ty::Int { .. }
+            | Ty::SignMagnitude { .. }
+            | Ty::UIntExpr { .. }
+            | Ty::F16(_)
+            | Ty::BF16(_)
+            | Ty::F32(_)
+            | Ty::F64(_)
+            | Ty::F80(_)
+            | Ty::F8 { .. }
+            | Ty::IbmF32(_)
+            | Ty::Computed(_)
+            | Ty::ComputedText(_)
+            | Ty::ComputedReal(_)
+            | Ty::Leb128 { .. }
+            | Ty::Zigzag
+            | Ty::EbmlVint { .. }
+            | Ty::Vlq
+            | Ty::Fixed { .. }
+            | Ty::Magic(_)
+            | Ty::Bytes(_)
+            | Ty::Str { .. }
+            | Ty::TextInt { .. }
+            | Ty::SqliteVarint
+            | Ty::SevenZipNumber
+            | Ty::Json(..)
+            | Ty::Insn { .. }
+            | Ty::Traced { .. }
+            | Ty::CodeBits { .. } => false,
         }
     }
 }
