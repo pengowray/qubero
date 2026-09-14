@@ -237,12 +237,23 @@ impl Evaluator {
         landing: Landing,
     ) -> R<Option<(usize, Vec<usize>)>> {
         // The first step starts the walk, and only a field declared before the
-        // gather can be where it starts.
+        // gather, or the record that placed the element around it, can be
+        // where it starts.
         if k == 0 {
-            let Step::Field(name) = step else { return fail("a gather starts at a field declared before it") };
             if from > 0 {
                 return Ok(None);
             }
+            if let Step::Placer = step {
+                let Some((outer, idx)) = self.gathered_in(list) else { return Ok(None) };
+                let record = self.gathered_record(doc, &outer, idx)?;
+                // Opened again on the way down, since the outer walk may have
+                // given some of them back since it stood there.
+                for d in 0..=record.len() {
+                    self.resolve(doc, &record[..d])?;
+                }
+                return Ok(Some((0, record)));
+            }
+            let Step::Field(name) = step else { return fail("a gather starts at a field declared before it") };
             let Some(mut p) = self.find_field(list, name) else { return Ok(None) };
             // `find_field` steps through an `At` the declaration shows. One a
             // switch or a `When` chose shows nothing until it is read, and an
@@ -327,6 +338,7 @@ impl Evaluator {
                 p.push(from);
                 Ok(Some((from, p)))
             }
+            Step::Placer => fail("only the first step of a walk can start at the record that placed it"),
             Step::Fields(names) => {
                 let mut node = node.to_vec();
                 self.into_contents(doc, &mut node)?;
@@ -363,6 +375,8 @@ impl Evaluator {
         match step {
             _ if k == 0 => line,
             Step::Stream | Step::Deep(_) => u64::MAX,
+            // Only ever a first step, and anywhere else it fails before this.
+            Step::Placer => u64::MAX,
             Step::Field(_) | Step::Fields(_) if stream => u64::MAX,
             _ if !listed => line,
             Step::Field(_) | Step::Fields(_) => line,
@@ -610,6 +624,16 @@ impl Evaluator {
         for (k, step) in from.iter().enumerate() {
             let dot = if label.is_empty() { "" } else { "." };
             if k == 0 {
+                // Named the way the outer gather names that record, so the
+                // label reads from the same place the walk started.
+                if let Step::Placer = step {
+                    let Some((outer, idx)) = self.gathered_in(list) else { break };
+                    let Some(start) = self.list(&outer).gather.as_deref().and_then(|g| g.records.get(idx)).cloned() else { break };
+                    let Some(Ty::Gather { from: outer_from, .. }) = self.memo.get(&outer).map(|r| r.ty.clone()) else { break };
+                    label = self.walk_label_here(&outer, &outer_from, &start);
+                    p = start;
+                    continue;
+                }
                 let Step::Field(name) = step else { break };
                 let Some(start) = self.find_field(list, name) else { break };
                 label.push_str(name);
@@ -675,6 +699,7 @@ impl Evaluator {
                 Step::Field(name) => label.push_str(&format!("{dot}{name}")),
                 Step::Tagged { shown, .. } => label.push_str(&format!("{dot}{shown}")),
                 Step::Each => label.push_str(&format!("[{j}]")),
+                Step::Placer => {}
                 Step::Fields(_) => {
                     let name = match self.memo.get(&p[..p.len() - 1]).map(|r| r.ty.base()) {
                         Some(Ty::Struct(s)) => s.fields.get(j).map(|f| f.name.to_string()).unwrap_or_default(),
