@@ -17,14 +17,26 @@ fn template_of(bytes: &[u8]) -> Option<&'static str> {
     qubero_core::formats::sniff(head, bytes.len() as u64)
 }
 
+thread_local! {
+    /// How many expressions the last reading had open inside one another at
+    /// most, which is what `DEEPEST_QUESTION` is measured against.
+    static DEEPEST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn spans_of(bytes: Vec<u8>, name: &str, start: u64, count: u64, max: usize) -> Result<Vec<qubero_core::eval::Span>, String> {
     let d = Document::new(MemSource(bytes));
     let Some(t) = qubero_core::formats::template(name) else { return Err("no template".into()) };
     let mut ev = Evaluator::new(t);
     ev.set_slice(Some(5_000));
+    let out = settle(&mut ev, &d, start, count, max);
+    DEEPEST.set(ev.deepest_question());
+    out
+}
+
+fn settle(ev: &mut Evaluator, d: &Document<MemSource>, start: u64, count: u64, max: usize) -> Result<Vec<qubero_core::eval::Span>, String> {
     for _ in 0..200 {
         ev.begin_slice();
-        match ev.spans(&d, start * 8, (start + count) * 8, max) {
+        match ev.spans(d, start * 8, (start + count) * 8, max) {
             Ok(v) => return Ok(v),
             Err(EvalError::Busy { .. }) => {}
             Err(e) => return Err(format!("{e:?}")),
@@ -48,7 +60,12 @@ fn sweep(root: &Path, dir: &Path, max: usize, out: &mut Vec<String>) {
             out.push(format!("{rel}\t-\t-\t-"));
             continue;
         };
-        match spans_of(bytes, name, 0, len, max) {
+        let got = spans_of(bytes, name, 0, len, max);
+        let deepest = DEEPEST.get();
+        if deepest > 16 {
+            eprintln!("deepest question {deepest}: {rel} as {name}");
+        }
+        match got {
             Ok(v) => {
                 let named: u64 = v.iter().filter(|s| !s.gap).map(|s| s.size_bits / 8).sum();
                 out.push(format!("{rel}\t{name}\t{}\t{named}", v.len()));
