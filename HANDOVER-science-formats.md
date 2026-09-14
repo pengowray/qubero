@@ -36,6 +36,7 @@ cases only.
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
+| Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. Six more private `Bits` copies remain (`codec/inflate.rs`, `lha.rs`, `pico8.rs`, `rar5.rs`, `fits_tile.rs`, `gwf_vect.rs`); `fits.rs`'s 840-line test module could move out as segy's did. | 3a583fd..a0544b9 |
 | S7 stage 4: HDF4 linked blocks joined (all 50 of `tdata.hdf`'s values match pyhdf), joined streams open as tabs under the cap, `map_out` through each part's own trace, and relations naming what cut and measured a joined stream. | ac1f83a, c15a455, 1bdc0d9, bb7f637 |
 | Engine: expression recursion refused past 88 levels instead of overflowing the stack; `ComputedText` cached on its node; a run of fixed-shape records counted once and multiplied in the kind totals (a 1M-point simply packed GRIB field: 601 goes and 14 s down to 1 go and under a millisecond). | 71634ab, 722f9bb, 849bea2 |
 | ADIOS2 BP3, BP4 and BP5: new templates for BP3 files and every file of a BP4 or BP5 directory, down to BP5's FFS records and schema fields. Matches adios2 2.12.1 on a three-version dataset. | a138f85, 8252840 |
@@ -352,9 +353,6 @@ Seven samples, cross-checked with pyhdf. Left:
 - The type column reads `switch[][]` for a shaped array whose element type is
   decided at read time; `f32 be[10][10]` would need a list node to report its
   resolved element type, and would improve HDF5, FITS and NPY too.
-- `hdf4.rs` is about 1,750 lines; the standalone records (number type,
-  dimensions, palette, strings, vgroup, special element) would split out as
-  `hdf4_records.rs`. Due.
 
 ### HDF5
 
@@ -410,9 +408,6 @@ Seven samples. Left:
 - `Expr::Idx` answers only for the nearest enclosing list, so a
   variable-length cell needed a `Descriptors` wrapper to keep its column
   index; an `Expr` naming a level out would remove it.
-- `fits.rs` is about 900 lines before tests; the card reading (`card`,
-  bodies, `tform_value`, `real_value`) would split from the data reading
-  (rows, cells, heap, axes).
 
 ### GRIB
 
@@ -429,8 +424,6 @@ Complex packing (5.2, 5.3) reads as fields and PNG packing opens as a PNG
   2000 template.
 - Grid templates 3.0, 3.20, 3.30, 3.40 and product templates 4.0, 4.1, 4.8
   only; anything else is bytes.
-- `grib.rs` is about 1,900 lines; edition 1 (about 300) would split out as
-  `grib1.rs`.
 - ecCodes has no wheel for Python 3.14; the cross-check used a uv Python 3.11
   environment.
 
@@ -488,8 +481,6 @@ vectors unpacked (see Closed). Five samples. Left:
   stays bytes past its check words.
 - `spans_probe` on the GWOSC file names 29 bytes fewer than before, around
   the last-block padding of zlib-decoded nodes (PNG and CDF share it).
-- `gwf.rs` holds the v6 and v8 tables and bodies side by side; the class
-  bodies would split out as `gwf_classes.rs`.
 
 ### NetCDF classic
 
@@ -559,9 +550,6 @@ no value differs from ecCodes 2.48. Left:
 - A GTS envelope is recognised only when it starts with SOH.
 - Code and flag table values show as numbers; the WMO CodeFlag CSVs would
   give their meanings.
-- `bufr_data.rs` is about 1,870 lines; the panel builder (about 200) would
-  move to `bufr_panel.rs`. `Bits` is copied in `grib_values.rs` and
-  `bufr_data.rs` and would serve both from a `crate::bits` module.
 
 ### Engine: recursion depth (fixed 2026-09-14)
 
@@ -635,9 +623,6 @@ buffer and value matches pyarrow. Left:
 - `File.fbs`'s comment on `Block` disagrees with what pyarrow writes: the
   offset points at the continuation marker and the body starts at `offset +
   metaDataLength`.
-- `arrow.rs` is about 1,200 lines: the transcribed schema, the node and buffer
-  walk (which packs a field's layout into one number to stay inside the
-  stack), and the buffer readings would each make a file.
 
 ### BGZF, BAM, BAI and CSI (built 2026-09-14)
 
@@ -656,8 +641,6 @@ htslib and samtools samples, matched against bamnostic. Left:
 - A plain gzip file of several members that is not BGZF still reports a false
   CRC mismatch (its CRC compared with the last member's trailer): the gzip
   template needs a compressed run that ends where its decoder stopped.
-- `bam.rs` is about 980 lines; the BAI and CSI parts would split out as
-  `bam_index.rs`.
 
 ### NIfTI and Analyze 7.5 (built 2026-09-14)
 
@@ -690,8 +673,6 @@ samples, zero mismatches against segyio on 13 files. Left:
 - `source_type`, `source_measurement_unit` and `last_trace_flag` are plain
   numbers; their labels need drafting.
 - `segy.rs` uses `°` and `²` in labels where `sac.rs` writes `nm/s2`.
-- `segy.rs` is about 1,150 lines; a `segy/` folder with the enum tables and
-  tests apart would help.
 - The SEG rev 2.0 PDF could not be fetched (403); the work used the rev 1
   draft, rev 2.1 text and segyio's `segy.h`, which put the first-trace offset
   at 3521, not the 3301 an earlier brief said.
