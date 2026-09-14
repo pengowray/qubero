@@ -42,7 +42,6 @@ mod stitch;
 mod time;
 mod traced;
 mod walk;
-
 #[cfg(test)]
 mod tests;
 
