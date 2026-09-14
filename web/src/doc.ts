@@ -2220,11 +2220,11 @@ export class Doc {
   template: string | null = null;
 
   /** Whether the file is a ZIP archive, under whichever name it was opened:
-   * a Zarr store in a ZIP is read by a template of its own, and its records
+   * a Zarr store or a BP5 dataset in a ZIP is read by a template of its own, and its records
    * are an archive's records to the byte. Anything that works on entries has
    * to ask this rather than the template's name. */
   get isZip(): boolean {
-    return this.template === "zip" || this.template === "zarrzip";
+    return this.template === "zip" || this.template === "zarrzip" || this.template === "adioszip";
   }
 
   /** Whether the file is a PNG, whatever else it also is. A PICO-8 cartridge

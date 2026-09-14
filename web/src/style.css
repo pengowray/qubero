@@ -395,6 +395,28 @@ button.welcome-crystal {
 .dropzone-card strong {
   font-size: 18px;
 }
+/* Opening a folder: how far it has got, and the way to stop. */
+.busycard {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.18);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.busycard[hidden] {
+  display: none;
+}
 
 /* ---- hex view ---- */
 .hexview {

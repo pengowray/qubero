@@ -19,7 +19,8 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DIAGRAM, DUMP, EDITOR_WONT_LOAD, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
@@ -174,11 +175,7 @@ let say: (text: string, warn?: boolean) => void = () => {};
 let dropKsy: ((text: string, name: string) => void) | null = null;
 
 const DROP_TITLE = "Drop to open";
-const DROP_HINT = "or drop a file anywhere on this page";
-const FOLDER_MSG =
-  "Folders can't be opened. Zip the folder and drop the .zip; a Zarr store is read from inside the archive.";
-const manyFilesMsg = (name: string, ignored: number): string =>
-  `Opened ${name}. Ignored ${ignored} other ${ignored === 1 ? "file" : "files"}.`;
+const DROP_HINT = "or drop a file or folder anywhere on this page";
 const discardMsg = (open: string, next: string): string =>
   `Discard unsaved edits to ${open} and open ${next}?`;
 /** Says what letting go costs: the open file closes. Not "replaces", which
@@ -366,6 +363,27 @@ function build(tab: Tab): Page {
     dumpBar.replaceChildren(el("div", { className: "dumpbar-facts" }, ...facts), open);
     dumpBar.hidden = false;
   });
+  // One file of a BP5 dataset, which reads less by itself than with the rest
+  // of its folder: said above the views, with the way to open the folder. A
+  // file lifted out of a folder already open says where it reads instead.
+  const memberBar = el("div", { className: "dumpbar" });
+  memberBar.hidden = true;
+  const showMember = (template: string | null): void => {
+    const fact = template === null ? undefined : DATASET_MEMBER.facts[template];
+    if (fact === undefined) return;
+    const facts = el("div", { className: "dumpbar-facts" }, el("strong", { textContent: DATASET_MEMBER.heading }));
+    if (doc.isFile) {
+      facts.append(el("span", { textContent: fact }));
+      const open = el("button", { type: "button", className: "dumpbar-open", textContent: DATASET_MEMBER.open, title: DATASET_MEMBER.openTitle });
+      open.addEventListener("click", () => pickFolder(doc.name));
+      memberBar.replaceChildren(facts, open);
+    } else {
+      const from = tabs.all.find((t) => t.doc.isFile)?.doc.name ?? doc.name;
+      facts.append(el("span", { textContent: DATASET_MEMBER.lifted(from) }));
+      memberBar.replaceChildren(facts);
+    }
+    memberBar.hidden = false;
+  };
   const overview = new OverviewPanel(doc);
   const search = new SearchBar(doc);
   // The views share one position: the hex cursor. Picking a field moves
@@ -721,6 +739,7 @@ function build(tab: Tab): Page {
   // honest answer, and it is already above.
   if (!doc.isFile) {
     structure.setMatched(doc.template !== null);
+    showMember(doc.template);
   } else
   void doc.sniffTemplate().then(async (name) => {
     const templated = name !== null;
@@ -729,6 +748,7 @@ function build(tab: Tab): Page {
       tmpl.value = name;
       tmplWas = name;
       doc.setTemplate(name);
+      showMember(name);
       // A file recognised as a bundled Kaitai format says so as much as one
       // picked from the menu does, and offers the same way to the description.
       if (name.startsWith(KAITAI_PREFIX)) showKaitaiNote(name);
@@ -801,8 +821,11 @@ function build(tab: Tab): Page {
     saveMsg.textContent = "Saving";
     const r = await saveDoc(doc);
     saveBtn.disabled = false;
-    saveMsg.textContent =
-      r.kind === "saved" ? `Saved ${formatSize(r.bytes)}` : r.kind === "cancelled" ? "" : `Save failed: ${r.message}`;
+    // A dataset's folder saved as the ZIP it was opened as is not something
+    // ADIOS2 reads until it is unzipped, and the message says so.
+    const saved = (bytes: number): string =>
+      builtArchives.has(doc) && doc.template === "adioszip" ? FOLDER.saved(formatSize(bytes), doc.name) : `Saved ${formatSize(bytes)}`;
+    saveMsg.textContent = r.kind === "saved" ? saved(r.bytes) : r.kind === "cancelled" ? "" : `Save failed: ${r.message}`;
     saveMsg.classList.toggle("warn", r.kind === "failed");
   };
   saveBtn.addEventListener("click", () => void save());
@@ -1091,7 +1114,7 @@ function build(tab: Tab): Page {
   // Where the main views live. The graph is put in here when it arrives, so
   // it takes the same area as the hex grid and the listing rather than a
   // corner of its own.
-  const workspaceLeft = el("div", { className: "left" }, dumpBar, search.el, view.el, text.el, strings.el, listRow);
+  const workspaceLeft = el("div", { className: "left" }, dumpBar, memberBar, search.el, view.el, text.el, strings.el, listRow);
 
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
@@ -1828,23 +1851,111 @@ function pick(): void {
   input.click();
 }
 
-/** Pick an OME-Zarr directory and open its root NGFF metadata document. */
-function pickOmeZarr(): void {
+/** Documents that are a folder written into a ZIP here, which Save as says so
+ *  of. */
+const builtArchives = new WeakSet<Doc>();
+
+/** Says where a message goes before anything is open, and after. */
+function report(text: string, warn = false): void {
+  if (welcomeStatus !== null) welcomeStatus.textContent = text;
+  else say(text, warn);
+}
+
+/** How far opening a folder has got, over whatever is showing, with the way
+ *  to stop it. Shown only once opening has taken long enough to wonder. */
+const busyText = el("span");
+const busyCancel = el("button", { type: "button", textContent: FOLDER.cancel });
+const busyCard = el("div", { className: "busycard" }, busyText, busyCancel);
+busyCard.setAttribute("role", "status");
+busyCard.hidden = true;
+document.body.append(busyCard);
+
+/**
+ * Open a folder, or several items dropped together, as one ZIP built here:
+ * read the files `read` finds, write them into an archive that stores them,
+ * and open that. `name` is what to call it while that happens.
+ *
+ * `read` is called before anything is awaited, since a drop's items are gone
+ * once the event is over. Replacing a document with unsaved edits is asked
+ * about by the caller, before the folder is read.
+ */
+async function openFolder(name: string, read: (seen: (count: number) => void) => Promise<Dropped | null>): Promise<void> {
+  const stop = new AbortController();
+  // What the card would say now. It is written out a few times a second rather
+  // than on every piece of every file read.
+  let latest = "";
+  const show = (text: string): void => {
+    latest = text;
+  };
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const reveal = setTimeout(() => {
+    busyText.textContent = latest;
+    busyCard.hidden = false;
+    ticker = setInterval(() => (busyText.textContent = latest), 200);
+  }, 400);
+  busyCancel.onclick = () => stop.abort();
+  welcomeCrystal?.setBusy(true);
+  const reading = read((count) => show(FOLDER.reading(name, count)));
+  try {
+    const dropped = await reading;
+    if (dropped === null) return report(FOLDER.unreadable, true);
+    if (dropped.files.length === 0) return report(FOLDER.empty(name), true);
+    const files = orderForArchive(dropped.files);
+    const total = formatBytes(files.reduce((n, f) => n + f.file.size, 0));
+    show(FOLDER.checking(name, formatBytes(0), total));
+    const zip = await storedZip(files, (p) => show(FOLDER.checking(name, formatBytes(p.done), total)), stop.signal);
+    const doc = await Doc.open(new File([zip], dropped.name, { type: "application/zip" }));
+    builtArchives.add(doc);
+    welcomeCrystal?.dispose();
+    welcomeCrystal = null;
+    welcomeStatus = null;
+    const count = FOLDER.files(files.length);
+    const origin = dropped.folder === null ? FOLDER.originItems(count) : FOLDER.origin(dropped.folder, count);
+    tabs.only({ doc, title: doc.name, origin });
+    say(openedMessage(dropped, count));
+  } catch (error) {
+    if (error instanceof Stopped) report(FOLDER.stopped(name));
+    else openFailed(error);
+  } finally {
+    clearTimeout(reveal);
+    clearInterval(ticker);
+    busyCard.hidden = true;
+    welcomeCrystal?.setBusy(false);
+  }
+}
+
+/** What opening a folder came to: how many files, and for a BP5 dataset what
+ *  its folder lacks and whether a second dataset beside it went unread. */
+function openedMessage(dropped: Dropped, count: string): string {
+  if (dropped.folder === null) return FOLDER.openedItems(count, dropped.name);
+  const indexes = dropped.files.filter((f) => leafOf(f.path) === "md.idx").map((f) => f.path.slice(0, -"/md.idx".length));
+  if (indexes.length > 1) {
+    const [read, rest] = [leafOf(indexes[0] as string), leafOf(indexes[1] as string)];
+    return FOLDER.severalDatasets(indexes.length, dropped.folder, read, rest);
+  }
+  const missing = missingFromDataset(dropped.files).map((file) => FOLDER.missing[file]);
+  return FOLDER.opened(dropped.folder, dropped.name, count, missing);
+}
+
+/**
+ * Pick a folder and open it as one ZIP. `holding` is the file the folder is
+ * meant to have, when the pick is to read a file that was opened by itself
+ * together with the rest of its folder.
+ */
+function pickFolder(holding?: string): void {
   const input = el("input", { type: "file" });
   input.setAttribute("webkitdirectory", "");
   input.addEventListener("change", () => {
-    const files = Array.from(input.files ?? []);
-    // A root .zattrs carries multiscales for v0.1--0.4; v0.5 uses zarr.json.
-    // Nested metadata describes an array, not the OME-Zarr image store.
-    const metadata = files.find((f) => {
-      const parts = f.webkitRelativePath.replace(/\\/g, "/").split("/");
-      return parts.length === 2 && (f.name === ".zattrs" || f.name === "zarr.json");
-    });
-    if (metadata === undefined) {
-      say("This folder has no root OME-Zarr metadata (.zattrs or zarr.json).", true);
-      return;
+    const list = input.files;
+    if (list === null || list.length === 0) return;
+    const picked = readPicked(list);
+    const name = picked.folder ?? FOLDER.files(picked.files.length);
+    if (holding !== undefined && !picked.files.some((f) => leafOf(f.path) === holding)) {
+      return report(DATASET_MEMBER.wrongFolder(name, holding), true);
     }
-    openFile(metadata, `Opened OME-Zarr metadata from ${metadata.webkitRelativePath}.`);
+    const edited = modifiedTab();
+    if (edited !== null && !confirm(discardMsg(edited.doc.name, name))) return;
+    void openFolder(name, () => Promise.resolve(picked));
   });
   input.click();
 }
@@ -1856,8 +1967,8 @@ function welcome(): void {
   welcomeStatus.setAttribute("role", "status");
   const openBtn = el("button", { type: "button", textContent: "Open a file", className: "primary" });
   openBtn.addEventListener("click", pick);
-  const openOmeZarrBtn = el("button", { type: "button", textContent: "Open OME-Zarr", className: "secondary", hidden: true });
-  openOmeZarrBtn.addEventListener("click", pickOmeZarr);
+  const openFolderBtn = el("button", { type: "button", textContent: FOLDER.open, title: FOLDER.openTitle, className: "secondary" });
+  openFolderBtn.addEventListener("click", () => pickFolder());
   const drop = el(
     "div",
     { className: "welcome" },
@@ -1865,7 +1976,7 @@ function welcome(): void {
     el("p", { className: "welcome-tagline", textContent: "A closer look at your data." }),
     el("p", { className: "welcome-description", textContent: "A scientific hex editor for files of any size." }),
     openBtn,
-    openOmeZarrBtn,
+    openFolderBtn,
     el("p", { className: "hint", textContent: DROP_HINT }),
     el("p", { className: "welcome-privacy", textContent: "Your files stay on your device." }),
     welcomeStatus,
@@ -1925,11 +2036,17 @@ document.addEventListener("drop", (e) => {
   if (!draggingFile(e)) return;
   e.preventDefault();
   showDropzone(false);
-  // A folder arrives as an item with no usable file behind it, so it has to be
-  // told apart before reaching for the file.
-  const first = e.dataTransfer?.items[0];
-  if (first !== undefined && first.webkitGetAsEntry()?.isDirectory === true) {
-    say(FOLDER_MSG, true);
+  // A folder, or several items dropped together, opens as one ZIP of all of
+  // them. A folder arrives as an item with no usable file behind it, so it has
+  // to be told apart before reaching for the file.
+  const items = e.dataTransfer?.items;
+  if (items !== undefined && dropIsFolder(items)) {
+    const entries = Array.from(items).filter((item) => item.kind === "file");
+    const only = entries.length === 1 ? entries[0]?.webkitGetAsEntry() : null;
+    const name = only?.isDirectory === true ? only.name : FOLDER.files(entries.length);
+    const edited = modifiedTab();
+    if (edited !== null && !confirm(discardMsg(edited.doc.name, name))) return;
+    void openFolder(name, (seen) => readDrop(items, seen));
     return;
   }
   const files = e.dataTransfer?.files;
@@ -1939,7 +2056,7 @@ document.addEventListener("drop", (e) => {
     openKsy(f);
     return;
   }
-  openFile(f, files.length > 1 ? manyFilesMsg(f.name, files.length - 1) : undefined);
+  openFile(f);
 });
 
 /** A dropped `.ksy` goes into the converter over the open file, not into a tab

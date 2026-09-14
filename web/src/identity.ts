@@ -87,6 +87,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   tar: ["tar"],
   zip: ["zip", "jar", "epub", "docx", "xlsx", "pptx", "odt", "apk", "npz"],
   zarrzip: ["zip"],
+  adioszip: ["zip"],
   "7z": ["7z"],
   rar4: ["rar"],
   rar5: ["rar"],

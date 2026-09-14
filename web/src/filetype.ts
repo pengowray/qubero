@@ -123,6 +123,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   adiosbp5idx: "ADIOS2 BP5 metadata index (md.idx)",
   adiosbp5md: "ADIOS2 BP5 metadata (md.0)",
   adiosbp5mmd: "ADIOS2 BP5 metadata schemas (mmd.0)",
+  adioszip: "ADIOS2 BP5 dataset in a ZIP",
   cdf: "NASA CDF",
   hdf4: "HDF4",
   parquet: "Parquet",

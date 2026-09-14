@@ -2349,6 +2349,52 @@ export const DUMP = {
     `hex and text columns disagree on ${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`,
 } as const;
 
+/** Opening a folder, or several dropped items, as one ZIP built in the browser.
+ *  See `folderzip.ts`. */
+export const FOLDER = {
+  open: "Open a folder",
+  openTitle: "Open every file in the folder as one ZIP, built in the browser",
+  /** Reading a large folder's list of files, once that has taken a moment. */
+  reading: (folder: string, count: number): string => `Reading ${folder}: ${count.toLocaleString()} files so far…`,
+  /** Reading every byte once for the CRC-32s. */
+  checking: (folder: string, done: string, total: string): string => `Checking ${folder}: ${done} of ${total}…`,
+  cancel: "Cancel",
+  stopped: (folder: string): string => `Stopped opening ${folder}.`,
+  empty: (folder: string): string => `The folder ${folder} is empty.`,
+  /** The browser gave no way to read what was dropped. */
+  unreadable: "Couldn't read the folder. Zip it with zip -0 -r and drop the .zip.",
+  files: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`,
+  /** A dataset missing a companion: what that costs, one clause each. */
+  missing: { "mmd.0": "No mmd.0 in the folder, so records stay bytes.", "data.0": "No data.0 in the folder, so values are not placed." },
+  opened: (folder: string, zip: string, files: string, missing: readonly string[]): string =>
+    missing.length === 0 ? `Opened folder ${folder} as ${zip}: ${files}, built in the browser.` : `Opened folder ${folder} as ${zip}: ${files}. ${missing.join(" ")}`,
+  openedItems: (files: string, zip: string): string => `Opened ${files} as ${zip}, built in the browser.`,
+  /** Only the first dataset in a folder of several is read. */
+  severalDatasets: (n: number, folder: string, read: string, rest: string): string =>
+    `${n} datasets in ${folder}: ${read} is read; ${rest} is listed as files only. Drop ${rest} on its own to read it.`,
+  /** The tab's tooltip. */
+  origin: (folder: string, files: string): string => `Built in the browser from the folder ${folder} (${files}). Not on disk; Save as writes it.`,
+  originItems: (files: string): string => `Built in the browser from ${files} dropped together. Not on disk; Save as writes it.`,
+  saved: (size: string, zip: string): string => `Saved ${size} as ${zip}. Unzip it to get a folder ADIOS reads.`,
+} as const;
+
+/** The row above the views when one file of a BP5 dataset is opened by
+ *  itself, which reads less than it would with the rest of its folder. */
+export const DATASET_MEMBER = {
+  heading: "One file of an ADIOS2 BP5 dataset",
+  /** What this file needs the others for, by template. */
+  facts: {
+    adiosbp5md: "Its FFS records stay bytes: the formats they are written in are in mmd.0.",
+    adiosbp5idx: "Its steps point into md.0 and data.N.",
+    adiosbp5mmd: "These formats describe the records in md.0.",
+  } as Record<string, string>,
+  open: "Open the folder…",
+  openTitle: "Pick the folder holding this file; it opens as one ZIP in place of this tab",
+  /** A file lifted out of a bundle, which reads in the bundle and not here. */
+  lifted: (zip: string): string => `Opened on its own from ${zip}; the records read there, not here.`,
+  wrongFolder: (folder: string, file: string): string => `${folder} has no ${file}. Pick the folder that holds this file.`,
+} as const;
+
 /** The page is an older build than the site now serves, and is about to reload
  *  itself once. Names the page as the thing out of date: the file and the
  *  reader did nothing wrong, and the browser's cache is nobody's business
