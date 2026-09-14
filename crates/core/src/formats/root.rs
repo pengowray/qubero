@@ -27,27 +27,34 @@
 //! fixed depth: nothing in a ROOT file stops a directory pointing back at one
 //! that holds it, and a template has no memory of where it has been.
 //!
-//! What is left as bytes. A record's contents, once past the compression
-//! header, are the streamed form of whatever C++ class wrote them, and reading
-//! those needs the class descriptions in `StreamerInfo`, which are themselves
-//! written that way. So a `TTree`'s branches and baskets are not taken apart
-//! here: the record is placed, named, measured, and what is inside the
-//! compressed stream is left whole. The stream itself is not: a `ZL` block
-//! holds a zlib stream, an `XZ` block a whole xz stream with its own index and
-//! footer, a `ZS` block a zstd frame, and each is read by the template that
-//! format already has here. `L4` is the odd one, and is read here rather than
-//! borrowed: ROOT writes an eight-byte checksum and then a bare LZ4 block, not
-//! an LZ4 frame, so there is no magic number and no frame header to read.
+//! A record's contents, once past the compression header, are the streamed
+//! form of whatever C++ class wrote them, and reading those needs the class
+//! descriptions in `StreamerInfo`, which are themselves written that way. The
+//! blocks are read as the streams they are: a `ZL` block holds a zlib stream,
+//! an `XZ` block a whole xz stream with its own index and footer, a `ZS` block
+//! a zstd frame, and each is read by the template that format already has
+//! here. `L4` is the odd one, and is read here rather than borrowed: ROOT
+//! writes an eight-byte checksum and then a bare LZ4 block, not an LZ4 frame,
+//! so there is no magic number and no frame header to read.
+//!
+//! What the blocks come to, joined, is the record's `object`, and that is read
+//! with the descriptions: every object is a [`Ty::Schema`](crate::template::Ty::Schema)
+//! node, and [`schema`] is the builder that makes a structure of a class out
+//! of what `StreamerInfo` says about it. Which is why `streamer_info` is
+//! declared before `directory` in the header: a walk to the descriptions
+//! starts from a field declared before the object asking, and every object in
+//! the file is under the directory.
 //!
 //! An RNTuple is the exception to all of that. Its anchor is the one streamed
 //! object in it, and everything the anchor points at is a format of its own
 //! with a published layout, read field by field in [`rntuple`]: the header and
 //! footer envelopes, the page lists, and every page, placed in the file.
 
-use crate::template::{Endian::*, Expr as E, Template, Ty as T, Until};
+use crate::template::{Endian::*, Expr as E, Step, Template, Ty as T, Until};
 use super::{xz, zlib, zstd};
 
 mod rntuple;
+mod schema;
 
 /// The two letters a compressed block opens with, read as one big-endian
 /// sixteen-bit number. `CS` is the zlib of ROOT 3 and before, which nothing
@@ -204,9 +211,182 @@ fn body() -> T {
     )
 }
 
-/// Any record reached by a key: the key, and the bytes it covers.
+/// Any record reached by a key: the key, the bytes it covers, and the object
+/// those bytes come to.
 fn record() -> T {
-    with_key("Record", "fName", "body", vec![("body", body())])
+    with_key("Record", "fName", "body", vec![("body", body()), ("object", object())])
+}
+
+/// The record a tree's key points at: a record like any other, and then every
+/// basket its branches wrote.
+///
+/// A tree holds almost none of its own bytes. Its events are in baskets, one
+/// record per branch per few thousand entries, which no directory lists and
+/// nothing points at except three arrays inside each branch: where each
+/// basket is, how long, and which entry it starts at. Those arrays are members
+/// of a `TBranch` the file describes, so the walk to them goes through the
+/// tree's object as the file laid it out, and each `BasketRef` the builder
+/// adds to a branch places one basket.
+///
+/// A tree split into sub-branches keeps those in each branch's own list, as
+/// deep as it was split, and a `TBranchElement` keeps its baskets in the
+/// `TBranch` it has as a base class. So the walk does not name the way down: it
+/// finds every `basket_refs` under the tree's object, at whatever depth, in the
+/// order a walk down through the object meets them. That puts a split branch's
+/// sub-branches before its own baskets, which in every file that splits one is
+/// none.
+fn tree_record() -> T {
+    let to_baskets = vec![Step::field("object"), Step::deep("basket_refs"), Step::each()];
+    let baskets = T::gather(
+        to_baskets,
+        E::field("seek"),
+        crate::template::Anchor::File,
+        E::lit(0),
+        T::sized(E::placer(E::field("bytes")), T::Named("Basket".into())),
+    )
+    .skipping_zero();
+    with_key("TreeRecord", "fName", "body", vec![("body", body()), ("object", object()), ("baskets", baskets)])
+}
+
+/// One basket: a key whose header runs on past `fTitle` with the basket's own
+/// numbers, and then the values of the entries it holds, compressed the way
+/// any record's contents are.
+///
+/// `fNevBuf` is how many entries it holds and `fLast` where their values stop,
+/// counted from the start of the key. What is after that, for a branch whose
+/// entries vary in length, is where each entry starts.
+fn basket() -> T {
+    let mut fields = key_fields();
+    fields.extend([
+        // The version of the basket's own streamer, which is not the key's.
+        ("basket_version", T::u16(Big)),
+        ("fBufferSize", T::i32(Big)),
+        ("fNevBufSize", T::i32(Big)),
+        ("fNevBuf", T::i32(Big)),
+        ("fLast", T::i32(Big)),
+        ("flag", T::u8()),
+        ("body", body()),
+        ("entries", joined(basket_entries())),
+    ]);
+    T::structure_named("Basket", "fName", "body", fields).machinery(&["large"]).counted_as("basket")
+}
+
+/// What a basket's body comes to: the values of its entries up to `fLast`, and
+/// after them, for a branch whose entries vary in length, the table of where
+/// each entry starts.
+///
+/// The table is as ROOT writes it: its own length first, then one offset per
+/// entry counted from the start of the key, and one more that nothing reads.
+fn basket_entries() -> T {
+    let border = E::field("fLast").sub(E::field("fKeylen")).at_most(E::Remaining).at_least(E::lit(0));
+    T::structure_named(
+        "BasketEntries",
+        "",
+        "values",
+        vec![
+            ("values", T::sized(border, leaf_values())),
+            ("offsets", T::when(E::lit(0).less_than(E::Remaining), T::repeat(T::i32(Big), Until::End))),
+        ],
+    )
+}
+
+/// The values of a basket, read as its branch's one leaf says.
+///
+/// The same cases the side reader reads and no more: a `TBranch` not split
+/// into sub-branches, of fixed-length entries, with one leaf that no other
+/// leaf counts, whose class is a number and whose width and count per entry
+/// are both something. Everything else stays the bytes it is. Each question
+/// is asked of the branch that placed the basket, through the record that
+/// placed it, and only once the one before it has held, since each reads
+/// through what the one before it found.
+fn leaf_values() -> T {
+    const LEAF: &[&str] = &["fLeaves", "members", "elements", "0"];
+    let leaf = |more: &[&str]| E::placer(E::within(&[LEAF, more].concat()));
+    let tleaf = |name: &str| leaf(&["object", "members", "TLeaf", "members", name]);
+    let count = || E::field("fNevBuf").mul(tleaf("fLen"));
+    let width = || tleaf("fLenType");
+    let rest = || T::bytes(E::Remaining);
+    let signed = |bits: u32| {
+        T::switch(
+            tleaf("fIsUnsigned"),
+            vec![(0, T::array(T::Int { bits, endian: Big }, count()))],
+            T::array(T::UInt { bits, endian: Big }, count()),
+        )
+    };
+    let ints = T::switch(width(), vec![(1, signed(8)), (2, signed(16)), (4, signed(32)), (8, signed(64))], rest());
+    let floats =
+        T::switch(width(), vec![(4, T::array(T::F32(Big), count())), (8, T::array(T::F64(Big), count()))], rest());
+    let by_leaf = T::matches(
+        leaf(&["class_name"]),
+        vec![
+            ("TLeafF", floats.clone()),
+            ("TLeafD", floats.clone()),
+            ("TLeafF16", floats.clone()),
+            ("TLeafD32", floats),
+            ("TLeafB", ints.clone()),
+            ("TLeafS", ints.clone()),
+            ("TLeafI", ints.clone()),
+            ("TLeafL", ints.clone()),
+            ("TLeafO", ints.clone()),
+            ("TLeafG", ints),
+        ],
+        rest(),
+    );
+    let then = |when: E, next: E| E::cond(when, next, E::lit(0));
+    let simple = then(
+        E::placer(E::within(&["fBranches", "members", "fSize"])).equal_to(E::lit(0)),
+        then(
+            E::placer(E::field("fEntryOffsetLen")).equal_to(E::lit(0)),
+            then(
+                E::placer(E::within(&["fLeaves", "members", "fSize"])).equal_to(E::lit(1)),
+                then(
+                    // A leaf counted by another points at it; nothing, or the
+                    // object holding it, is the tag 0 or 1.
+                    leaf(&["object", "members", "TLeaf", "members", "fLeafCount", "count_or_tag"]).less_than(E::lit(2)),
+                    then(
+                        E::lit(0).less_than(tleaf("fLen")).both(E::lit(0).less_than(width())),
+                        width().mul(count()).less_or_equal(E::Remaining),
+                    ),
+                ),
+            ),
+        ),
+    );
+    T::matches(E::placer(E::within(&["class_name"])), vec![("TBranch", T::switch(simple, vec![(1, by_leaf)], rest()))], rest())
+}
+
+/// What a record's blocks come to, joined, read as `inner`.
+///
+/// Joined rather than read inside a block: ROOT compresses in blocks of at
+/// most sixteen mebibytes unpacked, so a large object runs across several and
+/// only the blocks joined are the object. What each block comes to is the
+/// part, measured by the size its header gives rather than by unpacking it, and
+/// the whole is cut at `fObjlen`. A record written as it stands is one part,
+/// its own body.
+fn joined(inner: T) -> T {
+    let size = E::field("fNbytes").sub(E::field("fKeylen"));
+    let packed = size.less_than(E::field("fObjlen"));
+    T::switch(
+        packed,
+        vec![(
+            1,
+            T::stitched(
+                vec![Step::field("body"), Step::each(), Step::stream()],
+                Some(E::field("uncompressed_size")),
+                Some(E::field("fObjlen")),
+                inner.clone(),
+            ),
+        )],
+        T::stitched(vec![Step::field("body")], None, Some(E::field("fObjlen")), inner),
+    )
+}
+
+/// The object a record holds, read as the class its key names.
+///
+/// The object is where the positions in it count from. A class name written
+/// once and referred back to later is referred to by where it was in these
+/// bytes, which is what the origin says.
+fn object() -> T {
+    joined(T::origin(schema::object_of(E::within(&["fClassName", "text"]))))
 }
 
 /// The record at `fBEGIN`. Its contents are the file's own name and title
@@ -317,11 +497,15 @@ fn by_class(level: usize) -> T {
         false => at_if_set("fSeekKey", T::Named("Record".into())),
     };
     let anchor = at_if_set("fSeekKey", T::Named("RNTupleRecord".into()));
+    let tree = at_if_set("fSeekKey", T::Named("TreeRecord".into()));
     T::matches(
         E::within(&["fClassName", "text"]),
         vec![
             ("TDirectory", deeper.clone()),
             ("TDirectoryFile", deeper),
+            ("TTree", tree.clone()),
+            ("TNtuple", tree.clone()),
+            ("TNtupleD", tree),
             ("ROOT::RNTuple", anchor.clone()),
             // What the class was called while the format was being settled.
             ("ROOT::Experimental::RNTuple", anchor),
@@ -471,16 +655,24 @@ pub fn root() -> Template {
             // anyone has written, so what is between them reads as a gap. The
             // three fields below take up no room where they stand: each one
             // places a record somewhere else in the file.
-            ("directory", T::at(E::field("fBEGIN"), T::Named("FileRecord".into()))),
+            //
+            // The class descriptions come first although they are near the end
+            // of the file, because every object under the directory is read
+            // with them and a walk to them starts from a field declared before
+            // the object asking.
             ("streamer_info", at_if_set("fSeekInfo", T::Named("Record".into()))),
+            ("directory", T::at(E::field("fBEGIN"), T::Named("FileRecord".into()))),
             ("free_list", at_if_set("fSeekFree", T::Named("FreeRecord".into()))),
         ],
     )
     .machinery(&["large", "fUnits"]);
 
     let mut t = Template::new("root", header)
+        .with_schema(schema::KIND, schema::builder())
         .with_type("FileRecord", file_record())
         .with_type("Record", record())
+        .with_type("TreeRecord", tree_record())
+        .with_type("Basket", basket())
         .with_type("RNTupleRecord", rntuple_record())
         .with_type("FreeRecord", free_record())
         .with_type("Free", free())
@@ -670,8 +862,8 @@ pub(super) mod tests {
     /// record as its one child, which is the extra `0` in every path here.
     const F_VERSION: usize = 1;
     const F_UUID: usize = 15;
-    const DIRECTORY: [usize; 2] = [16, 0];
-    const STREAMER: [usize; 2] = [17, 0];
+    const STREAMER: [usize; 2] = [16, 0];
+    const DIRECTORY: [usize; 2] = [17, 0];
     const FREE: [usize; 2] = [18, 0];
     /// A record's own fields: twelve of key, and then whatever it holds.
     const K_FIELDS: usize = 12;
@@ -884,6 +1076,7 @@ pub(super) mod tests {
         let contents = down(&run, &[0]);
         for bit in [at, at + 8] {
             let found = ev.locate(&d, bit).unwrap();
+            assert!(found.starts_with(&run), "not found in the run: {found:?}");
             assert!(!found.starts_with(&contents), "landed inside the stream: {found:?}");
             assert_eq!(ev.node(&d, &found).unwrap().space, 0, "{found:?}");
         }

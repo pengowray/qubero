@@ -24,8 +24,10 @@ use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats::{root, root_tree};
 use qubero_core::source::MemSource;
 
-/// The header's fields, and the record each of the last three places.
-const DIRECTORY: [usize; 2] = [16, 0];
+/// The header's fields, and the record each of the last three places. The
+/// class descriptions are declared before the directory, so that every object
+/// under the directory can walk back to them.
+const DIRECTORY: [usize; 2] = [17, 0];
 /// A record's own fields: twelve of key, and then whatever it holds.
 const K_FIELDS: usize = 12;
 
@@ -801,9 +803,14 @@ fn rntuple_pages_are_placed_where_uproot_finds_them() {
 }
 
 /// How many bytes of the file some field of the tree names: the union of every
-/// field with no children, in the file's own space. `skip` names fields whose
+/// field with no children in the file's own space. `skip` names fields whose
 /// contents are not walked, which is how the same file is measured as the
 /// template read it before page lists were followed.
+///
+/// A compressed run is one of those. What it holds is in a space of its own,
+/// and a run whose codec leaves no trace of blocks to lay over it, as ROOT's
+/// lz4 does not, has no child in the file at all: the run is the field that
+/// names those bytes.
 fn named_bytes(d: &Document<MemSource>, ev: &mut Evaluator, skip: &dyn Fn(&str, &[usize]) -> bool) -> u64 {
     let mut spans = Vec::new();
     let mut stack = vec![Vec::new()];
@@ -811,6 +818,9 @@ fn named_bytes(d: &Document<MemSource>, ev: &mut Evaluator, skip: &dyn Fn(&str, 
         let Ok(node) = ev.node(d, &p) else { continue };
         if skip(&node.name, &p) {
             continue;
+        }
+        if node.decoded && node.space == 0 {
+            spans.push((node.offset_bits, node.offset_bits + node.size_bits));
         }
         // Walked into whatever space it is in, since a page list read out of
         // a compressed footer places its pages back in the file; counted only
@@ -934,6 +944,468 @@ fn rntuple_pages_read_as_the_values_uproot_reads() {
         }
         assert!(total / 8 >= after, "{file}: the spans name {} bytes and the tree {after}", total / 8);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Streamed objects, read by the template with the class descriptions the file
+// carries. The side reader above is the oracle: it reads the same bytes with
+// hand-written code, and the two have to agree wherever both answer.
+
+/// Where the header places the `StreamerInfo` record.
+const STREAMER: [usize; 2] = [16, 0];
+
+/// Down from `from` a name at a time, through a field that points elsewhere
+/// and into what a stream holds, the way a path in the template goes. A list's
+/// element is named by its index.
+fn go(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> Option<Vec<usize>> {
+    let mut p = from.to_vec();
+    for name in names {
+        inside(d, ev, &mut p);
+        match name.parse::<usize>() {
+            Ok(i) => p.push(i),
+            Err(_) => p = ev.child_named(d, &p, name).ok()??,
+        }
+    }
+    inside(d, ev, &mut p);
+    Some(p)
+}
+
+/// Step from a field of no bits to the one thing it holds, where it is one.
+fn inside(d: &Document<MemSource>, ev: &mut Evaluator, p: &mut Vec<usize>) {
+    while let Ok(node) = ev.node(d, p) {
+        let pointing = node.type_name.starts_with("at \u{2192}") || node.type_name.starts_with("joined");
+        if !pointing || node.child_count != 1 {
+            break;
+        }
+        p.push(0);
+    }
+}
+
+fn text(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> String {
+    let Some(p) = go(d, ev, from, names) else { return String::new() };
+    match ev.node(d, &p).map(|n| n.value) {
+        Ok(Value::Str(s)) => s,
+        _ => String::new(),
+    }
+}
+
+fn int(d: &Document<MemSource>, ev: &mut Evaluator, from: &[usize], names: &[&str]) -> Option<i128> {
+    let p = go(d, ev, from, names)?;
+    ev.node(d, &p).ok()?.value.as_int()
+}
+
+/// The class descriptions as the template reads them, in the shape the side
+/// reader lists them in.
+fn template_classes(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<root_tree::Class> {
+    let list = go(d, ev, &STREAMER, &["object", "members", "elements"]).expect("the StreamerInfo list");
+    let n = ev.node(d, &list).unwrap().child_count as usize;
+    let mut out = Vec::new();
+    for i in 0..n {
+        let entry = [list.as_slice(), &[i]].concat();
+        if text(d, ev, &entry, &["class_name"]) != "TStreamerInfo" {
+            continue;
+        }
+        let info = go(d, ev, &entry, &["object", "members"]).expect("a description");
+        let name = text(d, ev, &info, &["TNamed", "members", "fName", "text"]);
+        let version = int(d, ev, &info, &["fClassVersion"]).unwrap_or(0) as i32;
+        let checksum = int(d, ev, &info, &["fCheckSum"]).unwrap_or(0) as u32;
+        let mut members = Vec::new();
+        if let Some(elements) = go(d, ev, &info, &["fElements", "object", "members", "elements"]) {
+            let m = ev.node(d, &elements).unwrap().child_count as usize;
+            for j in 0..m {
+                let item = [elements.as_slice(), &[j]].concat();
+                let kind = text(d, ev, &item, &["class_name"]);
+                let own = go(d, ev, &item, &["object", "members"]).expect("an element");
+                // What every element class has, which is in its base.
+                let base: &[&str] = match kind.as_str() {
+                    "TStreamerSTLstring" => &["TStreamerSTL", "members", "TStreamerElement", "members"],
+                    _ => &["TStreamerElement", "members"],
+                };
+                fn joined<'a>(base: &[&'a str], more: &[&'a str]) -> Vec<&'a str> {
+                    base.iter().chain(more).copied().collect()
+                }
+                let at = |more: &[&'static str]| joined(base, more);
+                let type_name = text(d, ev, &own, &at(&["fTypeName", "text"]));
+                let is_base = kind == "TStreamerBase" || type_name == "BASE";
+                let dims = match is_base {
+                    true => Vec::new(),
+                    false => {
+                        let n = int(d, ev, &own, &at(&["fArrayDim"])).unwrap_or(0).clamp(0, 5) as usize;
+                        (0..n)
+                            .map(|k| {
+                                let k = k.to_string();
+                                int(d, ev, &own, &joined(base, &["fMaxIndex", &k])).unwrap_or(0) as i32
+                            })
+                            .collect()
+                    }
+                };
+                members.push(root_tree::Member {
+                    name: text(d, ev, &own, &at(&["TNamed", "members", "fName", "text"])),
+                    type_name,
+                    code: int(d, ev, &own, &at(&["fType"])).unwrap_or(-1) as i32,
+                    size: int(d, ev, &own, &at(&["fSize"])).unwrap_or(0) as i32,
+                    dims,
+                    base: is_base,
+                    comment: text(d, ev, &own, &at(&["TNamed", "members", "fTitle", "text"])),
+                });
+            }
+        }
+        out.push(root_tree::Class { name, version, checksum, members });
+    }
+    out
+}
+
+/// Every sample's class descriptions, read by the template as the streamed
+/// objects they are, come to what the side reader lists. That is the bootstrap
+/// classes (`TList`, `TStreamerInfo` and the element classes, which no file
+/// describes) checked against `root_streamer`'s hand-written reading of the
+/// same bytes, and it is what every object the file describes is built from.
+#[test]
+fn the_streamer_info_record_reads_as_the_classes_the_side_reader_lists() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (d, contents) = contents_of(&folder, &name);
+        let mut ev = Evaluator::new(root());
+        let classes = template_classes(&d, &mut ev);
+        assert!(!classes.is_empty(), "{name}: no classes");
+        assert_eq!(classes.len(), contents.classes.len(), "{name}");
+        for (got, want) in classes.iter().zip(&contents.classes) {
+            assert_eq!(got, want, "{name}: {}", want.name);
+        }
+        eprintln!("--- {name}: {} classes read the same both ways", classes.len());
+        checked += 1;
+    }
+    assert!(checked >= 8, "only {checked} samples read");
+}
+
+/// The first `TStreamerInfo` in the list spells its class out; the second
+/// writes where that spelling is, counted from the start of the key, and the
+/// template reads that as a field placed back at the first one's name.
+#[test]
+fn a_second_object_of_a_class_reads_its_name_from_where_the_first_spelled_it() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (d, mut ev) = rntuple_sample(&folder, "uproot-Zmumu-lz4.root");
+    let list = go(&d, &mut ev, &STREAMER, &["object", "members", "elements"]).expect("the list");
+    let first = ev.child_named(&d, &[list.as_slice(), &[0]].concat(), "class_name").unwrap().expect("a name");
+    let spelled = ev.node(&d, &first).unwrap();
+    assert_eq!(spelled.value, Value::Str("TStreamerInfo".into()));
+    assert_eq!(spelled.type_name, "cstr");
+
+    let second = ev.child_named(&d, &[list.as_slice(), &[1]].concat(), "class_name").unwrap().expect("a name");
+    let pointer = ev.node(&d, &second).unwrap();
+    assert!(pointer.type_name.starts_with("at \u{2192}"), "{}", pointer.type_name);
+    assert_eq!(pointer.size_bits, 0);
+    let named = ev.node(&d, &[second.as_slice(), &[0]].concat()).unwrap();
+    assert_eq!(named.value, Value::Str("TStreamerInfo".into()));
+    // The same bytes the first entry spelled, in the same space.
+    assert_eq!((named.offset_bits, named.space), (spelled.offset_bits, spelled.space));
+    // And the object is read as that class for it.
+    let object = go(&d, &mut ev, &list, &["1", "object"]).expect("an object");
+    assert_eq!(ev.node(&d, &object).unwrap().type_name, "TStreamerInfo");
+}
+
+/// Every basket the template placed for the tree whose key is at `key`: where
+/// it is and how long, in bytes, and its path.
+fn template_baskets(d: &Document<MemSource>, ev: &mut Evaluator, key: &[usize]) -> Vec<(u64, u64, Vec<usize>)> {
+    let record = [key, &[K_FIELDS, 0]].concat();
+    let list = ev.child_named(d, &record, "baskets").unwrap().expect("a tree record has baskets");
+    let n = ev.node(d, &list).unwrap().child_count as usize;
+    (0..n)
+        .map(|i| {
+            let p = [list.as_slice(), &[i]].concat();
+            let node = ev.node(d, &p).unwrap();
+            (node.offset_bits / 8, node.size_bits / 8, p)
+        })
+        .collect()
+}
+
+/// Every basket the side reader finds through a tree's branches is a basket
+/// the template placed, at the same offset with the same length, in the same
+/// order, and each is a `TBasket` key holding as many entries as its branch
+/// says it does.
+#[test]
+fn every_basket_the_side_reader_lists_is_placed_by_the_template() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut placed = 0;
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (d, contents) = contents_of(&folder, &name);
+        let mut ev = Evaluator::new(root());
+        for tree in &contents.trees {
+            let want: Vec<(u64, u64, i64)> = tree
+                .branches
+                .iter()
+                .flat_map(|b| b.baskets.iter().map(|k| (k.at, k.bytes as u64, k.entries)))
+                .collect();
+            let got = template_baskets(&d, &mut ev, &tree.path);
+            let at: Vec<(u64, u64)> = got.iter().map(|(o, s, _)| (*o, *s)).collect();
+            assert_eq!(at, want.iter().map(|(o, s, _)| (*o, *s)).collect::<Vec<_>>(), "{name} {}", tree.name);
+            for ((offset, _, p), (_, _, entries)) in got.iter().zip(&want) {
+                assert_eq!(text(&d, &mut ev, p, &["fClassName", "text"]), "TBasket", "{name} @{offset}");
+                assert_eq!(int(&d, &mut ev, p, &["fNevBuf"]), Some(*entries as i128), "{name} @{offset}");
+                assert_eq!(int(&d, &mut ev, p, &["fSeekKey"]), Some(*offset as i128), "{name} @{offset}");
+            }
+            placed += got.len();
+            eprintln!("--- {name} {}: {} baskets placed where the side reader lists them", tree.name, got.len());
+        }
+    }
+    assert!(placed > 0, "no sample had a basket to place");
+}
+
+/// The same tree written with lz4, lzma and zstd places twenty baskets each,
+/// at each file's own offsets, holding the same entries and unpacking to the
+/// same length, with the block inside each named by the codec that wrote it.
+#[test]
+fn the_same_tree_places_the_same_baskets_through_lz4_lzma_and_zstd() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut shapes = Vec::new();
+    for (name, first, codec) in [
+        ("uproot-Zmumu-lz4.root", 224u64, "lz4"),
+        ("uproot-Zmumu-lzma.root", 226, "xz"),
+        ("uproot-Zmumu-zstd.root", 254, "zstd"),
+    ] {
+        let (d, contents) = contents_of(&folder, name);
+        let mut ev = Evaluator::new(root());
+        let baskets = template_baskets(&d, &mut ev, &contents.trees[0].path);
+        assert_eq!(baskets.len(), 20, "{name}");
+        assert_eq!(baskets[0].0, first, "{name}");
+        let mut shape = Vec::new();
+        let mut packed = 0;
+        for (_, _, p) in &baskets {
+            // A basket that would not have got smaller is written as it
+            // stands, and has no block to name a codec.
+            let stored = int(&d, &mut ev, p, &["fNbytes"]).unwrap() - int(&d, &mut ev, p, &["fKeylen"]).unwrap();
+            if stored < int(&d, &mut ev, p, &["fObjlen"]).unwrap() {
+                let block = go(&d, &mut ev, p, &["body", "0", "algorithm"]).expect("a block");
+                let algorithm = ev.node(&d, &block).unwrap().value;
+                assert!(matches!(&algorithm, Value::Enum { name: Some(n), .. } if n == codec), "{name}: {algorithm:?}");
+                packed += 1;
+            }
+            shape.push((
+                text(&d, &mut ev, p, &["fName", "text"]),
+                int(&d, &mut ev, p, &["fNevBuf"]),
+                int(&d, &mut ev, p, &["fObjlen"]),
+            ));
+        }
+        assert!(packed > 0, "{name}: no basket was compressed");
+        eprintln!("--- {name}: {packed} of {} baskets compressed with {codec}", baskets.len());
+        shapes.push(shape);
+    }
+    assert_eq!(shapes[0], shapes[1]);
+    assert_eq!(shapes[0], shapes[2]);
+}
+
+/// A basket says where it came from: the branch's `BasketRef` that placed it,
+/// named by the walk through the tree's object, and that record's `seek` is an
+/// element of `fBasketSeek`, which is a counted array because the element of
+/// `TBranch`'s description in `StreamerInfo` says `Long64_t*`.
+#[test]
+fn a_baskets_type_names_the_streamer_element_it_came_from() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (d, contents) = contents_of(&folder, "uproot-Zmumu-lz4.root");
+    let mut ev = Evaluator::new(root());
+    let baskets = template_baskets(&d, &mut ev, &contents.trees[0].path);
+    let (_, _, e1) = &baskets[3];
+    let origins = ev.origins(&d, e1).unwrap();
+    let placed = origins.iter().find(|o| o.role == qubero_core::eval::Role::Position).expect("placed by a record");
+    assert_eq!(placed.label, "object.members.fBranches.members.elements[3].object.members.basket_refs[0]");
+    let record = placed.path.clone();
+    assert_eq!(int(&d, &mut ev, &record, &["seek"]), Some(13371));
+
+    // The seek is read from the branch's own array.
+    let seek = ev.child_named(&d, &record, "seek").unwrap().expect("seek");
+    let from = ev.origins(&d, &seek).unwrap();
+    assert!(from.iter().any(|o| o.label == "fBasketSeek.values[0]"), "{from:?}");
+
+    // And that array is what it is because of one element of one description.
+    let members = record[..record.len() - 2].to_vec();
+    let array = ev.child_named(&d, &members, "fBasketSeek").unwrap().expect("fBasketSeek");
+    assert_eq!(ev.node(&d, &array).unwrap().type_name, "Long64_t*");
+    let typed = ev.origins(&d, &array).unwrap();
+    let element = typed
+        .iter()
+        .find(|o| o.role == qubero_core::eval::Role::Type && o.path.starts_with(&STREAMER))
+        .unwrap_or_else(|| panic!("no description named: {typed:?}"));
+    assert!(element.label.starts_with("streamer_info.object.members.elements["), "{}", element.label);
+    let described = go(&d, &mut ev, &element.path, &["object", "members"]).expect("an element");
+    assert_eq!(text(&d, &mut ev, &described, &["TStreamerElement", "members", "TNamed", "members", "fName", "text"]), "fBasketSeek");
+    assert_eq!(text(&d, &mut ev, &described, &["TStreamerElement", "members", "fTypeName", "text"]), "Long64_t*");
+    // The branch as a whole was built from `TBranch`'s description.
+    let branch = ev.relations(&d, &members).unwrap();
+    assert!(branch.iter().any(|r| r.result == "TBranch v12"), "{branch:?}");
+}
+
+/// A byte of a basket, asked for by where it is in the file with nothing read
+/// before, lands in that basket: the hex view finds it without a tree walk
+/// having placed it first.
+#[test]
+fn a_byte_of_a_basket_locates_to_the_basket() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (d, contents) = contents_of(&folder, "uproot-Zmumu-lz4.root");
+    let mut walked = Evaluator::new(root());
+    let baskets = template_baskets(&d, &mut walked, &contents.trees[0].path);
+    for (offset, size, p) in [&baskets[0], &baskets[7], &baskets[19]] {
+        let mut ev = Evaluator::new(root());
+        let at = ev.locate(&d, (offset + size / 2) * 8).unwrap();
+        assert!(at.starts_with(p), "@{offset}: {at:?} is not under {p:?}");
+    }
+}
+
+/// A tree walk of the file names most of its bytes once the baskets are
+/// placed, where before them it named the header, the directory and the
+/// records the directory lists: a few per cent. Every sample says both, and
+/// the deepest chain of expressions the walk asked is well inside the guard.
+#[test]
+fn zmumu_names_nine_tenths_of_its_bytes() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let mut names: Vec<String> = std::fs::read_dir(&folder)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "root"))
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let mut zmumu = None;
+    for name in names {
+        let (d, mut ev) = rntuple_sample(&folder, &name);
+        let before = named_bytes(&d, &mut ev, &|n, _| n == "baskets");
+        let (d, mut ev) = rntuple_sample(&folder, &name);
+        let after = named_bytes(&d, &mut ev, &|_, _| false);
+        let deepest = ev.deepest_question();
+        let len = d.len_bytes();
+        eprintln!(
+            "--- {name}: {before} bytes named without the baskets ({:.1}%), {after} with ({:.1}%), of {len}; deepest chain of expressions {deepest}",
+            100.0 * before as f64 / len as f64,
+            100.0 * after as f64 / len as f64
+        );
+        assert!(deepest < 88, "{name}: {deepest}");
+        if name == "uproot-Zmumu-lz4.root" {
+            zmumu = Some((after, len));
+        }
+    }
+    let (after, len) = zmumu.expect("uproot-Zmumu-lz4.root is in the collection");
+    assert!(after * 10 >= len * 9, "uproot-Zmumu-lz4.root: {after} of {len}");
+}
+
+/// How many values of each basket are compared one by one. The rest are
+/// counted: a basket of the uncompressed sample holds a handful and one of
+/// Zmumu two thousand, and every one of those as a node is a slow test that
+/// says nothing the first few hundred did not.
+const VALUES_COMPARED: usize = 300;
+
+/// Every basket of every sample reads as the side reader reads it: the values
+/// of a branch it reads, number for number, by the leaf's type; bytes for a
+/// branch it does not; and the table of entry offsets, where there is one, as
+/// the same offsets less the key's length.
+#[test]
+fn a_baskets_values_match_the_side_reader() {
+    let Some(folder) = root_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (mut typed, mut left, mut tables) = (0, 0, 0);
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "root") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let (d, contents) = contents_of(&folder, &name);
+        let mut ev = Evaluator::new(root());
+        for tree in &contents.trees {
+            let placed = template_baskets(&d, &mut ev, &tree.path);
+            let listed = tree.branches.iter().flat_map(|b| b.baskets.iter().map(move |k| (b, k)));
+            for ((branch, basket), (_, _, p)) in listed.zip(&placed) {
+                let say = format!("{name} {} @{}", branch.name, basket.at);
+                let side = root_tree::read_basket(&d, basket.at, &branch.reading).unwrap_or_else(|e| panic!("{say}: {e:?}"));
+                let values = go(&d, &mut ev, p, &["entries", "values"]).unwrap_or_else(|| panic!("{say}: no values"));
+                let node = ev.node(&d, &values).unwrap_or_else(|e| panic!("{say}: {e:?}"));
+                let at = |ev: &mut Evaluator, i: usize| ev.node(&d, &[values.as_slice(), &[i]].concat()).unwrap().value;
+                match &side.values {
+                    root_tree::Values::Ints(want) => {
+                        assert_eq!(node.child_count as usize, want.len(), "{say}: {}", node.type_name);
+                        for (i, w) in want.iter().enumerate().take(VALUES_COMPARED) {
+                            let got = match at(&mut ev, i) {
+                                Value::Int(v) => v as i64,
+                                Value::UInt(v) => v as u64 as i64,
+                                other => panic!("{say} [{i}]: {other:?}"),
+                            };
+                            assert_eq!(got, *w, "{say} [{i}]");
+                        }
+                        typed += 1;
+                    }
+                    root_tree::Values::Floats(want) => {
+                        assert_eq!(node.child_count as usize, want.len(), "{say}: {}", node.type_name);
+                        // A four-byte float is shown as the shortest decimal
+                        // that reads back as those four bytes, and the side
+                        // reader widens the same bits to a double, so the two
+                        // are compared as the float the file holds.
+                        let narrow = node.type_name.starts_with("f32");
+                        for (i, w) in want.iter().enumerate().take(VALUES_COMPARED) {
+                            let Value::Float(got) = at(&mut ev, i) else { panic!("{say} [{i}]: not a float") };
+                            match narrow {
+                                true => assert_eq!((got as f32).to_bits(), (*w as f32).to_bits(), "{say} [{i}]"),
+                                false => assert_eq!(got.to_bits(), w.to_bits(), "{say} [{i}]"),
+                            }
+                        }
+                        typed += 1;
+                    }
+                    root_tree::Values::None(why) => {
+                        assert_eq!(node.type_name, "bytes[]", "{say}: the side reader reads nothing ({why})");
+                        assert_eq!(node.size_bits / 8, side.border as u64, "{say}");
+                        left += 1;
+                    }
+                }
+                // The table after the values: its length, one offset per
+                // entry counted from the key, and one the side reader puts the
+                // border in place of.
+                if !side.offsets.is_empty() {
+                    let table = go(&d, &mut ev, p, &["entries", "offsets"]).unwrap_or_else(|| panic!("{say}: no offsets"));
+                    let n = ev.node(&d, &table).unwrap().child_count as usize;
+                    assert_eq!(n, side.offsets.len() + 1, "{say}");
+                    let key_len = int(&d, &mut ev, p, &["fKeylen"]).unwrap();
+                    for (i, w) in side.offsets.iter().enumerate().take(side.offsets.len() - 1).take(VALUES_COMPARED) {
+                        let raw = ev.node(&d, &[table.as_slice(), &[i + 1]].concat()).unwrap().value.as_int().unwrap();
+                        assert_eq!(raw - key_len, *w as i128, "{say} offset [{i}]");
+                    }
+                    tables += 1;
+                }
+            }
+        }
+    }
+    eprintln!("--- {typed} baskets read as their leaf's values, {left} left as bytes, {tables} with entry offsets");
+    assert!(typed > 0 && left > 0 && tables > 0);
 }
 
 /// The spans over a whole file, asked for the way the browser asks: in goes

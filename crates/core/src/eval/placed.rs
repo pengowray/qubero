@@ -418,6 +418,10 @@ impl Evaluator {
             | Ty::Insn { .. }
             | Ty::Traced { .. }
             | Ty::CodeBits { .. } => false,
+            // A built type is not followed, though what it builds may place
+            // things: every ROOT object sits in a decoded stream, so indexing
+            // them would unpack every object in the file to answer one byte.
+            Ty::Schema { .. } => false,
         }
     }
 }
