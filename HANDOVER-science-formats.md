@@ -31,6 +31,7 @@ cases only.
 | Was | Commit |
 |---|---|
 | B2. A FITS table's heap failed with "unknown field cards" once a later HDU's rows had been read. A guarded walk in `walk.rs` dropped a node it had only placed again, which left the fields read inside it with no node above them, and a walk inside a walk left the element it kept behind once its list was dropped. The two walk tests check that no node is left without its parent, and `fits_real` no longer needs a fresh evaluator. | 5c0da64, deb296b |
+| B3. An element that ended a run because it could not be read was forgotten without the fields read inside it, which stayed with nothing above them (two HDF5 real-file tests and a WAV test). They go with it now. | 2e3cb9f |
 | S2: HDF5 extensible-array data blocks and secondary blocks past the index block, paged data blocks under them included | 508fa3b |
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
@@ -76,7 +77,7 @@ cases only.
 
 ## Bugs
 
-None open. B1 and B2 are in the table above.
+None open. B1 to B3 are in the table above.
 
 ## IR additions that close gaps in more than one format
 
