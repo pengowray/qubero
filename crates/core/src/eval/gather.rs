@@ -135,6 +135,7 @@ impl Evaluator {
         match anchor {
             Anchor::File => doc.len_bits(),
             Anchor::Origin => self.origin_of(list).map_or(doc.len_bits(), |(_, limit)| limit),
+            Anchor::Space => self.space_room(doc, lr.space),
             Anchor::Window | Anchor::SelfAligned(_) => lr.limit,
         }
     }
@@ -338,6 +339,21 @@ impl Evaluator {
                 p.push(from);
                 Ok(Some((from, p)))
             }
+            // The frame counts through the indices named rather than through
+            // the list, so the walk moves on from one to the next in the order
+            // they were written.
+            Step::Elements(indices) => {
+                if !self.is_list(doc, node)? {
+                    return Ok(None);
+                }
+                let n = self.child_count(doc, node)?;
+                let Some((k, &i)) = indices.iter().enumerate().skip(from).find(|(_, i)| (**i as u64) < n) else {
+                    return Ok(None);
+                };
+                let mut p = node.to_vec();
+                p.push(i);
+                Ok(Some((k, p)))
+            }
             Step::Placer => fail("only the first step of a walk can start at the record that placed it"),
             Step::Fields(names) => {
                 let mut node = node.to_vec();
@@ -388,6 +404,9 @@ impl Evaluator {
                 }
                 line.max(self.memo.count_reach(node))
             }
+            // An index past the end is passed over, so how many there are is
+            // what it read.
+            Step::Elements(_) => line.max(self.memo.count_reach(node)),
             Step::Tagged { .. } => r.size.map_or(u64::MAX, |size| line.max(r.offset.saturating_add(size))),
         }
     }
@@ -698,7 +717,7 @@ impl Evaluator {
                 Step::Stream | Step::Deep(_) => {}
                 Step::Field(name) => label.push_str(&format!("{dot}{name}")),
                 Step::Tagged { shown, .. } => label.push_str(&format!("{dot}{shown}")),
-                Step::Each => label.push_str(&format!("[{j}]")),
+                Step::Each | Step::Elements(_) => label.push_str(&format!("[{j}]")),
                 Step::Placer => {}
                 Step::Fields(_) => {
                     let name = match self.memo.get(&p[..p.len() - 1]).map(|r| r.ty.base()) {

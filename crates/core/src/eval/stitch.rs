@@ -149,7 +149,19 @@ impl Evaluator {
             Some(e) => self.claimed_len(doc, landing, e)?,
         };
         let path = landing.to_vec();
-        if !matches!(r.ty, Ty::Decoded { .. }) {
+        let codec = match matches!(r.ty, Ty::Decoded { .. }) {
+            true => Some(match self.codec_at(doc, landing)? {
+                Some(codec) => Ok(codec),
+                None => Err(Refusal::Settings),
+            }),
+            false => None,
+        };
+        // A run the format stored as it is, which a ZIP, a RAR and an LHA
+        // archive declare as a stream whose codec copies, is read where it
+        // sits like a run that is no stream at all. Copying it into the cache
+        // first would hold a large stored file twice, and refuse one past the
+        // cap a stream may unpack to.
+        if matches!(codec, None | Some(Ok(Codec::Stored))) {
             // As long as the run, or as long as the format says the part is
             // where that is less: a claim of more than is there cannot be
             // read, and the bytes that are there still can.
@@ -157,10 +169,7 @@ impl Evaluator {
             let source = PartSource::Stored { space: r.space, at_bits: r.offset };
             return Ok(Reached::Part(Part { start, len, path, source }));
         }
-        let codec = match self.codec_at(doc, landing)? {
-            Some(codec) => Ok(codec),
-            None => Err(Refusal::Settings),
-        };
+        let codec = codec.expect("a stream's codec was asked for above");
         let len = match (claimed, codec) {
             (Some(n), _) => n,
             // Nothing says how long it comes to, so it is unpacked to find
@@ -645,6 +654,59 @@ mod tests {
         v.extend_from_slice(&STREAM_BYTES[16..24]);
         v.extend_from_slice(&STREAM_BYTES[0..8]);
         v
+    }
+
+    /// Three runs of four bytes, each a stream whose codec copies, as a ZIP
+    /// declares a stored entry, and a stream joined from the third and the
+    /// first, in that order, which is the order the walk names them in and not
+    /// the order they are in the file.
+    fn named_runs(inner: T) -> Template {
+        let run = T::decoded(E::lit(4), crate::codec::Codec::Stored, T::bytes(E::Remaining));
+        Template::new(
+            "named",
+            T::structure(
+                "Named",
+                vec![
+                    ("runs", T::array(run, E::lit(3))),
+                    ("joined", T::stitched(vec![Step::field("runs"), Step::elements(&[2, 7, 0])], None, None, inner)),
+                ],
+            ),
+        )
+    }
+
+    #[test]
+    fn a_stream_joined_from_named_elements_joins_them_in_that_order_and_counts_from_its_own_front() {
+        let file: Vec<u8> = vec![0xa0, 0xa1, 0xa2, 0xa3, 0xb0, 0xb1, 0xb2, 0xb3, 0xc0, 0xc1, 0xc2, 0xc3];
+        // Offsets from the front of the joined stream: from a field of the
+        // stream, and from a field inside a record that has an origin of its
+        // own, which `Anchor::Origin` would count from instead.
+        let record = T::origin(T::structure(
+            "Record",
+            vec![("x", T::u8()), ("near", T::at_origin(E::lit(1), T::u8())), ("far", T::at_space(E::lit(6), T::u8()))],
+        ));
+        let inner = T::structure("Inner", vec![("head", T::u8()), ("pointed", T::at_space(E::lit(5), T::u8())), ("record", record)]);
+        let d = Document::new(MemSource(file));
+        let mut e = Evaluator::new(named_runs(inner));
+        let joined = e.node(&d, &[1, 0]).unwrap();
+        // Index 7 is past the end of the list and is passed over.
+        assert_eq!(e.spaces.len_bits(joined.space), 8 * 8, "the third run and the first");
+        assert_eq!(e.node(&d, &[1, 0, 0]).unwrap().value, Value::UInt(0xc0));
+        let pointed = e.node(&d, &[1, 0, 1, 0]).unwrap();
+        assert_eq!((pointed.value, pointed.space, pointed.offset_bits), (Value::UInt(0xa1), joined.space, 5 * 8));
+        assert_eq!(e.node(&d, &[1, 0, 2, 1, 0]).unwrap().value, Value::UInt(0xc2), "from the record's front");
+        assert_eq!(e.node(&d, &[1, 0, 2, 2, 0]).unwrap().value, Value::UInt(0xa2), "from the stream's front");
+        // Runs the format stored as they are are read where they sit: nothing
+        // was copied into the cache to read them.
+        let stitch = e.spaces.stitch(joined.space).expect("a stitched space");
+        assert!(stitch.parts.iter().all(|p| matches!(p.source, super::PartSource::Stored { .. })));
+        assert_eq!(stitch.cache.borrow().peak, 0);
+        let hit = e.part_of(&d, joined.space, 5).unwrap().unwrap();
+        assert_eq!((hit.label.as_str(), hit.in_part, hit.packed), ("runs[0]", 1, false));
+        // The walk is written with its indices, in the order they go, and the
+        // pointers with what they count from.
+        let text = crate::template_text::render(e.template());
+        assert!(text.contains("runs[2, 7, 0]"), "{text}");
+        assert!(text.contains("stream"), "{text}");
     }
 
     #[test]

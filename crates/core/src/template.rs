@@ -1342,6 +1342,17 @@ pub enum Anchor {
     /// from the front of the message. Two meanings had been folded into one
     /// marker, and this is the other one.
     Origin,
+    /// The start of the space the field is read in: the file for a field of
+    /// the file, and the front of what a stream holds for a field inside one.
+    ///
+    /// `File` means the file wherever it is asked, which is what an RNTuple
+    /// anchor inside a compressed record needs. Several files unpacked and
+    /// joined into one stream need the other thing: a BP5 dataset read from a
+    /// ZIP that compressed its files places each file at an offset in the
+    /// joined stream, and a pointer from `md.0` into `data.0` is an offset in
+    /// that stream too. No window or origin marks where the stream starts from
+    /// inside a record that has its own, so this names it.
+    Space,
     /// The list's own start, rounded up to a multiple of this many bytes.
     /// GGUF's tensor data starts at the end of the tensor table aligned to
     /// `general.alignment`, which is almost always 32; a file that sets it to
@@ -1394,6 +1405,16 @@ pub enum Step {
     /// floats has no field to read an offset from, so walking into it would be
     /// a thousand failures to find one.
     Each,
+    /// These elements of the list here, by index, in this order, which need not
+    /// be the list's own. An index past the end is passed over.
+    ///
+    /// What a template built from the file itself needs, when what it read
+    /// says which records a walk goes to. A BP5 dataset in a ZIP is the files
+    /// `md.idx`, `mmd.0`, `md.0` and `data.0`, wherever in the archive the writer
+    /// put them, and a stream joined from those four is joined in that order
+    /// whatever the archive's is. A template written by hand has no way to know
+    /// the indices, so only a builder writes this.
+    Elements(Arc<[usize]>),
     /// Every field of the structure here whose name is one of these, in the
     /// order the structure declares them. What a format that numbers its
     /// columns in their names needs: FITS calls them `col1` to `col32`, and
@@ -1447,6 +1468,10 @@ impl Step {
     }
     pub fn each() -> Step {
         Step::Each
+    }
+    /// The elements at these indices, in this order. See [`Step::Elements`].
+    pub fn elements(indices: &[usize]) -> Step {
+        Step::Elements(indices.into())
     }
     pub fn fields(names: &[&str]) -> Step {
         Step::Fields(names.iter().map(|s| s.to_string()).collect())
@@ -3426,6 +3451,11 @@ impl Ty {
     /// What `at` points at, counted from the nearest [`Ty::Origin`] around it.
     pub fn at_origin(at: Expr, inner: Ty) -> Ty {
         Ty::At { anchor: Anchor::Origin, at, inner: Box::new(inner) }
+    }
+    /// What `at` points at, counted from the start of the space the field is
+    /// read in. See [`Anchor::Space`].
+    pub fn at_space(at: Expr, inner: Ty) -> Ty {
+        Ty::At { anchor: Anchor::Space, at, inner: Box::new(inner) }
     }
     pub fn sized(size: Expr, inner: Ty) -> Ty {
         Ty::Sized { size, inner: Box::new(inner) }

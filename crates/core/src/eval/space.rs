@@ -427,11 +427,33 @@ impl PartCache {
     }
 
     /// Keep part `i`, putting back the parts read longest ago until it fits.
-    /// A part larger than the whole cap is still kept, alone: the read that
-    /// asked for it needs it, and the next read of another part puts it back.
+    ///
+    /// A part larger than the whole cap is still kept, beside the others, and
+    /// only another part that large puts it back. A stream of one large part and
+    /// some small ones is read by turns: a BP5 dataset joined from a ZIP reads a
+    /// block's counts from `md.0` and its values from `data.0`, one after the
+    /// other, and a `data.0` put back for every read of `md.0` would be unpacked
+    /// again for every value. So the cap bounds the parts within it, and at most
+    /// one part past it is held as well.
     pub(super) fn put(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
-        while self.bytes + bytes.len() > self.cap && !self.entries.is_empty() {
-            let oldest = self.entries.iter().min_by_key(|(_, (_, read))| *read).map(|(k, _)| *k).expect("not empty");
+        let large = bytes.len() > self.cap;
+        loop {
+            let small: usize = self.entries.values().map(|(b, _)| b.len()).filter(|&n| n <= self.cap).sum();
+            let over = if large {
+                self.entries.values().any(|(b, _)| b.len() > self.cap)
+            } else {
+                small + bytes.len() > self.cap
+            };
+            if !over {
+                break;
+            }
+            let oldest = self
+                .entries
+                .iter()
+                .filter(|(_, (b, _))| (b.len() > self.cap) == large)
+                .min_by_key(|(_, (_, read))| *read)
+                .map(|(k, _)| *k);
+            let Some(oldest) = oldest else { break };
             if let Some((gone, _)) = self.entries.remove(&oldest) {
                 self.bytes -= gone.len();
             }
@@ -671,6 +693,33 @@ mod tests {
         assert_eq!(e.node(&d, &[3]).unwrap().refused.as_deref(), Some("settings"));
         let mut e = Evaluator::new(make_named("props"));
         assert_eq!(e.node(&wrong, &[3]).unwrap().refused.as_deref(), Some("failed"));
+    }
+
+    /// A part past the cap is kept beside the small parts read by turns with it,
+    /// and put back only for another part past the cap: one large data file and
+    /// the small metadata that points into it are not each unpacked again for
+    /// every read of the other.
+    #[test]
+    fn a_part_larger_than_the_cap_is_kept_beside_the_small_ones() {
+        use super::PartCache;
+        use std::sync::Arc;
+        let part = |n: usize| Arc::new(vec![0u8; n]);
+        let held = |c: &PartCache| {
+            let (mut parts, bytes) = c.held();
+            parts.sort();
+            (parts, bytes)
+        };
+        let mut c = PartCache::new(100);
+        c.put(0, part(300));
+        c.put(1, part(50));
+        c.put(2, part(40));
+        assert_eq!(held(&c), (vec![0, 1, 2], 390), "the small parts do not put back the large one");
+        // Past the cap among the small ones, the oldest small part goes.
+        c.put(3, part(30));
+        assert_eq!(held(&c), (vec![0, 2, 3], 370));
+        // Another large part puts back the first, and no small part.
+        c.put(4, part(200));
+        assert_eq!(held(&c), (vec![2, 3, 4], 270));
     }
 
     /// A file that is one zlib stream, over whatever is handed in.

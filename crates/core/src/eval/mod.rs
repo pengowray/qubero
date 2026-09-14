@@ -1454,7 +1454,7 @@ impl Evaluator {
             // As for an `At`: an element named by a file address reaches the
             // whole file, and one named from an origin reaches the whole of
             // that copy of the format, whatever window the pointer was in.
-            if matches!(anchor, Anchor::File | Anchor::Origin) {
+            if matches!(anchor, Anchor::File | Anchor::Origin | Anchor::Space) {
                 escapes = Some(self.chain_room(doc, parent, anchor));
             }
             at
@@ -1490,6 +1490,10 @@ impl Evaluator {
                 escapes = Some(doc.len_bits());
             } else if anchor == Anchor::Origin {
                 escapes = Some(self.origin_of(parent).map_or(doc.len_bits(), |(_, limit)| limit));
+            } else if anchor == Anchor::Space {
+                // The whole of the space it is read in, whatever window or
+                // record it was written inside.
+                escapes = Some(self.space_room(doc, pr.space));
             }
             to
         } else if idx == 0 {
@@ -1625,6 +1629,9 @@ impl Evaluator {
             // and an address inside one still counts from the front of the
             // file the message is in.
             Anchor::Origin => self.origin_of(path).map_or(0, |(offset, _)| offset),
+            // The front of whichever space the field is in, which for the file
+            // is where `File` counts from too.
+            Anchor::Space => 0,
             // Its own start, aligned. `align` is bytes; offsets are bits.
             Anchor::SelfAligned(align) => {
                 let a = u64::from(align) * 8;
@@ -1649,8 +1656,15 @@ impl Evaluator {
         match anchor {
             Anchor::File => doc.len_bits(),
             Anchor::Origin => self.origin_of(list).map_or(doc.len_bits(), |(_, limit)| limit),
+            Anchor::Space => self.space_room(doc, self.memo.get(list).map_or(0, |r| r.space)),
             Anchor::Window | Anchor::SelfAligned(_) => self.memo.get(list).map_or(doc.len_bits(), |r| r.limit),
         }
+    }
+
+    /// How many bits space `space` holds: the file's length for the file, and
+    /// what the stream came to for any other.
+    pub(super) fn space_room<S: Source>(&self, doc: &Document<S>, space: u32) -> u64 {
+        if space == 0 { doc.len_bits() } else { self.spaces.len_bits(space) }
     }
 
     /// Where this copy of the format begins and how far it runs, for the

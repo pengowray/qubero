@@ -712,6 +712,7 @@ fn anchor_text(a: Anchor) -> String {
         Anchor::Window => "window".to_string(),
         Anchor::File => "file".to_string(),
         Anchor::Origin => "origin".to_string(),
+        Anchor::Space => "stream".to_string(),
         Anchor::SelfAligned(n) => format!("own start aligned to {n}"),
     }
 }
@@ -737,6 +738,7 @@ fn step_text(s: &Step) -> String {
             format!(".{shown}[{} = {}]", key.join("."), tag_text(tag, true).unwrap_or_default())
         }
         Step::Each => "[]".to_string(),
+        Step::Elements(indices) => format!("[{}]", indices.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
         Step::Fields(names) => format!(".{{{}}}", names.join(", ")),
         Step::Stream => ".(stream)".to_string(),
         Step::Deep(n) => format!("..{n}"),
