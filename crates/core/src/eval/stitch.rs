@@ -1070,6 +1070,17 @@ mod tests {
         // The same bit of the file leads back to the same step.
         let back = space.map_in(run.run_offset_bits + step.in_bits.start).unwrap();
         assert_eq!(back, step);
+        assert_eq!(space.run_holding(run.run_offset_bits + step.in_bits.start), Some(run));
+        // The end of the first block's deflate reads bits and makes nothing, so
+        // its output is where the second block's starts: the run it was read
+        // from is found by the bit, not by that output.
+        let first = &space.runs()[0];
+        let end = (first.run_offset_bits..first.run_offset_bits + first.run_bits)
+            .find(|&bit| space.map_in(bit).is_some_and(|s| s.kind == StepKind::EndOfBlock))
+            .expect("the first block's deflate ends");
+        assert_eq!(space.map_in(end).unwrap().out_bytes.start, first.out_bytes.end);
+        assert_eq!(space.run_holding(end), Some(first));
+        assert_ne!(space.run_at(first.out_bytes.end), Some(first));
     }
 
     #[test]

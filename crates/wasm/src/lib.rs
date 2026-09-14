@@ -2408,19 +2408,29 @@ struct MapStepDto {
     run_offset_bits: Option<f64>,
 }
 
+/// Which way a step of a space was asked for, which is how its run is found
+/// when the space was joined from several: by the byte it made, or by the bit
+/// of the file it read.
+enum AskedBy {
+    Byte(u64),
+    Bit(u64),
+}
+
 /// A step of a space, with where its run is when the space was joined from
 /// several. Nothing for a step of a run that is not in the file, which has no
 /// bits there to mark.
-fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, byte: Option<u64>) -> Option<MapStepDto> {
-    let byte = byte.unwrap_or(s.out_bytes.start);
-    let run = e.space(space).and_then(|sp| if sp.runs().is_empty() { None } else { Some(sp.run_at(byte)) });
+fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, asked: AskedBy) -> Option<MapStepDto> {
+    let Some(sp) = e.space(space) else { return Some(step_dto(s)) };
+    if sp.runs().is_empty() {
+        return Some(step_dto(s));
+    }
+    let run = match asked {
+        AskedBy::Byte(byte) => sp.run_at(byte),
+        AskedBy::Bit(bit) => sp.run_holding(bit),
+    };
     match run {
-        None => Some(step_dto(s)),
-        Some(Some(run)) if run.run_space == 0 => {
-            let at = run.run_offset_bits as f64;
-            Some(MapStepDto { run_offset_bits: Some(at), ..step_dto(s) })
-        }
-        Some(_) => None,
+        Some(run) if run.run_space == 0 => Some(MapStepDto { run_offset_bits: Some(run.run_offset_bits as f64), ..step_dto(s) }),
+        _ => None,
     }
 }
 
@@ -2627,7 +2637,7 @@ impl Editor {
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, Some(byte as u64)))))
+        reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
     }
 
     /// Which step read the bit at `bit` of the run `space` was unpacked from,
@@ -2635,7 +2645,7 @@ impl Editor {
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
         let Some(core) = self.core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
-        reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, None))))
+        reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
     }
 
     /// Take the deflate symbol at `bit` of the run `space` was unpacked from

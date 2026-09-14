@@ -173,11 +173,19 @@ impl Space {
         if self.runs.is_empty() {
             return self.trace.map_in(bit);
         }
-        let run = self
-            .runs
-            .iter()
-            .find(|r| r.run_space == self.parent && (r.run_offset_bits..r.run_offset_bits + r.run_bits).contains(&bit))?;
+        let run = self.run_holding(bit)?;
         Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
+    }
+
+    /// Which part of a joined stream was read from bit `bit` of the space the
+    /// stream was declared in, which is the run [`Space::map_in`] counts its
+    /// step's bits from. Asked by the bit and not by the step's output, since a
+    /// step that read bits and made nothing, the end of a deflate block, has
+    /// its output at the start of the next part.
+    pub fn run_holding(&self, bit: u64) -> Option<&JoinedRun> {
+        self.runs
+            .iter()
+            .find(|r| r.run_space == self.parent && (r.run_offset_bits..r.run_offset_bits + r.run_bits).contains(&bit))
     }
 
     /// Which part of a joined stream byte `byte` is in, and where that part's
