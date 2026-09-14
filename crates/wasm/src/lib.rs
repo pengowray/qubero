@@ -2889,6 +2889,13 @@ impl Editor {
         formats::sniff(head, file_len as u64).unwrap_or("").to_string()
     }
 
+    /// What a BGZF file holds, from the front of its first block in these
+    /// leading bytes: `bam`, `csi`, `vcf`, `bed`, `fasta` or `text`, or "" when
+    /// that cannot be told. See `formats::bgzf_contents`.
+    pub fn bgzf_contents(&self, head: &[u8]) -> String {
+        formats::bgzf_contents(head).unwrap_or("").to_string()
+    }
+
     /// Select a template by name; "" clears it. Returns false if unknown.
     ///
     /// A name starting `ksy:` is one of the bundled Kaitai Struct formats,
