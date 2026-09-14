@@ -37,6 +37,7 @@ cases only.
 | S2: HDF5 paged fixed arrays | 508fa3b |
 | S2: HDF5 implicit-index chunks | 508fa3b |
 | Large format files split into modules with no behaviour change: `grib1.rs`, `gwf_classes.rs`, `fits_cards.rs`, `segy/tables.rs` and `segy/tests.rs`, `bufr_panel.rs`, `bam_index.rs`, `arrow_schema.rs` and `arrow_walk.rs`, `hdf4_records.rs`, and one `Bits` reader in `crate::bits` for GRIB and BUFR. `fits.rs`'s test module moved to `fits/tests.rs` the same way. | 3a583fd..a0544b9, 68af087 |
+| Engine: a read refused at the depth limit asks again, keeping every 16th question on the way down, so the 12 of `more-types.arrow`'s 22 nodes that failed cold now read; `value_of` replaces building a `NodeInfo` inside expressions (hdf5 spans 2,956 to 2,559 ms, parquet tree 375 to 328 ms); `exact_stride` looks through named types with a `same_shape` check (whisper ggml 1,449 to 41 kind-totals goes, totals now match a full walk on all 744 samples, 11 were wrong before); stack tests on 640 KiB release / 4 MiB debug threads. | c714426..681442a |
 | Parquet on gathers: each row group is a sized `RowGroup` region over its column chunks, each `ColumnChunk` placed by an inner gather that starts at the footer record that placed its row group (`Step::Placer`), pages under it as before. Coverage identical on all 16 samples and a 3-row-group pyarrow file; an overwrite of a column chunk entry agrees with a fresh read. `wip-parquet-gather-region` is obsolete. | af58397..a92a7f5 |
 | JPEG 2000: a new `jpeg2000` template for raw codestreams (every Part 1 main and tile-part header segment, tile-parts sized by Psot including Psot 0) and JP2 boxes (XLBox, LBox 0, `jp2h`, `pclr`, `cmap`, `cdef`, `res `); GRIB2 5.40 section 7 reads as one, SIZ checked against the grid on `grib/regular_ll_jpeg.grib2`. Seven samples compared segment by segment with glymur. Four are ITU-T conformance files whose notice allows JPEG 2000 standard uses only (`jpeg2000/README.md`). | b50f472..d894c81 |
 | Edits: a `Chain` or `Gather` element whose position was read from bytes at or after an overwrite is dropped with what follows it; everything placed from before stays. A finished gather whose reads all end before the edit keeps its walk, which it used to throw away on any edit (`comp.fits` gather re-read 157 ms to 14 ms). Checked against a fresh read of the edited bytes on HDF4, Arrow and FITS samples. | 562505a..f790d9d |
@@ -578,18 +579,20 @@ deepest real reading in the collection (52, `arrow/more-types.arrow`) and 62%
 of where a 1 MiB release stack overflows. `ComputedText` values are cached on
 their node like numbers. See Closed. Left:
 
-- **A refused cold-start read cannot be retried into success**: nothing on
-  the way down is kept. A wide Arrow file opened at its last buffer could hit
-  it. On a refusal, the caller could walk the list in order and ask again.
-- A hop costs 5 to 7 KiB in release, much of it building a full `NodeInfo`
-  to read one value inside an expression; a value-only read would raise the
-  ceiling and speed chains up.
-- Debug frames are about 7 times larger, so a debug build on a 1 MiB stack
-  overflows before 88 (tests run on the stack `.cargo/config.toml` sets).
-- The wasm build gets rust-lld's default 1 MiB stack; the limit was measured
-  natively, not in the browser.
-- `exact_stride` does not look through a named struct, so a run of a named
-  fixed-shape record is still walked element by element.
+- Done 2026-09-15 (see Closed): a refused read asks again from its far end
+  and reads through; expressions read values without building a `NodeInfo`
+  (5,248 B per expression at the dearest shape, from about 8,016); strides
+  look through named types where `same_shape` allows; `deep_questions` and a
+  cold Arrow read run on scaled threads, so stack growth fails a test.
+- The limit stays 88. 640 KiB over 5,248 B would allow 124; 120 fits. The
+  dearest synthetic shapes are not measured in wasm (the last
+  `more-types.arrow` node read cold used 94 KiB there, 178 KiB native).
+- `eval/census.rs` and `eval/kinds.rs` each have a `same_shape` with slightly
+  different rules (census rejects every fixed-size window); keep the kinds
+  rule and share it.
+- `kinds_real` stops at its first failing sample, which hides
+  `macarchive/compactpro-133-two-folders.cpt` and `ne/net-trap-win16.dll`,
+  both failing on main.
 
 ### NI TDMS (built 2026-09-14)
 
