@@ -1391,9 +1391,11 @@ out by the dimension record beside the run, and a ROOT basket's entries are
 counted by its key. A reading of the stream's bytes on their own has none of
 that above its root, and that is what a tab used to be. The `tab_probe` example
 opens every stream the listing offers across the sample collection: read that
-way, 177 of 429 failed at the root: 102 ROOT baskets, 13 ROOT objects, 48 Arrow
-buffers, 9 PDB streams in pieces, 3 HDF4 datasets' values and the two below
-that still do, with 130 Parquet page payloads more in a deeper walk.
+way, 295 of 549 failed at the root: 118 Parquet pages' values, 102 ROOT
+baskets, 13 ROOT objects, 48 Arrow buffers, 9 PDB streams in pieces, 3 HDF4
+datasets' values and the two below that still do. A deeper walk of the Parquet
+and CDF samples found 12 more Parquet pages and 2 CDF variables' data that
+failed the same way.
 
 So a space whose template the stream declared keeps no reading of its own.
 `Space::view` says where its fields are, which is under the stream's node in
@@ -1407,7 +1409,7 @@ origins and has no path, since the tab has no row to send the reader to.
 `locate`, `spans`, the census and the kind totals take the root to start from,
 and a tab does without the index of placed stretches, which is of the file.
 Nothing is read twice and no second reading is kept. Read that way, the two
-tabs of the 429 that fail are streams whose bytes were recognised, and they
+tabs of the 549 that fail are streams whose bytes were recognised, and they
 fail on their own bytes.
 
 Two other ways were weighed. The tab's reading could have been handed a way to
