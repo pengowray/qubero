@@ -48,12 +48,17 @@ impl Evaluator {
     /// The steps of `path` from depth `from` down, named, and whether any step
     /// was left out or named by a tag on the way.
     fn short_steps<S: Source>(&mut self, doc: &Document<S>, from: usize, path: &[usize]) -> R<(String, bool)> {
+        // Every node on the way down is opened first, since the naming reads
+        // them all and a walk may have given some of them back since. See
+        // `walk_label`.
+        for k in 0..=path.len() {
+            self.resolve(doc, &path[..k])?;
+        }
         let mut out = String::new();
         let mut used = false;
         for k in from..path.len() {
             let (parent, j) = (&path[..k], path[k]);
-            self.resolve(doc, &path[..=k])?;
-            let ty = self.memo[parent].ty.base().clone();
+            let Some(ty) = self.memo.get(parent).map(|r| r.ty.base().clone()) else { break };
             match &ty {
                 Ty::Struct(s) => {
                     let Some(field) = s.fields.get(j) else { break };
@@ -84,7 +89,7 @@ impl Evaluator {
                 Ty::At { .. } | Ty::Origin { .. } => {}
                 Ty::Decoded { .. } | Ty::Stitched { .. } if j == 0 => {}
                 _ => {
-                    let name = self.memo[&path[..=k]].name.text();
+                    let Some(name) = self.memo.get(&path[..=k]).map(|r| r.name.text()) else { break };
                     out = joined(&out, &name);
                 }
             }
@@ -101,8 +106,8 @@ impl Evaluator {
         }
         self.resolve(doc, &path[..=k])?;
         let list = matches!(
-            self.memo[&path[..k]].ty.base(),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            self.memo.get(&path[..k]).map(|r| r.ty.base()),
+            Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
         );
         if !list || self.member_tag(&path[..=k]).is_none() {
             return Ok(false);
