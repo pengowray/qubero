@@ -109,6 +109,14 @@ impl Memo {
         self.nodes.insert(path, r);
     }
 
+    /// Every node held without the node it sits in. A name is looked up
+    /// through the nodes above the one asking, and a node that is held is not
+    /// placed again, so one of these reads as a field with nothing around it.
+    #[cfg(test)]
+    pub(super) fn without_parent(&self) -> Vec<Vec<usize>> {
+        self.nodes.keys().filter(|p| p.split_last().is_some_and(|(_, parent)| !self.nodes.contains_key(parent))).cloned().collect()
+    }
+
     /// Drop every node read inside a decoded stream.
     ///
     /// `forget_after` keeps what ended before the edit, and a decoded field is

@@ -361,9 +361,19 @@ impl Evaluator {
     }
 
     /// Drop these nodes, except `keep` and what is inside it.
+    ///
+    /// What is kept goes into the journal of the walk this one was inside, if
+    /// it was inside one, to be dropped when that walk drops the rest of what
+    /// it placed. The list this walk went along may be one of those, and a
+    /// node kept past its list has nothing above it for a name to be looked
+    /// up in. The element the walk was for is in that journal already, since
+    /// it is placed after this walk's journal has closed.
     fn drop_nodes(&mut self, added: VecDeque<Vec<usize>>, keep: &[usize]) {
         for path in added {
             if path.starts_with(keep) {
+                if let Some(w) = self.journals.last_mut() {
+                    w.added.push_back(path);
+                }
                 continue;
             }
             self.memo.forget_node(&path);

@@ -1351,10 +1351,49 @@ fn a_walk_past_a_node_read_into_keeps_the_node() {
     // before the walk, so the walk must not take it away when it ends while
     // what was read inside it stays.
     ev.node(&d, &[0, 3]).unwrap();
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
     // A field of record 1 read now looks up past its structure for `len`,
     // which is only there if record 1 is.
     let b = ev.node(&d, &[0, 1, 1, 1]).unwrap();
     assert_eq!(b.size_bits, 2 * 8);
+}
+
+#[test]
+fn a_walk_inside_a_walk_keeps_nothing_its_parent_let_go_of() {
+    // Records of a width, seven bytes of entries, and a tail as long as the
+    // third entry says. Each entry is a count and that many values of the
+    // record's width. Sizing a record finds its third entry, which walks the
+    // entries inside the walk along the records.
+    let entry = T::structure(
+        "Entry",
+        vec![("len", T::u8()), ("body", T::array(T::sized(E::field("w"), T::bytes(E::Remaining)), E::field("len")))],
+    );
+    let item = T::structure(
+        "Item",
+        vec![
+            ("w", T::u8()),
+            ("entries", T::sized(E::lit(7), T::repeat(entry, Until::End))),
+            ("tail", T::bytes(E::elem_field("entries", E::lit(2), &["len"]))),
+        ],
+    );
+    let t = Template::new("t", T::structure("Root", vec![("items", T::repeat(item, Until::End))]));
+    let mut bytes = Vec::new();
+    for i in 0..4u8 {
+        bytes.extend([1, /* entries */ 1, 0xa0 + i, 2, 0xb0 + i, 0xb8 + i, 1, 0xc0 + i, /* tail */ 0xd0 + i]);
+    }
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(t);
+
+    // Reaching record 3 walks over records 0 to 2, and sizing each walks its
+    // entries to the third. That inner walk keeps the second entry for the
+    // third to ask, and the outer walk then lets record 0 go. The entry must
+    // go with it: left behind, it has no record above it to look up to.
+    ev.node(&d, &[0, 3]).unwrap();
+    assert_eq!(ev.memo.without_parent(), Vec::<Vec<usize>>::new());
+    // A value of record 0's second entry, asked for by its path. Where it
+    // starts is worked out from `w`, which is in the record.
+    let v = ev.node(&d, &[0, 0, 1, 1, 1, 1]).unwrap();
+    assert_eq!((v.offset_bits, v.size_bits), (5 * 8, 8));
 }
 
 #[test]
