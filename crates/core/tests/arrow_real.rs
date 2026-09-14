@@ -323,14 +323,14 @@ fn buffers_read_as_their_columns() {
         eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
         return;
     };
-    for name in ["columns-uncompressed.arrow", "columns-legacy.arrow", "columns-zstd.arrow"] {
+    for name in ["columns-uncompressed.arrow", "columns-legacy.arrow", "columns-zstd.arrow", "columns-lz4.arrow"] {
         let (doc, mut ev) = open(&root, name);
         // A buffer of a compressed body is its uncompressed length and the
         // stream, and the stream opens into the same structure a plain one
         // is: [values, beyond_length].
         let data = |buffer: usize| -> Vec<usize> {
             let mut p = vec![BATCHES, 1, 4, buffer];
-            if name.contains("zstd") {
+            if name.contains("zstd") || name.contains("lz4") {
                 p.extend([1, 0]);
             }
             p.push(0);
@@ -372,6 +372,96 @@ fn buffers_read_as_their_columns() {
     assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 0, 1]).unwrap().value, Value::Str("short".into()));
     assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 2, 0]).unwrap().value.as_int(), Some(33));
     assert_eq!(ev.node(&doc, &[BATCHES, 0, 4, 38, 0, 2, 1]).unwrap().type_name, "ViewReference");
+}
+
+/// Every buffer of the compressed files, opened, is byte for byte the buffer
+/// the uncompressed file holds in the same place: the same table written three
+/// ways by the same script. A buffer compressing did not help is written as it
+/// was behind a length of -1, and is compared as it stands.
+///
+/// This is the check on the LZ4 frames that does not go through the frame
+/// reader's own idea of what a frame is: pyarrow wrote them with liblz4, and
+/// what they have to come to is what pyarrow wrote uncompressed.
+#[test]
+fn every_compressed_buffer_opens_to_the_uncompressed_files_buffer() {
+    let Some(root) = arrow_samples() else {
+        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        return;
+    };
+    let (plain_doc, mut plain) = open(&root, "columns-uncompressed.arrow");
+    let plain_bytes = std::fs::read(root.join("columns-uncompressed.arrow")).unwrap();
+    for name in ["columns-lz4.arrow", "columns-zstd.arrow"] {
+        let (doc, mut ev) = open(&root, name);
+        let bytes = std::fs::read(root.join(name)).unwrap();
+        let batches = ev.node(&doc, &[BATCHES]).unwrap().child_count as usize;
+        assert_eq!(batches, plain.node(&plain_doc, &[BATCHES]).unwrap().child_count as usize, "{name}");
+        let (mut opened, mut stored, mut empty) = (0, 0, 0);
+        let mut shapes = std::collections::BTreeSet::new();
+        for batch in 0..batches {
+            let count = ev.node(&doc, &[BATCHES, batch, 4]).unwrap().child_count as usize;
+            assert_eq!(count, plain.node(&plain_doc, &[BATCHES, batch, 4]).unwrap().child_count as usize, "{name} batch {batch}");
+            for i in 0..count {
+                let want = plain.node(&plain_doc, &[BATCHES, batch, 4, i]).unwrap();
+                let want = &plain_bytes[(want.offset_bits / 8) as usize..((want.offset_bits + want.size_bits) / 8) as usize];
+                let node = ev.node(&doc, &[BATCHES, batch, 4, i]).unwrap();
+                if node.size_bits == 0 {
+                    assert!(want.is_empty(), "{name} batch {batch} buffer {i}: no bytes here, {} there", want.len());
+                    empty += 1;
+                    continue;
+                }
+                let at = (node.offset_bits / 8) as usize;
+                let end = ((node.offset_bits + node.size_bits) / 8) as usize;
+                let length = i64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+                if length == -1 {
+                    assert_eq!(&bytes[at + 8..end], want, "{name} batch {batch} buffer {i}, stored");
+                    stored += 1;
+                    continue;
+                }
+                assert_eq!(length as usize, want.len(), "{name} batch {batch} buffer {i}: the length in front");
+                let id = ev
+                    .open_space(&doc, 0, &[BATCHES, batch, 4, i, 1])
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{name} batch {batch} buffer {i} opens"));
+                assert_eq!(ev.space(id).unwrap().bytes(), want, "{name} batch {batch} buffer {i}");
+                ev.space(id).unwrap().trace().check_tiles().unwrap_or_else(|e| panic!("{name} batch {batch} buffer {i}: {e}"));
+                // And the blocks read as rows, the way the listing reads them.
+                // The frames here are liblz4's rather than the ones the unit
+                // tests pack, so this is where a shape those never make turns
+                // up.
+                let mut names = Vec::new();
+                walk(&doc, &mut ev, &[BATCHES, batch, 4, i, 1, 1], 3, &mut names);
+                shapes.extend(names.into_iter().filter(|n| !n.starts_with("literal ") && !n.starts_with("match ")));
+                opened += 1;
+            }
+        }
+        assert!(opened > 20, "{name}: {opened} buffers opened");
+        eprintln!("{name}: {opened} buffers opened, {stored} stored, {empty} empty, all as the uncompressed file has them");
+        eprintln!("{name}: the rows under their blocks, symbols aside, are {shapes:?}");
+    }
+}
+
+/// Every row under `at`, `depth` levels down, read one at a time the way the
+/// listing reads them, each inside the row it is under. A run of thousands of
+/// codes is read at its two ends, which is where a row that does not fit
+/// would be.
+fn walk(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], depth: u32, names: &mut Vec<String>) {
+    let node = ev.node(doc, at).unwrap_or_else(|e| panic!("{at:?}: {e:?}"));
+    names.push(node.name.clone());
+    if depth == 0 {
+        return;
+    }
+    let n = node.child_count as usize;
+    for k in (0..n.min(64)).chain(n.saturating_sub(4).max(64)..n) {
+        let path = [at, &[k]].concat();
+        let child = ev.node(doc, &path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+        assert!(
+            child.offset_bits >= node.offset_bits && child.offset_bits + child.size_bits <= node.offset_bits + node.size_bits,
+            "{path:?} ({}) is not inside {at:?} ({})",
+            child.name,
+            node.name
+        );
+        walk(doc, ev, &path, depth - 1, names);
+    }
 }
 
 /// The listing of a whole file, asked for the way the browser asks: in goes

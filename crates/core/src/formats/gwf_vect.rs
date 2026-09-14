@@ -46,6 +46,7 @@
 //! the integer with the same bits.
 
 use super::hdf5_chunk::Step;
+use crate::bits::LowBits;
 
 /// What [`StructDef::packed`](crate::template::StructDef::packed) calls this,
 /// so the template can mark a packed vector and the panel can find its way
@@ -249,7 +250,7 @@ fn unsuppress(data: &[u8], word: usize, little: bool, count: usize, parts: bool)
     } else {
         words.chunks_exact(word).flat_map(|w| w.iter().rev().copied()).collect()
     };
-    let mut reader = Bits { bytes: &bits, at: 0 };
+    let mut reader = LowBits::low_first(&bits);
     let head = match word {
         1 => 3,
         2 => 4,
@@ -279,32 +280,6 @@ fn unsuppress(data: &[u8], word: usize, little: bool, count: usize, parts: bool)
         return Err((out, why));
     }
     Ok(out)
-}
-
-/// A run of bits taken from the low end of each byte first.
-struct Bits<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl Bits<'_> {
-    fn take(&mut self, n: u32) -> Option<u64> {
-        let n = n as usize;
-        if self.at + n > self.bytes.len() * 8 {
-            return None;
-        }
-        let mut v = 0u64;
-        let mut got = 0usize;
-        while got < n {
-            let byte = self.bytes[self.at / 8];
-            let off = self.at % 8;
-            let can = (8 - off).min(n - got);
-            v |= u64::from((byte >> off) & ((1u16 << can) - 1) as u8) << got;
-            got += can;
-            self.at += can;
-        }
-        Some(v)
-    }
 }
 
 /// All the real parts and then all the imaginary parts, put back as one pair

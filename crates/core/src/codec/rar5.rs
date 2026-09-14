@@ -111,6 +111,7 @@
 //! The nibbles of the first table are the high half of a byte and then the low
 //! half, which is the same order.
 
+use crate::bits::Bits;
 use crate::codec::{BlockKind, Refusal, StepField, StepKind, TableField, Trace, TraceBuilder, CAP_BYTES};
 
 /// The code-length alphabet, written a nibble at a time in front of everything.
@@ -139,83 +140,32 @@ const FILTER_ARM: u16 = 3;
 /// is rewritten only when it lands inside it.
 const E8_FILE_SIZE: u32 = 0x0100_0000;
 
-/// Reading a block's bits, most significant first.
+/// That the cursor is still inside the block. libarchive's two read functions
+/// refuse past this, and so does this.
 ///
-/// `in_addr` and `bit_addr` are libarchive's, kept rather than folded into one
-/// count because the table reader hands the cursor over as a byte and a nibble
-/// and the arithmetic below is easier to check against the original this way.
-struct Bits<'a> {
-    /// The block's bytes, and nothing past them.
-    data: &'a [u8],
-    /// Where `data[0]` sits in the whole run, in bits, so a step can be
-    /// recorded against the run rather than against the block.
-    base: u64,
-    in_addr: usize,
-    bit_addr: u32,
+/// A block's bits are read with the shared reader over the whole run, brought
+/// in to end where the block does, so a step's position is already a bit of
+/// the run. Its looks ahead, sixteen bits for a code and thirty-two for a long
+/// distance, reach past the end of a block near its end. libarchive reads the
+/// bytes that follow in its buffer; the reader reads noughts, which are the
+/// honest answer here, and no code an encoder wrote needs those bits: the
+/// block ends at a counted position and everything past it is padding.
+fn inside(bits: &Bits) -> Result<(), Refusal> {
+    match bits.at >> 3 < bits.end() >> 3 {
+        true => Ok(()),
+        false => Err(Refusal::Failed),
+    }
 }
 
-impl<'a> Bits<'a> {
-    fn new(data: &'a [u8], base: u64) -> Bits<'a> {
-        Bits { data, base, in_addr: 0, bit_addr: 0 }
-    }
-
-    /// Where the cursor is in the whole run.
-    fn at(&self) -> u64 {
-        self.base + self.in_addr as u64 * 8 + self.bit_addr as u64
-    }
-
-    /// A byte of the block, or zero past the end of it.
-    ///
-    /// The peeks below read up to five bytes to answer about the next sixteen
-    /// or thirty-two bits, so near the end of a block they reach past it.
-    /// libarchive reads the bytes that follow in its buffer; zeroes are the
-    /// honest answer here, and no code an encoder wrote needs those bits: the
-    /// block ends at a counted position and everything past it is padding.
-    fn byte(&self, i: usize) -> u32 {
-        self.data.get(i).copied().unwrap_or(0) as u32
-    }
-
-    /// That the cursor is still inside the block. libarchive's two read
-    /// functions refuse past this, and so does this.
-    fn inside(&self) -> Result<(), Refusal> {
-        match self.in_addr < self.data.len() {
-            true => Ok(()),
-            false => Err(Refusal::Failed),
-        }
-    }
-
-    /// The next sixteen bits, without consuming them.
-    fn peek16(&self) -> u32 {
-        let v = self.byte(self.in_addr) << 16 | self.byte(self.in_addr + 1) << 8 | self.byte(self.in_addr + 2);
-        v >> (8 - self.bit_addr) & 0xffff
-    }
-
-    /// The next thirty-two bits, without consuming them. Only the long distance
-    /// codes need this many.
-    fn peek32(&self) -> u32 {
-        let v = self.byte(self.in_addr) << 24
-            | self.byte(self.in_addr + 1) << 16
-            | self.byte(self.in_addr + 2) << 8
-            | self.byte(self.in_addr + 3);
-        // A shift of eight on a byte is zero, which is what C's promotion to
-        // int gives here and what the `bit_addr == 0` case needs.
-        (v << self.bit_addr) | (self.byte(self.in_addr + 4) >> (8 - self.bit_addr))
-    }
-
-    fn skip(&mut self, bits: u32) {
-        let n = self.bit_addr + bits;
-        self.in_addr += (n >> 3) as usize;
-        self.bit_addr = n & 7;
-    }
-
-    /// `n` bits as a number, the first one read being the highest. At most
-    /// sixteen, which is all any field in this format is.
-    fn val(&mut self, n: u32) -> Result<u32, Refusal> {
-        self.inside()?;
-        let v = self.peek16() >> (16 - n);
-        self.skip(n);
-        Ok(v)
-    }
+/// `n` bits as a number, the first one read being the highest, taken
+/// libarchive's way: from a cursor still inside the block, with any bits past
+/// its end read as noughts. At most sixteen, which is all any field in this
+/// format is.
+fn val(bits: &mut Bits, n: u32) -> Result<u32, Refusal> {
+    inside(bits)?;
+    let v = bits.peek(n) as u32;
+    bits.skip(n);
+    Ok(v)
 }
 
 /// One of the five tables, in the form libarchive decodes from.
@@ -307,10 +257,10 @@ impl Table {
 
     /// The symbol the next bits name.
     fn decode(&self, bits: &mut Bits) -> Result<u16, Refusal> {
-        bits.inside()?;
+        inside(bits)?;
         // The low bit is dropped before the comparison: a code is at most
         // fifteen bits, so the sixteenth never decides which one it is.
-        let bitfield = (bits.peek16() & 0xfffe) as i64;
+        let bitfield = (bits.peek(16) as u32 & 0xfffe) as i64;
         if bitfield < self.decode_len[self.quick_bits as usize] {
             let code = (bitfield >> (16 - self.quick_bits)) as usize;
             bits.skip(self.quick_len[code] as u32);
@@ -449,7 +399,8 @@ fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Resu
         b.open_block(pos as u64 * 8, raw.len() as u64);
         b.push(pos as u64 * 8, raw.len() as u64, StepKind::Header(StepField::BlockHeader, block_size as u32));
 
-        let mut bits = Bits::new(&data[body..body + block_size], body as u64 * 8);
+        let mut bits = Bits::new(data).until((body + block_size) * 8);
+        bits.at = body * 8;
         if table_present {
             tables = Some(parse_tables(&mut bits, &mut b, raw.len() as u64)?);
         }
@@ -460,7 +411,7 @@ fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Resu
         let Some(t) = tables.as_ref() else { return Err(Refusal::Failed) };
 
         let sym_start = b.steps();
-        let sym_in = bits.at();
+        let sym_in = bits.pos();
         let sym_out = raw.len() as u64;
         if coarse {
             b.push(sym_in, sym_out, StepKind::Opaque);
@@ -469,7 +420,10 @@ fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Resu
         loop {
             // The block ends at a counted position: past the last byte, or at
             // it with the meaningful bits used up.
-            if bits.in_addr + 1 > block_size || (bits.in_addr + 1 == block_size && bits.bit_addr >= bit_size) {
+            // libarchive's byte and bit of the block, which is the arithmetic
+            // this has to agree with.
+            let (in_addr, bit_addr) = ((bits.at - body * 8) / 8, ((bits.at - body * 8) % 8) as u32);
+            if in_addr + 1 > block_size || (in_addr + 1 == block_size && bit_addr >= bit_size) {
                 break;
             }
             // Too many symbols to name one at a time: keep the map at the
@@ -480,7 +434,7 @@ fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Resu
                 b.truncate(sym_start);
                 b.push(sym_in, sym_out, StepKind::Opaque);
             }
-            let at = bits.at();
+            let at = bits.pos();
             let sym = t.lit.decode(&mut bits)?;
 
             if sym < 256 {
@@ -566,11 +520,11 @@ fn run(data: &[u8], window_bits: u8, unpacked: u64, mut b: TraceBuilder) -> Resu
 
         // Whatever is left of the block after its last symbol. Reading past the
         // end of a block is a stream that does not fit the length it declared.
-        if bits.at() > block_end {
+        if bits.pos() > block_end {
             return Err(Refusal::Failed);
         }
-        if bits.at() < block_end {
-            b.push(bits.at(), raw.len() as u64, StepKind::Header(StepField::Padding, 0));
+        if bits.pos() < block_end {
+            b.push(bits.pos(), raw.len() as u64, StepKind::Header(StepField::Padding, 0));
         }
         b.close_block(block_end, raw.len() as u64, BlockKind::Dynamic, last_block);
 
@@ -617,7 +571,7 @@ fn code_length(bits: &mut Bits, code: u16) -> Result<u32, Refusal> {
         false => (code / 4 - 1, 2 + ((4 | code & 3) << (code / 4 - 1))),
     };
     if extra > 0 {
-        len += bits.val(extra)?;
+        len += val(bits, extra)?;
     }
     Ok(len)
 }
@@ -636,13 +590,13 @@ fn read_distance(bits: &mut Bits, dist: &Table, low_dist: &Table) -> Result<u64,
     let extra = slot / 2 - 1;
     let mut d = 1u64 + (((2 | (slot & 1)) as u64) << extra);
     if extra < 4 {
-        d += bits.val(extra)? as u64;
+        d += val(bits, extra)? as u64;
         return Ok(d);
     }
     if extra > 4 {
         // Everything above the low four bits, read flat.
-        bits.inside()?;
-        let add = bits.peek32();
+        inside(bits)?;
+        let add = bits.peek(32) as u32;
         bits.skip(extra - 4);
         d += ((add >> (36 - extra)) << 4) as u64;
     }
@@ -659,6 +613,8 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
     // The bit cursor has not started yet and takes over from where this stops.
     let mut bit_length = [0u8; HUFF_BC];
     let mut nib = 0usize;
+    // The block's own bytes, which the cursor is at the front of.
+    let (base, block) = (bits.pos(), &bits.buf()[bits.at / 8..bits.end() / 8]);
     // A nibble of the block, high half of a byte first. Running out is a block
     // that stops in the middle of its own tables.
     let nibble = |data: &[u8], nib: &mut usize| -> Result<u32, Refusal> {
@@ -672,8 +628,8 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
     };
     let mut w = 0usize;
     while w < HUFF_BC {
-        let at = bits.base + nib as u64 * 4;
-        let value = nibble(bits.data, &mut nib)?;
+        let at = base + nib as u64 * 4;
+        let value = nibble(block, &mut nib)?;
         if value != 15 {
             bit_length[w] = value as u8;
             b.push(at, out, StepKind::Table(TableField::CodeLen { sym: w as u8, len: value as u8 }));
@@ -682,7 +638,7 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
         }
         // An escape: a zero after it means the length really is fifteen, and
         // anything else means that many plus two lengths of zero.
-        let value = nibble(bits.data, &mut nib)?;
+        let value = nibble(block, &mut nib)?;
         if value == 0 {
             bit_length[w] = 15;
             b.push(at, out, StepKind::Table(TableField::CodeLen { sym: w as u8, len: 15 }));
@@ -696,8 +652,9 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
         b.push(at, out, StepKind::Table(TableField::Repeat { code: 15, count: run as u16, len: 0, dist: false }));
         w += run;
     }
-    bits.in_addr = nib / 2;
-    bits.bit_addr = if nib % 2 == 0 { 0 } else { 4 };
+    // The bit cursor carries on from the nibble after the last one read,
+    // which is mid-byte when an odd number of them were.
+    bits.at += nib * 4;
 
     let code_lengths = Table::new(&bit_length, HUFF_BC)?;
 
@@ -706,7 +663,7 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
     let mut table = [0u8; HUFF_TABLE_SIZE];
     let mut i = 0usize;
     while i < HUFF_TABLE_SIZE {
-        let at = bits.at();
+        let at = bits.pos();
         let num = code_lengths.decode(bits)?;
         // Which of the four tables this length belongs to, which is all the
         // trace needs to call it by the right name.
@@ -724,8 +681,8 @@ fn parse_tables(bits: &mut Bits, b: &mut TraceBuilder, out: u64) -> Result<Table
         // in each case differ only in how wide the count is.
         let short = num == 16 || num == 18;
         let n = match short {
-            true => bits.val(3)? + 3,
-            false => bits.val(7)? + 11,
+            true => val(bits, 3)? + 3,
+            false => val(bits, 7)? + 11,
         } as usize;
         let repeat = num < 18;
         if repeat && i == 0 {
@@ -772,11 +729,11 @@ fn step_for(dist: bool, i: usize, len: u8) -> StepKind {
 /// A number written as a count of bytes and then that many bytes, which is how
 /// a filter says where it starts and how long it is.
 fn filter_number(bits: &mut Bits) -> Result<u32, Refusal> {
-    let bytes = bits.val(2)? + 1;
+    let bytes = val(bits, 2)? + 1;
     let mut v = 0u32;
     for i in 0..bytes {
-        bits.inside()?;
-        let byte = bits.peek16() >> 8;
+        inside(bits)?;
+        let byte = bits.peek(8) as u32;
         bits.skip(8);
         v = v.wrapping_add(byte << (i * 8));
     }
@@ -794,7 +751,7 @@ fn filter_number(bits: &mut Bits) -> Result<u32, Refusal> {
 fn parse_filter(bits: &mut Bits, write_ptr: u64, window: u64, previous: Option<&Filter>) -> Result<Filter, Refusal> {
     let start = filter_number(bits)? as u64;
     let len = filter_number(bits)?;
-    let kind = bits.val(3)? as u16;
+    let kind = val(bits, 3)? as u16;
     let start = write_ptr + start;
     if len < 4 || len > 0x40_0000 || len as u64 > window >> 1 {
         return Err(Refusal::Failed);
@@ -805,7 +762,7 @@ fn parse_filter(bits: &mut Bits, write_ptr: u64, window: u64, previous: Option<&
         }
     }
     let channels = match kind {
-        FILTER_DELTA => bits.val(5)? as usize + 1,
+        FILTER_DELTA => val(bits, 5)? as usize + 1,
         FILTER_E8 | FILTER_E8E9 | FILTER_ARM => 0,
         // Four more numbers the field can hold, none of which RAR 5 ever
         // wrote. Refused rather than ignored: a filter left unrun is a file
