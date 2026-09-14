@@ -191,7 +191,8 @@ impl SchemaBuilder for Dataset {
                 continue;
             }
             let Some(len) = part_len(table, e, field == DATA_AT)? else {
-                out.unread(field, e, Unread { kind: "compressed entry".to_string(), why: UNOPENED.to_string() });
+                let word = crate::formats::zip::METHODS.iter().find(|(m, _)| *m == e.method).map_or("compressed", |(_, w)| *w);
+                out.unread(field, e, Unread { kind: format!("{word} entry"), why: unopened(word) });
                 continue;
             };
             parts.push(e.index());
@@ -331,4 +332,8 @@ const ENCRYPTED: &str = "Encrypted: Qubero doesn't decrypt ZIP entries. To read 
 
 /// Why a file of the dataset stays bytes when its entry, written as a stream
 /// with no size in its header, would not unpack to find out how long it is.
-const UNOPENED: &str = "Not unpacked: this entry's compressed data didn't unpack. To read this entry, extract the ZIP and open the extracted folder.";
+/// The way out is a test rather than an extraction, which would fail on the
+/// same bytes.
+fn unopened(method: &str) -> String {
+    format!("Not unpacked: unpacking failed, so this entry's {method} data is damaged or cut short. Test the ZIP with another tool, such as unzip -t.")
+}

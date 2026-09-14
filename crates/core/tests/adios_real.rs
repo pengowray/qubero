@@ -888,4 +888,20 @@ fn a_bp5_file_packed_with_a_method_not_unpacked_stays_bytes_saying_why() {
     let doc = unread.doc.unwrap_or_default();
     assert!(doc.contains("deflate64"), "{doc:?} on {}", unread.type_name);
     assert_eq!(f.get(&[&ds[..], &["md_idx", "md_idx", "records"]].concat()).child_count, 3);
+
+    // An entry written as a stream says nothing of how long it unpacks to, and
+    // one whose deflate is damaged cannot be unpacked to find out: it stays
+    // bytes, saying so, and the other files are joined without it.
+    let order = [&files[2], &files[0], &files[1], &files[3]];
+    let entries: Vec<_> = order.iter().enumerate().map(|(i, (n, d))| (n.as_str(), d.as_slice(), if i == 0 { Method::Streamed } else { Method::Deflated })).collect();
+    let mut zip = zip_of(&entries);
+    // The first block of md.0's deflate made a block type that does not exist.
+    zip[30 + files[2].0.len()] = 0xff;
+    let mut f = open_bytes(zip, "a zip with a damaged streamed md.0");
+    assert_eq!(f.ev.template().name, "adioszip");
+    let ds = dataset_at(&mut f);
+    let unread = f.get(&[&ds[..], &["md_0", "md_0"]].concat());
+    let doc = unread.doc.unwrap_or_default();
+    assert!(doc.contains("unpacking failed") && doc.contains("deflate"), "{doc:?} on {}", unread.type_name);
+    assert_eq!(f.get(&[&ds[..], &["md_idx", "md_idx", "records"]].concat()).child_count, 3);
 }
