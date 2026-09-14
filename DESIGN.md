@@ -1378,7 +1378,60 @@ Their headings are a level under the stream, never a top-level part of the
 file. The inspector already had the stream in its trail, since the trail is the
 line of ancestors, and now says beside the address which space it is in.
 Nothing decoded is editable: a decoded byte is a function of every compressed
-byte before it, and there is nowhere in the file to put a change.
+byte before it, and there is nowhere in the file to put a change. A stream
+opened as a tab asks the same questions from the stream's contents down, in
+bits of the tab: see "A tab over a stream" below.
+
+**A tab over a stream.** A stream opened as a document of its own reads as the
+template the stream declared, with the file's named types beside it. That
+template names what is outside the stream as freely as anything else in the
+file does: a PDB stream is as long as an entry in the directory says and holds
+what its number in the list says it holds, an HDF4 dataset's values are laid
+out by the dimension record beside the run, and a ROOT basket's entries are
+counted by its key. A reading of the stream's bytes on their own has none of
+that above its root, and that is what a tab used to be. The `tab_probe` example
+opens every stream the listing offers across the sample collection: read that
+way, 177 of 429 failed at the root, among them every PDB stream in pieces, every
+ROOT basket and every Arrow buffer, and 130 Parquet pages more in a deeper walk.
+
+So a space whose template the stream declared keeps no reading of its own.
+`Space::view` says where its fields are, which is under the stream's node in
+the reading it was declared in, and that reading already reads them. `Tab`
+lends it for one question and hands the answer back as the tab's: a path in is
+put under the stream's contents and a path out has them taken off, the
+stream's space is the tab's space 0 and the file takes the number the stream
+had, and the tab's own root is neither joined nor a stream to open. A field
+outside the stream that settled something inside it keeps its name among the
+origins and has no path, since the tab has no row to send the reader to.
+`locate`, `spans`, the census and the kind totals take the root to start from,
+and a tab does without the index of placed stretches, which is of the file.
+Nothing is read twice and no second reading is kept. Read that way, the two
+tabs of the 429 that fail are streams whose bytes were recognised, and they
+fail on their own bytes.
+
+Two other ways were weighed. The tab's reading could have been handed a way to
+ask the file's, but every walk upwards would have had to learn it: a name, an
+index into a list, a descriptor's frame, a schema's table of descriptions. The
+names a stream's type uses outside the stream could have been found and bound
+as constants, but that gets an index wrong without a word: an index asked for
+in a reading with no list around it is 0, so a switch on which element of the
+list the stream is picks element 0's type, and a PDB type stream reads as the
+plain bytes stream 0 is.
+
+A space whose template came from looking at its bytes, a gzip of a tar, is read
+by a template that needs nothing outside them, and keeps a reading of its own
+over its own bytes.
+
+The editor answers a declared stream's tab from the file's sheet
+(`Editor::tab`). An edit to the file or a change of template drops the spaces
+with the rest of the reading, so the tab's stream is opened again in the
+file's reading as it is now the next time a field of the tab is asked about,
+and a stream that is no longer there leaves the tab empty rather than reading
+whatever the new reading has at the old path. A field of such a tab can want
+bytes of the file, for the fields outside the stream or for a joined stream's
+stored runs, so a tab's document fetches chunks too, and they are always the
+file's. Paths in the file's reading are longer by the stream's own depth,
+which counts toward `DEEPEST_PATH`.
 
 **What the decoder read, as fields.** A decoder that only hands back bytes
 throws away the one thing a hex editor wants, which is where. So the decoders
@@ -2780,6 +2833,9 @@ and every value of all three matches pyhdf.
 be (`CAP_BYTES`, 64 MiB) opens in a tab the way one does. `open_space` holds it
 whole: every stored part read, every packed part unpacked again with its trace,
 since the cache the listing reads through keeps bytes and not traces. The
+tab's fields are not read over those bytes: like any stream read by the
+template it declared, it is read where it was declared, a part at a time, and
+the bytes are what the hex view shows (see "A tab over a stream"). The
 traces are laid end to end, one member a part. A trace's steps go forward and
 a joined stream's runs are anywhere, so the steps count bits along an axis of
 the trace's own, each part's run after the one before, and `Space::runs` says
