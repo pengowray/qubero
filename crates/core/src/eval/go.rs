@@ -65,11 +65,17 @@ const STACK_BUDGET: usize = 640 << 10;
 /// search by label about 2.2, spending two expressions a link. By that
 /// arithmetic the limit could be 124, and it stays at 88: a read refused here
 /// is asked again, so a higher limit would save only some of that asking,
-/// and the frames of a wasm build have not been measured. The deepest real
-/// reading is 52, an Arrow file with many columns read from its last buffer
-/// first, the same in a sweep of every sample in `check_tree` and
+/// and the dearest shapes have not been measured in a wasm build. The deepest
+/// real reading is 52, an Arrow file with many columns read from its last
+/// buffer first, the same in a sweep of every sample in `check_tree` and
 /// `spans_probe` and in the sample tests. One of that file's field nodes read
 /// with nothing asked before it goes past the limit and is asked again.
+///
+/// That one was measured in wasm, as the web app builds it, run in Node 26:
+/// the column of `more-types.arrow`'s last node read first wrote over 94 KiB
+/// of the megabyte of stack rust-lld gives the module, against 178 KiB of a
+/// native release build: the stack is the first megabyte of wasm memory, so
+/// it was filled with a known byte before the read and counted after it.
 ///
 /// A debug build's frames are six to ten times as large: read to the limit, a
 /// chain of computed fields wrote over 2.8 MiB there. Tests run on the stack
