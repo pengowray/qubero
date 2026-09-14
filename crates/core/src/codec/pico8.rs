@@ -39,6 +39,7 @@
 //! same either way; only a highlight narrower than a byte sits at the other
 //! end of it. See [`crate::codec::Step`].
 
+use crate::bits::{Bits, LowBits};
 use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder, CAP_BYTES};
 
 /// The shortest back-reference pxa writes, which is what its length chain
@@ -58,49 +59,11 @@ const PXA_INDEX_BITS: u32 = 4;
 /// are, so a longer prefix is a stream that is not a stream.
 const PXA_MAX_EXTRA: u32 = 4;
 
-/// Reading a bit at a time from the low end of each byte upwards.
-struct Bits<'a> {
-    data: &'a [u8],
-    /// How many bits have been read, which is the position in the run.
-    at: u64,
-}
-
-impl<'a> Bits<'a> {
-    fn new(data: &'a [u8]) -> Bits<'a> {
-        Bits { data, at: 0 }
-    }
-
-    fn left(&self) -> u64 {
-        self.data.len() as u64 * 8 - self.at
-    }
-
-    /// Whether what is left is the zero bits a last byte was padded out with:
-    /// less than a byte of them, and every one a zero.
-    fn at_padding(&self) -> bool {
-        let left = self.left();
-        left < 8 && (left == 0 || self.data[(self.at / 8) as usize] >> (self.at % 8) == 0)
-    }
-
-    fn bit(&mut self) -> Result<bool, Refusal> {
-        if self.at >= self.data.len() as u64 * 8 {
-            return Err(Refusal::Failed);
-        }
-        let byte = self.data[(self.at / 8) as usize];
-        let set = byte >> (self.at % 8) & 1 != 0;
-        self.at += 1;
-        Ok(set)
-    }
-
-    /// `bits` bits as a number, the first one read being the lowest.
-    fn val(&mut self, bits: u32) -> Result<u32, Refusal> {
-        let mut val = 0u32;
-        for i in 0..bits {
-            if self.bit()? {
-                val |= 1 << i;
-            }
-        }
-        Ok(val)
-    }
+/// Whether what is left is the zero bits a last byte was padded out with:
+/// less than a byte of them, and every one a zero.
+fn at_padding(bits: &LowBits) -> bool {
+    let left = bits.left();
+    left < 8 && bits.peek(left as u32) == 0
 }
 
 /// PICO-8's `\0pxa` code compression, the stream without its header.
@@ -129,21 +92,21 @@ impl<'a> Bits<'a> {
 /// The move-to-front table is not recorded: it changes on every literal, and a
 /// copy of it per step would be more memory than the cart.
 pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
-    let mut bits = Bits::new(data);
+    let mut bits = Bits::low_first(data);
     let mut b = TraceBuilder::default();
-    // `Bits` takes the bottom bit of a byte first. `old` below reads whole
+    // The reader takes the bottom bit of a byte first. `old` below reads whole
     // bytes and says nothing, which leaves its steps counted Qubero's way.
     b.counts_low_bit_first();
     let mut out: Vec<u8> = Vec::new();
     // The table, most lately used first. It starts as every byte in order.
     let mut table: Vec<u8> = (0..=255u8).collect();
     b.open_block(0, 0);
-    while !bits.at_padding() {
-        let start = bits.at;
-        if bits.bit()? {
+    while !at_padding(&bits) {
+        let start = bits.pos();
+        if bits.read_bit()? == 1 {
             // A literal: how much wider than four bits its index is, in unary.
             let mut extra = 0u32;
-            while bits.bit()? {
+            while bits.read_bit()? == 1 {
                 extra += 1;
                 if extra > PXA_MAX_EXTRA {
                     return Err(Refusal::Failed);
@@ -151,7 +114,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             }
             // Every index the narrower widths could say is already spoken for,
             // so a wider one counts on from where they stopped.
-            let index = bits.val(PXA_INDEX_BITS + extra)? as usize
+            let index = bits.read(PXA_INDEX_BITS + extra)? as usize
                 + ((1usize << PXA_INDEX_BITS) << extra) - (1usize << PXA_INDEX_BITS);
             if index > 255 {
                 return Err(Refusal::Failed);
@@ -164,22 +127,22 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             table.insert(0, byte);
         } else {
             // A back-reference, or the marker that stands in for one.
-            let width = match bits.bit()? {
-                true => match bits.bit()? {
+            let width = match bits.read_bit()? == 1 {
+                true => match bits.read_bit()? == 1 {
                     true => 5,
                     false => 10,
                 },
                 false => 15,
             };
-            let offset = bits.val(width)? + 1;
+            let offset = bits.read(width)? + 1;
             if offset == 1 && width == 10 {
                 // The thirteen bits of the marker belong to the first byte of
                 // the run, so that every step of a block is one of its symbols
                 // and the run has no header standing on its own.
                 let mut marker = Some(start);
                 loop {
-                    let at = marker.take().unwrap_or(bits.at);
-                    let byte = bits.val(8)? as u8;
+                    let at = marker.take().unwrap_or(bits.pos());
+                    let byte = bits.read(8)? as u8;
                     if byte == 0 {
                         b.push(at, out.len() as u64, StepKind::EndOfBlock);
                         break;
@@ -192,7 +155,7 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
             }
             let mut len = PXA_MIN_MATCH;
             loop {
-                let part = bits.val(PXA_LEN_LINK_BITS)?;
+                let part = bits.read(PXA_LEN_LINK_BITS)?;
                 len = len.checked_add(part).ok_or(Refusal::Failed)?;
                 if len as usize > CAP_BYTES {
                     return Err(Refusal::TooLarge);
@@ -217,9 +180,9 @@ pub fn pxa(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     let end = data.len() as u64 * 8;
     // The padding goes outside the block, since it is not a symbol of one: it
     // is the zero bits the last byte was filled out with.
-    b.close_block(bits.at, out.len() as u64, BlockKind::Sequences, true);
+    b.close_block(bits.pos(), out.len() as u64, BlockKind::Sequences, true);
     if bits.left() > 0 {
-        b.push(bits.at, out.len() as u64, StepKind::Header(StepField::Padding, 0));
+        b.push(bits.pos(), out.len() as u64, StepKind::Header(StepField::Padding, 0));
     }
     b.finish_at(end, out.len() as u64);
     Ok((out, b.done()))

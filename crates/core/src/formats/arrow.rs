@@ -83,9 +83,10 @@
 //! `indices`, of the index type.
 //!
 //! A compressed body compresses each buffer on its own behind an eight-byte
-//! uncompressed length, -1 for one left as it was. ZSTD buffers open and read
-//! as the plain ones do. LZ4 is the frame format, and the codec here reads the
-//! blocks inside a frame and not the frame, so those buffers keep their bytes.
+//! uncompressed length, -1 for one left as it was. ZSTD and LZ4 buffers open
+//! and read as the plain ones do. Arrow's LZ4 is the frame format, magic and
+//! descriptor and end mark included, and not the bare blocks a ROOT basket
+//! or a Parquet LZ4_RAW page holds.
 
 use super::arrow_schema::{table, DICTIONARY_BATCH, FOOTER, MESSAGE, RECORD_BATCH, SCHEMA, STRUCTS, TABLES};
 use super::arrow_walk::{buffer_walk, field_layout, node_walk, ROLE, SCHEMA_FIELDS, SCHEMA_TABLE};
@@ -295,9 +296,9 @@ fn view(text: bool) -> T {
 ///
 /// A compressed body compresses each buffer on its own and writes, in front of
 /// each, how long it is uncompressed, or -1 for one left as it was because
-/// compressing it did not help. ZSTD opens and reads as the buffer would have;
-/// an LZ4 frame keeps its bytes, since the codec here reads LZ4 blocks and
-/// not the frame around them.
+/// compressing it did not help. Either codec opens and reads as the buffer
+/// would have: a codec of 0 is an LZ4 frame, which is also what a body that
+/// leaves the codec unwritten means, and 1 is ZSTD.
 fn buffers(batch: &[&str]) -> T {
     let mut path: Vec<&str> = vec!["metadata", "root", "table"];
     path.extend_from_slice(batch);
@@ -318,7 +319,14 @@ fn buffers(batch: &[&str]) -> T {
             "values",
             vec![("uncompressed_length", i64le()), ("values", reading()), ("beyond_length", beyond_length())],
         );
-        let opened = T::switch(codec.clone(), vec![(1, T::decoded(E::Remaining, Codec::Zstd, plain(name)))], T::bytes(E::Remaining));
+        let opened = T::switch(
+            codec.clone(),
+            vec![
+                (0, T::decoded(E::Remaining, Codec::Lz4Frame, plain(name))),
+                (1, T::decoded(E::Remaining, Codec::Zstd, plain(name))),
+            ],
+            T::bytes(E::Remaining),
+        );
         let packed = T::structure_named(name, "", "values", vec![("uncompressed_length", i64le()), ("values", opened)]);
         T::switch(
             E::peek(64, Little).equal_to(E::lit(u64::MAX)),

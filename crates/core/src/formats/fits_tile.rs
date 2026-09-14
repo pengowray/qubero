@@ -93,6 +93,7 @@
 
 use std::sync::OnceLock;
 
+use crate::bits::Bits;
 use crate::codec::{self, Codec};
 
 /// What [`StructDef::packed`](crate::template::StructDef::packed) calls a
@@ -740,7 +741,8 @@ fn rice(data: &[u8], pixels: usize, bytepix: usize, blocksize: usize) -> Rice {
     if pixels == 0 {
         return out;
     }
-    let mut bits = Bits { data, at: 0 };
+    // Read from the top of each byte down.
+    let mut bits = Bits::new(data);
     let Some(first) = bits.take(width) else { return out };
     let mut last = first;
     let signed = |v: u64| -> i64 {
@@ -786,53 +788,6 @@ fn rice(data: &[u8], pixels: usize, bytepix: usize, blocksize: usize) -> Rice {
         }
     }
     out
-}
-
-/// Bits read from the top of each byte down.
-struct Bits<'a> {
-    data: &'a [u8],
-    at: usize,
-}
-
-impl Bits<'_> {
-    /// The next `n` bits as a number, or nothing when fewer than `n` are left.
-    fn take(&mut self, n: u32) -> Option<u64> {
-        if self.at + n as usize > self.data.len() * 8 {
-            return None;
-        }
-        let mut v = 0u64;
-        let mut left = n;
-        while left > 0 {
-            let byte = self.data[self.at / 8];
-            let used = (self.at % 8) as u32;
-            let here = (8 - used).min(left);
-            let part = (u64::from(byte) >> (8 - used - here)) & ((1 << here) - 1);
-            v = (v << here) | part;
-            self.at += here as usize;
-            left -= here;
-        }
-        Some(v)
-    }
-
-    /// How many zero bits come before the next one bit, with that one bit
-    /// read too.
-    fn unary(&mut self) -> Option<u64> {
-        let mut zeros = 0u64;
-        loop {
-            let byte = *self.data.get(self.at / 8)?;
-            let used = (self.at % 8) as u32;
-            let rest = (byte << used) as u32 & 0xff;
-            if rest == 0 {
-                zeros += u64::from(8 - used);
-                self.at += (8 - used) as usize;
-                continue;
-            }
-            let lead = rest.leading_zeros() - 24;
-            zeros += u64::from(lead);
-            self.at += lead as usize + 1;
-            return Some(zeros);
-        }
-    }
 }
 
 /// gzip, and for GZIP_2 the bytes put back together, then read as numbers.
