@@ -195,18 +195,24 @@ pub struct Column {
 }
 
 impl Column {
-    /// How many bytes one cell of the column takes.
+    /// How many bytes one cell of the column takes. A repeat too large to
+    /// count them in is as wide as a count goes, which is wider than any row.
     fn width(&self) -> usize {
         let r = self.repeat;
         match self.code {
             b'L' | b'B' | b'A' => r,
             b'X' => r.div_ceil(8),
-            b'I' => 2 * r,
-            b'J' | b'E' => 4 * r,
-            b'K' | b'D' | b'C' | b'P' => 8 * r,
-            b'M' | b'Q' => 16 * r,
+            b'I' => r.saturating_mul(2),
+            b'J' | b'E' => r.saturating_mul(4),
+            b'K' | b'D' | b'C' | b'P' => r.saturating_mul(8),
+            b'M' | b'Q' => r.saturating_mul(16),
             _ => 0,
         }
+    }
+
+    /// The column's cell in `row`, or `None` where the row ends first.
+    fn cell<'a>(&self, row: &'a [u8]) -> Option<&'a [u8]> {
+        row.get(self.at..self.at.checked_add(self.width())?)
     }
 }
 
@@ -276,17 +282,20 @@ impl Image {
         for n in 1..=fields {
             let form = cards.text(&format!("TFORM{n}")).unwrap_or("");
             let digits = form.bytes().take_while(u8::is_ascii_digit).count();
-            let repeat = if digits == 0 { 1 } else { form[..digits].parse().unwrap_or(1) };
+            // Digits too many for a count are a repeat too wide for any row.
+            let repeat = if digits == 0 { 1 } else { form[..digits].parse().unwrap_or(usize::MAX) };
             let code = form.as_bytes().get(digits).copied().unwrap_or(0).to_ascii_uppercase();
             let elem = form.as_bytes().get(digits + 1).copied().unwrap_or(0).to_ascii_uppercase();
             let name = cards.text(&format!("TTYPE{n}")).unwrap_or("").trim().to_ascii_uppercase();
             let column = Column { name, at, repeat, code, elem };
-            at += column.width();
+            at = at.saturating_add(column.width());
             columns.push(column);
         }
         let row_bytes = cards.int("NAXIS1").unwrap_or(0).max(0) as usize;
         let rows = cards.int("NAXIS2").unwrap_or(0).max(0) as u64;
-        let heap_start = cards.int("THEAP").map_or(row_bytes as u64 * rows, |t| t.max(0) as u64);
+        // Rows too many to count in bytes put the heap past the end of any
+        // file, which is where the largest count leaves it too.
+        let heap_start = cards.int("THEAP").map_or_else(|| (row_bytes as u64).checked_mul(rows).unwrap_or(u64::MAX), |t| t.max(0) as u64);
         Ok(Image {
             algorithm: cards.text("ZCMPTYPE").unwrap_or("").to_string(),
             zbitpix,
@@ -311,12 +320,12 @@ impl Image {
         self.shape.iter().zip(&self.tile_shape).map(|(n, t)| n.div_ceil((*t).max(1))).collect()
     }
 
-    /// How many tiles the image is cut into.
+    /// How many tiles the image is cut into, or `u64::MAX` for more than that.
     pub fn tiles(&self) -> u64 {
         if self.shape.is_empty() {
             return 0;
         }
-        self.tiles_along().iter().product()
+        self.tiles_along().iter().fold(1, |n, along| n.saturating_mul(*along))
     }
 
     /// Where tile `index` starts, counted from 0 along each axis, and how many
@@ -328,6 +337,8 @@ impl Image {
         for ((n, t), along) in self.shape.iter().zip(&self.tile_shape).zip(self.tiles_along()) {
             let k = if along == 0 { 0 } else { rest % along };
             rest = if along == 0 { 0 } else { rest / along };
+            // `k` is less than the tiles along the axis, so `k * t` is less
+            // than the axis is long, and cannot overflow.
             let from = k * t;
             start.push(from);
             size.push((*t).min(n.saturating_sub(from)));
@@ -345,7 +356,7 @@ impl Image {
     /// them.
     pub fn row(&self, bytes: &[u8]) -> Row {
         let descriptor = |c: &Column| -> Option<(u64, u64)> {
-            let cell = bytes.get(c.at..c.at + c.width())?;
+            let cell = c.cell(bytes)?;
             match c.code {
                 b'P' => Some((u64::from(be_u32(&cell[0..4])), u64::from(be_u32(&cell[4..8])))),
                 b'Q' => Some((be_u64(&cell[0..8]), be_u64(&cell[8..16]))),
@@ -354,7 +365,7 @@ impl Image {
         };
         let real = |name: &str| -> Option<f64> {
             let c = self.column(name)?;
-            let cell = bytes.get(c.at..c.at + c.width())?;
+            let cell = c.cell(bytes)?;
             match c.code {
                 b'D' => Some(f64::from_bits(be_u64(cell))),
                 b'E' => Some(f64::from(f32::from_bits(be_u32(cell)))),
@@ -362,7 +373,7 @@ impl Image {
             }
         };
         let blank = self.column("ZBLANK").and_then(|c| {
-            let cell = bytes.get(c.at..c.at + c.width())?;
+            let cell = c.cell(bytes)?;
             match c.code {
                 b'J' => Some(i64::from(be_u32(cell) as i32)),
                 b'K' => Some(be_u64(cell) as i64),
@@ -504,9 +515,10 @@ pub struct Tile {
 }
 
 impl Tile {
-    /// How many pixels the tile has, whether or not they were all decoded.
+    /// How many pixels the tile has, whether or not they were all decoded, or
+    /// `u64::MAX` for more than that, which is over [`PIXEL_LIMIT`].
     pub fn pixel_count(&self) -> u64 {
-        self.shape.iter().product()
+        self.shape.iter().fold(1, |n, along| n.saturating_mul(*along))
     }
 
     /// One pixel as a panel writes it.
@@ -974,7 +986,8 @@ fn unquantize(tile: &mut Tile, image: &Image, row: &Row, index: u64, values: &Va
         return Vec::new();
     };
     let rand = randoms();
-    let mut iseed = (index as i64 + dither0 - 1).rem_euclid(N_RANDOM as i64) as usize;
+    // Summed wider than an i64, since ZDITHER0 can be any i64.
+    let mut iseed = (i128::from(index) + i128::from(dither0) - 1).rem_euclid(N_RANDOM as i128) as usize;
     let mut next = (rand[iseed] * 500.0) as usize;
     tile.steps.push(Step {
         what: "dither".into(),
@@ -1227,6 +1240,83 @@ mod tests {
         assert_eq!(image.tile_box(2), (vec![40, 0], vec![10, 16]));
         assert_eq!(image.tile_box(11), (vec![40, 48], vec![10, 12]));
         assert_eq!((image.blocksize, image.bytepix), (32, 4));
+    }
+
+    /// A corrupt header can give axes and tiles, or a column's repeat, that
+    /// multiply to more than a count holds. The count is then the largest
+    /// there is: more tiles than can be numbered, a tile over the pixel limit,
+    /// and a cell past the end of its row.
+    #[test]
+    fn a_count_too_large_to_hold_is_the_largest_there_is() {
+        let square = |side: u64, tile: u64| {
+            let lines = [
+                "ZBITPIX =                    8".to_string(),
+                "ZNAXIS  =                    2".into(),
+                format!("ZNAXIS1 = {side:20}"),
+                format!("ZNAXIS2 = {side:20}"),
+                format!("ZTILE1  = {tile:20}"),
+                format!("ZTILE2  = {tile:20}"),
+                "ZCMPTYPE= 'NOCOMPRESS'".into(),
+            ];
+            let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+            Image::from_cards(&cards(&refs)).unwrap()
+        };
+        let row = Row {
+            place: Some(Place { stored: Stored::Compressed, count: 4, offset: 0, elem: b'B' }),
+            has_data_column: true,
+            zscale: None,
+            zzero: None,
+            zblank: None,
+            quantized: false,
+        };
+        // Tiles of one pixel, 2^80 of them.
+        let image = square(1 << 40, 1);
+        assert_eq!(image.tiles(), u64::MAX);
+        assert_eq!(unread(&image, 0, &row, 4, None).tiles, u64::MAX);
+        // One tile of 2^80 pixels.
+        let t = decode(&square(1 << 40, 1 << 40), 0, &row, &[1, 2, 3, 4]);
+        assert_eq!((t.tiles, t.pixel_count()), (1, u64::MAX));
+        assert_eq!(t.problem.as_deref(), Some("Not unpacked: the tile is 18,446,744,073,709,551,615 pixels, over this viewer's limit of 16,777,216 pixels."));
+
+        // A column whose repeat is more bytes than a count holds, of each
+        // width, as the data column and as a column before it. And one whose
+        // repeat is more than a count holds before it is multiplied at all.
+        // Every four bytes of the row say 4, so a P descriptor is four bytes at
+        // offset 4.
+        let bytes: Vec<u8> = [0, 0, 0, 4].repeat(16);
+        let place = |forms: &[String]| {
+            let mut lines = vec!["ZBITPIX =                    8".to_string(), format!("TFIELDS = {:20}", forms.len())];
+            for (n, form) in forms.iter().enumerate() {
+                let name = if n + 1 == forms.len() { "COMPRESSED_DATA" } else { "ZSCALE" };
+                lines.push(format!("TTYPE{}  = '{name}'", n + 1));
+                lines.push(format!("TFORM{}  = '{form}'", n + 1));
+            }
+            let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+            Image::from_cards(&cards(&refs)).unwrap().row(&bytes)
+        };
+        for (code, width) in [("I", 2), ("J", 4), ("K", 8), ("D", 8), ("M", 16), ("PB", 8), ("QB", 16)] {
+            let repeat = usize::MAX / width + 1;
+            let wide = place(&[format!("{repeat}{code}")]);
+            assert_eq!((wide.place, wide.has_data_column), (None, true), "{repeat}{code}");
+            let after = place(&[format!("{repeat}{code}"), "1PB".into()]);
+            assert_eq!((after.place, after.zscale), (None, None), "{repeat}{code} before the data column");
+        }
+        let after = place(&[format!("{}L", usize::MAX), "1E".into(), "1PB".into()]);
+        assert_eq!((after.place, after.zscale), (None, None));
+        assert_eq!(place(&["99999999999999999999PB".into()]).place, None);
+        assert_eq!(place(&["1PB".into()]).place, Some(Place { stored: Stored::Compressed, count: 4, offset: 4, elem: b'B' }));
+    }
+
+    /// `ZDITHER0` can be any 64-bit number, and the first random number a tile
+    /// takes is counted from it and from the tile's number, round the sequence.
+    #[test]
+    fn the_dither_seed_wraps_round_the_sequence_whatever_it_is() {
+        let r = randoms();
+        let want = |iseed: usize| f64::from(((4.0 - f64::from(r[(r[iseed] * 500.0) as usize]) + 0.5) * 0.5 + 10.0) as f32);
+        // i64::MAX is 5807 more than a multiple of 10,000; one less than
+        // i64::MIN is 4191 more.
+        assert_eq!(quantized("SUBTRACTIVE_DITHER_1", &[4], i64::MAX, 1).pixels, [want(5807)]);
+        assert_eq!(quantized("SUBTRACTIVE_DITHER_1", &[4], i64::MIN, 0).pixels, [want(4191)]);
     }
 
     #[test]
