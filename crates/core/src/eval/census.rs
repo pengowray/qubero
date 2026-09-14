@@ -258,6 +258,9 @@ struct Seen {
     /// How many children it has.
     children: u64,
     guarded: bool,
+    /// Whether its children are the elements of a run that are all the same
+    /// shape, so that the first can stand for the rest.
+    same: bool,
 }
 
 impl Evaluator {
@@ -416,13 +419,50 @@ impl Evaluator {
             Ty::Array { .. } => children > super::walk::GUARD_ABOVE as u64,
             _ => false,
         };
-        Ok(Seen { space, declared, resolved, run, children, guarded })
+        // A run of elements that are all the same shape: the first one is
+        // walked and stands for every one of them. Only where the node's
+        // children are the elements themselves, which is a list and not
+        // something wrapped round one: a stream holding a list has the list
+        // as its child, not the list's elements.
+        //
+        // And only when the last element places too. A length read from the
+        // file can say more elements than the room holds, and walking them
+        // stops at the first that will not place: an icon group of 31 bytes
+        // in a Windows program says it holds 21,641 entries, two of them fit,
+        // and multiplying counted every one. Walked instead, it counts the
+        // two, as the listing shows them.
+        let same = match &resolved {
+            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } if same_shape(&self.template, elem) => {
+                children < 2 || self.element_places(doc, path, children - 1)?
+            }
+            _ => false,
+        };
+        Ok(Seen { space, declared, resolved, run, children, guarded, same })
+    }
+
+    /// Whether element `index` of the run at `path` places, leaving the memo
+    /// as it found it.
+    fn element_places<S: Source>(&mut self, doc: &Document<S>, path: &[usize], index: u64) -> R<bool> {
+        let Ok(index) = usize::try_from(index) else { return Ok(false) };
+        let mut at = path.to_vec();
+        at.push(index);
+        let kept = self.memo.contains_key(&at);
+        match self.resolve(doc, &at) {
+            Ok(()) => {
+                if !kept {
+                    self.memo.forget_node(&at);
+                }
+                Ok(true)
+            }
+            Err(e) if e.interrupted() => Err(e),
+            Err(_) => Ok(false),
+        }
     }
 
     /// Write down one node that has been seen, standing for `weight` nodes of
     /// the file, and open a frame over its children.
     fn count_seen(&mut self, walk: &mut CensusWalk, path: &[usize], row: Option<(String, usize)>, weight: u64, seen: Seen) {
-        let Seen { space, declared, resolved, run, children, guarded } = seen;
+        let Seen { space, declared, resolved, run, children, guarded, same } = seen;
         walk.walked += 1;
         if let Some((key, i)) = &row {
             walk.add_row(key, *i, weight, path, space);
@@ -457,16 +497,8 @@ impl Evaluator {
         if children == 0 {
             return;
         }
-        // A run of elements that are all the same shape: the first one is
-        // walked and stands for every one of them. Only where the node's
-        // children are the elements themselves, which is a list and not
-        // something wrapped round one: a stream holding a list has the list
-        // as its child, not the list's elements.
-        let same = walk.multiply && match &resolved {
-            Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => same_shape(&self.template, elem),
-            _ => false,
-        };
-        let (count, weight) = match (children, same) {
+        // A run whose first element stands for the rest. See `same` in `see`.
+        let (count, weight) = match (children, walk.multiply && same) {
             (n, true) => (1, weight.saturating_mul(n)),
             (n, false) => (n, weight),
         };
@@ -636,6 +668,29 @@ mod tests {
             // Walked once and multiplied, or walked through.
             assert_eq!(fast.walked < slow.walked, multiplied, "{} walked against {}", fast.walked, slow.walked);
         }
+    }
+
+    #[test]
+    fn a_same_shaped_run_longer_than_its_room_counts_the_elements_that_place() {
+        // A group of seven bytes whose count says a hundred pairs: three fit.
+        // Walking every element stops where the listing stops, a few past
+        // that and nowhere near a hundred, and the count multiplied from the
+        // first has to stop in the same place.
+        let pair = T::structure("Pair", vec![("a", T::u8()), ("b", T::u8())]);
+        let group = T::sized(E::lit(7), T::structure("Group", vec![("count", T::u8()), ("pairs", T::array(pair, E::field("count")))]));
+        let t = Template::new("test", T::structure("root", vec![("group", group)]));
+        let d = crate::eval::diagram(&t);
+        let pair_key = d.types.iter().find(|b| b.name == "Pair").expect("a Pair box").key.clone();
+        let bytes = [100, 1, 2, 3, 4, 5, 6];
+        let (mut ev, doc) = read(t.clone(), &bytes);
+        let fast = ev.census(&doc, usize::MAX).expect("a census");
+        let mut ev = Evaluator::new(t);
+        let mut walk = CensusWalk::new(doc.len_bits()).element_by_element();
+        let slow = ev.census_step(&doc, &mut walk, usize::MAX).expect("a census");
+        let walked = slow.boxes.iter().find(|b| b.key == pair_key).map_or(0, |b| b.count);
+        assert!((3..10).contains(&walked), "walked {walked} pairs");
+        assert_eq!(fast.boxes, slow.boxes);
+        assert_eq!(fast.rows, slow.rows);
     }
 
     #[test]

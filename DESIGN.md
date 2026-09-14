@@ -3174,7 +3174,11 @@ walked every window of a written size, even one round a fixed record; the two
 became one on 2026-09-15, and `examples/census_exact.rs`, which counts each
 file both ways, gave the same answer for 659 of the 660 samples it could
 finish walking element by element, before the change and after it, to the
-field.
+field. The one it did not was a run whose length the file gives and whose room
+does not hold it: an icon group of 31 bytes in `wzoom-win16.exe` says it holds
+21,641 entries, the walk stops where they stop fitting, and multiplying had
+counted all of them. So a same-shaped run is multiplied only when its last
+element places as well, and walked otherwise, and then all 663 agreed.
 
 **When the web counts.** `AUTO_COUNT` in `diagramcounts.ts`: a file under 50
 MiB is counted to the end; a larger one to 200,000 fields, then the toolbar
