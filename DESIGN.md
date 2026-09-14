@@ -1047,7 +1047,8 @@ it ships. `deep_questions` and the Arrow nodes read first in `arrow_real` read
 on threads of 640 KiB in a release build and 4 MiB in a debug one, whose
 frames are six to ten times as large. The dearest shape read to the limit takes
 457 KiB and 2.8 MiB, so a read whose stack per expression grows by half
-overflows them.
+overflows `deep_questions` in either build. The Arrow read takes 178 KiB and
+2.0 MiB, and overflows a debug build when its stack about doubles.
 
 ### A structure that says which field names it
 A RIFF chunk is identified by its `id`, a PNG chunk by its `type`, a wasm

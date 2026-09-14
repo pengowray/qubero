@@ -82,8 +82,9 @@ const STACK_BUDGET: usize = 640 << 10;
 /// `.cargo/config.toml` gives them, which is far more, except the ones that
 /// read to the limit on purpose: `deep_questions` and the Arrow nodes read
 /// first in `arrow_real` read on threads of 640 KiB in a release build and 4
-/// MiB in a debug one, so that a read whose stack per expression grows by half
-/// fails them.
+/// MiB in a debug one. A read whose stack per expression grows by half fails
+/// `deep_questions` in either build; the Arrow read takes less, 178 KiB and
+/// 2.0 MiB, and fails a debug build when its stack about doubles.
 ///
 /// `cargo run --release --example stack_probe -- <levels> <shape> <KiB> [paint]`
 /// is where these numbers come from.
