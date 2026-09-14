@@ -964,6 +964,72 @@ one instead, which is what lenient sequencers accept. It can only misread a
 file that is already invalid, where the alternative was to stop reading valid
 ones.
 
+### A chain of fields read from its far end
+Read in order, element `n` finds element `n - 1` answered. Read first, with
+nothing asked before it, it asks its way back through every element in front
+of it, and each of those questions is still open while the next is asked. An
+Arrow record batch does this with its nodes, each working out which column it
+is from the node before, and so does a switch keyed on the element before, a
+length taken from it, or a search back by label. In wasm the stack is the
+megabyte rust-lld gives it, and running out of it takes the whole module down,
+so three guards stand in the way (`eval/go.rs`):
+
+- `DEEPEST_PATH`, 128 components, for the nesting of the file.
+- `DEEPEST_QUESTION`, 88 expressions open inside one another, for chains like
+  the one above. It is counted per expression, so arithmetic between fields
+  counts too.
+- `STACK_BUDGET`, 640 KiB of stack measured while a size is worked out, a
+  backstop for a shape that costs more per step than anything measured.
+
+**A refused read is asked again.** The outermost expression of a read that
+comes back refused for depth asks the same question a second time, and this
+time every sixteenth expression on the way down is kept: where it was asked,
+what it was and which reading it wanted. When the refusal comes, the kept ones
+are asked again from the deepest up (`eval/again.rs`). Each reads down to the
+one kept below it, which by then has its answer remembered on its node, so no
+stretch is more than sixteen deep, and the original question at the top reads
+through. What stays refused is what no order helps: a question refused twice,
+or one that leaves nothing deeper to ask, which is an expression nested past
+the limit in itself. Nothing is kept on a read that is not refused, because
+keeping would cost every expression; the count check on the way in is all an
+ordinary read pays, about 150 bytes of stack per expression.
+
+**An expression reads a value, not a node.** A field an expression names goes
+through `value_of`, which places the field, measures it and reads its value.
+The whole `NodeInfo` also works out a name, a type name, a unit, prose,
+editability and how the text reads, all thrown away there, and its frame stays
+open while the rest of the chain is read beneath it. Measured by painting the
+stack in a release build, the dearest shape went from about 8 KiB an
+expression to 5.1 KiB: 88 of them took 453 KiB, where at 8 KiB they came to
+about 690 KiB, more than the budget. 640 KiB would carry 124 at the new rate;
+the limit stays 88, since a refusal only costs asking again, and in wasm only
+one reading has been measured. That is the last Arrow node above read first,
+88 deep and asked again, which wrote over 94 KiB of the wasm stack run in
+Node against 178 KiB of a native one.
+
+**A list of a named type has a stride.** An element written as the name of a
+type is placed and measured as the type it stands for, so a run of them is
+placed by multiplying rather than walking (`stride` looks through the name).
+The kind totals ask more than a stride: they walk element 0 and multiply its
+breakdown by the count, which is only honest when every element has the same
+fields of the same types. A fixed number of bits does not promise that. A
+field pointing elsewhere costs no bits, and a minidump's directory is a run of
+twelve-byte entries each pointing at a stream of its own; a window of fixed
+size can hold a type chosen as it is read, which is how Arrow keeps its nodes
+sixteen bytes. Multiplying either counts element 0's answer for every element,
+so `same_shape` leaves out pointers and choices. For every file in the sample
+collection that a template reads, the totals now equal what walking every
+element gives, which they did not for eleven of them before, Arrow's among
+them.
+
+**Tests keep the stack honest.** The tests run on the stack
+`.cargo/config.toml` gives them, which is far more than any reading has where
+it ships. `deep_questions` and the Arrow nodes read first in `arrow_real` read
+on threads of 640 KiB in a release build and 4 MiB in a debug one, whose
+frames are six to ten times as large. The dearest shape read to the limit takes
+457 KiB and 2.8 MiB, so a read whose stack per expression grows by half
+overflows them.
+
 ### A structure that says which field names it
 A RIFF chunk is identified by its `id`, a PNG chunk by its `type`, a wasm
 section by its `id`. Nothing generic can work that out: guessing at the first
