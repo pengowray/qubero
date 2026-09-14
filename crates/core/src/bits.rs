@@ -1,4 +1,7 @@
 //! Bit-level copying with a byte-aligned fast path.
+//!
+//! And [`Bits`], a reader that takes numbers of any width off the front of a
+//! run of bits, most significant first, for the formats that pack that way.
 
 /// Copy `n` bits from `src` starting at bit `src_bit` into `dst` starting at bit `dst_bit`.
 /// Bits outside the written range in `dst` are preserved.
@@ -46,6 +49,57 @@ pub fn set_bit(buf: &mut [u8], bit: u64, value: bool) {
 #[inline]
 pub fn bytes_for(bits: u64) -> usize {
     bits.div_ceil(8) as usize
+}
+
+/// A place in a run of bits, most significant first, which is how GRIB and
+/// BUFR pack everything narrower than a byte. `at` is how many bits have been
+/// taken, which a BUFR reading keeps as where each value starts.
+pub(crate) struct Bits<'a> {
+    buf: &'a [u8],
+    pub(crate) at: usize,
+}
+
+impl<'a> Bits<'a> {
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
+        Bits { buf, at: 0 }
+    }
+
+    /// The next `n` bits, or nothing when there are not that many left. Zero
+    /// bits is zero, which is what a group of no width means and not an error.
+    pub(crate) fn take(&mut self, n: u32) -> Option<u64> {
+        if n > 64 || self.at + n as usize > self.buf.len() * 8 {
+            return None;
+        }
+        let mut v = 0u64;
+        let mut left = n as usize;
+        // A byte at a time where the reader is on a byte boundary, which is
+        // most of the time for text and wide values.
+        while left >= 8 && self.at % 8 == 0 {
+            v = (v << 8) | u64::from(self.buf[self.at / 8]);
+            self.at += 8;
+            left -= 8;
+        }
+        for _ in 0..left {
+            let byte = self.buf[self.at >> 3];
+            v = (v << 1) | u64::from((byte >> (7 - (self.at & 7))) & 1);
+            self.at += 1;
+        }
+        Some(v)
+    }
+
+    /// On to the next byte boundary, which is where each of the tables in
+    /// front of GRIB's complexly packed values begins.
+    pub(crate) fn align(&mut self) {
+        self.at = (self.at + 7) & !7;
+    }
+
+    /// The next `n` bytes' worth of bits, which need not start on a byte.
+    pub(crate) fn bytes(&mut self, n: usize) -> Option<Vec<u8>> {
+        if self.at + n * 8 > self.buf.len() * 8 {
+            return None;
+        }
+        (0..n).map(|_| self.take(8).map(|b| b as u8)).collect()
+    }
 }
 
 #[cfg(test)]

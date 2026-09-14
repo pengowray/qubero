@@ -50,6 +50,8 @@
 //! is is said in [`Reading::problem`] rather than left for a reader to notice
 //! in a measurement of 4 billion.
 
+use crate::bits::Bits;
+
 /// What [`StructDef::packed`](crate::template::StructDef::packed) calls section
 /// 7's data, so the template can mark it and the panel can find its way back
 /// here.
@@ -439,40 +441,6 @@ fn table(bits: &mut Bits, n: usize, width: u32) -> Option<Vec<u64>> {
     }
     bits.align();
     Some(out)
-}
-
-/// A place in a run of bits, most significant first, which is how GRIB packs
-/// everything narrower than a byte.
-struct Bits<'a> {
-    buf: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Bits<'a> {
-    fn new(buf: &'a [u8]) -> Self {
-        Bits { buf, at: 0 }
-    }
-
-    /// The next `n` bits, or nothing when there are not that many left. Zero
-    /// bits is zero, which is what a group of no width means and not an error.
-    fn take(&mut self, n: u32) -> Option<u64> {
-        if n > 64 || self.at + n as usize > self.buf.len() * 8 {
-            return None;
-        }
-        let mut v = 0u64;
-        for _ in 0..n {
-            let byte = self.buf[self.at >> 3];
-            v = (v << 1) | u64::from((byte >> (7 - (self.at & 7))) & 1);
-            self.at += 1;
-        }
-        Some(v)
-    }
-
-    /// On to the next byte boundary, which is where the table after this one
-    /// begins.
-    fn align(&mut self) {
-        self.at = (self.at + 7) & !7;
-    }
 }
 
 #[cfg(test)]
