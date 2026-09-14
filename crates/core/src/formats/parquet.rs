@@ -1175,6 +1175,12 @@ mod tests {
     /// the second row group are listed in the footer in the opposite order to
     /// the file. Returns the bytes and where each page starts.
     fn two_row_groups() -> (Vec<u8>, Vec<u64>) {
+        row_groups_listed(true)
+    }
+
+    /// The same file, with the second row group's column chunks listed in the
+    /// footer back to front or in file order.
+    fn row_groups_listed(backwards: bool) -> (Vec<u8>, Vec<u64>) {
         let page = || {
             let mut bytes = object(vec![integer(1, 0), integer(2, 2), integer(3, 2)], false);
             bytes.extend([0xab, 0xcd]);
@@ -1199,7 +1205,7 @@ mod tests {
         let rows = |columns: Vec<Vec<u8>>| object(vec![many(1, columns), integer(3, 1)], false);
         let groups = vec![
             rows(vec![chunk(starts[0]), chunk(starts[1])]),
-            rows(vec![chunk(starts[3]), chunk(starts[2])]),
+            if backwards { rows(vec![chunk(starts[3]), chunk(starts[2])]) } else { rows(vec![chunk(starts[2]), chunk(starts[3])]) },
         ];
         let footer = object(vec![integer(1, 1), many(4, groups), integer(3, 2)], false);
         bytes.extend_from_slice(&footer);
@@ -1245,6 +1251,31 @@ mod tests {
         // group's own entry.
         let label = e.origins(&d, &[4, 1, 0, 1]).unwrap()[0].label.clone();
         assert_eq!(label, "footer.fields.row_groups.value.elems[1].fields.columns.value.elems[1]");
+    }
+
+    /// The footer is after every page it places, so an overwrite of a column
+    /// chunk entry in it has to move the column chunk it placed, the way a
+    /// file read afresh has it.
+    #[test]
+    fn an_overwrite_of_a_column_chunk_entry_moves_its_column_chunk() {
+        let (bytes, _) = row_groups_listed(true);
+        let (after, starts) = row_groups_listed(false);
+        assert_eq!(bytes.len(), after.len());
+        let first = bytes.iter().zip(&after).position(|(a, b)| a != b).unwrap();
+        let last = bytes.iter().zip(&after).rposition(|(a, b)| a != b).unwrap();
+        let mut d = Document::new(MemSource(bytes));
+        let mut e = Evaluator::new(parquet());
+        let before: Vec<Vec<usize>> = nodes_of(&mut e, &d, "Page").into_iter().map(|(p, _)| p).collect();
+        assert_eq!(e.node(&d, &[4, 1, 0, 0]).unwrap().offset_bits / 8, starts[3]);
+        d.overwrite_bytes(first as u64, &after[first..=last]);
+        e.invalidate_from(first as u64 * 8);
+        let mut fresh = Evaluator::new(parquet());
+        assert_eq!(e.node(&d, &[4, 1, 0, 0]).unwrap().offset_bits / 8, starts[2]);
+        for path in &before {
+            for k in 0..=path.len() {
+                assert_eq!(e.node(&d, &path[..k]), fresh.node(&d, &path[..k]), "{:?}", &path[..k]);
+            }
+        }
     }
 
     /// A file of one column chunk holding one page, with the column's physical
