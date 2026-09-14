@@ -8,6 +8,10 @@
 //! the whole file, and once in windows the size of a screenful, which is what
 //! the hex view does. Where the tree names bytes the spans do not, something
 //! placed those bytes that the spans never found.
+//!
+//! Three settings, as environment variables: `COVER_MAX_BYTES` passes over
+//! larger files, `COVER_DIFF` lists the stretches the tree names and the spans
+//! do not, and `COVER_TIMING` is for a large file (see `timing`).
 
 use std::fs;
 use std::path::Path;
