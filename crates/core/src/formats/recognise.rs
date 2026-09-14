@@ -306,6 +306,9 @@ const PROBES: &[Probe] = &[
     // A weather bulletin saved off the GTS, whose BUFR message is behind the
     // envelope's heading rather than at the front.
     Probe::Is("bufr", bufr::in_envelope),
+    // ADIOS2's BP4 files and BP5 index, which sign themselves with a version
+    // string whose last word and the version byte after it say which file.
+    Probe::Which(adios::sniff_signed),
     Probe::Signatures,
     // The Amiga container, whose form type says which format it holds.
     Probe::Which(|h, _| match h.len() >= 12 && h.starts_with(b"FORM") {
@@ -359,6 +362,9 @@ const PROBES: &[Probe] = &[
             false => Some("wav"),
         }
     }),
+    // The ADIOS2 files with no header: a BP5 step or format list whose sizes
+    // agree with each other, and a BP3 file that names its step twice.
+    Probe::Which(adios::sniff_agreeing),
     // A MATLAB save file from before there was a header: five integers that
     // have to agree with each other and with the length of the file. Late,
     // because nothing at all marks the front of one.
