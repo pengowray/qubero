@@ -1391,8 +1391,9 @@ out by the dimension record beside the run, and a ROOT basket's entries are
 counted by its key. A reading of the stream's bytes on their own has none of
 that above its root, and that is what a tab used to be. The `tab_probe` example
 opens every stream the listing offers across the sample collection: read that
-way, 177 of 429 failed at the root, among them every PDB stream in pieces, every
-ROOT basket and every Arrow buffer, and 130 Parquet pages more in a deeper walk.
+way, 177 of 429 failed at the root: 102 ROOT baskets, 13 ROOT objects, 48 Arrow
+buffers, 9 PDB streams in pieces, 3 HDF4 datasets' values and the two below
+that still do, with 130 Parquet page payloads more in a deeper walk.
 
 So a space whose template the stream declared keeps no reading of its own.
 `Space::view` says where its fields are, which is under the stream's node in
