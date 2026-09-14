@@ -36,6 +36,7 @@ mod relate;
 mod shape;
 mod size;
 mod space;
+mod stitch;
 mod time;
 mod traced;
 mod walk;
@@ -46,6 +47,7 @@ pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP}
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
 pub use space::{Space, SpaceId};
+pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
@@ -252,6 +254,13 @@ pub struct NodeInfo {
     /// `decoded`, is where a listing hangs Open unpacked, and the stream it
     /// opens is this node's parent.
     pub space_root: bool,
+    /// True for a field read inside a stream joined from several runs, whose
+    /// offsets count from the front of the joined stream: see
+    /// [`crate::template::Ty::Stitched`]. A view saying what an address counts
+    /// from says "joined" rather than "unpacked" for these, since a PDB page
+    /// was never packed, and asks [`Evaluator::part_of`] which run a byte is
+    /// kept in.
+    pub joined: bool,
     /// What the template says about this field regardless of the shapes:
     /// `Some(true)` for machinery, `Some(false)` for payload, `None` when it
     /// has no opinion.
@@ -358,6 +367,10 @@ struct ListState {
     /// because every other list leaves it empty, and a list state is kept for
     /// every list anything has been learned about.
     gather: Option<Box<GatherState>>,
+    /// For `Stitched`: the walk to its parts and what it has found, until the
+    /// walk is over and the parts become a space. Boxed for the reason
+    /// `gather` is.
+    stitch: Option<Box<stitch::StitchWalk>>,
     /// Children `0..seq_end` are resolved and sized, so child `seq_end` can
     /// be placed without walking back. Keeps sibling resolution iterative.
     seq_end: usize,
@@ -379,6 +392,19 @@ struct GatherState {
     starts: Vec<u64>,
     /// The record that placed each child, by the same index.
     records: Vec<Vec<usize>>,
+    walk: Walk,
+    done: bool,
+    /// Every start with its child, sorted by where, once the walk is done:
+    /// what the search for the child under a bit halves. Shared, because that
+    /// search is made for every row of every screen.
+    sorted: Option<std::sync::Arc<Vec<(u64, usize)>>>,
+}
+
+/// Where a walk down a run of [`crate::template::Step`]s stands, for the two
+/// types that take one: a gather walking to its records and a stitched stream
+/// walking to its parts.
+#[derive(Debug, Default, Clone)]
+struct Walk {
     /// The walk's own stack: one frame per step taken, holding the node the
     /// step is taken from and the candidate it stands on. Kept rather than
     /// rebuilt, so that a go that runs out part way through carries on from
@@ -388,11 +414,6 @@ struct GatherState {
     /// Whether the frames have been set up. The walk is over when they have
     /// been and are empty again.
     started: bool,
-    done: bool,
-    /// Every start with its child, sorted by where, once the walk is done:
-    /// what the search for the child under a bit halves. Shared, because that
-    /// search is made for every row of every screen.
-    sorted: Option<std::sync::Arc<Vec<(u64, usize)>>>,
 }
 
 /// One step of a gather's walk that is under way: the node it was taken from,
@@ -717,6 +738,12 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
+            // The same for a stream joined from parts, whose opening is a walk
+            // to every part and no unpacking.
+            Ty::Stitched { .. } => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
             _ => (self.primitive_value(doc, path, &r, &r.ty, size)?, 0, false),
         };
         let reading = self.reading(doc, &r, size)?;
@@ -745,10 +772,14 @@ impl Evaluator {
             space_root: r.space != 0
                 && !path.is_empty()
                 && self.memo.get(&path[..path.len() - 1]).is_none_or(|p| p.space != r.space),
+            joined: self.spaces.stitch(r.space).is_some(),
             // Nothing inside a decoded stream is written back: there is no
             // mapping from a decoded byte to a byte of the file, so a change
             // made there has nowhere to go.
-            editable: r.space == 0
+            // Except where a joined stream's field lies wholly in one run
+            // stored as it sits in the file, which is a stretch of the file
+            // under another address.
+            editable: (r.space == 0 || self.joined_write(&r, size).is_ok())
                 && !composite && encode::editable(&r.ty, size) && self.padding_is_clean(doc, &r, size)? && !reading.1,
             edit_text: match &r.ty {
                 Ty::Json(json::Shape::Number, _) => {
@@ -899,9 +930,19 @@ impl Evaluator {
         // already says so; this is the same answer where it cannot be ignored,
         // since the offset below would otherwise be a bit of the stream used as
         // a bit of the file.
-        if r.space != 0 {
-            return fail(encode::UNPACKED_MSG);
-        }
+        //
+        // A field of a joined stream that lies wholly in one stored run of the
+        // file is the exception: those bits are in the file, at the run's
+        // place, and `shift` is how far the write moves to get there.
+        let shift: i128 = if r.space == 0 {
+            0
+        } else {
+            match self.joined_write(&r, size) {
+                Ok(file_bits) => file_bits as i128 - r.offset as i128,
+                Err(why) => return fail(why),
+            }
+        };
+        let to_file = |at: u64| (at as i128 + shift) as u64;
         if !encode::editable(&r.ty, size) {
             return fail(match &r.ty {
                 Ty::Magic(_) => encode::MAGIC_MSG.to_string(),
@@ -963,13 +1004,15 @@ impl Evaluator {
             };
             let data = literal.into_bytes();
             let new_bits = data.len() as u64 * 8;
-            if new_bits != n_bits && self.json_length_is_recorded(path) {
+            // A run of a joined stream is as long as its page, whatever the
+            // text in it says, so its length is recorded too.
+            if new_bits != n_bits && (r.space != 0 || self.json_length_is_recorded(path)) {
                 return fail(encode::JSON_FIXED_LENGTH.to_string());
             }
-            return Ok(Write { offset_bits: at, data, n_bits: new_bits, old_bits: n_bits });
+            return Ok(Write { offset_bits: to_file(at), data, n_bits: new_bits, old_bits: n_bits });
         }
         let data = encode::encode(&r.ty, text, n_bits, &state).map_err(EvalError::Failed)?;
-        Ok(Write { offset_bits: at, data, n_bits, old_bits: n_bits })
+        Ok(Write { offset_bits: to_file(at), data, n_bits, old_bits: n_bits })
     }
 
     /// Whether anything this field sits inside has a length the file already
@@ -1124,6 +1167,10 @@ impl Evaluator {
         if matches!(pr.ty, Ty::Json(..)) {
             self.resolve_json_child(doc, path)?;
             return Ok(None);
+        }
+        // The one thing a stitched stream holds, in the space its parts make.
+        if let Ty::Stitched { inner, .. } = &pr.ty {
+            return self.place_stitched(doc, parent, &pr, idx, inner);
         }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
@@ -1949,6 +1996,12 @@ impl Evaluator {
         doc: &Document<S>,
         path: &[usize],
     ) -> R<Option<(std::sync::Arc<Vec<u8>>, crate::codec::Trace, crate::codec::Codec, Ty)>> {
+        // A stream joined from parts is never held in one buffer, so there is
+        // no document of its own to open it as.
+        self.resolve(doc, path)?;
+        if matches!(self.memo[path].ty, Ty::Stitched { .. }) {
+            return Ok(None);
+        }
         let id = match self.open_space_at(doc, path)? {
             space::Opened::Space(id) => id,
             space::Opened::Refused(_) => return Ok(None),
@@ -2127,6 +2180,14 @@ impl Evaluator {
                 if path.get(k) == Some(&1) {
                     return r.space;
                 }
+                return match self.spaces.get(&path[..k]) {
+                    Some(space::Opened::Space(id)) => id,
+                    _ => r.space,
+                };
+            }
+            // A stitched stream has no second child: everything below it is
+            // in the space its parts make.
+            if matches!(r.ty, Ty::Stitched { .. }) {
                 return match self.spaces.get(&path[..k]) {
                     Some(space::Opened::Space(id)) => id,
                     _ => r.space,

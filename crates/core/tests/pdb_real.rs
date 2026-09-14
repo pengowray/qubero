@@ -149,11 +149,18 @@ fn the_type_records_number_what_the_header_says_and_tile_its_space() {
     assert!(checked >= 1, "at least one sample has a type stream in a single run");
 }
 
-/// A stream whose blocks are scattered is its block list and nothing else.
+/// A stream whose blocks are scattered is joined and read as what it holds.
 /// Nothing built in one pass has one, which is why this is the sample with 260
-/// translation units in it.
+/// translation units in it: its type stream is in pieces.
+///
+/// Every joined stream's body is as long as the stream's length, and a joined
+/// type stream passes the same test a type stream in one run does: as many
+/// records as its header's two type numbers are apart, tiling exactly the
+/// bytes it says. A block joined in the wrong order, or one byte too many
+/// taken from the end of a block, puts every record after it on the wrong
+/// byte, and the count is what catches that.
 #[test]
-fn a_scattered_stream_is_read_as_its_blocks_and_no_further() {
+fn a_scattered_stream_reads_as_its_body() {
     let Some(dir) = folder() else {
         eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
         return;
@@ -162,20 +169,36 @@ fn a_scattered_stream_is_read_as_its_blocks_and_no_further() {
     assert_eq!(ev.node(&doc, &[DIRECTORY, 0, STREAM_COUNT]).unwrap().value.as_int(), Some(278));
     let streams = ev.node(&doc, &[DIRECTORY, 0, STREAMS]).unwrap().child_count as usize;
 
-    let mut scattered = 0;
+    let (mut scattered, mut types) = (0, 0);
     for i in 0..streams {
         let size = ev.node(&doc, &[DIRECTORY, 0, STREAMS, i, SIZE]).unwrap().value.as_int().unwrap();
         let blocks = ev.node(&doc, &[DIRECTORY, 0, STREAMS, i, BLOCKS]).unwrap().child_count;
         let contents = ev.node(&doc, &[DIRECTORY, 0, STREAMS, i, CONTENTS]).unwrap();
-        if size <= 0 || contents.child_count > 0 {
+        if size <= 0 || contents.type_name != "PdbScatteredStream" {
             continue;
         }
-        // Nothing read, and yet the stream has blocks: they are not one run.
         assert!(blocks > 1, "stream {i}: a stream of one block is always a run");
-        assert_eq!(contents.size_bits, 0, "stream {i}");
+        // The blocks, each where it is, and the stream they make.
+        assert_eq!(ev.node(&doc, &[DIRECTORY, 0, STREAMS, i, CONTENTS, 0]).unwrap().child_count, blocks, "stream {i}");
+        let body = [DIRECTORY, 0, STREAMS, i, CONTENTS, 1, 0];
+        let node = ev.node(&doc, &body).unwrap();
+        assert_ne!(node.space, 0, "stream {i}");
+        assert_eq!(node.size_bits, size as u64 * 8, "stream {i} is not read as its whole length");
         scattered += 1;
+        if node.type_name != "TpiStream" && node.type_name != "IpiStream" {
+            continue;
+        }
+        let field = |ev: &mut Evaluator, f: usize| -> i128 {
+            ev.node(&doc, &[body.as_slice(), &[f]].concat()).unwrap().value.as_int().unwrap()
+        };
+        let (begin, end, record_bytes) = (field(&mut ev, 2), field(&mut ev, 3), field(&mut ev, 4));
+        let records = ev.node(&doc, &[body.as_slice(), &[15, 0]].concat()).unwrap();
+        assert_eq!(records.child_count as i128, end - begin, "stream {i}: one record per type number");
+        assert_eq!(records.size_bits, record_bytes as u64 * 8, "stream {i}: the records fill the space exactly");
+        types += 1;
     }
     assert!(scattered >= 1, "this sample is here for its scattered streams");
+    assert!(types >= 1, "and its type stream is one of them");
 }
 
 /// The GUID and the age in the executable's debug directory are the ones in

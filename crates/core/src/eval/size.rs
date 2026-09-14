@@ -384,6 +384,12 @@ impl Evaluator {
                 super::space::Opened::Space(_) => 1,
                 super::space::Opened::Refused(_) => 0,
             }),
+            // One child when the walk to its parts made a space, none when
+            // it would not. See [`Ty::Stitched`].
+            Ty::Stitched { .. } => Ok(match self.open_stitched_at(doc, path)? {
+                super::space::Opened::Space(_) => 1,
+                super::space::Opened::Refused(_) => 0,
+            }),
             Ty::Traced { part } => {
                 let part = *part;
                 let Some((_, trace)) = self.trace_for(path) else { return Ok(0) };

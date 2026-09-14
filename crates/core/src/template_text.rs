@@ -401,6 +401,21 @@ fn wrapper<'a>(head: &str, ty: &'a Ty) -> Option<(String, &'a Ty)> {
             s.push(')');
             with(s, elem)
         }
+        // The walk to the parts, written the way a gather's is, and the two
+        // lengths only where the template gives them.
+        Ty::Stitched { from, part_len, len, inner } => {
+            let walk: String = from.iter().map(step_text).collect::<Vec<_>>().join("");
+            let walk = walk.strip_prefix('.').unwrap_or(&walk).to_string();
+            let mut s = format!("stitched(from {walk}");
+            if let Some(e) = part_len {
+                s.push_str(&format!(", each {}", expr(e)));
+            }
+            if let Some(e) = len {
+                s.push_str(&format!(", total {}", expr(e)));
+            }
+            s.push(')');
+            with(s, inner)
+        }
         _ => None,
     }
 }
@@ -800,6 +815,10 @@ fn inline(ty: &Ty) -> Option<String> {
         }
         Ty::Repeat { elem, until } => format!("repeat({}) {}", until_text(until), inline(elem)?),
         Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
+            let (head, inner) = wrapper("", ty)?;
+            format!("{head}{}", inline(inner)?)
+        }
+        Ty::Stitched { .. } => {
             let (head, inner) = wrapper("", ty)?;
             format!("{head}{}", inline(inner)?)
         }
