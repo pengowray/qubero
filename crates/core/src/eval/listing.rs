@@ -1064,11 +1064,13 @@ impl Evaluator {
                     _ => continue,
                 }
             }
+            let mut elsewhere = false;
             let placed = match self.resolve(doc, &p) {
                 Ok(()) => match self.memo[&p].ty {
                     // The field covers nothing where it is declared; what it
                     // points at is what the cursor can be inside of.
                     Ty::At { .. } => {
+                        elsewhere = true;
                         p.push(0);
                         let inner = match self.resolve(doc, &p) {
                             Ok(()) => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
@@ -1087,7 +1089,14 @@ impl Evaluator {
                 Err(e) if scattered && !e.interrupted() => continue,
                 Err(e) => return Err(e),
             };
-            if bit < off && !scattered {
+            // A child placed somewhere else says nothing about where the
+            // children declared after it are. `scattered` sees an `At` only
+            // when it is the declared field, and a template that follows an
+            // offset only when it is set writes a switch round it: a COFF
+            // object's symbol table is one, placed past the section data that
+            // is declared after it, and stopping there left every section's
+            // bytes reading as a gap.
+            if bit < off && !scattered && !elsewhere {
                 return Ok(None);
             }
             if bit >= off && bit < off + size {
