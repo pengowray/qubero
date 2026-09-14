@@ -1091,9 +1091,10 @@ export class Inspector {
    * one step under the cursor and is why it is asked here, on the field the
    * cursor landed on, and nowhere in a draw of the listing or the rows.
    *
-   * The bit to ask by is the step's own place in the run, which is where the
-   * node was put: a code sits at the stream's offset plus the bit its step
-   * began at, so the subtraction gives back the number the trace counts in.
+   * A code sits at the stream's offset plus the bit its step began at, so the
+   * node's own offset and the stream's are both handed over: the one minus the
+   * other is the number the trace counts in, and the node's offset is the bit
+   * of the file that asks which bytes the code wrote.
    */
   private codeAt(path: readonly number[], n: TemplateNode): CodeAt | null {
     const key = path.join("/");
@@ -1104,7 +1105,7 @@ export class Inspector {
     }
     const stream = this.streamAbove(path);
     if (stream === null) return null;
-    const found = this.doc.decodedCode(stream.path, n.offset_bits - stream.offset_bits);
+    const found = this.doc.decodedCode(stream.path, stream.offset_bits, n.offset_bits);
     this.code = found === null ? null : { step: found.step, out: found.out, stream: stream.path };
     return this.code;
   }

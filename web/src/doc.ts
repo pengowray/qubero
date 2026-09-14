@@ -1825,9 +1825,10 @@ export type MapStep = {
   readonly len?: number;
   /** A match's distance. */
   readonly dist?: number;
-  /** For a stream joined from several runs, where in the file the run of the
-   *  step's part starts: `in_start` and `in_end` count from there. */
-  readonly run_offset_bits?: number;
+  /** Where in the file the run the step was read from starts: the run the
+   *  stream was unpacked from, or the run of the step's part for a stream
+   *  joined from several. `in_start` and `in_end` count from there. */
+  readonly run_offset_bits: number;
 };
 
 /**
@@ -2138,8 +2139,8 @@ export class Doc {
   }
 
   /**
-   * One step of a compressed run taken apart, for the code at `bit` of the run
-   * the stream at `path` was unpacked from.
+   * One step of a compressed run taken apart, for the code at `bit` of this
+   * document, inside the stream at `path`, whose run starts at `runAt`.
    *
    * Three questions of the editor, because they are three halves of one
    * answer and no caller wants to ask them separately. The stream is opened as
@@ -2147,7 +2148,9 @@ export class Doc {
    * which is idempotent for one already open; the step is taken apart; and the
    * same bit is asked which bytes of the unpacked stream the step wrote, since
    * the taking-apart says what the codes were and not where their output
-   * landed.
+   * landed. The two count differently: taking the step apart counts in the
+   * run, as the trace does, and which bytes it wrote is asked by the bit of
+   * the file, as the file tab's cursor asks.
    *
    * Null for every step that is not a deflate symbol, and null while the
    * compressed bytes are still on their way: the reply says so, the chunks are
@@ -2155,13 +2158,17 @@ export class Doc {
    * scroll or a listing draw; rebuilding the block's tables is worth doing for
    * the one step under the cursor and not for the millions behind it.
    */
-  decodedCode(path: readonly number[], bit: number): { readonly step: DecodedStep; readonly out: MapStep | null } | null {
+  decodedCode(
+    path: readonly number[],
+    runAt: number,
+    bit: number,
+  ): { readonly step: DecodedStep; readonly out: MapStep | null } | null {
     const opened = this.handleReply<{ space: number; template: string; refused?: string }>(
       this.editor.open_space(this.space, Uint32Array.from(path)),
     );
     if (opened.status !== "ok" || opened.node.space === 0) return null;
     const space = opened.node.space;
-    const r = this.handleReply<DecodedStep | null>(this.editor.decode_step(space, bit));
+    const r = this.handleReply<DecodedStep | null>(this.editor.decode_step(space, bit - runAt));
     if (r.status !== "ok" || r.node === null) return null;
     const out = this.handleReply<MapStep | null>(this.editor.map_in(space, bit));
     return { step: r.node, out: out.status === "ok" ? out.node : null };
@@ -2173,8 +2180,9 @@ export class Doc {
     return r.status === "ok" ? r.node : null;
   }
 
-  /** Which step read the bit at `bit` of the compressed run this space was
-   *  unpacked from, and so which of its bytes that bit produced. */
+  /** Which step read the bit at `bit` of the file, when that bit is in the
+   *  compressed run this space was unpacked from, and so which of its bytes
+   *  that bit produced. */
   mapIn(bit: number): MapStep | null {
     const r = this.handleReply<MapStep | null>(this.editor.map_in(this.space, bit));
     return r.status === "ok" ? r.node : null;

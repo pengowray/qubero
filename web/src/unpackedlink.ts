@@ -22,9 +22,10 @@ export type Step = {
   readonly value?: number;
   readonly len?: number;
   readonly dist?: number;
-  /** For a stream joined from several runs, where in the file the run of the
-   *  step's part starts: the step's bits count from there. */
-  readonly run_offset_bits?: number;
+  /** Where in the file the run the step was read from starts: the step's bits
+   *  count from there. The stream's one run, or its part's run for a stream
+   *  joined from several. */
+  readonly run_offset_bits: number;
 };
 
 /** A stretch of one document, in bits of it. */
@@ -45,14 +46,14 @@ export function markFromStep(step: Step | null): Marked | null {
 }
 
 /**
- * The bits a step read, counted the way the file tab counts them. A step of a
- * stream joined from several runs counts from the start of its own part's run,
- * which is block 3 of a BGZF file or page 10 of a PDB stream and not the start
- * of anything the file tab knows, so the run's place is added back. Any other
- * step is as it came.
+ * The bits a step read, counted the way the file tab counts them. A decoder
+ * counts from the start of the run it was handed, which is after a gzip's
+ * header, inside a PNG's IDAT, or block 3 of a BGZF file for a stream joined
+ * from several runs, and not the start of anything the file tab knows, so the
+ * run's place is added back. Every step says where its run is.
  */
 export function stepBits(step: Step): { readonly start: number; readonly end: number } {
-  const at = step.run_offset_bits ?? 0;
+  const at = step.run_offset_bits;
   return { start: at + step.in_start, end: at + step.in_end };
 }
 

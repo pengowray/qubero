@@ -52,7 +52,7 @@ pub use census::{BoxCount, Census, CensusState, CensusWalk, RowCount};
 pub use diagram::{diagram, BoxKind, Diagram, DiagramEdge, Row, TypeBox, BOX_CAP};
 pub use explain::{Explain, FlagBit, GribPlace, GribValue};
 pub use graph::{kind_of, value_kind, Graph, GraphEdge, GraphNode, NO_PARENT};
-pub use space::{JoinedRun, Space, SpaceId, View};
+pub use space::{JoinedRun, SingleRun, Space, SpaceId, View};
 pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
@@ -106,13 +106,15 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
 
 /// What a stream comes to when it is opened as a document of its own: its
 /// bytes, the trace of how they were made, what made them, what it declared
-/// they hold, and, for a stream joined from several runs, where each run is.
+/// they hold, and where the run it came from is: each run, for a stream joined
+/// from several, or the one.
 struct Unpacked {
     bytes: std::sync::Arc<Vec<u8>>,
     trace: crate::codec::Trace,
     codec: crate::codec::Codec,
     inner: Ty,
     runs: Vec<JoinedRun>,
+    run: Option<space::SingleRun>,
 }
 
 /// Whether a stream's declared contents say nothing about what they are.
@@ -2192,7 +2194,7 @@ impl Evaluator {
                 got?
             }
         };
-        let Some(Unpacked { bytes, trace, codec, inner, runs }) = unpacked else { return Ok(None) };
+        let Some(Unpacked { bytes, trace, codec, inner, runs, run }) = unpacked else { return Ok(None) };
         let (template, recognised) = self.template_for(&inner, &bytes);
         // A template the stream declared reads the stream where it was
         // declared, under the node that holds what the stream opened to. One
@@ -2207,6 +2209,7 @@ impl Evaluator {
             bytes,
             trace,
             runs,
+            run,
             template,
             view,
         ))));
@@ -2231,6 +2234,7 @@ impl Evaluator {
                     codec: crate::codec::Codec::Stored,
                     inner: *inner,
                     runs: whole.runs,
+                    run: None,
                 }),
                 Err(why) => {
                     self.spaces.refuse_whole(path, why);
@@ -2246,10 +2250,22 @@ impl Evaluator {
             return fail("not a decoded stream");
         };
         let Some(codec) = self.codec_at(doc, path)? else { return Ok(None) };
+        // Where the run is, which the trace does not know: it counts from the
+        // run's first bit, wherever in the reading's document that is.
+        let run_bits = self.size_of(doc, path)?;
+        let placed = &self.memo[path];
+        let run = space::SingleRun { run_space: placed.space, run_offset_bits: placed.offset, run_bits };
         let (Some(bytes), Some(trace)) = (self.spaces.buf(id), self.spaces.trace(id)) else {
             return fail("this stream is no longer open");
         };
-        Ok(Some(Unpacked { bytes: bytes.clone(), trace: trace.clone(), codec, inner: (*inner).clone(), runs: Vec::new() }))
+        Ok(Some(Unpacked {
+            bytes: bytes.clone(),
+            trace: trace.clone(),
+            codec,
+            inner: (*inner).clone(),
+            runs: Vec::new(),
+            run: Some(run),
+        }))
     }
 
     /// Why the stream at `path` of the file did not open as a document of its
@@ -2333,15 +2349,17 @@ impl Evaluator {
         self.open.iter().flatten().map(|s| &**s)
     }
 
-    /// Which step of a decoding produced a byte of `space`. For a stream joined
-    /// from several runs, the step is its part's own, counted in bits of that
-    /// part's run, and [`Evaluator::run_at`] says where the run is.
+    /// Which step of a decoding produced a byte of `space`, counted in bits of
+    /// the run it was read from. [`Space::run`] says where that run is for a
+    /// stream unpacked from one, and [`Evaluator::run_at`] for a stream joined
+    /// from several, whose step is its part's own.
     pub fn map_out(&self, space: SpaceId, byte: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_out(byte)
     }
 
-    /// Which step read a bit of the run `space` was unpacked from. For a
-    /// joined stream, `bit` is a bit of the space the stream was declared in.
+    /// Which step read a bit of the run `space` was unpacked from. `bit` is a
+    /// bit of the space the run is a field of, which is where the stream was
+    /// declared, and not a bit of the run.
     pub fn map_in(&self, space: SpaceId, bit: u64) -> Option<crate::codec::Step> {
         self.space(space)?.map_in(bit)
     }
