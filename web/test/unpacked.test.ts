@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import { JOINED, UNPACKED, unpackedOrigin, unpackedOriginRow } from "../src/strings.ts";
 import { markFromRange, markFromStep, stepBits, type Step } from "../src/unpackedlink.ts";
 
-/** Bit 5 of byte 0x1a3 to bit 2 of byte 0x1a4: the handover's own example. */
+/** Bit 5 of byte 0x1a3 to bit 2 of byte 0x1a4: the handover's own example,
+ *  in a run that starts at the front of the file. */
 const MATCH: Step = {
   in_start: 0x1a3 * 8 + 5,
   in_end: 0x1a4 * 8 + 2,
@@ -23,6 +24,7 @@ const MATCH: Step = {
   kind: "match",
   len: 5,
   dist: 12,
+  run_offset_bits: 0,
 };
 
 /** The same bits, for a step that is only its own name. */
@@ -32,6 +34,7 @@ const PLAIN = (kind: string): Step => ({
   out_start: MATCH.out_start,
   out_end: MATCH.out_end,
   kind,
+  run_offset_bits: 0,
 });
 
 const line = (s: Step, file = "hello.txt.zst"): string =>
@@ -46,7 +49,7 @@ test("a step that read nothing says so, and still says where", () => {
   // literals pull none. The range is empty and its one bit is where the decoder
   // stood; `bits @0x6.0 to @0x6.0` would put the step on a bit it never read. The
   // panel row is the same line without `from`, under a heading that says it.
-  const literal: Step = { in_start: 0x6 * 8, in_end: 0x6 * 8, out_start: 0x40, out_end: 0x41, kind: "literal" };
+  const literal: Step = { in_start: 0x6 * 8, in_end: 0x6 * 8, out_start: 0x40, out_end: 0x41, kind: "literal", run_offset_bits: 0 };
   assert.equal(line(literal, "hello.txt.lz"), "from no bits at @0x6.0 of hello.txt.lz: literal");
   assert.equal(
     unpackedOriginRow("hello.txt.lz", literal.in_start, literal.in_end, literal.kind),
@@ -122,8 +125,22 @@ test("a step of a joined stream marks its own part's run where the run is in the
   const joined: Step = { ...MATCH, run_offset_bits: 0x4d2 * 8 };
   assert.deepEqual(markFromStep(joined), { startBit: (0x4d2 + 0x1a3) * 8 + 5, endBit: (0x4d2 + 0x1a4) * 8 + 2 });
   assert.deepEqual(stepBits(joined), { start: (0x4d2 + 0x1a3) * 8 + 5, end: (0x4d2 + 0x1a4) * 8 + 2 });
-  // And a step with no run of its own is as it came.
+  // And a step of a run at the front of the file is where it came.
   assert.deepEqual(stepBits(MATCH), { start: MATCH.in_start, end: MATCH.in_end });
+});
+
+test("a step of a stream unpacked from one run marks that run where it is in the file", () => {
+  // gnu-gzip-9-with-name.gz: the deflate starts 18 bytes in, after the header
+  // and the name, and byte 0 of what it unpacks to is a literal three bits
+  // into it. Counted from the file's start those bits are inside the magic.
+  const literal: Step = { in_start: 3, in_end: 11, out_start: 0, out_end: 1, kind: "literal", value: 0x54, run_offset_bits: 18 * 8 };
+  assert.deepEqual(markFromStep(literal), { startBit: 18 * 8 + 3, endBit: 19 * 8 + 3 });
+  // The status bar's line says the same bits.
+  const { start, end } = stepBits(literal);
+  assert.equal(
+    unpackedOrigin("gnu-gzip-9-with-name.gz", start, end, literal.kind),
+    "from bits @0x12.3 to @0x13.3 of gnu-gzip-9-with-name.gz: literal",
+  );
 });
 
 test("a range becomes the bytes to mark in the unpacked tab", () => {

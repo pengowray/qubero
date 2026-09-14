@@ -53,7 +53,12 @@ pub(crate) enum Opened {
 /// opens one of these.
 ///
 /// It stays connected to where it came from by the trace: `map_out` says which
-/// bits of the run made a byte of this, and `map_in` the other way.
+/// bits of the run made a byte of this, and `map_in` the other way. The trace
+/// counts its bits from the start of the run, and the run is wherever the
+/// stream's field is, after a gzip's header or inside a PNG's IDAT, so `run`
+/// says where that is: a step's place in the file is the run's place plus the
+/// step's bits, and `map_in` takes a bit of the file and takes the run's place
+/// off before it asks the trace.
 ///
 /// Its fields are read where the stream was declared, unless the template came
 /// from looking at the bytes. What a stream holds is often sized, counted or
@@ -70,7 +75,8 @@ pub(crate) enum Opened {
 /// each part's bits counted along an axis of the trace's own rather than at
 /// any place in a file, since the runs are scattered and a PDB's run 3 can be
 /// before its run 1. `runs` says where each part's run really is, and the two
-/// maps answer through it: a step is given in bits of its own part's run.
+/// maps answer through it: a step is given in bits of its own part's run, as a
+/// step of a stream unpacked from one run is.
 pub struct Space {
     /// This space's own number, which is what everything outside calls it by.
     pub id: SpaceId,
@@ -95,6 +101,27 @@ pub struct Space {
     /// For a joined stream, where each part's run is, in the order the parts
     /// go. Empty for a stream unpacked from one run.
     runs: Vec<JoinedRun>,
+    /// For a stream unpacked from one run, where that run is. Nothing for a
+    /// joined stream, whose parts each say in `runs`.
+    run: Option<SingleRun>,
+}
+
+/// Where the one run a stream was unpacked from is.
+///
+/// The trace a decoder keeps counts bits from the front of what it was handed,
+/// which is the run and not the file: byte 0 of a gzip's contents is a literal
+/// three bits into the deflate, and the deflate starts after the gzip header.
+/// This is what turns the one count into the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SingleRun {
+    /// The space the run is a field of, and where in it the run starts and
+    /// how many bits it is. The space is numbered the way the reading that
+    /// unpacked the stream numbers them, as a joined stream's runs are: 0 is
+    /// that reading's own document, which is the file for a stream the file's
+    /// reading opened, and anything else is a stream the run sits inside.
+    pub run_space: SpaceId,
+    pub run_offset_bits: u64,
+    pub run_bits: u64,
 }
 
 /// What reads a space's fields.
@@ -153,6 +180,7 @@ impl Space {
         bytes: Arc<Vec<u8>>,
         trace: Trace,
         runs: Vec<JoinedRun>,
+        run: Option<SingleRun>,
         template: Template,
         view: Option<View>,
     ) -> Space {
@@ -170,6 +198,7 @@ impl Space {
             },
             trace,
             runs,
+            run,
         }
     }
 
@@ -186,13 +215,16 @@ impl Space {
         &self.trace
     }
 
-    /// Which step of the decoding produced a byte of this space.
+    /// Which step of the decoding produced a byte of this space, with its bits
+    /// counted from the start of the run it read them from.
     ///
-    /// For a joined stream, the step of the part the byte is in, with its bits
-    /// counted from the start of that part's run rather than along the trace's
-    /// own axis: a byte of what a BGZF block unpacks to names bits of that
-    /// block's deflate, and [`Space::run_at`] says where the block's deflate
-    /// is. A byte of a stored part is the one step over that part's bytes.
+    /// For a stream unpacked from one run that is the trace's own count, and
+    /// [`Space::run`] says where the run is. For a joined stream, the step of
+    /// the part the byte is in, counted from the start of that part's run
+    /// rather than along the trace's own axis: a byte of what a BGZF block
+    /// unpacks to names bits of that block's deflate, and [`Space::run_at`]
+    /// says where the block's deflate is. A byte of a stored part is the one
+    /// step over that part's bytes.
     pub fn map_out(&self, byte: u64) -> Option<Step> {
         let step = self.trace.map_out(byte)?;
         if self.runs.is_empty() {
@@ -204,14 +236,21 @@ impl Space {
     /// Which step read a bit of the run this space was unpacked from, and so
     /// which bytes of this space that bit produced.
     ///
-    /// A joined stream has no one run, so there `bit` is a bit of the space
-    /// its parts' runs are in, which is where the stream was declared: the
-    /// part whose run holds the bit answers, with the step's bits counted from
-    /// that run's start as [`Space::map_out`] counts them. Nothing for a bit no
-    /// part was read from.
+    /// `bit` is a bit of the space the run is a field of, not a bit of the run:
+    /// for every stream the file's reading opened from a field of its own, a
+    /// bit of the file. The run's place is taken off before the trace is
+    /// asked, and a bit before the run or past its end is nothing of this
+    /// space's. The step's bits count from the run's start, as
+    /// [`Space::map_out`] counts them.
+    ///
+    /// A joined stream has no one run, so there the part whose run holds the
+    /// bit answers, with the step's bits counted from that run's start. Nothing
+    /// for a bit no part was read from.
     pub fn map_in(&self, bit: u64) -> Option<Step> {
         if self.runs.is_empty() {
-            return self.trace.map_in(bit);
+            let run = self.run?;
+            let in_run = bit.checked_sub(run.run_offset_bits).filter(|&at| at < run.run_bits)?;
+            return self.trace.map_in(in_run);
         }
         let run = self.run_holding(bit)?;
         Some(in_run(self.trace.map_in(run.in_start + (bit - run.run_offset_bits))?, run))
@@ -239,6 +278,13 @@ impl Space {
     /// stream unpacked from one run.
     pub fn runs(&self) -> &[JoinedRun] {
         &self.runs
+    }
+
+    /// Where the run of a stream unpacked from one run is, which is what its
+    /// steps' bits count from. Nothing for a joined stream: see
+    /// [`Space::run_at`].
+    pub fn run(&self) -> Option<SingleRun> {
+        self.run
     }
 
     /// The reading over this space's own bytes, lent with its document, since
@@ -539,7 +585,7 @@ impl Spaces {
 mod tests {
     use crate::codec::StepKind;
     use crate::document::Document;
-    use crate::eval::{Evaluator, Value};
+    use crate::eval::{Evaluator, SingleRun, Value};
     use crate::formats;
     use crate::source::MemSource;
 
@@ -682,21 +728,35 @@ mod tests {
 
     /// Every byte of a space came from a step, and every bit of the run it was
     /// unpacked from was read by one.
+    ///
+    /// The step's bits count from the start of the run, and the run is where
+    /// the stream's field is: two bytes into a zlib file, after the header. So
+    /// the bit of the file that leads back to a step is the run's place plus
+    /// the step's bits, and the header's bits lead nowhere.
     #[test]
     fn the_map_runs_both_ways() {
         let text = "map me both ways. ".repeat(50).into_bytes();
         let d = zlib_over(&text);
         let mut e = Evaluator::new(formats::builtin("zlib").unwrap());
+        let field = e.node(&d, RUN).unwrap();
+        assert_eq!(field.offset_bits, 16, "the run starts after the two header bytes");
         let id = e.open_space(&d, 0, RUN).unwrap().unwrap();
         let space = e.space(id).unwrap();
+        let run = SingleRun { run_space: 0, run_offset_bits: field.offset_bits, run_bits: field.size_bits };
+        assert_eq!(space.run(), Some(run));
         for byte in 0..text.len() as u64 {
             let step = space.map_out(byte).unwrap_or_else(|| panic!("byte {byte} came from nowhere"));
             assert!(step.out_bytes.contains(&byte));
             assert!(matches!(step.kind, StepKind::Literal(_) | StepKind::Match { .. } | StepKind::Stored | StepKind::Pixel));
-            // And the bits it read lead back to it.
-            assert_eq!(space.map_in(step.in_bits.start).map(|s| s.kind), Some(step.kind));
+            assert!(step.in_bits.end <= field.size_bits, "{:?} is past the run's {} bits", step.in_bits, field.size_bits);
+            // And the bits it read, as bits of the file, lead back to it.
+            assert_eq!(space.map_in(field.offset_bits + step.in_bits.start), Some(step));
         }
         assert_eq!(space.map_out(text.len() as u64), None);
+        for bit in 0..field.offset_bits {
+            assert_eq!(space.map_in(bit), None, "bit {bit} is the zlib header's, not the run's");
+        }
+        assert_eq!(space.map_in(field.offset_bits + field.size_bits), None, "the Adler-32 after the run");
     }
 
     /// Editing the file drops the spaces: a decoded byte is worked out from

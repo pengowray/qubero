@@ -1525,7 +1525,8 @@ as a path of the file, so a stream inside a tab opened whatever the file had at
 that path, or nothing. The cursor link and the decoder's line in the status bar
 mark bits of the file, so a stream whose run is bits of another stream has
 neither: one whose home is a recognised stream, or one declared inside a stream
-the file declares, whose node is not in the file's space. An edit to the file or a change of template drops the spaces
+the file declares, whose run is not in the file's space (`SingleRun::run_space`,
+or each part's `JoinedRun::run_space`). An edit to the file or a change of template drops the spaces
 with the rest of the reading, so the tab's stream is opened again in its
 home's reading as it is now the next time a field of the tab is asked about,
 and a stream that is no longer there leaves the tab empty rather than reading
@@ -1569,6 +1570,25 @@ This is a correspondence deflate does have -- a literal is one bit range and
 one byte, a match is one bit range and the bytes it copied -- and saying it
 step by step is not the same as claiming a byte-for-byte mapping, which deflate
 does not have and this does not offer.
+
+A decoder counts bits from the front of what it was handed, which is the run
+and not the file. The run is wherever the stream's field is: 18 bytes into a
+gzip with a name, after the header, or inside a PNG's IDAT. So a space
+unpacked from one run keeps where that run is (`Space::run`, a `SingleRun`
+with the space the run is a field of, its offset and its length), as a joined
+stream keeps each part's. `map_out` gives the step with its bits counted from
+the run's start, and the wasm reply carries the run's offset on every step
+(`run_offset_bits`), for a single run and for a joined stream's part alike,
+so the web adds the two before it marks the file tab or writes the status
+bar's decoder line. `map_in` takes a bit of the space the run is a field of,
+the file's for every stream the file's reading opened from a field of its own,
+and takes the run's offset off before it asks the trace; a bit before the run
+or past its end maps to nothing. `decode_step` still counts in the run, which
+is what the trace counts in. The offset used to be carried only for joined
+streams, so byte 0 of a gzip's tab marked bits 3 to 11 of the file, inside the
+magic, and bit 147 of the file was looked up as bit 147 of the deflate. A run
+whose space is not the file's, a stream declared inside another stream, maps
+to no mark: its bits are that stream's and are nowhere in the file.
 
 ### A stream that says nowhere how long it is
 JPEG is a list of segments, and all but one kind of them carry a length. The
@@ -2980,7 +3000,8 @@ A byte of that tab maps back through its part. `map_out` finds the step in the
 joined trace and gives it back with its bits counted from the start of its
 part's run, and `Space::run_at` says where the run is, so a byte of what BGZF
 block 3 unpacks to names bits of block 3's deflate and the web adds the run's
-place (`run_offset_bits` on the step) before it marks the file tab. `map_in`
+place (`run_offset_bits` on the step) before it marks the file tab, the same
+as it does for a stream unpacked from one run. `map_in`
 goes the other way from a bit of the space the stream was declared in: the
 part whose run holds the bit, then its step. The run is found by the bit and
 not by the step's output, since the end of a deflate block reads bits and

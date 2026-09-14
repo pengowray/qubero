@@ -2538,11 +2538,11 @@ struct MapStepDto {
     len: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dist: Option<f64>,
-    /// For a stream joined from several runs, where in the file the run of the
-    /// part the step belongs to starts. The step's own bits count from there,
+    /// Where in the file the run the step was read from starts: the run the
+    /// stream was unpacked from, or for a stream joined from several, the run
+    /// of the part the step belongs to. The step's own bits count from there,
     /// so the file's bits are this plus them.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    run_offset_bits: Option<f64>,
+    run_offset_bits: f64,
 }
 
 /// Which way a step of a space was asked for, which is how its run is found
@@ -2553,25 +2553,29 @@ enum AskedBy {
     Bit(u64),
 }
 
-/// A step of a space, with where its run is when the space was joined from
-/// several. Nothing for a step of a run that is not in the file, which has no
-/// bits there to mark.
+/// A step of a space, with where its run is: the one run the space was
+/// unpacked from, or, for a space joined from several, the run of the part the
+/// step belongs to. Nothing for a step of a run that is not in the file, which
+/// has no bits there to mark: a stream declared inside another stream has its
+/// run in that stream's bytes.
+///
+/// `e` is the file's reading, so a run's space 0 is the file.
 fn space_step_dto(e: &Evaluator, space: SpaceId, s: MapStep, asked: AskedBy) -> Option<MapStepDto> {
-    let Some(sp) = e.space(space) else { return Some(step_dto(s)) };
-    if sp.runs().is_empty() {
-        return Some(step_dto(s));
-    }
-    let run = match asked {
-        AskedBy::Byte(byte) => sp.run_at(byte),
-        AskedBy::Bit(bit) => sp.run_holding(bit),
+    let sp = e.space(space)?;
+    let (run_space, run_offset_bits) = match sp.run() {
+        Some(run) => (run.run_space, run.run_offset_bits),
+        None => {
+            let run = match asked {
+                AskedBy::Byte(byte) => sp.run_at(byte),
+                AskedBy::Bit(bit) => sp.run_holding(bit),
+            }?;
+            (run.run_space, run.run_offset_bits)
+        }
     };
-    match run {
-        Some(run) if run.run_space == 0 => Some(MapStepDto { run_offset_bits: Some(run.run_offset_bits as f64), ..step_dto(s) }),
-        _ => None,
-    }
+    (run_space == 0).then(|| step_dto(s, run_offset_bits))
 }
 
-fn step_dto(s: MapStep) -> MapStepDto {
+fn step_dto(s: MapStep, run_offset_bits: u64) -> MapStepDto {
     let mut dto = MapStepDto {
         in_start: s.in_bits.start as f64,
         in_end: s.in_bits.end as f64,
@@ -2582,7 +2586,7 @@ fn step_dto(s: MapStep) -> MapStepDto {
         value: None,
         len: None,
         dist: None,
-        run_offset_bits: None,
+        run_offset_bits: run_offset_bits as f64,
     };
     match s.kind {
         StepKind::Header(f, v) => {
@@ -2840,7 +2844,8 @@ impl Editor {
 
     /// Which bits of the compressed run the byte at `byte` of `space` came
     /// from, and by which step: {status:"ok",node:{..}} or a null node when the
-    /// codec's map does not reach that far.
+    /// codec's map does not reach that far. The step's bits count from the
+    /// start of its run, and `run_offset_bits` says where in the file that is.
     ///
     /// Null too for a stream whose run is bits of another stream and not of
     /// the file: one opened in a recognised stream's reading, or one declared
@@ -2851,8 +2856,10 @@ impl Editor {
         reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
     }
 
-    /// Which step read the bit at `bit` of the run `space` was unpacked from,
-    /// and so which of its bytes that bit produced.
+    /// Which step read the bit at `bit` of the file, when that bit is in the
+    /// run `space` was unpacked from, and so which of its bytes that bit
+    /// produced. Counted in the file and not in the run, since the file tab's
+    /// cursor is what asks.
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
@@ -2959,24 +2966,16 @@ impl Editor {
         self.core_space_of(space).map(|(_, sp)| sp.id)
     }
 
-    /// The same, only for a space whose run is bits of the file, which is what
-    /// a step's bits are marked on: opened by the file's reading, from a field
-    /// that is not itself inside another stream. The run of a stream nested in
-    /// a stream is bits of that stream. A joined stream's runs each say which
-    /// space they are in, and `space_step_dto` asks them.
-    fn file_core_space(&mut self, space: u32) -> Option<SpaceId> {
-        let (id, joined) = match self.core_space_of(space)? {
-            (0, sp) => (sp.id, !sp.runs().is_empty()),
-            _ => return None,
-        };
-        if joined {
-            return Some(id);
+    /// The same, only for a space the file's reading opened, which is the only
+    /// reading whose space 0 is the file. Whether its run is bits of the file
+    /// or of a stream it was declared inside is the run's to say, and
+    /// `space_step_dto` asks it, for a stream unpacked from one run and for
+    /// each part of a joined one alike.
+    fn file_core_space(&self, space: u32) -> Option<SpaceId> {
+        match self.core_space_of(space)? {
+            (0, sp) => Some(sp.id),
+            _ => None,
         }
-        let origin = self.sheets[space as usize].origin.clone();
-        let sh = &mut self.sheets[0];
-        let e = sh.eval.as_mut()?;
-        e.begin_slice();
-        e.node(&sh.doc, &origin).is_ok_and(|n| n.space == 0).then_some(id)
     }
 
     fn changed(&mut self) {
