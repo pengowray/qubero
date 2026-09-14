@@ -1137,6 +1137,17 @@ impl Evaluator {
             match elem {
                 Ty::Named(n) => elem = self.template.types.get(&**n)?.base(),
                 Ty::Origin { inner } | Ty::When { inner, .. } => elem = inner.base(),
+                // A run of optional fields is a run of whatever they are
+                // optional instances of, so the unit is that type's, not
+                // "items". The switch has to be seen through to reach it,
+                // since what carries the word is the struct underneath. Only
+                // when the branches agree: a run of a dozen unrelated shapes
+                // has no word of its own and falls back to items. See
+                // [`Ty::agreed_case`].
+                Ty::Switch { .. } | Ty::Match { .. } => match elem.agreed_case() {
+                    Some(ty) => elem = ty.base(),
+                    None => break,
+                },
                 _ => break,
             }
         }
