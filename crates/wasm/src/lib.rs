@@ -3289,25 +3289,29 @@ impl Editor {
     }
 
     /// What an HDF5 file holds, read in the file's own terms rather than the
-    /// template's: {status:"ok",node:{objects,..}}. Empty for every other
-    /// format, since nothing else here has a group tree to walk.
+    /// template's: {status:"ok",node:{objects,..}}. Empty for a file that holds
+    /// no HDF5, since nothing else here has a group tree to walk.
     pub fn contents(&mut self, space: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "hdf5" {
-            return reply(Ok(ContentsDto {
-                objects: Vec::new(),
-                total: 0.0,
-                anndata: false,
-                encoding: String::new(),
-                rows: 0.0,
-                columns: 0.0,
-            }));
-        }
         let Some(e) = &mut sh.eval else {
             return reply::<ContentsDto>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
+        match qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc) {
+            Ok(true) => {}
+            Ok(false) => {
+                return reply(Ok(ContentsDto {
+                    objects: Vec::new(),
+                    total: 0.0,
+                    anndata: false,
+                    encoding: String::new(),
+                    rows: 0.0,
+                    columns: 0.0,
+                }))
+            }
+            Err(err) => return reply::<ContentsDto>(Err(err)),
+        }
         let found = match qubero_core::formats::h5ad::contents(e, &sh.doc) {
             Ok(c) => c,
             Err(err) => return reply::<ContentsDto>(Err(err)),
@@ -3365,14 +3369,16 @@ impl Editor {
     pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
         self.go(space);
         let sh = self.sm();
-        if sh.template != "hdf5" {
-            return reply(Ok(None::<TreeDto>));
-        }
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let Some(e) = &mut sh.eval else {
             return reply::<Option<TreeDto>>(Err(EvalError::Failed("no template".into())));
         };
         e.begin_slice();
+        match qubero_core::formats::h5ad::holds_hdf5(e, &sh.doc) {
+            Ok(true) => {}
+            Ok(false) => return reply(Ok(None::<TreeDto>)),
+            Err(err) => return reply::<Option<TreeDto>>(Err(err)),
+        }
         let found = match qubero_core::formats::hdf5_tree::tree(e, &sh.doc, &p, limit as usize) {
             Ok(t) => t,
             Err(err) => return reply::<Option<TreeDto>>(Err(err)),
