@@ -649,6 +649,25 @@ through it field by field, so a template being selected now shows the field
 column by default; the text column leads when no template is set, and each of
 those two states remembers what the user last chose for it.
 
+A click in the field column never moves the view. Clicking a chip selects its
+field and puts the cursor on the bytes the chip is drawn beside
+(`chipCursorBit`). For most chips that is the field's first bit. A chip carried
+in from above the view puts it on the first byte on screen instead. The chip
+for what is left of a structure after its last child, which `spans` answers
+under the structure's own path, puts it on the first bit of that rest: in a PNG
+the padding and checksum after the last deflate block are a chip named `data`,
+and a click there stays there rather than going to `data`'s first byte eight
+thousand bytes up. A value cell puts the cursor
+on its own first bit. The row the cursor lands in is not pulled wholly on screen
+either, as every other cursor move does, because a row cut by the top or bottom
+edge would still nudge the view. The reason is the double click: a chip whose
+bytes are a document of their own (the corner arrow, `hv-chip-opens`) opens
+them in a tab on a double click, and while the first click scrolled to the
+field's start, the second landed on some other chip. The keys stay on the chip's
+path and also carry where its span starts, since two chips for one path can
+stand for different bytes. A heading is the exception: it names where a part
+starts, and pressing it goes there, bringing that row on screen.
+
 `Evaluator::spans` feeds it: one call per screenful rather than one per field.
 It walks `locate` forwards from the first bit on screen, and does two things
 that are not one field each. Slack inside a structure comes back as a gap,
