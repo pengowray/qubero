@@ -102,7 +102,7 @@ impl Evaluator {
         // the same question: it names a field of an enclosing struct, and an
         // element's own fields are not in scope for it.
         let n = self.eval_expr(doc, path, size)?;
-        Ok(if n > 0 { Some(n as u64 * 8) } else { None })
+        Ok(if n > 0 { byte_bits(n) } else { None })
     }
 
     pub(super) fn size_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
@@ -168,7 +168,7 @@ impl Evaluator {
                 _ => self.read_size(doc, path, &r)?,
             }
         };
-        if r.offset + size > r.limit {
+        if r.offset.checked_add(size).is_none_or(|end| end > r.limit) {
             return fail("runs past the end of its container");
         }
         self.memo.get_mut(path).expect("resolved").size = Some(size);
@@ -185,7 +185,7 @@ impl Evaluator {
                     if n < 0 {
                         return fail("negative length");
                     }
-                    n as u64 * 8
+                    match byte_bits(n) { Some(bits) => bits, None => return fail("runs past the end of its container") }
                 }
                 Ty::Str { len, .. } | Ty::TextInt { len, .. } => match len {
                     StrLen::Fixed(e) | StrLen::Padded { size: e, .. } => {
@@ -193,7 +193,7 @@ impl Evaluator {
                         if n < 0 {
                             return fail("negative length");
                         }
-                        n as u64 * 8
+                        match byte_bits(n) { Some(bits) => bits, None => return fail("runs past the end of its container") }
                     }
                     // Whitespace, then the value, then the byte that ends it.
                     StrLen::Scan { skip, ends, comment } => self.read_scan(doc, &r, skip, ends, *comment)?.1 * 8,

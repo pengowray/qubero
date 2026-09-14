@@ -2650,11 +2650,31 @@ What it does not do yet. Parquet still places its pages with the `At` per
 column chunk; moving it onto a gather would give the row-group region a node
 of its own, and the unfinished attempt (a struct's gap accounting has to see
 its zero-size gathers' scattered children) is on branch
-`wip-parquet-gather-region`. An edit to a descriptor leaves the arrays where
-they were until the memo forgets them, and the memo forgets forwards
-(`forget_after`), which is right for a heap after its rows and wrong for a
-Parquet footer after its pages. Neither the placed index nor `kinds` counts a
+`wip-parquet-gather-region`. Neither the placed index nor `kinds` counts a
 gathered child twice, but a gather over records that two paths reach would.
+
+**What an overwrite keeps.** The memo forgets forwards (`forget_after`): a
+node that ended before the edit stays, with the nodes above it, because what
+placed it was read before it. A gathered child is placed from its record, and
+a chain's element from the link in the element before, and either can be
+anywhere: an Arrow footer is after every batch it places. So the walk writes
+down how far it had read when it found each element (2026-09-14): the end of
+the record or link, the start of every node on the way down to it, and, since
+which element is which depends on the ones before, the furthest of those over
+every element so far. A gather also counts the records it passed over and
+whatever told a step it had nothing more, such as where a run of records
+ended. An overwrite at or past that point leaves the element where it was.
+One before it drops the element, what is under it, and the elements after it.
+A chain keeps the starts it found before that point and walks on from there.
+A gather's walk is a stack of steps and cannot be cut back to a child, so it
+stands only when it is over and nothing it read reaches the edit, which is an
+edit in a FITS heap after its rows; otherwise it walks again, and finds the
+children it kept where they are. A step into a stream's contents, or a search
+at any depth, says nothing about how far it read, so a ROOT walk to its
+baskets starts again after any edit, and so does the walk a schema's build
+leaves part way. An expression that names an earlier field whose contents an
+`At` placed after the edit is still taken as read before it: nothing writes
+down how far an expression read.
 
 ### One stream kept in several runs
 A PDB keeps each stream in fixed-size blocks, listed by number in the order

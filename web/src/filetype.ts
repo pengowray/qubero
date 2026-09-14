@@ -57,6 +57,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   it: "Impulse Tracker IT",
   journal: "systemd journal",
   jxr: "JPEG XR",
+  jpeg2000: "JPEG 2000 image",
   ico: "Windows icon/cursor",
   lnk: "Windows shortcut",
   mod: "ProTracker MOD",

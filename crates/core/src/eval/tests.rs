@@ -1269,6 +1269,25 @@ fn a_real_has_no_place_in_a_size_or_a_count() {
     assert_eq!(within(E::pow2(E::lit(4))), "runs past the end of its container");
 }
 
+/// A length or an offset read from the file can be any 64-bit number, and
+/// the largest of them are more bytes than a `u64` counts in bits. Each is
+/// refused as running past what holds it, the same as a merely large one,
+/// instead of overflowing the multiplication by eight.
+#[test]
+fn a_length_too_large_to_count_in_bits_runs_past_its_container() {
+    let huge = [0xFF; 8];
+    let reading = |field: T, at: &[usize]| {
+        let t = Template::new("t", T::structure("Root", vec![("n", T::u64(Little)), ("x", field)]));
+        let mut ev = Evaluator::new(t);
+        let d = doc(&[&huge[..], &[1, 2, 3, 4]].concat());
+        ev.node(&d, at).map(|n| n.size_bits).map_err(failure)
+    };
+    assert_eq!(reading(T::sized(E::field("n"), T::bytes(E::Remaining)), &[1]), Err("size 18446744073709551615 runs past the end of its container".into()));
+    assert_eq!(reading(T::bytes(E::field("n")), &[1]), Err("runs past the end of its container".into()));
+    // The pointer itself covers nothing; what it points at is refused.
+    assert_eq!(reading(T::at(E::field("n"), T::u8()), &[1, 0]), Err("runs past the end of the file".into()));
+}
+
 #[test]
 fn the_whole_part_of_a_float_places_bytes() {
     let placed = |offset: f32| {
