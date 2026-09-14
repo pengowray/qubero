@@ -1396,6 +1396,7 @@ function build(tab: Tab): Page {
         // The diagram is a picture of the template, and the template is a new
         // one, so the drawing on hand is of the last format.
         diagramFor = null;
+        keepCounting = false;
         setView("listing");
       };
       panel.el.hidden = true;
@@ -1647,6 +1648,9 @@ function build(tab: Tab): Page {
   doc.onChange(() => {
     if (doc.template !== hadTemplate) {
       hadTemplate = doc.template;
+      // A count carried past its limit was of the last template. The new one
+      // stops at the limit again until the reader asks.
+      keepCounting = false;
       syncColumn();
       // The diagram is a picture of the template and of nothing else, so a new
       // template is the one thing that changes it. Only while it is showing:

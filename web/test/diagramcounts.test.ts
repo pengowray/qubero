@@ -46,9 +46,9 @@ test("an unfinished count badges every box as a floor and fades none", () => {
 
 test("a row is badged only where its count differs from its box's", () => {
   // Every field of a journal object is there once per object: no badge.
-  assert.equal(rowBadge(19966, 19966, "done"), null);
+  assert.equal(rowBadge(156, 156, "done"), null);
   // An optional field, or a case taken by some.
-  assert.equal(rowBadge(40, 19966, "done"), "×40");
+  assert.equal(rowBadge(40, 156, "done"), "×40");
   assert.equal(rowBadge(1, 3, "done"), "×1");
   // None, once finished, is the faded row and not a badge.
   assert.equal(rowBadge(0, 3, "done"), null);
@@ -131,6 +131,16 @@ test("nothing is laid out again when nothing a reader sees has changed", () => {
   assert.equal(redrawIn(census("working", 10), census("waiting", 10), 5000, 0, 0), null);
   assert.equal(redrawIn(null, null, 5000, 0, 0), null);
   assert.equal(redrawIn(census("done"), null, 5000, 0, 0), 0);
+});
+
+test("a count taken again after an edit is drawn even when it walked as far", () => {
+  const box = (count: number) => ({ key: "chunk", count, first_path: [0], space: 0 });
+  const row = (count: number) => ({ key: "chunk", row: 1, count, first_path: [0, 1], space: 0 });
+  const before: DiagramCensus = { boxes: [box(10)], rows: [row(2)], walked: 117, state: "done" };
+  assert.equal(redrawIn(before, { ...before, boxes: [box(10)], rows: [row(2)] }, 5000, 0, 0), null);
+  assert.equal(redrawIn(before, { ...before, rows: [row(3)] }, 5000, 0, 0), 0);
+  assert.equal(redrawIn(before, { ...before, boxes: [box(9)] }, 5000, 0, 0), 0);
+  assert.equal(redrawIn(before, { ...before, boxes: [{ ...box(10), first_path: [2] }] }, 5000, 0, 0), 0);
 });
 
 test("a double click goes to the field itself, the first one counted, or nowhere", () => {

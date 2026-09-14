@@ -38,15 +38,15 @@
 //! memory together. So this walks the way [`super::KindWalk`] does, one frame
 //! per open node, and gives each node back to the memo once the walk is past
 //! it. What a limit keeps is then the first part of the file in order rather
-//! than the top of all of it, which is what "the first 20,000 fields" says.
+//! than the top of all of it, which is what "Counted the first N fields" says.
 //!
 //! **Exact, or it says it is not.** A run whose elements are all the same
 //! shape, which the template settles, is counted by walking its first element
 //! and counting what is in it once per element: a WAV's half a million samples
 //! are one sample walked. Every other run is walked element by element, since
 //! what one element holds says nothing about the next: sampling the first 32
-//! of a journal's objects badged its object box `×32` over a file of twenty
-//! thousand. A count that finished is the file's; one that did not says so.
+//! of a journal's 156 objects badged its object box `×32`, and every object
+//! type found only past the 32nd was drawn as one the file has none of. A count that finished is the file's; one that did not says so.
 
 use rustc_hash::FxHashMap;
 
@@ -772,7 +772,7 @@ mod tests {
     fn a_run_only_walking_settles_is_counted_to_its_end() {
         // Fifty records. The walk once looked inside the first 32 of a run
         // whose length it could not know, and badged a journal's object box
-        // with 32 over a file of twenty thousand.
+        // with 32 over a file of 156.
         let (t, bytes) = records(50);
         let d = crate::eval::diagram(&t);
         let (mut ev, doc) = read(t, &bytes);

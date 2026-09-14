@@ -154,10 +154,30 @@ export function redrawIn(
   countingSince: number,
 ): number | null {
   if (incoming === null) return shown === null ? null : 0;
-  if (shown !== null && phase(shown.state) === phase(incoming.state) && shown.walked === incoming.walked) return null;
+  if (shown !== null && phase(shown.state) === phase(incoming.state) && sameCounts(shown, incoming)) return null;
   if (phase(incoming.state) !== "counting") return 0;
   const since = shown === null ? countingSince : lastDrawn;
   return Math.max(0, since + REDRAW_MS - now);
+}
+
+/** True when two counts would draw the same badges and go to the same places.
+ *  How far each got is not enough: an edit starts the count again, and a small
+ *  file counted again walks as many fields as before with a different case
+ *  taken. */
+function sameCounts(a: DiagramCensus, b: DiagramCensus): boolean {
+  if (a.walked !== b.walked || a.boxes.length !== b.boxes.length || a.rows.length !== b.rows.length) return false;
+  const samePath = (x: readonly number[], y: readonly number[]): boolean => x.length === y.length && x.every((v, i) => v === y[i]);
+  for (let i = 0; i < a.boxes.length; i++) {
+    const x = a.boxes[i]!;
+    const y = b.boxes[i]!;
+    if (x.key !== y.key || x.count !== y.count || x.space !== y.space || !samePath(x.first_path, y.first_path)) return false;
+  }
+  for (let i = 0; i < a.rows.length; i++) {
+    const x = a.rows[i]!;
+    const y = b.rows[i]!;
+    if (x.key !== y.key || x.row !== y.row || x.count !== y.count || x.space !== y.space || !samePath(x.first_path, y.first_path)) return false;
+  }
+  return true;
 }
 
 /** Where a double click on a row goes. */
