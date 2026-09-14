@@ -304,6 +304,16 @@ fn every_tile_of_every_compressed_sample_matches_astropy() {
         ("fits/gzip2.fits", 1, 0x6459_9677_2adb_8e88, "gzip", &[1183.0, 1264.0, 1283.0]),
         ("fits/gzip2.fits", 2, 0x45ad_6018_d883_80eb, "gzip", &[21.033499, 36.869576, 44.493217]),
         ("fits/gzip2.fits", 3, 0x9899_bb47_c761_aabf, "stored", &[1183.0, 1264.0, 1283.0]),
+        ("fits/plio.fits", 1, 0xd7a1_0a19_52d7_5c89, "PLIO_1", &[0.0, 0.0, 0.0]),
+        ("fits/plio.fits", 2, 0xa4b2_0a25_8f45_13ea, "PLIO_1", &[0.0, 0.0, 0.0]),
+        ("fits/plio.fits", 3, 0x63ec_8fec_5772_b55e, "PLIO_1", &[0.0, 0.0, 0.0]),
+        ("fits/hcompress.fits", 1, 0x5a13_b0de_2060_0a01, "HCOMPRESS_1", &[1199.0, 1280.0, 1331.0]),
+        ("fits/hcompress.fits", 2, 0xf7e4_2caf_f7fd_8a51, "HCOMPRESS_1", &[583.0, 738.0, 979.0]),
+        ("fits/hcompress.fits", 3, 0xc681_6d1a_5cf7_5b83, "HCOMPRESS_1", &[583.0, 738.0, 977.0]),
+        ("fits/hcompress.fits", 4, 0xc9e3_4e1c_8fd6_d463, "HCOMPRESS_1", &[27.23504066467285, 39.18748092651367, 46.35916519165039]),
+        ("fits/fallback.fits", 1, 0xdd07_3336_b90f_b70c, "RICE_1", &[78.8850092917391, 66.05480325863505, 112.33276328282162]),
+        ("fits/fallback.fits", 2, 0x791a_7ff1_dce7_1c0b, "RICE_1", &[1219.0, 1242.0, 1326.0]),
+        ("fits/fallback.fits", 3, 0x502e_12af_1c43_d94c, "RICE_1", &[209020.0, 301610.0, 349476.0]),
     ];
     let mut ran = 0;
     for (file, hdu, want, first_step, first_pixels) in samples {
@@ -415,4 +425,89 @@ fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
     // A cell of the row that is a float, the tile's ZSCALE, still explains
     // the float it is.
     assert!(matches!(ev.explain(&doc, &[0, 1, 3, ROWS, 1, 0, 2, 0], None).unwrap(), Explain::Float { .. }));
+}
+
+/// The steps a PLIO or HCOMPRESS tile reports: what its list or its stream
+/// was made of, and the smoothing a tile with `SMOOTH` had.
+#[test]
+fn a_plio_or_hcompress_tile_reports_the_steps_its_bytes_took() {
+    let Some((doc, mut ev)) = read("fits/plio.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let steps = |ev: &mut Evaluator, doc: &Document<MemSource>, hdu: usize, tile: usize| -> Vec<(String, String)> {
+        let t = ev.fits_tile(doc, &[0, hdu, 3, ROWS, tile]).unwrap().unwrap();
+        assert_eq!(t.problem, None);
+        t.steps.into_iter().map(|s| (s.what, s.note)).collect()
+    };
+    // The first tile of the 32-bit mask has the ramps, a pixel stored for each
+    // step of them.
+    assert_eq!(
+        steps(&mut ev, &doc, 1, 0),
+        [(
+            "PLIO_1".to_string(),
+            "pixel list, 65 words of 16 bits; a 7-word header, then 58 instructions: 8 runs of zeros, 7 runs of the current value, 2 runs of zeros ending in the value, 0 values set from two words, 3 changes to the value with no pixel written, 38 changes to the value with one pixel written".to_string()
+        )]
+    );
+    // 70,000 is too large for twelve bits, so the list sets it from two words.
+    assert!(steps(&mut ev, &doc, 1, 5)[0].1.contains("1 value set from two words, "));
+    // 4,530 zeros before the one pixel of the 16-bit mask, which is more
+    // than one instruction counts.
+    assert!(steps(&mut ev, &doc, 2, 0)[0].1.contains(" 2 runs of zeros, 0 runs of the current value, 1 run of zeros ending in the value, "));
+
+    let Some((doc, mut ev)) = read("fits/hcompress.fits") else { return };
+    let lossless = steps(&mut ev, &doc, 1, 0);
+    assert_eq!(
+        lossless,
+        [
+            (
+                "HCOMPRESS_1".to_string(),
+                "12 × 16 coefficients, scale 0 (lossless); coarsest coefficient 41,728, stored whole in the header, not in the bit planes; 35 bit planes (12 for quadrant 1, 8 each for quadrants 2 and 3, 7 for quadrant 4): 12 as quadtrees, 23 written directly; 191 sign bits, one per non-zero coefficient".to_string()
+            ),
+            ("H-transform".to_string(), "inverse H-transform (a 2-D Haar wavelet) over 4 levels, coarsest first".to_string()),
+        ]
+    );
+    // The last tile along both axes is odd both ways.
+    let edge = ev.fits_tile(&doc, &[0, 1, 3, ROWS, 8]).unwrap().unwrap();
+    assert_eq!((edge.start, edge.shape), (vec![24, 32], vec![11, 13]));
+    let smoothed = steps(&mut ev, &doc, 3, 0);
+    let whats: Vec<&str> = smoothed.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(whats, ["HCOMPRESS_1", "undigitize", "H-transform"]);
+    assert_eq!(smoothed[1].1, "each coefficient × 10, the scale it was divided by when compressed");
+    assert!(smoothed[0].1.starts_with("24 × 32 coefficients, scale 10 (lossy); coarsest coefficient -736, "));
+    assert!(smoothed[2].1.ends_with("; smoothed at every level (SMOOTH = 1): each level's differences adjusted by at most 5"));
+    // The same stream without SMOOTH says nothing of smoothing.
+    assert!(!steps(&mut ev, &doc, 2, 0)[2].1.contains("SMOOTH"));
+    let dithered = steps(&mut ev, &doc, 4, 0);
+    let whats: Vec<&str> = dithered.iter().map(|(w, _)| w.as_str()).collect();
+    assert_eq!(whats, ["HCOMPRESS_1", "undigitize", "H-transform", "SUBTRACTIVE_DITHER_1", "dither"]);
+}
+
+/// A tile of 64-bit floats that would not quantize, and tiles of integer
+/// images moved into the two columns astropy only ever fills with floats: each
+/// is read from its own column at the width its bytes come to, and not
+/// unquantized.
+#[test]
+fn a_tile_outside_compressed_data_is_read_from_its_column_at_its_width() {
+    let Some((doc, mut ev)) = read("fits/fallback.fits") else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    for (hdu, tile, column, read_note) in [
+        (1, 3, fits_tile::Stored::Gzip, "500 pixels, as big-endian f64"),
+        (2, 1, fits_tile::Stored::Gzip, "500 pixels, as big-endian i16"),
+        (2, 2, fits_tile::Stored::Gzip, "500 pixels, as big-endian i16"),
+        (3, 3, fits_tile::Stored::Uncompressed, "500 pixels, as big-endian i32"),
+    ] {
+        let t = ev.fits_tile(&doc, &[0, hdu, 3, ROWS, tile]).unwrap().unwrap();
+        assert_eq!((t.stored, t.problem.as_deref()), (Some(column), None), "hdu {hdu} tile {tile}");
+        let whats: Vec<&str> = t.steps.iter().map(|s| s.what.as_str()).collect();
+        let first = if column == fits_tile::Stored::Gzip { "gzip" } else { "stored" };
+        assert_eq!(whats, [first, "read"], "hdu {hdu} tile {tile}");
+        assert_eq!(t.steps[1].note, read_note, "hdu {hdu} tile {tile}");
+    }
+    // The float tile is one value, and the tiles beside it were Rice coded.
+    let flat = ev.fits_tile(&doc, &[0, 1, 3, ROWS, 3]).unwrap().unwrap();
+    assert!(flat.pixels.iter().all(|p| *p == -12.25));
+    assert_eq!(ev.fits_tile(&doc, &[0, 2, 3, ROWS, 0]).unwrap().unwrap().stored, Some(fits_tile::Stored::Compressed));
 }
