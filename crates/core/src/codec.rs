@@ -63,6 +63,14 @@ pub enum Codec {
     /// One LZ4 block, with no frame header and no length in front of it. What
     /// ROOT hands to LZ4 and what an LZ4 frame's blocks hold.
     Lz4Block,
+    /// One or more LZ4 frames: a magic, a descriptor, blocks each behind a
+    /// size, an end mark, and whichever checksums the descriptor asked for.
+    /// What Arrow compresses a buffer into when its body says LZ4_FRAME.
+    ///
+    /// Read whole rather than a block at a time, because a frame may link its
+    /// blocks and a linked block copies from the ones before it. See
+    /// [`crate::codec::lz4::frame`].
+    Lz4Frame,
     /// One raw Snappy block: a varint saying how many bytes come out, and then
     /// tags to the end of the run.
     ///
@@ -198,6 +206,7 @@ impl Codec {
             Codec::Deflate => "deflate",
             Codec::Zstd => "zstd",
             Codec::Lz4Block => "lz4",
+            Codec::Lz4Frame => "lz4 frame",
             Codec::Snappy => "snappy",
             Codec::Brotli => "brotli",
             Codec::Xz => "xz",
@@ -992,6 +1001,7 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::Deflate => inflate::inflate(data)?,
         Codec::Zlib => inflate::zlib(data)?,
         Codec::Lz4Block => lz4::block(data)?,
+        Codec::Lz4Frame => lz4::frame(data)?,
         Codec::Snappy => snappy::block(data)?,
         Codec::Brotli => frames::brotli(data)?,
         Codec::Zstd => frames::zstd(data)?,
@@ -1031,6 +1041,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::Zlib
         | Codec::Deflate
         | Codec::Lz4Block
+        | Codec::Lz4Frame
         | Codec::Snappy
         | Codec::Brotli
         | Codec::PngUnfilter { .. }
