@@ -21,7 +21,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{ListState, Resolved};
 use crate::json;
-use crate::template::{Deduced, Ty};
+use crate::template::{Deduced, Ty, Until};
 
 /// A label a tagged search looks for, in the form a map can be keyed by.
 ///
@@ -279,6 +279,8 @@ impl Memo {
             pointer_starts: None,
             chain_starts: Vec::new(),
             chain_done: false,
+            chain_reach: Vec::new(),
+            chain_end_reach: 0,
             gather: None,
             stitch: None,
             stretched: Vec::new(),
@@ -314,6 +316,76 @@ impl Memo {
         self.deduced = Some(r);
     }
 
+    /// How far into the file what placed the node at `path` was read from.
+    ///
+    /// The judgement `forget_after` makes of the nodes above one it keeps,
+    /// made when a walk reads a field somewhere else and places an element
+    /// with it, and written down as a number: an overwrite at or past it
+    /// leaves the element where it was. Each node on the line was placed from
+    /// what came before it, so where it starts is as far as that reaches;
+    /// JSON is the exception, whose values are placed by a parse that runs to
+    /// its end. An element of a chain or a gather reaches as far as the walk
+    /// that found it read. A node that is not held, or one in a space of its
+    /// own, whose offsets are not bits of the file, says nothing, and that is
+    /// `u64::MAX`.
+    pub(super) fn placed_from(&self, path: &[usize]) -> u64 {
+        let mut reach = 0;
+        for k in 0..=path.len() {
+            let Some(r) = self.nodes.get(&path[..k]) else { return u64::MAX };
+            if r.space != 0 {
+                return u64::MAX;
+            }
+            let here = match r.ty {
+                Ty::Json(..) => r.size.map_or(u64::MAX, |size| r.offset.saturating_add(size)),
+                _ => r.offset,
+            };
+            reach = reach.max(here);
+            if let Some((&idx, list)) = path[..k].split_last() {
+                reach = reach.max(self.element_reach(list, idx));
+            }
+        }
+        reach
+    }
+
+    /// How far what placed element `idx` of the list at `list` was read from,
+    /// beyond what placed the list. Nothing for a list whose elements follow
+    /// one another or sit where a table before the list says. For a chain or
+    /// a gather, what its walk wrote down when it found the element, and
+    /// `u64::MAX` when it has nothing written down, since then nothing says.
+    fn element_reach(&self, list: &[usize], idx: usize) -> u64 {
+        let noted = match self.nodes.get(list).map(|r| &r.ty) {
+            Some(Ty::Chain { .. }) => self.lists.get(list).and_then(|l| l.chain_reach.get(idx)),
+            Some(Ty::Gather { .. }) => self.lists.get(list).and_then(|l| l.gather.as_deref()).and_then(|g| g.reaches.get(idx)),
+            _ => return 0,
+        };
+        noted.copied().unwrap_or(u64::MAX)
+    }
+
+    /// How far what says how many elements the list at `path` has was read
+    /// from, beyond what placed the list.
+    ///
+    /// An array's count and a pointer list's table are read before the list,
+    /// and a run divided by its stride is as long as its room, which was
+    /// settled before it too. A run walked to its end reaches that end, and a
+    /// bit further when the element after it would not read, since an edit
+    /// there may make it read. A chain or a gather has as many elements as
+    /// its walk found, and reaches as far as that walk read.
+    pub(super) fn count_reach(&self, path: &[usize]) -> u64 {
+        let Some(r) = self.nodes.get(path) else { return u64::MAX };
+        let l = self.lists.get(path);
+        match &r.ty {
+            Ty::Array { .. } | Ty::PointerList { .. } => 0,
+            Ty::Repeat { until, .. } => match l {
+                Some(l) if l.repeat_done => l.repeat_end.map_or(r.offset, |end| end + u64::from(l.repeat_trouble.is_some())),
+                _ if matches!(until, Until::End) => 0,
+                _ => u64::MAX,
+            },
+            Ty::Chain { .. } => l.filter(|l| l.chain_done).map_or(u64::MAX, |l| l.chain_end_reach),
+            Ty::Gather { .. } => l.and_then(|l| l.gather.as_deref()).filter(|g| g.done).map_or(u64::MAX, |g| g.walk.reach),
+            _ => r.size.map_or(u64::MAX, |size| r.offset.saturating_add(size)),
+        }
+    }
+
     /// Forget everything. For a change to the document that moves bytes about,
     /// or a change of template, after which none of this stands.
     pub(super) fn forget(&mut self) {
@@ -343,6 +415,31 @@ impl Memo {
         // where a value in it ends is where the parse found the next one, and
         // the parse covers the edit.
         let holds = |r: &Resolved| ended(r) || (r.offset <= bit && !matches!(r.ty, Ty::Json(..)));
+        // An element of a chain or a gather is placed from a field that need
+        // not be on its line at all: the link in the element before, or the
+        // record the walk reached. Where that was read is written down by
+        // the walk, and an element placed from after the edit goes whatever
+        // its line says, with what is under it.
+        //
+        // Most files hold no such list, and the ones that do hold a few, so a
+        // node is only looked up as one when a list of that kind sits at the
+        // depth its parent does. Asked of every node on every line otherwise,
+        // this is a lookup per node more than the rest of the pass makes.
+        let (mut depths, mut deep) = (0u128, false);
+        for (path, r) in &self.nodes {
+            if matches!(r.ty, Ty::Chain { .. } | Ty::Gather { .. }) {
+                match 1u128.checked_shl(path.len() as u32) {
+                    Some(at) => depths |= at,
+                    None => deep = true,
+                }
+            }
+        }
+        let placed = |p: &[usize]| {
+            p.split_last().is_none_or(|(&idx, list)| {
+                let maybe = deep || 1u128.checked_shl(list.len() as u32).is_some_and(|at| depths & at != 0);
+                !maybe || self.element_reach(list, idx) <= bit
+            })
+        };
         let (nodes, lists) = (&self.nodes, &self.lists);
         let mut judged = FxHashMap::default();
         let mut above = FxHashSet::default();
@@ -351,7 +448,7 @@ impl Memo {
             if !ended(r) {
                 continue;
             }
-            if !line_holds(path, &mut judged, |p| nodes.get(p).is_some_and(holds)) {
+            if !line_holds(path, &mut judged, |p| nodes.get(p).is_some_and(holds) && placed(p)) {
                 cut_off.insert(path.clone());
                 continue;
             }
@@ -371,7 +468,7 @@ impl Memo {
         let mut judged = FxHashMap::default();
         let misplaced: FxHashSet<Vec<usize>> = lists
             .keys()
-            .filter(|path| !line_holds(path, &mut judged, |p| nodes.get(p).is_none_or(holds)))
+            .filter(|path| !line_holds(path, &mut judged, |p| nodes.get(p).is_none_or(holds) && placed(p)))
             .cloned()
             .collect();
         self.nodes.retain(|path, r| if ended(r) { !cut_off.contains(path) } else { structure.contains(path) });
@@ -421,12 +518,30 @@ impl Memo {
             // children some of which have just gone. Both are cheap to redo.
             l.pointer_starts = None;
             l.seq_end = 0;
-            // What a gather found was read from records that may sit after
-            // the edit even when the children do not, and a Parquet footer
-            // sits after every page it places. So the walk starts again.
-            l.gather = None;
-            // The same for the walk to a stitched stream's parts: its runs
-            // may be anywhere, and the space it opened is gone already.
+            // A chain keeps the elements it found from links that ended
+            // before the edit, which are the ones before the first that did
+            // not: each is found from the one before, so what was read to
+            // find it only grows along the chain. The walk carries on from
+            // there, and is over only if what ended it ended before the edit.
+            let kept = l.chain_reach.partition_point(|&reach| reach <= bit);
+            if kept < l.chain_starts.len() || l.chain_end_reach > bit {
+                l.chain_done = false;
+                l.chain_end_reach = 0;
+            }
+            l.chain_starts.truncate(kept);
+            l.chain_reach.truncate(kept);
+            // A gather's walk stands, with everything it found, when it is
+            // over and nothing it read reaches the edit: every record, and
+            // every step that said there was nothing more, is where it was
+            // and says what it said. Otherwise it starts again. The walk is a
+            // stack of steps, which cannot be cut back to a child, and the
+            // children before the first placed from after the edit are still
+            // held and are found again where they are.
+            if l.gather.as_deref().is_some_and(|g| !g.done || g.walk.reach > bit) {
+                l.gather = None;
+            }
+            // The walk to a stitched stream's parts starts again whatever it
+            // read: the space it opened is gone already.
             l.stitch = None;
             // A run that is gone is placed again in the room the template
             // gives it, and stretched again if it needs to be.
@@ -439,9 +554,14 @@ impl Memo {
                 && l.repeat_len == 0
                 && !l.repeat_done
                 && l.stretched.is_empty();
+            // What a chain or a gather found is kept like the checkpoints,
+            // whether or not the list is held: the rules above already cut it
+            // back to what was read before the edit, and what was read to
+            // place the list itself is part of that.
+            let walked = l.chain_done || !l.chain_starts.is_empty() || l.gather.is_some();
             // A list kept only for what is under it has not ended, so it
             // keeps what the rules above leave and no more.
-            !empty || node.is_some_and(ended)
+            !empty || walked || node.is_some_and(ended)
         });
     }
 }
@@ -465,43 +585,7 @@ fn line_holds<'a>(path: &'a [usize], judged: &mut FxHashMap<&'a [usize], bool>, 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::{Computed, Evaluator, Value};
-    use crate::document::Document;
-    use crate::source::MemSource;
-    use crate::template::{Expr as E, Template, Ty as T};
-
-    /// Computed text is kept on its node like a computed number, and goes
-    /// when an edit could have changed what it read: an edit after it leaves
-    /// it, and an edit to the text it copies drops it and it reads again.
-    #[test]
-    fn computed_text_is_kept_until_an_edit_could_change_it() {
-        let t = Template::new(
-            "t",
-            T::structure("S", vec![("name", T::utf8(E::lit(3))), ("copy", T::computed_text(E::field("name"))), ("tail", T::u8())]),
-        );
-        let mut d = Document::new(MemSource(b"abc!".to_vec()));
-        let mut ev = Evaluator::new(t);
-        let kept = |ev: &Evaluator| match ev.memo.get(&[1]).and_then(|r| r.computed.clone()) {
-            Some(Computed::Text(s)) => Some(s.to_string()),
-            _ => None,
-        };
-        assert_eq!(kept(&ev), None);
-        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("abc".into()));
-        assert_eq!(kept(&ev).as_deref(), Some("abc"));
-
-        d.overwrite_bits(3 * 8, b"?", 8);
-        ev.invalidate_from(3 * 8);
-        assert_eq!(kept(&ev).as_deref(), Some("abc"));
-        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("abc".into()));
-
-        d.overwrite_bits(0, b"x", 8);
-        ev.invalidate_from(0);
-        assert_eq!(kept(&ev), None);
-        assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::Str("xbc".into()));
-        assert_eq!(kept(&ev).as_deref(), Some("xbc"));
-    }
-}
+mod tests;
 
 /// Reading a node that is not there is a bug rather than a case: every caller
 /// that indexes has resolved the node first, and says so by indexing.

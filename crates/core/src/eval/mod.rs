@@ -376,6 +376,15 @@ struct ListState {
     /// on rather than started again per element.
     chain_starts: Vec<u64>,
     chain_done: bool,
+    /// For `Chain`, by the same index as `chain_starts`: the furthest bit that
+    /// anything read to find the element reaches, counting what was read to
+    /// find every element before it. The link that placed an element is in
+    /// the element before, wherever that is, so an overwrite judges the
+    /// element by this rather than by where the element itself is. See
+    /// `Memo::forget_after`.
+    chain_reach: Vec<u64>,
+    /// The same for what ended the walk, once `chain_done` says it has.
+    chain_end_reach: u64,
     /// For `Gather`: what its walk has found and where the walk stands. Boxed
     /// because every other list leaves it empty, and a list state is kept for
     /// every list anything has been learned about.
@@ -410,6 +419,10 @@ struct GatherState {
     starts: Vec<u64>,
     /// The record that placed each child, by the same index.
     records: Vec<Vec<usize>>,
+    /// How far the walk had read when it placed each child, by the same
+    /// index: `walk.reach` at that moment. Every record before a child's own
+    /// decides which child it is, so this counts all of them.
+    reaches: Vec<u64>,
     walk: Walk,
     done: bool,
     /// Every start with its child, sorted by where, once the walk is done:
@@ -432,6 +445,10 @@ struct Walk {
     /// Whether the frames have been set up. The walk is over when they have
     /// been and are empty again.
     started: bool,
+    /// The furthest bit anything the walk has read so far reaches: each
+    /// record it stood on, and what said a step had nothing more to stand on.
+    /// An overwrite before this may have changed what the walk would find.
+    reach: u64,
 }
 
 /// One step of a gather's walk that is under way: the node it was taken from,
@@ -668,6 +685,11 @@ impl Evaluator {
     /// after `bit` cannot have been what it read. So a node that ends at or
     /// before `bit` still starts where it did and is still the size it was,
     /// and what a list learned about its own first elements still holds.
+    ///
+    /// Three kinds of node can sit before the field that placed them. An `At`
+    /// can point back at one, a chain's element is placed by the link in the
+    /// element before it, and a gather's element by a record its walk
+    /// reached. `Memo::forget_after` says what it keeps of each.
     ///
     /// This is what makes editing a large file bearable: a byte changed in a
     /// GGUF's weights leaves the walk over its two million metadata elements
@@ -1596,27 +1618,37 @@ impl Evaluator {
             // rather than failing: a record too short to hold its own pointer
             // is a file cut off, and the records before it are still worth
             // showing.
-            let at = if n == 0 {
-                self.eval_expr(doc, list, &first)?
+            //
+            // How far what was read reaches goes with every answer, for an
+            // overwrite to judge it by. The first offset is read before the
+            // list, like any expression of it. A link reaches as far as its
+            // own end and as far as whatever placed the element it is in,
+            // which counts every link before it.
+            let (at, reach) = if n == 0 {
+                (self.eval_expr(doc, list, &first)?, self.memo.placed_from(list))
             } else {
                 let mut prev = list.to_vec();
                 prev.push(n - 1);
                 self.resolve(doc, &prev)?;
                 if !self.descend(doc, &mut prev, &next)? {
-                    self.list_mut(list).chain_done = true;
+                    // What says there is no link is the element's type, and
+                    // nothing here says how far that was read. Walking this
+                    // one step again after any edit costs one element.
+                    self.end_chain(list, u64::MAX);
                     return Ok(());
                 }
                 let info = self.node(doc, &prev)?;
+                let reach = self.memo.placed_from(&prev).max(info.offset_bits.saturating_add(info.size_bits));
                 let v = info.value.as_int().unwrap_or(0);
                 // All ones for the width of the field it was read from: the
                 // other way a format writes "no more". Judged by that field's
                 // width, since 0xffff is a terminator in a 16-bit field and an
                 // ordinary offset in a 32-bit one.
                 if info.size_bits > 0 && info.size_bits < 127 && v == (1i128 << info.size_bits) - 1 {
-                    self.list_mut(list).chain_done = true;
+                    self.end_chain(list, reach);
                     return Ok(());
                 }
-                v
+                (v, reach)
             };
             // The adjustment moves where the element is read; it does not move
             // the tests above, which are about what the file wrote. And the
@@ -1633,14 +1665,24 @@ impl Evaluator {
                 || n >= crate::template::CHAIN_CAP
                 || self.list(list).chain_starts.contains(&(bits as u64));
             if ends {
-                self.list_mut(list).chain_done = true;
+                self.end_chain(list, reach);
                 return Ok(());
             }
             // Charged like any other element, so a chain long enough to be
             // worth watching hands the caller its screen back.
             self.spend(bits as u64)?;
-            self.list_mut(list).chain_starts.push(bits as u64);
+            let l = self.list_mut(list);
+            l.chain_starts.push(bits as u64);
+            l.chain_reach.push(reach);
         }
+    }
+
+    /// Mark the chain at `list` as walked to its end, by a read that reaches
+    /// as far as `reach`.
+    fn end_chain(&mut self, list: &[usize], reach: u64) {
+        let l = self.list_mut(list);
+        l.chain_done = true;
+        l.chain_end_reach = reach;
     }
 
     /// Every element of the chain at `list`, walked to the end.
