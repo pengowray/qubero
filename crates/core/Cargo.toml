@@ -9,9 +9,10 @@ proptest = "1"
 # What the decoders in `codec` are checked against. Our own inflater and LZ4
 # reader exist for the trace, not for the bytes: the bytes have to be the same
 # bytes these give, over the whole sample collection and over random data at
-# every level.
+# every level. `frame` is on here and not below: the frame encoder is what the
+# frame reader's tests pack with, and the build that ships reads frames itself.
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
-lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std"] }
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-decode", "std", "frame"] }
 # The bzip2 encoder the tests compress with, since nothing that ships writes
 # one. Default features are `libbz2-rs-sys`, the pure-Rust port of the C
 # library, so this needs no C toolchain either. A second implementation of the
