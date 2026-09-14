@@ -26,18 +26,41 @@ fn template_of(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// How many bits the union of these stretches covers.
-fn union(mut v: Vec<(u64, u64)>) -> u64 {
+fn union(v: Vec<(u64, u64)>) -> u64 {
+    merged(v).iter().map(|(a, b)| b - a).sum()
+}
+
+/// The same stretches, sorted, with the overlapping ones joined.
+fn merged(mut v: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     v.sort();
-    let mut total = 0;
-    let mut end = 0;
+    let mut out: Vec<(u64, u64)> = Vec::new();
     for (a, b) in v {
-        let a = a.max(end);
-        if b > a {
-            total += b - a;
-            end = b;
+        match out.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
         }
     }
-    total
+    out
+}
+
+/// The stretches of `named` that `spans` leaves out, in bytes, for finding
+/// what is behind a difference. Asked for with `COVER_DIFF=1`.
+fn missing(tree: Vec<(u64, u64)>, spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    let spans = merged(spans);
+    let mut out = Vec::new();
+    for (a, b) in merged(tree) {
+        let mut at = a;
+        for &(c, d) in spans.iter().filter(|(c, d)| *d > a && *c < b) {
+            if c > at {
+                out.push((at / 8, c / 8));
+            }
+            at = at.max(d);
+        }
+        if at < b {
+            out.push((at / 8, b / 8));
+        }
+    }
+    out
 }
 
 fn tree(ev: &mut Evaluator, doc: &Document<MemSource>, path: &mut Vec<usize>, out: &mut Vec<(u64, u64)>, opened: &mut usize) {
@@ -104,13 +127,21 @@ fn probe(path: &Path, rel: &str) {
     let mut leaves = Vec::new();
     let mut opened = 0;
     tree(&mut ev, &doc, &mut Vec::new(), &mut leaves, &mut opened);
-    let tree_bytes = union(leaves) / 8;
+    let tree_bytes = union(leaves.clone()) / 8;
 
     let mut ev = Evaluator::new(t.clone());
     ev.set_slice(Some(5_000));
     let clock = Instant::now();
     let whole = match spans(&mut ev, &doc, 0, len * 8) {
-        Ok((v, goes)) => format!("{}\t{} ms {goes} goes", union(v) / 8, clock.elapsed().as_millis()),
+        Ok((v, goes)) => {
+            let ms = clock.elapsed().as_millis();
+            if std::env::var_os("COVER_DIFF").is_some() {
+                for (a, b) in missing(leaves, v.clone()).into_iter().take(20) {
+                    println!("  not named: {a:#x}..{b:#x} ({} bytes)", b - a);
+                }
+            }
+            format!("{}\t{ms} ms {goes} goes", union(v) / 8)
+        }
         Err(e) => format!("{e}\t{} ms", clock.elapsed().as_millis()),
     };
 
