@@ -989,9 +989,12 @@ nothing asked before it, it asks its way back through every element in front
 of it, and each of those questions is still open while the next is asked. An
 Arrow record batch does this with its nodes, each working out which column it
 is from the node before, and so does a switch keyed on the element before, a
-length taken from it, or a search back by label. In wasm the stack is the
-megabyte rust-lld gives it, and running out of it takes the whole module down,
-so three guards stand in the way (`eval/go.rs`):
+length taken from it, or a search back by label. In wasm the stack is two
+megabytes, twice what rust-lld gives a module unless told otherwise
+(`crates/wasm/build.rs`), and running out of it takes the whole module down,
+so three guards stand in the way (`eval/go.rs`). They are measured against
+640 KiB, which fits in the one megabyte with room over; the second megabyte is
+margin, not more for a read to spend.
 
 - `DEEPEST_PATH`, 128 components, for the nesting of the file.
 - `DEEPEST_QUESTION`, 110 expressions open inside one another, for chains like

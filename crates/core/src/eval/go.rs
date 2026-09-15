@@ -20,9 +20,12 @@ use super::{EvalError, Missing, R, fail};
 /// For everything measured the count is reached first and this never fires,
 /// which is what makes it a backstop rather than the limit.
 ///
-/// 640 KiB fits in the megabyte wasm is given with room left for whoever
-/// called in, and carries about 175 components of the dearest measured shape
-/// in a debug build, which is comfortably past the 128 the count allows.
+/// 640 KiB fits in the megabyte of stack rust-lld gives a wasm module with
+/// room left for whoever called in, and carries about 175 components of the
+/// dearest measured shape in a debug build, which is comfortably past the 128
+/// the count allows. The web build asks for two megabytes
+/// (`crates/wasm/build.rs`), and the second is margin: none of the limits
+/// here were raised for it.
 const STACK_BUDGET: usize = 640 << 10;
 
 /// How many expressions one read may have open inside one another.
@@ -88,7 +91,7 @@ const STACK_BUDGET: usize = 640 << 10;
 /// against 178 KiB of a native release build: the stack is the first megabyte
 /// of wasm memory, so it was filled with a known byte before the read and
 /// counted after it. Read to 110 it writes over 216 KiB in a native release
-/// build; wasm has not been measured again.
+/// build and 114 KiB in wasm, of a stack that is two megabytes there now.
 ///
 /// A debug build's frames are six to ten times as large: read to the limit, a
 /// chain of computed fields wrote over 3.5 MiB there, the dearest shape in
