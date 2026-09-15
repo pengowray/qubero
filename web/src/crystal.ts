@@ -126,6 +126,55 @@ const A_CLICK = 4;
 // stopping dead.
 const RECENT = 80;
 
+/** Enough paths for every face the mark can turn towards the viewer. */
+export const CRYSTAL_FACES = facets.length;
+
+/** The mark turned `angle` radians about its upright axis, into `paths` (at
+ *  least `CRYSTAL_FACES` of them) and its silhouette into `outline`. */
+export function drawCrystal(paths: readonly SVGPathElement[], outline: SVGPathElement, angle: number): void {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const rotated = points.map(([x, y, z]) =>
+    [240 + (x - 240) * c + z * s, y, -(x - 240) * s + z * c]);
+  const faces = facets.map(face => {
+    const vertices = face.map(i => rotated[i]!);
+    const [a, b, d] = vertices as [number[], number[], number[], ...number[][]];
+    const ux = b[0]! - a[0]!, uy = b[1]! - a[1]!, uz = b[2]! - a[2]!;
+    const vx = d[0]! - a[0]!, vy = d[1]! - a[1]!, vz = d[2]! - a[2]!;
+    const normal = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+    const length = Math.hypot(...normal);
+    return { vertices, normal: normal.map(n => n / length), depth: vertices.reduce((sum, v) => sum + v[2]!, 0) / vertices.length };
+  }).filter(face => face.normal[2]! > 0.0001).sort((a, b) => a.depth - b.depth);
+  paths.forEach(path => {
+    path.setAttribute("display", "none");
+    path.removeAttribute("d");
+    path.removeAttribute("fill");
+  });
+  faces.forEach((face, i) => {
+    const path = paths[i]!;
+    path.removeAttribute("display");
+    // A restrained, theme-aware tint lets broad planes read as surfaces.
+    const light = -0.4 * face.normal[0]! - 0.5 * face.normal[1]! + 0.75 * face.normal[2]!;
+    const ink = 2 + 8 * (1 - Math.max(0, light));
+    path.setAttribute("fill", `color-mix(in srgb, var(--bg), currentColor ${ink.toFixed(2)}%)`);
+    path.setAttribute("d", face.vertices.map((v, j) => `${j === 0 ? "M" : "L"}${v[0]!.toFixed(2)},${v[1]}`).join(" ") + " Z");
+  });
+  // The outline is only the current silhouette, never an edge in the mesh.
+  const projected = [...rotated].sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!);
+  const cross = (a: number[], b: number[], c: number[]): number =>
+    (b[0]! - a[0]!) * (c[1]! - a[1]!) - (b[1]! - a[1]!) * (c[0]! - a[0]!);
+  const half = (vertices: number[][]): number[][] => {
+    const hull: number[][] = [];
+    for (const v of vertices) {
+      while (hull.length > 1 && cross(hull[hull.length - 2]!, hull[hull.length - 1]!, v) <= 0) hull.pop();
+      hull.push(v);
+    }
+    hull.pop();
+    return hull;
+  };
+  const hull = [...half(projected), ...half([...projected].reverse())];
+  outline.setAttribute("d", hull.map((v, i) => `${i === 0 ? "M" : "L"}${v[0]!.toFixed(2)},${v[1]}`).join(" ") + " Z");
+}
+
 export class Crystal {
   readonly el = document.createElement("button");
   private readonly svg = document.createElementNS(NS, "svg");
@@ -315,47 +364,7 @@ export class Crystal {
   }
 
   private draw(angle: number): void {
-    const c = Math.cos(angle), s = Math.sin(angle);
-    const rotated = points.map(([x, y, z]) =>
-      [240 + (x - 240) * c + z * s, y, -(x - 240) * s + z * c]);
-    const faces = facets.map(face => {
-      const vertices = face.map(i => rotated[i]!);
-      const [a, b, d] = vertices as [number[], number[], number[], ...number[][]];
-      const ux = b[0]! - a[0]!, uy = b[1]! - a[1]!, uz = b[2]! - a[2]!;
-      const vx = d[0]! - a[0]!, vy = d[1]! - a[1]!, vz = d[2]! - a[2]!;
-      const normal = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
-      const length = Math.hypot(...normal);
-      return { vertices, normal: normal.map(n => n / length), depth: vertices.reduce((sum, v) => sum + v[2]!, 0) / vertices.length };
-    }).filter(face => face.normal[2]! > 0.0001).sort((a, b) => a.depth - b.depth);
-    this.paths.forEach(path => {
-      path.setAttribute("display", "none");
-      path.removeAttribute("d");
-      path.removeAttribute("fill");
-    });
-    faces.forEach((face, i) => {
-      const path = this.paths[i]!;
-      path.removeAttribute("display");
-      // A restrained, theme-aware tint lets broad planes read as surfaces.
-      const light = -0.4 * face.normal[0]! - 0.5 * face.normal[1]! + 0.75 * face.normal[2]!;
-      const ink = 2 + 8 * (1 - Math.max(0, light));
-      path.setAttribute("fill", `color-mix(in srgb, var(--bg), currentColor ${ink.toFixed(2)}%)`);
-      path.setAttribute("d", face.vertices.map((v, j) => `${j === 0 ? "M" : "L"}${v[0]!.toFixed(2)},${v[1]}`).join(" ") + " Z");
-    });
-    // The outline is only the current silhouette, never an edge in the mesh.
-    const projected = [...rotated].sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!);
-    const cross = (a: number[], b: number[], c: number[]): number =>
-      (b[0]! - a[0]!) * (c[1]! - a[1]!) - (b[1]! - a[1]!) * (c[0]! - a[0]!);
-    const half = (vertices: number[][]): number[][] => {
-      const hull: number[][] = [];
-      for (const v of vertices) {
-        while (hull.length > 1 && cross(hull[hull.length - 2]!, hull[hull.length - 1]!, v) <= 0) hull.pop();
-        hull.push(v);
-      }
-      hull.pop();
-      return hull;
-    };
-    const hull = [...half(projected), ...half([...projected].reverse())];
-    this.outline.setAttribute("d", hull.map((v, i) => `${i === 0 ? "M" : "L"}${v[0]!.toFixed(2)},${v[1]}`).join(" ") + " Z");
+    drawCrystal(this.paths, this.outline, angle);
   }
 
   spin(): void {
