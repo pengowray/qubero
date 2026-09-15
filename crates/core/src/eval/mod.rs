@@ -140,12 +140,12 @@ fn says_only_bytes(ty: &Ty) -> bool {
 /// near what one can be made to say.
 ///
 /// Measured rather than picked, in a debug build, whose frames are several
-/// times a release build's. A megabyte of stack, which is what wasm is given
-/// and what a thread on Windows starts with, carries about 280 components of
-/// a run that stops on what it reads (how bencode nests) and about 390 of a
-/// list of lists. So this is under half of the smaller of those, on the
-/// smallest stack any of it runs on, and there is several times the room in
-/// the build that ships.
+/// times a release build's. A megabyte of stack, which is what a thread on
+/// Windows starts with and half what the web build gives wasm, carries about
+/// 280 components of a run that stops on what it reads (how bencode nests)
+/// and about 390 of a list of lists. So this is under half of the smaller of
+/// those, on the smallest stack any of it runs on, and there is several times
+/// the room in the build that ships.
 ///
 /// Per component, not per level: the two shapes are much further apart per
 /// level than they are here, because a level of the first is four or five

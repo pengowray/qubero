@@ -18,14 +18,18 @@ fn arrow_samples() -> Option<PathBuf> {
 /// in a debug one, whose frames are six to ten times as large. The same as
 /// `deep_questions` gives each read there.
 ///
-/// Measured on 2026-09-14 by filling the stack with a known byte and counting
+/// Measured on 2026-09-15 by filling the stack with a known byte and counting
 /// how much of it a read wrote over (`cold_read <file> <KiB> paint <step>...`):
-/// the column of the last node of `more-types.arrow`, read first, took 178 KiB
-/// in a release build and 2.0 MiB in a debug one, and on a debug thread of 2
-/// MiB the test overflows its stack. A stack that runs out takes the test down
-/// with it, which is how a read that has come to need more stack per
+/// the column of the last node of `more-types.arrow`, read first, took 216 KiB
+/// in a release build and 2.5 MiB in a debug one, and on a debug thread of 2.5
+/// MiB the same read overflows its stack. A stack that runs out takes the test
+/// down with it, which is how a read that has come to need more stack per
 /// expression fails here.
 const STACK: usize = if cfg!(debug_assertions) { 4 << 20 } else { 640 << 10 };
+
+/// The most expressions a read may have open inside one another, which is
+/// `DEEPEST_QUESTION` in the evaluator.
+const LIMIT: usize = 110;
 
 fn open(root: &std::path::Path, name: &str) -> (Document<MemSource>, Evaluator) {
     let bytes = std::fs::read(root.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -584,7 +588,7 @@ fn every_node_read_first_says_what_it_says_in_order() {
     let count = in_order.node(&doc, &nodes).unwrap().child_count as usize;
     assert!(count > 20, "{count} nodes");
     let want: Vec<_> = (0..count).map(|i| node_walk_of(&mut in_order, &doc, &nodes, i)).collect();
-    assert!(in_order.deepest_question() < 88, "in order: {} deep", in_order.deepest_question());
+    assert!(in_order.deepest_question() < LIMIT, "in order: {} deep", in_order.deepest_question());
     let bytes = std::fs::read(root.join("more-types.arrow")).unwrap();
     let mut refused_before = 0;
     for (i, want) in want.iter().enumerate() {
@@ -601,7 +605,7 @@ fn every_node_read_first_says_what_it_says_in_order() {
             .unwrap();
         assert_eq!(&got, want, "node {i} read first");
         // The limit was reached on the way, which is the case this is for.
-        if deepest == 88 {
+        if deepest == LIMIT {
             refused_before += 1;
         }
     }

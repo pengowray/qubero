@@ -11,8 +11,9 @@
 //! The size is chosen so the test means something both ways: ten thousand
 //! links need hundreds of megabytes of stack in a debug build and tens in a
 //! release one, so without the guard every one of these crashes; with it, the
-//! guard's 88 expressions fit, with too little room over for a read whose
-//! stack per expression grows by half. See `STACK`.
+//! guard's 110 expressions fit, with too little room over for a read whose
+//! stack per expression grows by a fifteenth in a release build or an eighth
+//! in a debug one. See `STACK`.
 
 use qubero_core::document::Document;
 use qubero_core::eval::{EvalError, Evaluator, NodeInfo, Value};
@@ -26,19 +27,19 @@ const LINKS: usize = 10_000;
 /// given where it ships (`STACK_BUDGET` in the evaluator), and 4 MiB in a
 /// debug one, whose frames are six to ten times as large.
 ///
-/// Measured on 2026-09-14 by filling the stack with a known byte and counting
+/// Measured on 2026-09-15 by filling the stack with a known byte and counting
 /// how much of it a read wrote over (`stack_probe <links> <shape> <KiB>
-/// paint`). Read to the limit, the dearest shape here took 457 KiB in a
-/// release build, a switch on the element before, and 2.8 MiB in a debug
-/// one, a computed field naming the one before. 640 KiB and 4 MiB are
-/// each about two fifths more than that. On a debug thread of 3 MiB these
-/// tests pass, and on one of 2.5 MiB the process overflows its stack; on a
-/// release thread of 400 KiB it overflows too.
+/// paint`). Read to the limit, the dearest shape here took 571 KiB in a
+/// release build, a switch on the element before, and 3.5 MiB in a debug
+/// one, a computed field naming the one before. A thread of 640 KiB gives a
+/// read between 608 and 613 KiB, and one of 4 MiB between 3.93 and 3.98 MiB,
+/// about a fifteenth and an eighth more than that. The same reads overflow a
+/// release thread of 576 KiB and a debug one of 3.5 MiB.
 const STACK: usize = if cfg!(debug_assertions) { 4 << 20 } else { 640 << 10 };
 
 /// The most expressions a read may have open inside one another, which is
 /// `DEEPEST_QUESTION` in the evaluator.
-const LIMIT: usize = 88;
+const LIMIT: usize = 110;
 
 /// Read `path` of `bytes` with `template`, on a thread with `STACK` of stack,
 /// from a cold start: nothing else has been asked first. Also how many
@@ -162,7 +163,23 @@ fn a_search_back_reads_from_the_far_end() {
 fn an_expression_nested_past_the_limit_in_itself_is_refused() {
     let t = Template::new("deep", T::structure("Deep", vec![("v", T::computed(nested(E::lit(1), 200)))]));
     let why = refused(read_small(t, vec![0], vec![0]));
-    assert!(why.contains("88"), "{why}");
+    assert!(why.contains(&format!("more than {LIMIT} expressions")), "{why}");
+}
+
+/// A refusal says what expression it stopped at, and that is written once the
+/// read has come back up, not where it stopped. Writing an expression out
+/// costs a frame for every level of it. Here four hundred levels are left
+/// when the read is refused: written where it stopped, on top of every
+/// expression open, they overflow a debug build's thread, and written at the
+/// top they fit. A release build fits both ways, so only a debug build tests
+/// this.
+#[test]
+fn a_refusal_writes_its_expression_after_the_read_comes_back_up() {
+    let t = Template::new("deep", T::structure("Deep", vec![("v", T::computed(nested(E::lit(1), LIMIT + 400)))]));
+    let why = refused(read_small(t, vec![0], vec![0]));
+    // All of what was left, not a part of it.
+    assert!(why.contains("; stopped at v while evaluating 1 + 0 + 0"), "{why}");
+    assert_eq!(why.matches(" + 0").count(), 400, "{why}");
 }
 
 /// A search back through the list passes over an element that will not read,

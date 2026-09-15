@@ -17,6 +17,14 @@
 //! - `switch`: an element whose type is a switch on the element before it.
 //! - `length`: an element as long as the element before it.
 //! - `within`: a switch on a path into the element before, found by `sibling`.
+//! - `nested`: one computed field whose expression is `levels` sums deep in
+//!   itself, with no field between one level and the next.
+//! - `refused`: `sibling` again, with the first element's value nested 200
+//!   deep in itself, so the read is refused however it is asked, and
+//!   `refused-tagged` the same through `tagged`. These are the two reads of
+//!   `a_search_back_does_not_read_a_refusal_as_nothing_found` in
+//!   `deep_questions`. A refusal writes out the expression it stopped in, and
+//!   in a debug build writing 200 levels of it costs about a megabyte.
 //!
 //! Prints the answer, or the error, and how many expressions were open at
 //! most. A stack that runs out takes the process with it, which is the answer
@@ -125,6 +133,30 @@ fn main() {
                 "switch" => {
                     let elem = T::structure("Elem", vec![("b", T::switch(E::prev("b"), vec![(0, T::u8())], T::u8()))]);
                     (list(elem), vec![0; n], vec![n - 1, 0])
+                }
+                "nested" => {
+                    // One computed field whose expression is nested `levels`
+                    // deep in itself, refused however it is asked.
+                    let e = (0..n).fold(E::lit(1), |e, _| e.add(E::lit(0)));
+                    (Template::new("nested", T::structure("Nested", vec![("v", T::computed(e))])), vec![0], vec![0])
+                }
+                "refused" | "refused-tagged" => {
+                    // A search back whose far end is refused however it is
+                    // asked: the first element's value is nested 200 deep in
+                    // itself, and every element after it takes the value of
+                    // the one before.
+                    let first = (0..200).fold(E::lit(1), |e, _| e.add(E::lit(0)));
+                    let fallback = E::cond(E::idx().equal_to(E::lit(0)), first, E::lit(1));
+                    if shape == "refused" {
+                        let elem = T::structure("Elem", vec![("b", T::u8()), ("v", T::computed(E::sibling(&["v"]).or(fallback)))]);
+                        (list(elem), vec![0; n], vec![n - 1, 1])
+                    } else {
+                        let v = E::sibling_tagged(&["id"], E::idx().sub(E::lit(1)), &["v"]).or(fallback);
+                        let elem = T::structure("Elem", vec![("id", T::u16(Endian::Little)), ("v", T::computed(v))]);
+                        let t = Template::new("chain", T::array(T::sized(E::lit(2), elem), E::lit(n as i128)));
+                        let bytes = (0..n as u16).flat_map(|i| i.to_le_bytes()).collect();
+                        (t, bytes, vec![n - 1, 1])
+                    }
                 }
                 "length" => {
                     // A run of no bytes as long as the one before it, which is

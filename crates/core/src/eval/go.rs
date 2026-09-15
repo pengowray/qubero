@@ -20,9 +20,12 @@ use super::{EvalError, Missing, R, fail};
 /// For everything measured the count is reached first and this never fires,
 /// which is what makes it a backstop rather than the limit.
 ///
-/// 640 KiB fits in the megabyte wasm is given with room left for whoever
-/// called in, and carries about 175 components of the dearest measured shape
-/// in a debug build, which is comfortably past the 128 the count allows.
+/// 640 KiB fits in the megabyte of stack rust-lld gives a wasm module with
+/// room left for whoever called in, and carries about 175 components of the
+/// dearest measured shape in a debug build, which is comfortably past the 128
+/// the count allows. The web build asks for two megabytes
+/// (`crates/wasm/build.rs`), and the second is margin: none of the limits
+/// here were raised for it.
 const STACK_BUDGET: usize = 640 << 10;
 
 /// How many expressions one read may have open inside one another.
@@ -49,10 +52,10 @@ const STACK_BUDGET: usize = 640 << 10;
 /// between two fields counts too: a lookup written as twenty-six conditions is
 /// twenty-six deep, and spends the stack that way.
 ///
-/// The limit is what the dearest shape fits in `STACK_BUDGET`, the room a read
-/// is given with some left for whoever called in. It was set when the dearest
-/// cost 7.3 KiB an expression, found by shrinking a thread of one megabyte
-/// until a chain ran out: 640 KiB at 7.3 KiB each is 88.
+/// The limit is what the dearest shape fits in the stack a read has. It was
+/// first set when the dearest cost 7.3 KiB an expression, found by shrinking a
+/// thread of one megabyte until a chain ran out: `STACK_BUDGET`'s 640 KiB at
+/// 7.3 KiB each is 88.
 ///
 /// Measured again on 2026-09-14, after an expression came to read a field's
 /// value without the rest of its `NodeInfo`, in a release build like the one
@@ -62,33 +65,53 @@ const STACK_BUDGET: usize = 640 << 10;
 /// before found by a search back, at 5.1 KiB an expression, and read 88 deep
 /// they wrote over 453 KiB. A length taken from the element before costs 3.5
 /// KiB, a computed field naming the one before 3.3, a `prev` chain and a
-/// search by label about 2.2, spending two expressions a link. By that
-/// arithmetic the limit could be 124, and it stays at 88: a read refused here
-/// is asked again, so a higher limit would save only some of that asking,
-/// and the dearest shapes have not been measured in a wasm build. The deepest
-/// real reading is 52, an Arrow file with many columns read from its last
-/// buffer first, the same in a sweep of every sample in `check_tree` and
-/// `spans_probe` and in the sample tests. One of that file's field nodes read
-/// with nothing asked before it goes past the limit and is asked again.
+/// search by label about 2.2, spending two expressions a link.
 ///
-/// That one was measured in wasm, as the web app builds it, run in Node 26:
-/// the column of `more-types.arrow`'s last node read first wrote over 94 KiB
-/// of the megabyte of stack rust-lld gives the module, against 178 KiB of a
-/// native release build: the stack is the first megabyte of wasm memory, so
-/// it was filled with a known byte before the read and counted after it.
+/// 640 KiB at 5.1 KiB is 124, but a thread of 640 KiB does not give a read all
+/// of it. On one, the switch on a path read 118 deep fits and 119 deep runs
+/// out, so a read has between 608 and 613 KiB there. Read from the far end of
+/// ten thousand links to a limit of 120, refused and asked again, the same
+/// switch wrote over 624 KiB and ran out.
+///
+/// So the limit was raised from 88 to 110 on 2026-09-15. Read to it from the
+/// far end of ten thousand links, the switch on a path wrote over 573 KiB and
+/// the switch on the element before 571 KiB, 34 to 42 KiB under what the
+/// thread gives: their stack per expression can grow by about a fifteenth
+/// before `deep_questions` runs out in a release build. A read refused here is
+/// asked again, so the limit decides how much asking a read takes, not whether
+/// it gets through. The deepest real reading is 52, an Arrow file with many
+/// columns read from its last buffer first, the same in a sweep of every
+/// sample in `check_tree` and `spans_probe` and in the sample tests. One of
+/// that file's field nodes read with nothing asked before it goes past the
+/// limit and is asked again.
+///
+/// That one was measured in wasm, as the web app builds it, run in Node 26,
+/// while the limit was 88: the column of `more-types.arrow`'s last node read
+/// first wrote over 94 KiB of the megabyte of stack rust-lld gives the module,
+/// against 178 KiB of a native release build: the stack is the first megabyte
+/// of wasm memory, so it was filled with a known byte before the read and
+/// counted after it. Read to 110 it writes over 216 KiB in a native release
+/// build and 114 KiB in wasm, of a stack that is two megabytes there now.
 ///
 /// A debug build's frames are six to ten times as large: read to the limit, a
-/// chain of computed fields wrote over 2.8 MiB there. Tests run on the stack
-/// `.cargo/config.toml` gives them, which is far more, except the ones that
-/// read to the limit on purpose: `deep_questions` and the Arrow nodes read
-/// first in `arrow_real` read on threads of 640 KiB in a release build and 4
-/// MiB in a debug one. A read whose stack per expression grows by half fails
-/// `deep_questions` in either build; the Arrow read takes less, 178 KiB and
-/// 2.0 MiB, and fails a debug build when its stack about doubles.
+/// chain of computed fields wrote over 3.5 MiB there, the dearest shape in
+/// that build. A read refused at the limit takes less: a search back to a
+/// refusal, from the far end of ten thousand links, wrote over 2.9 MiB, since
+/// what the refusal says is written at the top of the read (see
+/// `refused_here`). Written where it stopped, the same read took 4.0 MiB.
+///
+/// Tests run on the stack `.cargo/config.toml` gives them, which is far more,
+/// except the ones that read to the limit on purpose: `deep_questions` and the
+/// Arrow nodes read first in `arrow_real` read on threads of 640 KiB in a
+/// release build and 4 MiB in a debug one, where a read has between 3.93 and
+/// 3.98 MiB. A read whose stack per expression grows by about a fifteenth
+/// fails `deep_questions` in a release build, and by about an eighth in a
+/// debug one. The Arrow read takes less, 216 KiB and 2.5 MiB, and fails a
+/// debug build when its stack grows by about three fifths.
 ///
 /// `cargo run --release --example stack_probe -- <levels> <shape> <KiB> [paint]`
-/// is where these numbers come from.
-pub(super) const DEEPEST_QUESTION: usize = 88;
+/// is where these numbers come from, and `cold_read` for the Arrow read.
+pub(super) const DEEPEST_QUESTION: usize = 110;
 
 /// How far apart the questions kept while a refused read is asked again are,
 /// counted in expressions. Asking one of them again reads down to the one kept
@@ -116,6 +139,15 @@ pub(super) struct Question {
     pub(super) here: Option<(u64, u64)>,
     pub(super) asked: Asked,
     pub(super) depth: usize,
+}
+
+/// Where the last refusal for depth started: what it said there, and the
+/// field and expression it stopped at, for `Evaluator::outermost` to write
+/// the expression into what it says once the read has come back up.
+pub(super) struct Refused {
+    pub(super) said: String,
+    pub(super) at: Vec<usize>,
+    pub(super) expr: Expr,
 }
 
 #[derive(Default)]
@@ -152,6 +184,9 @@ pub(super) struct Go {
     /// expression opened after it means the refusal was passed over, and
     /// lets the trail go on.
     held: bool,
+    /// The last refusal for depth, until the outermost expression of its
+    /// read takes it. See `Refused`.
+    refused: Option<Refused>,
 }
 
 impl Go {
@@ -174,6 +209,7 @@ impl Go {
         self.asking_again = false;
         self.trail.clear();
         self.held = false;
+        self.refused = None;
     }
 
     /// The same, and back to the start of the file, for when what was worked
@@ -325,6 +361,16 @@ impl Go {
         self.trail.retain(|q| q.depth < depth);
         self.trail.push(Question { at: at.to_vec(), expr: expr.clone(), here, asked, depth });
         self.held = true;
+    }
+
+    /// Note where a refusal for depth started and what it said there.
+    pub(super) fn refused_at(&mut self, said: &str, at: &[usize], expr: &Expr) {
+        self.refused = Some(Refused { said: said.to_string(), at: at.to_vec(), expr: expr.clone() });
+    }
+
+    /// Where the last refusal for depth started, and none kept after.
+    pub(super) fn take_refused(&mut self) -> Option<Refused> {
+        self.refused.take()
     }
 
     /// The trail as the last refusal left it, shallowest first, and none left
