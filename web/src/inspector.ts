@@ -16,6 +16,8 @@ import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText,
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
+import { spinner } from "./spinner.ts";
+import type { ArchiveSumSlot } from "./sumjob.ts";
 import { anyStored, clauseStored, readShown, storedLine, templateLine, writeShown, type StoredLine } from "./storedpath.ts";
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
@@ -248,6 +250,10 @@ export class Inspector {
   private readonly types: HTMLElement;
   /** Human-readable dates and checks derived from format fields. */
   private readonly semantics: HTMLElement;
+  /** The background sums this panel is listening to, and what it last showed
+   *  of them, so a sum arriving re-renders only when it changes that. */
+  private sumsHeard: { readonly job: object; readonly stop: () => void } | null = null;
+  private sumShown: { readonly index: number; readonly key: string } | null = null;
   /** Which other fields settled this one's length, count, type or place. */
   private readonly origins: HTMLElement;
   /** Offer to open this field's bytes as a document in a tab of its own. */
@@ -1345,17 +1351,12 @@ export class Inspector {
         parts.push(note);
       }
     }
-    const crcText = (crc: number): string => `0x${crc.toString(16).padStart(8, "0")}`;
     if (plan !== null) {
       // A sum whose field holds a placeholder is not checked: against the
       // nought in the field every file would read as damaged.
-      const instead = placeholder === null ? null : placeholder.crc === null ? ARCHIVE_SUMS.pending : ARCHIVE_SUMS.known(crcText(placeholder.crc));
-      parts.push(this.integrityWidget(plan, instead));
+      parts.push(this.integrityWidget(plan, placeholder === null ? null : this.archiveSumState(placeholder, plan)));
     } else if (placeholder !== null) {
-      const note = document.createElement("div");
-      note.className = "insp-note";
-      note.textContent = placeholder.crc === null ? ARCHIVE_SUMS.pendingNote : ARCHIVE_SUMS.knownNote(crcText(placeholder.crc));
-      parts.push(note);
+      parts.push(this.archiveSumState(placeholder, null));
     }
     this.semantics.replaceChildren(...parts);
     this.semantics.hidden = false;
@@ -1363,15 +1364,102 @@ export class Inspector {
 
   /**
    * Whether the field is a CRC-32 field of an archive built from a folder too
-   * large to sum before it opened, which holds nought until Save as writes the
-   * sum, and that sum once it is known. Only a field of the file itself, still
-   * where the archive was built with it, and not one a reader has typed over.
+   * large to sum before it opened, which holds nought until the sum is written
+   * in, and where it is. Only a field of the file itself, still where the
+   * archive was built with it, still nought, and not one a reader has typed
+   * over: a field holding any other number is checked like any other, so a
+   * wrong one still reads as a mismatch.
    */
-  private archiveSumAt(n: TemplateNode): { readonly crc: number | null } | null {
+  private archiveSumAt(n: TemplateNode): { readonly slot: ArchiveSumSlot; readonly at: number } | null {
     const sums = this.doc.archiveSums;
+    this.sumShown = null;
     if (sums === null || n.space !== 0 || n.size_bits !== 32 || n.offset_bits % 8 !== 0) return null;
-    const at = this.doc.sourceByteOf(n.offset_bits / 8);
-    return at === null ? null : sums.slotAt(at);
+    const at = n.offset_bits / 8;
+    const from = this.doc.sourceByteOf(at);
+    const slot = from === null ? null : sums.slotAt(from);
+    if (slot === null || this.doc.read(at, 4).bytes.some((b) => b !== 0)) return null;
+    const job = sums.job;
+    if (this.sumsHeard?.job !== job) {
+      this.sumsHeard?.stop();
+      // Reads come in every few megabytes; the panel changes only when the job
+      // starts, fails or finishes a file.
+      const stop = job.onChange(() => {
+        if (this.sumShown !== null && this.sumShown.key !== this.sumKey(this.sumShown.index)) this.render();
+      });
+      this.sumsHeard = { job, stop };
+    }
+    this.sumShown = { index: slot.index, key: this.sumKey(slot.index) };
+    return { slot, at };
+  }
+
+  /** What the panel shows of entry `index`'s background sum. */
+  private sumKey(index: number): string {
+    const job = this.doc.archiveSums?.job;
+    return job === undefined ? "" : `${index} ${job.started} ${job.sum(index)} ${job.error?.message}`;
+  }
+
+  /**
+   * What a placeholder CRC-32 field is waiting on, in the Integrity section's
+   * result slot or, for the central directory's copy, under the value. The
+   * sum is of the file as it was on disk, so once those bytes are edited it
+   * is no longer theirs and is not offered; with an Integrity section the
+   * sum of the bytes as they are now can be taken instead.
+   */
+  private archiveSumState(where: { readonly slot: ArchiveSumSlot; readonly at: number }, plan: IntegrityPlan | null): HTMLElement {
+    const job = (this.doc.archiveSums as NonNullable<Doc["archiveSums"]>).job;
+    const { slot, at } = where;
+    const box = document.createElement("div");
+    box.className = "insp-check-result insp-sum-state";
+    const line = (className: string, ...children: (Node | string)[]): HTMLElement => {
+      const d = document.createElement("div");
+      d.className = className;
+      d.append(...children);
+      return d;
+    };
+    const button = (text: string, act: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "insp-check-button";
+      b.textContent = text;
+      b.addEventListener("click", act);
+      return b;
+    };
+    const hex = (crc: number): string => `0x${crc.toString(16).padStart(8, "0")}`;
+    const known = (crc: number): void => {
+      const update = button(ARCHIVE_SUMS.updateTo(hex(crc)), () => {
+        const bytes = new Uint8Array(4);
+        new DataView(bytes.buffer).setUint32(0, crc, true);
+        this.doc.replaceAt(at, 4, bytes);
+      });
+      box.replaceChildren(line("", ARCHIVE_SUMS.placeholder), update);
+    };
+    const failed = (message: string): void => box.replaceChildren(line("bad", CHECKED.notChecked(message)));
+    const waiting = (): void => box.replaceChildren(line("", spinner(), ARCHIVE_SUMS.calculating));
+    if (!this.doc.sourceRangeIntact(slot.data.at, slot.data.bytes)) {
+      const flag = line("bad", ARCHIVE_SUMS.outdated);
+      if (plan === null) {
+        box.replaceChildren(flag);
+        return box;
+      }
+      const recalculate = button(ARCHIVE_SUMS.calculateNow, () => {
+        waiting();
+        plan.check().then(
+          ({ actual }) => {
+            const crc = /^0x[0-9a-f]{1,8}$/i.test(actual) ? Number.parseInt(actual, 16) : Number.NaN;
+            if (Number.isNaN(crc)) failed(actual);
+            else known(crc);
+          },
+          (cause: unknown) => failed(cause instanceof Error ? cause.message : CHECKED.unknownFailure),
+        );
+      });
+      box.replaceChildren(flag, recalculate);
+      return box;
+    }
+    if (slot.crc !== null) known(slot.crc);
+    else if (job.error !== null) failed(job.error.message);
+    else if (job.started) waiting();
+    else box.replaceChildren(line("", ARCHIVE_SUMS.onSave), button(ARCHIVE_SUMS.calculateNow, () => job.start()));
+    return box;
   }
 
   /**
@@ -1461,15 +1549,14 @@ export class Inspector {
 
   /** The Integrity section. `instead` is what the result slot says in place of
    *  running the check, for a sum whose field does not hold it yet. */
-  private integrityWidget(plan: IntegrityPlan, instead: string | null = null): HTMLElement {
+  private integrityWidget(plan: IntegrityPlan, instead: HTMLElement | null = null): HTMLElement {
     const box = document.createElement("div");
     box.className = "insp-integrity";
     const result = document.createElement("div");
     result.className = "insp-check-result";
     const { element: covered, setSize } = this.coveredRows(plan);
     if (instead !== null) {
-      result.textContent = instead;
-      box.append(subhead("Integrity"), covered, result);
+      box.append(subhead("Integrity"), covered, instead);
       return box;
     }
     const run = async (): Promise<void> => {

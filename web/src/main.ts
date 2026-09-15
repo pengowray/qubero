@@ -846,22 +846,21 @@ function build(tab: Tab): Page {
   const save = async (): Promise<void> => {
     if (saveBtn.disabled) return;
     // What came from a folder asks first whether to save it or a ZIP of the
-    // folder, and whether that ZIP gets its CRC-32s. Anything else saves as it
-    // always has.
+    // folder. Anything else saves as it always has.
     const built = builtFor.get(doc);
     const from = folderDocs.has(doc) ? folder : null;
-    let choice: SaveAsChoice = { whole: false, crc: true };
+    let choice: SaveAsChoice = { whole: false };
     if (built !== undefined || (from !== null && from.at !== null)) {
       const files = built?.files ?? from?.files ?? [];
       const total = files.reduce((n, f) => n + f.file.size, 0);
-      const sums = doc.archiveSums;
       const asked = await askSaveAs({
         file: built !== undefined ? null : { name: doc.name, size: formatSize(doc.lengthBytes) },
         zip: from?.zip ?? doc.name,
         files: FOLDER.files(files.length),
         size: formatSize(total),
         edited: doc.modified ? doc.name : null,
-        crcCost: built !== undefined && (sums === null || sums.job.finished) ? null : formatSize(total),
+        sums: built !== undefined ? (doc.archiveSums?.job ?? null) : null,
+        formatSize,
       });
       if (asked === null) return;
       choice = asked;
@@ -877,7 +876,6 @@ function build(tab: Tab): Page {
       zipName = doc.name;
       const sums = doc.archiveSums;
       const source = async (): Promise<Blob> => {
-        if (!choice.crc) return built.summed ? built.withSums(built.files.map(() => 0)) : built.blob;
         if (sums === null) return built.blob;
         const job = sums.job;
         const progress = (): void => {
@@ -902,7 +900,6 @@ function build(tab: Tab): Page {
         const edited = doc.modified ? await doc.buildOutput() : null;
         const files = from.files.map((f, i) => (i === at && edited !== null ? { ...f, file: edited } : f));
         const zip = await storedZip(orderForArchive(files), {
-          sums: choice.crc,
           progress: (p) => (saveMsg.textContent = SAVE_AS.progress(from.zip, formatSize(p.done), formatSize(p.total))),
         });
         return zip.blob;
@@ -913,7 +910,7 @@ function build(tab: Tab): Page {
     unwatch();
     saveBtn.disabled = false;
     const saved = (bytes: number): string =>
-      zipName === null ? `Saved ${formatSize(bytes)}` : choice.crc ? SAVE_AS.done(zipName, formatSize(bytes)) : SAVE_AS.doneNoCrc(zipName, formatSize(bytes));
+      zipName === null ? `Saved ${formatSize(bytes)}` : SAVE_AS.done(zipName, formatSize(bytes));
     saveMsg.textContent = r.kind === "saved" ? saved(r.bytes) : r.kind === "cancelled" ? "" : `Save failed: ${r.message}`;
     saveMsg.classList.toggle("warn", r.kind === "failed");
   };

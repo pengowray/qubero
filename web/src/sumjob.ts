@@ -7,8 +7,8 @@
  * the file Save as writes, so they are taken in the background: in a worker
  * where the browser has one, and a slice at a time in idle moments where it has
  * not. Save as waits for whatever is left and writes the archive with the sums
- * in; the open document keeps its noughts, and the inspector says what they
- * are (`ArchiveSums.slotAt`).
+ * in; the open document keeps its noughts until the reader writes a sum in from
+ * the inspector, which says what each field is waiting on (`ArchiveSums.slotAt`).
  */
 
 import { crc32Update } from "./crc32.ts";

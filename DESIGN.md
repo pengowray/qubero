@@ -3335,7 +3335,7 @@ list over the views, and steps to the files either side. A dataset's list leads
 with the whole dataset, so its files can each be opened as plain files and the
 dataset opened again. The ZIP is the reader's business only in Save as, which
 for anything from a folder asks first: this file or the whole folder as one
-stored ZIP (a dataset has only the ZIP), and whether to write its CRC-32s. The
+stored ZIP (a dataset has only the ZIP). The ZIP always has its CRC-32s. The
 whole folder's ZIP takes the open file with its edits. Earlier, every folder
 opened as the ZIP, which asked a reader of a folder of photos to think about an
 archive nobody had made.
@@ -3358,17 +3358,31 @@ before it opens, with a count of how far it has got and a way to stop, which
 for that size is over before the count shows. A larger one opens at once with
 nought in every CRC-32 field (2026-09-15). `sumjob.ts` takes the sums after the
 page settles, in a worker, or a slice per idle moment where there is none, and
-Save as writes them unless the reader unticks the box, which writes nought in
-every field whether or not they were taken: `BuiltZip.withSums` is the same archive with the headers
+Save as always writes them. The dialog used to have a box to leave them out,
+which wrote nought in every field and gave unzip tools a checksum error per
+file; saving a wrong archive to skip a wait was not worth a choice, and it
+went (2026-09-15). `BuiltZip.withSums` is the same archive with the headers
 copied and filled in, and `Doc.buildOutput` takes it in place of the file the
 document was opened from, so an unchanged stretch is read from the summed
-archive and an edit still wins. Save as asks for the file first, while the
-click still counts, then waits for any sums still being read, saying how far
-they are. The open document keeps its noughts. The inspector says what they are
-on either field, in the Integrity slot for the local header's and on a line
-under the value for the central directory's, before the sum is known and after,
-and runs no check against them. A 64 MiB folder
-opened in 144 ms, its sums done in the worker 600 ms later.
+archive and an edit still wins. Opening the dialog starts any sums not yet
+started and shows how far they are beside a spinner (`spinner.ts`, the
+welcome screen's crystal at the height of a line of text). Save as asks for the
+file first, while the click still counts, then waits for the rest.
+
+The open document keeps its noughts until the reader writes a sum in. The
+inspector shows the state on either field, in the Integrity slot for the local
+header's and under the value for the central directory's, and runs no check
+against a nought: `Computed on save.` with `Calculate now` before the job has
+started, the spinner while it runs, and once the sum is known `Placeholder
+checksum (0).` with `Update to: 0x…`, which writes it as an ordinary undoable
+edit. A written field is no longer a placeholder and is checked like any other,
+and so is a field holding anything but nought, so a wrong sum still reads as a
+mismatch. The job sums the files on disk, so once an entry's bytes are edited
+(`Doc.sourceRangeIntact`) its sum is `Outdated` and not offered; the local
+header's `Calculate now` then sums the bytes as they are. The panel re-renders
+when the job starts, fails or finishes a file, not on every read. Save as
+still writes the on-disk sum for an edited entry that was not updated. A 64 MiB
+folder opened in 144 ms, its sums done in the worker 600 ms later.
 
 **The dataset.** A ZIP is `adioszip` (`formats/adios/dataset.rs`) when its front
 holds a BP5 index or format list, stored or deflated, or when its central

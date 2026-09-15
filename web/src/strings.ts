@@ -2430,39 +2430,41 @@ export const SAVE_AS = {
   withEdits: (file: string): string => `Includes your unsaved edits to ${file}.`,
   /** A dataset has only the ZIP to save, so it is a statement, not a choice. */
   datasetOnly: (zip: string, files: string, size: string): string =>
-    `${zip} (${files}, ${size}, stored without compression). Unzip it to get the folder back.`,
-  /** The cost is named only while it is still to be paid. */
-  crc: (size: string | null): string => (size === null ? "Write CRC-32 checksums" : `Write CRC-32 checksums (reads all ${size} first)`),
-  crcOffNote: "Unchecked: every CRC-32 field holds 0 and unzip tools report checksum errors. This app opens the ZIP either way.",
+    `${zip} (${files}, ${size}, stored without compression).`,
+  /** Beside a spinner, while the CRC-32s a dataset's ZIP is written with are
+   *  still being read. Saving waits for them. */
+  calculating: (done: string, total: string): string => `Calculating checksums (${done} of ${total})…`,
   ok: "Save…",
   cancel: "Cancel",
   /** The toolbar button's tooltip while a file of a folder is open. */
   buttonTitle: "Save this file or the whole folder (Ctrl+S)",
   progress: (zip: string, done: string, total: string): string => `Saving ${zip}: checksums ${done} of ${total}…`,
-  done: (zip: string, size: string): string => `Saved ${zip} (${size}). Unzip it to get the folder back.`,
-  doneNoCrc: (zip: string, size: string): string => `Saved ${zip} (${size}) without checksums.`,
+  done: (zip: string, size: string): string => `Saved ${zip} (${size}).`,
 } as const;
 
 /**
  * The CRC-32 fields of a dataset read from a folder too large to sum before it
- * opened: nought in the document, the sums taken in the background, and Save
- * as writing them when asked to. See `sumjob.ts`.
+ * opened: 0 in the document, the sums taken in the background, and Save as
+ * always writing them. See `sumjob.ts`.
  *
- * Neither state is a verdict: `Not checked` already means a check that did not
- * run, and `Mismatch` means damage. Both say what the field holds and what
- * saving does about it.
+ * Shown in the Integrity section's result slot, where `Valid` or `Mismatch`
+ * would be, and for the central directory's copy, which has no Integrity
+ * section, under the value. None of them is a verdict: `Mismatch` means damage,
+ * and a field that holds a number other than 0 is checked like any other.
  */
 export const ARCHIVE_SUMS = {
-  /** In the Integrity section's result slot, where `Valid` or `Mismatch` would
-   *  be, while the sum is still being taken. Nothing to press: the slot does
-   *  not update as the sum is read, and Save as waits for it. */
-  pending: "Not computed yet: this field holds 0 while the CRC-32 is calculated in the background. Save as, with checksums on, writes it.",
-  /** The same, once the sum is known. */
-  known: (crc: string): string => `Holds 0 in this document; the real CRC-32 is ${crc}. Save as, with checksums on, writes it.`,
-  /** A plain line under the value, for the central directory's copy of the
-   *  sum, which has no Integrity section. The same words as the slot. */
-  pendingNote: "Not computed yet: this field holds 0 while the CRC-32 is calculated in the background. Save as, with checksums on, writes it.",
-  knownNote: (crc: string): string => `Holds 0 in this document; the real CRC-32 is ${crc}. Save as, with checksums on, writes it.`,
+  /** Not started: the sums wait for the page to be idle. */
+  onSave: "Computed on save.",
+  calculateNow: "Calculate now",
+  /** Beside a spinner. */
+  calculating: "Calculating CRC-32…",
+  /** The sum is known and the field still holds 0. */
+  placeholder: "Placeholder checksum (0).",
+  /** Writes the sum into the field as an ordinary, undoable edit. */
+  updateTo: (crc: string): string => `Update to: ${crc}`,
+  /** The file's bytes were edited, so a sum of them as they were on disk is
+   *  no longer theirs and is not offered. */
+  outdated: "Outdated",
 } as const;
 
 /** The row above the views when one file of a BP5 dataset is opened by
@@ -2478,7 +2480,7 @@ export const DATASET_MEMBER = {
   open: "Open the folder…",
   openTitle: "Pick the folder this file is in; it opens as the whole dataset.",
   /** A file lifted out of a dataset, which reads in the dataset and not here. */
-  lifted: (dataset: string): string => `Opened on its own from the dataset ${dataset}. The dataset's records are read in the ${dataset} tab, not here.`,
+  lifted: (dataset: string): string => `Opened on its own from the dataset ${dataset}. The dataset's records are read in the ${dataset} tab.`,
   wrongFolder: (folder: string, file: string): string => `${folder} has no ${file}. Pick the folder that holds this file.`,
 } as const;
 
