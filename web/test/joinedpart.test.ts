@@ -21,6 +21,7 @@ const PAGE: JoinedPart = {
   parts: 11,
   path: [11, 0, 2, 2, 4, 0, 0, 0],
   label: "pages[0]",
+  stored: null,
   in_part: 0x50,
   part_len: 4096,
   run_offset_bits: 0x144000 * 8,
@@ -37,6 +38,7 @@ const BLOCK: JoinedPart = {
   parts: 9,
   path: [0, 3, 4],
   label: "blocks[3].compressed",
+  stored: null,
   in_part: 0x1c,
   part_len: 65280,
   run_offset_bits: (0x12 + 18) * 8,
@@ -87,6 +89,14 @@ test("a joined tab's unpacked run says so, with its virtual offset, and the step
   assert.equal(groups[0]?.lines[0]?.plus, "Offset within unpacked blocks[3].compressed");
   // The step says what made the byte and names no place.
   assert.equal(groups[1]?.lines[0]?.place, false);
+});
+
+test("a run stored at a longer path says whose path it is, and only that row does", () => {
+  // No format with encoding wrappers joins a stream yet; this is the shape one
+  // would give.
+  const group = startsInGroup({ ...BLOCK, label: "blocks[3].data", stored: "blocks.elems[3].fields[2].value" });
+  assert.deepEqual(group.lines.map((l) => l.stored), [{ subject: "blocks[3].data", path: "blocks.elems[3].fields[2].value" }, null]);
+  assert.ok(startsInGroup(PAGE).lines.every((l) => l.stored === null));
 });
 
 test("the open button and its refusals say joined, not unpacked", () => {

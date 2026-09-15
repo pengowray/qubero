@@ -23,6 +23,9 @@ export type PartLine = {
   /** False for the decoder's step, which says what made the byte rather than
    *  naming a place, and is drawn as the status bar's line is. */
   readonly place: boolean;
+  /** The run the row names, and the path the file stores it at, where an
+   *  encoding's own steps make that differ from its name. See `storedpath.ts`. */
+  readonly stored: { readonly subject: string; readonly path: string } | null;
 };
 
 /** A heading and the rows under it. */
@@ -43,11 +46,18 @@ export type PartGroup = { readonly head: string; readonly lines: readonly PartLi
 function placeLines(part: JoinedPart, file: string | null): PartLine[] {
   const at = `${ADDRESS_MARK}+${offsetDigits(part.in_part * 8)}`;
   const lines: PartLine[] = [
-    { text: JOINED.at(at, part.label, part.packed), plus: JOINED.plusTitle(part.label, part.packed), title: null, path: file === null ? part.path : null, place: true },
+    {
+      text: JOINED.at(at, part.label, part.packed),
+      plus: JOINED.plusTitle(part.label, part.packed),
+      title: null,
+      path: file === null ? part.path : null,
+      place: true,
+      stored: part.stored === null ? null : { subject: part.label, path: part.stored },
+    },
   ];
   if (!part.packed && part.run_space === 0) {
     const inFile = formatOffset(part.run_offset_bits + part.in_part * 8);
-    lines.push({ text: file === null ? JOINED.inFile(inFile) : JOINED.inNamedFile(inFile, file), plus: null, title: null, path: null, place: true });
+    lines.push({ text: file === null ? JOINED.inFile(inFile) : JOINED.inNamedFile(inFile, file), plus: null, title: null, path: null, place: true, stored: null });
   }
   if (part.block_offset !== null && part.in_block !== null) {
     const voffset = (BigInt(part.block_offset) << 16n) | BigInt(part.in_block);
@@ -57,6 +67,7 @@ function placeLines(part: JoinedPart, file: string | null): PartLine[] {
       title: JOINED.virtualTitle(formatOffset(part.block_offset * 8)),
       path: null,
       place: true,
+      stored: null,
     });
   }
   return lines;
@@ -85,7 +96,7 @@ export function startsInGroup(part: JoinedPart): PartGroup {
 export function tabGroups(part: JoinedPart, file: string, underCursor: boolean, step: string | null): PartGroup[] {
   const groups: PartGroup[] = [{ head: underCursor ? JOINED.underCursor : JOINED.startsIn, lines: placeLines(part, file) }];
   if (part.packed && step !== null) {
-    groups.push({ head: UNPACKED.originHead, lines: [{ text: step, plus: null, title: null, path: null, place: false }] });
+    groups.push({ head: UNPACKED.originHead, lines: [{ text: step, plus: null, title: null, path: null, place: false, stored: null }] });
   }
   return groups;
 }

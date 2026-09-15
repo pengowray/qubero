@@ -88,8 +88,16 @@ impl Role {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Origin {
     pub role: Role,
-    /// The field as the reader would name it: `len`, or `tensors[3].offset`.
+    /// The field as the reader would name it: `len`, or `tensors[3].offset`,
+    /// or `meta_data.data_page_offset` for a field of a Parquet footer, in the
+    /// names the format's specification uses.
     pub label: String,
+    /// The same field named by every step the file stores on the way to it,
+    /// where that differs from `label`: `fields[id = 3].value.fields[7].value`
+    /// for that Parquet field, since Thrift keeps a struct as a list of
+    /// entries. None for nearly every field, whose label is already that. See
+    /// [`crate::template::EncodingStep`].
+    pub stored: Option<String>,
     /// Where that field is, so the reader can go there. Empty when the number
     /// came from somewhere with no field of its own.
     pub path: Vec<usize>,
@@ -187,6 +195,7 @@ impl Evaluator {
                 out.push(Origin {
                     role: Role::Points,
                     label,
+                    stored: None,
                     path: Vec::new(),
                     value: String::new(),
                     target_bits: Some(bits),
@@ -266,7 +275,7 @@ impl Evaluator {
             }
             label = format!("{label}.{}", field.join("."));
         }
-        let o = self.origin(doc, out.values, Role::Position, label, p);
+        let o = self.origin_from(doc, out.values, Role::Position, label, p, list)?;
         out.push(o);
         Ok(())
     }
@@ -306,7 +315,7 @@ impl Evaluator {
         let Some(Ty::Gather { offset, .. }) = self.memo.get(list).map(|r| r.ty.clone()) else { return Ok(()) };
         let record = self.gathered_record(doc, list, idx)?;
         let label = self.gathered_label(doc, list, &record)?;
-        let o = self.origin(doc, out.values, Role::Position, label, record.clone());
+        let o = self.origin_from(doc, out.values, Role::Position, label, record.clone(), list)?;
         out.push(o);
         let (end, _) = self.record_frame(doc, &record)?;
         self.from_expr(doc, &end, &offset, Role::Position, out)
@@ -330,7 +339,7 @@ impl Evaluator {
             return Ok(());
         }
         let label = format!("{name}[{}].{}", idx - 1, next.join("."));
-        let o = self.origin(doc, out.values, Role::Position, label, p);
+        let o = self.origin_from(doc, out.values, Role::Position, label, p, list)?;
         out.push(o);
         Ok(())
     }
@@ -364,9 +373,16 @@ impl Evaluator {
         let mut named = Sink::told(out.values);
         self.from_expr(doc, &frame.end, part_len, Role::Length, &mut named)?;
         let holder = self.walk_label(doc, parent, &from, &frame.holder)?;
+        let short = match out.values.then(|| self.short_label(doc, parent, &frame.holder)) {
+            Some(Ok(Some(short))) => short,
+            Some(Err(e)) if e.interrupted() => return Err(e),
+            _ => holder.clone(),
+        };
         for mut o in named.out {
             if !holder.is_empty() && o.path.starts_with(&frame.holder) && !parent.starts_with(&frame.holder) {
-                o.label = format!("{holder}.{}", o.label);
+                let stored = format!("{holder}.{}", o.stored.as_deref().unwrap_or(&o.label));
+                o.label = format!("{short}.{}", o.label);
+                o.stored = (stored != o.label).then_some(stored);
             }
             out.push(o);
         }
@@ -601,7 +617,7 @@ impl Evaluator {
                     }
                     label = format!("{label}.{name}");
                 }
-                let o = self.origin(doc, out.values, role, label, p);
+                let o = self.origin_from(doc, out.values, role, label, p, at)?;
                 out.push(o);
             }
             Expr::Elem { array, index, field } | Expr::Product { array, index, field } => {
@@ -623,7 +639,7 @@ impl Evaluator {
                     }
                     label = format!("{label}.{name}");
                 }
-                let mut o = self.origin(doc, out.values, role, label, p);
+                let mut o = self.origin_from(doc, out.values, role, label, p, at)?;
                 if product && out.values {
                     o.value = self.eval_expr(doc, at, e)?.to_string();
                 }
@@ -645,7 +661,7 @@ impl Evaluator {
                 let t = t.clone();
                 let here = self.memo.get(at).map(|r| (r.offset, r.limit));
                 if let Some((p, label)) = self.tagged_path(doc, at, &t, here)? {
-                    let o = self.origin(doc, out.values, role, label, p);
+                    let o = self.origin_from(doc, out.values, role, label, p, at)?;
                     out.push(o);
                 }
             }
@@ -740,6 +756,33 @@ impl Evaluator {
             Some(Ok(info)) => brief(&info.value),
             _ => String::new(),
         };
-        Origin { role, label, path, value, target_bits: None }
+        Origin { role, label, stored: None, path, value, target_bits: None }
+    }
+
+    /// The same answer, for a label written as a path from `at`: named the
+    /// way the format names it where the path goes through an encoding's own
+    /// steps, with the label as stored kept beside it. See `shortpath.rs`.
+    ///
+    /// Only for a collector that shows what it collects. The names are read
+    /// from the file, a member's tag at a time, and a graph asking the same of
+    /// every field in a subtree draws no labels.
+    fn origin_from<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        values: bool,
+        role: Role,
+        label: String,
+        path: Vec<usize>,
+        at: &[usize],
+    ) -> R<Origin> {
+        let mut o = self.origin(doc, values, role, label, path);
+        if values {
+            match self.short_label(doc, at, &o.path) {
+                Ok(Some(short)) if short != o.label => o.stored = Some(std::mem::replace(&mut o.label, short)),
+                Err(e) if e.interrupted() => return Err(e),
+                _ => {}
+            }
+        }
+        Ok(o)
     }
 }

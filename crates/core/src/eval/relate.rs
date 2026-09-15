@@ -29,7 +29,16 @@ pub struct Relation {
     /// What the expression decides about the field.
     pub role: Role,
     /// The expression as the template writes it: `cell_content_start - 100`.
+    /// A field reached through an encoding's own steps is named the way the
+    /// format names it, the way its row above the formula names it:
+    /// `descriptor.meta_data.total_compressed_size` for a Parquet column
+    /// chunk's length. See `template`.
     pub written: String,
+    /// The expression exactly as the template writes it, where that differs
+    /// from `written`: `descriptor.(fields[id = 3].value.fields[id = 7].value)`.
+    /// None for nearly every relationship, whose leaves are already named
+    /// that way. See [`crate::template::EncodingStep`].
+    pub template: Option<String>,
     /// The same with every field's value in its place: `3936 - 100`.
     pub substituted: String,
     /// What it comes to.
@@ -223,7 +232,40 @@ impl Evaluator {
         if substituted == result {
             return;
         }
-        out.push(Relation { role, written, substituted, result });
+        match template_text::with_leaves(e, &mut |leaf| self.short_leaf(doc, at, leaf, here)) {
+            Some(short) if short != written => {
+                out.push(Relation { role, written: short, template: Some(written), substituted, result })
+            }
+            _ => out.push(Relation { role, written, template: None, substituted, result }),
+        }
+    }
+
+    /// One leaf of an expression, with the field it names named the way the
+    /// format names it where that is shorter than the template's spelling.
+    /// Every other leaf is written as the template writes it. See
+    /// `shortpath.rs`.
+    fn short_leaf<S: Source>(&mut self, doc: &Document<S>, at: &[usize], leaf: &Expr, here: Option<(u64, u64)>) -> Option<String> {
+        if let Expr::Placer(inner) = leaf {
+            // Asked of the record that placed this element, so named from
+            // there, and written with the word the template writes it with.
+            if let Ok((end, frame)) = self.placer_frame(doc, at) {
+                if let Some(short) = self.short_path(doc, &end, inner, frame) {
+                    return Some(format!("descriptor.{short}"));
+                }
+            }
+            return write_expr(leaf);
+        }
+        self.short_path(doc, at, leaf, here).or_else(|| write_expr(leaf))
+    }
+
+    /// The field a leaf that names a path lands on, named the way the format
+    /// names it, when an encoding's own steps are on the way to it.
+    fn short_path<S: Source>(&mut self, doc: &Document<S>, at: &[usize], leaf: &Expr, here: Option<(u64, u64)>) -> Option<String> {
+        if !matches!(leaf, Expr::Tagged(_) | Expr::Within(_) | Expr::ElemWithin { .. } | Expr::Elem { .. }) {
+            return None;
+        }
+        let path = self.text_path(doc, at, leaf, here).ok()??;
+        self.short_label(doc, at, &path).ok()?
     }
 
     /// The same expression with every leaf that reads the file replaced by

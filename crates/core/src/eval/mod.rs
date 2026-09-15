@@ -37,6 +37,7 @@ mod read;
 mod relate;
 mod schema;
 mod shape;
+mod shortpath;
 mod size;
 mod space;
 mod stitch;

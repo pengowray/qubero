@@ -1248,9 +1248,10 @@ mod tests {
         assert!(between[0].gap);
         assert_eq!((between[0].offset_bits / 8, between[0].size_bits / 8), (starts[1] + page, 8));
         // The column chunk says which entry placed it, starting from the row
-        // group's own entry.
-        let label = e.origins(&d, &[4, 1, 0, 1]).unwrap()[0].label.clone();
-        assert_eq!(label, "footer.fields.row_groups.value.elems[1].fields.columns.value.elems[1]");
+        // group's own entry: in Parquet's names, and as Thrift stores it.
+        let placed = e.origins(&d, &[4, 1, 0, 1]).unwrap().swap_remove(0);
+        assert_eq!(placed.label, "footer.row_groups[1].columns[1]");
+        assert_eq!(placed.stored.as_deref(), Some("footer.fields.row_groups.value.elems[1].fields.columns.value.elems[1]"));
     }
 
     /// The footer is after every page it places, so an overwrite of a column

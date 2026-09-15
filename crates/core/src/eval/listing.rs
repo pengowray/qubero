@@ -271,21 +271,32 @@ impl Evaluator {
         let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.text()) };
         let Some(by) = s.named_by.clone() else { return Ok(r.name.text()) };
         let Some(i) = s.fields.iter().position(|f| *f.name == *by) else { return Ok(r.name.text()) };
-        let mut child = path.to_vec();
-        child.push(i);
         // A field that cannot be read yet leaves the node with the name it had.
-        let Ok(mut info) = self.node(doc, &child) else { return Ok(r.name.text()) };
-        // A name a format wraps in something of its own is still the name.
-        // Two wrappers to step through, and a name may be behind both:
-        //
-        //   - a structure whose `contents` field is the whole of it, which is
-        //     how GGUF writes every string as a length and then its bytes;
-        //   - a placement, which is how a format that keeps its names in one
-        //     table writes them. An ELF section header holds an offset into
-        //     the section name table and no name at all, so the name is read
-        //     with `at`, and `at` is a node with the string inside it. Without
-        //     this step `named_by` reached the wrapper, found a composite, and
-        //     labelled the record with the number of things in it.
+        let Some(value) = self.naming_value(doc, path, i) else { return Ok(r.name.text()) };
+        let text = brief(&value);
+        let text = text.trim_end();
+        Ok(if text.is_empty() { r.name.text() } else { format!("{} {text}", r.name.text()) })
+    }
+
+    /// What field `field` of the structure at `path` says, read as a name: the
+    /// value at the end of whatever the format wrapped it in. None when it
+    /// cannot be read yet.
+    ///
+    /// A name a format wraps in something of its own is still the name. Two
+    /// wrappers to step through, and a name may be behind both:
+    ///
+    ///   - a structure whose `contents` field is the whole of it, which is how
+    ///     GGUF writes every string as a length and then its bytes;
+    ///   - a placement, which is how a format that keeps its names in one
+    ///     table writes them. An ELF section header holds an offset into the
+    ///     section name table and no name at all, so the name is read with
+    ///     `at`, and `at` is a node with the string inside it. Without this
+    ///     step `named_by` reached the wrapper, found a composite, and labelled
+    ///     the record with the number of things in it.
+    pub(super) fn naming_value<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: usize) -> Option<Value> {
+        let mut child = path.to_vec();
+        child.push(field);
+        let mut info = self.node(doc, &child).ok()?;
         while info.composite {
             let inner = self.memo[&child].ty.base().clone();
             match inner {
@@ -302,9 +313,7 @@ impl Evaluator {
             let Ok(next) = self.node(doc, &child) else { break };
             info = next;
         }
-        let text = brief(&info.value);
-        let text = text.trim_end();
-        Ok(if text.is_empty() { r.name.text() } else { format!("{} {text}", r.name.text()) })
+        Some(info.value)
     }
 
     /// Where the field at `path` gets its displayed name from, when its
