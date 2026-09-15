@@ -28,11 +28,12 @@ pub enum Value {
     List(Vec<Value>),
     Tuple(Vec<Value>),
     Dict(Vec<(Value, Value)>),
-    F32Matrix {
-        key: Box<Value>,
+    Array {
         at: usize,
-        rows: u8,
-        columns: u8,
+        len: usize,
+        dtype: String,
+        dimensions: Vec<u64>,
+        fortran_order: bool,
     },
 }
 
@@ -99,7 +100,7 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     if let Some(value) = c.value(0) {
         if c.exact(b".").is_some() && c.at == bytes.len() {
             return Some(Match {
-                form: "basic-p4-p5-v1",
+                form: "basic-p4-p5-v2",
                 value,
                 stop: c.at - 1,
                 payload: None,
@@ -109,17 +110,16 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     // A second bounded, exact production, derived from the existing NumPy
     // matrix fixture. No memo interpreter: each reference has a fixed slot.
     c.at = body;
-    let (value, at, count) = c.matrix()?;
+    let (value, at, payload) = c.array()?;
     c.exact(b".")?;
     if c.at != bytes.len() {
         return None;
     }
-    let (shape, _) = shapes::dtype("<f4")?;
     Some(Match {
-        form: "numpy-f32-matrix-dict-p4-p5-v1",
+        form: "numpy-numeric-array-p4-p5-v2",
         value,
         stop: c.at - 1,
-        payload: Some((at, Payload { shape, count })),
+        payload: Some((at, payload)),
     })
 }
 
@@ -146,8 +146,8 @@ impl<'a> Cursor<'a> {
         (self.take(expected.len())? == expected).then_some(())
     }
     fn text(&mut self) -> Option<Value> {
-        self.exact(&[0x8c])?;
-        let len = self.byte()? as usize;
+        let code = self.byte()?;
+        let len = self.length(code, 0x8c, 0x58, 0x8d)?;
         let at = self.at;
         std::str::from_utf8(self.take(len)?).ok()?;
         self.exact(&[0x94])?;
@@ -158,7 +158,7 @@ impl<'a> Cursor<'a> {
             return None;
         }
         self.left = self.left.checked_sub(1)?;
-        if self.peek()? == 0x8c {
+        if matches!(self.peek()?, 0x8c | 0x58 | 0x8d) {
             return self.text();
         }
         Some(match self.byte()? {
@@ -169,8 +169,8 @@ impl<'a> Cursor<'a> {
             b'M' => Value::Int(u16::from_le_bytes(self.take(2)?.try_into().ok()?) as i128),
             b'J' => Value::Int(i32::from_le_bytes(self.take(4)?.try_into().ok()?) as i128),
             b'G' => Value::Float(f64::from_be_bytes(self.take(8)?.try_into().ok()?)),
-            b'C' => {
-                let len = self.byte()? as usize;
+            code @ (b'C' | b'B' | 0x8e) => {
+                let len = self.length(code, b'C', b'B', 0x8e)?;
                 let at = self.at;
                 self.take(len)?;
                 self.exact(&[0x94])?;
@@ -189,9 +189,18 @@ impl<'a> Cursor<'a> {
                     if values.len() < 2 || values.len() > 1000 {
                         return None;
                     }
-                } else if !matches!(self.peek()?, b'.' | b'e' | b'u' | b'a' | b's') {
-                    values.push(self.value(depth + 1)?);
-                    self.exact(b"a")?;
+                } else {
+                    // EMPTY_LIST and a single-item list share a prefix. Try
+                    // the whole single-item production before accepting empty.
+                    // Rewinding never restores the shared work budget.
+                    let start = self.at;
+                    if let Some(value) =
+                        self.value(depth + 1).filter(|_| self.exact(b"a").is_some())
+                    {
+                        values.push(value);
+                    } else {
+                        self.at = start;
+                    }
                 }
                 Value::List(values)
             }
@@ -207,10 +216,19 @@ impl<'a> Cursor<'a> {
                     if entries.len() < 2 || entries.len() > 1000 {
                         return None;
                     }
-                } else if self.peek() == Some(0x8c) {
-                    let key = self.text()?;
-                    entries.push((key, self.value(depth + 1)?));
-                    self.exact(b"s")?;
+                } else {
+                    let start = self.at;
+                    let entry = (|| {
+                        let key = self.text()?;
+                        let value = self.value(depth + 1)?;
+                        self.exact(b"s")?;
+                        Some((key, value))
+                    })();
+                    if let Some(entry) = entry {
+                        entries.push(entry);
+                    } else {
+                        self.at = start;
+                    }
                 }
                 Value::Dict(entries)
             }
@@ -218,35 +236,149 @@ impl<'a> Cursor<'a> {
         })
     }
 
-    fn matrix(&mut self) -> Option<(Value, usize, u64)> {
-        self.exact(b"}\x94")?;
-        let key = self.text()?;
-        // These exact strings and memo positions are part of this one form.
-        self.exact(b"\x8c\x16numpy._core.multiarray\x94\x8c\x0c_reconstruct\x94\x93\x94")?;
-        self.exact(b"\x8c\x05numpy\x94\x8c\x07ndarray\x94\x93\x94K\0\x85\x94C\x01b\x94\x87\x94R\x94(K\x01K")?;
-        let rows = self.byte()?;
-        self.exact(b"K")?;
-        let columns = self.byte()?;
-        self.exact(b"\x86\x94h\x05\x8c\x05dtype\x94\x93\x94\x8c\x02f4\x94\x89\x88\x87\x94R\x94")?;
-        self.exact(b"(K\x03\x8c\x01<\x94NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t\x94b\x89C")?;
-        let len = self.byte()? as usize;
-        let count = u64::from(rows) * u64::from(columns);
-        if len as u64 != count.checked_mul(4)? {
+    fn length(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<usize> {
+        let n = if code == short {
+            u64::from(self.byte()?)
+        } else if code == wide {
+            u32::from_le_bytes(self.take(4)?.try_into().ok()?) as u64
+        } else if code == widest {
+            u64::from_le_bytes(self.take(8)?.try_into().ok()?)
+        } else {
+            return None;
+        };
+        usize::try_from(n).ok()
+    }
+
+    fn dimension(&mut self) -> Option<u64> {
+        match self.byte()? {
+            b'K' => Some(self.byte()? as u64),
+            b'M' => Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?) as u64),
+            b'J' => u64::try_from(i32::from_le_bytes(self.take(4)?.try_into().ok()?)).ok(),
+            _ => None,
+        }
+    }
+
+    fn dimensions(&mut self) -> Option<Vec<u64>> {
+        if self.peek()? == b')' {
+            self.byte()?;
+            return Some(Vec::new());
+        }
+        let marked = self.peek()? == b'(';
+        if marked {
+            self.byte()?;
+        }
+        let mut dims = Vec::new();
+        loop {
+            if dims.len() == 32 {
+                return None;
+            }
+            dims.push(self.dimension()?);
+            if matches!(self.peek()?, b't' | 0x85..=0x87) {
+                break;
+            }
+        }
+        let end = self.byte()?;
+        let expected = match dims.len() {
+            1..=3 if !marked => 0x84 + dims.len() as u8,
+            4..=32 if marked => b't',
+            _ => return None,
+        };
+        if end != expected {
+            return None;
+        }
+        self.exact(&[0x94])?;
+        Some(dims)
+    }
+
+    fn array(&mut self) -> Option<(Value, usize, Payload)> {
+        let key = if self.peek() == Some(b'}') {
+            self.exact(b"}\x94")?;
+            Some(self.text()?)
+        } else {
+            None
+        };
+        // The dictionary and key add exactly two memo slots. No arbitrary
+        // memo lookup or stack effect is supported by this production.
+        let numpy_slot = if key.is_some() { 5 } else { 3 };
+        self.exact(b"\x8c")?;
+        match self.byte()? {
+            22 => self.exact(b"numpy._core.multiarray")?,
+            21 => self.exact(b"numpy.core.multiarray")?,
+            _ => return None,
+        }
+        self.exact(b"\x94\x8c\x0c_reconstruct\x94\x93\x94")?;
+        self.exact(
+            b"\x8c\x05numpy\x94\x8c\x07ndarray\x94\x93\x94K\0\x85\x94C\x01b\x94\x87\x94R\x94(K\x01",
+        )?;
+        let dimensions = self.dimensions()?;
+        self.exact(&[b'h', numpy_slot])?;
+        self.exact(b"\x8c\x05dtype\x94\x93\x94\x8c")?;
+        let dtype_len = self.byte()? as usize;
+        let kind = std::str::from_utf8(self.take(dtype_len)?).ok()?;
+        // Only these plain numeric dtype productions have this exact state.
+        if !matches!(
+            kind,
+            "b1" | "i1"
+                | "i2"
+                | "i4"
+                | "i8"
+                | "u1"
+                | "u2"
+                | "u4"
+                | "u8"
+                | "f2"
+                | "f4"
+                | "f8"
+                | "c8"
+                | "c16"
+        ) {
+            return None;
+        }
+        self.exact(b"\x94\x89\x88\x87\x94R\x94(K\x03\x8c\x01")?;
+        let order = self.byte()?;
+        let one_byte = matches!(kind, "b1" | "i1" | "u1");
+        if (one_byte && order != b'|') || (!one_byte && !matches!(order, b'<' | b'>')) {
+            return None;
+        }
+        let dtype = format!("{}{kind}", char::from(order));
+        let (shape, width) = shapes::dtype(&dtype)?;
+        self.exact(b"\x94NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t\x94b")?;
+        let fortran_order = match self.byte()? {
+            0x89 => false,
+            0x88 => true,
+            _ => return None,
+        };
+        let code = self.byte()?;
+        let len = self.length(code, b'C', b'B', 0x8e)?;
+        // Check every dimension even when another one is zero. Dimensions
+        // originate from nonnegative i32 values; the product is bounded too.
+        let count = if dimensions.contains(&0) {
+            0
+        } else {
+            dimensions
+                .iter()
+                .try_fold(1u64, |n, dim| n.checked_mul(*dim))?
+        };
+        if len as u64 != count.checked_mul(width)? {
             return None;
         }
         let at = self.at;
         self.take(len)?;
-        self.exact(b"\x94t\x94bs")?;
-        Some((
-            Value::F32Matrix {
-                key: Box::new(key),
-                at,
-                rows,
-                columns,
-            },
+        self.exact(b"\x94t\x94b")?;
+        let array = Value::Array {
             at,
-            count,
-        ))
+            len,
+            dtype,
+            dimensions,
+            fortran_order,
+        };
+        let value = if let Some(key) = key {
+            self.exact(b"s")?;
+            Value::Dict(vec![(key, array)])
+        } else {
+            array
+        };
+        Some((value, at, Payload { shape, count }))
     }
 }
 
@@ -265,7 +397,7 @@ mod tests {
     fn captures_basic_values_without_a_machine() {
         let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
         let found = recognise(&bytes).unwrap();
-        assert_eq!(found.form, "basic-p4-p5-v1");
+        assert_eq!(found.form, "basic-p4-p5-v2");
         assert_eq!(
             found.value,
             Value::Dict(vec![(
@@ -321,14 +453,24 @@ mod tests {
     #[test]
     fn captures_numpy_payload_and_rejects_changed_structure() {
         let found = recognise(MATRIX).unwrap();
-        assert_eq!(found.form, "numpy-f32-matrix-dict-p4-p5-v1");
-        let Value::F32Matrix {
-            at, rows, columns, ..
-        } = found.value
-        else {
-            panic!("matrix expected")
+        assert_eq!(found.form, "numpy-numeric-array-p4-p5-v2");
+        let Value::Dict(entries) = &found.value else {
+            panic!("dict expected")
         };
-        assert_eq!((rows, columns), (4, 6));
+        let Value::Array {
+            at,
+            dimensions,
+            dtype,
+            fortran_order,
+            ..
+        } = &entries[0].1
+        else {
+            panic!("array expected")
+        };
+        let at = *at;
+        assert_eq!(dimensions, &[4, 6]);
+        assert_eq!(dtype, "<f4");
+        assert!(!fortran_order);
         assert_eq!(found.int(Deduce::PayloadCount, at as u64), Some(24));
         let floats: Vec<_> = MATRIX[at..at + 96]
             .chunks_exact(4)
@@ -339,7 +481,7 @@ mod tests {
             assert!(recognise(&MATRIX[..end]).is_none());
         }
         // Mutate fixed control bytes, shape, callable, memo reference and dtype.
-        for offset in [0x30, 0x40, 0x65, 0x6b, 0x79, 0x99, 0x100] {
+        for offset in [0x30, 0x40, 0x65, 0x6b, 0x79, 0x9b, 0x100] {
             let mut changed = MATRIX.to_vec();
             changed[offset] ^= 1;
             assert!(
@@ -366,6 +508,184 @@ mod tests {
                 fallback.text(Deduce::Builds, at),
                 old.text(Deduce::Builds, at)
             );
+        }
+    }
+
+    fn replace(bytes: &mut Vec<u8>, from: &[u8], to: &[u8]) {
+        let positions: Vec<_> = bytes
+            .windows(from.len())
+            .enumerate()
+            .filter_map(|(i, b)| (b == from).then_some(i))
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "fixture replacement must be unambiguous"
+        );
+        bytes.splice(positions[0]..positions[0] + from.len(), to.iter().copied());
+    }
+
+    /// A standalone variant derived from the corpus fixture: remove the
+    /// dictionary/key and SETITEM, and adjust its one explicit memo reference.
+    fn standalone() -> Vec<u8> {
+        assert_eq!(&MATRIX[11..23], b"}\x94\x8c\x07weights\x94");
+        assert_eq!(&MATRIX[MATRIX.len() - 2..], b"s.");
+        let mut body = MATRIX[23..MATRIX.len() - 2].to_vec();
+        replace(&mut body, b"h\x05\x8c\x05dtype", b"h\x03\x8c\x05dtype");
+        body.push(b'.');
+        body
+    }
+
+    #[test]
+    fn standalone_arrays_preserve_dimensions_dtype_and_storage_order() {
+        let mut body = standalone();
+        replace(&mut body, b"K\x04K\x06\x86\x94", b"K\x02K\x03K\x04\x87\x94");
+        replace(
+            &mut body,
+            b"\x8c\x16numpy._core.multiarray",
+            b"\x8c\x15numpy.core.multiarray",
+        );
+        replace(&mut body, b"\x8c\x02f4\x94", b"\x8c\x02i4\x94");
+        replace(&mut body, b"\x8c\x01<\x94NNN", b"\x8c\x01>\x94NNN");
+        replace(&mut body, b"t\x94b\x89C", b"t\x94b\x88C");
+        let bytes = framed(&body);
+        let found = recognise(&bytes).unwrap();
+        let Value::Array {
+            at,
+            len,
+            dtype,
+            dimensions,
+            fortran_order,
+        } = &found.value
+        else {
+            panic!("array")
+        };
+        assert_eq!(
+            (*len, dtype.as_str(), dimensions.as_slice(), *fortran_order),
+            (96, ">i4", &[2, 3, 4][..], true)
+        );
+        assert_eq!(found.int(Deduce::PayloadCount, *at as u64), Some(24));
+        assert_eq!(
+            found.int(Deduce::PayloadShape, *at as u64),
+            Some(shapes::dtype(">i4").unwrap().0 as i128)
+        );
+        // The standalone memo reference must match the slot for numpy, not
+        // the dictionary variant's slot or any other existing slot.
+        replace(&mut body, b"h\x03\x8c\x05dtype", b"h\x05\x8c\x05dtype");
+        assert!(recognise(&framed(&body)).is_none());
+    }
+
+    #[test]
+    fn numeric_dtype_branches_check_byte_order_and_payload_width() {
+        for (kind, width, order) in [
+            ("b1", 1, b'|'),
+            ("i1", 1, b'|'),
+            ("u1", 1, b'|'),
+            ("i2", 2, b'<'),
+            ("u2", 2, b'>'),
+            ("i4", 4, b'<'),
+            ("u4", 4, b'>'),
+            ("i8", 8, b'<'),
+            ("u8", 8, b'>'),
+            ("f2", 2, b'<'),
+            ("f4", 4, b'>'),
+            ("f8", 8, b'<'),
+            ("c8", 8, b'>'),
+            ("c16", 16, b'<'),
+        ] {
+            let mut body = standalone();
+            let mut dtype = vec![0x8c, kind.len() as u8];
+            dtype.extend_from_slice(kind.as_bytes());
+            dtype.push(0x94);
+            replace(&mut body, b"\x8c\x02f4\x94", &dtype);
+            replace(
+                &mut body,
+                b"\x8c\x01<\x94NNN",
+                &[0x8c, 1, order, 0x94, b'N', b'N', b'N'],
+            );
+            let mut dims = vec![b'K', (96 / width) as u8, 0x85, 0x94];
+            replace(&mut body, b"K\x04K\x06\x86\x94", &dims);
+            assert!(recognise(&framed(&body)).is_some(), "{kind}");
+            dims[1] += 1;
+            let before = [b'K', (96 / width) as u8, 0x85, 0x94];
+            replace(&mut body, &before, &dims);
+            assert!(
+                recognise(&framed(&body)).is_none(),
+                "wrong length for {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_empty_and_wide_arrays_obey_length_and_shape_constraints() {
+        let mut base = standalone();
+        // Replace the complete payload with one float (the scalar form).
+        let payload = &MATRIX[0x9b..0xfd];
+        assert_eq!(&payload[..2], b"C\x60");
+        replace(&mut base, payload, b"C\x04\0\0\x80\x3f");
+        replace(&mut base, b"K\x04K\x06\x86\x94", b")");
+        let scalar = recognise(&framed(&base)).unwrap();
+        let Value::Array { dimensions, .. } = scalar.value else {
+            panic!("array")
+        };
+        assert!(dimensions.is_empty());
+
+        let mut empty = standalone();
+        replace(&mut empty, payload, b"C\0");
+        replace(&mut empty, b"K\x04K\x06\x86\x94", b"K\0\x85\x94");
+        assert!(recognise(&framed(&empty)).is_some());
+
+        for code in [b'B', 0x8e] {
+            let mut wide = standalone();
+            replace(&mut wide, b"K\x04K\x06\x86\x94", b"M\0\x01\x85\x94");
+            let mut data = vec![code];
+            if code == b'B' {
+                data.extend_from_slice(&1024u32.to_le_bytes());
+            } else {
+                data.extend_from_slice(&1024u64.to_le_bytes());
+            }
+            data.resize(data.len() + 1024, 0);
+            replace(&mut wide, payload, &data);
+            assert!(recognise(&framed(&wide)).is_some());
+        }
+        let mut overflow = standalone();
+        replace(
+            &mut overflow,
+            b"K\x04K\x06\x86\x94",
+            b"J\xff\xff\xff\x7fJ\xff\xff\xff\x7fJ\xff\xff\xff\x7f\x87\x94",
+        );
+        assert!(recognise(&framed(&overflow)).is_none());
+        let mut negative = standalone();
+        replace(
+            &mut negative,
+            b"K\x04K\x06\x86\x94",
+            b"J\xff\xff\xff\xff\x85\x94",
+        );
+        assert!(recognise(&framed(&negative)).is_none());
+    }
+
+    #[test]
+    fn nested_empty_containers_and_wide_text_are_captured() {
+        let found = recognise(&framed(b"]\x94(]\x94K\x01}\x94\x8c\x01x\x94e.")).unwrap();
+        let Value::List(values) = found.value else {
+            panic!("list")
+        };
+        assert_eq!(
+            &values[..3],
+            &[Value::List(vec![]), Value::Int(1), Value::Dict(vec![])]
+        );
+        assert!(matches!(values[3], Value::Text { len: 1, .. }));
+        for (code, width) in [(0x58, 4), (0x8d, 8)] {
+            let mut body = vec![code];
+            body.extend_from_slice(&300u64.to_le_bytes()[..width]);
+            body.extend(std::iter::repeat_n(b'x', 300));
+            body.extend_from_slice(b"\x94.");
+            assert!(matches!(
+                recognise(&framed(&body)).unwrap().value,
+                Value::Text { len: 300, .. }
+            ));
+            body[1..1 + width].fill(255);
+            assert!(recognise(&framed(&body)).is_none());
         }
     }
 

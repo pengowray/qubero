@@ -1,6 +1,6 @@
 # Familiar Pickle Forms (FPF)
 
-Status: initial implementation delivered in `crates/core/src/formats/pickle/familiar.rs`.
+Status: second implementation slice delivered in `crates/core/src/formats/pickle/familiar.rs`.
 
 ## Implemented slice and continuation notes
 
@@ -12,19 +12,23 @@ strict forms grow.
 
 Implemented forms:
 
-- `basic-p4-p5-v1`: null, bool, BININT1/BININT2/BININT, BINFLOAT, short UTF-8
-  strings and short byte strings (with required MEMOIZE), empty tuples, and
+- `basic-p4-p5-v2`: null, bool, BININT1/BININT2/BININT, BINFLOAT, UTF-8
+  strings and byte strings with 1/4/8-byte lengths (with required MEMOIZE), empty tuples, and
   explicit empty/single/batched list and string-key dictionary productions.
-  Only one batch of 2–1000 entries is supported. Some nested empty-container
-  arrangements deliberately fall back because the current grammar does not
-  resolve their prefix ambiguity. Nonempty tuples, long integers, wide strings,
-  shared references, cycles and sets remain unsupported.
-- `numpy-f32-matrix-dict-p4-p5-v1`: one string-key dictionary entry holding a
-  two-dimensional, little-endian, C-order NumPy float32 array. Matches the exact
-  `numpy._core.multiarray._reconstruct` sequence and dtype state of the committed
-  fixture, with fixed memo positions. Dimensions use BININT1, storage uses
-  SHORT_BINBYTES, and its length must equal rows times columns times four.
-  Other dtypes, larger payloads and other NumPy layouts fall back.
+  Only one batch of 2–1000 entries is supported. The empty/single-container
+  ambiguity uses an explicit local alternative with a shared work budget that
+  is never reset by rewinding. Nonempty tuples, long integers, shared references,
+  cycles and sets remain unsupported.
+- `numpy-numeric-array-p4-p5-v2`: a standalone array or one string-key dictionary
+  entry holding an array. Matches exact `_reconstruct` sequences for
+  `numpy._core.multiarray` and `numpy.core.multiarray`, with fixed memo positions
+  (numpy occupies slot 3 standalone, slot 5 in the dictionary). Supports plain
+  b1/i1/i2/i4/i8/u1/u2/u4/u8/f2/f4/f8/c8/c16 dtypes, little/big endian for multibyte
+  values, `|` for single-byte values, and explicit C/Fortran order. Dimensions use
+  BININT1/BININT2/nonnegative BININT; shapes have 0–32 dimensions with the exact
+  EMPTY_TUPLE/TUPLE1/TUPLE2/TUPLE3/marked TUPLE production for their arity. Storage
+  uses SHORT_BINBYTES/BINBYTES/BINBYTES8 and must match shape times item size.
+  Object, structured, datetime and external-buffer dtypes/layouts fall back.
 
 Both forms accept protocol 4/5 with either no frame or exactly one frame spanning
 the complete body. They require STOP followed immediately by EOF. The matcher
@@ -32,7 +36,7 @@ uses borrowed byte ranges, a 64-level recursion bound and a shared budget of
 100,000 values. No Python or new runtime dependency was introduced.
 
 `recognise` exposes a Rust capture tree and form ID. The existing template renders
-basic scalar operands and the matched matrix as a typed payload; a dedicated
+basic scalar operands and matched arrays as typed payloads in storage order; a dedicated
 decoded-object tree and visible form ID still need a UI/API surface. No new TS
 surface is added in this slice.
 
@@ -40,17 +44,23 @@ The committed matrix fixture was copied from the existing sibling sample corpus;
 its producer version is unknown. Its expected payload is a 4-by-6 matrix of f32
 values 0 through 23. The protocol-5 alternative is an explicitly supported
 grammar branch, not evidence that a particular NumPy release emits that layout.
+The newer test variants are explicit transformations of that fixture: remove the
+dictionary wrapper and adjust the numpy memo reference, or replace declared
+shape, dtype, byte-order, storage-order and payload fields. They validate the
+grammar and captured metadata but do not establish additional producer-version
+provenance. Array dimensions and Fortran order are preserved in Rust captures;
+the current viewer displays flat physical storage rather than logical rows.
 
 Next steps, in order:
 
 1. Expose form ID and captured values through the WASM/UI result model, with
    source-range navigation. Distinguish legacy symbolic deductions visibly.
-2. Add provenance-backed NumPy fixtures for standalone arrays, wider payload
-   lengths, other plain dtypes, dimensions, module aliases and framing. Give
-   each new production exact constants and negative mutation tests.
-3. Replace the ambiguous basic-container prefix handling with explicit bounded
-   alternatives before expanding nested-container coverage; preserve a shared
-   work budget. Add nonempty tuples, wide strings and big integers deliberately.
+2. Add provenance-backed NumPy fixtures for the expanded branches, then add
+   protocol-5 `_frombuffer` and multiple-frame forms. Give each new production
+   exact constants and negative mutation tests. Keep frame bytes visible to the
+   grammar and validate boundaries; do not merely strip FRAME instructions.
+3. Add nonempty tuples and big integers deliberately, and extend container
+   batching beyond one batch. Keep work bounded across every alternative.
 4. Add typed memo bindings for specific repeated dtype/name forms; then build
    pandas and estimator forms from reviewed complete structures.
 5. Move recognition onto a chunk-aware source cursor for large tensors. Current
@@ -59,10 +69,12 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: 25 pickle unit tests passed, including six new FPF tests; all seven
+Validation: 29 pickle unit tests passed, including ten FPF tests; all seven
 `pickle_real` integration tests passed against the available sibling corpus.
-The template-level test verifies the exact message at STOP. Browser visual QA
-and a rebuilt WASM bundle were not performed.
+The template-level test verifies the exact message at STOP. The browser smoke
+test is `web/test/pickle.browser.mjs`; it checks a visible FPF message and an
+unfamiliar program's PVM listing without an FPF claim. Build/browser results
+are recorded below once verified.
 
 ## Contract
 
