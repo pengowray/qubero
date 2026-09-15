@@ -129,7 +129,7 @@ that and the builder re-resolves on a miss.
 *Cycles.* A `building: FxHashSet<(kind, key)>` on the evaluator; re-entry on
 the same key fails with "TBranch's description is being read with TBranch's
 description". A class holding its own class (`TBranch.fBranches`) recurses at
-evaluation only, bounded by `DEEPEST_PATH`, the 88-level expression depth
+evaluation only, bounded by `DEEPEST_PATH`, the 110-level expression depth
 guard, and byte-count `Sized` windows that shrink. A kind whose descriptions
 are typed by itself (ROOT's `TStreamerInfo`) is answered by the builder from a
 bootstrap table without touching the file table.

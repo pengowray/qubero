@@ -93,6 +93,7 @@ cases only.
 | MAT struct fields labelled with their names, struct arrays included: `[2] one` | e0d9fa3 |
 | B1. `spans` never settled in goes on `parquet/delta_binary_packed.parquet`. Not slow and not a loop: a whole pass is 580 ms and 11,709 steps. The list walks in `walk.rs` charged a step for every element they stepped over, placed or not, and `spans` starts again from the top of its window each go, so going back over what the last go listed (7,854 steps of it here) used up a go of 5,000 before anything new was read. Only placing an element is charged now. The same fix settles 16 more samples `spans_probe` gave up on (ELF, PE, LE, Mach-O, DOS, firmware), nearly all of them full 4,000-row windows of code. | 83aba76 |
 | Short position labels: templates mark an encoding's own steps (`Wrapper`, `Member` in `eval/shortpath.rs`), so Parquet (Thrift) and Arrow (FlatBuffers) positions, lengths and formulas read `footer.row_groups[0].columns[0]`. The full stored path stays behind a Paths as stored switch on the Properties heading. Bencode and CBOR are marked too. | 16ebc30, 627031d, d58eb68 |
+| Engine depth: limit 88 to 110, after a refusal's message stopped writing its expression at the deepest point (+1.1 MiB for a 200-level expression in debug); wasm module stack 1 to 2 MiB via `crates/wasm/build.rs` (+1 MiB initial memory, `.wasm` size and load unchanged). | 7442274..7f15c6e |
 
 ## Bugs
 
@@ -583,28 +584,21 @@ no value differs from ecCodes 2.48. Left:
 
 ### Engine: recursion depth (fixed 2026-09-14)
 
-Evaluation now refuses a read whose expressions nest more than 88 deep
-instead of overflowing the stack (`go.rs`; the wrappers round `eval_expr_at`,
-`eval_real_at` and `text_at` count). 88 is the 640 KiB stack budget over the
-costliest shape's 7.3 KiB per expression in a release build: 1.7 times the
-deepest real reading in the collection (52, `arrow/more-types.arrow`) and 62%
-of where a 1 MiB release stack overflows. `ComputedText` values are cached on
-their node like numbers. See Closed. Left:
+Evaluation now refuses a read whose expressions nest more than 110 deep
+instead of overflowing the stack (`go.rs`, `DEEPEST_QUESTION`; the wrappers
+round `eval_expr_at`, `eval_real_at` and `text_at` count). A refused read asks
+again from its far end and reads through, so the limit bounds stack, not what
+can be read; the deepest real reading in the collection is 52
+(`arrow/more-types.arrow`). Measured margins and the stack each build takes
+are in `go.rs` and DESIGN.md: at 110 a release read on the 640 KiB test
+thread uses 573 KiB at its dearest shape, a debug read on 4 MiB uses 3.48 MiB.
+The web build's wasm stack is 2 MiB (`crates/wasm/build.rs`), rust-lld's 1 MiB
+doubled as margin; the limit is still set by the 640 KiB native budget. A
+refusal's message writes its expression once the read is back at the top,
+not at the deepest point. See Closed. Left:
 
-- Done 2026-09-15 (see Closed): a refused read asks again from its far end
-  and reads through; expressions read values without building a `NodeInfo`
-  (5,248 B per expression at the dearest shape, from about 8,016); strides
-  look through named types where `same_shape` allows; `deep_questions` and a
-  cold Arrow read run on scaled threads, so stack growth fails a test.
-- The limit stays 88. 640 KiB over 5,248 B would allow 124; 120 fits. The
-  dearest synthetic shapes are not measured in wasm (the last
-  `more-types.arrow` node read cold used 94 KiB there, 178 KiB native).
-- `eval/census.rs` and `eval/kinds.rs` each have a `same_shape` with slightly
-  different rules (census rejects every fixed-size window); keep the kinds
-  rule and share it.
-- `kinds_real` stops at its first failing sample, which hides
-  `macarchive/compactpro-133-two-folders.cpt` and `ne/net-trap-win16.dll`,
-  both failing on main.
+- The dearest synthetic shapes are not measured in wasm (the cold Arrow read
+  used 113.9 KiB there).
 
 ### NI TDMS (built 2026-09-14)
 
