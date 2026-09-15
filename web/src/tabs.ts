@@ -116,6 +116,15 @@ export class Tabs {
     this.add({ ...t, closable: false });
   }
 
+  /** Close everything, leaving the host empty for a page that is not a
+   *  document: a folder's list of files. */
+  clear(): void {
+    for (const tab of this.list) this.discard(tab);
+    this.list = [];
+    this.at = 0;
+    this.host.replaceChildren();
+  }
+
   /** Open another document beside the ones already open, and show it. */
   add(t: NewTab): void {
     this.list.push({

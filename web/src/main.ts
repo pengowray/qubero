@@ -6,7 +6,9 @@ import type { GraphView } from "./graphview.ts";
 import type { DiagramView } from "./diagramview.ts";
 import { COUNT_TURN_MS, countLimit } from "./diagramcounts.ts";
 import { Inspector } from "./inspector.ts";
-import { saveDoc } from "./save.ts";
+import { saveBlob, saveDoc, type SaveOutcome } from "./save.ts";
+import { askSaveAs, type SaveAsChoice } from "./saveasdialog.ts";
+import { FolderList } from "./folderview.ts";
 import { parseSize, syntheticFile } from "./synthetic.ts";
 import { ListingReport } from "./listingreport.ts";
 import { ListPane } from "./listpane.ts";
@@ -19,8 +21,8 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { ARCHIVE_SUMS, DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
-import { CRC_AT_OPEN_MAX_BYTES, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
@@ -225,6 +227,8 @@ function openFile(f: File, note?: string): void {
     welcomeCrystal?.dispose();
     welcomeCrystal = null;
     welcomeStatus = null;
+    hideFolderList();
+    folder = null;
     mount(doc);
     if (note !== undefined) say(note);
   }).catch(openFailed);
@@ -382,7 +386,7 @@ function build(tab: Tab): Page {
       open.addEventListener("click", () => pickFolder(doc.name));
       memberBar.replaceChildren(facts, open);
     } else {
-      const from = tabs.all.find((t) => t.doc.isFile)?.doc.name ?? doc.name;
+      const from = fileTab()?.title ?? doc.name;
       facts.append(el("span", { textContent: DATASET_MEMBER.lifted(from) }));
       memberBar.replaceChildren(facts);
     }
@@ -838,37 +842,78 @@ function build(tab: Tab): Page {
     saveMsg.textContent = text;
     saveMsg.classList.toggle("warn", warn === true);
   };
+  if (folderDocs.has(doc)) saveBtn.title = SAVE_AS.buttonTitle;
   const save = async (): Promise<void> => {
+    if (saveBtn.disabled) return;
+    // What came from a folder asks first whether to save it or a ZIP of the
+    // folder, and whether that ZIP gets its CRC-32s. Anything else saves as it
+    // always has.
+    const built = builtFor.get(doc);
+    const from = folderDocs.has(doc) ? folder : null;
+    let choice: SaveAsChoice = { whole: false, crc: true };
+    if (built !== undefined || (from !== null && from.at !== null)) {
+      const files = built?.files ?? from?.files ?? [];
+      const total = files.reduce((n, f) => n + f.file.size, 0);
+      const sums = doc.archiveSums;
+      const asked = await askSaveAs({
+        file: built !== undefined ? null : { name: doc.name, size: formatSize(doc.lengthBytes) },
+        zip: from?.zip ?? doc.name,
+        files: FOLDER.files(files.length),
+        size: formatSize(total),
+        edited: doc.modified ? doc.name : null,
+        crcCost: built !== undefined && (sums === null || sums.job.finished) ? null : formatSize(total),
+      });
+      if (asked === null) return;
+      choice = asked;
+    }
     saveBtn.disabled = true;
     saveMsg.textContent = "Saving";
-    // An archive built from a large folder saves with the CRC-32s it opened
-    // without, and waits for any still being read, saying how far they are.
-    const sums = doc.archiveSums;
     let unwatch = (): void => {};
-    const source =
-      sums === null
-        ? undefined
-        : async (): Promise<Blob> => {
-            const job = sums.job;
-            const progress = (): void => {
-              if (!job.finished) saveMsg.textContent = ARCHIVE_SUMS.saving(formatSize(job.read), formatSize(job.total));
-            };
-            progress();
-            unwatch = job.onChange(progress);
-            try {
-              return await sums.summed();
-            } finally {
-              unwatch();
-              saveMsg.textContent = "Saving";
-            }
-          };
-    const r = await saveDoc(doc, source);
+    let r: SaveOutcome;
+    let zipName: string | null = null;
+    if (built !== undefined) {
+      // A dataset saves as the ZIP it is read from. A large one opened without
+      // its CRC-32s waits for any still being read, saying how far they are.
+      zipName = doc.name;
+      const sums = doc.archiveSums;
+      const source = async (): Promise<Blob> => {
+        if (!choice.crc) return built.summed ? built.withSums(built.files.map(() => 0)) : built.blob;
+        if (sums === null) return built.blob;
+        const job = sums.job;
+        const progress = (): void => {
+          if (!job.finished) saveMsg.textContent = SAVE_AS.progress(doc.name, formatSize(job.read), formatSize(job.total));
+        };
+        progress();
+        unwatch = job.onChange(progress);
+        try {
+          return await sums.summed();
+        } finally {
+          unwatch();
+          saveMsg.textContent = "Saving";
+        }
+      };
+      r = await saveDoc(doc, source);
+    } else if (choice.whole && from !== null) {
+      // The whole folder, with this file as it is now rather than as it is on
+      // disk.
+      zipName = from.zip;
+      const at = from.at;
+      r = await saveBlob(from.zip, async () => {
+        const edited = doc.modified ? await doc.buildOutput() : null;
+        const files = from.files.map((f, i) => (i === at && edited !== null ? { ...f, file: edited } : f));
+        const zip = await storedZip(orderForArchive(files), {
+          sums: choice.crc,
+          progress: (p) => (saveMsg.textContent = SAVE_AS.progress(from.zip, formatSize(p.done), formatSize(p.total))),
+        });
+        return zip.blob;
+      });
+    } else {
+      r = await saveDoc(doc);
+    }
     unwatch();
     saveBtn.disabled = false;
-    // A dataset's folder saved as the ZIP it was opened as is not something
-    // ADIOS2 reads until it is unzipped, and the message says so.
     const saved = (bytes: number): string =>
-      builtArchives.has(doc) && doc.template === "adioszip" ? FOLDER.saved(formatSize(bytes), doc.name) : `Saved ${formatSize(bytes)}`;
+      zipName === null ? `Saved ${formatSize(bytes)}` : choice.crc ? SAVE_AS.done(zipName, formatSize(bytes)) : SAVE_AS.doneNoCrc(zipName, formatSize(bytes));
     saveMsg.textContent = r.kind === "saved" ? saved(r.bytes) : r.kind === "cancelled" ? "" : `Save failed: ${r.message}`;
     saveMsg.classList.toggle("warn", r.kind === "failed");
   };
@@ -1152,6 +1197,12 @@ function build(tab: Tab): Page {
   // it takes the same area as the hex grid and the listing rather than a
   // corner of its own.
   const workspaceLeft = el("div", { className: "left" }, dumpBar, memberBar, search.el, view.el, text.el, strings.el, listRow);
+  // The folder this file, or this dataset, was opened from: its name, the way
+  // to its list, and the files either side of this one.
+  if (doc.isFile) {
+    const bar = folderBarFor(doc, workspaceLeft);
+    if (bar !== null) workspaceLeft.prepend(bar);
+  }
 
   const hexBtn = el("button", { type: "button", textContent: "Hex", className: "tb-view" });
   const listBtn = el("button", { type: "button", textContent: "Listing", className: "tb-view" });
@@ -1882,9 +1933,28 @@ function pick(): void {
   input.click();
 }
 
-/** Documents that are a folder written into a ZIP here, which Save as says so
- *  of. */
-const builtArchives = new WeakSet<Doc>();
+/** Datasets read from a folder, and the ZIP each is read from, which Save as
+ *  writes. */
+const builtFor = new WeakMap<Doc, BuiltZip>();
+/** Documents opened from the folder that is open, plain files and datasets. */
+const folderDocs = new WeakSet<Doc>();
+
+/** The folder the open document came from, while it did. */
+type OpenedFolder = {
+  /** The folder's name, or a count of the items dropped together. */
+  readonly name: string;
+  /** What a ZIP of it is called. */
+  readonly zip: string;
+  /** Every file, in path order. */
+  readonly files: readonly FolderFile[];
+  readonly dropped: Dropped;
+  readonly list: FolderList;
+  /** Whether the folder holds a dataset, which opens as one. */
+  readonly dataset: boolean;
+  /** The file open from the list, or null for the dataset or none yet. */
+  at: number | null;
+};
+let folder: OpenedFolder | null = null;
 
 /** Says where a message goes before anything is open, and after. */
 function report(text: string, warn = false): void {
@@ -1901,23 +1971,12 @@ busyCard.setAttribute("role", "status");
 busyCard.hidden = true;
 document.body.append(busyCard);
 
-/**
- * Open a folder, or several items dropped together, as one ZIP built here:
- * read the files `read` finds, write them into an archive that stores them,
- * and open that. `name` is what to call it while that happens.
- *
- * `read` is called before anything is awaited, since a drop's items are gone
- * once the event is over. Replacing a document with unsaved edits is asked
- * about by the caller, before the folder is read.
- */
-async function openFolder(name: string, read: (seen: (count: number) => void) => Promise<Dropped | null>): Promise<void> {
+/** Run `work` with the busy card up once it has taken a moment. `show` sets
+ *  what the card says; it is written out a few times a second rather than on
+ *  every piece of every file read. */
+async function busy(name: string, work: (show: (text: string) => void, signal: AbortSignal) => Promise<void>): Promise<void> {
   const stop = new AbortController();
-  // What the card would say now. It is written out a few times a second rather
-  // than on every piece of every file read.
   let latest = "";
-  const show = (text: string): void => {
-    latest = text;
-  };
   let ticker: ReturnType<typeof setInterval> | undefined;
   const reveal = setTimeout(() => {
     busyText.textContent = latest;
@@ -1926,37 +1985,8 @@ async function openFolder(name: string, read: (seen: (count: number) => void) =>
   }, 400);
   busyCancel.onclick = () => stop.abort();
   welcomeCrystal?.setBusy(true);
-  const reading = read((count) => show(FOLDER.reading(name, count)));
   try {
-    const dropped = await reading;
-    if (dropped === null) return report(FOLDER.unreadable, true);
-    if (dropped.files.length === 0) return report(FOLDER.empty(name), true);
-    const files = orderForArchive(dropped.files);
-    const bytes = files.reduce((n, f) => n + f.file.size, 0);
-    const total = formatBytes(bytes);
-    // A small folder is summed before it opens, which takes no time worth
-    // mentioning. A large one opens now and is summed after, out of the way.
-    const sums = bytes <= CRC_AT_OPEN_MAX_BYTES;
-    if (sums) show(FOLDER.checking(name, formatBytes(0), total));
-    const built = await storedZip(files, { sums, progress: (p) => show(FOLDER.checking(name, formatBytes(p.done), total)), signal: stop.signal });
-    const doc = await Doc.open(new File([built.blob], dropped.name, { type: "application/zip" }));
-    builtArchives.add(doc);
-    if (!built.summed) doc.archiveSums = new ArchiveSums(built, new SumJob(files.map((f) => f.file)));
-    welcomeCrystal?.dispose();
-    welcomeCrystal = null;
-    welcomeStatus = null;
-    const count = FOLDER.files(files.length);
-    const origin = dropped.folder === null ? FOLDER.originItems(count) : FOLDER.origin(dropped.folder, count);
-    tabs.only({ doc, title: doc.name, origin: built.summed ? origin : `${origin} ${FOLDER.originUnsummed}` });
-    say(openedMessage(dropped, count));
-    // The sums start once the page has settled, so the first reads of the
-    // archive are not queued behind a read of all of it.
-    const job = doc.archiveSums?.job;
-    if (job !== undefined) {
-      const request = (window as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-      if (request !== undefined) request(() => job.start(), { timeout: 5000 });
-      else setTimeout(() => job.start(), 2000);
-    }
+    await work((text) => (latest = text), stop.signal);
   } catch (error) {
     if (error instanceof Stopped) report(FOLDER.stopped(name));
     else openFailed(error);
@@ -1968,20 +1998,179 @@ async function openFolder(name: string, read: (seen: (count: number) => void) =>
   }
 }
 
-/** What opening a folder came to: how many files, and for a BP5 dataset what
- *  its folder lacks and whether a second dataset beside it went unread. */
-function openedMessage(dropped: Dropped, count: string): string {
-  if (dropped.folder === null) return FOLDER.openedItems(count, dropped.name);
-  const indexes = dropped.files.filter((f) => leafOf(f.path) === "md.idx").map((f) => f.path.slice(0, -"/md.idx".length));
+/**
+ * Open a folder, or several items dropped together. A folder holding a
+ * dataset opens as that dataset; a folder of one file opens that file; any
+ * other opens as a list of its files, to open one from.
+ *
+ * `read` is called before anything is awaited, since a drop's items are gone
+ * once the event is over. Replacing a document with unsaved edits is asked
+ * about by the caller, before the folder is read.
+ */
+async function openFolder(name: string, read: (seen: (count: number) => void) => Promise<Dropped | null>): Promise<void> {
+  let show: (text: string) => void = () => {};
+  const reading = read((count) => show(FOLDER.listing(name, count)));
+  await busy(name, async (status) => {
+    show = status;
+    const dropped = await reading;
+    if (dropped === null) return report(FOLDER.unreadable, true);
+    if (dropped.files.length === 0) return report(FOLDER.empty(name), true);
+    const byPath = (a: FolderFile, b: FolderFile): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    const files = [...dropped.files].sort(byPath);
+    const root = dropped.folder === null ? "" : `${dropped.folder}/`;
+    const title = dropped.folder ?? FOLDER.dropped(files.length);
+    const dataset = datasetIn(files) !== null;
+    const list = new FolderList(
+      title,
+      files.map((f) => ({ label: f.path.startsWith(root) ? f.path.slice(root.length) : f.path, size: f.file.size })),
+      formatSize,
+    );
+    const opened: OpenedFolder = { name: title, zip: dropped.name, files, dropped, list, dataset, at: null };
+    list.onOpen = (i) => openFromFolder(opened, i);
+    if (dataset) list.onDataset = () => void busy(title, (s, signal) => openDataset(opened, s, signal));
+    list.onDismiss = () => hideFolderList();
+    list.render();
+    if (dataset) return openDataset(opened, status, new AbortController().signal);
+    folder = opened;
+    if (files.length === 1) return openFromFolder(opened, 0, false);
+    showFolderPage(opened);
+  });
+}
+
+/** The list of a folder in place of the start screen, before any of its files
+ *  is open. */
+function showFolderPage(opened: OpenedFolder): void {
+  welcomeCrystal?.dispose();
+  welcomeCrystal = null;
+  tabs.clear();
+  welcomeStatus = el("p", { className: "welcome-status" });
+  welcomeStatus.setAttribute("role", "status");
+  opened.list.el.className = "folderlist is-page";
+  app.replaceChildren(el("div", { className: "folderpage" }, opened.list.el, welcomeStatus));
+  opened.list.focus();
+}
+
+/** Lay the folder's list over the views, or take it away. */
+function toggleFolderList(host: HTMLElement): void {
+  if (folder === null) return;
+  const list = folder.list.el;
+  if (list.parentElement === host) return hideFolderList();
+  list.className = "folderlist is-overlay";
+  host.classList.add("has-folderlist");
+  host.append(list);
+  folder.list.focus();
+}
+
+function hideFolderList(): void {
+  const list = folder?.list.el;
+  if (list === undefined || !list.classList.contains("is-overlay")) return;
+  list.parentElement?.classList.remove("has-folderlist");
+  list.remove();
+  document.querySelector<HTMLElement>(".folderbar-files[aria-pressed='true']")?.setAttribute("aria-pressed", "false");
+}
+
+/** Open one file of the folder, in place of what is open. */
+function openFromFolder(opened: OpenedFolder, i: number, ask = true): void {
+  const f = opened.files[i];
+  if (f === undefined) return;
+  const label = leafOf(f.path);
+  const edited = modifiedTab();
+  if (ask && edited !== null && !confirm(discardMsg(edited.doc.name, label))) return;
+  hideFolderList();
+  const file = f.file instanceof File ? f.file : new File([f.file], label);
+  void Doc.open(file)
+    .then((doc) => {
+      welcomeCrystal?.dispose();
+      welcomeCrystal = null;
+      welcomeStatus = null;
+      folder = opened;
+      opened.at = i;
+      opened.list.setCurrent(i);
+      folderDocs.add(doc);
+      tabs.only({ doc, title: doc.name, origin: f.path });
+      say(FOLDER.openedFile(label, opened.name));
+    })
+    .catch(openFailed);
+}
+
+/** Open the folder as the dataset it holds: its files written into a ZIP that
+ *  stores them, which the templates read as one space. */
+async function openDataset(opened: OpenedFolder, show: (text: string) => void, signal: AbortSignal): Promise<void> {
+  const edited = folder === opened ? modifiedTab() : null;
+  if (edited !== null && !confirm(discardMsg(edited.doc.name, opened.name))) return;
+  hideFolderList();
+  const files = orderForArchive(opened.files);
+  const bytes = files.reduce((n, f) => n + f.file.size, 0);
+  const total = formatBytes(bytes);
+  // A small folder is summed before it opens, which takes no time worth
+  // mentioning. A large one opens now and is summed after, out of the way.
+  const sums = bytes <= CRC_AT_OPEN_MAX_BYTES;
+  if (sums) show(FOLDER.reading(opened.name, formatBytes(0), total));
+  const built = await storedZip(files, { sums, progress: (p) => show(FOLDER.reading(opened.name, formatBytes(p.done), total)), signal });
+  const doc = await Doc.open(new File([built.blob], opened.zip, { type: "application/zip" }));
+  builtFor.set(doc, built);
+  folderDocs.add(doc);
+  if (!built.summed) doc.archiveSums = new ArchiveSums(built, new SumJob(files.map((f) => f.file)));
+  welcomeCrystal?.dispose();
+  welcomeCrystal = null;
+  welcomeStatus = null;
+  folder = opened;
+  opened.at = null;
+  opened.list.setCurrent(null, true);
+  const count = FOLDER.files(files.length);
+  const kind = doc.template === "adioszip" ? FOLDER.kinds.bp5 : doc.template === "omezarr" ? FOLDER.kinds.omezarr : FOLDER.kinds.zarr;
+  tabs.only({ doc, title: opened.name, origin: FOLDER.datasetOrigin(kind, count, opened.name) });
+  say(openedMessage(opened, kind, count, formatSize(bytes)));
+  // The sums start once the page has settled, so the first reads of the
+  // archive are not queued behind a read of all of it.
+  const job = doc.archiveSums?.job;
+  if (job !== undefined) {
+    const request = (window as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+    if (request !== undefined) request(() => job.start(), { timeout: 5000 });
+    else setTimeout(() => job.start(), 2000);
+  }
+}
+
+/** What opening a dataset came to: its files, and for a BP5 dataset what its
+ *  folder lacks and whether a second dataset beside it went unread. */
+function openedMessage(opened: OpenedFolder, kind: string, count: string, size: string): string {
+  const indexes = opened.files.filter((f) => leafOf(f.path) === "md.idx").map((f) => f.path.slice(0, -"/md.idx".length));
   if (indexes.length > 1) {
     const [read, rest] = [leafOf(indexes[0] as string), leafOf(indexes[1] as string)];
-    return FOLDER.severalDatasets(indexes.length, dropped.folder, read, rest);
+    return FOLDER.severalDatasets(indexes.length, opened.name, read, rest);
   }
-  return FOLDER.opened(dropped.folder, dropped.name, count, missingFromDataset(dropped.files));
+  return FOLDER.openedDataset(opened.name, kind, count, size, missingFromDataset(opened.files));
+}
+
+/** The bar above the views for a document opened from the folder: the
+ *  folder's name, the way to its list, and the files either side of this
+ *  one. Null for a document that did not come from the folder open now. */
+function folderBarFor(doc: Doc, host: HTMLElement): HTMLElement | null {
+  const opened = folder;
+  if (opened === null || !folderDocs.has(doc)) return null;
+  const files = el("button", { type: "button", className: "folderbar-files", textContent: FOLDER.barFiles });
+  files.setAttribute("aria-pressed", "false");
+  files.addEventListener("click", () => {
+    toggleFolderList(host);
+    files.setAttribute("aria-pressed", String(opened.list.el.parentElement === host));
+  });
+  const bar = el("div", { className: "dumpbar folderbar" }, el("div", { className: "dumpbar-facts" }, el("strong", { textContent: FOLDER.bar(opened.name, FOLDER.files(opened.files.length)) })), files);
+  if (opened.files.length > 1 && opened.at !== null) {
+    const at = opened.at;
+    const step = (by: number, text: string, title: string): HTMLButtonElement => {
+      const b = el("button", { type: "button", textContent: text, title });
+      b.setAttribute("aria-label", title);
+      b.disabled = opened.files[at + by] === undefined;
+      b.addEventListener("click", () => openFromFolder(opened, at + by));
+      return b;
+    };
+    bar.append(step(-1, "‹", FOLDER.barPrev(opened.name)), step(1, "›", FOLDER.barNext(opened.name)));
+  }
+  return bar;
 }
 
 /**
- * Pick a folder and open it as one ZIP. `holding` is the file the folder is
+ * Pick a folder and open it. `holding` is the file the folder is
  * meant to have, when the pick is to read a file that was opened by itself
  * together with the rest of its folder.
  */
@@ -2013,7 +2202,7 @@ function welcome(): void {
   // Opening a folder is a rare way in, so it is a link at the end of the hint
   // under the one button rather than a choice beside it. A button still, for
   // the keyboard and a screen reader: it opens a picker, it goes nowhere.
-  const openFolderLink = el("button", { type: "button", textContent: FOLDER.open, title: FOLDER.openTitle, className: "welcome-link" });
+  const openFolderLink = el("button", { type: "button", textContent: FOLDER.open, className: "welcome-link" });
   openFolderLink.addEventListener("click", () => pickFolder());
   const drop = el(
     "div",
@@ -2080,9 +2269,9 @@ document.addEventListener("drop", (e) => {
   if (!draggingFile(e)) return;
   e.preventDefault();
   showDropzone(false);
-  // A folder, or several items dropped together, opens as one ZIP of all of
-  // them. A folder arrives as an item with no usable file behind it, so it has
-  // to be told apart before reaching for the file.
+  // A folder, or several items dropped together, opens as a folder. A folder
+  // arrives as an item with no usable file behind it, so it has to be told
+  // apart before reaching for the file.
   const items = e.dataTransfer?.items;
   if (items !== undefined && dropIsFolder(items)) {
     const entries = Array.from(items).filter((item) => item.kind === "file");

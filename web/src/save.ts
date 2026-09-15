@@ -17,16 +17,22 @@ const failed = (e: unknown): SaveOutcome => ({ kind: "failed", message: e instan
 /**
  * Save `doc`. `source`, when given, is what the document's unchanged bytes
  * are read from instead of the file it was opened from, and may take a while
- * to have: an archive built from a large folder waits for its CRC-32s. The
- * file picker is asked first, while the click that asked to save still counts
- * as the reader's, and the wait comes after.
+ * to have: a dataset read from a large folder waits for its CRC-32s.
  */
-export async function saveDoc(doc: Doc, source?: () => Promise<Pick<ByteSource, "slice">>): Promise<SaveOutcome> {
-  const build = async (): Promise<Blob> => doc.buildOutput(source === undefined ? undefined : await source());
+export function saveDoc(doc: Doc, source?: () => Promise<Pick<ByteSource, "slice">>): Promise<SaveOutcome> {
+  return saveBlob(doc.name, async () => doc.buildOutput(source === undefined ? undefined : await source()));
+}
+
+/**
+ * Save what `build` makes, as `name`. The file picker is asked first, while
+ * the click that asked to save still counts as the reader's, and the wait for
+ * the bytes comes after.
+ */
+export async function saveBlob(name: string, build: () => Promise<Blob>): Promise<SaveOutcome> {
   if (hasSavePicker(window)) {
     let handle: Awaited<ReturnType<SavePicker>>;
     try {
-      handle = await window.showSaveFilePicker({ suggestedName: doc.name });
+      handle = await window.showSaveFilePicker({ suggestedName: name });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return { kind: "cancelled" };
       return failed(e);
@@ -50,7 +56,7 @@ export async function saveDoc(doc: Doc, source?: () => Promise<Pick<ByteSource, 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = doc.name;
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return { kind: "saved", bytes: blob.size };

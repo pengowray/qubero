@@ -2340,31 +2340,28 @@ export const DUMP = {
     `hex and text columns disagree on ${n.toLocaleString()} ${n === 1 ? "byte" : "bytes"}`,
 } as const;
 
-/** Opening a folder, or several dropped items, as one ZIP built in the browser.
- *  See `folderzip.ts`. */
+/** Opening a folder, or several dropped items. A folder of plain files opens
+ *  as a list to open them from, one at a time; a folder holding a dataset
+ *  opens as that dataset. See `folderview.ts` and `folderzip.ts`. */
 export const FOLDER = {
   /**
    * The welcome screen's hint under `Open a file`, with the way to open a
-   * folder as a link at its end: `You can also drag a file onto this page, or
-   * [open a folder].` A file is the default and the button is the one thing to
-   * press, so a folder is named once, last, as the rare extra; a link leading
-   * the line under the button read as a second choice beside it. The drag
-   * names only files, so `folder` is not met twice in one line; that a folder
-   * can be dragged too is said on the link's tooltip, to the reader who cares
-   * about folders. `drag`, not `drop`: the hint is read before a drag starts.
-   * The overlay shown mid-drag keeps `Drop to open`, since by then letting go
-   * is the one thing left to do.
+   * folder as a link at its end: `You can also drag a file or folder onto this
+   * page, or [open a folder].` A file is the default and the button is the one
+   * thing to press, so a folder is the rare extra, last; a link leading the
+   * line under the button read as a second choice beside it. The drag names
+   * folders too, so the link needs no tooltip to say they can be dragged.
+   * `drag`, not `drop`: the hint is read before a drag starts. The overlay
+   * shown mid-drag keeps `Drop to open`, since by then letting go is the one
+   * thing left to do.
    */
-  hintBefore: "You can also drag a file onto this page, or ",
+  hintBefore: "You can also drag a file or folder onto this page, or ",
   open: "open a folder",
   hintAfter: ".",
-  /** The link's tooltip. What a click does first, a picker opening, and the
-   *  folder drag the hint leaves out. */
-  openTitle: "Pick a folder; every file in it opens as one ZIP, built in the browser. Dragging a folder onto this page does the same.",
   /** Reading a large folder's list of files, once that has taken a moment. */
-  reading: (folder: string, count: number): string => `Reading ${folder}: ${count.toLocaleString()} files so far…`,
-  /** Reading every byte once for the CRC-32s. */
-  checking: (folder: string, done: string, total: string): string => `Checking ${folder}: ${done} of ${total}…`,
+  listing: (folder: string, count: number): string => `Listing ${folder}: ${count.toLocaleString()} files so far…`,
+  /** A dataset's files read once for their CRC-32s before it opens. */
+  reading: (folder: string, done: string, total: string): string => `Reading ${folder}: ${done} of ${total}…`,
   cancel: "Cancel",
   stopped: (folder: string): string => `Stopped opening ${folder}.`,
   empty: (folder: string): string => `The folder ${folder} is empty.`,
@@ -2376,6 +2373,27 @@ export const FOLDER = {
    */
   unreadable: "Couldn't read the folder. Zip it and open the .zip instead.",
   files: (n: number): string => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`,
+  /** The list's heading for several items dropped together, which have no
+   *  folder name to go by. */
+  dropped: (n: number): string => `${n.toLocaleString()} dropped files`,
+  /** Under the list's heading: `4 files · 12.3 MB`. */
+  sub: (files: string, size: string): string => `${files} · ${size}`,
+  filterPlaceholder: "Filter by name",
+  filterLabel: "Filter the files by name",
+  filterNone: (text: string): string => `No files match "${text}".`,
+  capped: (shown: number, n: number): string =>
+    `Showing the first ${shown.toLocaleString()} of ${n.toLocaleString()} files. Type in the filter to narrow the list.`,
+  /** The first row of a dataset's list, which opens every file as the one
+   *  dataset again. */
+  wholeDataset: "Whole dataset",
+  /** The bar above the views while a file of a folder is open. */
+  bar: (folder: string, files: string): string => `${folder} · ${files}`,
+  barFiles: "Files",
+  barPrev: (folder: string): string => `Previous file in ${folder}`,
+  barNext: (folder: string): string => `Next file in ${folder}`,
+  openedFile: (file: string, folder: string): string => `Opened ${file} from ${folder}.`,
+  /** What reads a folder as one thing, by the template that read it. */
+  kinds: { bp5: "ADIOS2 BP5 dataset", zarr: "Zarr store", omezarr: "OME-Zarr store" } as const,
   /**
    * A dataset's folder without a file the dataset reads, said once for the
    * whole folder as it opens: `The folder has no mmd.0.`, `The folder has no
@@ -2385,50 +2403,66 @@ export const FOLDER = {
    * neither or as one of the two.
    */
   missing: (files: readonly string[]): string => `The folder has no ${files.join(" and no ")}.`,
-  opened: (folder: string, zip: string, files: string, missing: readonly string[]): string =>
-    missing.length === 0 ? `Opened folder ${folder} as ${zip}: ${files}, built in the browser.` : `Opened folder ${folder} as ${zip}: ${files}. ${FOLDER.missing(missing)}`,
-  openedItems: (files: string, zip: string): string => `Opened ${files} as ${zip}, built in the browser.`,
+  /** `Opened steps.bp5 as an ADIOS2 BP5 dataset: 4 files, 40 MB.` */
+  openedDataset: (folder: string, kind: string, files: string, size: string, missing: readonly string[]): string => {
+    const opened = `Opened ${folder} as ${/^[AEIOU]/.test(kind) ? "an" : "a"} ${kind}: ${files}, ${size}.`;
+    return missing.length === 0 ? opened : `${opened} ${FOLDER.missing(missing)}`;
+  },
   /** Only the first dataset in a folder of several is read. */
   severalDatasets: (n: number, folder: string, read: string, rest: string): string =>
     `${n} datasets in ${folder}: ${read} is read; ${rest} is listed as files only. Open ${rest} on its own to read it.`,
-  /** The tab's tooltip. How the files arrived is not a fact about the
-   *  archive, so several loose files are only counted. */
-  origin: (folder: string, files: string): string => `Built in the browser from the folder ${folder} (${files}). Not on disk; Save as writes it.`,
-  originItems: (files: string): string => `Built in the browser from ${files}. Not on disk; Save as writes it.`,
-  /** Added to either tooltip for a folder too large to sum before it opened.
-   *  Set once as the tab opens, so it says what stays true: the document
-   *  keeps the noughts. */
-  originUnsummed: "Its CRC-32 fields hold 0; the saved file gets the real sums.",
-  saved: (size: string, zip: string): string => `Saved ${size} as ${zip}. Unzip it to get a folder ADIOS reads.`,
+  /** The dataset tab's tooltip. */
+  datasetOrigin: (kind: string, files: string, folder: string): string =>
+    `${kind}: the ${files} of the folder ${folder}, read together. Save as writes them as one ZIP.`,
 } as const;
 
 /**
- * The CRC-32 fields of an archive built from a folder too large to sum before
- * it opened: nought in the document, the sums taken in the background, and
- * Save as writing them. See `sumjob.ts`.
+ * Save as, for a file opened from a folder and for a dataset read from one:
+ * the one place a ZIP of the folder, and its CRC-32s, are asked about.
+ */
+export const SAVE_AS = {
+  title: "Save as",
+  thisFile: (file: string, size: string): string => `This file: ${file} (${size})`,
+  wholeFolder: (zip: string, files: string, size: string): string =>
+    `The whole folder as one ZIP: ${zip} (${files}, ${size}, stored without compression)`,
+  /** Under the whole-folder choice, when the open file has edits: the ZIP
+   *  takes the edited file, not the one on disk. */
+  withEdits: (file: string): string => `Includes your unsaved edits to ${file}.`,
+  /** A dataset has only the ZIP to save, so it is a statement, not a choice. */
+  datasetOnly: (zip: string, files: string, size: string): string =>
+    `${zip} (${files}, ${size}, stored without compression). Unzip it to get the folder back.`,
+  /** The cost is named only while it is still to be paid. */
+  crc: (size: string | null): string => (size === null ? "Write CRC-32 checksums" : `Write CRC-32 checksums (reads all ${size} first)`),
+  crcOffNote: "Unchecked: every CRC-32 field holds 0 and unzip tools report checksum errors. This app opens the ZIP either way.",
+  ok: "Save…",
+  cancel: "Cancel",
+  /** The toolbar button's tooltip while a file of a folder is open. */
+  buttonTitle: "Save this file or the whole folder (Ctrl+S)",
+  progress: (zip: string, done: string, total: string): string => `Saving ${zip}: checksums ${done} of ${total}…`,
+  done: (zip: string, size: string): string => `Saved ${zip} (${size}). Unzip it to get the folder back.`,
+  doneNoCrc: (zip: string, size: string): string => `Saved ${zip} (${size}) without checksums.`,
+} as const;
+
+/**
+ * The CRC-32 fields of a dataset read from a folder too large to sum before it
+ * opened: nought in the document, the sums taken in the background, and Save
+ * as writing them when asked to. See `sumjob.ts`.
  *
- * `Placeholder` leads both states the Integrity slot can be in, before the sum
- * is known and after, so the reader sees one state move on rather than two
- * verdicts: `Not checked` already means a check that did not run, and
- * `Mismatch` means damage. `real` rather than `calculated`, since it is true
- * before the sum exists as well as after.
+ * Neither state is a verdict: `Not checked` already means a check that did not
+ * run, and `Mismatch` means damage. Both say what the field holds and what
+ * saving does about it.
  */
 export const ARCHIVE_SUMS = {
   /** In the Integrity section's result slot, where `Valid` or `Mismatch` would
    *  be, while the sum is still being taken. Nothing to press: the slot does
    *  not update as the sum is read, and Save as waits for it. */
-  pending: "Placeholder · the real CRC-32 is being calculated in the background. Save as writes it.",
-  /** The same, once the sum is known. The value is said twice so no pronoun
-   *  has to reach back for it, and the document keeping its nought is the
-   *  one thing a reader who saves and looks again needs. */
-  known: (crc: string): string => `Placeholder · the real CRC-32 is ${crc}. This document keeps the 0; Save as writes ${crc}.`,
+  pending: "Not computed yet: this field holds 0 while the CRC-32 is calculated in the background. Save as, with checksums on, writes it.",
+  /** The same, once the sum is known. */
+  known: (crc: string): string => `Holds 0 in this document; the real CRC-32 is ${crc}. Save as, with checksums on, writes it.`,
   /** A plain line under the value, for the central directory's copy of the
    *  sum, which has no Integrity section. The same words as the slot. */
-  pendingNote: "0 is a placeholder: the real CRC-32 is being calculated in the background. Save as writes it.",
-  knownNote: (crc: string): string => `0 is a placeholder; the real CRC-32 is ${crc}. This document keeps the 0; Save as writes ${crc}.`,
-  /** The toolbar while Save as waits for the sums still being taken, in place
-   *  of `Saving`, which it leads with so the save still reads as under way. */
-  saving: (done: string, total: string): string => `Saving: calculating CRC-32s, ${done} of ${total}…`,
+  pendingNote: "Not computed yet: this field holds 0 while the CRC-32 is calculated in the background. Save as, with checksums on, writes it.",
+  knownNote: (crc: string): string => `Holds 0 in this document; the real CRC-32 is ${crc}. Save as, with checksums on, writes it.`,
 } as const;
 
 /** The row above the views when one file of a BP5 dataset is opened by
@@ -2442,9 +2476,9 @@ export const DATASET_MEMBER = {
     adiosbp5mmd: "These formats describe the records in md.0.",
   } as Record<string, string>,
   open: "Open the folder…",
-  openTitle: "Pick the folder holding this file; it opens as one ZIP in place of this tab",
-  /** A file lifted out of a bundle, which reads in the bundle and not here. */
-  lifted: (zip: string): string => `Opened on its own from ${zip}; the records read there, not here.`,
+  openTitle: "Pick the folder this file is in; it opens as the whole dataset.",
+  /** A file lifted out of a dataset, which reads in the dataset and not here. */
+  lifted: (dataset: string): string => `Opened on its own from the dataset ${dataset}. The dataset's records are read in the ${dataset} tab, not here.`,
   wrongFolder: (folder: string, file: string): string => `${folder} has no ${file}. Pick the folder that holds this file.`,
 } as const;
 

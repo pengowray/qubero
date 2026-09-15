@@ -6065,3 +6065,135 @@ summary.kp-group-heading:hover {
 .set-foot {
   margin-top: 8px;
 }
+
+/* A folder's files. On the page before any of them is open, and laid over the
+   views from the folder bar after. One element, moved between the two. */
+.folderpage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-height: 0;
+  padding: 1.5rem;
+}
+.folderlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  font-family: var(--sans);
+  background: var(--bg);
+}
+.folderlist.is-page {
+  width: min(100%, 48rem);
+  flex: 1;
+}
+.left.has-folderlist {
+  position: relative;
+}
+.folderlist.is-overlay {
+  position: absolute;
+  inset: 34px 0 0 0;
+  z-index: 5;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+.folderlist-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.folderlist-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.folderlist-sub,
+.folderlist-note,
+.folderlist-size {
+  color: var(--muted);
+  font-size: 12px;
+}
+.folderlist-note {
+  margin: 0;
+}
+.folderlist-filter {
+  max-width: 20rem;
+}
+.folderlist-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+  border: 1px solid var(--line);
+}
+.folderlist-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 4px 10px;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+}
+.folderlist-row:hover {
+  background: var(--panel);
+}
+.folderlist-row[aria-current="true"] {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.folderlist-row.is-dataset {
+  border-bottom: 1px solid var(--line);
+}
+.folderlist-name {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.folderbar .folderbar-files[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+
+/* Save as, for what came from a folder. */
+.saveas {
+  max-width: 34rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 20px;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+}
+.saveas h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.saveas-choice {
+  margin: 0 0 10px;
+}
+.saveas-crc {
+  margin: 6px 0 0 24px;
+}
+.saveas-crc.is-off {
+  opacity: 0.55;
+}
+.saveas-note {
+  margin: 4px 0 0 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.saveas-crc .saveas-note {
+  margin-left: 20px;
+}
+.saveas-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
