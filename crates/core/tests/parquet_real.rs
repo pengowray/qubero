@@ -143,7 +143,7 @@ fn page_payloads_open_with_the_codec_the_footer_names() {
         ("nan_in_stats.parquet", "snappy", true),
         ("data_index_bloom_encoding_stats.parquet", "gzip", true),
         ("byte_stream_split.zstd.parquet", "zstd", true),
-        ("lz4_raw_compressed.parquet", "lz4", true),
+        ("lz4_raw_compressed.parquet", "lz4 block", true),
         // Every page but two opens. The two are the point of the file: its
         // first column claims 2,147,483,749 uncompressed bytes from three
         // kilobytes of input, which is past what this will hold in memory.

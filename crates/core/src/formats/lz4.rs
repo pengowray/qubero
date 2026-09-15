@@ -240,7 +240,7 @@ mod tests {
         let first = [blocks.clone(), vec![0]].concat();
         let data = field(&mut e, &d, &first, "data");
         let n = e.node(&d, &data).unwrap();
-        assert_eq!(n.type_name, "lz4");
+        assert_eq!(n.type_name, "lz4 block");
         assert_eq!((n.space, n.child_count, n.refused), (0, 2, None));
         let text = e.node(&d, &[data, vec![0, 0]].concat()).unwrap();
         assert_eq!(text.value, crate::eval::Value::Str("hello hello hello lz4".into()));

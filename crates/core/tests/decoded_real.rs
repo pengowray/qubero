@@ -238,7 +238,7 @@ fn streams(
     if node.space != 0 {
         return;
     }
-    if matches!(node.type_name.as_str(), "deflate" | "zlib" | "lz4" | "zstd" | "xz") && node.child_count > 0 {
+    if matches!(node.type_name.as_str(), "deflate" | "zlib" | "lz4 block" | "zstd" | "xz") && node.child_count > 0 {
         out.push(at.to_vec());
         return;
     }

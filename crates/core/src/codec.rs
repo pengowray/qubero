@@ -214,7 +214,7 @@ impl Codec {
             Codec::Zlib => "zlib",
             Codec::Deflate => "deflate",
             Codec::Zstd => "zstd",
-            Codec::Lz4Block => "lz4",
+            Codec::Lz4Block => "lz4 block",
             Codec::Lz4Frame => "lz4 frame",
             Codec::Snappy => "snappy",
             Codec::Brotli => "brotli",

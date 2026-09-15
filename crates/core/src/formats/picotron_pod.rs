@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(node.type_name, "PicotronLz4Pod");
         assert_eq!(ev.node(&d, &[3, 0, 0, 2, 6, 2]).unwrap().value, Value::UInt(11));
         // The block, and the text inside it.
-        assert_eq!(ev.node(&d, &[3, 0, 0, 2, 6, 3]).unwrap().type_name, "lz4");
+        assert_eq!(ev.node(&d, &[3, 0, 0, 2, 6, 3]).unwrap().type_name, "lz4 block");
         assert_eq!(ev.node(&d, &[3, 0, 0, 2, 6, 3, 0]).unwrap().value, Value::Str("{ 1, 2, 3 }".into()));
     }
 
