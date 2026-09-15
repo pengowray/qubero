@@ -154,3 +154,20 @@ subjects; no byline. Test files, in order: `notes.sqlite`, `tiny.png`, `img1.jpg
 `/local/datasets/zebrahub/...` on the `web-local` server (`.claude/launch.json`, port
 17273, serves `D:/`). Verify scrolled states by DOM queries; the pane's screenshots of
 scrolled positions are unreliable.
+
+## Open items: folders and ZIP checksums (noted 2026-09-15)
+
+- Save as writes a folder ZIP entry's CRC-32 of the bytes as opened. After an
+  edit to that entry, unless the reader pressed `Update to:`, the saved sum no
+  longer matches. Save as should sum the edited bytes.
+- Saving a plain folder as one ZIP shows its checksum progress in the status
+  line only; use the spinner (`web/src/spinner.ts`) as the dataset save dialog
+  does.
+- The central directory's copy of an outdated CRC-32 says `Outdated` with no
+  way to recalculate; only the local header's copy has `Calculate now`.
+- The folder's file list has no toolbar, so there is no way back to the
+  welcome screen from it.
+- A file from a dataset's list, opened on its own, still offers to pick the
+  folder again instead of reopening the dataset already open.
+- A BP5 or Zarr dataset in a subfolder beside other files gets no row of its
+  own in the list; the whole folder is bundled instead.
