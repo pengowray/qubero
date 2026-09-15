@@ -2118,7 +2118,7 @@ async function openDataset(opened: OpenedFolder, show: (text: string) => void, s
   opened.at = null;
   opened.list.setCurrent(null, true);
   const count = FOLDER.files(files.length);
-  const kind = doc.template === "adioszip" ? FOLDER.kinds.bp5 : doc.template === "omezarr" ? FOLDER.kinds.omezarr : FOLDER.kinds.zarr;
+  const kind = datasetIn(files) === "bp5" ? FOLDER.kinds.bp5 : doc.template === "omezarr" ? FOLDER.kinds.omezarr : FOLDER.kinds.zarr;
   tabs.only({ doc, title: opened.name, origin: FOLDER.datasetOrigin(kind, count, opened.name) });
   say(openedMessage(opened, kind, count, formatSize(bytes)));
   // The sums start once the page has settled, so the first reads of the

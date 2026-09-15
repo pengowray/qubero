@@ -3322,17 +3322,35 @@ the archive (which ADIOS2 reads once it is unzipped), and the archive is made
 before anything can be read. An archive that compressed its files keeps the one
 space by another route, below.
 
-**The archive.** The web app makes it from a dropped folder, several dropped
-items, or a picked folder (`folderzip.ts`). Nothing is copied: it is a `Blob` of
+**Opening a folder** (2026-09-15). A picked folder, a dropped one, or several
+dropped items, open by what they hold, told from the names of the files before
+any byte is read (`datasetIn`). A folder with a BP5 index or format list, or
+Zarr metadata, anywhere in it, is a dataset: it is written into the archive
+below and opens as the dataset, its tab named after the folder and not the
+archive. Any other folder is only files, and opens none of them: its list takes
+the place of the start screen (`folderview.ts`), a folder of one file opens that
+file, and each file opens from the list as a file opened on its own would, in
+place of what is open. A bar above the views names the folder, lays the same
+list over the views, and steps to the files either side. A dataset's list leads
+with the whole dataset, so its files can each be opened as plain files and the
+dataset opened again. The ZIP is the reader's business only in Save as, which
+for anything from a folder asks first: this file or the whole folder as one
+stored ZIP (a dataset has only the ZIP), and whether to write its CRC-32s. The
+whole folder's ZIP takes the open file with its edits. Earlier, every folder
+opened as the ZIP, which asked a reader of a folder of photos to think about an
+archive nobody had made.
+
+**The archive.** The web app makes it from a folder holding a dataset, and Save
+as makes one of any folder (`folderzip.ts`). Nothing is copied: it is a `Blob` of
 the headers written here and the files themselves, read when the editor asks,
 the same as a file opened alone. Entries keep the folder's name in front,
 `steps.bp5/md.idx`, so unzipping gives the folder back. Each file is stored as it
 is. The files a format is recognised by go first (`md.idx`, `mmd.0`, `md.0`, and
 Zarr's metadata, shallowest first so a store's root leads), because recognition
 reads the front of a file, then the rest in path order with `data.N` last. ZIP64
-records are written where a size or an offset does not fit in 32 bits. A folder
-that is not a dataset opens as a ZIP, or as a Zarr ZipStore, which an OME-Zarr
-image read from its folder is too.
+records are written where a size or an offset does not fit in 32 bits. A Zarr
+store opens as a Zarr ZipStore, which an OME-Zarr image read from its folder is
+too.
 
 **Its sums.** Each entry carries a CRC-32, and taking them reads every byte of
 the folder. A folder of up to `CRC_AT_OPEN_MAX_BYTES` (50 MiB) is read for them
@@ -3340,7 +3358,8 @@ before it opens, with a count of how far it has got and a way to stop, which
 for that size is over before the count shows. A larger one opens at once with
 nought in every CRC-32 field (2026-09-15). `sumjob.ts` takes the sums after the
 page settles, in a worker, or a slice per idle moment where there is none, and
-Save as writes them: `BuiltZip.withSums` is the same archive with the headers
+Save as writes them unless the reader unticks the box, which writes nought in
+every field whether or not they were taken: `BuiltZip.withSums` is the same archive with the headers
 copied and filled in, and `Doc.buildOutput` takes it in place of the file the
 document was opened from, so an unchanged stretch is read from the summed
 archive and an edit still wins. Save as asks for the file first, while the
@@ -3348,7 +3367,7 @@ click still counts, then waits for any sums still being read, saying how far
 they are. The open document keeps its noughts. The inspector says what they are
 on either field, in the Integrity slot for the local header's and on a line
 under the value for the central directory's, before the sum is known and after,
-and runs no check against them; the tab's tooltip says it too. A 64 MiB folder
+and runs no check against them. A 64 MiB folder
 opened in 144 ms, its sums done in the worker 600 ms later.
 
 **The dataset.** A ZIP is `adioszip` (`formats/adios/dataset.rs`) when its front
@@ -3408,7 +3427,10 @@ second reading was.
 the other files for, and a button to pick the folder, which then opens in its
 place. A file lifted out of an archive already open says it reads there.
 
-What it does not do. Only the first dataset in an archive is read. A step
+What it does not do. Only the first dataset in an archive is read, and a
+folder holding a dataset anywhere in it is written whole into the archive, so a
+dataset in a subfolder beside other files is not yet a row of the list that
+opens it alone. A step
 written by more than one writer, and data files past `data.0`, stay bytes.
 Addresses are the archive's, not each file's; the position of the cursor inside
 the file it is in is not said. A folder of millions of files is read into a list
