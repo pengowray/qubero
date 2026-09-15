@@ -132,14 +132,10 @@ button.welcome-crystal {
   overflow: visible;
 }
 .welcome-tagline {
-  margin: 0 0 0.5rem;
+  margin: 0 0 1.75rem;
   font-size: 1.25rem;
   font-weight: 450;
   letter-spacing: 0.015em;
-}
-.welcome-description {
-  margin: 0 0 1.75rem;
-  color: var(--muted);
 }
 .welcome-privacy {
   margin: 2rem 0 0;

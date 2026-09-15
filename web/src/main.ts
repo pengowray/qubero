@@ -2017,11 +2017,10 @@ function welcome(): void {
     "div",
     { className: "welcome" },
     el("div", { className: "welcome-brand" }, welcomeCrystal.el, el("h1", { textContent: "Qubero" })),
-    el("p", { className: "welcome-tagline", textContent: "A closer look at your data." }),
-    el("p", { className: "welcome-description", textContent: "A scientific hex editor for files of any size." }),
+    el("p", { className: "welcome-tagline", textContent: "A hex editor and scientific file viewer." }),
     openBtn,
     el("p", { className: "hint" }, FOLDER.hintBefore, openFolderLink, FOLDER.hintAfter),
-    el("p", { className: "welcome-privacy", textContent: "Your files stay on your device." }),
+    el("p", { className: "welcome-privacy", textContent: "Your files stay on your device. Opens files of any size." }),
     welcomeStatus,
   );
   app.replaceChildren(drop);
