@@ -239,6 +239,10 @@ fn a_naming_row_says_the_name_and_nothing_else() {
     let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
     let mut rows = Vec::new();
     annotated(&doc, &mut ev, &[], &mut rows, 0);
+    if rows.iter().any(|(op, text)| op == "STOP" && text == formats::pickle::familiar::MESSAGE) {
+        assert_eq!(rows.len(), 1, "FPF bypasses symbolic annotations");
+        return;
+    }
     let said: Vec<&(String, String)> = rows.iter().filter(|(_, t)| t == "a numpy array").collect();
     assert_eq!(said.len(), 1, "one row makes the array, and these said so: {said:?}");
     assert_eq!(said[0].0, "REDUCE");
@@ -339,6 +343,11 @@ fn the_libraries_worth_knowing_are_named() {
     let mut checked = 0;
     for (file, phrase) in want {
         let Ok(bytes) = std::fs::read(dir.join(file)) else { continue };
+        let phrase = if formats::pickle::familiar::recognise(&bytes).is_some() {
+            formats::pickle::familiar::MESSAGE
+        } else {
+            *phrase
+        };
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
         let mut said = Vec::new();

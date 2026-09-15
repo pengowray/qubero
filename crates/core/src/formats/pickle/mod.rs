@@ -45,6 +45,7 @@
 //! anything. See [`is_pickle`].
 
 pub mod known;
+pub mod familiar;
 pub mod machine;
 pub mod shapes;
 
@@ -127,7 +128,7 @@ const OPCODE: &[(i128, &str)] = &[
 ];
 
 pub fn pickle() -> Template {
-    Template::new("pickle", ops()).with_type("Op", op()).deduced_by(machine::Program)
+    Template::new("pickle", ops()).with_type("Op", op()).deduced_by(familiar::Program)
 }
 
 /// A run of opcodes, ending at the `.` that stops the machine.
@@ -198,7 +199,7 @@ fn operand() -> T {
     // `REDUCE` calls and what a `BUILD` fills in are on the stack rather than
     // in the file, so the operand slot they were never going to use says it.
     // No bytes, so nothing about the layout changes.
-    add(&[0x52, 0x62, 0x93, 0x81, 0x92, 0x6f, 0x51], T::ComputedText(E::deduced(Deduce::Builds)));
+    add(&[0x2e, 0x52, 0x62, 0x93, 0x81, 0x92, 0x6f, 0x51], T::ComputedText(E::deduced(Deduce::Builds)));
     // Reading the memo, whose index says nothing on its own: `BINGET 5` is a
     // row a reader has to go looking to understand.
     add(&[0x68], memo_ref(T::u8()));
