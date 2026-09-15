@@ -58,6 +58,9 @@ try {
       await page.waitForTimeout(600);
     }
     await page.getByRole("button", { name: "Diagram", exact: true }).click();
+    // Strips are the default; the arrows are measured first.
+    await page.waitForSelector(".dv-mode", { timeout: 20000 });
+    await page.selectOption(".dv-mode", "arrows");
     await page.waitForSelector(".dv-box", { timeout: 20000 });
     // The layout runs once the boxes are measured, so wait for it to have put
     // them somewhere rather than photographing a pile at the origin.

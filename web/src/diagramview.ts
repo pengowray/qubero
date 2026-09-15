@@ -460,7 +460,7 @@ export class DiagramView {
       this.modeBtn.append(opt);
     }
     const saved = localStorage.getItem(MODE_KEY);
-    this.mode = saved === "strips" ? "strips" : "arrows";
+    this.mode = saved === "arrows" ? "arrows" : "strips";
     this.modeBtn.value = this.mode;
     this.modeBtn.addEventListener("change", () => {
       this.mode = this.modeBtn.value === "strips" ? "strips" : "arrows";
