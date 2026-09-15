@@ -1800,15 +1800,6 @@ export const INSIDE = {
   moreRest: (rest: number, noun: string): string => `Show the remaining ${countText(rest, noun)}`,
 } as const;
 
-/** The row width that is one record of what is on screen, which reads a
- *  stream of records as the table it is: the same field of every record in the
- *  same column. `every` is false where the records are only mostly that
- *  length, which the reader wants to know before trusting the columns. */
-export function strideOption(bytes: number, every: boolean, unit: string | null): string {
-  const word = unit ?? "record";
-  return `${bytes} per row (${every ? `one ${word}` : `most ${plural(word)}`})`;
-}
-
 /** More than one of them. Nouns here are the words formats use for what they
  *  hold, so this covers the endings those run to and no more. */
 function plural(noun: string): string {
@@ -3432,7 +3423,11 @@ export const SETTINGS = {
   noMatches: (q: string): string => `No matches for "${q}". Try a name, an extension like .exe, or hex bytes.`,
 } as const;
 
-/** The row width that is one record, as a button beside 8, 16 and 32. */
+/** The row width that is one record of what is on screen, as a button beside
+ *  8, 16 and 32. It reads a stream of records as the table it is: the same
+ *  field of every record in the same column. `every` is false where the
+ *  records are only mostly that length, which the reader wants to know before
+ *  trusting the columns. */
 export function strideSegment(bytes: number, every: boolean, unit: string | null): string {
   const word = unit ?? "record";
   return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
