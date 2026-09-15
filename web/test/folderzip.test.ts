@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { crc32Update, missingFromDataset, orderForArchive, storedZip, type FolderFile } from "../src/folderzip.ts";
+import { crc32Update, datasetIn, missingFromDataset, orderForArchive, storedZip, type FolderFile } from "../src/folderzip.ts";
 
 const file = (path: string, text: string): FolderFile => ({ path, file: new Blob([text]) });
 
@@ -93,4 +93,11 @@ test("a BP5 folder says which of its companions it lacks", () => {
   assert.deepEqual(missingFromDataset([file("s/md.idx", ""), file("s/md.0", "")]), ["mmd.0", "data.0"]);
   assert.deepEqual(missingFromDataset([file("s/md.idx", ""), file("s/md.0", ""), file("s/mmd.0", ""), file("s/data.0", "")]), []);
   assert.deepEqual(missingFromDataset([file("store/.zgroup", "")]), []);
+});
+
+test("a folder is a dataset by the names of its files, and otherwise only files", () => {
+  assert.equal(datasetIn([file("s/data.0", ""), file("s/md.idx", "")]), "bp5");
+  assert.equal(datasetIn([file("image.zarr/.zattrs", ""), file("image.zarr/0/.zarray", "")]), "zarr");
+  assert.equal(datasetIn([file("v3/zarr.json", "")]), "zarr");
+  assert.equal(datasetIn([file("photos/a.bmp", ""), file("photos/sub/b.cab", "")]), null);
 });

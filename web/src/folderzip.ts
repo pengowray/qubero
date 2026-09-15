@@ -378,3 +378,17 @@ export function missingFromDataset(files: readonly FolderFile[]): ("mmd.0" | "da
   if (!has("data.0")) out.push("data.0");
   return out;
 }
+
+/** The kind of dataset a folder holds when it has to be read as one space: an
+ *  ADIOS2 BP5 dataset, or a Zarr store (OME-Zarr included). Told by names
+ *  alone, before anything is read. Null for a folder of files that each read
+ *  on their own. */
+export function datasetIn(files: readonly FolderFile[]): "bp5" | "zarr" | null {
+  let zarr = false;
+  for (const f of files) {
+    const leaf = leafOf(f.path);
+    if (leaf === "md.idx" || leaf === "md.0" || leaf === "mmd.0") return "bp5";
+    if (leaf === ".zgroup" || leaf === ".zarray" || leaf === "zarr.json") zarr = true;
+  }
+  return zarr ? "zarr" : null;
+}
