@@ -17,16 +17,20 @@ test("the sums come out the same taken in the background as taken before the arc
   let told = 0;
   job.onChange(() => told++);
   assert.equal(job.sum(0), null);
+  assert.equal(job.started, false, "nothing is read until something asks");
   const crcs = await job.whenDone();
   assert.deepEqual(crcs, [crc32Update(0, new TextEncoder().encode("index")), crc32Update(0, big), 0]);
   assert.equal(job.read, job.total);
+  assert.equal(job.started, true);
   assert.ok(told > 0);
 
   const built = await storedZip(files, { sums: false });
   const sums = new ArchiveSums(built, job);
-  const first = built.sumAt[1] as { local: number; central: number };
-  assert.deepEqual(sums.slotAt(first.local), { crc: crc32Update(0, big) });
-  assert.deepEqual(sums.slotAt(first.central), { crc: crc32Update(0, big) });
+  const first = built.sumAt[1] as (typeof built.sumAt)[number];
+  const slot = { index: 1, crc: crc32Update(0, big), data: first.data };
+  assert.deepEqual(sums.slotAt(first.local), slot);
+  assert.deepEqual(sums.slotAt(first.central), slot);
+  assert.deepEqual(new Uint8Array(await built.blob.slice(first.data.at, first.data.at + first.data.bytes).arrayBuffer()), big, "the bytes the sum is of");
   assert.equal(sums.slotAt(first.local + 1), null, "only where a field starts");
   const summed = new Uint8Array(await (await sums.summed()).arrayBuffer());
   const before = new Uint8Array(await (await storedZip(files)).blob.arrayBuffer());

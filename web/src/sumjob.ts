@@ -23,7 +23,7 @@ export class SumJob {
   readonly total: number;
   private readBytes = 0;
   private readonly crcs: (number | null)[];
-  private started = false;
+  private begun = false;
   private stopped = false;
   private failure: Error | null = null;
   private worker: Worker | null = null;
@@ -47,6 +47,16 @@ export class SumJob {
     return this.crcs[i] ?? null;
   }
 
+  /** Whether anything has asked for the sums yet. */
+  get started(): boolean {
+    return this.begun;
+  }
+
+  /** Why the sums could not be taken, once they could not. */
+  get error(): Error | null {
+    return this.failure;
+  }
+
   get finished(): boolean {
     return this.crcs.every((c) => c !== null);
   }
@@ -59,8 +69,9 @@ export class SumJob {
 
   /** Start taking the sums, if they are not already being taken. */
   start(): void {
-    if (this.started || this.stopped) return;
-    this.started = true;
+    if (this.begun || this.stopped) return;
+    this.begun = true;
+    this.changed();
     if (this.finished) return this.settle();
     try {
       this.worker = new Worker(new URL("./crcworker.ts", import.meta.url), { type: "module" });
@@ -103,7 +114,7 @@ export class SumJob {
   private take(message: SumMessage): void {
     if (message.kind === "read") this.readBytes += message.bytes;
     else if (message.kind === "sum") this.crcs[message.index] = message.crc;
-    else this.fail(new Error(message.message));
+    else return this.fail(new Error(message.message));
     this.changed();
     if (this.finished) this.settle();
   }
@@ -121,6 +132,7 @@ export class SumJob {
   private fail(error: Error): void {
     this.failure = error;
     for (const w of this.waiting.splice(0)) w.reject(error);
+    this.changed();
   }
 
   /** The same on the main thread, a slice of a file per idle moment. */
@@ -153,6 +165,14 @@ export class SumJob {
   }
 }
 
+/** One CRC-32 field of an archive whose sums are being taken. */
+export type ArchiveSumSlot = {
+  readonly index: number;
+  readonly crc: number | null;
+  /** The file's bytes the sum is of, in bytes of the archive as built. */
+  readonly data: { readonly at: number; readonly bytes: number };
+};
+
 /** A built archive whose sums are being taken: where its CRC-32 fields are,
  *  and the archive with them filled in. */
 export class ArchiveSums {
@@ -170,11 +190,14 @@ export class ArchiveSums {
     });
   }
 
-  /** The CRC-32 field starting at byte `at` of the archive as built, and its
-   *  sum once that is known. Null for any other byte. */
-  slotAt(at: number): { readonly crc: number | null } | null {
+  /** The CRC-32 field starting at byte `at` of the archive as built: which
+   *  entry's it is, the bytes its sum is of, and the sum once that is known.
+   *  Null for any other byte. */
+  slotAt(at: number): ArchiveSumSlot | null {
     const i = this.fields.get(at);
-    return i === undefined ? null : { crc: this.job.sum(i) };
+    if (i === undefined) return null;
+    const where = this.built.sumAt[i] as BuiltZip["sumAt"][number];
+    return { index: i, crc: this.job.sum(i), data: where.data };
   }
 
   /** The archive with every sum written in, once they are all known. */

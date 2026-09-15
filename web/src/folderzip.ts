@@ -123,8 +123,9 @@ export type BuiltZip = {
   /** Whether the CRC-32 fields hold the sums. */
   readonly summed: boolean;
   /** Where each entry's two CRC-32 fields are, in bytes of the archive: the
-   *  local header's and the central directory's. */
-  readonly sumAt: readonly { readonly local: number; readonly central: number }[];
+   *  local header's and the central directory's, and the file's bytes the
+   *  sum is of. */
+  readonly sumAt: readonly { readonly local: number; readonly central: number; readonly data: { readonly at: number; readonly bytes: number } }[];
   /** The same archive with these sums, one per file, written into both of
    *  each entry's fields. Nothing is copied but the headers. */
   withSums(crcs: readonly number[]): Blob;
@@ -157,6 +158,7 @@ export async function storedZip(
   const locals: Uint8Array[] = [];
   const centralAt: number[] = [];
   const localAt: number[] = [];
+  const dataAt: number[] = [];
   const central = new Writer();
   let at = 0;
   const utf8 = new TextEncoder();
@@ -225,6 +227,7 @@ export async function storedZip(
       .bytes(extra);
     locals.push(local);
     localAt.push(at + LOCAL_CRC);
+    dataAt.push(at + local.length);
     at += local.length + size;
   }
   const directory = central.done();
@@ -272,7 +275,7 @@ export async function storedZip(
     blob: blobOf(locals, directory),
     files,
     summed,
-    sumAt: localAt.map((local, i) => ({ local, central: directoryAt + (centralAt[i] as number) })),
+    sumAt: localAt.map((local, i) => ({ local, central: directoryAt + (centralAt[i] as number), data: { at: dataAt[i] as number, bytes: (files[i] as FolderFile).file.size } })),
     withSums(crcs: readonly number[]): Blob {
       const headers = locals.map((local, i) => {
         const copy = local.slice();

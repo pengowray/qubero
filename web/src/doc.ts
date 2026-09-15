@@ -3189,6 +3189,24 @@ export class Doc {
   }
 
   /**
+   * Whether bytes `from` to `from + len` of the source this document was
+   * opened from are all still in it, unchanged: nothing typed over them, cut
+   * out of them or pasted in their place. Bytes moved by an edit elsewhere
+   * still count as unchanged.
+   */
+  sourceRangeIntact(from: number, len: number): boolean {
+    if (!this.modified || len === 0) return true;
+    const plan = this.editor.save_plan();
+    let kept = 0;
+    for (let i = 0; i < plan.length; i += 4) {
+      const [kind, srcOff, pieceLen] = [plan[i] ?? 0, plan[i + 2] ?? 0, plan[i + 3] ?? 0];
+      if (kind !== 0) continue;
+      kept += Math.max(0, Math.min(from + len, srcOff + pieceLen) - Math.max(from, srcOff));
+    }
+    return kept === len;
+  }
+
+  /**
    * Build the saved file as a Blob of lazy parts. Unchanged stretches of the
    * original are referenced, not copied, so this works for any file size.
    *
