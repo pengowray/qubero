@@ -15,6 +15,7 @@
 //! stream is opened whole or not at all, which is why there is a cap.
 
 pub mod bzip2;
+pub mod cfb;
 pub mod cdfhuff;
 pub mod cdfrle;
 pub mod compress;
@@ -42,6 +43,9 @@ pub const CAP_BYTES: usize = 64 * 1024 * 1024;
 /// What a run is compressed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
+    /// The Workbook/Book stream of an OLE compound document, following FAT
+    /// and mini-FAT chains rather than assuming adjacent sectors.
+    CfbWorkbook,
     /// Not compressed at all: the bytes come out as they went in.
     ///
     /// An archive that stores a file rather than packing it has written that
@@ -210,6 +214,7 @@ pub enum Codec {
 impl Codec {
     pub fn as_str(self) -> &'static str {
         match self {
+            Codec::CfbWorkbook => "cfb-workbook",
             Codec::Stored => "stored",
             Codec::Zlib => "zlib",
             Codec::Deflate => "deflate",
@@ -1024,6 +1029,11 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         return Err(Refusal::TooLarge);
     }
     let (out, trace) = match codec {
+        Codec::CfbWorkbook => {
+            let out = cfb::workbook(data)?;
+            let trace = frames::whole(data.len(), out.len());
+            (out, trace)
+        }
         Codec::Stored => (data.to_vec(), frames::whole(data.len(), data.len())),
         Codec::Deflate => inflate::inflate(data)?,
         Codec::Zlib => inflate::zlib(data)?,
@@ -1066,7 +1076,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     let out = match codec {
         // One decoder, not two: the bytes a reader sees have to be the bytes
         // the trace describes, so the traced path is the only path.
-        Codec::Stored
+        Codec::CfbWorkbook
+        | Codec::Stored
         | Codec::Zlib
         | Codec::Deflate
         | Codec::Lz4Block

@@ -17,40 +17,42 @@ const OBJECT_TYPE: &[(i128, &str)] = &[
 const COLOUR: &[(i128, &str)] = &[(0, "red"), (1, "black")];
 
 pub fn thumbsdb() -> Template {
-    Template::new(
-        "thumbsdb",
-        T::structure(
-            "ThumbsDatabase",
-            vec![
-                ("signature", T::magic(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")),
-                ("header_clsid", T::bytes(E::lit(16))),
-                ("minor_version", T::u16(Little)),
-                ("major_version", T::u16(Little)),
-                ("byte_order", T::u16(Little)),
-                ("sector_shift", T::u16(Little)),
-                ("mini_sector_shift", T::u16(Little)),
-                ("reserved", T::bytes(E::lit(6))),
-                ("directory_sector_count", T::u32(Little)),
-                ("fat_sector_count", T::u32(Little)),
-                ("first_directory_sector", T::u32(Little)),
-                ("transaction_signature", T::u32(Little)),
-                ("mini_stream_cutoff", T::u32(Little)),
-                ("first_mini_fat_sector", T::u32(Little)),
-                ("mini_fat_sector_count", T::u32(Little)),
-                ("first_difat_sector", T::u32(Little)),
-                ("difat_sector_count", T::u32(Little)),
-                ("header_difat", T::array(T::u32(Little), E::lit(109))),
-                (
-                    "first_directory",
-                    T::switch(
-                        E::field("sector_shift"),
-                        vec![(9, directory_at(512, 4)), (12, directory_at(4096, 32))],
-                        T::bytes(E::lit(0)),
-                    ),
+    Template::new("thumbsdb", compound_file("ThumbsDatabase"))
+}
+
+/// Header and first directory sector shared by compound-document templates.
+pub(crate) fn compound_file(name: &str) -> T {
+    T::structure(
+        name,
+        vec![
+            ("signature", T::magic(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")),
+            ("header_clsid", T::bytes(E::lit(16))),
+            ("minor_version", T::u16(Little)),
+            ("major_version", T::u16(Little)),
+            ("byte_order", T::u16(Little)),
+            ("sector_shift", T::u16(Little)),
+            ("mini_sector_shift", T::u16(Little)),
+            ("reserved", T::bytes(E::lit(6))),
+            ("directory_sector_count", T::u32(Little)),
+            ("fat_sector_count", T::u32(Little)),
+            ("first_directory_sector", T::u32(Little)),
+            ("transaction_signature", T::u32(Little)),
+            ("mini_stream_cutoff", T::u32(Little)),
+            ("first_mini_fat_sector", T::u32(Little)),
+            ("mini_fat_sector_count", T::u32(Little)),
+            ("first_difat_sector", T::u32(Little)),
+            ("difat_sector_count", T::u32(Little)),
+            ("header_difat", T::array(T::u32(Little), E::lit(109))),
+            (
+                "first_directory",
+                T::switch(
+                    E::field("sector_shift"),
+                    vec![(9, directory_at(512, 4)), (12, directory_at(4096, 32))],
+                    T::bytes(E::lit(0)),
                 ),
-                ("sectors", T::bytes(E::Remaining)),
-            ],
-        ),
+            ),
+            ("sectors", T::bytes(E::Remaining)),
+        ],
     )
 }
 
@@ -107,7 +109,10 @@ fn directory_entry() -> T {
     // FILETIMEs, and a compound file leaves them zero for most entries: the
     // specification says an unset one is written as zero, and the storage
     // objects in one of these usually are.
-    .field_times(&["creation_time", "modified_time"], Time::filetime().unset(0))
+    .field_times(
+        &["creation_time", "modified_time"],
+        Time::filetime().unset(0),
+    )
 }
 
 #[cfg(test)]

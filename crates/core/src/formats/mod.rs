@@ -177,6 +177,8 @@ mod tdms;
 mod tga;
 mod tiff;
 mod thumbsdb;
+mod xls;
+mod xls_cells;
 mod tracker;
 mod unity;
 mod utmp;
@@ -308,6 +310,7 @@ pub use tdms::tdms;
 pub use tga::tga;
 pub use tiff::{camera_raw, tiff};
 pub use thumbsdb::thumbsdb;
+pub use xls::xls;
 pub use tracker::{it, mod_file, s3m, xm};
 pub use unity::{unity_assets, unity_bundle};
 pub use utmp::utmp;
@@ -518,6 +521,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("unityassets", |_| unity_assets()),
     ("unitybundle", |_| unity_bundle()),
     ("thumbsdb", |_| thumbsdb()),
+    ("xls", |_| xls()),
     ("ico", |_| ico()),
     ("elf", |_| elf()),
     ("le", |_| le()),

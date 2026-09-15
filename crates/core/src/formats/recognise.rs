@@ -304,6 +304,8 @@ const PROBES: &[Probe] = &[
     Probe::Is("ico", is_ico),
     Probe::Is("unityassets", is_unity_assets),
     Probe::Is("thumbsdb", |h, _| is_thumbs_db(h)),
+    Probe::Is("xls", |h, _| crate::codec::cfb::is_xls(h)),
+    Probe::Is("xls", |h, _| h.starts_with(b"\x09\x08\x10\x00\x00\x06")),
     Probe::Is("deb", |h, _| is_deb(h)),
     // Nothing marks the front of a tar: the signature is 257 bytes in,
     // and the bytes before it could open anything.
