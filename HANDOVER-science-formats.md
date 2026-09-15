@@ -94,6 +94,7 @@ cases only.
 | B1. `spans` never settled in goes on `parquet/delta_binary_packed.parquet`. Not slow and not a loop: a whole pass is 580 ms and 11,709 steps. The list walks in `walk.rs` charged a step for every element they stepped over, placed or not, and `spans` starts again from the top of its window each go, so going back over what the last go listed (7,854 steps of it here) used up a go of 5,000 before anything new was read. Only placing an element is charged now. The same fix settles 16 more samples `spans_probe` gave up on (ELF, PE, LE, Mach-O, DOS, firmware), nearly all of them full 4,000-row windows of code. | 83aba76 |
 | Short position labels: templates mark an encoding's own steps (`Wrapper`, `Member` in `eval/shortpath.rs`), so Parquet (Thrift) and Arrow (FlatBuffers) positions, lengths and formulas read `footer.row_groups[0].columns[0]`. The full stored path stays behind a Paths as stored switch on the Properties heading. Bencode and CBOR are marked too. | 16ebc30, 627031d, d58eb68 |
 | Engine depth: limit 88 to 110, after a refusal's message stopped writing its expression at the deepest point (+1.1 MiB for a 200-level expression in debug); wasm module stack 1 to 2 MiB via `crates/wasm/build.rs` (+1 MiB initial memory, `.wasm` size and load unchanged). | 7442274..7f15c6e |
+| BP5 from any ZIP: compressed members unpacked and joined into one stream (`Step::Elements`, `Anchor::Space`), recognition from the central directory (`sniff_ends`), CRC-32s for bundles over 50 MiB computed in a worker and written by Save as, folder picker as a link in the welcome hint, Zarr and OME-Zarr folders open as bundles. Three new samples, value-checked. | ba91592..9175434 |
 
 ## Bugs
 
@@ -272,10 +273,7 @@ is built from the file's own `StreamerInfo`, and each branch's baskets are
 placed and read as their leaf's values. Zmumu-lz4 names 212,776 of 212,813
 bytes (from 6,321). Left from S9:
 
-- Stage 5, BP5's FFS formats, is not started. It needs descriptions read
-  from a second document (`mmd.0` for `md.0`), FFS field type strings such as
-  `integer[BitFieldCount]` and nested formats, and pointer bases and
-  alignment checked against adios2.
+- Stage 5, BP5's FFS formats: built (see Closed, ADIOS2 BP5 values).
 - A parent branch's own baskets come after its sub-branches', the side
   reader's order, not necessarily file order. `basket_refs` is added only to
   branches described as `TBranch`.
@@ -546,19 +544,23 @@ Closed). One dataset written by adios2 2.12.1 (under WSL; there is no Windows
 wheel) as BP3, BP4 and BP5, matched against `adios2.FileReader`, with each
 file checked against the files it points into. Left:
 
-- BP5 values read (see Closed) when the dataset is one stored ZIP: a dropped
-  folder is bundled in the browser (`web/src/folderzip.ts`). The bundle's hex
-  addresses are the archive's, not each file's, and no row gives the offset
-  within the member file. The browser reads every byte once for CRC-32s
-  before the dataset opens; skipping that and recomputing on Save as needs a
-  "not computed" state in the inspector.
+- BP5 values read (see Closed) from a folder, bundled in the browser as a
+  stored ZIP (`web/src/folderzip.ts`), or from any ZIP of it. A ZIP with a
+  compressed member is read as one joined stream (md.idx, mmd.0, md.0,
+  data.0), so its bytes do not link back to the hex view; a deflated `data.0`
+  over 64 MiB shows block counts and bounds but no values. Encrypted and
+  unsupported-method members stay bytes with a note. Recognition also reads
+  the central directory in the last 1 MiB (`sniff_ends`).
+- The bundle's hex addresses are the archive's, not each file's, and no row
+  gives the offset within the member file.
+- A bundle over 50 MiB opens with 0 in its CRC-32 fields; a worker computes
+  the sums once the page is idle and Save as writes them. An inspector left
+  open does not refresh when the sums finish, only when the cursor moves.
 - A step with more than one writer stays bytes; `data.N` past `data.0` and a
   second dataset in one archive are listed as files only; `data.0`'s bytes
   outside values (padding to 4096) are uncounted.
-- Recognition looks for a stored `md.idx` or `mmd.0` in the first 36 KiB, so
-  a `zip -0 -r` archive with a large `data.0` first opens as a plain ZIP (the
-  template menu still reads it). Reading the central directory would fix it.
-- BP4 `data.0`, a BP3 `.bp.dir` and OME-Zarr could use the same bundle.
+- BP4 `data.0` and a BP3 `.bp.dir` could use the same bundle (Zarr and
+  OME-Zarr folders already do).
 
 ### WMO BUFR (built 2026-09-14)
 
