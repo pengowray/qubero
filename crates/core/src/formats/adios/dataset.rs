@@ -332,8 +332,6 @@ const ENCRYPTED: &str = "Encrypted: Qubero doesn't decrypt ZIP entries. To read 
 
 /// Why a file of the dataset stays bytes when its entry, written as a stream
 /// with no size in its header, would not unpack to find out how long it is.
-/// The way out is a test rather than an extraction, which would fail on the
-/// same bytes.
 fn unopened(method: &str) -> String {
-    format!("Not unpacked: unpacking failed, so this entry's {method} data is damaged or cut short. Test the ZIP with another tool, such as unzip -t.")
+    format!("Not unpacked: unpacking failed. This entry's {method} data is damaged or cut short.")
 }

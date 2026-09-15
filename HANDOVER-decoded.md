@@ -95,3 +95,13 @@ Wasm/web (`crates/wasm`, `web/src`):
 
 Strings the reader sees are written by the coordinator; agents use the wording
 in this document and list what they used.
+
+## Later: ZIP entries
+
+- Encrypted entries stay bytes everywhere (`dataset.rs` `ENCRYPTED`, and the
+  ZIP template). Add ZipCrypto and WinZip AES decryption when a password can be
+  asked for, if it is not too much work.
+- Check a damaged ZIP at least as well as `unzip -t`: every entry's CRC-32
+  and sizes against its unpacked bytes, local header against central
+  directory, and a note on each entry that fails, not only the BP5 dataset's
+  streamed entries (`unopened` in `dataset.rs`).
