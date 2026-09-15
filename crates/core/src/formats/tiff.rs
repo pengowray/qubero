@@ -98,6 +98,10 @@ const TAG: &[(i128, &str)] = &[
     (330, "sub ifds"),
     (338, "extra samples"),
     (339, "sample format"),
+    // Exif's JPEG-compressed thumbnail or another JPEG image carried inside
+    // a TIFF-family file. Sony ARW uses these for its embedded previews.
+    (513, "jpeg interchange format"),
+    (514, "jpeg interchange format length"),
     (529, "ycbcr coefficients"),
     (530, "ycbcr subsampling"),
     (531, "ycbcr positioning"),
@@ -111,6 +115,7 @@ const TAG: &[(i128, &str)] = &[
     (34675, "icc profile"),
     (34713, "nikon nef info"),
     (34853, "gps ifd"),
+    (50341, "print image matching"),
     // TIFF/EP and DNG camera-raw metadata. DNG deliberately extends TIFF
     // rather than wrapping it, and proprietary raw formats use many of the
     // same tags alongside their maker-specific records.
@@ -182,6 +187,8 @@ const EXIF_TAG: &[(i128, &str)] = &[
     (36880, "offset from utc"),
     (36881, "offset from utc, taken"),
     (36882, "offset from utc, digitised"),
+    (37121, "components configuration"),
+    (37122, "compressed bits per pixel"),
     (37377, "shutter speed"),
     (37378, "aperture"),
     (37379, "brightness"),
@@ -274,6 +281,27 @@ const GPS_TAG: &[(i128, &str)] = &[
     (31, "horizontal error"),
 ];
 
+/// Tags found in Sony ARW IFDs. The public names come from ExifTool's EXIF
+/// table; the remaining values are observed in ARW files but have no published
+/// meaning, so their labels say only that they are vendor-private. Keep these
+/// out of the generic TIFF, Nikon and DNG tag tables.
+const SONY_TAG: &[(i128, &str)] = &[
+    (513, "preview image start"),
+    (514, "preview image length"),
+    (0x7000, "sony raw file type"),
+    (0x7001, "sony private 0x7001 (undocumented)"),
+    (0x7010, "sony tone curve"),
+    (0x7011, "sony private 0x7011 (undocumented)"),
+    (0x7020, "sony private 0x7020 (undocumented)"),
+    (0x7031, "vignetting correction"),
+    (0x7032, "vignetting correction parameters"),
+    (0x7034, "chromatic aberration correction"),
+    (0x7035, "chromatic aberration correction parameters"),
+    (0x7036, "distortion correction"),
+    (0x7037, "distortion correction parameters"),
+    (0x7038, "sony raw image size"),
+];
+
 /// What one value of an entry is. The count says how many of them there are,
 /// so the room an entry describes is this times that.
 const FIELD_TYPE: &[(i128, &str)] = &[
@@ -303,7 +331,12 @@ pub fn tiff() -> Template {
 /// distinct template name preserves the more precise result from sniffing and
 /// makes each format available explicitly in the template picker.
 pub fn camera_raw(name: &str) -> Template {
-    tiff_named(name)
+    if name == "arw" {
+        let part = sony_arw_part();
+        Template::new(name, part.root.clone()).with_part(&part)
+    } else {
+        tiff_named(name)
+    }
 }
 
 fn tiff_named(name: &str) -> Template {
@@ -319,6 +352,16 @@ pub fn tiff_part() -> Part {
     for e in [Little, Big] {
         for space in SPACES {
             part = part.with_type(space.named(e), ifd(e, *space));
+        }
+    }
+    part
+}
+
+fn sony_arw_part() -> Part {
+    let mut part = Part::new(tiff_file_for(Space::Sony));
+    for e in [Little, Big] {
+        for space in [Space::Sony, Space::Exif, Space::Gps] {
+            part = part.with_type(space.named(e), ifd(e, space));
         }
     }
     part
@@ -341,6 +384,10 @@ pub fn jxr_part() -> Part {
 /// the window changes nothing; written into an EXIF block partway through a
 /// JPEG it is the only thing that makes the offsets mean anything.
 pub fn tiff_file() -> T {
+    tiff_file_for(Space::Tiff)
+}
+
+fn tiff_file_for(space: Space) -> T {
     T::sized(
         E::Remaining,
         T::structure(
@@ -357,7 +404,7 @@ pub fn tiff_file() -> T {
                     "file",
                     T::switch(
                         E::field("byte_order"),
-                        vec![(0x4949, file(Little)), (0x4d4d, file(Big))],
+                        vec![(0x4949, file(Little, space)), (0x4d4d, file(Big, space))],
                         T::bytes(E::Remaining),
                     ),
                 ),
@@ -367,7 +414,7 @@ pub fn tiff_file() -> T {
 }
 
 /// Everything after the two letters, written the way they said.
-fn file(e: Endian) -> T {
+fn file(e: Endian, space: Space) -> T {
     T::structure(
         "Header",
         vec![
@@ -378,7 +425,7 @@ fn file(e: Endian) -> T {
             ("ifd_offset", T::u32(e)),
             // The directory, wherever the header says it is. It costs no bytes
             // here, so the image below still starts where it starts.
-            ("ifd", T::at_in_window(E::field("ifd_offset"), T::Named(ifd_name(e).into()))),
+            ("ifd", T::at_in_window(E::field("ifd_offset"), T::Named(space.named(e).into()))),
             // The strips, the tiles, any directory after the first, and the
             // values too big to sit inside an entry. Every one of them is
             // pointed at by an entry above rather than laid out in order.
@@ -395,6 +442,7 @@ fn file(e: Endian) -> T {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Space {
     Tiff,
+    Sony,
     Exif,
     Gps,
     /// A JPEG XR's directory, which is this layout exactly and almost none of
@@ -405,7 +453,7 @@ pub enum Space {
 impl Space {
     fn tags(self) -> &'static [(i128, &'static str)] {
         match self {
-            Space::Tiff => TAG,
+            Space::Tiff | Space::Sony => TAG,
             Space::Exif => EXIF_TAG,
             Space::Gps => GPS_TAG,
             Space::Jxr => super::jxr::TAG,
@@ -414,7 +462,7 @@ impl Space {
     /// What a reader sees the directory called.
     fn shown(self) -> &'static str {
         match self {
-            Space::Tiff => "Ifd",
+            Space::Tiff | Space::Sony => "Ifd",
             Space::Exif => "ExifIfd",
             Space::Gps => "GpsIfd",
             Space::Jxr => "JxrIfd",
@@ -427,6 +475,8 @@ impl Space {
         match (self, e) {
             (Space::Tiff, Little) => "tiff.Ifd.le",
             (Space::Tiff, Big) => "tiff.Ifd.be",
+            (Space::Sony, Little) => "arw.Ifd.le",
+            (Space::Sony, Big) => "arw.Ifd.be",
             (Space::Exif, Little) => "tiff.ExifIfd.le",
             (Space::Exif, Big) => "tiff.ExifIfd.be",
             (Space::Gps, Little) => "tiff.GpsIfd.le",
@@ -440,6 +490,7 @@ impl Space {
     fn subs(self) -> &'static [(i128, Space)] {
         match self {
             Space::Tiff => SUB_IFD,
+            Space::Sony => SONY_SUB_IFD,
             Space::Jxr => super::jxr::SUB_IFD,
             Space::Exif | Space::Gps => &[],
         }
@@ -447,10 +498,6 @@ impl Space {
 }
 
 const SPACES: &[Space] = &[Space::Tiff, Space::Exif, Space::Gps];
-
-fn ifd_name(e: Endian) -> &'static str {
-    Space::Tiff.named(e)
-}
 
 /// One directory: how many entries, the entries, and where the next one is.
 ///
@@ -479,12 +526,22 @@ fn ifd(e: Endian, space: Space) -> T {
 /// there, more and they are an offset to it. So the size is worked out first,
 /// in a field of no bits, and the switch below is on whether it fits.
 fn entry(e: Endian, space: Space) -> T {
+    let mut tags = space.tags().to_vec();
+    if space == Space::Sony {
+        for &(id, name) in SONY_TAG {
+            if let Some(existing) = tags.iter_mut().find(|(number, _)| *number == id) {
+                existing.1 = name;
+            } else {
+                tags.push((id, name));
+            }
+        }
+    }
     T::structure_named(
         "Entry",
         "tag",
         "",
         vec![
-            ("tag", T::enumeration("Tag", T::u16(e), space.tags())),
+            ("tag", T::enumeration("Tag", T::u16(e), &tags)),
             ("type", T::enumeration("FieldType", T::u16(e), FIELD_TYPE)),
             ("count", T::u32(e)),
             ("room", room()),
@@ -507,6 +564,12 @@ const SUB_IFD: &[(i128, Space)] = &[
     // Whole other images: the preview inside a raw file, and the pages of a
     // multi-resolution one.
     (330, Space::Tiff),
+    (34665, Space::Exif),
+    (34853, Space::Gps),
+];
+
+const SONY_SUB_IFD: &[(i128, Space)] = &[
+    (330, Space::Sony),
     (34665, Space::Exif),
     (34853, Space::Gps),
 ];
@@ -652,6 +715,76 @@ mod tests {
     use crate::document::Document;
     use crate::eval::{Evaluator, Value};
     use crate::source::MemSource;
+
+    #[test]
+    fn jpeg_interchange_tag_keeps_its_standard_name_outside_sony_arw() {
+        let mut bytes = tiff_bytes(true);
+        bytes[18..20].copy_from_slice(&513u16.to_le_bytes());
+        let d = Document::new(MemSource(bytes));
+        for (template, label) in [
+            (tiff(), "jpeg interchange format"),
+            (camera_raw("arw"), "preview image start"),
+        ] {
+            let mut ev = Evaluator::new(template);
+            assert_eq!(
+                ev.node(&d, &[1, 2, 0, 1, 0, 0]).unwrap().value,
+                Value::Enum {
+                    raw: 513,
+                    name: Some(label.into()),
+                    hex: false,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn sony_arw_real_ifds_name_all_observed_tags() {
+        let samples = std::env::var_os("QUBERO_SAMPLES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"))
+            });
+        let path = samples.join("cameraraw/sony-ilce-7s-14bit-compressed.arw");
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(camera_raw("arw"));
+        let ifd0 = [1, 2, 0, 1];
+        let raw_ifd = [1, 2, 0, 1, 11, 4, 1, 0, 1];
+        let exif_ifd = [1, 2, 0, 1, 15, 4, 1, 0, 1];
+        for (prefix, count) in [
+            (ifd0.as_slice(), 18),
+            (raw_ifd.as_slice(), 27),
+            (exif_ifd.as_slice(), 37),
+        ] {
+            for index in 0..count {
+                let path = [prefix, &[index, 0]].concat();
+                let tag = ev.node(&d, &path).unwrap_or_else(|error| panic!("{path:?}: {error:?}"));
+                assert!(
+                    matches!(tag.value, Value::Enum { name: Some(_), .. }),
+                    "undefined tag at {path:?}: {:?}",
+                    tag.value
+                );
+            }
+        }
+        assert_eq!(
+            ev.node(&d, &[1, 2, 0, 1, 12, 0]).unwrap().value,
+            Value::Enum {
+                raw: 513,
+                name: Some("preview image start".into()),
+                hex: false,
+            }
+        );
+        assert_eq!(
+            ev.node(&d, &[1, 2, 0, 1, 13, 0]).unwrap().value,
+            Value::Enum {
+                raw: 514,
+                name: Some("preview image length".into()),
+                hex: false,
+            }
+        );
+    }
 
     /// The same picture written both ways round: a two-entry directory at the
     /// end, and eight bytes of image before it.
