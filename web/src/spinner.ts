@@ -29,8 +29,13 @@ class Spinner extends HTMLElement {
   private frame = 0;
   private readonly still = (): void => this.restart();
 
-  constructor() {
-    super();
+  private built = false;
+
+  /** Built on first connect, not in the constructor: an element made by
+   *  `document.createElement` must come back with no attributes or children,
+   *  and throws otherwise. */
+  private build(): void {
+    this.built = true;
     const svg = document.createElementNS(NS, "svg");
     svg.setAttribute("viewBox", "-40 -36 560 894");
     svg.setAttribute("fill", "var(--bg)");
@@ -49,6 +54,7 @@ class Spinner extends HTMLElement {
   }
 
   connectedCallback(): void {
+    if (!this.built) this.build();
     this.reduced.addEventListener("change", this.still);
     this.restart();
   }
