@@ -54,7 +54,10 @@ try {
     await (await chooser).setFiles({ name: basename(c.file), buffer: await readFile(c.file) });
     await page.waitForSelector(".rp-row, .hv-hex", { timeout: 20000 });
     if (c.template !== undefined) {
-      await page.selectOption(".tb-tmpl", c.template);
+      // The template chip opens the settings dialog, whose list has a row per template.
+      await page.click(".tb-tmpl");
+      await page.click(`.settings-dlg [data-template="${c.template}"]`);
+      await page.keyboard.press("Escape");
       await page.waitForTimeout(600);
     }
     await page.getByRole("button", { name: "Diagram", exact: true }).click();

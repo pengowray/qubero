@@ -19,7 +19,7 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { ARCHIVE_SUMS, DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { ARCHIVE_SUMS, DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
@@ -37,6 +37,10 @@ import {
   UNICODE_ENCODINGS,
 } from "./encodings.ts";
 import { ASCII_GLYPHS } from "./hexcell.ts";
+import { gearIcon } from "./icons.ts";
+import { SettingsDialog, type ExtraTemplate } from "./settingsdialog.ts";
+import { magicPattern, type TemplateEntry } from "./templatesearch.ts";
+import { templateExtensions } from "./identity.ts";
 
 const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
@@ -193,15 +197,11 @@ const selectedBytes = (n: number): string => (n === 1 ? "1 byte" : `${n.toLocale
 const SIGNATURE_NOTE = "Signature only. This template marks the bytes that identify the format and nothing else.";
 
 
-/** The select value that stands for the generated template. Not a built-in
- *  name, so it can never collide with one. */
+/** The chooser's value for the generated template. Not a built-in name, so it
+ *  can never collide with one. */
 const SIGNATURE_VALUE = "generated-signature";
-const signatureOption = (name: string): string =>
-  name === "" ? "Template: signature only" : `Template: ${name} (signature only)`;
+const signatureOption = (name: string): string => (name === "" ? "Signature only" : `${name} (signature only)`);
 
-/** The menu entry that opens the `.ksy` converter. An action rather than a
- *  template, so picking it puts the menu back where it was. */
-const KSY_OPEN_VALUE = "open-ksy-converter";
 /** What a bundled Kaitai format's template name starts with. */
 const KAITAI_PREFIX = "ksy:";
 /** The menu entry for the template a converted `.ksy` produced, added once one
@@ -673,66 +673,74 @@ function build(tab: Tab): Page {
   const kind = fileType();
   // The overview shows the same name the toolbar does, whatever named it.
   kind.onIdentity = (name) => overview.setIdentity(name);
-  const tmpl = el("select", { className: "tb-tmpl" });
-  tmpl.setAttribute("aria-label", "Template");
-  tmpl.append(el("option", { value: "", textContent: "No template" }));
-  // The built-ins first, then the bundled Kaitai Struct formats under a
-  // heading of their own: a reader picking one should know the description
-  // came from elsewhere, and a hundred more names run into the built-ins
-  // without a break between them.
+  // Every template the chooser offers, with what the search looks for in each:
+  // a built-in's extensions, and a bundled Kaitai format's own extensions and
+  // magic bytes.
   const choices = doc.templateChoices;
   rememberKaitaiTitles(choices);
-  for (const c of choices.filter((c) => c.source === "builtin")) {
-    tmpl.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
-  }
-  const kaitai = choices.filter((c) => c.source === "kaitai");
-  if (kaitai.length > 0) {
-    const group = el("optgroup");
-    group.label = KAITAI_TEMPLATE.group;
-    for (const c of kaitai) group.append(el("option", { value: c.name, textContent: `Template: ${templateLabel(c.name)}` }));
-    tmpl.append(group);
-  }
-  // Last, after every template there is: it opens a tool rather than choosing
-  // one of them. The generated-signature entry is added later and goes in front
-  // of this one, so the tool stays at the end of the menu.
-  const ksyEntry = el("option", { value: KSY_OPEN_VALUE, textContent: KSY.menuEntry });
-  if (doc.isFile) tmpl.append(ksyEntry);
-  /** The entry for a converted `.ksy`, once one has been applied. */
-  let ksyOption: HTMLOptionElement | null = null;
-  /** What the menu was on before the current change, so the entry that opens
-   *  the converter can put it back. */
-  let tmplWas = "";
+  const templateEntries: TemplateEntry[] = choices.map((c) => {
+    const magic = c.source === "kaitai" ? magicPattern(c.magic ?? []) : null;
+    return {
+      value: c.name,
+      label: templateLabel(c.name),
+      kind: c.source,
+      ext: c.source === "builtin" ? templateExtensions(c.name) : [...(c.ext ?? [])],
+      sigs: magic === null ? [] : [magic],
+    };
+  });
+  /** The templates that are not in the list above: the file's own signature
+   *  template, and a converted `.ksy`, each once there is one. */
+  let extraTemplates: ExtraTemplate[] = [];
+  const setExtra = (x: ExtraTemplate): void => {
+    extraTemplates = [...extraTemplates.filter((e) => e.kind !== x.kind), x];
+    settings?.setExtras(extraTemplates);
+    if (tmplValue === x.value) setTemplateValue(x.value);
+  };
+  const dropExtra = (kind: ExtraTemplate["kind"]): void => {
+    extraTemplates = extraTemplates.filter((e) => e.kind !== kind);
+    settings?.setExtras(extraTemplates);
+  };
+  /** The settings dialog, built once the hex view's controls it holds are. */
+  let settings: SettingsDialog | null = null;
+  /** Which template the chooser says is reading the file. */
+  let tmplValue = "";
+  // The toolbar names the template and opens the chooser: it is a button, not
+  // a menu, since what it opens is the dialog.
+  const tmpl = el("button", { type: "button", className: "tb-tmpl", title: SETTINGS.chipTitle });
+  const setTemplateValue = (value: string): void => {
+    tmplValue = value;
+    tmpl.dataset.template = value;
+    const name = value === "" ? null : (extraTemplates.find((x) => x.value === value)?.label ?? templateLabel(value));
+    tmpl.textContent = name === null ? SETTINGS.chipNone : SETTINGS.chip(name);
+    tmpl.title = `${tmpl.textContent}. ${SETTINGS.chipTitle}`;
+    settings?.setCurrent(value, name);
+  };
+  setTemplateValue("");
+  tmpl.addEventListener("click", () => settings?.open());
   // The generated template is not one of the built-ins, so switching back to it
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
-  tmpl.addEventListener("change", () => {
-    if (tmpl.value === KSY_OPEN_VALUE) {
-      // Opening the converter changes nothing about how the file is read, so
-      // the menu goes back to saying what is reading it.
-      tmpl.value = tmplWas;
-      openKsyPanel();
-      return;
-    }
-    tmplWas = tmpl.value;
+  const chooseTemplate = (value: string): void => {
+    setTemplateValue(value);
     overview.setNote("");
-    if (tmpl.value === SIGNATURE_VALUE) {
+    if (value === SIGNATURE_VALUE) {
       void reapplySignature?.();
       return;
     }
-    if (tmpl.value === KSY_VALUE) {
+    if (value === KSY_VALUE) {
       applyKsy();
       return;
     }
-    doc.setTemplate(tmpl.value === "" ? null : tmpl.value);
+    doc.setTemplate(value === "" ? null : value);
     // A bundled Kaitai format says where it came from, and says so again with
     // a count when its description holds things the template does not: those
     // fields are missing or read another way, and a reader who is not told
     // has no way to know which.
-    if (tmpl.value.startsWith(KAITAI_PREFIX)) showKaitaiNote(tmpl.value);
+    if (value.startsWith(KAITAI_PREFIX)) showKaitaiNote(value);
     // Picking a template is asking to read fields, so the panel goes back to
     // them. It is left on the raw reading only for a file that has none.
-    if (tmpl.value !== "") inspector.setMode("structure");
-  });
+    if (value !== "") inspector.setMode("structure");
+  };
   // An unpacked stream was named by the stream that held it, so none of the
   // work below applies: nothing sniffs it, nothing identifies it, and its
   // template is not one of the menu's.
@@ -749,8 +757,7 @@ function build(tab: Tab): Page {
     const templated = name !== null;
     structure.setMatched(templated);
     if (name !== null) {
-      tmpl.value = name;
-      tmplWas = name;
+      setTemplateValue(name);
       doc.setTemplate(name);
       showMember(name);
       // A file recognised as a bundled Kaitai format says so as much as one
@@ -788,13 +795,8 @@ function build(tab: Tab): Page {
       // is one field, but it is a field: clickable, highlighted, and true.
       const signature = await doc.signatureTemplate(id);
       if (signature === null) return;
-      const option = el("option", { value: SIGNATURE_VALUE, textContent: signatureOption(signature) });
-      // Before the entry that opens the converter: templates first, the tool
-      // last.
-      if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(option, ksyEntry);
-      else tmpl.append(option);
-      tmpl.value = SIGNATURE_VALUE;
-      tmplWas = SIGNATURE_VALUE;
+      setExtra({ value: SIGNATURE_VALUE, label: signatureOption(signature), kind: "signature" });
+      setTemplateValue(SIGNATURE_VALUE);
       overview.setNote(SIGNATURE_NOTE);
       kind.setNote(SIGNATURE_TEMPLATE);
       reapplySignature = async (): Promise<void> => {
@@ -897,78 +899,39 @@ function build(tab: Tab): Page {
   });
   goto.addEventListener("input", () => goto.classList.remove("invalid"));
 
-  const width = el("select", { className: "tb-width" });
-  width.setAttribute("aria-label", "Bytes per row");
-  for (const n of [8, 16, 32]) width.append(el("option", { value: String(n), textContent: `${n} per row` }));
+  // The hex view's settings, which the settings dialog shows and changes.
   const narrow = window.innerWidth < 700;
-  width.value = narrow ? "8" : "16";
-  view.setBytesPerRow(narrow ? 8 : 16);
-  width.addEventListener("change", () => view.setBytesPerRow(Number(width.value)));
+  let bytesPerRow = narrow ? 8 : 16;
+  view.setBytesPerRow(bytesPerRow);
+  let byteMode: "hex" | "binary" = "hex";
+  /** The width the stride button was offered at, kept while it is the row
+   *  width in use: the button the reader chose has to go on saying what they
+   *  chose. */
+  let strideOffered: { bytes: number; label: string } | null = null;
   // A stream of records read sixteen bytes to a row is read across the grain:
   // every record starts in a different column. This offers the row that is one
   // record long, where the screen is holding records of one length. It is
-  // worked out as the menu opens rather than kept up to date behind it: an
-  // entry that changed while the reader was deciding would be worse than one
+  // worked out as the dialog opens rather than kept up to date behind it: a
+  // button that changed while the reader was deciding would be worse than one
   // that is not there.
-  const stride = el("option", { value: "" });
-  stride.hidden = true;
-  width.append(stride);
-  const offerStride = (): void => {
-    // Not while it is the row width in use: the entry the reader chose has to
-    // go on saying what they chose.
-    if (!stride.hidden && width.value === stride.value) return;
+  const offerStride = (): { bytes: number; label: string } | null => {
+    if (strideOffered !== null && bytesPerRow === strideOffered.bytes) return strideOffered;
     const found = view.recordStride();
-    const fixed = found !== null && [8, 16, 32].includes(found.bytes);
-    stride.hidden = found === null || fixed;
-    if (found === null || fixed) return;
-    stride.value = String(found.bytes);
-    stride.textContent = strideOption(found.bytes, found.every, found.unit);
+    strideOffered = found === null || [8, 16, 32].includes(found.bytes) ? null : { bytes: found.bytes, label: strideSegment(found.bytes, found.every, found.unit) };
+    return strideOffered;
   };
-  width.addEventListener("pointerdown", offerStride);
-  width.addEventListener("keydown", offerStride);
 
-  const mode = el("select", { className: "tb-mode" });
-  mode.setAttribute("aria-label", "Show bytes as");
-  for (const [value, label] of [["hex", "Hex"], ["binary", "Binary"]] as const) {
-    mode.append(el("option", { value, textContent: label }));
-  }
-  mode.addEventListener("change", () => {
-    const binary = mode.value === "binary";
-    view.setMode(binary ? "binary" : "hex");
-    // Eight binary digits per byte: a wide row has to narrow to stay readable.
-    if (binary && Number(width.value) > 8) {
-      width.value = "8";
-      view.setBytesPerRow(8);
-    }
-  });
-
-  const column = el("select", { className: "tb-col" });
-  column.setAttribute("aria-label", "Column beside the bytes");
-  for (const [value, label] of [
-    ["text", "Text column"],
-    ["fields", "Field column"],
-    ["fields-condensed", "Field column, condensed"],
-    ["both", "Text and fields"],
-    ["both-condensed", "Text and fields, condensed"],
-  ] as const) {
-    column.append(el("option", { value, textContent: label }));
-  }
+  let column: RightColumn = "text";
   const columnKey = (): string => (doc.template === null ? "qubero.column.plain" : "qubero.column.template");
   const syncColumn = (): void => {
     const saved = localStorage.getItem(columnKey());
     // Anything else saved is from an older build, or from nowhere: fall back
     // to what a file of this kind starts with.
-    const c: RightColumn = isRightColumn(saved) ? saved : doc.template === null ? "text" : "both";
-    column.value = c;
-    view.setRightColumn(c);
+    column = isRightColumn(saved) ? saved : doc.template === null ? "text" : "both";
+    view.setRightColumn(column);
+    settings?.syncHex();
   };
   syncColumn();
-  column.addEventListener("change", () => {
-    const c: RightColumn = isRightColumn(column.value) ? column.value : "text";
-    localStorage.setItem(columnKey(), c);
-    view.setRightColumn(c);
-    syncGlyphsShown();
-  });
 
   // Which characters the text column is drawn in. ASCII is what a hex dump's
   // text column has always been, and is still the default; the rest are for
@@ -1008,13 +971,45 @@ function build(tab: Tab): Page {
     rememberChoice(HEX_GLYPHS_KEY, glyphs.value);
     useGlyphs(glyphs.value);
   });
-  /** The chooser says nothing where the text column is not drawn, so it is
-   *  not offered there. Kept out of `hexOnly` because it has this second
-   *  reason to be hidden as well as the view it belongs to. */
-  const syncGlyphsShown = (): void => {
-    const showsText = column.value === "text" || column.value.startsWith("both");
-    glyphs.hidden = view.el.hidden || !showsText;
-  };
+
+  const dialog = new SettingsDialog(
+    templateEntries,
+    {
+      mode: () => byteMode,
+      setMode: (m) => {
+        byteMode = m;
+        view.setMode(m);
+        // Eight binary digits per byte: a wide row has to narrow to stay readable.
+        if (m === "binary" && bytesPerRow > 8) {
+          bytesPerRow = 8;
+          view.setBytesPerRow(8);
+        }
+      },
+      bytesPerRow: () => bytesPerRow,
+      setBytesPerRow: (n) => {
+        bytesPerRow = n;
+        view.setBytesPerRow(n);
+      },
+      stride: offerStride,
+      column: () => column,
+      setColumn: (c) => {
+        column = c;
+        localStorage.setItem(columnKey(), c);
+        view.setRightColumn(c);
+      },
+    },
+    glyphs,
+  );
+  settings = dialog;
+  dialog.setTemplatesOffered(doc.isFile, doc.isFile);
+  dialog.setCurrent(tmplValue, tmplValue === "" ? null : (extraTemplates.find((x) => x.value === tmplValue)?.label ?? templateLabel(tmplValue)));
+  dialog.setExtras(extraTemplates);
+  dialog.onPickTemplate = chooseTemplate;
+  dialog.onConvertKsy = () => openKsyPanel();
+  tab.release.push(() => dialog.el.remove());
+  const gear = el("button", { type: "button", className: "icon-btn tb-settings", title: SETTINGS.gearTitle }, gearIcon());
+  gear.setAttribute("aria-label", SETTINGS.gearLabel);
+  gear.addEventListener("click", () => dialog.open());
 
   // The arrows from a field's dependencies to the field, over the bytes. Only
   // over the hex grid: the listing already draws the structure as a tree and
@@ -1199,7 +1194,7 @@ function build(tab: Tab): Page {
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "View");
   /** Controls that only mean anything over the hex rows. */
-  const hexOnly = [width, mode, column, linksBtn];
+  const hexOnly = [linksBtn];
   /** Controls that only mean anything over the text. */
   const textOnly = [encoding, wrapping, reading, endings];
   /** Controls that only mean anything over the strings list. */
@@ -1433,27 +1428,19 @@ function build(tab: Tab): Page {
           // showing its title.
           const name = `${KAITAI_PREFIX}${id}`;
           if (doc.setTemplate(name)) {
-            tmpl.value = name;
-            tmplWas = name;
+            setTemplateValue(name);
             // The entry for a pasted `.ksy` named a template that is no longer
             // what the converter holds, and picking it would have applied this
             // one under that name. It goes, and comes back with the next
             // pasted template.
-            ksyOption?.remove();
-            ksyOption = null;
+            dropExtra("ksy");
             say(KSY.applied(id));
             showKaitaiNote(name);
           } else say(KSY.cannotApply(id), true);
         } else {
-          // The menu names whatever is reading the file, and that is now this.
-          if (ksyOption === null) {
-            ksyOption = el("option", { value: KSY_VALUE, textContent: KSY.menuApplied(id) });
-            // In front of the entry that opens the converter, which stays last.
-            if (ksyEntry.parentElement === tmpl) tmpl.insertBefore(ksyOption, ksyEntry);
-            else tmpl.append(ksyOption);
-          } else ksyOption.textContent = KSY.menuApplied(id);
-          tmpl.value = KSY_VALUE;
-          tmplWas = KSY_VALUE;
+          // The chooser names whatever is reading the file, and that is now this.
+          setExtra({ value: KSY_VALUE, label: KSY.menuApplied(id), kind: "ksy" });
+          setTemplateValue(KSY_VALUE);
           overview.setNote("");
         }
         structure.setMatched(true);
@@ -1511,7 +1498,6 @@ function build(tab: Tab): Page {
     if (diagram !== null) diagram.el.hidden = !diagramOn;
     if (ksyPanel !== null) ksyPanel.el.hidden = !ksyOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
-    syncGlyphsShown();
     for (const c of textOnly) c.hidden = !textOn;
     for (const c of stringsOnly) c.hidden = !stringsOn;
     for (const [btn, on] of [
@@ -1623,7 +1609,6 @@ function build(tab: Tab): Page {
     "header",
     { className: "toolbar" },
     openBtn,
-    saveBtn,
     // Before anything whose width changes with the file or the view, so the
     // switch stays put when it is pressed.
     views,
@@ -1640,14 +1625,15 @@ function build(tab: Tab): Page {
     saveMsg,
     el("span", { className: "tb-spacer" }),
     goto,
-    width,
-    mode,
-    column,
-    glyphs,
     linksBtn,
     tmpl,
+    gear,
     undoBtn,
     redoBtn,
+    // Last and apart from the view switch, so that switching views cannot
+    // land on it by mistake.
+    saveBtn,
+    dialog.el,
   );
 
   // The origin sits after the offset, because it answers a question about the

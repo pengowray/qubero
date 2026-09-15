@@ -3303,12 +3303,12 @@ function unitWord(counts: string): string {
  * covers; these are constructs a template cannot express.
  */
 export const KSY = {
-  /** The entry at the end of the template menu. It opens the panel rather than
-   *  choosing a template, which is what every other entry does. */
+  /** The button under the template list. It opens the panel rather than
+   *  choosing a template, which is what every row above it does. */
   menuEntry: "Convert a .ksy…",
-  /** What the menu shows while the file is being read with a converted `.ksy`,
-   *  in place of a built-in's name. */
-  menuApplied: (id: string): string => `Template: ${id} (from .ksy)`,
+  /** What the chooser calls the template a converted `.ksy` produced, in place
+   *  of a built-in's name. The toolbar puts "Template:" in front. */
+  menuApplied: (id: string): string => `${id} (from .ksy)`,
   regionLabel: "Kaitai .ksy converter",
 
   // ---- the three columns ----
@@ -3371,3 +3371,69 @@ export const KSY = {
    *  declared it rather than by a template of the reader's choosing. */
   notHere: "A .ksy reads the file, not an unpacked stream.",
 } as const;
+
+/** The settings dialog, and the two toolbar controls that open it: the
+ *  template in use, and the gear. Only the hex view has settings here so far. */
+export const SETTINGS = {
+  // ---- the toolbar ----
+
+  chip: (name: string): string => `Template: ${name}`,
+  chipNone: "No template",
+  chipTitle: "Change the template. It applies to every view.",
+  gearLabel: "Settings",
+  gearTitle: "Settings: template and hex view",
+
+  // ---- the dialog ----
+
+  title: "Settings",
+  closeLabel: "Close settings",
+  close: "Close",
+
+  hexHeading: "Hex view",
+  bytesAs: "Show bytes as",
+  hex: "Hex",
+  binary: "Binary",
+  perRow: "Bytes per row",
+  column: "Column beside the bytes",
+  columnText: "Text",
+  columnFields: "Fields",
+  condensed: "Condensed",
+  /** On the one toggle still lit, which cannot be turned off. */
+  lastOn: "One column stays on",
+  columnNote: "Saved separately for files with a template and files without one.",
+
+  templateHeading: "Template",
+  current: (name: string): string => `Current template: ${name}`,
+  currentNone: "Current template: none",
+  searchLabel: "Search templates",
+  searchPlaceholder: 'Name, .ext, hex bytes, or "text"',
+  searchHint:
+    'Bytes match from the start of the file. Add $ for the end of the file (49 45 4E 44$) or * for any offset (*57 41 56 45). Quote text that could be hex: "cafe".',
+  clearSearch: "Clear search",
+  templates: (n: number): string => `Templates (${n})`,
+  noTemplate: "No template",
+  currentTag: "Current",
+  fileSignatureSub: "Marks only the signature bytes this file was identified by",
+  kaitaiTag: "Kaitai Struct",
+  ksyTag: "from .ksy",
+
+  // ---- why a row matched ----
+
+  reasonExt: (ext: string): string => `.${ext}`,
+  reasonStart: (bytes: string): string => `starts ${bytes}`,
+  reasonAt: (offset: number, bytes: string): string => `at 0x${offset.toString(16).toUpperCase()}: ${bytes}`,
+  reasonEnd: (bytes: string): string => `ends ${bytes}`,
+
+  signatures: (n: number): string => `Signatures with no template (${n})`,
+  fromWikidata: "Signature only, from Wikidata",
+  fromMagic: "Signature only, from file(1) magic",
+  more: (shown: number, n: number): string => `${shown} of ${n} shown. Narrow the search.`,
+  noTemplateMatches: (q: string): string => `No template matches "${q}".`,
+  noMatches: (q: string): string => `No matches for "${q}". Try a name, an extension like .exe, or hex bytes.`,
+} as const;
+
+/** The row width that is one record, as a button beside 8, 16 and 32. */
+export function strideSegment(bytes: number, every: boolean, unit: string | null): string {
+  const word = unit ?? "record";
+  return `${bytes} (${every ? `one ${word}` : `most ${plural(word)}`})`;
+}

@@ -20,7 +20,10 @@ export type TemplateEntry = {
   readonly sigs: readonly { readonly pattern: string; readonly offset: number }[];
 };
 
-export type ByteQuery = { readonly bytes: Uint8Array; readonly where: Where };
+/** `whole` is for a word read as text only because it could be: `zzzz` is
+ *  far more likely a name than bytes, so as bytes it has to be in a signature
+ *  entire, not just share its first two with one. */
+export type ByteQuery = { readonly bytes: Uint8Array; readonly where: Where; readonly whole?: boolean };
 
 export type Query = {
   /** Lowercase, for matching names; empty when the query is bytes only. */
@@ -68,7 +71,7 @@ export function parseQuery(raw: string): Query {
   const bytes: ByteQuery[] = [];
   if (hex !== null) bytes.push({ bytes: hex, where });
   const text = parseCString(t);
-  if (text !== null && (hex === null || !same(text, hex))) bytes.push({ bytes: text, where });
+  if (text !== null && (hex === null || !same(text, hex))) bytes.push(t.includes("\\") ? { bytes: text, where } : { bytes: text, where, whole: true });
   // A `*` or `$` is about bytes, so the query is not also a name.
   if (placed) return { word: "", ext: null, bytes };
   const bare = t.replace(/^\./, "").toLowerCase();
@@ -123,6 +126,7 @@ function bestBytes(
   for (const c of candidates) {
     for (const b of q.bytes) {
       const pinned = signatureHolds(c.tokens, c.offset, c.fromEnd, b.bytes, b.where);
+      if (b.whole === true && pinned < b.bytes.length) continue;
       if (pinned > 0 && (best === null || (best.by === "bytes" && pinned > best.pinned))) {
         best = { by: "bytes", pattern: c.pattern, offset: c.offset, fromEnd: c.fromEnd, pinned };
       }

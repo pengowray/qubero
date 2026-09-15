@@ -42,13 +42,17 @@ try {
   await (await chooser).setFiles({ name: basename(sample), buffer: await readFile(sample) });
   await page.waitForSelector(".rp-row, .hv-hex", { timeout: 20000 });
 
-  // Open the panel the way the menu offers it, rather than by calling into the
-  // page: the entry at the end of the template menu is half of what is being
-  // tested.
-  await page.selectOption(".tb-tmpl", { label: "Convert a .ksy…" });
+  // Open the panel the way the settings dialog offers it, rather than by
+  // calling into the page: the button under the template list is half of what
+  // is being tested.
+  const openConverter = async () => {
+    await page.click(".tb-tmpl");
+    await page.getByRole("button", { name: "Convert a .ksy…", exact: true }).click();
+  };
+  await openConverter();
   await page.waitForSelector(".kp:not([hidden])", { timeout: 10000 });
   // Picking the tool does not change what is reading the file.
-  assert.notEqual(await page.inputValue(".tb-tmpl"), "open-ksy-converter", "the menu stayed on the converter entry");
+  assert.equal(await page.evaluate(() => document.querySelector(".settings-dlg").open), false, "the settings dialog stayed open over the converter");
 
   const paste = async (text) => {
     await page.locator(".kp-source").fill(text);
@@ -131,7 +135,7 @@ try {
   await page.getByRole("button", { name: "Use this template", exact: true }).click();
   await page.waitForSelector(".rp-row", { timeout: 20000 });
   const applied = await page.evaluate(() => ({
-    menu: [...document.querySelectorAll(".tb-tmpl option")].find((o) => o.selected)?.textContent ?? "",
+    menu: document.querySelector(".tb-tmpl")?.textContent ?? "",
     view: document.querySelector(".tb-view.is-on")?.textContent ?? "",
     // A row names its field in `.rp-field`, or in `.rp-name` where the field is
     // a heading of its own.
@@ -151,7 +155,7 @@ try {
   }
 
   // Reopening comes back to the text that was in it, and Escape closes.
-  await page.selectOption(".tb-tmpl", { label: "Convert a .ksy…" });
+  await openConverter();
   await page.waitForSelector(".kp:not([hidden])", { timeout: 10000 });
   const kept = await page.evaluate(() => document.querySelector(".kp-source").value.length);
   assert(kept > 0, "the converter came back empty");
@@ -161,7 +165,7 @@ try {
   // A .ksy whose meta/imports names another format: the shipped collection is
   // what the import resolves against, so nothing has to be supplied alongside
   // it and the imported types are in the template.
-  await page.selectOption(".tb-tmpl", { label: "Convert a .ksy…" });
+  await openConverter();
   await page.waitForSelector(".kp:not([hidden])", { timeout: 10000 });
   await paste(await readFile(join(formats, "media/wav.ksy"), "utf8"));
   const imported = await page.evaluate(() => ({
@@ -203,15 +207,17 @@ try {
 
   await page.getByRole("button", { name: "Use this template", exact: true }).click();
   await page.waitForTimeout(500);
+  await page.click(".tb-tmpl");
   const asBundled = await page.evaluate(() => ({
-    value: document.querySelector(".tb-tmpl").value,
+    value: document.querySelector(".tb-tmpl").dataset.template,
     note: document.querySelector(".ov-note")?.textContent ?? "",
     action: document.querySelector(".ov-note-action")?.textContent ?? "",
     // The entry for the .ksy that was pasted earlier named a template the
     // converter no longer holds, so it is gone rather than left to apply this
     // one under that name.
-    pastedEntry: document.querySelectorAll('.tb-tmpl option[value="converted-ksy"]').length,
+    pastedEntry: document.querySelectorAll('.settings-dlg [data-template="converted-ksy"]').length,
   }));
+  await page.keyboard.press("Escape");
   console.log("applied bundled", JSON.stringify(asBundled));
   assert.equal(asBundled.pastedEntry, 0, "the menu kept an entry for a pasted .ksy that is no longer in the converter");
   assert.equal(asBundled.value, `ksy:${bundledId.first}`, "applying a shipped description did not select it in the chooser");

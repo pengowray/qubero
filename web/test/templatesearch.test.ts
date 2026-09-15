@@ -91,6 +91,12 @@ test("bytes match from the start by default, not in the middle or at the end", (
   assert.deepEqual(sigNames("*57 41 56 45"), ["Waveform Audio File Format"]);
 });
 
+test("a plain word is bytes only when a signature holds all of it", () => {
+  assert.deepEqual(sigNames("PKzz"), []);
+  assert.deepEqual(names("PK"), ["zip"]);
+  assert.deepEqual(names("PK\\x03\\x04zz"), ["zip"]);
+});
+
 test("a Kaitai format's own magic is searched", () => {
   assert.deepEqual(names("GIF"), ["ksy:gif"]);
   assert.deepEqual(names("47 49"), ["ksy:gif"]);
