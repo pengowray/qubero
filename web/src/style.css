@@ -235,6 +235,15 @@ button.welcome-crystal {
 }
 
 /* ---- toolbar / statusbar ---- */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+}
+.history-icon {
+  display: block;
+}
 .toolbar,
 .statusbar {
   display: flex;

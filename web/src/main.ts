@@ -17,7 +17,7 @@ import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
-import { el } from "./dom.ts";
+import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
 import { ARCHIVE_SUMS, DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, strideOption, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type Dropped } from "./folderzip.ts";
@@ -814,8 +814,21 @@ function build(tab: Tab): Page {
   // tab strip to say it on.
   if (tab.origin !== null) fileLabel.title = tab.origin;
   const posLabel = el("span", { className: "tb-pos" });
-  const undoBtn = el("button", { type: "button", textContent: "Undo", title: "Undo (Ctrl+Z)" });
-  const redoBtn = el("button", { type: "button", textContent: "Redo", title: "Redo (Ctrl+Y)" });
+  // Icons, not words, and only once there is an edit to go back over: two
+  // buttons that do nothing yet are room taken from the controls that do.
+  const historyIcon = (flip: boolean): SVGSVGElement => {
+    const svg = svgEl("svg", { viewBox: "0 0 16 16", width: "16", height: "16", "aria-hidden": "true", class: "history-icon" });
+    if (flip) svg.style.transform = "scaleX(-1)";
+    svg.append(
+      svgEl("path", { d: "M5.5 3.5 2.5 6.5l3 3", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round" }),
+      svgEl("path", { d: "M2.5 6.5h7a4 4 0 0 1 0 8H7", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round" }),
+    );
+    return svg;
+  };
+  const undoBtn = el("button", { type: "button", title: "Undo (Ctrl+Z)", className: "icon-btn" }, historyIcon(false));
+  const redoBtn = el("button", { type: "button", title: "Redo (Ctrl+Y)", className: "icon-btn" }, historyIcon(true));
+  undoBtn.setAttribute("aria-label", "Undo");
+  redoBtn.setAttribute("aria-label", "Redo");
   const saveBtn = el("button", { type: "button", textContent: "Save as", title: "Save as a new file (Ctrl+S)" });
   const saveMsg = el("span", { className: "tb-msg" });
   saveMsg.setAttribute("role", "status");
@@ -1653,6 +1666,9 @@ function build(tab: Tab): Page {
     if (tabs.showing(tab)) app.querySelector(".tab.is-active")?.classList.toggle("is-edited", doc.modified);
     undoBtn.disabled = !doc.canUndo;
     redoBtn.disabled = !doc.canRedo;
+    const history = doc.isFile && (doc.canUndo || doc.canRedo);
+    undoBtn.hidden = !history;
+    redoBtn.hidden = !history;
     const c = view.cursorState;
     const at = document.createElement("span");
     at.className = "addr";
