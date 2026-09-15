@@ -206,6 +206,13 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   p64rom: ["p64"],
 };
 
+/** The extensions a template's format goes by, its own name first when that
+ *  reads as one: `png` is its own extension, `pe` is not listed as one. */
+export const templateExtensions = (template: string): string[] => {
+  const listed = TEMPLATE_EXT[template] ?? [];
+  return /^[a-z0-9]+$/.test(template) && !listed.includes(template) && listed.length === 0 ? [template] : [...listed];
+};
+
 /** Words in a file(1) sentence that say nothing about which format it is. */
 const STOP_WORDS = new Set(["data", "file", "archive", "image", "executable", "format", "document", "text", "binary", "compressed", "audio", "video", "the", "for", "with", "and", "or", "of", "a", "an", "v", "version"]);
 

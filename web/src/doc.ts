@@ -168,6 +168,10 @@ export type TemplateChoice = {
   readonly name: string;
   readonly title: string;
   readonly source: "builtin" | "kaitai";
+  /** A bundled Kaitai format's `meta/file-extension`; empty for a built-in. */
+  readonly ext: readonly string[];
+  /** The bytes a bundled Kaitai format pins, as offset and hex. */
+  readonly magic: readonly (readonly [number, string])[];
 };
 
 /** A field picked in one of the structure views: which node, and the bits

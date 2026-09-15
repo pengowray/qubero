@@ -1807,6 +1807,53 @@ struct TemplateChoiceDto {
     title: String,
     /// `builtin` or `kaitai`.
     source: &'static str,
+    /// A bundled Kaitai format's `meta/file-extension`, lowercase. Empty for a
+    /// built-in, whose extensions the web app lists beside its identity rules.
+    ext: Vec<String>,
+    /// The bytes a bundled Kaitai format pins, as offset and lowercase hex.
+    magic: Vec<(u64, String)>,
+}
+
+/// `meta/file-extension` read off a `.ksy` without parsing the rest of it:
+/// the chooser lists every bundled format, and a hundred full parses to get
+/// one word each would be paid on every file opened.
+fn ksy_extensions(text: &str) -> Vec<String> {
+    let clean = |e: &str| e.trim().trim_matches(['"', '\'']).to_lowercase();
+    let mut out = Vec::new();
+    let mut in_meta = false;
+    let mut in_list = false;
+    for line in text.lines() {
+        let bare = line.split(" #").next().unwrap_or("").trim_end();
+        if bare.is_empty() {
+            continue;
+        }
+        if !bare.starts_with(' ') {
+            in_meta = bare == "meta:";
+            in_list = false;
+            continue;
+        }
+        if !in_meta {
+            continue;
+        }
+        let t = bare.trim();
+        if in_list {
+            if let Some(item) = t.strip_prefix("- ") {
+                out.push(clean(item));
+                continue;
+            }
+            in_list = false;
+        }
+        if let Some(rest) = t.strip_prefix("file-extension:") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                in_list = true;
+            } else {
+                let rest = rest.trim_start_matches('[').trim_end_matches(']');
+                out.extend(rest.split(',').map(clean).filter(|e| !e.is_empty()));
+            }
+        }
+    }
+    out
 }
 
 /// What a `.ksy` conversion had to say, for the panel.
@@ -3158,6 +3205,8 @@ impl Editor {
             name: name.to_string(),
             title: String::new(),
             source: "builtin",
+            ext: Vec::new(),
+            magic: Vec::new(),
         });
         let kaitai = qubero_core::ksy::bundled::all()
             .iter()
@@ -3166,6 +3215,8 @@ impl Editor {
                 name: entry.name.to_string(),
                 title: entry.title.to_string(),
                 source: "kaitai",
+                ext: ksy_extensions(entry.text),
+                magic: entry.signature.iter().map(|(at, bytes)| (*at, bytes.iter().map(|b| format!("{b:02x}")).collect())).collect(),
             });
         serde_json::to_string(&builtins.chain(kaitai).collect::<Vec<_>>()).unwrap_or_default()
     }

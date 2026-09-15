@@ -94,7 +94,7 @@ export const EXTENSION_WORTH = 4;
 export const LISTING_BYTES_ALONE = 2;
 
 /** A compiled pattern. Gaps have a minimum and maximum length. */
-type Token =
+export type Token =
   | { readonly k: "lit"; readonly b: Uint8Array }
   | { readonly k: "gap"; readonly min: number; readonly max: number }
   | { readonly k: "alt"; readonly opts: readonly Token[][] }
