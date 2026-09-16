@@ -436,6 +436,7 @@ impl Evaluator {
             | Ty::SqliteVarint
             | Ty::SevenZipNumber
             | Ty::Json(..)
+            | Ty::Pickle(..)
             | Ty::Insn { .. }
             | Ty::Traced { .. }
             | Ty::CodeBits { .. } => false,

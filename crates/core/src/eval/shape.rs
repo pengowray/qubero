@@ -260,7 +260,7 @@ impl Evaluator {
                 let _ = s;
                 Placed::Overlap
             }
-            Ty::Struct(_) | Ty::Json(..) => {
+            Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => {
                 if idx == 0 {
                     Placed::First
                 } else {
@@ -327,6 +327,12 @@ impl Evaluator {
             Ty::Json(shape, _) if shape.composite() => Sizing::Children,
             // A JSON scalar is as long as the text the parse gave it.
             Ty::Json(..) => Sizing::Encoded,
+            // A recognised pickle is as long as the bytes its production
+            // consumed, which is not what its children come to: the opcodes
+            // between them belong to the container and to nothing below it.
+            // The whole file included: a form matched all of it, opcodes and
+            // operands, and that is what said where it ends.
+            Ty::Pickle(..) => Sizing::Encoded,
             Ty::Array { .. } => Sizing::Count,
             Ty::Repeat { until: Until::End, .. } => Sizing::Remaining,
             // A run told to stop after the element that says so: the same

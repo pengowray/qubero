@@ -34,9 +34,15 @@ fn every_pickle_is_opcodes_all_the_way_to_the_full_stop() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let bytes = std::fs::read(&path).unwrap();
 
+        // A file a Familiar Pickle Form matches whole is offered the
+        // template that shows the data; everything else is the listing.
+        let want = match formats::pickle::familiar::recognise(&bytes).is_some() {
+            true => "picklefpf",
+            false => "pickle",
+        };
         assert_eq!(
             formats::sniff(&bytes[..bytes.len().min(0x9000)], bytes.len() as u64),
-            Some("pickle"),
+            Some(want),
             "{name}: not recognised"
         );
 
@@ -239,7 +245,7 @@ fn a_naming_row_says_the_name_and_nothing_else() {
     let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
     let mut rows = Vec::new();
     annotated(&doc, &mut ev, &[], &mut rows, 0);
-    if rows.iter().any(|(op, text)| op == "STOP" && text == formats::pickle::familiar::MESSAGE) {
+    if rows.iter().any(|(op, text)| op == "STOP" && text.starts_with("Matched a Familiar Pickle Form")) {
         assert_eq!(rows.len(), 1, "FPF bypasses symbolic annotations");
         return;
     }
@@ -343,11 +349,11 @@ fn the_libraries_worth_knowing_are_named() {
     let mut checked = 0;
     for (file, phrase) in want {
         let Ok(bytes) = std::fs::read(dir.join(file)) else { continue };
-        let phrase = if formats::pickle::familiar::recognise(&bytes).is_some() {
-            formats::pickle::familiar::MESSAGE
-        } else {
-            *phrase
-        };
+        // A matched file says one thing and stops: the form it matched, and
+        // where to read what it holds.
+        let matched = formats::pickle::familiar::recognise(&bytes)
+            .map(|m| formats::pickle::familiar::stop_message(m.form));
+        let phrase = matched.as_deref().unwrap_or(phrase);
         let doc = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
         let mut said = Vec::new();
@@ -538,4 +544,218 @@ fn pickles(dir: &Path) -> Vec<PathBuf> {
         .collect();
     out.sort();
     out
+}
+
+/// Which of the samples a Familiar Pickle Form matches, file by file.
+///
+/// Written out rather than counted, because both halves matter and neither is
+/// a number. A file that starts matching is a form that grew without anyone
+/// saying so, and a file that stops matching is coverage lost; the long half
+/// is the one that has to keep failing, since a form accepting a scikit-learn
+/// estimator or an out-of-band buffer would be publishing values it never
+/// validated.
+#[test]
+fn the_forms_match_these_samples_and_no_others() {
+    let Some(dir) = folder() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    // The whole corpus as it stands, with the form each file matches. Keep
+    // this in step with the collection: a file added to it belongs here.
+    let want: &[(&str, Option<&str>)] = &[
+        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v2")),
+        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v2")),
+        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v2")),
+        // The rest, none of which any form accepts yet. Some are grammar the
+        // forms have not reached (nonempty tuples, big integers, shared
+        // references, more than one batch); the library files need forms of
+        // their own, built from reviewed complete structures.
+        ("handmade-python2-modules.pickle", None),
+        ("handmade-python2-opcodes.pickle", None),
+        ("handmade-wide-lengths.pickle", None),
+        ("proto0-everything.pickle", None),
+        ("proto0-persistent-id.pickle", None),
+        ("proto1-everything.pickle", None),
+        ("proto2-everything.pickle", None),
+        ("proto2-extension-registry.pickle", None),
+        ("proto2-memo-over-256.pickle", None),
+        ("proto2-torch-state-dict.pickle", None),
+        ("proto3-everything.pickle", None),
+        ("proto3-numpy-1-module-names.pickle", None),
+        ("proto4-builtins.pickle", None),
+        ("proto4-collections.pickle", None),
+        ("proto4-datetime.pickle", None),
+        ("proto4-everything.pickle", None),
+        ("proto4-newobj.pickle", None),
+        ("proto4-numpy-byte-order.pickle", None),
+        ("proto4-numpy-dtypes.pickle", None),
+        ("proto4-numpy-object-array.pickle", None),
+        ("proto4-numpy-shapes.pickle", None),
+        ("proto4-numpy-shared-dtype.pickle", None),
+        ("proto4-persistent-id.pickle", None),
+        ("proto4-scipy-coo-matrix.pickle", None),
+        ("proto4-scipy-csc-matrix.pickle", None),
+        ("proto4-scipy-csr-matrix.pickle", None),
+        ("proto4-sklearn-pipeline.pickle", None),
+        ("proto4-sklearn-random-forest.pickle", None),
+        ("proto4-unframed-payload.pickle", None),
+        ("proto5-everything.pickle", None),
+        ("proto5-out-of-band.pickle", None),
+        ("proto5-pandas-dataframe.pickle", None),
+        ("proto5-pandas-index-types.pickle", None),
+        ("proto5-pandas-series.pickle", None),
+    ];
+    let mut seen = Vec::new();
+    for path in pickles(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path).unwrap();
+        let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
+        let Some((_, expected)) = want.iter().find(|(f, _)| *f == name) else {
+            panic!("{name} is not in the matrix; add it with the form it matches, or None");
+        };
+        assert_eq!(form, *expected, "{name}");
+        seen.push(name);
+    }
+    for (name, _) in want {
+        assert!(seen.iter().any(|s| s == name), "{name} is in the matrix and not in the collection");
+    }
+}
+
+/// One row of the familiar-form template: how deep it sits, what it is called,
+/// what type it is, where it starts, how long it is and what it says.
+#[derive(Debug)]
+struct Row {
+    path: Vec<usize>,
+    depth: usize,
+    name: String,
+    ty: String,
+    at: u64,
+    len: u64,
+    value: Value,
+}
+
+/// Every row the template shows for this file, in file order.
+fn familiar_rows(bytes: Vec<u8>) -> Vec<Row> {
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let mut out = Vec::new();
+    walk_rows(&doc, &mut ev, &[], 0, &mut out);
+    out
+}
+
+fn walk_rows(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], depth: usize, out: &mut Vec<Row>) {
+    let node = ev.node(doc, path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+    out.push(Row {
+        path: path.to_vec(),
+        depth,
+        name: node.name.clone(),
+        ty: node.type_name.clone(),
+        at: node.offset_bits / 8,
+        len: node.size_bits / 8,
+        value: node.value.clone(),
+    });
+    // A run of numbers is counted rather than walked: it is a value, not a
+    // part of the file's shape.
+    if node.type_name.ends_with("[]") {
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = path.to_vec();
+        next.push(i);
+        walk_rows(doc, ev, &next, depth + 1, out);
+    }
+}
+
+fn row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
+    rows.iter().find(|r| r.name == name).unwrap_or_else(|| panic!("no {name} row"))
+}
+
+/// A matched file's decoded values are reachable under the other template, an
+/// unmatched one has nothing there, and a matched one has no byte left over.
+///
+/// The last of those is the point of a form. A form fixes its instructions, so
+/// a byte no field covers is a byte the grammar matched and the template could
+/// not account for, which is the thing this reading is supposed to rule out.
+#[test]
+fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
+    let Some(dir) = folder() else { return };
+    let mut checked = 0;
+    for path in pickles(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path).unwrap();
+        let Some(form) = formats::pickle::familiar::recognise(&bytes).map(|m| m.form.to_string()) else {
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            assert!(ev.node(&doc, &[]).is_err(), "{name}: read as a familiar form");
+            continue;
+        };
+        let rows = familiar_rows(bytes.clone());
+        assert_eq!(rows[0].len, bytes.len() as u64, "{name}: the root is not the file");
+        assert_eq!(row(&rows, "message").value, Value::Str(formats::pickle::familiar::MESSAGE.to_string()), "{name}");
+        assert_eq!(row(&rows, "form").value, Value::Str(form), "{name}");
+        assert_eq!(row(&rows, "protocol").value, Value::UInt(4), "{name}");
+        covers(&rows, &name);
+        checked += 1;
+    }
+    assert!(checked >= 3, "only {checked} samples matched a form");
+}
+
+/// Every node's children tile it: they start where it starts, they follow each
+/// other, and the last of them ends where it ends. Rows worked out from the
+/// match have no bytes and are not part of the tiling.
+fn covers(rows: &[Row], what: &str) {
+    for (i, row) in rows.iter().enumerate() {
+        let kids: Vec<&Row> = rows[i + 1..]
+            .iter()
+            .take_while(|r| r.depth > row.depth)
+            .filter(|r| r.depth == row.depth + 1)
+            .collect();
+        if kids.is_empty() {
+            continue;
+        }
+        let mut want = row.at;
+        for kid in kids {
+            if kid.len == 0 {
+                assert_eq!(kid.at, row.at, "{what}: {} is nowhere", kid.name);
+                continue;
+            }
+            assert_eq!(kid.at, want, "{what}: {} in {} leaves {want:#x} over", kid.name, row.name);
+            want = kid.at + kid.len;
+        }
+        assert_eq!(want, row.at + row.len, "{what}: {} has bytes over at {want:#x}", row.name);
+    }
+}
+
+/// The numbers of the one matched array, and the call that rebuilt it.
+#[test]
+fn a_matched_array_reads_as_its_numbers_under_the_familiar_template() {
+    let Some(dir) = folder() else { return };
+    let Ok(bytes) = std::fs::read(dir.join("proto4-numpy-array.pickle")) else { return };
+    let rows = familiar_rows(bytes);
+    // One entry, called `weights`, holding an array of 24 floats 0 to 23.
+    assert_eq!(row(&rows, "weights").ty, "entry");
+    assert_eq!(row(&rows, "value").ty, "array");
+    assert_eq!(row(&rows, "dtype").value, Value::Str("<f4".into()));
+    assert_eq!(row(&rows, "shape").value, Value::Str("4 x 6".into()));
+    assert_eq!(row(&rows, "order").value, Value::Str("C".into()));
+    // The call, with the names the form matched inside it.
+    assert_eq!(row(&rows, "ndarray reconstruct call").ty, "call");
+    assert_eq!(row(&rows, "module").value, Value::Str("numpy._core.multiarray".into()));
+    assert_eq!(row(&rows, "callable").value, Value::Str("_reconstruct".into()));
+    assert_eq!(row(&rows, "class module").value, Value::Str("numpy".into()));
+    assert_eq!(row(&rows, "class").value, Value::Str("ndarray".into()));
+    let numbers = row(&rows, "numbers");
+    assert_eq!((numbers.ty.as_str(), numbers.len), ("f32 le[]", 96));
+
+    // And the numbers themselves, read through the template.
+    let doc = Document::new(MemSource(std::fs::read(dir.join("proto4-numpy-array.pickle")).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let read: Vec<Value> = (0..24)
+        .map(|i| {
+            let mut at = numbers.path.clone();
+            at.push(i);
+            ev.node(&doc, &at).unwrap().value
+        })
+        .collect();
+    assert_eq!(read, (0..24).map(|n| Value::Float(n as f64)).collect::<Vec<_>>());
 }

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{ListState, Resolved};
+use crate::formats::pickle::familiar::Match;
 use crate::json;
 use crate::template::{Deduced, Ty, Until};
 
@@ -77,6 +78,10 @@ pub(super) struct Memo {
     nodes: FxHashMap<Vec<usize>, Resolved>,
     lists: FxHashMap<Vec<usize>, ListState>,
     json: FxHashMap<Vec<usize>, Arc<json::Val>>,
+    /// What the Familiar Pickle Form recogniser made of the file, for the
+    /// pickle field it was run over. Kept beside the nodes for the reason the
+    /// parsed JSON is: the values are placed from it rather than read.
+    pickle: FxHashMap<Vec<usize>, Arc<Match>>,
     /// What a tagged search over a named list has learned, by the stretch of
     /// bytes the list covers and the field of an element the label is read
     /// from: `(space, offset, limit, key)`. Not by path, so that every
@@ -147,6 +152,7 @@ impl Memo {
             self.nodes.remove(&p);
             self.lists.remove(&p);
             self.json.remove(&p);
+            self.pickle.remove(&p);
         }
         // A stitched stream's node is a field of the file and stays, but the
         // parts its walk found were read from bytes that may be what changed,
@@ -257,6 +263,7 @@ impl Memo {
         self.nodes.retain(|p, _| !inside(p));
         self.lists.retain(|p, _| !inside(p));
         self.json.retain(|p, _| !inside(p));
+        self.pickle.retain(|p, _| !inside(p));
     }
 
     /// What the list at `path` has learned about itself. A node that is not a
@@ -307,6 +314,16 @@ impl Memo {
         self.json.insert(path, val);
     }
 
+    /// What a Familiar Pickle Form made of the field at `path`, if it has been
+    /// run over it.
+    pub(super) fn pickle(&self, path: &[usize]) -> Option<&Arc<Match>> {
+        self.pickle.get(path)
+    }
+
+    pub(super) fn remember_pickle(&mut self, path: Vec<usize>, found: Arc<Match>) {
+        self.pickle.insert(path, found);
+    }
+
     /// What running the file said about it, if it has been run.
     pub(super) fn deduced(&self) -> Option<&Arc<dyn Deduced>> {
         self.deduced.as_ref()
@@ -336,7 +353,7 @@ impl Memo {
                 return u64::MAX;
             }
             let here = match r.ty {
-                Ty::Json(..) => r.size.map_or(u64::MAX, |size| r.offset.saturating_add(size)),
+                Ty::Json(..) | Ty::Pickle(..) => r.size.map_or(u64::MAX, |size| r.offset.saturating_add(size)),
                 _ => r.offset,
             };
             reach = reach.max(here);
@@ -401,6 +418,7 @@ impl Memo {
         self.nodes.clear();
         self.lists.clear();
         self.json.clear();
+        self.pickle.clear();
         self.tags.clear();
         self.tag_entries = 0;
         self.deduced = None;
@@ -423,7 +441,7 @@ impl Memo {
         // a pointer read after the edit may say somewhere else now. And JSON:
         // where a value in it ends is where the parse found the next one, and
         // the parse covers the edit.
-        let holds = |r: &Resolved| ended(r) || (r.offset <= bit && !matches!(r.ty, Ty::Json(..)));
+        let holds = |r: &Resolved| ended(r) || (r.offset <= bit && !matches!(r.ty, Ty::Json(..) | Ty::Pickle(..)));
         // An element of a chain or a gather is placed from a field that need
         // not be on its line at all: the link in the element before, or the
         // record the walk reached. Where that was read is written down by
@@ -497,6 +515,9 @@ impl Memo {
         // The parsed text of a JSON field stands only if the field ended
         // before the edit.
         self.json.retain(|path, _| self.nodes.get(path).is_some_and(ended));
+        // A recognition covers the whole file, so nothing that was edited
+        // ended before the edit and the file is recognised again.
+        self.pickle.retain(|path, _| self.nodes.get(path).is_some_and(ended));
         // A run over the whole file says nothing about which half of it an
         // edit touched, so an edit anywhere means running it again.
         self.deduced = None;

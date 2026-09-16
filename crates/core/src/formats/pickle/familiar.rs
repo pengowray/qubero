@@ -7,16 +7,48 @@ use super::{known::Payload, machine, shapes};
 use crate::template::{Deduce, Deduced, Deducer};
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
+/// The label the other template goes by on screen, which the STOP row names so
+/// that a reader looking at the program knows where the data went. Spelled the
+/// same here as in `web/src/filetype.ts`.
+pub const FAMILIAR_LABEL: &str = "Python pickle (familiar form)";
 const MAX_VALUES: usize = 100_000;
 const MAX_DEPTH: usize = 64;
 
+/// What the STOP row of the opcode listing says about a match: the contract's
+/// sentence, the form that matched, and where the decoded data is.
+pub fn stop_message(form: &str) -> String {
+    format!("Matched a Familiar Pickle Form ({form}): bypassed Pickle stack machine decoding. Switch to the \"{FAMILIAR_LABEL}\" template to see the data.")
+}
+
 /// Captured values preserve Python distinctions and reference payload bytes.
+///
+/// `at`/`len` are the whole production: the first opcode byte of the value
+/// through the last byte that belongs to it, memo marks included. What a leaf
+/// is *worth* sits inside that, and [`Kind`] says where.
 #[derive(Debug, PartialEq)]
-pub enum Value {
+pub struct Value {
+    pub at: usize,
+    pub len: usize,
+    pub kind: Kind,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Kind {
     None,
     Bool(bool),
-    Int(i128),
-    Float(f64),
+    /// The number, and the operand bytes it was written in. `None` has no
+    /// operand and neither has a bool: those two are the opcode byte itself,
+    /// which is what their span already covers.
+    Int {
+        value: i128,
+        at: usize,
+        len: usize,
+    },
+    Float {
+        value: f64,
+        at: usize,
+        len: usize,
+    },
     Text {
         at: usize,
         len: usize,
@@ -37,10 +69,89 @@ pub enum Value {
     },
 }
 
+/// A named operand inside a run of fixed instructions: the module and class
+/// names a form matched exactly, and the letters that spell a dtype. The
+/// instructions around it are the grammar's; these bytes are what varies.
+#[derive(Debug, PartialEq)]
+pub struct Said {
+    pub name: &'static str,
+    pub at: usize,
+    pub len: usize,
+}
+
+/// A run of instructions a form matched as one act. Rebuilding a NumPy array
+/// is a couple of dozen opcodes and one thing happening, and a reader wants
+/// the thing, with the names and letters it was given.
+#[derive(Debug, PartialEq)]
+pub struct Call {
+    pub name: &'static str,
+    pub at: usize,
+    pub len: usize,
+    pub says: Vec<Said>,
+}
+
+/// One instruction of a matched file: where it is, where it ends, and what
+/// `pickletools` calls it.
+///
+/// A form fixes its instructions, so every byte a match consumed that is not
+/// a value is one of these. That is what lets the template name them instead
+/// of leaving them as bytes nothing accounts for.
+#[derive(Debug, PartialEq)]
+pub struct Instr {
+    pub at: usize,
+    pub end: usize,
+    pub name: &'static str,
+}
+
+/// What a node of a recognised tree holds, for the nodes that hold others.
+/// A leaf is read as the type its bytes are and never carries one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// The whole file, read as the one object it holds.
+    Doc,
+    /// What matched, and the protocol envelope the match was made through:
+    /// the bytes before the object, which say nothing about the object.
+    Header,
+    Dict,
+    /// One key and one value of a dictionary, kept as the pair it is written
+    /// as: two keys spelled alike are two entries, not one.
+    Entry,
+    List,
+    Tuple,
+    /// A typed run of numbers, with the dtype, shape and storage order that
+    /// say how to read it.
+    Array,
+    /// A run of instructions the form matched as one act. See [`Call`].
+    Call,
+}
+
+impl Shape {
+    pub fn name(self) -> &'static str {
+        match self {
+            Shape::Doc => "pickle",
+            Shape::Header => "header",
+            Shape::Dict => "dict",
+            Shape::Entry => "entry",
+            Shape::List => "list",
+            Shape::Tuple => "tuple",
+            Shape::Array => "array",
+            Shape::Call => "call",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Match {
     pub form: &'static str,
     pub value: Value,
+    /// Where the object starts, which is one past the protocol byte and past
+    /// the frame header when there is one.
+    pub body: usize,
+    /// The one run of instructions this form matched as an act of its own.
+    pub call: Option<Call>,
+    /// Every instruction in the file, in order, so that the bytes no value
+    /// covers can be named rather than left over.
+    pub ops: Vec<Instr>,
     stop: usize,
     payload: Option<(usize, Payload)>,
 }
@@ -59,7 +170,7 @@ impl Deduced for Match {
     }
 
     fn text(&self, what: Deduce, at: u64) -> Option<String> {
-        (what == Deduce::Builds && at == (self.stop + 1) as u64).then(|| MESSAGE.to_owned())
+        (what == Deduce::Builds && at == (self.stop + 1) as u64).then(|| stop_message(self.form))
     }
 }
 
@@ -84,6 +195,7 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
         bytes,
         at: 0,
         left: MAX_VALUES,
+        says: Vec::new(),
     };
     c.exact(&[0x80])?;
     if !matches!(c.byte()?, 4 | 5) {
@@ -102,6 +214,9 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
             return Some(Match {
                 form: "basic-p4-p5-v2",
                 value,
+                body,
+                call: None,
+                ops: instructions(bytes),
                 stop: c.at - 1,
                 payload: None,
             });
@@ -110,7 +225,8 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     // A second bounded, exact production, derived from the existing NumPy
     // matrix fixture. No memo interpreter: each reference has a fixed slot.
     c.at = body;
-    let (value, at, payload) = c.array()?;
+    c.says.clear();
+    let (value, at, call, payload) = c.array()?;
     c.exact(b".")?;
     if c.at != bytes.len() {
         return None;
@@ -118,15 +234,36 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     Some(Match {
         form: "numpy-numeric-array-p4-p5-v2",
         value,
+        body,
+        call: Some(call),
+        ops: instructions(bytes),
         stop: c.at - 1,
         payload: Some((at, payload)),
     })
+}
+
+/// Every instruction of a file a form has just matched.
+///
+/// The same walk the listing does, over bytes already known to be a whole
+/// pickle: it reaches the STOP and stops there, so what comes back covers the
+/// file exactly. Names are `pickletools`' own.
+fn instructions(bytes: &[u8]) -> Vec<Instr> {
+    super::opcodes(bytes)
+        .iter()
+        .map(|op| Instr {
+            at: op.at as usize,
+            end: op.end as usize,
+            name: super::opcode_name(op.code),
+        })
+        .collect()
 }
 
 struct Cursor<'a> {
     bytes: &'a [u8],
     at: usize,
     left: usize,
+    /// The named operands the form has matched so far inside its fixed runs.
+    says: Vec<Said>,
 }
 
 impl<'a> Cursor<'a> {
@@ -146,12 +283,22 @@ impl<'a> Cursor<'a> {
         (self.take(expected.len())? == expected).then_some(())
     }
     fn text(&mut self) -> Option<Value> {
+        let start = self.at;
         let code = self.byte()?;
         let len = self.length(code, 0x8c, 0x58, 0x8d)?;
         let at = self.at;
         std::str::from_utf8(self.take(len)?).ok()?;
         self.exact(&[0x94])?;
-        Some(Value::Text { at, len })
+        Some(self.span(start, Kind::Text { at, len }))
+    }
+    /// A value and the bytes it was written in, which is everything the
+    /// production consumed.
+    fn span(&self, start: usize, kind: Kind) -> Value {
+        Value {
+            at: start,
+            len: self.at - start,
+            kind,
+        }
     }
     fn value(&mut self, depth: usize) -> Option<Value> {
         if depth >= MAX_DEPTH {
@@ -161,22 +308,39 @@ impl<'a> Cursor<'a> {
         if matches!(self.peek()?, 0x8c | 0x58 | 0x8d) {
             return self.text();
         }
-        Some(match self.byte()? {
-            b'N' => Value::None,
-            0x88 => Value::Bool(true),
-            0x89 => Value::Bool(false),
-            b'K' => Value::Int(self.byte()? as i128),
-            b'M' => Value::Int(u16::from_le_bytes(self.take(2)?.try_into().ok()?) as i128),
-            b'J' => Value::Int(i32::from_le_bytes(self.take(4)?.try_into().ok()?) as i128),
-            b'G' => Value::Float(f64::from_be_bytes(self.take(8)?.try_into().ok()?)),
+        let start = self.at;
+        let kind = match self.byte()? {
+            b'N' => Kind::None,
+            0x88 => Kind::Bool(true),
+            0x89 => Kind::Bool(false),
+            b'K' => Kind::Int {
+                value: self.byte()? as i128,
+                at: start + 1,
+                len: 1,
+            },
+            b'M' => Kind::Int {
+                value: u16::from_le_bytes(self.take(2)?.try_into().ok()?) as i128,
+                at: start + 1,
+                len: 2,
+            },
+            b'J' => Kind::Int {
+                value: i32::from_le_bytes(self.take(4)?.try_into().ok()?) as i128,
+                at: start + 1,
+                len: 4,
+            },
+            b'G' => Kind::Float {
+                value: f64::from_be_bytes(self.take(8)?.try_into().ok()?),
+                at: start + 1,
+                len: 8,
+            },
             code @ (b'C' | b'B' | 0x8e) => {
                 let len = self.length(code, b'C', b'B', 0x8e)?;
                 let at = self.at;
                 self.take(len)?;
                 self.exact(&[0x94])?;
-                Value::Bytes { at, len }
+                Kind::Bytes { at, len }
             }
-            b')' => Value::Tuple(Vec::new()),
+            b')' => Kind::Tuple(Vec::new()),
             b']' => {
                 self.exact(&[0x94])?;
                 let mut values = Vec::new();
@@ -202,7 +366,7 @@ impl<'a> Cursor<'a> {
                         self.at = start;
                     }
                 }
-                Value::List(values)
+                Kind::List(values)
             }
             b'}' => {
                 self.exact(&[0x94])?;
@@ -230,10 +394,11 @@ impl<'a> Cursor<'a> {
                         self.at = start;
                     }
                 }
-                Value::Dict(entries)
+                Kind::Dict(entries)
             }
             _ => return None,
-        })
+        };
+        Some(self.span(start, kind))
     }
 
     fn length(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<usize> {
@@ -290,31 +455,55 @@ impl<'a> Cursor<'a> {
         Some(dims)
     }
 
-    fn array(&mut self) -> Option<(Value, usize, Payload)> {
+    /// Remember a named operand inside the run of instructions being matched.
+    fn says(&mut self, name: &'static str, at: usize, len: usize) {
+        self.says.push(Said { name, at, len });
+    }
+
+    fn array(&mut self) -> Option<(Value, usize, Call, Payload)> {
+        let outer = self.at;
         let key = if self.peek() == Some(b'}') {
             self.exact(b"}\x94")?;
             Some(self.text()?)
         } else {
             None
         };
+        let start = self.at;
         // The dictionary and key add exactly two memo slots. No arbitrary
         // memo lookup or stack effect is supported by this production.
         let numpy_slot = if key.is_some() { 5 } else { 3 };
         self.exact(b"\x8c")?;
-        match self.byte()? {
-            22 => self.exact(b"numpy._core.multiarray")?,
-            21 => self.exact(b"numpy.core.multiarray")?,
+        let module = self.at + 1;
+        let module_len = match self.byte()? {
+            22 => {
+                self.exact(b"numpy._core.multiarray")?;
+                22
+            }
+            21 => {
+                self.exact(b"numpy.core.multiarray")?;
+                21
+            }
             _ => return None,
-        }
+        };
+        self.says("module", module, module_len);
+        let run = self.at;
         self.exact(b"\x94\x8c\x0c_reconstruct\x94\x93\x94")?;
+        self.says("callable", run + 3, 12);
+        let run = self.at;
         self.exact(
             b"\x8c\x05numpy\x94\x8c\x07ndarray\x94\x93\x94K\0\x85\x94C\x01b\x94\x87\x94R\x94(K\x01",
         )?;
+        self.says("class module", run + 2, 5);
+        self.says("class", run + 10, 7);
         let dimensions = self.dimensions()?;
         self.exact(&[b'h', numpy_slot])?;
+        let run = self.at;
         self.exact(b"\x8c\x05dtype\x94\x93\x94\x8c")?;
+        self.says("dtype class", run + 2, 5);
         let dtype_len = self.byte()? as usize;
+        let kind_at = self.at;
         let kind = std::str::from_utf8(self.take(dtype_len)?).ok()?;
+        self.says("dtype", kind_at, dtype_len);
         // Only these plain numeric dtype productions have this exact state.
         if !matches!(
             kind,
@@ -335,7 +524,9 @@ impl<'a> Cursor<'a> {
             return None;
         }
         self.exact(b"\x94\x89\x88\x87\x94R\x94(K\x03\x8c\x01")?;
+        let order_at = self.at;
         let order = self.byte()?;
+        self.says("byte order", order_at, 1);
         let one_byte = matches!(kind, "b1" | "i1" | "u1");
         if (one_byte && order != b'|') || (!one_byte && !matches!(order, b'<' | b'>')) {
             return None;
@@ -363,22 +554,34 @@ impl<'a> Cursor<'a> {
             return None;
         }
         let at = self.at;
+        // The call is everything the form fixed before the numbers: the
+        // globals it named, the shape it declared, and the dtype state it
+        // built. The numbers themselves are the value it produced.
+        let call = Call {
+            name: "ndarray reconstruct call",
+            at: start,
+            len: at - start,
+            says: std::mem::take(&mut self.says),
+        };
         self.take(len)?;
         self.exact(b"\x94t\x94b")?;
-        let array = Value::Array {
-            at,
-            len,
-            dtype,
-            dimensions,
-            fortran_order,
-        };
+        let array = self.span(
+            start,
+            Kind::Array {
+                at,
+                len,
+                dtype,
+                dimensions,
+                fortran_order,
+            },
+        );
         let value = if let Some(key) = key {
             self.exact(b"s")?;
-            Value::Dict(vec![(key, array)])
+            self.span(outer, Kind::Dict(vec![(key, array)]))
         } else {
             array
         };
-        Some((value, at, Payload { shape, count }))
+        Some((value, at, call, Payload { shape, count }))
     }
 }
 
@@ -398,16 +601,30 @@ mod tests {
         let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
         let found = recognise(&bytes).unwrap();
         assert_eq!(found.form, "basic-p4-p5-v2");
+        // Every node spans the bytes its production consumed, and a leaf says
+        // where inside that its value proper sits.
+        assert_eq!((found.value.at, found.value.len), (11, 15));
+        let Kind::Dict(entries) = &found.value.kind else {
+            panic!("dict expected")
+        };
+        let (key, value) = &entries[0];
+        assert_eq!(entries.len(), 1);
+        assert_eq!((key.at, key.len, &key.kind), (13, 4, &Kind::Text { at: 15, len: 1 }));
+        assert_eq!((value.at, value.len), (17, 8));
+        let Kind::List(items) = &value.kind else {
+            panic!("list expected")
+        };
+        let seen: Vec<_> = items.iter().map(|v| (v.at, v.len, &v.kind)).collect();
         assert_eq!(
-            found.value,
-            Value::Dict(vec![(
-                Value::Text { at: 15, len: 1 },
-                Value::List(vec![Value::Int(1), Value::Int(2)])
-            )])
+            seen,
+            vec![
+                (20, 2, &Kind::Int { value: 1, at: 21, len: 1 }),
+                (22, 2, &Kind::Int { value: 2, at: 23, len: 1 }),
+            ]
         );
         assert_eq!(
             found.text(Deduce::Builds, bytes.len() as u64).as_deref(),
-            Some(MESSAGE)
+            Some(stop_message("basic-p4-p5-v2").as_str())
         );
         assert!(recognise(b"\x80\x05N.").is_some());
     }
@@ -454,16 +671,16 @@ mod tests {
     fn captures_numpy_payload_and_rejects_changed_structure() {
         let found = recognise(MATRIX).unwrap();
         assert_eq!(found.form, "numpy-numeric-array-p4-p5-v2");
-        let Value::Dict(entries) = &found.value else {
+        let Kind::Dict(entries) = &found.value.kind else {
             panic!("dict expected")
         };
-        let Value::Array {
+        let Kind::Array {
             at,
             dimensions,
             dtype,
             fortran_order,
             ..
-        } = &entries[0].1
+        } = &entries[0].1.kind
         else {
             panic!("array expected")
         };
@@ -550,13 +767,13 @@ mod tests {
         replace(&mut body, b"t\x94b\x89C", b"t\x94b\x88C");
         let bytes = framed(&body);
         let found = recognise(&bytes).unwrap();
-        let Value::Array {
+        let Kind::Array {
             at,
             len,
             dtype,
             dimensions,
             fortran_order,
-        } = &found.value
+        } = &found.value.kind
         else {
             panic!("array")
         };
@@ -625,7 +842,7 @@ mod tests {
         replace(&mut base, payload, b"C\x04\0\0\x80\x3f");
         replace(&mut base, b"K\x04K\x06\x86\x94", b")");
         let scalar = recognise(&framed(&base)).unwrap();
-        let Value::Array { dimensions, .. } = scalar.value else {
+        let Kind::Array { dimensions, .. } = scalar.value.kind else {
             panic!("array")
         };
         assert!(dimensions.is_empty());
@@ -667,22 +884,27 @@ mod tests {
     #[test]
     fn nested_empty_containers_and_wide_text_are_captured() {
         let found = recognise(&framed(b"]\x94(]\x94K\x01}\x94\x8c\x01x\x94e.")).unwrap();
-        let Value::List(values) = found.value else {
+        let Kind::List(values) = found.value.kind else {
             panic!("list")
         };
+        let kinds: Vec<_> = values[..3].iter().map(|v| &v.kind).collect();
         assert_eq!(
-            &values[..3],
-            &[Value::List(vec![]), Value::Int(1), Value::Dict(vec![])]
+            kinds,
+            vec![
+                &Kind::List(vec![]),
+                &Kind::Int { value: 1, at: 17, len: 1 },
+                &Kind::Dict(vec![])
+            ]
         );
-        assert!(matches!(values[3], Value::Text { len: 1, .. }));
+        assert!(matches!(values[3].kind, Kind::Text { len: 1, .. }));
         for (code, width) in [(0x58, 4), (0x8d, 8)] {
             let mut body = vec![code];
             body.extend_from_slice(&300u64.to_le_bytes()[..width]);
             body.extend(std::iter::repeat_n(b'x', 300));
             body.extend_from_slice(b"\x94.");
             assert!(matches!(
-                recognise(&framed(&body)).unwrap().value,
-                Value::Text { len: 300, .. }
+                recognise(&framed(&body)).unwrap().value.kind,
+                Kind::Text { len: 300, .. }
             ));
             body[1..1 + width].fill(255);
             assert!(recognise(&framed(&body)).is_none());
@@ -695,6 +917,229 @@ mod tests {
         let doc = Document::new(MemSource(vec![0x80, 4, b'N', b'.']));
         let mut ev = Evaluator::new(super::super::pickle());
         let node = ev.node(&doc, &[2, 1]).unwrap();
-        assert_eq!(node.value, crate::eval::Value::Str(MESSAGE.to_owned()));
+        // The contract's sentence, the form that matched, and where the data
+        // is. The first sentence is the one the design document fixes.
+        let said = stop_message("basic-p4-p5-v2");
+        assert_eq!(node.value, crate::eval::Value::Str(said.clone()));
+        assert!(said.starts_with("Matched a Familiar Pickle Form ("));
+        assert!(said.contains(": bypassed Pickle stack machine decoding."));
+        assert!(said.ends_with(&format!("Switch to the \"{FAMILIAR_LABEL}\" template to see the data.")));
+    }
+
+    use crate::document::Document;
+    use crate::eval::{Evaluator, Value as V};
+    use crate::source::MemSource;
+
+    fn read(bytes: &[u8]) -> (Document<MemSource>, Evaluator) {
+        (Document::new(MemSource(bytes.to_vec())), Evaluator::new(super::super::familiar_pickle()))
+    }
+
+    /// One row of the template, as a reader sees it.
+    #[derive(Debug, PartialEq)]
+    struct Row {
+        depth: usize,
+        name: String,
+        ty: String,
+        at: u64,
+        len: u64,
+        value: V,
+        machinery: bool,
+    }
+
+    /// Every row under `path`, in file order, with the rows inside a node
+    /// after it.
+    fn rows(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], depth: usize, out: &mut Vec<Row>) {
+        let node = ev.node(doc, path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+        out.push(Row {
+            depth,
+            name: node.name.clone(),
+            ty: node.type_name.clone(),
+            at: node.offset_bits / 8,
+            len: node.size_bits / 8,
+            value: node.value.clone(),
+            machinery: node.machinery == Some(true),
+        });
+        // An array's numbers are a run of values rather than the shape of the
+        // file, so they are counted and not walked.
+        if node.type_name.ends_with("[]") {
+            return;
+        }
+        for i in 0..node.child_count as usize {
+            let mut next = path.to_vec();
+            next.push(i);
+            rows(doc, ev, &next, depth + 1, out);
+        }
+    }
+
+    fn dump(bytes: &[u8]) -> Vec<Row> {
+        let (doc, mut ev) = read(bytes);
+        let mut out = Vec::new();
+        rows(&doc, &mut ev, &[], 0, &mut out);
+        out
+    }
+
+    /// The first row of this name, which is what an assertion about a named
+    /// field means when the name is not repeated.
+    fn named_row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
+        rows.iter().find(|r| r.name == name).unwrap_or_else(|| panic!("no {name} row in {rows:#?}"))
+    }
+
+    /// Every row the familiar-form template shows for a small dictionary, in
+    /// file order: the header, the instructions the form fixed, the names and
+    /// the values.
+    #[test]
+    fn the_familiar_template_places_the_decoded_values() {
+        let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
+        let seen = dump(&bytes);
+        let said: Vec<(usize, &str, &str, u64, u64)> =
+            seen.iter().map(|r| (r.depth, r.name.as_str(), r.ty.as_str(), r.at, r.len)).collect();
+        assert_eq!(
+            said,
+            vec![
+                (0, "file", "pickle", 0, 27),
+                (1, "header", "header", 0, 11),
+                (2, "message", "computed text", 0, 0),
+                (2, "form", "computed text", 0, 0),
+                (2, "proto", "bytes[]", 0, 1),
+                (2, "protocol", "u8", 1, 1),
+                (2, "frame", "bytes[]", 2, 9),
+                // The dictionary, from its EMPTY_DICT to the SETITEM that
+                // filled it, with both of those inside it.
+                (1, "data", "dict", 11, 15),
+                (2, "empty_dict", "bytes[]", 11, 1),
+                (2, "memoize", "bytes[]", 12, 1),
+                (2, "a", "entry", 13, 12),
+                (3, "short_binunicode", "bytes[]", 13, 2),
+                (3, "key", "utf8[]", 15, 1),
+                (3, "memoize", "bytes[]", 16, 1),
+                (3, "value", "list", 17, 8),
+                (4, "empty_list", "bytes[]", 17, 1),
+                (4, "memoize", "bytes[]", 18, 1),
+                (4, "mark", "bytes[]", 19, 1),
+                (4, "binint1", "bytes[]", 20, 1),
+                (4, "[0]", "u8", 21, 1),
+                (4, "binint1", "bytes[]", 22, 1),
+                (4, "[1]", "u8", 23, 1),
+                (4, "appends", "bytes[]", 24, 1),
+                (2, "setitem", "bytes[]", 25, 1),
+                (1, "stop", "bytes[]", 26, 1),
+            ]
+        );
+        assert_eq!(named_row(&seen, "message").value, V::Str(MESSAGE.into()));
+        assert_eq!(named_row(&seen, "form").value, V::Str("basic-p4-p5-v2".into()));
+        assert_eq!(named_row(&seen, "protocol").value, V::UInt(4));
+        assert_eq!(named_row(&seen, "key").value, V::Str("a".into()));
+        assert_eq!(named_row(&seen, "[0]").value, V::UInt(1));
+        assert_eq!(named_row(&seen, "[1]").value, V::UInt(2));
+        // The instructions fold away; the values do not.
+        assert!(named_row(&seen, "setitem").machinery, "an instruction is the value's machinery");
+        assert!(!named_row(&seen, "key").machinery);
+        assert!(!named_row(&seen, "data").machinery);
+    }
+
+    /// Nothing a matched form consumed is left over. A form fixes its
+    /// instructions, so a byte no field covers would be a byte the form
+    /// matched and the template could not name.
+    #[test]
+    fn a_matched_file_has_no_unmapped_bytes() {
+        for bytes in [
+            framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es."),
+            framed(b"]\x94(N\x88\x89M\x39\x30J\xff\xff\xff\xffG\x3f\xf0\x00\x00\x00\x00\x00\x00C\x02\xde\xad\x94e."),
+            framed(b"}\x94."),
+            MATRIX.to_vec(),
+        ] {
+            let seen = dump(&bytes);
+            assert_eq!(seen[0].len, bytes.len() as u64, "the root is the file");
+            // Every node's children tile it: they start where it does, they
+            // follow each other, and the last of them ends where it ends.
+            for (i, row) in seen.iter().enumerate() {
+                let kids: Vec<&Row> = seen[i + 1..]
+                    .iter()
+                    .take_while(|r| r.depth > row.depth)
+                    .filter(|r| r.depth == row.depth + 1)
+                    .collect();
+                if kids.is_empty() {
+                    continue;
+                }
+                let mut want = row.at;
+                for kid in &kids {
+                    // A row worked out from the match has no bytes and sits
+                    // where its parent starts.
+                    if kid.len == 0 {
+                        assert_eq!(kid.at, row.at, "{}: {} is nowhere", row.name, kid.name);
+                        continue;
+                    }
+                    assert_eq!(kid.at, want, "{}: {} leaves bytes over at {want:#x}", row.name, kid.name);
+                    want = kid.at + kid.len;
+                }
+                assert_eq!(want, row.at + row.len, "{}: bytes left over at {want:#x}", row.name);
+            }
+        }
+    }
+
+    /// The two values a pickle writes as an opcode and nothing else read as
+    /// the word Python spells them with.
+    fn named(raw: i128, name: &str) -> V {
+        V::Enum { raw, name: Some(name.to_string()), hex: false }
+    }
+
+    /// The other leaf types, each at the bytes it was written in.
+    #[test]
+    fn every_leaf_reads_as_the_type_its_bytes_are() {
+        let bytes = framed(b"]\x94(N\x88\x89M\x39\x30J\xff\xff\xff\xffG\x3f\xf0\x00\x00\x00\x00\x00\x00C\x02\xde\xad\x94e.");
+        // The values of the list, which is what the file holds: the header
+        // says what matched and is not part of it.
+        let seen: Vec<(String, u64, V)> = dump(&bytes)
+            .into_iter()
+            .skip_while(|r| r.name != "data")
+            .filter(|r| !r.machinery && r.depth == 2)
+            .map(|r| (r.ty, r.len, r.value))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("null".into(), 1, named(0x4e, "None")),
+                ("bool".into(), 1, named(0x88, "True")),
+                ("bool".into(), 1, named(0x89, "False")),
+                ("u16 le".into(), 2, V::UInt(12345)),
+                ("i32 le".into(), 4, V::Int(-1)),
+                ("f64 be".into(), 8, V::Float(1.0)),
+                ("bytes[]".into(), 2, V::Bytes { len: 2, preview: vec![0xde, 0xad] }),
+            ]
+        );
+    }
+
+    /// A matched array says what it is before it says what it holds, and the
+    /// call that rebuilt it holds the names and letters the form matched.
+    #[test]
+    fn a_matched_array_carries_its_dtype_shape_and_order() {
+        let seen = dump(MATRIX);
+        assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v2".into()));
+        assert_eq!(named_row(&seen, "value").ty, "array");
+        assert_eq!(named_row(&seen, "dtype").value, V::Str("<f4".into()));
+        assert_eq!(named_row(&seen, "shape").value, V::Str("4 x 6".into()));
+        assert_eq!(named_row(&seen, "order").value, V::Str("C".into()));
+        // The call, and the names it was made with.
+        let call = named_row(&seen, "ndarray reconstruct call");
+        assert_eq!(call.ty, "call");
+        assert_eq!(named_row(&seen, "module").value, V::Str("numpy._core.multiarray".into()));
+        assert_eq!(named_row(&seen, "callable").value, V::Str("_reconstruct".into()));
+        assert_eq!(named_row(&seen, "class module").value, V::Str("numpy".into()));
+        assert_eq!(named_row(&seen, "class").value, V::Str("ndarray".into()));
+        assert_eq!(named_row(&seen, "dtype class").value, V::Str("dtype".into()));
+        assert_eq!(named_row(&seen, "byte order").value, V::Str("<".into()));
+        let numbers = named_row(&seen, "numbers");
+        assert_eq!((numbers.ty.as_str(), numbers.len, &numbers.value), ("f32 le[]", 96, &V::Composite { count: 24 }));
+    }
+
+    /// A pickle no form matches has nothing for this template to show, and
+    /// says so rather than showing part of a reading.
+    #[test]
+    fn an_unfamiliar_program_has_no_tree() {
+        let (doc, mut ev) = read(b"\x80\x04\x8c\x02os\x94\x8c\x06system\x94\x93.");
+        let root = ev.node(&doc, &[]);
+        assert!(root.is_err(), "an unmatched file resolved to {root:?}");
+        assert!(ev.node(&doc, &[0]).is_err());
+        assert!(ev.node(&doc, &[1]).is_err());
     }
 }

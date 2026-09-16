@@ -93,6 +93,7 @@ impl Evaluator {
             // bytes are: a header inside a decoded stream holds its values
             // there too.
             space: self.memo[parent].space,
+            machinery: false,
         };
         self.remember(path, r);
         Ok(())

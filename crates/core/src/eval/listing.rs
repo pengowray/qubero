@@ -215,6 +215,7 @@ fn holds_fields(ty: &Ty) -> bool {
         | Ty::Traced { .. }
         | Ty::Stitched { .. } => true,
         Ty::Json(shape, _) => shape.composite(),
+        Ty::Pickle(..) => true,
         _ => false,
     }
 }
