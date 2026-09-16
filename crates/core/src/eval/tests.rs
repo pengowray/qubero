@@ -5371,3 +5371,188 @@ fn a_joined_stream_open_as_a_tab_reads_names_from_outside_it() {
 fn an_unpacked_stream_open_as_a_tab_reads_names_from_outside_it() {
     a_tab_reads_names_from_outside_its_stream(true);
 }
+
+/// The three bitwise operators, over bytes a reader can check by hand. `Or`
+/// beside them is still the value-or, which is the whole reason the new ones
+/// have names of their own.
+#[test]
+fn the_bitwise_operators_work_on_the_bits() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("a", T::u8()),
+            ("b", T::u8()),
+            ("ored", T::computed(E::field("a").bit_or(E::field("b")))),
+            ("xored", T::computed(E::field("a").bit_xor(E::field("b")))),
+            ("flipped", T::computed(E::field("a").bit_not())),
+            ("masked", T::computed(E::field("a").bit_not().and(E::lit(0xff)))),
+            // The value-or, unchanged: the left side, because it is not zero.
+            ("valued", T::computed(E::field("a").or(E::field("b")))),
+        ],
+    );
+    let d = doc(&[0b1100, 0b1010]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::Int(0b1110));
+    assert_eq!(ev.node(&d, &[3]).unwrap().value, Value::Int(0b0110));
+    // Over the whole 128-bit number, so it is negative, and a mask brings it
+    // back inside a byte. See `Expr::BitNot`.
+    assert_eq!(ev.node(&d, &[4]).unwrap().value, Value::Int(-13));
+    assert_eq!(ev.node(&d, &[5]).unwrap().value, Value::Int(0xf3));
+    assert_eq!(ev.node(&d, &[6]).unwrap().value, Value::Int(0b1100));
+}
+
+/// A run that stops once it has read as many elements as a field ahead of it
+/// said. The question is asked before each element, so the count is the index
+/// of the element that is never read.
+#[test]
+fn a_while_run_stops_at_the_count_beside_it() {
+    let counted = || {
+        T::structure(
+            "Root",
+            vec![
+                ("count", T::u8()),
+                ("items", T::repeat(T::u8(), Until::While(E::Idx.less_than(E::field("count"))))),
+                ("tail", T::u8()),
+            ],
+        )
+    };
+    let d = doc(&[3, 10, 20, 30, 99]);
+    let mut ev = Evaluator::new(Template::new("t", counted()));
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 3);
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 3 * 8);
+    // The byte after the run belongs to the field after it, which is the whole
+    // difference from `Until::Cond`: nothing read the element that ended it.
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(99));
+
+    // A count of nought is a run of nothing, which a question asked after the
+    // element could not say.
+    let d0 = doc(&[0, 77]);
+    let mut ev0 = Evaluator::new(Template::new("t", counted()));
+    assert_eq!(ev0.node(&d0, &[1]).unwrap().child_count, 0);
+    assert_eq!(ev0.node(&d0, &[2]).unwrap().value, Value::UInt(77));
+}
+
+/// A run that stops when the next element would start past a limit the file
+/// wrote down. The position in the question is where that element would
+/// begin, not where the last one did.
+#[test]
+fn a_while_run_stops_before_the_element_that_would_pass_a_limit() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("limit", T::u8()),
+            ("items", T::repeat(T::u16(Big), Until::While(E::SpacePos.less_than(E::field("limit"))))),
+            ("rest", T::bytes(E::Remaining)),
+        ],
+    );
+    // The run starts at 1 and the limit is 6, so elements start at 1, 3 and 5;
+    // the one that would start at 7 is never read.
+    let d = doc(&[6, 0, 1, 0, 2, 0, 3, 0, 4]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 3);
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 6 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().size_bits, 2 * 8);
+
+    // The question reads nothing of the element it is asked about, which is
+    // what lets a run stop where reading one more would run off the end.
+    let room =
+        T::structure("Root", vec![("items", T::repeat(T::u16(Big), Until::While(E::Remaining.at_least(E::lit(2)))))]);
+    let mut ev2 = Evaluator::new(Template::new("t", room));
+    assert_eq!(ev2.node(&doc(&[0, 1, 0, 2, 9]), &[0]).unwrap().child_count, 2);
+}
+
+/// Inside a window, where a field is in the file and where it is in the window
+/// are two different numbers, and so are the two sizes.
+#[test]
+fn space_position_and_size_ignore_the_window() {
+    let inner = T::structure(
+        "Inner",
+        vec![
+            ("a", T::u16(Big)),
+            ("pos", T::computed(E::Pos)),
+            ("space_pos", T::computed(E::SpacePos)),
+            ("window", T::computed(E::WindowSize)),
+            ("space", T::computed(E::SpaceSize)),
+        ],
+    );
+    let t = T::structure("Root", vec![("head", T::bytes(E::lit(3))), ("body", T::sized(E::lit(4), inner))]);
+    let d = doc(&[9, 9, 9, 0, 7, 0, 0, 1, 1]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    // Two bytes into the window, five bytes into the file.
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::Int(2));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value, Value::Int(5));
+    // The window is four bytes; the file is nine.
+    assert_eq!(ev.node(&d, &[1, 3]).unwrap().value, Value::Int(4));
+    assert_eq!(ev.node(&d, &[1, 4]).unwrap().value, Value::Int(9));
+}
+
+/// A peek at an address rather than at a distance, asked from inside a window
+/// that holds neither address, one of them behind the field asking. Neither is
+/// something a relative skip can say.
+#[test]
+fn a_peek_in_the_space_reads_at_an_address() {
+    let peek = |at: i64, bits: u32| T::computed(E::PeekIn { at: Box::new(E::lit(at)), bits, endian: Big });
+    let inner = T::structure("Inner", vec![("a", T::u8()), ("front", peek(0, 16)), ("back", peek(8 * 8, 8))]);
+    let t = T::structure("Root", vec![("head", T::bytes(E::lit(4))), ("body", T::sized(E::lit(2), inner))]);
+    let d = doc(&[0xab, 0xcd, 0, 0, 5, 0, 0, 0, 0x42]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1, 1]).unwrap().value, Value::Int(0xabcd));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value, Value::Int(0x42));
+
+    // Past the end of the file is a failure, not a number nobody wrote.
+    let over = T::structure("Root", vec![("a", peek(80 * 8, 8))]);
+    assert!(Evaluator::new(Template::new("t", over)).node(&d, &[0]).is_err());
+}
+
+/// A union: every field starts where the structure does, and the structure is
+/// as long as the longest of them.
+#[test]
+fn a_union_lays_its_fields_over_one_another() {
+    let u = T::union_structure(
+        "Colour",
+        vec![("packed", T::u32(Big)), ("bytes", T::array(T::u8(), E::lit(4))), ("high", T::u16(Big))],
+    );
+    let t = T::structure("Root", vec![("head", T::u8()), ("colour", u), ("tail", T::u8())]);
+    let d = doc(&[9, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+
+    // Four bytes of the file, whichever of the three readings is asked.
+    let whole = ev.node(&d, &[1]).unwrap();
+    assert_eq!((whole.offset_bits, whole.size_bits), (8, 4 * 8));
+    for (i, size) in [(0usize, 4u64), (1, 4), (2, 2)] {
+        let f = ev.node(&d, &[1, i]).unwrap();
+        assert_eq!((f.offset_bits, f.size_bits), (8, size * 8), "field {i}");
+    }
+    assert_eq!(ev.node(&d, &[1, 0]).unwrap().value, Value::UInt(0x11223344));
+    assert_eq!(ev.node(&d, &[1, 2]).unwrap().value, Value::UInt(0x1122));
+    // The field after the union starts past the longest of its readings.
+    assert_eq!(ev.node(&d, &[2]).unwrap().offset_bits, 5 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(0x55));
+
+    // Only the first reading is counted; the others are second readings of the
+    // same bytes, the way `Field::aside` marks one by hand.
+    assert!(!ev.aside(&[1, 0]));
+    assert!(ev.aside(&[1, 1]) && ev.aside(&[1, 2]));
+
+    // And the panel says so rather than calling the first one "first field".
+    for i in 0..3 {
+        assert_eq!(ev.shape(&d, &[1, i]).unwrap().placed, shape::Placed::Overlap, "field {i}");
+    }
+
+    // The listing draws one row per field, all at the same place: overlapping
+    // spans, the way a second reading of bytes is already drawn.
+    let rows = ev.spans(&d, 8, 5 * 8, 100).unwrap();
+    assert_eq!(rows.iter().map(|s| (s.name.clone(), s.offset_bits)).collect::<Vec<_>>(), vec![("packed".into(), 8)]);
+}
+
+/// A union whose longest field is only as long as the file says, which is the
+/// case no arithmetic over the declaration alone can settle.
+#[test]
+fn a_union_is_as_long_as_the_file_makes_its_longest_field() {
+    let u = T::union_structure("Body", vec![("head", T::u8()), ("run", T::bytes(E::field("len")))]);
+    let t = T::structure("Root", vec![("len", T::u8()), ("body", u), ("tail", T::u8())]);
+    let d = doc(&[3, 1, 2, 3, 7]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 3 * 8);
+    assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(7));
+}
