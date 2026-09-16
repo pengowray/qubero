@@ -43,6 +43,8 @@
 //! anchor      := "file" | "window" | "origin" | "own start aligned to" int
 //! until       := "until end" | "until element." NAME ("is" bytes | "==" int)
 //!              | "until" expr                       asked inside each element
+//!              | "while" expr                       asked before each element,
+//!                                                   beside the list itself
 //!
 //! A count binds to the word in front of it, so an element written in more
 //! than one word is bracketed first: `(text[4] utf8)[3]` is three of them,
@@ -68,6 +70,8 @@
 //!              | "contents" NAME                    which field is merely the body
 //!              | "unit" NAME                        what one is called when counted
 //!              | "inline"                           one row, not one row per field
+//!              | "overlap"                           every field starts where the
+//!                                                   structure does, as a union does
 //!              | "packed" NAME                      contents only the format unpacks
 //!              | "machinery" NAME {NAME}            fields that are this structure's
 //!                                                   own plumbing, whatever they decide
@@ -529,6 +533,9 @@ fn struct_attrs(def: &StructDef) -> Vec<String> {
     if def.inline {
         a.push("inline".to_string());
     }
+    if def.overlap {
+        a.push("overlap".to_string());
+    }
     if let Some(p) = &def.packed {
         a.push(format!("packed {p}"));
     }
@@ -735,6 +742,7 @@ fn until_text(u: &Until) -> String {
         Until::FieldBytes { field, bytes } => format!("until element.{field} is {}", bytes_lit(bytes)),
         Until::FieldValue { field, value } => format!("until element.{field} == {}", tag_lit(*value)),
         Until::Cond(e) => format!("until {}", expr(e)),
+        Until::While(e) => format!("while {}", expr(e)),
     }
 }
 
@@ -1119,6 +1127,11 @@ fn prec(e: &Expr) -> u32 {
         Expr::Both(..) => 25,
         Expr::Not(..) => 30,
         Expr::Less(..) | Expr::Eq(..) | Expr::Ne(..) | Expr::Le(..) | Expr::Gt(..) | Expr::Ge(..) => 40,
+        // The three bitwise operators in C's order among themselves, `|`
+        // loosest and `&` tightest, all of them tighter than a comparison so
+        // that a mask written beside one needs no brackets.
+        Expr::BitOr(..) => 44,
+        Expr::BitXor(..) => 47,
         Expr::And(..) => 50,
         Expr::Shl(..) | Expr::Shr(..) => 60,
         Expr::Add(..) | Expr::Sub(..) => 70,
@@ -1204,6 +1217,17 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         Expr::And(a, b) => {
             wrap(format!("{} & {}", write_expr(a, here, true, leaf)?, write_expr(b, here + 1, true, leaf)?))
         }
+        // Masks like `&` is: the numbers in these are runs of bits, and a
+        // reader who has to convert 0x3f back out of 63 to see that is being
+        // shown the wrong thing.
+        Expr::BitOr(a, b) => {
+            wrap(format!("{} | {}", write_expr(a, here, true, leaf)?, write_expr(b, here + 1, true, leaf)?))
+        }
+        Expr::BitXor(a, b) => {
+            wrap(format!("{} ^ {}", write_expr(a, here, true, leaf)?, write_expr(b, here + 1, true, leaf)?))
+        }
+        // Bracketed unless what it flips is a leaf or a call, as `not` is.
+        Expr::BitNot(a) => wrap(format!("~{}", write_expr(a, CALL, true, leaf)?)),
         Expr::Min(a, b) => format!("min({}, {})", write_expr(a, 0, false, leaf)?, write_expr(b, 0, false, leaf)?),
         Expr::Max(a, b) => format!("max({}, {})", write_expr(a, 0, false, leaf)?, write_expr(b, 0, false, leaf)?),
         Expr::PadTo { n, align } => format!("padding({}, {align})", write_expr(n, 0, false, leaf)?),
@@ -1252,6 +1276,9 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::Idx
         | Expr::Pos
         | Expr::WindowSize
+        | Expr::SpacePos
+        | Expr::SpaceSize
+        | Expr::PeekIn { .. }
         | Expr::LenOf(..)
         | Expr::Elem { .. }
         | Expr::ElemWithin { .. }
@@ -1309,6 +1336,10 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::Idx => "index".to_string(),
         Expr::Pos => "pos".to_string(),
         Expr::WindowSize => "size of window".to_string(),
+        // The same two measured from the front of the file, or of what a
+        // compressed run unpacked to, rather than from the nearest window.
+        Expr::SpacePos => "pos in space".to_string(),
+        Expr::SpaceSize => "size of space".to_string(),
         // Not `sizeof(x)`, which is the same list measured in bytes. A reader
         // seeing both beside each other has to be able to tell them apart.
         Expr::LenOf(n) => format!("count of {n}"),
@@ -1360,6 +1391,12 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::Peek { bits, endian } if probes => format!("peek(u{bits}{})", end(*endian)),
         Expr::PeekAt { skip, bits, endian } if probes => {
             format!("peek(u{bits}{} at {} bits)", end(*endian), spelled(skip, probes)?)
+        }
+        // `in space` is the whole difference from the one above: that one
+        // counts on from where the field is, and this one counts from the
+        // front of the file.
+        Expr::PeekIn { at, bits, endian } if probes => {
+            format!("peek(u{bits}{} at {} bits in space)", end(*endian), spelled(at, probes)?)
         }
         Expr::ToMarker { lead, unless } if probes => {
             if unless.is_empty() {

@@ -296,6 +296,15 @@ impl Evaluator {
                 let (start, end) = self.window_of(doc, at);
                 (end.saturating_sub(start) / 8) as i128
             }
+            // The same two asked of the whole space rather than of the nearest
+            // window: offsets inside a space are already counted from its
+            // front, so this is the offset itself and the space's own length.
+            // See `Expr::SpacePos`.
+            Expr::SpacePos => {
+                let Some((offset, _)) = here else { return fail("nothing to measure from") };
+                (offset / 8) as i128
+            }
+            Expr::SpaceSize => (self.space_len(doc, at) / 8) as i128,
             // How many elements a list holds, which is not how many bytes it
             // took: see `Expr::LenOf`.
             Expr::LenOf(name) => {
@@ -448,6 +457,30 @@ impl Evaluator {
                 let buf = self.read_in(doc, self.space_at(at), from, u64::from(*bits))?;
                 read_uint(&buf, *bits, *endian) as i128
             }
+            // A peek at an address rather than at a distance. Held to the
+            // space and not to the container the field sits in: an address is
+            // an address of the whole file, and a record that names one is
+            // usually a record inside a window that does not hold it.
+            Expr::PeekIn { at: addr, bits, endian } => {
+                let addr = self.eval_expr_at(doc, at, &addr.clone(), here)?;
+                if addr < 0 {
+                    return fail("looks at an address before the start of the file");
+                }
+                let Ok(from) = u64::try_from(addr) else { return fail("looks past the end of the file") };
+                let space = self.space_at(at);
+                if from.checked_add(u64::from(*bits)).is_none_or(|end| end > self.space_len(doc, at)) {
+                    return fail("looks past the end of the file");
+                }
+                let from = match lsb_packed(*bits, *endian, from) {
+                    true => match lsb_offset(*bits, from) {
+                        Some(at) => at,
+                        None => return fail("a peek packed low-bit-first would cross a byte boundary"),
+                    },
+                    false => from,
+                };
+                let buf = self.read_in(doc, space, from, u64::from(*bits))?;
+                read_uint(&buf, *bits, *endian) as i128
+            }
             // Walk forward for what ends an unmeasured stream. A lead is told
             // apart from an escape by the byte after it, so blocks overlap by
             // the length of the lead: one straddling the seam between two
@@ -558,6 +591,14 @@ impl Evaluator {
                 self.eval_expr_at(doc, at, a, here)? >> by
             }
             Expr::And(a, b) => self.eval_expr_at(doc, at, a, here)? & self.eval_expr_at(doc, at, b, here)?,
+            // Both sides worked out, unlike `Either` and `Both`, which are
+            // truths and may stand in front of what they guard. These are
+            // arithmetic: every bit of both sides is part of the answer.
+            Expr::BitOr(a, b) => self.eval_expr_at(doc, at, a, here)? | self.eval_expr_at(doc, at, b, here)?,
+            Expr::BitXor(a, b) => self.eval_expr_at(doc, at, a, here)? ^ self.eval_expr_at(doc, at, b, here)?,
+            // Over the whole 128-bit number, which is what makes `~0` come to
+            // -1. See `Expr::BitNot`.
+            Expr::BitNot(a) => !self.eval_expr_at(doc, at, a, here)?,
             Expr::Less(a, b) => {
                 i128::from(self.eval_expr_at(doc, at, a, here)? < self.eval_expr_at(doc, at, b, here)?)
             }
@@ -870,6 +911,15 @@ impl Evaluator {
     /// the stream's own bytes, and an outer `Sized` counted in the file would
     /// answer with offsets from another numbering entirely. Where the space
     /// has no window in it, the window is the whole space.
+    /// How many bits the space the field at `at` is read in holds: the file at
+    /// the top level, and what a compressed run unpacked to inside one.
+    fn space_len<S: Source>(&self, doc: &Document<S>, at: &[usize]) -> u64 {
+        match self.space_at(at) {
+            0 => doc.len_bits(),
+            other => self.spaces.len_bits(other),
+        }
+    }
+
     fn window_of<S: Source>(&self, doc: &Document<S>, at: &[usize]) -> (u64, u64) {
         let space = self.space_at(at);
         let found = (0..at.len()).rev().find_map(|k| match self.memo.get(&at[..k]) {

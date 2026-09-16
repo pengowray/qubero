@@ -137,6 +137,23 @@ impl Evaluator {
                 return Ok(ends as u64);
             }
             self.spend(start)?;
+            // The condition that is asked before the element rather than
+            // after it, so that an element the run does not want is never
+            // read. Asked as if it were a field of the list's own structure
+            // standing where that element would start: the frame is a child
+            // of the list that the memo has nothing at, which is what makes a
+            // name climb past the list to its siblings while the index still
+            // counts elements of the run. See `Until::While`.
+            if let Until::While(e) = until {
+                let e = e.clone();
+                let mut frame = p.clone();
+                frame.push(ends);
+                if self.eval_expr_at(doc, &frame, &e, Some((start, r.limit)))? == 0 {
+                    self.list_mut(path).repeat_done = true;
+                    self.list_mut(path).repeat_end = Some(start);
+                    return Ok(ends as u64);
+                }
+            }
             // A short run is remembered whole: most runs are short, and having
             // one in memory is what makes reading it cheap. Once a run proves
             // long, the walk starts keeping a journal and dropping what it has
@@ -257,7 +274,10 @@ impl Evaluator {
         before: usize,
     ) -> R<()> {
         let stop = match until {
-            Until::End => false,
+            // Asked before the next element instead, in `count_from`: by the
+            // time an element has been read, the question this one asks is
+            // about the one after it.
+            Until::End | Until::While(_) => false,
             Until::FieldBytes { field, bytes } => self.child_raw_bytes(doc, elem, field)? == *bytes,
             Until::FieldValue { field, value } => self.child_int(doc, elem, field)? == Some(*value),
             // Asked of the element that was just read, from where its last

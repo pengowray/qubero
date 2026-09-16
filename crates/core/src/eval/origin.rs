@@ -683,6 +683,8 @@ impl Evaluator {
             | Expr::Shl(a, b)
             | Expr::Shr(a, b)
             | Expr::And(a, b)
+            | Expr::BitOr(a, b)
+            | Expr::BitXor(a, b)
             | Expr::Min(a, b)
             | Expr::Max(a, b) => {
                 self.from_expr(doc, at, a, role, out)?;
@@ -704,7 +706,7 @@ impl Evaluator {
                 };
                 self.from_expr(doc, at, &taken.clone(), role, out)?;
             }
-            Expr::Log2(a) | Expr::Not(a) => self.from_expr(doc, at, a, role, out)?,
+            Expr::Log2(a) | Expr::Not(a) | Expr::BitNot(a) => self.from_expr(doc, at, a, role, out)?,
             // The field whose start this is. It decided where something else
             // went, so the row a reader wants is the one naming it, not a
             // number with nowhere to go.

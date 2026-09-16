@@ -1499,6 +1499,11 @@ impl Evaluator {
             to
         } else if idx == 0 {
             pr.offset
+        } else if matches!(&pr.ty, Ty::Struct(s) if s.overlap) {
+            // Every field of a union starts where the union does: one stretch
+            // of bytes with several readings laid over it. See
+            // `StructDef::overlap`.
+            pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
             let Some(at) = stride.checked_mul(idx as u64).and_then(|bits| pr.offset.checked_add(bits)) else {
                 return fail("runs past the end of its container");
