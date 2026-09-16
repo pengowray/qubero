@@ -3476,8 +3476,9 @@ export const HEXPAT = {
 
   /** Over the boxes, in the report column. */
   includesHeading: (n: number): string => (n === 1 ? "Needs 1 more file" : `Needs ${n} more files`),
-  /** Under that heading. Says why Qubero cannot supply them and what to do. */
-  includesNote: "These are part of the ImHex pattern library and are not shipped with Qubero. Paste each one to finish converting.",
+  /** Under that heading. Says what to do; the file may be one of the ImHex
+   *  library's, which Qubero does not ship, or one of the reader's own. */
+  includesNote: "Qubero does not have these files. Paste each one to finish converting.",
   includeLabel: (path: string): string => `Text of ${path}`,
   includePlaceholder: (path: string): string => `Paste ${path}`,
   /** On a box that has been filled in. */

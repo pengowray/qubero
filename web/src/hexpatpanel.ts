@@ -40,6 +40,10 @@ export class HexpatPanel extends ConvertPanel {
   private includes: Record<string, string> = {};
   /** Include files this pattern still wants, from the last conversion. */
   private missing: readonly string[] = [];
+  /** The box for each of those files, kept between conversions. The report is
+   *  redrawn on every pause in typing, and a box rebuilt under the caret would
+   *  take the focus away mid-keystroke. */
+  private readonly needBoxes = new Map<string, HTMLElement>();
   private readonly library: LibraryDialog;
 
   constructor(doc: Doc) {
@@ -75,6 +79,7 @@ export class HexpatPanel extends ConvertPanel {
       this.bundledList.value = "";
       this.name = entry.name;
       this.includes = { ...fetched.includes };
+      this.needBoxes.clear();
       this.put(fetched.text, entry.path);
     };
     this.el.append(this.library.el);
@@ -87,6 +92,7 @@ export class HexpatPanel extends ConvertPanel {
     this.bundled = null;
     this.bundledList.value = "";
     this.includes = {};
+    this.needBoxes.clear();
     this.name = name ?? "";
     this.put(text, name);
   }
@@ -96,6 +102,7 @@ export class HexpatPanel extends ConvertPanel {
     this.bundled = { id, text };
     this.bundledList.value = id;
     this.includes = {};
+    this.needBoxes.clear();
     this.name = id;
     this.put(text, this.bundledList.value === id ? null : HEXPAT.bundledName(id));
   }
@@ -158,20 +165,28 @@ export class HexpatPanel extends ConvertPanel {
       el("p", { className: "kp-group-heading kp-needs-heading", textContent: HEXPAT.includesHeading(this.missing.length) }),
       el("p", { className: "kp-needs-note", textContent: HEXPAT.includesNote }),
     );
-    for (const path of this.missing) {
-      const area = el("textarea", { className: "kp-need-text", spellcheck: false, placeholder: HEXPAT.includePlaceholder(path) });
-      area.setAttribute("aria-label", HEXPAT.includeLabel(path));
-      area.addEventListener("input", () => {
-        const text = area.value;
-        if (text.trim() === "") delete this.includes[path];
-        else this.includes[path] = text;
-        this.schedule();
-      });
-      const held = this.includes[path];
-      if (held !== undefined) area.value = held;
-      box.append(el("div", { className: "kp-need" }, el("span", { className: "kp-need-path", textContent: path }), area));
-    }
+    for (const path of this.missing) box.append(this.needBox(path));
     return [box];
+  }
+
+  /** The box for one missing file, built once and reused, so that typing into
+   *  it survives the redraw each conversion causes. */
+  private needBox(path: string): HTMLElement {
+    const had = this.needBoxes.get(path);
+    if (had !== undefined) return had;
+    const area = el("textarea", { className: "kp-need-text", spellcheck: false, placeholder: HEXPAT.includePlaceholder(path) });
+    area.setAttribute("aria-label", HEXPAT.includeLabel(path));
+    area.addEventListener("input", () => {
+      const text = area.value;
+      if (text.trim() === "") delete this.includes[path];
+      else this.includes[path] = text;
+      this.schedule();
+    });
+    const held = this.includes[path];
+    if (held !== undefined) area.value = held;
+    const row = el("div", { className: "kp-need" }, el("span", { className: "kp-need-path", textContent: path }), area);
+    this.needBoxes.set(path, row);
+    return row;
   }
 }
 
@@ -254,7 +269,9 @@ class LibraryDialog {
       this.detail.replaceChildren();
       return;
     }
-    this.list.replaceChildren(...found.slice(0, 200).map((entry) => this.row(entry)));
+    // Every match, not the first so many: the whole library is 310 rows, and a
+    // count above a list that silently stops short says the wrong number.
+    this.list.replaceChildren(...found.map((entry) => this.row(entry)));
     this.drawDetail();
   }
 

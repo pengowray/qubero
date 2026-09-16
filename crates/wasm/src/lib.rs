@@ -3804,6 +3804,12 @@ impl Editor {
         sh.kinds = None;
         sh.census = None;
         sh.template = String::new();
+        // A signature template came from a `file(1)` rule and from no format
+        // description, so the reports of the last one are about another
+        // template and would have the panel and the overview note talking
+        // about a template nothing is reading the file with.
+        sh.ksy_report = String::new();
+        sh.hexpat_report = String::new();
         match magicrule::match_signature(rules, head) {
             Some(sig) => {
                 sh.eval = Some(Evaluator::new(magicrule::signature_template(name, &sig)));
