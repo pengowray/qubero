@@ -108,6 +108,22 @@ pub(super) fn byte_text(n: u64) -> String {
     if n == 1 { "1 byte".to_string() } else { format!("{} bytes", grouped(n)) }
 }
 
+/// An address as the reader sees it everywhere else: `@0x9e4`, with the bit
+/// spelled out as `@0x9e4+3b` where the field starts inside a byte, and a `+`
+/// after the mark for an address counted inside an unpacked stream rather than
+/// in the file.
+///
+/// The same spelling `formatAddress` writes in the web app, and here rather
+/// than there because a reading built in the core has to say an address in the
+/// middle of a line: a chip and the panel beside it both show that line, and
+/// two formatters would be two chances for them to disagree.
+pub fn address_text(bits: u64, space: u32) -> String {
+    let (byte, rem) = (bits / 8, bits % 8);
+    let plus = if space == 0 { "" } else { "+" };
+    let bit = if rem == 0 { String::new() } else { format!("+{rem}b") };
+    format!("@{plus}0x{byte:x}{bit}")
+}
+
 /// A number with its thousands marked off, which is what makes `626,038`
 /// readable at a glance and `626038` a thing to be counted.
 pub(super) fn grouped(n: u64) -> String {
@@ -986,10 +1002,53 @@ impl Evaluator {
         s.fields.get(last).is_some_and(|f| *f.name == *by)
     }
 
+    /// What a small structure reads as on one line, for [`NodeInfo::line`].
+    ///
+    /// Only a structure of a few fields. The walk goes through every leaf
+    /// under the node, and a panel listing a header's three hundred fields
+    /// asks this of every row it draws: a line for a record that long would
+    /// be unreadable anyway, so the count it falls back to is both cheaper and
+    /// better. A list is left out for the same reason and one more: its
+    /// elements are a table, and `one_line` answers for one with a count.
+    ///
+    /// A reading that cannot be had yet is no reading rather than an error.
+    /// The panel is drawn again as the bytes land, and a structure whose
+    /// values are still coming has the count to show in the meantime.
+    pub(super) fn node_line<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        worth_a_line: bool,
+        child_count: u64,
+    ) -> R<Option<String>> {
+        const FIELDS: u64 = 8;
+        if self.lining || !worth_a_line || child_count == 0 || child_count > FIELDS {
+            return Ok(None);
+        }
+        let mut said = Vec::new();
+        let got = self.one_line(doc, path, &mut said);
+        match got {
+            Ok(()) => Ok(Some(said.join(" ")).filter(|s| !s.is_empty())),
+            Err(e) if e.interrupted() => Err(e),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// A structure that reads on one row, as its fields' values in order. A
     /// field that is itself a structure contributes its own fields, so a wasm
     /// instruction whose immediate has two parts still reads as one line.
     pub(super) fn one_line<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<String>) -> R<()> {
+        // A line is a walk through every leaf under the node, and each step of
+        // it asks for a node. Working out a line for each of those as well
+        // would read the same leaves once per level of nesting, so the walk
+        // says it is under way and the nodes it asks for come back without one.
+        let was = std::mem::replace(&mut self.lining, true);
+        let got = self.one_line_walk(doc, path, out);
+        self.lining = was;
+        got
+    }
+
+    fn one_line_walk<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut Vec<String>) -> R<()> {
         let info = self.node(doc, path)?;
         if !info.composite {
             // A field of no bits is an absence, not an empty value: the switch
@@ -1014,6 +1073,21 @@ impl Evaluator {
         // not a reading of the table: it is the table with the reader left to
         // do the work. The field tree opens it for anyone who wants them.
         let ty = self.memo[path].ty.clone();
+        // A field read somewhere else says where before it says what. Without
+        // the address the line hands back a value from the far side of the
+        // file with nothing to say it did not come from the bytes the line is
+        // drawn over, and the offset beside it, which is the only clue, is
+        // exactly the field a reading folds away as machinery.
+        if matches!(ty, Ty::At { .. }) && info.child_count == 1 {
+            let mut child = path.to_vec();
+            child.push(0);
+            let there = self.node(doc, &child)?;
+            let mut said = Vec::new();
+            self.one_line(doc, &child, &mut said)?;
+            let at = address_text(there.offset_bits, there.space);
+            out.push(if said.is_empty() { at } else { format!("{at} · {}", said.join(" ")) });
+            return Ok(());
+        }
         if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
             let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
             out.push(count_text(info.child_count, &unit));

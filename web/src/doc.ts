@@ -260,6 +260,13 @@ export type TemplateNode = {
    *  structure it is. Absent for a field nobody wrote prose for, which is most
    *  of them. Nothing renders it yet. */
   readonly doc?: string;
+  /** What a structure of a few fields reads as on one line, which is the same
+   *  reading the annotation column puts beside the bytes: a length and the
+   *  string it sizes read as the string, and an offset and the value it places
+   *  read as `@0x9e4 · 2003:07:19 13:30:49`. Null for a field that reads as
+   *  its own value, for a list, whose elements are a table rather than a line,
+   *  and for a structure of more fields than a line can hold. */
+  readonly line: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */

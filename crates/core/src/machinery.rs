@@ -77,6 +77,17 @@ fn refs(def: &StructDef, selectors: bool) -> Vec<Option<usize>> {
     out
 }
 
+/// Every sibling an expression reads by name. What [`consumers`] is worked out
+/// from, for a caller that has one expression in hand and wants to know
+/// whether a particular field is in it: the offset a pointer is read from is
+/// the field that pointer points from, and a reading that says so has to be
+/// sure it is naming the right one.
+pub fn names_in(e: &Expr) -> Vec<Arc<str>> {
+    let mut out = Vec::new();
+    expr_refs(e, &mut out);
+    out
+}
+
 /// What the template itself says about field `i`: `Some(true)` for machinery,
 /// `Some(false)` for payload, `None` when it has no opinion and [`consumers`]
 /// is all there is to go on.

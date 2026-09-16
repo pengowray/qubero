@@ -92,17 +92,21 @@ export function pinnedText(t: ChipText, c: Chip, reading: Reading | null): ChipT
 }
 
 /** What a chip says. A run of list elements is named for the list and says
- *  how many; a structure that reads on one line is the whole chip, since
- *  `[47]` is the element's number in a repeat and says nothing, and the
- *  line says everything. An element drawn after its run's chip says only its
- *  value, for the same reason: `[3]` names nothing the row does not already
- *  show, and the chip before it has named the list. */
+ *  how many. An element drawn after its run's chip says only its value: `[3]`
+ *  names nothing the row does not already show, and the chip before it has
+ *  named the list.
+ *
+ *  A structure that reads on one line keeps its own name in front of that
+ *  line, the way every other chip does, and only an element gives the name up:
+ *  `[47]` is a number in a repeat and says nothing, so the line is worth the
+ *  whole chip. A named one is not, and dropping the name left a TIFF entry's
+ *  date sitting over four bytes with nothing saying which field it was. */
 export function chipText(c: Chip): ChipText {
   const s = c.span;
   if (c.run.length > 0) return { name: listName(s), detail: runDetail(c.run.length) };
   if (c.element === true) return { name: "", detail: chipDetail(s) };
   if (s.gap) return { name: GAP_LABEL, detail: chipDetail(s) };
-  if (s.line !== null) return { name: s.line, detail: "" };
+  if (s.line !== null) return isElementName(s.name) ? { name: s.line, detail: "" } : { name: s.name, detail: s.line };
   return { name: s.name, detail: chipDetail(s) };
 }
 

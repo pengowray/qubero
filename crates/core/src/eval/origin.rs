@@ -200,9 +200,74 @@ impl Evaluator {
                     value: String::new(),
                     target_bits: Some(bits),
                 });
+            } else if let Some(o) = self.points_from(doc, path)? {
+                out.push(o);
             }
         }
         Ok(())
+    }
+
+    /// Where this field points, for an offset a sibling reads to place what it
+    /// holds: a TIFF entry's four bytes and the text they lead to, a header's
+    /// address and the table at it. The commonest pointer in any format, and
+    /// the one a table of offsets does not cover.
+    ///
+    /// The far end is the sibling's contents rather than the sibling, since
+    /// the sibling covers no bytes of its own: it is written here and read
+    /// there. What comes back names it as the reader sees it, `values`, and
+    /// says what is at the other end, so a row can lead with the address and
+    /// still say what is there.
+    fn points_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Origin>> {
+        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
+        let Some(Ty::Struct(def)) = self.memo.get(parent).map(|r| r.ty.base().clone()) else { return Ok(None) };
+        let Some(me) = def.fields.get(idx).map(|f| f.name.clone()) else { return Ok(None) };
+        for (j, f) in def.fields.iter().enumerate() {
+            if j == idx {
+                continue;
+            }
+            let Some(at) = self.address_expr(&f.ty) else { continue };
+            if !crate::machinery::names_in(&at).iter().any(|n| *n == me) {
+                continue;
+            }
+            let mut there = parent.to_vec();
+            there.push(j);
+            // The one thing the pointer holds, which is where the bytes are.
+            there.push(0);
+            let Ok(info) = self.node(doc, &there) else { continue };
+            let value = match &info.line {
+                Some(line) => line.clone(),
+                None => brief(&info.value),
+            };
+            return Ok(Some(Origin {
+                role: Role::Points,
+                label: f.name.to_string(),
+                stored: None,
+                path: Vec::new(),
+                value,
+                target_bits: Some(info.offset_bits),
+            }));
+        }
+        Ok(None)
+    }
+
+    /// The address a field is read at, for a field declared to be somewhere
+    /// else. None for a field that is where it is written.
+    ///
+    /// Through the wrappers that do not move it: a name from the template's
+    /// table, a window with a size, and the guard on an optional field. Not
+    /// through a switch, whose cases are several shapes and only one of them
+    /// the file took.
+    fn address_expr(&self, ty: &Ty) -> Option<Expr> {
+        let mut ty = ty.clone();
+        for _ in 0..8 {
+            match ty {
+                Ty::At { at, .. } => return Some(at),
+                Ty::Named(n) => ty = self.template.types.get(&*n)?.clone(),
+                Ty::Sized { inner, .. } | Ty::When { inner, .. } | Ty::Origin { inner } => ty = *inner,
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// Where this field points, for a field an earlier list of pointers reads

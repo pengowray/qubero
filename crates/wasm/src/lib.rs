@@ -259,6 +259,10 @@ struct NodeDto {
     /// most of them.
     #[serde(skip_serializing_if = "Option::is_none")]
     doc: Option<String>,
+    /// What a structure of a few fields reads as on one line, the same reading
+    /// the annotation column puts beside the bytes. Null for a leaf, for a
+    /// list, and for a structure too long to read on a line.
+    line: Option<String>,
 }
 
 /// One element of a folded run, as the value table draws it.
@@ -2454,6 +2458,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         joined: n.joined,
         absent: n.absent,
         doc: n.doc,
+        line: n.line,
     }
 }
 
