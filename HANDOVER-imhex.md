@@ -187,9 +187,9 @@ converter is merged.
   size: the maximum. The listing shows overlapping fields as the hex view
   already can (aside fields exist), and the inspector's Position row says
   "same start as its siblings".
-* `Time` variants for `FILETIME`, `time32_t`, `time64_t`, DOS date and
-  time if any of those is missing (check `pub enum Time` in template.rs;
-  ZIP and NTFS templates may already have them).
+* No `Time` additions: `Time::unix`, `Time::filetime`, `Time::dos` and
+  `Time::dos_halves` (template.rs, after line 1724) already cover
+  `time32_t`, `time64_t`, `FILETIME`, `DOSTime` and `DOSDate`.
 
 Not added, and why: a hidden flag (24 files; the listing's machinery
 folding covers padding, which is most of the use); float expressions (20
