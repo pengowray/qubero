@@ -364,15 +364,7 @@ impl Evaluator {
         }
         let width = u64::from(first.leading_zeros() + 1);
         let bytes = self.read(doc, r, r.offset, width * 8)?;
-        let mut value = if strip_marker {
-            u128::from(first & (0xff >> width))
-        } else {
-            u128::from(first)
-        };
-        for &b in &bytes[1..] {
-            value = (value << 8) | u128::from(b);
-        }
-        Ok((value, width))
+        Ok((ebml_vint_value(&bytes, strip_marker), width))
     }
 
     /// SQLite's varint: seven bits per byte, most significant group first, and
@@ -627,9 +619,42 @@ impl Evaluator {
     }
 }
 
+/// The number in a whole EBML VINT, big-endian, with or without its marker
+/// bit. `bytes` is exactly as many bytes as the marker selects, so the marker
+/// is the first byte's top set bit. At width eight the marker is the whole
+/// first byte, so stripping it leaves nothing there; the shift is done in
+/// u16 because `0xff_u8 >> 8` overflows.
+fn ebml_vint_value(bytes: &[u8], strip_marker: bool) -> u128 {
+    let width = u32::from(bytes[0].leading_zeros() + 1);
+    let mut value = if strip_marker {
+        u128::from(bytes[0]) & (0xff_u16 >> width) as u128
+    } else {
+        u128::from(bytes[0])
+    };
+    for &b in &bytes[1..] {
+        value = (value << 8) | u128::from(b);
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
-    use super::code_string;
+    use super::{code_string, ebml_vint_value};
+
+    /// An eight-byte VINT's first byte is 0x01: the marker and nothing else.
+    /// Stripping it must leave the remaining seven bytes, not overflow the
+    /// mask shift as the u8 version did.
+    #[test]
+    fn an_eight_byte_ebml_vint_is_all_marker_in_its_first_byte() {
+        let bytes = [0x01u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34];
+        assert_eq!(ebml_vint_value(&bytes, true), 0x1234);
+        assert_eq!(ebml_vint_value(&bytes, false), 0x0100_0000_0000_1234);
+        // Every other width still works the same way.
+        assert_eq!(ebml_vint_value(&[0x81], true), 1);
+        assert_eq!(ebml_vint_value(&[0x81], false), 0x81);
+        assert_eq!(ebml_vint_value(&[0x1a, 0x45, 0xdf, 0xa3], false), 0x1a45_dfa3);
+        assert_eq!(ebml_vint_value(&[0x1a, 0x45, 0xdf, 0xa3], true), 0x0a45_dfa3);
+    }
 
     /// The one thing about a code's value that can be wrong without looking
     /// wrong: read the other way round, the same bits are still a plausible
