@@ -375,6 +375,15 @@ impl Memo {
         let l = self.lists.get(path);
         match &r.ty {
             Ty::Array { .. } | Ty::PointerList { .. } => 0,
+            // A `While` run asks its question at the start of the element it
+            // decides not to read, and the question may look at bytes there:
+            // an ImHex list carries on while the four bytes ahead of it are
+            // not zero. Those bytes are past where the run ends, so an edit to
+            // them changes how many elements there are, and saying the run
+            // reaches only its own end would leave the old count on screen.
+            // Every edit re-counts such a run until something narrower than
+            // "somewhere ahead" tracks how far its question looked.
+            Ty::Repeat { until: Until::While(_), .. } => u64::MAX,
             Ty::Repeat { until, .. } => match l {
                 Some(l) if l.repeat_done => l.repeat_end.map_or(r.offset, |end| end + u64::from(l.repeat_trouble.is_some())),
                 _ if matches!(until, Until::End) => 0,
