@@ -565,8 +565,12 @@ impl Evaluator {
                     Err(e) => return Err(e),
                 }
             }
+            // Measuring the text goes by the field's own type, and a field
+            // whose type wraps text in something else, an enum say, has none
+            // to measure. That is the template's mistake, and it is reported
+            // as one rather than taken as impossible.
             Ty::Str { .. } => {
-                let span = self.str_span(doc, r, size)?.expect("text field");
+                let Some(span) = self.str_span(doc, r, size)? else { return not_text(r, "text") };
                 let shown = span.len.min(256);
                 let bytes = self.read(doc, r, r.offset + span.start * 8, shown * 8)?;
                 let (mut text, _) = text::decode_settled(span.settled, &bytes);
@@ -576,7 +580,7 @@ impl Evaluator {
                 Value::Str(text)
             }
             Ty::TextInt { radix, .. } => {
-                let span = self.str_span(doc, r, size)?.expect("digits");
+                let Some(span) = self.str_span(doc, r, size)? else { return not_text(r, "digits") };
                 // A number nobody could read is not a number: 64 digits is
                 // past anything an i128 holds, so what is past that is only
                 // ever an error either way.
@@ -674,4 +678,13 @@ mod tests {
         assert_eq!(code_string(&buf, 0, 8, true), "00101101");
         assert_eq!(code_string(&buf, 0, 8, false), "10110100");
     }
+}
+
+/// The error for a field read as text or digits whose own type is not text.
+/// Kept out of line: the value arms sit in a frame the deepest nesting a file
+/// reaches is measured against, and a message built there widens it.
+#[cold]
+#[inline(never)]
+fn not_text<T>(r: &Resolved, as_what: &str) -> R<T> {
+    fail(format!("{} is not a text field, so it cannot be read as {as_what}", r.name.text()))
 }
