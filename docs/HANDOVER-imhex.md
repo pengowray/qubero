@@ -285,3 +285,11 @@ The template chooser lists an applied pattern as an extra template
 ## Status
 
 2026-09-17: planned. Census run once from the scratchpad.
+
+2026-09-17: the IR additions landed on branch
+`worktree-agent-a633c14639002f7a0`, not yet merged to main:
+`Expr::BitOr`/`BitXor`/`BitNot`, `Until::While`, `Expr::SpacePos`/`SpaceSize`,
+`StructDef::overlap` with `Ty::union_structure`, and `Expr::PeekIn` for the
+absolute read. Evaluation, `template_text` rendering, the relations panel,
+unit tests over a `MemSource` and a notation snapshot. The converter is not
+started.

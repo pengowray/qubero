@@ -145,6 +145,8 @@
 //!   and                     boolean and
 //!   not                     boolean not
 //!   < == != <= > >=         comparison
+//!   |                       bitwise or
+//!   ^                       bitwise exclusive or
 //!   &                       mask
 //!   << >>                   shifts
 //!   + -
@@ -152,22 +154,31 @@
 //!   name  literal  call()   everything else
 //! ```
 //!
-//! Three places take a bracket whatever the table says, because the reading
-//! without one is not the only reading: what `not` negates, what `start of`
-//! names, and a ternary inside a ternary on either side of the colon.
+//! `~x` flips every bit of a number, over the whole 128 bits the arithmetic
+//! here is in, so `~0` is -1 and a complement within a word is written with
+//! the mask that says so: `~x & 0xffffffff`. It binds as tightly as a call.
+//!
+//! Four places take a bracket whatever the table says, because the reading
+//! without one is not the only reading: what `not` negates, what `~` flips,
+//! what `start of` names, and a ternary inside a ternary on either side of
+//! the colon.
 //!
 //! A name is a field declared earlier, in this structure or in one it sits
 //! inside. `a.b` is a path down into an earlier field. `index` is this
 //! element's place in the list it sits in. `remaining` is from here to the end
 //! of the container, `pos` is from the start of the window to here, `size of
-//! window` is the window, all in bytes; `count of f` is how many elements an
-//! earlier list has and `start of x` where an element found by expression
-//! begins. Then the calls: `sizeof(f)` `bitsof(f)` `sum(f)`
+//! window` is the window; `pos in space` and `size of space` are the same two
+//! measured from the front of the whole file, or of what a compressed run
+//! unpacked to, whatever windows lie in between; all in bytes. `count of f` is
+//! how many elements an earlier list has and `start of x` where an element
+//! found by expression begins. Then the calls: `sizeof(f)` `bitsof(f)` `sum(f)`
 //! `product(f)` `largest(f)` `setbits(f)` `min(a, b)` `max(a, b)`
 //! `ceil(a / b)` `log2(a)` `bit(x, 3)` `padding(n, 4)` (the padding *after* n
 //! bytes, to the next multiple of 4), `peek(u8be)` and
-//! `peek(u16le at expr bits)` (read without consuming), `tomarker(FF unless
-//! 00)`, `find("endobj")` and `findlast("startxref")` (how far it is to
+//! `peek(u16le at expr bits)` and `peek(u32be at expr bits in space)` (read
+//! without consuming: here, a distance on from here, or an address in the
+//! file), `tomarker(FF unless 00)`, `find("endobj")` and
+//! `findlast("startxref")` (how far it is to
 //! there), `previous(f)` (the element before this one), `earlier(a.b)` and
 //! `earlier[key = tag].f` (the nearest earlier element that has one),
 //! `array[i].f`, `descriptor.f` (the record that placed this element).

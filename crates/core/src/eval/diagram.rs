@@ -342,7 +342,15 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
                 if f.aside {
                     continue;
                 }
-                total = total.checked_add(static_bits(t, &f.ty, depth + 1)?)?;
+                let bits = static_bits(t, &f.ty, depth + 1)?;
+                // A union is as wide as its widest field: every field of one
+                // starts where the record does, so a sibling after it would
+                // be drawn at an offset no file agrees with if these added
+                // up. See `StructDef::overlap`.
+                total = match sd.overlap {
+                    true => total.max(bits),
+                    false => total.checked_add(bits)?,
+                };
             }
             Some(total)
         }
