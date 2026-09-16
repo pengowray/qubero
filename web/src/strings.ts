@@ -3485,8 +3485,8 @@ export const HEXPAT = {
 
   // ---- the library browser ----
 
-  libraryButton: "ImHex library…",
-  libraryButtonTitle: "Browse the 310 patterns in the ImHex pattern library",
+  libraryButton: "Library…",
+  libraryButtonTitle: "Browse the patterns in the ImHex pattern library",
   libraryTitle: "ImHex pattern library",
   libraryClose: "Close",
   libraryCloseLabel: "Close the pattern list",

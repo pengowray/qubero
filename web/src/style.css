@@ -5677,6 +5677,27 @@ summary.kp-group-heading:hover {
   background: var(--panel);
 }
 
+/* The ImHex panel's toolbar carries one control more than the .ksy one. The
+   two buttons stay on one line, since a wrapped one would make this column's
+   bar taller than the two beside it, and the file name gives up the room: it
+   keeps enough to read the first characters, and its tooltip has the rest. */
+.kp-library-open {
+  white-space: nowrap;
+}
+.kp-hexpat .kp-bar {
+  overflow: hidden;
+}
+.kp-hexpat .kp-name {
+  min-width: 3rem;
+}
+/* Wide enough for its own placeholder and no wider: a `select` sizes itself to
+   its longest option, and these are a format name and a whole description. */
+.kp-hexpat .kp-bundled {
+  flex: 0 0 auto;
+  width: 10.5rem;
+  max-width: 10.5rem;
+}
+
 /* ---- ImHex patterns: the files one still needs ---- */
 /* Above the report, because until these are here the report is about a pattern
    that stopped part way. Warn-coloured heading for the same reason the gap
@@ -5729,9 +5750,11 @@ summary.kp-group-heading:hover {
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--fg);
-  display: flex;
   flex-direction: column;
 }
+/* Only when open. A `display` on the element itself would override the
+   browser's own `display: none` for a closed dialog, and the closed dialog
+   would go on swallowing clicks meant for the panel behind it. */
 .kp-lib[open] {
   display: flex;
 }
@@ -5813,8 +5836,11 @@ summary.kp-group-heading:hover {
   font: 11px var(--sans);
   white-space: nowrap;
 }
+/* Converting whole is the ordinary case, so it is quiet. The colour is spent
+   on the count of what a pattern loses, which is the deviation a reader is
+   looking for; the words say which state it is either way. */
 .kp-lib-state.is-whole {
-  color: var(--ok, var(--muted));
+  color: var(--muted);
 }
 .kp-lib-state.is-gaps {
   color: var(--warn);
@@ -6261,8 +6287,14 @@ summary.kp-group-heading:hover {
   padding: 6px 8px;
   color: var(--muted);
 }
+/* The two converters, side by side under the template list. They are the same
+   kind of thing and go to the same place, so they sit together and wrap
+   together rather than one being made to look like the main one. */
 .set-foot {
   margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* A folder's files. On the page before any of them is open, and laid over the
