@@ -7,6 +7,7 @@ use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
 use qubero_core::eval::{leap_seconds, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
+use qubero_core::hexpat::Includes as _;
 use qubero_core::textview;
 use qubero_core::source::Source;
 use qubero_core::{diescript, dosbasic};
@@ -86,6 +87,10 @@ struct Sheet {
     /// What the last `.ksy` conversion had to say, as the JSON the panel
     /// shows. Empty for a template that did not come from a `.ksy`.
     ksy_report: String,
+    /// The same for the last `.hexpat`. The two are kept apart rather than
+    /// sharing one slot with a tag, because each panel asks its own question
+    /// and an empty answer is how it knows the template is not its own.
+    hexpat_report: String,
 }
 
 impl Sheet {
@@ -157,6 +162,7 @@ impl Sheet {
             kinds: None,
             census: None,
             ksy_report: String::new(),
+            hexpat_report: String::new(),
         }
     }
 }
@@ -1933,6 +1939,205 @@ fn ksy_report_dto(report: &qubero_core::ksy::Report, name: &str) -> KsyReportDto
     }
 }
 
+// ---- ImHex patterns ----
+
+/// What a `.hexpat` the reader pasted in resolves its `#include`s and
+/// `import`s against: the files they supplied alongside it, then the bundled
+/// patterns, and then the declaration-only table the core keeps.
+///
+/// The upstream `includes/` tree is GPL-2.0 and is not here, so a pattern that
+/// asks for a file nothing can answer for has to be told which file to hand
+/// over. That is what `asked` records: every path this was asked for and could
+/// not answer, which the panel turns into a box to paste that file into.
+struct PastedIncludes {
+    files: qubero_core::hexpat::MapIncludes,
+    asked: std::cell::RefCell<Vec<String>>,
+}
+
+impl qubero_core::hexpat::Includes for PastedIncludes {
+    fn load(&self, path: &str) -> Option<String> {
+        if let Some(text) = self.files.load(path) {
+            return Some(text);
+        }
+        if let Some(text) = qubero_core::hexpat::bundled::BundledIncludes.load(path) {
+            return Some(text);
+        }
+        let mut asked = self.asked.borrow_mut();
+        if !asked.iter().any(|p| p == path) {
+            asked.push(path.to_string());
+        }
+        None
+    }
+}
+
+impl PastedIncludes {
+    fn new(files: std::collections::HashMap<String, String>) -> Self {
+        PastedIncludes {
+            files: qubero_core::hexpat::MapIncludes(files),
+            asked: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The paths this could not answer for and the core's own table cannot
+    /// either, which is what the reader still has to supply.
+    fn missing(&self) -> Vec<String> {
+        self.asked
+            .borrow()
+            .iter()
+            .filter(|path| qubero_core::hexpat::includes::builtin(&strip_pat(path)).is_none())
+            .cloned()
+            .collect()
+    }
+}
+
+/// A path with its `.pat` or `.hexpat` off, which is the form the two spellings
+/// of an include agree on.
+fn strip_pat(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    for extension in [".hexpat", ".pat"] {
+        if let Some(stem) = path.strip_suffix(extension) {
+            return stem.to_string();
+        }
+    }
+    path
+}
+
+/// Every `#include` and `import` written in a pattern, as the resolver would
+/// see the path, minus the ones already answered for.
+///
+/// Parsing stops at the first path it cannot find, so the recorder alone would
+/// name one file at a time and a pattern wanting four would take four rounds.
+/// This says what the file asks for up front. It is a scan and not a parse, so
+/// it sees only what this file writes: an include's own includes appear as they
+/// are supplied.
+fn hexpat_wanted(text: &str, supplied: &std::collections::HashMap<String, String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let path = if let Some(rest) = line.strip_prefix("#include") {
+            let rest = rest.trim();
+            rest.strip_prefix('<')
+                .and_then(|r| r.split('>').next())
+                .or_else(|| rest.strip_prefix('"').and_then(|r| r.split('"').next()))
+                .map(|p| p.trim().to_string())
+        } else if let Some(rest) = line.strip_prefix("import ") {
+            // `import std.mem;`, and `import * from fs.mbr as MBR;`, which
+            // names its file after the `from`.
+            let rest = rest.trim().trim_end_matches(';');
+            let rest = rest.split(" as ").next().unwrap_or(rest).trim();
+            let rest = rest.rsplit(" from ").next().unwrap_or(rest).trim();
+            if rest.is_empty() || rest.contains(' ') {
+                None
+            } else {
+                Some(rest.replace('.', "/"))
+            }
+        } else {
+            None
+        };
+        let Some(path) = path else { continue };
+        let key = strip_pat(&path);
+        if qubero_core::hexpat::includes::builtin(&key).is_some() {
+            continue;
+        }
+        if qubero_core::hexpat::bundled::BundledIncludes.load(&path).is_some() {
+            continue;
+        }
+        if supplied.keys().any(|name| strip_pat(name) == key) {
+            continue;
+        }
+        if !out.iter().any(|p| *p == path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// What a `.hexpat` conversion said, or what was wrong with the pattern, in the
+/// panel's terms.
+///
+/// `missing` is the include files the pattern asks for and nothing here has.
+/// It comes back with a failure and with a success alike, because a pattern can
+/// convert without one of its includes and be the poorer for it.
+#[derive(Serialize)]
+struct HexpatReportDto {
+    /// The name the template goes by once it is in use.
+    name: String,
+    fields: Vec<KsyLineDto>,
+    gaps: Vec<KsyLineDto>,
+    notes: Vec<KsyLineDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    missing: Vec<String>,
+}
+
+/// A conversion done for the panel and thrown away: the report, and the
+/// template it produced written out as text.
+#[derive(Serialize)]
+struct HexpatPreviewDto {
+    report: HexpatReportDto,
+    text: String,
+}
+
+/// A failed conversion, with the include files the pattern wanted. The message
+/// leads with the line and column, which is where the panel puts it.
+#[derive(Serialize)]
+struct HexpatFailedDto {
+    message: String,
+    missing: Vec<String>,
+}
+
+/// The failure envelope for the two `.hexpat` entries.
+///
+/// The shared [`Reply::Error`] carries a message and nothing else, and an
+/// include file the pattern is waiting for is not a message: it is a thing for
+/// the reader to hand over. Flattened, so a caller reading `status` and
+/// `message` sees exactly what it sees from every other entry.
+#[derive(Serialize)]
+struct HexpatFailedReply {
+    status: &'static str,
+    #[serde(flatten)]
+    node: HexpatFailedDto,
+}
+
+fn hexpat_report_dto(
+    report: &qubero_core::report::Report,
+    name: &str,
+    missing: Vec<String>,
+) -> HexpatReportDto {
+    let line = |path: &str, source: &str, message: &str| KsyLineDto {
+        path: path.to_string(),
+        source: source.to_string(),
+        message: message.to_string(),
+    };
+    HexpatReportDto {
+        name: name.to_string(),
+        fields: report.fields.iter().map(|f| line(&f.path, &f.source, &f.message)).collect(),
+        gaps: report.gaps.iter().map(|g| line(&g.path, &g.source, &g.reason)).collect(),
+        notes: report.notes.iter().map(|n| line(&n.path, &n.source, &n.message)).collect(),
+        missing,
+    }
+}
+
+/// The error as the panel shows it: `line:col: what was wrong`, with the file
+/// named only when it is not the one in the box.
+fn hexpat_error(error: &qubero_core::hexpat::HexpatError, name: &str) -> String {
+    if error.file.is_empty() || error.file == name {
+        format!("{}: {}", error.pos, error.message)
+    } else {
+        format!("{} {}: {}", error.file, error.pos, error.message)
+    }
+}
+
+/// The name a converted pattern goes by: what the caller passed, or `pattern`
+/// for a paste with no file behind it.
+fn hexpat_name(name: &str) -> String {
+    let name = name.trim().trim_end_matches(".hexpat").trim_end_matches(".pat").trim();
+    if name.is_empty() {
+        "pattern".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "status")]
 enum Reply<T: Serialize> {
@@ -3228,7 +3433,19 @@ impl Editor {
                 ext: ksy_extensions(entry.text),
                 magic: entry.signature.iter().map(|(at, bytes)| (*at, bytes.iter().map(|b| format!("{b:02x}")).collect())).collect(),
             });
-        serde_json::to_string(&builtins.chain(kaitai).collect::<Vec<_>>()).unwrap_or_default()
+        let imhex = qubero_core::hexpat::bundled::all()
+            .iter()
+            .filter(|entry| entry.offered)
+            .map(|entry| TemplateChoiceDto {
+                name: entry.name.to_string(),
+                title: entry.title.to_string(),
+                source: "hexpat",
+                // An ImHex pattern says nothing about file extensions; what it
+                // says about the files it is for is its magic.
+                ext: Vec::new(),
+                magic: entry.signature.iter().map(|(at, bytes)| (*at, bytes.iter().map(|b| format!("{b:02x}")).collect())).collect(),
+            });
+        serde_json::to_string(&builtins.chain(kaitai).chain(imhex).collect::<Vec<_>>()).unwrap_or_default()
     }
 
     /// The template in use, written out as text: every type, every field and
@@ -3294,10 +3511,12 @@ impl Editor {
 
     /// Select a template by name; "" clears it. Returns false if unknown.
     ///
-    /// A name starting `ksy:` is one of the bundled Kaitai Struct formats,
-    /// converted here and now. Its conversion report is kept beside the
-    /// template, so [`ksy_report`](Self::ksy_report) answers for a bundled
-    /// format exactly as it does for a `.ksy` the reader pasted in: a bundled
+    /// A name starting `ksy:` is one of the bundled Kaitai Struct formats and
+    /// one starting `hexpat:` is one of the bundled ImHex patterns, converted
+    /// here and now. The conversion report is kept beside the template, so
+    /// [`ksy_report`](Self::ksy_report) and
+    /// [`hexpat_report`](Self::hexpat_report) answer for a bundled format
+    /// exactly as they do for a description the reader pasted in: a bundled
     /// format may have gaps, and they are only honest if they are visible.
     pub fn set_template(&mut self, name: &str) -> bool {
         // A different template may not have the stream a space came from, so
@@ -3315,23 +3534,38 @@ impl Editor {
         sh.census = None;
         sh.template = name.to_string();
         sh.ksy_report = String::new();
+        sh.hexpat_report = String::new();
         if name.is_empty() {
             sh.eval = None;
             return true;
         }
-        let template = match name.strip_prefix(qubero_core::ksy::bundled::PREFIX) {
-            Some(id) => match qubero_core::ksy::bundled::template(id) {
+        let template = if let Some(id) = name.strip_prefix(qubero_core::ksy::bundled::PREFIX) {
+            match qubero_core::ksy::bundled::template(id) {
                 Some(Ok(converted)) => {
                     sh.ksy_report =
                         serde_json::to_string(&ksy_report_dto(&converted.report, &converted.template.name)).unwrap_or_default();
                     Some(converted.template)
                 }
-                // A bundled `.ksy` that no longer converts is a broken build,
-                // not a format the reader chose wrongly; there is nothing to
-                // select and nothing useful to say here about why.
+                // A bundled description that no longer converts is a broken
+                // build, not a format the reader chose wrongly; there is
+                // nothing to select and nothing useful to say here about why.
                 Some(Err(_)) | None => None,
-            },
-            None => formats::builtin(name),
+            }
+        } else if let Some(id) = name.strip_prefix(qubero_core::hexpat::bundled::PREFIX) {
+            match qubero_core::hexpat::bundled::template(id) {
+                Some(Ok(converted)) => {
+                    sh.hexpat_report = serde_json::to_string(&hexpat_report_dto(
+                        &converted.report,
+                        &converted.template.name,
+                        Vec::new(),
+                    ))
+                    .unwrap_or_default();
+                    Some(converted.template)
+                }
+                Some(Err(_)) | None => None,
+            }
+        } else {
+            formats::builtin(name)
         };
         match template {
             Some(t) => {
@@ -3388,6 +3622,7 @@ impl Editor {
         e.set_slice(Some(WORK_SLICE));
         sh.eval = Some(e);
         sh.ksy_report = serde_json::to_string(&report).unwrap_or_default();
+        sh.hexpat_report = String::new();
         serde_json::to_string(&Reply::Ok { node: report, wanted: Vec::new() }).unwrap_or_default()
     }
 
@@ -3431,6 +3666,117 @@ impl Editor {
         };
         let node = KsyPreviewDto {
             report: ksy_report_dto(&converted.report, &converted.template.name),
+            text: qubero_core::template_text::render(&converted.template),
+        };
+        serde_json::to_string(&Reply::Ok { node, wanted: Vec::new() }).unwrap_or_default()
+    }
+
+    /// Convert an ImHex pattern and read the file with what comes out.
+    ///
+    /// `includes_json` is a JSON object mapping an include path such as
+    /// `std/mem.pat` to the text of that file, for a pattern that includes one
+    /// Qubero does not have; `{}` where it needs none. `name` is what the
+    /// template goes by afterwards, which is the file's name where it has one.
+    ///
+    /// What comes back is the usual reply envelope. `ok` carries the conversion
+    /// report; `error` carries `line:col` and what was wrong there, plus the
+    /// include paths the pattern asks for and nothing here can answer.
+    ///
+    /// The report is worth reading even on success. The ImHex pattern language
+    /// has an imperative half that no template can hold, and every piece of it
+    /// is a gap in the report with the line it came from; the field is left as
+    /// bytes rather than guessed at. See [`hexpat_report`](Self::hexpat_report).
+    pub fn set_hexpat_template(&mut self, text: &str, includes_json: &str, name: &str) -> String {
+        let map = match ksy_imports(includes_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<HexpatReportDto>::Error { message }).unwrap_or_default();
+            }
+        };
+        let wanted = hexpat_wanted(text, &map);
+        let includes = PastedIncludes::new(map);
+        let name = hexpat_name(name);
+        let converted = match qubero_core::hexpat::convert_named(&name, text, &includes) {
+            Ok(converted) => converted,
+            Err(e) => {
+                let mut missing = wanted;
+                for path in includes.missing() {
+                    if !missing.contains(&path) {
+                        missing.push(path);
+                    }
+                }
+                let node = HexpatFailedDto { message: hexpat_error(&e, &name), missing };
+                return serde_json::to_string(&HexpatFailedReply { status: "error", node }).unwrap_or_default();
+            }
+        };
+        // A different template may not have the stream a space came from; see
+        // `set_template`, which throws the same working away for the same
+        // reasons.
+        self.forget_spaces();
+        let report = hexpat_report_dto(&converted.report, &converted.template.name, includes.missing());
+        let sh = self.sm();
+        sh.disasm = None;
+        sh.bpf = None;
+        sh.bpf_complete = false;
+        sh.ne = None;
+        sh.kinds = None;
+        sh.census = None;
+        sh.template = converted.template.name.clone();
+        let mut e = Evaluator::new(converted.template);
+        e.set_slice(Some(WORK_SLICE));
+        sh.eval = Some(e);
+        sh.ksy_report = String::new();
+        sh.hexpat_report = serde_json::to_string(&report).unwrap_or_default();
+        serde_json::to_string(&Reply::Ok { node: report, wanted: Vec::new() }).unwrap_or_default()
+    }
+
+    /// The report from the last ImHex pattern converted into this space, as
+    /// JSON. Empty when the template in use did not come from one.
+    pub fn hexpat_report(&self, space: u32) -> String {
+        self.at(space).hexpat_report.clone()
+    }
+
+    /// A bundled pattern's `.hexpat`, byte for byte, by its id (the part of
+    /// `hexpat:vhd` after the colon). Empty for an id nothing here has.
+    ///
+    /// This is the file as it was copied from ImHex-Patterns, which is what the
+    /// converter panel shows a reader who asks to see the pattern behind a
+    /// shipped format.
+    pub fn bundled_hexpat_text(&self, id: &str) -> String {
+        qubero_core::hexpat::bundled::find(id).map(|b| b.text.to_string()).unwrap_or_default()
+    }
+
+    /// Convert an ImHex pattern and say what it became, without reading
+    /// anything with it. The document keeps the template it had.
+    ///
+    /// This is what the converter panel calls as the text is typed: the reply
+    /// carries the same report [`set_hexpat_template`](Self::set_hexpat_template)
+    /// gives, plus the template written out as text.
+    pub fn preview_hexpat_template(&self, text: &str, includes_json: &str, name: &str) -> String {
+        let map = match ksy_imports(includes_json) {
+            Ok(map) => map,
+            Err(message) => {
+                return serde_json::to_string(&Reply::<HexpatPreviewDto>::Error { message }).unwrap_or_default();
+            }
+        };
+        let wanted = hexpat_wanted(text, &map);
+        let includes = PastedIncludes::new(map);
+        let name = hexpat_name(name);
+        let converted = match qubero_core::hexpat::convert_named(&name, text, &includes) {
+            Ok(converted) => converted,
+            Err(e) => {
+                let mut missing = wanted;
+                for path in includes.missing() {
+                    if !missing.contains(&path) {
+                        missing.push(path);
+                    }
+                }
+                let node = HexpatFailedDto { message: hexpat_error(&e, &name), missing };
+                return serde_json::to_string(&HexpatFailedReply { status: "error", node }).unwrap_or_default();
+            }
+        };
+        let node = HexpatPreviewDto {
+            report: hexpat_report_dto(&converted.report, &converted.template.name, includes.missing()),
             text: qubero_core::template_text::render(&converted.template),
         };
         serde_json::to_string(&Reply::Ok { node, wanted: Vec::new() }).unwrap_or_default()
