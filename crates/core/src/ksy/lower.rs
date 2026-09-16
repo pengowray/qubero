@@ -22,7 +22,7 @@ use crate::template::{
 
 use super::expr::{BinOp, BoolOp, CmpOp, Expr as KExpr, TypeId, UnaryOp};
 use super::imports::Imports;
-use super::report::Report;
+use crate::report::Report;
 use super::spec::{
 	AttrSpec, ByteSource, ClassSpec, InstanceSpec, ParamSpec, ProcessSpec, RepeatSpec,
 	TypeRef, ValidSpec,

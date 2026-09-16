@@ -3,7 +3,7 @@
 //! Half of that is here so far: [`parse`] reads a `.ksy` into the [`spec`]
 //! model, which is the Kaitai compiler's own model of a format description,
 //! and the expression language it is written in is in [`expr`]. Lowering that
-//! model to the IR, and the [`report`] of what could not be expressed, comes
+//! model to the IR, and the [report](crate::report) of what could not be expressed, comes
 //! next.
 //!
 //! A `.ksy` is never kept around at run time. Once converted, a Kaitai format
@@ -18,7 +18,6 @@ pub mod bundled;
 pub mod expr;
 pub mod imports;
 pub mod lower;
-pub mod report;
 pub mod spec;
 pub mod yaml;
 
@@ -26,7 +25,7 @@ pub use bundled::{Bundled, BundledImports};
 pub use expr::Expr;
 pub use imports::{Imports, MapImports, NoImports};
 pub use lower::{convert, Converted};
-pub use report::{Became, Gap, Note, Report};
+pub use crate::report::{Became, Gap, Note, Report};
 pub use spec::ClassSpec;
 pub use yaml::KsyError;
 
