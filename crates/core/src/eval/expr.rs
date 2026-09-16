@@ -516,6 +516,31 @@ impl Evaluator {
                 // cut off before the word it promised is still worth showing.
                 hit.unwrap_or(total) as i128
             }
+            // Decode the stream in front of here to find where it stops. The
+            // bytes it comes to are dropped; a run that is opened later is
+            // decoded again, which is one inflate more than the run would
+            // otherwise cost and the price of a length nothing wrote down.
+            // Nothing measured when it will not decode, so that the template
+            // can say what the run is then.
+            Expr::StreamLen(codec) => {
+                let Some((offset, limit)) = here else { return fail("nothing to measure") };
+                if limit < offset {
+                    return fail("nothing to measure");
+                }
+                if offset % 8 != 0 {
+                    return fail("a stream that does not start on a byte");
+                }
+                // Up to the cap and no further. A stream that ends inside
+                // that is measured however long the file goes on after it;
+                // one that does not runs out of bytes and measures as
+                // nothing, the way one past the cap is refused when opened.
+                let total = ((limit - offset) / 8).min(crate::codec::CAP_BYTES as u64);
+                let data = self.read_in(doc, self.space_at(at), offset, total * 8)?;
+                match crate::codec::stream_len(*codec, &data) {
+                    Ok(n) => n as i128,
+                    Err(_) => 0,
+                }
+            }
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             // A field beside this one, and a path down into it.
             Expr::Within(field) => {

@@ -1,31 +1,38 @@
 template gzip
 
-root GZIP {
-  magic: magic 1F 8B
-  method: u8be enum Method {8 = deflate}
-  flg: u8be flags Flags {
-    bit 0 = text, bit 1 = header crc, bit 2 = extra field, bit 3 = name, bit 4 = comment
-  }
-  mtime: u32le  time unix utc unset 0
-  extra_flags: u8be enum ExtraFlags {2 = best compression, 4 = fastest}
-  os: u8be enum Os {
-    0 = fat, 1 = amiga, 2 = vms, 3 = unix, 4 = vm/cms, 5 = atari tos, 6 = hpfs, 7 = macintosh,
-    8 = z-system, 9 = cp/m, 10 = tops-20, 11 = ntfs, 12 = qdos, 13 = acorn riscos, 255 = unknown
-  }
-  extra: switch flg / 4 - flg / 8 * 2 {
-    1 => Extra {
-      length: u16le
-      data: bytes[length]
+root Gzip {
+  members: repeat(until end) GzipMember {
+    magic: magic 1F 8B
+    method: u8be enum Method {8 = deflate}
+    flg: u8be flags Flags {
+      bit 0 = text, bit 1 = header crc, bit 2 = extra field, bit 3 = name, bit 4 = comment
     }
-    _ => bytes[0]
+    mtime: u32le  time unix utc unset 0
+    extra_flags: u8be enum ExtraFlags {2 = best compression, 4 = fastest}
+    os: u8be enum Os {
+      0 = fat, 1 = amiga, 2 = vms, 3 = unix, 4 = vm/cms, 5 = atari tos, 6 = hpfs,
+      7 = macintosh, 8 = z-system, 9 = cp/m, 10 = tops-20, 11 = ntfs, 12 = qdos,
+      13 = acorn riscos, 255 = unknown
+    }
+    extra: switch flg / 4 - flg / 8 * 2 {
+      1 => Extra {
+        length: u16le
+        data: bytes[length]
+      }
+      _ => bytes[0]
+    }
+    name: switch flg / 8 - flg / 16 * 2 {1 => text until 0x00 latin1, _ => bytes[0]}
+    comment: switch flg / 16 - flg / 32 * 2 {1 => text until 0x00 latin1, _ => bytes[0]}
+    header_crc: switch flg / 2 - flg / 4 * 2 {1 => u16le, _ => bytes[0]}
+        check crc16 over everything before this field when flg / 2 - flg / 4 * 2
+    compressed: sized(streamlen(deflate) or else remaining - 8) decoded(deflate) Cut
+        (contents bytes) {
+      bytes: bytes[remaining]
+    }
+    crc32: u32le  check crc32 over unpacked compressed of original_size bytes
+    original_size: u32le
   }
-  name: switch flg / 8 - flg / 16 * 2 {1 => text until 0x00 latin1, _ => bytes[0]}
-  comment: switch flg / 16 - flg / 32 * 2 {1 => text until 0x00 latin1, _ => bytes[0]}
-  header_crc: switch flg / 2 - flg / 4 * 2 {1 => u16le, _ => bytes[0]}
-      check crc16 over everything before this field when flg / 2 - flg / 4 * 2
-  compressed: sized(remaining - 8) decoded(deflate) DecodedText (contents text) {
+  decoded: stitched(from members[].compressed, each original_size) DecodedText (contents text) {
     text: text[remaining] utf8
   }
-  crc32: u32le  check crc32 over unpacked compressed of original_size bytes
-  original_size: u32le
 }

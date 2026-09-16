@@ -139,6 +139,37 @@ pub fn inflate(data: &[u8]) -> Result<(Vec<u8>, Trace), Refusal> {
     Ok((out, b.done()))
 }
 
+/// How many bytes of `data` a raw deflate stream at the front of it takes:
+/// its blocks, up to and including the one that says it is the last, and the
+/// bits that pad that block out to a byte. What is after that is not measured
+/// and not looked at.
+///
+/// A deflate stream ends itself, and a format that writes several in a row
+/// with nothing between them but a trailer, which is what a gzip of more than
+/// one member is, gives a template no other way of finding where the second
+/// one starts. The stream is decoded to find out, and the bytes it came to
+/// are thrown away: what the caller wanted was a length, and a run that is
+/// later opened is decoded again then. That is one inflate more than the
+/// stream would otherwise cost, which is the same bargain a stitched stream
+/// makes when it measures a part with no declared length.
+///
+/// The same refusals as [`inflate`]: a stream that will not decode, or one
+/// that comes to more than [`CAP_BYTES`], has no length to give.
+pub fn inflate_len(data: &[u8]) -> Result<u64, Refusal> {
+    let mut b = TraceBuilder::default();
+    let mut out = Vec::new();
+    run(data, 0, data.len() as u64 * 8, CAP_BYTES, &mut out, &mut b)?;
+    let trace = b.done();
+    // The decoder marks whatever it did not read as one opaque step at the
+    // end; the stream ends where that begins. No such step and the stream
+    // ran to the last bit it was given.
+    let end = match trace.steps().last() {
+        Some(step) if step.kind == StepKind::Opaque => step.in_bits.start,
+        _ => trace.in_bits(),
+    };
+    Ok(end.div_ceil(8))
+}
+
 /// The same, with a step budget the tests can reach. See [`crate::codec::MAX_STEPS`].
 #[cfg(test)]
 fn inflate_within(data: &[u8], budget: usize) -> Result<(Vec<u8>, Trace), Refusal> {

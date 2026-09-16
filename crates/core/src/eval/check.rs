@@ -772,10 +772,12 @@ mod tests {
         v
     }
 
+    // A gzip is a list of members, and the fields below are the first
+    // member's: `[0, 0]` is `members[0]`.
     #[test]
     fn a_gzip_checks_its_header_and_the_file_that_went_in() {
         let mut r = Read::of("gzip", gzip(b"the contents of the file", true));
-        let head = r.at(&[], "header_crc");
+        let head = r.at(&[0, 0], "header_crc");
         let info = r.info(&head).expect("the header check is there when the flag is set");
         assert_eq!(info.algorithm, "crc16");
         assert_eq!(info.over, Some((0, 10)));
@@ -785,7 +787,7 @@ mod tests {
 
         // The trailer is over the unpacked file, which is nowhere in the gzip:
         // the run it came out of is what a reader can be sent to instead.
-        let crc = r.at(&[], "crc32");
+        let crc = r.at(&[0, 0], "crc32");
         let info = r.info(&crc).expect("the trailer checks the file");
         assert_eq!(info.over, None);
         assert!(info.unpacked_from.is_some());
@@ -798,7 +800,7 @@ mod tests {
         // The field is nothing at all, and a sum of the header against a
         // stored nothing would be a mismatch on a file that is fine.
         let mut r = Read::of("gzip", gzip(b"no header check here", false));
-        let head = r.at(&[], "header_crc");
+        let head = r.at(&[0, 0], "header_crc");
         assert_eq!(r.info(&head), None);
         assert_eq!(r.verdict(&head), None);
     }
@@ -808,9 +810,9 @@ mod tests {
         let mut broken = gzip(b"the contents of the file", true);
         broken[4] = 0x40; // the timestamp, which the header check covers.
         let mut r = Read::of("gzip", broken);
-        let head = r.at(&[], "header_crc");
+        let head = r.at(&[0, 0], "header_crc");
         assert!(!r.must(&head).ok);
-        let crc = r.at(&[], "crc32");
+        let crc = r.at(&[0, 0], "crc32");
         assert!(r.must(&crc).ok, "the file that went in has not changed");
     }
 

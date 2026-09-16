@@ -2377,6 +2377,7 @@ fn empty_struct(name: &str) -> StructDef {
 		inline: false,
 		overlap: false,
 		packed: None,
+		cut: false,
 		machinery: Vec::new(),
 		payload: Vec::new(),
 		line: Vec::new(),

@@ -357,6 +357,14 @@ impl Evaluator {
 /// the room left, it is worked out from the file, or it is a number the
 /// template wrote down.
 pub(super) fn expr_sizing(e: &Expr) -> Sizing {
+    // A run the decoder measured ends where its own bytes say, whatever the
+    // expression falls back to when the decoder cannot: `remaining - 8` is
+    // what a gzip member's run is read as when its stream will not decode,
+    // and calling the run "what is left" would send a reader looking for a
+    // trailer the run does not reach.
+    if decoder_measured(e) {
+        return Sizing::Encoded;
+    }
     let (remaining, read) = expr_reads(e);
     if remaining {
         Sizing::Remaining
@@ -399,6 +407,18 @@ fn width_in_name(ty: &Ty) -> bool {
     }
 }
 
+/// Whether a length is what a decoder found by reading the run: an
+/// [`Expr::StreamLen`], possibly with a fallback or an adjustment around it.
+fn decoder_measured(e: &Expr) -> bool {
+    match e {
+        Expr::StreamLen(_) => true,
+        Expr::Or(a, b) | Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Min(a, b) | Expr::Max(a, b) => {
+            decoder_measured(a) || decoder_measured(b)
+        }
+        _ => false,
+    }
+}
+
 /// Whether an expression measures the room left, and whether any part of it is
 /// worked out rather than written down. Both are needed at once: `remaining -
 /// 4` is a field that fills what is left, and reporting it as an expression
@@ -412,6 +432,7 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
     match e {
         Expr::Lit(_) | Expr::Real(_) => (false, false),
         Expr::Remaining => (true, false),
+        Expr::StreamLen(_) => (false, true),
         Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
