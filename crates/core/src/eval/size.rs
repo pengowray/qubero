@@ -47,6 +47,12 @@ impl Evaluator {
             elem => elem,
         };
         if let Some(f) = fixed_bits(elem) {
+            // A fixed size can still be nought: a struct of computed fields,
+            // or a run of no bytes. Counting a repeat by dividing by that is
+            // no count, so it keeps the walk, which refuses the element.
+            if f == 0 && !matches!(ty, Ty::Array { .. }) {
+                return Ok(None);
+            }
             return Ok(Some(f));
         }
         // A run of numbers packed to whatever width the header named. The
@@ -575,4 +581,13 @@ pub(super) fn uniform(e: &Expr) -> bool {
         // Sibling and Elem ask another one; SizeOf asks a field beside it.
         _ => false,
     }
+}
+
+/// The error for a run whose element takes no room. Out of line for the
+/// reason `read::not_text` is: the walk's frame is on the path the deepest
+/// nesting is measured against.
+#[cold]
+#[inline(never)]
+pub(super) fn zero_size_element<T>(r: &Resolved) -> R<T> {
+    fail(format!("{} repeats an element of zero size", r.name.text()))
 }
