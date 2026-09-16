@@ -894,6 +894,30 @@ mod tests {
         assert_eq!(stitch_of(&e, space).cache.borrow().held(), (vec![3], 3000));
     }
 
+    /// The structure a stream sits in reads as a row like any other, and
+    /// asking what that row says unpacks nothing.
+    ///
+    /// The reading of a small structure is its fields' values in order, and a
+    /// stream's value is whatever comes out of it. Walking into one to write a
+    /// line would unpack every stream the annotation column drew a row for,
+    /// which is every stream in the file as the reader scrolls past. So a
+    /// stream reads as its size, the same as any other run of bytes.
+    #[test]
+    fn the_record_a_stream_sits_in_reads_without_unpacking_it() {
+        let pieces: Vec<Vec<u8>> = (0..5).map(|i| vec![b'a' + i; 3000]).collect();
+        let d = Document::new(MemSource(bgzf_of(&pieces.iter().map(|p| p.as_slice()).collect::<Vec<_>>())));
+        let mut e = Evaluator::new(crate::formats::bgzf());
+        assert!(e.node(&d, &[]).unwrap().composite);
+        let space = match e.spaces.get(&[1]) {
+            Some(super::Opened::Space(id)) => id,
+            other => panic!("the stream did not open: {other:?}"),
+        };
+        for part in &stitch_of(&e, space).parts {
+            assert_eq!(e.spaces.get(&part.path), None, "block run {:?} was opened", part.path);
+        }
+        assert_eq!(stitch_of(&e, space).cache.borrow().peak, 0);
+    }
+
     /// A BAM of a header block and two blocks of records, the second of which
     /// is changed by `spoil` after it is written.
     fn bam_in_blocks(spoil: impl Fn(&mut Vec<u8>)) -> Vec<u8> {

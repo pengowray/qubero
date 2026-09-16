@@ -46,6 +46,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     parts: [],
     bits: null,
     opens: false,
+    inline: false,
     ...o,
   };
 }
@@ -99,6 +100,17 @@ test("a folded run says how many, a gap says it is unmapped, a one-line structur
     name: "push rbp",
     detail: "",
   });
+  // A named structure that reads on one line keeps its name: without it a
+  // TIFF entry's date sat over four bytes with nothing saying which field it
+  // was, and the four bytes are not even where the date is kept.
+  assert.deepEqual(
+    chipText({
+      span: span({ name: "value", line: "@0x9e4 · 2003:07:19 13:30:49", offset_bits: 0, size_bits: 32 }),
+      carried: false,
+      run: [],
+    }),
+    { name: "value", detail: "@0x9e4 · 2003:07:19 13:30:49" },
+  );
 });
 
 test("a carried chip is measured with the arrow its stylesheet draws", () => {

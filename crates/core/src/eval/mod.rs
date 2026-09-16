@@ -329,6 +329,16 @@ pub struct NodeInfo {
     /// describes the number the field happens to hold rather than the field,
     /// and belongs beside that value in a list of them.
     pub doc: Option<String>,
+    /// What a structure of a few fields reads as on one line, which is the
+    /// same reading the annotation column puts beside the bytes: a length and
+    /// the string it sizes read as the string, and an offset and the value it
+    /// places read as `@0x9e4 · 2003:07:19 13:30:49`.
+    ///
+    /// None for a leaf, which reads as its own value, for a list, whose
+    /// elements are a table rather than a line, and for a structure of more
+    /// fields than a line can hold. A panel with one line to spend on a
+    /// structure shows this before it falls back to counting the fields.
+    pub line: Option<String>,
 }
 
 /// What an expression reads of a field. See [`Evaluator::value_of`].
@@ -609,6 +619,11 @@ pub struct Evaluator {
     /// The types [`Ty::Schema`] nodes were built as, by kind and key, and the
     /// builds under way. See [`schema`].
     schemas: schema::Schemas,
+    /// True while [`NodeInfo::line`] is being worked out. The line is a walk
+    /// through the node's own children, and that walk asks each child for its
+    /// node: without this the answer for a structure would be the answer for
+    /// its first child, and so on down, which is a loop rather than a reading.
+    lining: bool,
 }
 
 impl Evaluator {
@@ -623,6 +638,7 @@ impl Evaluator {
             spaces: space::Spaces::default(),
             open: Vec::new(),
             schemas: schema::Schemas::default(),
+            lining: false,
         }
     }
 
@@ -826,6 +842,31 @@ impl Evaluator {
         Ok(Some(s.fields.iter().map(|f| f.name.to_string()).collect()))
     }
 
+    /// Where the one thing a pointer field holds actually sits, and how many
+    /// bytes of it there are. None for every field that is where it is
+    /// written, which is nearly all of them.
+    ///
+    /// A value that could not be read yet is no answer rather than an error:
+    /// the field keeps its own extent, which is nothing, until the bytes land.
+    fn read_elsewhere<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        r: &Resolved,
+        child_count: u64,
+    ) -> R<Option<(u64, u64)>> {
+        if !matches!(r.ty, Ty::At { .. }) || child_count != 1 {
+            return Ok(None);
+        }
+        let mut child = path.to_vec();
+        child.push(0);
+        match self.node(doc, &child) {
+            Ok(there) => Ok(Some((there.offset_bits, there.size_bits / 8))),
+            Err(e) if e.interrupted() => Err(e),
+            Err(_) => Ok(None),
+        }
+    }
+
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
@@ -840,6 +881,24 @@ impl Evaluator {
             None => reading,
         };
         let (consumed_by, mut machinery, contents) = self.in_parent(path);
+        let list = matches!(
+            r.ty.base(),
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+        );
+        // Only a structure and a pointer to one thing. The rest of what is
+        // composite is a list, whose elements are a table rather than a line,
+        // or a stream, and asking a stream what it reads as would unpack it:
+        // a panel drawing a row per field would unpack every stream in a
+        // record to write a line none of them needs.
+        let worth_a_line = matches!(r.ty.base(), Ty::Struct(_)) || matches!(r.ty, Ty::At { .. });
+        let line = self.node_line(doc, path, worth_a_line && !list, child_count)?;
+        // A field read somewhere else covers no bytes where it is written, so
+        // the value it holds is the one at the far end: a row saying `0 bytes`
+        // beside twenty bytes of text reads as the text not being there.
+        let (value_offset_bits, value_bytes) = match self.read_elsewhere(doc, path, &r, child_count)? {
+            Some(there) => there,
+            None => (reading.0 .0, reading.0 .1),
+        };
         // What the decoder read is machinery for what it produced: a reader
         // who wants the contents of a stream is not asking about its Huffman
         // tables, and a view that folds machinery should fold these.
@@ -873,8 +932,8 @@ impl Evaluator {
                 }
                 _ => None,
             },
-            value_offset_bits: reading.0 .0,
-            value_bytes: reading.0 .1,
+            value_offset_bits,
+            value_bytes,
             read_as: reading.2,
             name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
@@ -884,10 +943,8 @@ impl Evaluator {
             value,
             child_count,
             composite,
-            list: matches!(
-                r.ty.base(),
-                Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
-            ),
+            list,
+            line,
             consumed_by,
             // The braces of an object and the brackets of an array are the
             // node's own, and its members account for everything between them.

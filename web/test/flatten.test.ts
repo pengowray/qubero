@@ -76,6 +76,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     machinery: spec.machinery ?? null,
     contents: spec.contents ?? false,
     framed: spec.framed ?? false,
+    line: null,
   };
   return { node, kids };
 }

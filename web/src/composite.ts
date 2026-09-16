@@ -26,7 +26,7 @@ export const CHILD_PAGE = 12;
  *  Past either the box would be showing a fraction of a value while looking
  *  like the whole of it, which the count it replaced never did. */
 export const PREVIEW_ITEMS = 8;
-const PREVIEW_CHARS = 48;
+export const PREVIEW_CHARS = 48;
 
 /** The one value a structure was written to carry, when it has one. */
 export type Inside =

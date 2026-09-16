@@ -259,6 +259,10 @@ struct NodeDto {
     /// most of them.
     #[serde(skip_serializing_if = "Option::is_none")]
     doc: Option<String>,
+    /// What a structure of a few fields reads as on one line, the same reading
+    /// the annotation column puts beside the bytes. Null for a leaf, for a
+    /// list, and for a structure too long to read on a line.
+    line: Option<String>,
 }
 
 /// One element of a folded run, as the value table draws it.
@@ -2272,6 +2276,10 @@ struct SpanDto {
     bits: Option<BitRolesDto>,
     /// These bytes are a document of their own and can be opened as one.
     opens: bool,
+    /// The template wrote this structure to hold one value in several fields,
+    /// so the name it gave the structure is the template's own bookkeeping and
+    /// is not shown to a reader.
+    inline: bool,
 }
 
 /// The bit split of one variable-length number, in the order it is stored.
@@ -2347,6 +2355,7 @@ fn span_dto(s: Span) -> SpanDto {
         sample: s.sample,
         parts: s.parts.into_iter().map(span_part_dto).collect(),
         opens: s.opens,
+        inline: s.inline,
         bits: s.bits.map(|b| BitRolesDto {
             rule: b.rule,
             groups: b
@@ -2454,6 +2463,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         joined: n.joined,
         absent: n.absent,
         doc: n.doc,
+        line: n.line,
     }
 }
 

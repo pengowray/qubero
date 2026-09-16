@@ -2873,8 +2873,27 @@ export const PROPERTIES = {
    * is over the file or it does not run, and a search that does not run
    * leaves no row.
    */
+  /**
+   * The clause under the Points to row: which field is read at that address,
+   * and what it says there.
+   *
+   * The address is the row's own answer and is a place to go. The clause is
+   * what saves the going: `values · 2003:07:19 13:30:49` says the four bytes
+   * under the cursor are where a date is kept, which is the question a reader
+   * who has stopped on a pointer is asking. The separator is the one the
+   * annotation column uses between a name and what it holds, so the row and
+   * the chip over the same bytes read the same way.
+   */
+  pointsTo: {
+    target: (field: string, value: string): string => (value === "" ? field : `${field} · ${value}`),
+  },
+
   readBy: {
     found: (n: number): string => (n === 0 ? "none" : countText(n, "field")),
+    /** The collapsed answer where one field reads this one: which field, and
+     *  what it took from it. A bare `1 field` makes the reader open the row to
+     *  learn a name that fits on it. */
+    one: (name: string, role: string): string => `${name} (${roleLabel(role).toLowerCase()})`,
     /** One row of the expansion, before the field's name, which is a link:
      *  `length of` data. A phrase rather than a column of role words, because
      *  under this heading a bare `Length` reads as this field's length, and
