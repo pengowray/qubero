@@ -185,7 +185,7 @@ try {
 
   await openConverter();
   await page.waitForSelector(".kp-hexpat:not([hidden])", { timeout: 10000 });
-  await page.getByRole("button", { name: "Library…", exact: true }).click();
+  await page.getByRole("button", { name: "ImHex library…", exact: true }).click();
   await page.waitForSelector(".kp-lib[open]", { timeout: 10000 });
   await page.waitForFunction(() => document.querySelectorAll(".kp-lib-row").length > 0, { timeout: 10000 });
   const list = await page.evaluate(() => ({

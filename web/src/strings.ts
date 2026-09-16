@@ -3447,8 +3447,8 @@ export const HEXPAT = {
   openButton: "Open .hexpat…",
   openTitle: "Open a .hexpat file from this computer",
   /** The list of shipped patterns, beside the file picker. */
-  bundledPlaceholder: "Bundled pattern…",
-  bundledLabel: "Bundled pattern",
+  bundledPlaceholder: "Bundled .hexpat…",
+  bundledLabel: "Bundled .hexpat",
   bundledTitle: "One of the ImHex patterns Qubero ships with",
   bundledOption: (id: string, title: string): string => (title === "" ? id : `${id} · ${title}`),
   bundledName: (id: string): string => `${id}.hexpat (bundled)`,
@@ -3486,7 +3486,7 @@ export const HEXPAT = {
 
   // ---- the library browser ----
 
-  libraryButton: "Library…",
+  libraryButton: "ImHex library…",
   libraryButtonTitle: "Browse the patterns in the ImHex pattern library",
   libraryTitle: "ImHex pattern library",
   libraryClose: "Close",
