@@ -1217,11 +1217,20 @@ impl<'a> Lower<'a> {
 			// A lone `char` is one byte of text.
 			None => Ok(Ty::text(StrLen::Fixed(Expr::lit(if utf16 { 2 } else { 1 })), enc)),
 			// The field owns all N characters and its value is all of them,
-			// embedded NULs included; only the display trims trailing NULs.
+			// embedded NULs included: `PatternString::getValue` reads exactly
+			// `size` bytes and returns a string of that length, and the only
+			// trimming is in `formatDisplayValue`, which drops *trailing* NULs
+			// before printing.
+			//
+			// So `StrLen::Fixed`, not `StrLen::Padded`, which the plan called
+			// for. The IR's `Padded` ends the value at the *first* pad byte,
+			// which is the reading the plan itself ruled out: `char s[6]`
+			// holding `ab\0cd` would read as `ab`, and `s == "ab"` would come
+			// out true where the reference says false.
 			Some(ArraySize::Count(count)) => {
 				let count = self.expr(count)?;
 				let size = if utf16 { count.mul(Expr::lit(2)) } else { count };
-				Ok(Ty::text(StrLen::Padded { size, pad: 0 }, enc))
+				Ok(Ty::text(StrLen::Fixed(size), enc))
 			}
 			Some(ArraySize::Unbounded) => Ok(Ty::text(StrLen::Terminated { end: 0, or_end: false }, enc)),
 			// The IR's text has no condition for its length, and a run of

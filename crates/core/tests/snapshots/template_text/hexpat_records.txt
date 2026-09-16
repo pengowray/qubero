@@ -1,0 +1,28 @@
+template pattern
+
+root pattern (machinery magic) {
+  // A run of tagged records
+  magic: magic "REC"  aside
+  file: at(0 from file) File
+}
+
+type File {
+  magic: text[3] ascii
+  records: repeat(until end) Record
+}
+
+type Kind = u8be enum Kind {0 = Empty, 1 = Text, 16 = Numbers, 17 = Numbers, 18 = Numbers}
+
+type Record (machinery if_1 else_2) {
+  kind: Kind
+  length: u16be
+  if_1: optional(when kind == 1) if_1 (inline) {
+    text: text[length] ascii
+  }
+  else_2: optional(when not (kind == 1)) else_2 (inline) {
+    numbers: u32be[length]
+  }
+}
+
+report
+  note 8:2 Kind::Numbers = 16 ... 18: 3 values, each named Numbers
