@@ -21,7 +21,7 @@ import type { ArchiveSumSlot } from "./sumjob.ts";
 import { anyStored, clauseStored, readShown, storedLine, templateLine, writeShown, type StoredLine } from "./storedpath.ts";
 import { trailItems } from "./trail.ts";
 import { instantDigits } from "./instant.ts";
-import { CHILD_PAGE, insideValue, PREVIEW_ITEMS, type Inside } from "./composite.ts";
+import { CHILD_PAGE, insideValue, PREVIEW_CHARS, PREVIEW_ITEMS, type Inside } from "./composite.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { withPictures } from "./textview.ts";
@@ -1051,7 +1051,8 @@ export class Inspector {
     // are looking at looks at the value first and the line under it next.
     const inside = n.space === 0 ? "" : ` ${n.joined ? JOINED.inside : DECODED_INSIDE}`;
     this.detail.replaceChildren(at, inside);
-    this.shape.textContent = `${n.type} · ${bitSizeText(n.size_bits)}`;
+    const named = typeText(n);
+    this.shape.textContent = named === "" ? bitSizeText(n.size_bits) : `${named} · ${bitSizeText(n.size_bits)}`;
     this.shape.hidden = false;
     // The formula reads bytes of the file by address. There is no address of
     // the file for these bytes, so there is no formula to write.
@@ -1900,13 +1901,18 @@ export class Inspector {
       // compression` alone sends them to the field to find out which case this
       // was. Two fields and there is no value to show, only a count.
       const clause = one === null ? this.fromHow(decided) : { text: PROPERTIES.typeFrom(one.label, one.value), path: one.path, stored: one.stored };
+      // A structure the template wrote to hold one value in several fields has
+      // no name to put here: `Elsewhere` is the template's bookkeeping and not
+      // a word the format uses. The clause under the row still says which
+      // field settled the shape, which is what the row is for.
+      const named = typeText(n);
       out.push({
         key: `${prefix}type`,
         label: PROPERTIES.row.type,
-        value: n.type,
+        value: named,
         bit: null,
         how: clause,
-        detail: this.working(["type", "condition"], from, how, n.type, clause),
+        detail: this.working(["type", "condition"], from, how, named, clause),
       });
     }
     if (said_(["count"])) {
@@ -1962,7 +1968,10 @@ export class Inspector {
         label: PROPERTIES.row.pointsTo,
         value: formatOffset(o.target_bits ?? 0),
         bit: o.target_bits,
-        how: { text: o.label, path: null, stored: null },
+        // Which field is read there, and what it says. An address alone is
+        // somewhere to go; the reader who wanted to know what is there had to
+        // go there to find out.
+        how: { text: PROPERTIES.pointsTo.target(o.label, o.value), path: null, stored: null },
         detail: [],
       });
     }
@@ -2412,6 +2421,7 @@ export class Inspector {
     if (found === null) return null;
     const { graph, self } = found;
     const rows: Node[] = [];
+    const named: { readonly name: string; readonly role: string }[] = [];
     const seen = new Set<string>();
     for (const e of graph.edges) {
       // A `points` edge is the pointer this field holds, and the Points to row
@@ -2423,6 +2433,7 @@ export class Inspector {
       const at = `${e.role} ${to.path.join("/")}`;
       if (seen.has(at)) continue;
       seen.add(at);
+      named.push({ name: to.name, role: e.role });
       rows.push(usedRow(e.role, to.name, to.path));
     }
     // Most fields are read by nothing, so the row was on nearly every field
@@ -2437,10 +2448,13 @@ export class Inspector {
     // template has wrong. That is the one place where "none" is a finding
     // rather than the norm.
     if (rows.length === 0 && !this.isMachinery(path)) return null;
+    // One reader fits on the row, so it goes there rather than behind the
+    // triangle: `1 field` is a row that exists to make the reader open it.
+    const one = named.length === 1 ? (named[0] as { name: string; role: string }) : null;
     return {
       key: `${prefix}readby`,
       label: PROPERTIES.row.readBy,
-      value: PROPERTIES.readBy.found(rows.length),
+      value: one === null ? PROPERTIES.readBy.found(rows.length) : PROPERTIES.readBy.one(one.name, one.role),
       bit: null,
       how: null,
       detail: rows,
@@ -2630,6 +2644,13 @@ export class Inspector {
       if (inside?.kind === "row") return { text: inside.text, count: false };
       if (inside?.kind === "payload") return { text: inside.node.value, count: false };
     }
+    // What the annotation column would say over these bytes, which is a
+    // reading and not a count: `2 fields` is what the panel says when it has
+    // nothing better, and a structure of an offset and the value it places
+    // has something better. The count comes back for a structure with no
+    // reading, and for one whose reading is too long to sit in the column.
+    const line = kid.line ?? "";
+    if (line !== "" && line.length <= PREVIEW_CHARS) return { text: line, count: false };
     return { text: countText(kid.child_count, childWord(kid)), count: true };
   }
 
@@ -2755,8 +2776,8 @@ export class Inspector {
     this.field.readOnly = !n.editable || row !== null;
     this.field.classList.remove("invalid");
     this.field.value = row ?? (n.composite ? "" : n.edit_text);
-    this.field.placeholder = n.composite && row === null ? countText(n.child_count, childWord(n)) : "";
-    this.field.setAttribute("aria-label", `${n.name}, ${n.type}`);
+    this.field.placeholder = n.composite && row === null ? structText(n) : "";
+    this.field.setAttribute("aria-label", ariaLabel(n));
   }
 
   /**
@@ -2774,7 +2795,7 @@ export class Inspector {
     this.note.title = "";
     if (this.area.dataset["dirty"] === "1" && document.activeElement === this.area) return;
     this.area.classList.remove("invalid");
-    this.area.setAttribute("aria-label", `${owner.name}, ${n.type}`);
+    this.area.setAttribute("aria-label", ariaLabel({ ...n, name: owner.name }));
     this.area.placeholder = "";
     const shown = n.kind === "str" ? this.readText(n) : this.readHex(n);
     if (shown === null) {
@@ -3084,6 +3105,43 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 }
 
+/** A structure's own line in the box the value would have gone in: what it
+ *  reads as, where a line says more than a count of its fields, and how many
+ *  fields it has where it does not. */
+function structText(n: TemplateNode): string {
+  const line = n.line ?? "";
+  return line !== "" && line.length <= PREVIEW_CHARS ? line : countText(n.child_count, childWord(n));
+}
+
+/** How a screen reader is told which field this is. The type is dropped for a
+ *  structure with no name a reader could look up, the same as on screen. */
+function ariaLabel(n: TemplateNode): string {
+  const named = typeText(n);
+  return named === "" ? n.name : `${n.name}, ${named}`;
+}
+
+/**
+ * What to call the shape of a field, where the panel names one.
+ *
+ * Empty for a structure the template wrote to hold one value in several
+ * fields. The name on such a structure is the template's own bookkeeping:
+ * `Elsewhere` is not a word the TIFF specification uses, nobody reading a
+ * file can look it up, and the panel saying it where it usually says `u32 be`
+ * offers it as if they could. The field's own name is above it and the
+ * reading is beside it, which is the whole of what there is to say.
+ */
+function typeText(n: TemplateNode): string {
+  return n.composite && n.inline ? "" : n.type;
+}
+
+/** How many bytes a child's row says it holds: the bytes it covers, or for a
+ *  field read somewhere else, the bytes at the other end. The field itself is
+ *  four bytes of address and none of value, and `0 bytes` beside a date reads
+ *  as the date not being there. */
+function kidSize(kid: TemplateNode): number {
+  return kid.size_bits === 0 && kid.value_bytes > 0 ? kid.value_bytes * 8 : kid.size_bits;
+}
+
 /** One child of the structure at the cursor: what it is called, what it holds,
  *  and how long it is. A structure of its own holds a count, drawn as the box
  *  draws one so a count is never read as a value. */
@@ -3093,7 +3151,7 @@ function kidRow(kid: TemplateNode, holds: { readonly text: string; readonly coun
   row.append(el("span", `insp-kid-name ${fieldClass(kid.kind)}`, kid.name));
   const value = el("span", `insp-kid-value${holds.count ? " insp-kid-count" : ""}`, holds.text);
   value.title = holds.text;
-  row.append(value, el("span", "insp-kid-size", bitSizeText(kid.size_bits)));
+  row.append(value, el("span", "insp-kid-size", bitSizeText(kidSize(kid))));
   return row;
 }
 

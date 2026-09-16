@@ -10,11 +10,11 @@ import { trailItems, type TrailNode } from "../src/trail.ts";
 
 /** A composite node. Lists and structures differ only in `list`. */
 function composite(name: string, type: string, list: boolean, child_count = 2, size_bits = 64): TrailNode {
-  return { name, type, composite: true, list, size_bits, child_count };
+  return { name, type, composite: true, list, size_bits, child_count, inline: false };
 }
 
 function leaf(name: string, type: string): TrailNode {
-  return { name, type, composite: false, list: false, size_bits: 8, child_count: 0 };
+  return { name, type, composite: false, list: false, size_bits: 8, child_count: 0, inline: false };
 }
 
 /** Answers for the prefixes of one path, from a table keyed by the prefix. */
@@ -72,6 +72,17 @@ test("a structure is not folded, whatever its type is called", () => {
     "1/0": leaf("x", "u8"),
   };
   assert.deepEqual(labels([1, 0], nodes), ["file (Thing)", "body (Body)", "x"]);
+});
+
+test("a value written as several fields is named for the field, not for the structure", () => {
+  // The structure is the template's way of writing one value in two fields,
+  // and the name it gave it is a name no reader of the format has met.
+  const nodes = {
+    "": composite("file", "Tiff", false),
+    "4": { ...composite("value", "Elsewhere", false), inline: true },
+    "4/0": leaf("offset", "u32 be"),
+  };
+  assert.deepEqual(labels([4, 0], nodes), ["file (Tiff)", "value", "offset"]);
 });
 
 test("a list that is where the trail ends is a crumb of its own", () => {

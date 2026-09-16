@@ -260,6 +260,13 @@ export type TemplateNode = {
    *  structure it is. Absent for a field nobody wrote prose for, which is most
    *  of them. Nothing renders it yet. */
   readonly doc?: string;
+  /** What a structure of a few fields reads as on one line, which is the same
+   *  reading the annotation column puts beside the bytes: a length and the
+   *  string it sizes read as the string, and an offset and the value it places
+   *  read as `@0x9e4 · 2003:07:19 13:30:49`. Null for a field that reads as
+   *  its own value, for a list, whose elements are a table rather than a line,
+   *  and for a structure of more fields than a line can hold. */
+  readonly line: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -298,6 +305,10 @@ export type Span = {
    *  or the contents of one. What the annotation column marks so a reader
    *  running down the bytes can see there is a file in front of them. */
   readonly opens: boolean;
+  /** The template wrote this structure to hold one value in several fields, so
+   *  the name it gave the structure is its own bookkeeping: `Elsewhere` is not
+   *  a word the TIFF specification uses, and nothing shows it to a reader. */
+  readonly inline: boolean;
 };
 
 /** One element of a folded run, for the value table beside the bytes. A span
