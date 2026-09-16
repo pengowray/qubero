@@ -5,54 +5,154 @@ root TarArchive {
     0 => TarEndBlock {
       zeros: bytes[512]
     }
-    _ => TarEntry (named by name, contents data, unit entry) {
-      name: text[100] padded with 0x00 utf8
-      mode: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
+    _ => switch peek(u8be at 1248 bits) {
+      83 => TarSparseEntry (named by name, contents data, unit entry) {
+        name: text[100] padded with 0x00 utf8
+        mode: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        uid: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        gid: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        size: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        mtime: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }  time unix utc
+        checksum: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }  check sum over 512 bytes at 0 blanking 0x20
+        typeflag: u8be enum TarType {
+          0 = file, 48 = file, 49 = hard link, 50 = symbolic link, 51 = character device,
+          52 = block device, 53 = directory, 54 = fifo, 55 = contiguous file,
+          103 = pax global header, 120 = pax header, 76 = gnu long name,
+          75 = gnu long link name, 83 = gnu sparse file, 68 = gnu dump directory,
+          77 = gnu multi-volume continuation, 86 = gnu volume header
+        }
+        linkname: text[100] padded with 0x00 utf8
+        magic: text[6] padded with 0x00 utf8
+        version: text[2] padded with 0x00 utf8
+        uname: text[32] padded with 0x00 utf8
+        gname: text[32] padded with 0x00 utf8
+        devmajor: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        devminor: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        atime: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        ctime: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        offset: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        longnames: bytes[4]
+        unused: bytes[1]
+        sparse: TarSparseChunk {
+          offset: switch peek(u8be) {
+            0 => bytes[12]
+            _ => sized(12) text token ending at 00 20 base 8 as number
+          }
+          numbytes: switch peek(u8be) {
+            0 => bytes[12]
+            _ => sized(12) text token ending at 00 20 base 8 as number
+          }
+        }[4]
+        isextended: u8be
+        realsize: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        header_padding: bytes[17]
+        extensions: switch isextended {
+          0 => bytes[0]
+          _ => repeat(until isextended == 0) TarSparseExtension {
+            sparse: TarSparseChunk {
+              offset: switch peek(u8be) {
+                0 => bytes[12]
+                _ => sized(12) text token ending at 00 20 base 8 as number
+              }
+              numbytes: switch peek(u8be) {
+                0 => bytes[12]
+                _ => sized(12) text token ending at 00 20 base 8 as number
+              }
+            }[21]
+            isextended: u8be
+            padding: bytes[7]
+          }
+        }
+        data: bytes[size]
+        padding: bytes[padding(size, 512)]
       }
-      uid: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
+      _ => TarEntry (named by name, contents data, unit entry) {
+        name: text[100] padded with 0x00 utf8
+        mode: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        uid: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        gid: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        size: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }
+        mtime: switch peek(u8be) {
+          0 => bytes[12]
+          _ => sized(12) text token ending at 00 20 base 8 as number
+        }  time unix utc
+        checksum: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }  check sum over 512 bytes at 0 blanking 0x20
+        typeflag: u8be enum TarType {
+          0 = file, 48 = file, 49 = hard link, 50 = symbolic link, 51 = character device,
+          52 = block device, 53 = directory, 54 = fifo, 55 = contiguous file,
+          103 = pax global header, 120 = pax header, 76 = gnu long name,
+          75 = gnu long link name, 83 = gnu sparse file, 68 = gnu dump directory,
+          77 = gnu multi-volume continuation, 86 = gnu volume header
+        }
+        linkname: text[100] padded with 0x00 utf8
+        magic: text[6] padded with 0x00 utf8
+        version: text[2] padded with 0x00 utf8
+        uname: text[32] padded with 0x00 utf8
+        gname: text[32] padded with 0x00 utf8
+        devmajor: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        devminor: switch peek(u8be) {
+          0 => bytes[8]
+          _ => sized(8) text token ending at 00 20 base 8 as number
+        }
+        prefix: text[155] padded with 0x00 utf8
+        header_padding: bytes[12]
+        data: bytes[size]
+        padding: bytes[padding(size, 512)]
       }
-      gid: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
-      }
-      size: switch peek(u8be) {
-        0 => bytes[12]
-        _ => sized(12) text token ending at 00 20 base 8 as number
-      }
-      mtime: switch peek(u8be) {
-        0 => bytes[12]
-        _ => sized(12) text token ending at 00 20 base 8 as number
-      }  time unix utc
-      checksum: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
-      }  check sum over 512 bytes at 0 blanking 0x20
-      typeflag: u8be enum TarType {
-        0 = file, 48 = file, 49 = hard link, 50 = symbolic link, 51 = character device,
-        52 = block device, 53 = directory, 54 = fifo, 55 = contiguous file,
-        103 = pax global header, 120 = pax header, 76 = gnu long name, 75 = gnu long link name
-      }
-      linkname: text[100] padded with 0x00 utf8
-      magic: text[6] padded with 0x00 utf8
-      version: text[2] padded with 0x00 utf8
-      uname: text[32] padded with 0x00 utf8
-      gname: text[32] padded with 0x00 utf8
-      devmajor: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
-      }
-      devminor: switch peek(u8be) {
-        0 => bytes[8]
-        _ => sized(8) text token ending at 00 20 base 8 as number
-      }
-      prefix: text[155] padded with 0x00 utf8
-      header_padding: bytes[12]
-      data: bytes[size]
-      padding: bytes[padding(size, 512)]
     }
   }
 }
