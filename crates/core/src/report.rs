@@ -1,4 +1,7 @@
-//! What the conversion did, said out loud.
+//! What a conversion did, said out loud.
+//!
+//! Shared by every converter that reads a format description into the IR: the
+//! Kaitai one in [`crate::ksy`] and the ImHex pattern one in [`crate::hexpat`].
 //!
 //! The report is as much the deliverable as the template. For every field it
 //! says what the field became; for anything the IR cannot express it gives the
@@ -11,7 +14,7 @@
 //! string compared as its bytes read big-endian is still the same comparison,
 //! but a reader looking at the IR would not guess where the number came from.
 //!
-//! This file is the shape only. The lowering fills it in.
+//! This file is the shape only. Each lowering fills it in.
 
 /// Everything the conversion has to say.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -27,9 +30,10 @@ pub struct Report {
 /// A field, and what it turned into.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Became {
-	/// Where in the `.ksy` this field is written, e.g. `/types/chunk/seq/2`.
+	/// Where in the source this field is written: a `.ksy` path such as
+	/// `/types/chunk/seq/2`, or a `.hexpat` line and column.
 	pub path: String,
-	/// The `.ksy` text this is about: the type string, the expression, the key.
+	/// The source text this is about: the type, the expression, the key.
 	pub source: String,
 	/// What it became, in the IR's own words.
 	pub message: String,
@@ -92,7 +96,7 @@ impl Report {
 		});
 	}
 
-	/// Whether the whole `.ksy` was expressed. A report with notes is still
+	/// Whether the whole description was expressed. A report with notes is still
 	/// clean; a report with gaps is not.
 	pub fn is_complete(&self) -> bool {
 		self.gaps.is_empty()

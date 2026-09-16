@@ -1,0 +1,27 @@
+template pattern
+
+root pattern {
+  head: at(0 from file) Head
+}
+
+type Colour (overlap) {
+  packed: u32le
+  channels: u8be[4]
+}
+
+type Flags = sizedbits(8) Flags (inline, machinery padding) {
+  visible: u1le
+  weight: i3le
+  padding: u4le
+}
+
+type Head {
+  flags: Flags
+  colour: Colour
+  label: label (inline) {
+    offset: u16le
+    target: at(offset from file) u16le
+  }
+}
+
+report

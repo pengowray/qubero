@@ -27,6 +27,7 @@ pub mod machinery;
 pub mod magicrule;
 pub mod overview;
 pub mod piece;
+pub mod report;
 pub mod riscv;
 pub mod save;
 pub mod search;

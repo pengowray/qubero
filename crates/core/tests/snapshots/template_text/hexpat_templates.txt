@@ -1,0 +1,30 @@
+template pattern
+
+root pattern {
+  head: at(0 from file) Head
+}
+
+type Head (machinery doubled chosen) {
+  count: u8be
+  doubled: computed count * 2
+  pair: Run
+  triple: Run#2
+  chosen: switch count {
+    0 => case_1 (inline) {
+      none: u8be
+    }
+    _ => case_2 (inline) {
+      some: u8be
+    }
+  }
+}
+
+type Run {
+  values: u8be[2]
+}
+
+type Run#2 {
+  values: u16le[3]
+}
+
+report
