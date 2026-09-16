@@ -2365,3 +2365,1283 @@ fn blank_field(ty: TypeRef, name: String, pos: Pos) -> Field {
 		pos,
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	//! One test per case in the reference implementation's own language tests
+	//! (`~/github/PatternLanguage/tests/include/test_patterns/*.hpp`), carrying
+	//! that case's source over and asserting the shape the parser gives it.
+	//!
+	//! Shape, not values: the reference's expected *values* are the oracle for
+	//! lowering and evaluation, which are not written yet. What is checked here
+	//! is that each construct arrives as the node it should be, that the
+	//! imperative ones arrive as [`Statement`]s of the right kind, and that the
+	//! cases the reference rejects are rejected.
+
+	use super::*;
+	use crate::hexpat::expr::ExprKind;
+
+	/// A resolver over a handful of files given inline, for the `#include` and
+	/// `import` cases.
+	struct Map(Vec<(&'static str, &'static str)>);
+
+	impl Resolver for Map {
+		fn resolve(&self, path: &str) -> Option<Resolved> {
+			self.0
+				.iter()
+				.find(|(name, _)| *name == path)
+				.map(|(name, text)| Resolved { name: (*name).to_string(), text: (*text).to_string() })
+		}
+	}
+
+	fn parse_ok(src: &str) -> Program {
+		match parse(src) {
+			Ok(program) => program,
+			Err(error) => panic!("{error}"),
+		}
+	}
+
+	fn parse_files(src: &str, files: Vec<(&'static str, &'static str)>) -> Program {
+		match parse_with("main", src, &Map(files), &[]) {
+			Ok(program) => program,
+			Err(error) => panic!("{error}"),
+		}
+	}
+
+	fn parse_err(src: &str) -> HexpatError {
+		match parse(src) {
+			Ok(_) => panic!("expected this to be rejected"),
+			Err(error) => error,
+		}
+	}
+
+	/// Every declaration in the file, with the contents of namespaces
+	/// flattened in, which is how a name lookup sees them.
+	fn all_decls(program: &Program) -> Vec<&Decl> {
+		fn walk<'a>(decls: &'a [Decl], out: &mut Vec<&'a Decl>) {
+			for decl in decls {
+				out.push(decl);
+				if let Decl::Namespace(ns) = decl {
+					walk(&ns.decls, out);
+				}
+			}
+		}
+		let mut out = Vec::new();
+		walk(&program.decls, &mut out);
+		out
+	}
+
+	fn struct_named<'a>(program: &'a Program, name: &str) -> &'a StructDef {
+		all_decls(program)
+			.into_iter()
+			.find_map(|decl| match decl {
+				Decl::Struct(def) if def.name == name => Some(def),
+				_ => None,
+			})
+			.unwrap_or_else(|| panic!("no struct {name}"))
+	}
+
+	fn enum_named<'a>(program: &'a Program, name: &str) -> &'a EnumDef {
+		all_decls(program)
+			.into_iter()
+			.find_map(|decl| match decl {
+				Decl::Enum(def) if def.name == name => Some(def),
+				_ => None,
+			})
+			.unwrap_or_else(|| panic!("no enum {name}"))
+	}
+
+	fn bitfield_named<'a>(program: &'a Program, name: &str) -> &'a BitfieldDef {
+		all_decls(program)
+			.into_iter()
+			.find_map(|decl| match decl {
+				Decl::Bitfield(def) if def.name == name => Some(def),
+				_ => None,
+			})
+			.unwrap_or_else(|| panic!("no bitfield {name}"))
+	}
+
+	fn using_named<'a>(program: &'a Program, name: &str) -> &'a UsingDecl {
+		let suffix = format!("::{name}");
+		all_decls(program)
+			.into_iter()
+			.find_map(|decl| match decl {
+				Decl::Using(def) if def.name == name || def.name.ends_with(&suffix) => Some(def),
+				_ => None,
+			})
+			.unwrap_or_else(|| panic!("no using {name}"))
+	}
+
+	fn placements(program: &Program) -> Vec<&Field> {
+		all_decls(program)
+			.into_iter()
+			.filter_map(|decl| match decl {
+				Decl::Placement(field) => Some(field),
+				_ => None,
+			})
+			.collect()
+	}
+
+	fn placed<'a>(program: &'a Program, name: &str) -> &'a Field {
+		placements(program)
+			.into_iter()
+			.find(|field| field.name() == name)
+			.unwrap_or_else(|| panic!("no variable {name}"))
+	}
+
+	fn functions(program: &Program) -> Vec<&FunctionDef> {
+		all_decls(program)
+			.into_iter()
+			.filter_map(|decl| match decl {
+				Decl::Function(def) => Some(def),
+				_ => None,
+			})
+			.collect()
+	}
+
+	fn field<'a>(def: &'a StructDef, name: &str) -> &'a Field {
+		def.members
+			.iter()
+			.find_map(|member| match member {
+				Member::Field(field) if field.names.iter().any(|item| item == name) => Some(field),
+				_ => None,
+			})
+			.unwrap_or_else(|| panic!("no field {name}"))
+	}
+
+	fn type_named(ty: &TypeRef) -> String {
+		match &ty.kind {
+			TypeKind::Builtin(builtin) => builtin.name().to_string(),
+			TypeKind::Named { path, .. } => path.clone(),
+		}
+	}
+
+	fn statement_kinds(program: &Program) -> Vec<StatementKind> {
+		all_decls(program)
+			.into_iter()
+			.filter_map(|decl| match decl {
+				Decl::Statement(statement) => Some(statement.kind),
+				_ => None,
+			})
+			.collect()
+	}
+
+	/* test_pattern_structs.hpp: TestPatternStructs */
+	#[test]
+	fn structs() {
+		let program = parse_ok(
+			"
+			struct TestStruct {
+				s32 variable;
+				u8 array[0x10];
+			};
+
+			TestStruct testStruct @ 0x100;
+		",
+		);
+		let def = struct_named(&program, "TestStruct");
+		assert!(!def.union);
+		assert_eq!(def.members.len(), 2);
+		assert_eq!(type_named(&field(def, "variable").ty), "s32");
+		assert!(matches!(field(def, "array").array, Some(ArraySize::Count(_))));
+
+		let placed = placed(&program, "testStruct");
+		assert_eq!(type_named(&placed.ty), "TestStruct");
+		assert!(placed.placement.is_some());
+	}
+
+	/* test_pattern_unions.hpp: TestPatternUnions */
+	#[test]
+	fn unions() {
+		let program = parse_ok(
+			"
+			union TestUnion {
+				s32 array[2];
+				if ( true ) { u128 variable; }
+			};
+
+			TestUnion testUnion @ 0x200;
+		",
+		);
+		let def = struct_named(&program, "TestUnion");
+		assert!(def.union);
+		assert_eq!(def.members.len(), 2);
+		let Member::If { then, otherwise, .. } = &def.members[1] else { panic!("expected an if") };
+		assert_eq!(then.len(), 1);
+		assert!(otherwise.is_empty());
+	}
+
+	/* test_pattern_nested_structs.hpp: TestPatternNestedStructs */
+	#[test]
+	fn nested_structs() {
+		let program = parse_ok(
+			"
+			fn end_of_body() {
+				u32 start = addressof(parent.parent.hdr);
+				u32 len = parent.parent.hdr.len;
+				u32 end = start + len;
+
+				return $ >= end;
+			};
+
+			struct Header {
+				u8 len;
+			};
+
+			struct Body {
+				u8 arr[while(!end_of_body())];
+			};
+
+			struct Data {
+				Header hdr;
+				Body body;
+			};
+
+			Data data @ 0x0;
+		",
+		);
+		// A `[while(c)]` count is its own shape, not an element count.
+		assert!(matches!(field(struct_named(&program, "Body"), "arr").array, Some(ArraySize::While(_))));
+		assert_eq!(type_named(&field(struct_named(&program, "Data"), "hdr").ty), "Header");
+
+		let def = functions(&program)[0];
+		assert_eq!(def.name, "end_of_body");
+		// A function body stays opaque, one statement per statement of it.
+		assert_eq!(
+			def.body.iter().map(|statement| statement.kind).collect::<Vec<_>>(),
+			vec![StatementKind::Local, StatementKind::Local, StatementKind::Local, StatementKind::Return]
+		);
+		assert_eq!(def.body[3].text, "return $ >= end");
+	}
+
+	/* test_pattern_struct_inheritance.hpp: TestPatternStructInheritance */
+	#[test]
+	fn struct_inheritance() {
+		let program = parse_ok(
+			"
+			struct Parent<T> {
+				T inherited;
+			};
+
+			struct Child<T> : Parent<T> {
+				T own;
+			};
+
+			Child<u32> test @ 0;
+		",
+		);
+		let child = struct_named(&program, "Child");
+		assert_eq!(child.template.len(), 1);
+		assert!(child.template[0].is_type);
+		assert_eq!(child.inherits.len(), 1);
+		assert_eq!(type_named(&child.inherits[0]), "Parent");
+
+		let TypeKind::Named { args, .. } = &placed(&program, "test").ty.kind else { panic!("expected a named type") };
+		assert!(matches!(args.as_slice(), [TemplateArg::Type(_)]));
+	}
+
+	/* test_pattern_padding.hpp: TestPatternPadding */
+	#[test]
+	fn padding() {
+		let program = parse_ok(
+			"
+			struct TestStruct {
+				s32 variable;
+				padding[20];
+				u8 array[0x10];
+			};
+
+			TestStruct testStruct @ 0x100;
+		",
+		);
+		let def = struct_named(&program, "TestStruct");
+		assert!(matches!(def.members[1], Member::Padding { size: ArraySize::Count(_), .. }));
+	}
+
+	/* test_pattern_allowed_redefinitions.hpp: TestPatternAllowedRedefinitions */
+	#[test]
+	fn allowed_redefinitions() {
+		let program = parse_ok(
+			"
+			struct S {
+				u8;
+				padding[3];
+				u8;
+				padding[3];
+			};
+		",
+		);
+		let def = struct_named(&program, "S");
+		assert_eq!(def.members.len(), 4);
+		// A nameless field is legal and keeps an empty name.
+		assert!(matches!(&def.members[0], Member::Field(field) if field.name().is_empty()));
+		assert!(matches!(def.members[3], Member::Padding { .. }));
+	}
+
+	/* test_pattern_placement.hpp: TestPatternPlacement */
+	#[test]
+	fn placement() {
+		let program = parse_ok(
+			"
+			u32 placementVar @ 0x00;
+			u8 placementArray[10] @ 0x10;
+		",
+		);
+		assert!(placed(&program, "placementVar").placement.is_some());
+		let array = placed(&program, "placementArray");
+		assert!(matches!(array.array, Some(ArraySize::Count(_))));
+		assert!(array.placement.is_some());
+	}
+
+	/* test_pattern_pointers.hpp: TestPatternPointers */
+	#[test]
+	fn pointers() {
+		let program = parse_ok(
+			"
+			u32 *placementPointer : u8 @ 0x0C;
+			u32 *pointerToArray[10] : u8 @ $;
+
+			fn Rel(u128) { return 0x1D; };
+			u32 *pointerRelativeSigned : s8 @ 0x1D [[pointer_base(\"Rel\")]];
+		",
+		);
+		let pointer = placed(&program, "placementPointer");
+		assert_eq!(type_named(&pointer.ty), "u32");
+		assert_eq!(pointer.pointer.as_ref().map(type_named), Some("u8".to_string()));
+
+		let array = placed(&program, "pointerToArray");
+		assert!(array.array.is_some());
+		assert!(array.pointer.is_some());
+
+		let based = placed(&program, "pointerRelativeSigned");
+		assert_eq!(based.attrs.len(), 1);
+		assert_eq!(based.attrs[0].path, "pointer_base");
+		assert_eq!(based.attrs[0].args.len(), 1);
+
+		// An unnamed function parameter is legal.
+		let def = functions(&program)[0];
+		assert_eq!(def.params.len(), 1);
+		assert!(def.params[0].name.is_none());
+	}
+
+	/* test_pattern_enums.hpp: TestPatternEnums */
+	#[test]
+	fn enums() {
+		let program = parse_ok(
+			"
+			enum TestEnum : u32 {
+				A,
+				B = 0x0C,
+				C,
+				D,
+				E = 0xAA ... 0xBB
+			};
+
+			be TestEnum testEnum @ 0x08;
+
+			enum SignedEnum : s8 {
+				unknown = -1,
+				fe = 0xfe,
+			};
+		",
+		);
+		let def = enum_named(&program, "TestEnum");
+		assert_eq!(type_named(&def.ty), "u32");
+		assert_eq!(def.entries.len(), 5);
+		// An implicit value continues from the one before, so it has none here.
+		assert!(def.entries[0].value.is_none());
+		assert!(def.entries[1].value.is_some());
+		assert!(def.entries[2].value.is_none());
+		assert!(def.entries[4].upto.is_some());
+
+		// A trailing comma is allowed.
+		assert_eq!(enum_named(&program, "SignedEnum").entries.len(), 2);
+
+		// `be` belongs to the use, never to the underlying type.
+		assert_eq!(placed(&program, "testEnum").ty.endian, Some(Endian::Big));
+	}
+
+	#[test]
+	fn enum_underlying_type_may_not_carry_an_endian() {
+		let error = parse_err("enum E : be u32 { A };");
+		assert_eq!(error.message, "Underlying enum type may not have an endian specifier.");
+	}
+
+	/* test_pattern_bitfields.hpp: TestPatternBitfields */
+	#[test]
+	fn bitfields() {
+		let program = parse_ok(
+			"
+			bitfield NestedBitfield {
+				nestedA : 4;
+				nestedB : 4;
+			};
+
+			bitfield TestBitfield {
+				unsigned a : 2;
+				b : 3;
+				NestedBitfield c;
+				d : 4;
+				signed e : 4;
+				NestedBitfield f[c.nestedA];
+			};
+
+			be TestBitfield testBitfield @ 0x25;
+		",
+		);
+		let def = bitfield_named(&program, "TestBitfield");
+		assert_eq!(def.entries.len(), 6);
+		assert!(matches!(&def.entries[0], BitEntry::Bits { name, sign: BitSign::Unsigned, .. } if name == "a"));
+		assert!(matches!(&def.entries[1], BitEntry::Bits { sign: BitSign::Unsigned, .. }));
+		assert!(matches!(&def.entries[2], BitEntry::Typed(field) if field.width.is_none() && field.array.is_none()));
+		assert!(matches!(&def.entries[4], BitEntry::Bits { sign: BitSign::Signed, .. }));
+		let BitEntry::Typed(array) = &def.entries[5] else { panic!("expected a bitfield array") };
+		assert!(matches!(array.array, Some(ArraySize::Count(_))));
+		assert_eq!(placed(&program, "testBitfield").ty.endian, Some(Endian::Big));
+	}
+
+	/* test_pattern_bitfields.hpp: TestPatternReversedBitfields */
+	#[test]
+	fn reversed_bitfields() {
+		let program = parse_ok(
+			"
+			#pragma endian big
+
+			enum Enum : u8 {
+				A = 0x39,
+			};
+
+			bitfield Test {
+				bool flag0 : 1;
+				bool flag1 : 1;
+				Enum enumerated : 6;
+			} [[bitfield_order(1, 16)]];
+
+			Test test @ 2;
+		",
+		);
+		let def = bitfield_named(&program, "Test");
+		assert_eq!(def.entries.len(), 3);
+		// A typed bit field carries both its type and its width.
+		let BitEntry::Typed(flag) = &def.entries[0] else { panic!("expected a typed entry") };
+		assert_eq!(type_named(&flag.ty), "bool");
+		assert!(flag.width.is_some());
+		let BitEntry::Typed(enumerated) = &def.entries[2] else { panic!("expected a typed entry") };
+		assert_eq!(type_named(&enumerated.ty), "Enum");
+		assert!(enumerated.width.is_some());
+
+		assert_eq!(def.attrs.len(), 1);
+		assert_eq!(def.attrs[0].path, "bitfield_order");
+		assert_eq!(def.attrs[0].args.len(), 2);
+		assert_eq!(program.pragmas.len(), 1);
+		assert_eq!((program.pragmas[0].key.as_str(), program.pragmas[0].value.as_str()), ("endian", "big"));
+	}
+
+	/* test_pattern_set_entries_sorted_consistency.hpp: TestPatternSetEntriesSortedConsistency */
+	#[test]
+	fn templated_bitfield() {
+		let program = parse_ok(
+			"
+			bitfield TemplateBitfield<auto N> {
+				unsigned a : 2;
+				unsigned b : 3;
+			};
+
+			TemplateBitfield<4> bf @ 0;
+		",
+		);
+		let def = bitfield_named(&program, "TemplateBitfield");
+		assert_eq!(def.template.len(), 1);
+		assert!(!def.template[0].is_type);
+		let TypeKind::Named { args, .. } = &placed(&program, "bf").ty.kind else { panic!("expected a named type") };
+		assert!(matches!(args.as_slice(), [TemplateArg::Value(_)]));
+	}
+
+	/* test_pattern_attributes.hpp: TestPatternAttributes */
+	#[test]
+	fn attributes() {
+		let program = parse_ok(
+			"
+			struct FormatTransformTest {
+				u32 x, y, z;
+			} [[format(\"format_test\"), transform(\"transform_test\")]];
+
+			struct NoUniqueAddressTest {
+				u32 x;
+				u32 y [[no_unique_address]];
+			};
+
+			struct FixedSizeTest1 {
+				u8 x;
+			} [[fixed_size(4)]];
+
+			struct ColorTest {
+				char s[5];
+			} [[color(\"FF00FF\")]];
+		",
+		);
+		let def = struct_named(&program, "FormatTransformTest");
+		// `u32 x, y, z;` is one declaration with three names.
+		assert_eq!(def.members.len(), 1);
+		assert_eq!(field(def, "x").names, vec!["x", "y", "z"]);
+		assert_eq!(def.attrs.iter().map(|attr| attr.path.as_str()).collect::<Vec<_>>(), vec!["format", "transform"]);
+
+		// An attribute with no arguments is still an attribute.
+		let no_unique = struct_named(&program, "NoUniqueAddressTest");
+		assert_eq!(field(no_unique, "y").attrs[0].path, "no_unique_address");
+		assert!(field(no_unique, "y").attrs[0].args.is_empty());
+
+		assert_eq!(struct_named(&program, "FixedSizeTest1").attrs[0].path, "fixed_size");
+		assert_eq!(struct_named(&program, "ColorTest").attrs[0].path, "color");
+	}
+
+	#[test]
+	fn namespaced_attribute() {
+		let program = parse_ok("struct S { u8 x [[hex::visualize(\"bitmap\", x)]]; };");
+		let attr = &field(struct_named(&program, "S"), "x").attrs[0];
+		assert_eq!(attr.path, "hex::visualize");
+		assert_eq!(attr.args.len(), 2);
+	}
+
+	/* test_pattern_namespaces.hpp: TestPatternNamespaces */
+	#[test]
+	fn namespaces() {
+		let program = parse_ok(
+			"
+			namespace A {
+				struct Test {
+					u32 x;
+				};
+			}
+
+			namespace B {
+				struct Test {
+					u16 x;
+				};
+			}
+
+			using ATest = A::Test;
+
+			A::Test test1 @ 0x10;
+			ATest test2 @ 0x20;
+			B::Test test3 @ 0x20;
+		",
+		);
+		// Two types with the same name live under different namespaces.
+		assert_eq!(struct_named(&program, "A::Test").members.len(), 1);
+		assert_eq!(type_named(&field(struct_named(&program, "B::Test"), "x").ty), "u16");
+		assert_eq!(using_named(&program, "ATest").ty.as_ref().map(type_named), Some("A::Test".to_string()));
+		assert_eq!(type_named(&placed(&program, "test1").ty), "A::Test");
+		assert_eq!(type_named(&placed(&program, "test3").ty), "B::Test");
+	}
+
+	/* test_pattern_using.hpp: TestPatternUsing */
+	#[test]
+	fn using_declarations() {
+		let program = parse_ok(
+			"
+			using US<T> = T;
+			US<u32> u;
+			US<u32> v = 64;
+			u = 64;
+
+			using UST<T> = US<T>;
+
+			US<u8> us3[2] @ 0;
+
+			namespace A {
+				using US<T> = T;
+			}
+			A::US<u8> us5 @ 0;
+		",
+		);
+		let us = using_named(&program, "US");
+		assert_eq!(us.template.len(), 1);
+		assert!(us.template[0].is_type);
+		// A template parameter counts as a type inside its own declaration.
+		assert_eq!(us.ty.as_ref().map(type_named), Some("T".to_string()));
+
+		// `US<u32> v = 64;` is a local: it reads nothing.
+		assert_eq!(placed(&program, "v").kind, FieldKind::Local);
+		assert_eq!(placed(&program, "u").kind, FieldKind::Normal);
+		// `u = 64;` after it is an assignment, which is imperative.
+		assert_eq!(statement_kinds(&program), vec![StatementKind::Assign]);
+
+		// A namespace gives a second `US`, and the qualified name finds it.
+		assert_eq!(type_named(&placed(&program, "us5").ty), "A::US");
+		assert!(placed(&program, "us3").array.is_some());
+	}
+
+	/* test_pattern_using.hpp: `USS<US<u32>>` must close two template lists */
+	#[test]
+	fn nested_template_arguments_close_two_lists() {
+		let program = parse_ok(
+			"
+			using US<T> = T;
+			struct USS<T> {
+				US<T> us = 16;
+			};
+			USS<US<u32>> ussus;
+		",
+		);
+		let TypeKind::Named { args, .. } = &placed(&program, "ussus").ty.kind else { panic!("expected a named type") };
+		let [TemplateArg::Type(inner)] = args.as_slice() else { panic!("expected one type argument") };
+		assert_eq!(type_named(inner), "US");
+	}
+
+	/* test_pattern_using.hpp: a forward declaration reserves the name */
+	#[test]
+	fn forward_declaration() {
+		let program = parse_ok(
+			"
+			using Later;
+			struct Holder {
+				Later later;
+			};
+			struct Later {
+				u8 x;
+			};
+		",
+		);
+		assert_eq!(type_named(&field(struct_named(&program, "Holder"), "later").ty), "Later");
+		assert_eq!(struct_named(&program, "Later").members.len(), 1);
+	}
+
+	/* test_pattern_match.hpp: TestPatternMatching */
+	#[test]
+	fn matching() {
+		let program = parse_ok(
+			"
+			struct a {
+				u8 c;
+				u8 d;
+				match(c, d) {
+					((0x78 - 0x10) | 5 | 3, _): u8 h;
+					(0x77 | 0x80 | 0x87, _): u8 l;
+					(_, _): u8 k;
+				}
+			};
+
+			a b @ 0x100;
+		",
+		);
+		let def = struct_named(&program, "a");
+		let Member::Match { scrutinee, arms, .. } = &def.members[2] else { panic!("expected a match") };
+		assert_eq!(scrutinee.len(), 2);
+		assert_eq!(arms.len(), 3);
+		// Inside a case, `|` separates alternatives rather than being bit-or.
+		let CasePattern::Values(values) = &arms[0].patterns[0] else { panic!("expected values") };
+		assert_eq!(values.len(), 3);
+		assert!(matches!(arms[0].patterns[1], CasePattern::Wildcard));
+		assert!(arms[2].patterns.iter().all(|pattern| matches!(pattern, CasePattern::Wildcard)));
+		assert_eq!(arms[0].body.len(), 1);
+	}
+
+	#[test]
+	fn match_range_arm() {
+		let program = parse_ok(
+			"
+			struct S {
+				u8 c;
+				match (c) {
+					(1 ... 5): u8 a;
+					(_): u8 b;
+				}
+			};
+		",
+		);
+		let Member::Match { arms, .. } = &struct_named(&program, "S").members[1] else { panic!("expected a match") };
+		let CasePattern::Values(values) = &arms[0].patterns[0] else { panic!("expected values") };
+		assert!(matches!(values[0], CaseValue::Range(_, _)));
+	}
+
+	#[test]
+	fn match_arm_arity_is_checked() {
+		let error = parse_err("struct S { u8 c; u8 d; match (c, d) { (1): u8 a; } };");
+		assert_eq!(error.message, "Size of case parameters smaller than size of match condition.");
+	}
+
+	/* test_pattern_extra_semicolon.hpp: TestPatternExtraSemicolon */
+	#[test]
+	fn extra_semicolons() {
+		let program = parse_ok(
+			"
+			struct Test {
+				u32 x;;;
+				u8 y;
+				float z;;
+			};;
+
+			Test test @ 0x00;;;
+			Test test2 @ 0x10;
+		",
+		);
+		assert_eq!(struct_named(&program, "Test").members.len(), 3);
+		assert_eq!(placements(&program).len(), 2);
+	}
+
+	/* test_pattern_doc_comments.hpp: TestPatternDocComments */
+	#[test]
+	fn doc_comments() {
+		let program = parse_ok(
+			"
+			/// this is a doc comment
+			u8 documentedVariable = 3;
+			/**
+			 * This is a doc comment, but with extra flare
+			 */
+			struct DocumentedStruct {
+				/**
+				 * This is a doc comment, but with extra flare
+				 */
+				u8 documentedVariable = 3;
+			};
+
+			/*!
+			 * This is a global doc comment
+			 */
+		",
+		);
+		assert_eq!(placed(&program, "documentedVariable").doc.as_deref(), Some(" this is a doc comment"));
+		let def = struct_named(&program, "DocumentedStruct");
+		assert!(def.doc.is_some());
+		assert!(field(def, "documentedVariable").doc.is_some());
+		// `/*! */` documents the file, not the next statement.
+		assert_eq!(program.docs.len(), 1);
+	}
+
+	/* test_pattern_pragmas.hpp and test_pattern_pragmas_pr249.hpp */
+	#[test]
+	fn pragmas() {
+		let program = parse_ok(
+			"
+			#pragma once
+			#pragma author authorValue
+			#pragma description descValue
+			#pragma somePragma someValue
+
+			u8 test = 0;
+		",
+		);
+		let seen: Vec<(&str, &str)> =
+			program.pragmas.iter().map(|pragma| (pragma.key.as_str(), pragma.value.as_str())).collect();
+		assert_eq!(
+			seen,
+			vec![("once", ""), ("author", "authorValue"), ("description", "descValue"), ("somePragma", "someValue")]
+		);
+		// An unknown pragma is nothing to the parser: the reference rejects it
+		// when the pattern runs (test_pattern_pragmas_fail.hpp), which is where
+		// lowering will report it.
+		assert_eq!(placed(&program, "test").kind, FieldKind::Local);
+	}
+
+	#[test]
+	fn a_pragma_value_is_the_rest_of_its_line() {
+		let program = parse_ok("#pragma magic [ 4D 5A ] @ 0x00\nu8 x @ 0;");
+		assert_eq!(program.pragmas[0].key, "magic");
+		assert_eq!(program.pragmas[0].value, "[ 4D 5A ] @ 0x00");
+	}
+
+	/* test_pattern_literals.hpp: TestPatternLiterals */
+	#[test]
+	fn literals() {
+		let program = parse_ok(
+			"
+			#define MSG \"Invalid literal\"
+
+			std::assert(255 == 0xFF, MSG);
+			std::assert(0xAA == 0b10101010, MSG);
+			std::assert(100U == 0x64U, MSG);
+			std::assert(-100 == -0x64, MSG);
+			std::assert(3.14159F > 1.414D, MSG);
+			std::assert('A' == 0x41, MSG);
+		",
+		);
+		let calls: Vec<&Decl> = all_decls(&program).into_iter().filter(|decl| matches!(decl, Decl::Call { .. })).collect();
+		assert_eq!(calls.len(), 6);
+		// `#define` substitutes a token list, so the macro is gone by now.
+		let Decl::Call { path, args, .. } = calls[0] else { panic!("expected a call") };
+		assert_eq!(path, "std::assert");
+		assert!(matches!(&args[1].kind, ExprKind::Lit(Lit::Str(text)) if text == "Invalid literal"));
+		// A character literal is an integer.
+		let Decl::Call { args, .. } = calls[5] else { panic!("expected a call") };
+		assert_eq!(args[0].to_string(), "65 == 65");
+	}
+
+	/* test_pattern_math.hpp: TestPatternMath */
+	#[test]
+	fn math_precedence_is_not_c() {
+		// The bitwise operators bind tighter than the comparisons here.
+		let program = parse_ok("struct S { u8 x; u8 y = x & 1 == 0; };");
+		let init = field(struct_named(&program, "S"), "y").init.as_ref().unwrap();
+		assert_eq!(init.to_string(), "x & 1 == 0");
+		let ExprKind::Binary { op, .. } = &init.kind else { panic!("expected a binary operator") };
+		assert_eq!(*op, BinOp::Eq);
+	}
+
+	#[test]
+	fn composed_operators() {
+		let program = parse_ok("struct S { u8 a = 1 << 2 >> 1; u8 b = 1 <= 2; u8 c = 2 >= 1; };");
+		let def = struct_named(&program, "S");
+		assert_eq!(field(def, "a").init.as_ref().unwrap().to_string(), "1 << 2 >> 1");
+		assert_eq!(field(def, "b").init.as_ref().unwrap().to_string(), "1 <= 2");
+		assert_eq!(field(def, "c").init.as_ref().unwrap().to_string(), "2 >= 1");
+	}
+
+	/* test_pattern_dollar.hpp: TestPatternDollar */
+	#[test]
+	fn dollar() {
+		let program = parse_ok(
+			"
+			struct ReadArray {
+				u8 array[while($ == addressof(this) || $[$-1] != 0x36)];
+			};
+			ReadArray readArray1 @ 0x10;
+
+			struct CurrentSectionRead {
+				u8 field1 = $[0];
+				$ += 3;
+			};
+		",
+		);
+		let Some(ArraySize::While(cond)) = &field(struct_named(&program, "ReadArray"), "array").array else {
+			panic!("expected a while array")
+		};
+		// `$` is a path segment of its own, and `$[i]` indexes the space.
+		assert_eq!(cond.to_string(), "$ == addressof(this) || $[$ - 1] != 54");
+
+		let def = struct_named(&program, "CurrentSectionRead");
+		assert!(matches!(&def.members[0], Member::Field(field) if field.kind == FieldKind::Local));
+		// `$ += 3` moves the cursor, which is imperative.
+		assert!(matches!(&def.members[1], Member::Statement(statement) if statement.kind == StatementKind::Assign));
+	}
+
+	#[test]
+	fn type_operators() {
+		let program = parse_ok(
+			"
+			struct S {
+				u8 a;
+				u8 b = sizeof($) + addressof($) + sizeof(a) + addressof(a) + sizeof(u32);
+			};
+		",
+		);
+		let init = field(struct_named(&program, "S"), "b").init.as_ref().unwrap();
+		// `sizeof(u32)` folds to the type's size in bytes, as the reference does.
+		assert_eq!(init.to_string(), "sizeof($) + addressof($) + sizeof(a) + addressof(a) + 4");
+	}
+
+	/* test_pattern_typenameof.hpp: TestPatternTypeNameOf */
+	#[test]
+	fn typenameof() {
+		let program = parse_ok(
+			"
+			struct A {
+
+			};
+
+			struct B<T, auto y> {
+
+			};
+
+			u32 P = 16;
+			B<B<u32, P>, 2> d @ 0;
+		",
+		);
+		assert!(struct_named(&program, "A").members.is_empty());
+		let def = struct_named(&program, "B");
+		assert_eq!(def.template.len(), 2);
+		assert!(def.template[0].is_type);
+		assert!(!def.template[1].is_type);
+		// The declaration decides whether an argument is a type or a value.
+		let TypeKind::Named { args, .. } = &placed(&program, "d").ty.kind else { panic!("expected a named type") };
+		assert!(matches!(args.as_slice(), [TemplateArg::Type(_), TemplateArg::Value(_)]));
+	}
+
+	/* test_pattern_template_parameters_scope.hpp: TestPatternTemplateParametersScope */
+	#[test]
+	fn template_parameters_scope() {
+		let program = parse_ok(
+			"
+			struct Y {
+				try {
+					u8 a = x;
+				} catch {
+					u8 a = 2;
+				}
+			};
+			struct T<auto x> {
+				u8 value = x;
+				Y y;
+			};
+			T<4> t @ 0;
+
+			struct Z<T2, auto v> {
+				if(v > 0) {
+					Z<Z<T2, v - 1>, v-1> q;
+				}
+				u32 value = v;
+			};
+			Z<u32, 5> a @ 0;
+
+			u32 b = 64;
+			using C<auto d> = T<d + b>;
+			C<16> c @ 0;
+		",
+		);
+		let y = struct_named(&program, "Y");
+		let Member::Try { body, catch, .. } = &y.members[0] else { panic!("expected a try") };
+		assert_eq!(body.len(), 1);
+		assert_eq!(catch.len(), 1);
+
+		// A type may name itself inside its own body.
+		let z = struct_named(&program, "Z");
+		let Member::If { then, .. } = &z.members[0] else { panic!("expected an if") };
+		assert_eq!(then.len(), 1);
+
+		// `using C<auto d> = ..` takes a value parameter, so the argument at
+		// the use site is read as an expression.
+		let c = using_named(&program, "C");
+		assert_eq!(c.template.len(), 1);
+		assert!(!c.template[0].is_type);
+		let TypeKind::Named { args, .. } = &placed(&program, "c").ty.kind else { panic!("expected a named type") };
+		assert!(matches!(args.as_slice(), [TemplateArg::Value(_)]));
+	}
+
+	/* test_pattern_rvalues_assignment_in_struct.hpp: TestPatternRValuesAssignmentInStruct */
+	#[test]
+	fn rvalue_assignment_in_struct() {
+		let program = parse_ok(
+			"
+			struct A {
+				u32 a;
+			};
+
+			struct B {
+				A a = null;
+				u8 b [5] = {1, 2, 3, 4, 5};
+				a.a = 4;
+				b[3] = 7;
+				std::assert(a.a == 4, \"RValue member assignment failed!\");
+			};
+
+			B a @ 0x00;
+		",
+		);
+		let def = struct_named(&program, "B");
+		assert_eq!(def.members.len(), 5);
+		assert!(matches!(&def.members[0], Member::Field(field) if field.kind == FieldKind::Local));
+		let Member::Field(array) = &def.members[1] else { panic!("expected a field") };
+		assert_eq!(array.init_list.len(), 5);
+		// Both assignments are imperative, and each keeps its own text.
+		assert!(matches!(&def.members[2], Member::Statement(statement) if statement.text == "a.a = 4"));
+		assert!(matches!(&def.members[3], Member::Statement(statement) if statement.text == "b[3] = 7"));
+		assert!(matches!(&def.members[4], Member::Call { path, .. } if path == "std::assert"));
+	}
+
+	/* test_pattern_arrays.hpp: TestPatternArrays */
+	#[test]
+	fn arrays() {
+		let program = parse_ok(
+			"
+			fn end_of_signature() {
+				return $ >= 8;
+			};
+
+			struct Signature {
+				u8 first[4];
+				u8 second[while(!end_of_signature())];
+				u8 rest[];
+			};
+
+			Signature sign @ 0x0;
+		",
+		);
+		let def = struct_named(&program, "Signature");
+		assert!(matches!(field(def, "first").array, Some(ArraySize::Count(_))));
+		assert!(matches!(field(def, "second").array, Some(ArraySize::While(_))));
+		assert!(matches!(field(def, "rest").array, Some(ArraySize::Unbounded)));
+	}
+
+	/* test_pattern_arrays.hpp: a parameter pack, a `for` and a `while` */
+	#[test]
+	fn function_bodies_stay_opaque() {
+		let program = parse_ok(
+			"
+			fn forward(auto fmt, auto ... args) {
+				builtin::std::format(fmt, args);
+			};
+
+			fn loops(auto size) {
+				u8 count = 6;
+				char buffer[count];
+				for (u32 i = 0, i < size, i = i + 1) {
+					count = count + 1;
+				}
+				while (count > 0) {
+					count = count - 1;
+				}
+				return count;
+			};
+		",
+		);
+		let defs = functions(&program);
+		assert_eq!(defs[0].param_pack.as_deref(), Some("args"));
+		assert_eq!(defs[0].params.len(), 1);
+		assert_eq!(
+			defs[1].body.iter().map(|statement| statement.kind).collect::<Vec<_>>(),
+			vec![
+				StatementKind::Local,
+				StatementKind::Local,
+				StatementKind::For,
+				StatementKind::While,
+				StatementKind::Return
+			]
+		);
+		// Each one keeps the source it covered, for the gap it will become.
+		assert!(defs[1].body[2].text.starts_with("for (u32 i = 0, i < size, i = i + 1)"));
+	}
+
+	/* test_pattern_strings.hpp and test_pattern_unicode_escapes.hpp */
+	#[test]
+	fn strings() {
+		let program = parse_ok(
+			"
+			str string = \"Hello World!\";
+			str string2 = \"Hello World!\\n\";
+			str string3 = \"\\\"Hello World!\\\"\";
+			str string4 = \"\\x91\\x92\";
+			str string5 = \"\\u1734\\u2162\";
+		",
+		);
+		assert_eq!(placements(&program).len(), 5);
+		assert_eq!(type_named(&placed(&program, "string").ty), "str");
+		let Some(init) = &placed(&program, "string2").init else { panic!("expected an initialiser") };
+		assert!(matches!(&init.kind, ExprKind::Lit(Lit::Str(text)) if text == "Hello World!\n"));
+		// `\u` gives one code point, encoded as UTF-8, not one byte.
+		let Some(init) = &placed(&program, "string5").init else { panic!("expected an initialiser") };
+		assert!(matches!(&init.kind, ExprKind::Lit(Lit::Str(text)) if text == "\u{1734}\u{2162}"));
+	}
+
+	/* test_pattern_unicode_escapes.hpp: the eight failing cases */
+	#[test]
+	fn bad_escapes_are_rejected() {
+		assert!(parse_err("str s = \"\\uD800\";").message.starts_with("Not a Unicode code point"));
+		assert!(parse_err("str s = \"\\U00110000\";").message.starts_with("Not a Unicode code point"));
+		assert!(parse_err("str s = \"\\uZZZZ\";").message.starts_with("Invalid hex digit"));
+		assert!(parse_err("str s = \"\\u12\";").message.starts_with("Invalid hex digit"));
+		assert!(parse_err("str s = \"\\xZZ\";").message.starts_with("Invalid hex digit"));
+		assert!(parse_err("str s = \"\\x4\";").message.starts_with("Invalid hex digit"));
+		assert!(parse_err("str s = \"\\q\";").message.starts_with("Unknown escape sequence"));
+		// A char holds one byte, so a code point above U+007F does not fit.
+		assert_eq!(parse_err("char c = '\\u00E9';").message, "A char holds one byte. Use a string for this code point");
+	}
+
+	/* test_pattern_format.hpp: TestPatternFormat, every built-in width */
+	#[test]
+	fn every_builtin_width() {
+		let program = parse_ok(
+			"
+			struct MyStruct {
+				char s[];
+				u8 ua; u16 ub; u24 uc; u32 ud; u48 ue; u64 uf; u96 ug; u128 uh;
+				s8 sa; s16 sb; s24 sc; s32 sd; s48 se; s64 sf; s96 sg; s128 sh;
+				float fa; double fb; bool ba; char16 ca;
+			};
+
+			MyStruct data @ 0x0;
+		",
+		);
+		let def = struct_named(&program, "MyStruct");
+		assert_eq!(def.members.len(), 21);
+		assert!(matches!(field(def, "s").array, Some(ArraySize::Unbounded)));
+		assert_eq!(type_named(&field(def, "uh").ty), "u128");
+		assert_eq!(type_named(&field(def, "ca").ty), "char16");
+	}
+
+	/* test_pattern_flattening.hpp: TestPatternFlattening */
+	#[test]
+	fn flattening() {
+		let program = parse_ok(
+			"
+			struct Outer {
+				u8 bytes[16];
+			} [[sealed]];
+
+			Outer outer @ 0;
+			u8 before1 @ 1;
+			u8 before2 @ 2;
+		",
+		);
+		assert_eq!(struct_named(&program, "Outer").attrs[0].path, "sealed");
+		assert_eq!(placements(&program).len(), 3);
+		assert!(placements(&program).iter().all(|field| field.placement.is_some()));
+	}
+
+	/* test_pattern_in_variable_defaults.hpp: both cases */
+	#[test]
+	fn in_and_out_variables() {
+		let program = parse_ok(
+			"
+			u32 base = 40;
+			u32 value in = base + 2;
+			u32 result out;
+		",
+		);
+		assert_eq!(placed(&program, "base").kind, FieldKind::Local);
+		assert_eq!(placed(&program, "value").kind, FieldKind::In);
+		assert!(placed(&program, "value").init.is_some());
+		assert_eq!(placed(&program, "result").kind, FieldKind::Out);
+	}
+
+	/* test_pattern_include.hpp: TestPatternInclude */
+	#[test]
+	fn include() {
+		let program = parse_files(
+			"
+			#include <A>
+
+			Included included @ 0;
+		",
+			vec![("A", "#pragma once\nstruct Included { u8 x; };\n")],
+		);
+		let Some(Decl::Include { path, program: included, .. }) = program.decls.first() else {
+			panic!("expected an include")
+		};
+		assert_eq!(path, "A");
+		assert_eq!(included.as_ref().unwrap().decls.len(), 1);
+		// The included file's types are the includer's, because `#include`
+		// splices tokens rather than making a second translation unit.
+		assert_eq!(type_named(&placed(&program, "included").ty), "Included");
+	}
+
+	#[test]
+	fn include_happens_once() {
+		let program = parse_files(
+			"
+			#include <A>
+			#include <A>
+
+			Included included @ 0;
+		",
+			vec![("A", "#pragma once\nstruct Included { u8 x; };\n")],
+		);
+		assert_eq!(type_named(&placed(&program, "included").ty), "Included");
+	}
+
+	/* test_pattern_import.hpp: TestPatternImport */
+	#[test]
+	fn import() {
+		let program = parse_files(
+			"
+			import IA as A;
+			import * from ImportedSection as ImportedSection;
+			import IC;
+
+			ImportedSection imported @ 0;
+			IC::Thing thing @ 4;
+		",
+			vec![
+				("IA", "#pragma once\nstruct FromA { u8 x; };\n"),
+				("ImportedSection", "#pragma once\nchar value @ 0;\n"),
+				("IC", "#pragma once\nnamespace IC { struct Thing { u8 x; }; }\n"),
+			],
+		);
+		let imports: Vec<&Import> = all_decls(&program)
+			.into_iter()
+			.filter_map(|decl| match decl {
+				Decl::Import(import) => Some(import),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(imports.len(), 3);
+		assert_eq!(imports[0].alias.as_deref(), Some("A"));
+		assert!(!imports[0].all);
+		// `import * from X as Y` names the whole file as one type `Y`.
+		assert!(imports[1].all);
+		assert!(imports[1].program.is_none());
+		assert_eq!(type_named(&placed(&program, "imported").ty), "ImportedSection");
+		assert_eq!(type_named(&placed(&program, "thing").ty), "IC::Thing");
+	}
+
+	#[test]
+	fn a_dotted_import_is_a_path() {
+		let program = parse_files("import std.mem;", vec![("std/mem", "#pragma once\nstruct M { u8 x; };\n")]);
+		let Some(Decl::Import(import)) = program.decls.first() else { panic!("expected an import") };
+		assert_eq!(import.path, "std/mem");
+	}
+
+	/* test_pattern_example.hpp: TestPatternExample, an empty pattern */
+	#[test]
+	fn an_empty_pattern_is_legal() {
+		assert!(parse_ok("\n\n").decls.is_empty());
+	}
+
+	/* The strict tier: what the reference rejects, rejected at the same line. */
+	#[test]
+	fn an_undeclared_type_is_rejected() {
+		let error = parse_err("Nope x @ 0;");
+		assert_eq!(error.message, "Type Nope has not been declared yet.");
+		assert_eq!(error.pos.line, 1);
+	}
+
+	#[test]
+	fn a_missing_semicolon_is_reported_on_the_line_it_ended() {
+		// The reference reports at the token before the cursor, so this lands
+		// on line 2, not on the line the next token is on.
+		let error = parse_err("struct S {\n\tu8 x\n\tu8 y;\n};");
+		assert!(error.message.starts_with("Expected ';' at end of statement"));
+		assert_eq!(error.pos.line, 2);
+	}
+
+	#[test]
+	fn a_template_type_needs_its_arguments() {
+		let error = parse_err("struct S<T> { T x; };\nS s @ 0;");
+		assert_eq!(error.message, "Cannot use template type without template parameters.");
+	}
+
+	#[test]
+	fn a_type_may_not_be_declared_twice() {
+		let error = parse_err("struct S { u8 x; };\nstruct S { u8 y; };");
+		assert_eq!(error.message, "Type with name 'S' has already been declared.");
+	}
+
+	#[test]
+	fn a_reserved_word_is_not_a_name() {
+		// `inf` is a literal, not an identifier, so it cannot name a field: the
+		// declaration reads as a nameless `u8` and then wants its semicolon.
+		assert!(parse_err("struct S { u8 inf; };").message.starts_with("Expected ';' at end of statement"));
+		assert!(parse_err("struct S { u8 true; };").message.starts_with("Expected ';' at end of statement"));
+	}
+
+	#[test]
+	fn placement_is_invalid_inside_a_bitfield() {
+		let error = parse_err("bitfield B { u8 x @ 0; };");
+		assert_eq!(error.message, "Placement syntax is invalid within bitfields.");
+	}
+
+	#[test]
+	fn an_unknown_directive_is_rejected() {
+		assert_eq!(parse_err("#nonsense\n").message, "Unknown directive: #nonsense");
+	}
+
+	#[test]
+	fn a_macro_redefined_differently_is_rejected() {
+		// The reference compares the whole token list, positions included, so a
+		// second `#define` of a name is a redefinition even when the text is
+		// identical.
+		assert!(parse_err("#define A 1\n#define A 2\n").message.starts_with("Macro 'A' is redefined"));
+		assert!(parse_err("#define A 1\n#define A 1\n").message.starts_with("Macro 'A' is redefined"));
+	}
+
+	#[test]
+	fn an_inactive_ifdef_branch_is_dropped() {
+		let program = parse_ok("#ifdef __IMHEX__\nNotAType x @ 0;\n#endif\nu8 y @ 0;");
+		assert_eq!(placements(&program).len(), 1);
+	}
+
+	#[test]
+	fn an_ifdef_without_an_endif_is_rejected() {
+		assert_eq!(parse_err("#ifdef A\nu8 x @ 0;\n").message, "#ifdef without #endif");
+	}
+}
