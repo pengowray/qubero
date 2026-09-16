@@ -338,12 +338,22 @@ lowering starts.
   its brackets. Pragma names are not checked when parsing; the reference
   rejects an unknown one when the pattern runs, so that check belongs to
   lowering.
-* **Two strictness checks are not implemented**, because both only reject and
-  neither fires on the corpus: the reference refuses an `in`/`out` variable
-  whose type does not resolve to an integer, float, `bool`, `char`, `str` or
-  enum, and it refuses a `namespace auto` alias substitution that the corpus
-  never triggers (nothing is imported with an alias except `import * from`,
-  which does not parse the file).
+* **A top-level `T x;` reads nothing.** Only a declaration with an `@` reads
+  the file; a bare one is a global variable, the same as `T x = e;` without
+  the value. The parser marks it `FieldKind::Local`, so lowering never has to
+  guess, and never emits a read at offset zero for it.
+* **Five places where the parser is looser than the reference**, each because
+  it only ever rejects and none of them fires on the corpus. Tighten them if
+  a pattern ever depends on it, but not before. (1) An `in`/`out` variable's
+  type is not checked to resolve to an integer, float, `bool`, `char`, `str`
+  or enum. (2) A `namespace auto` alias is treated as a plain namespace;
+  nothing in the corpus imports with an alias except `import * from`, which
+  does not parse the file at all. (3) An attribute is accepted after an
+  assignment, a call or a `return`, where the reference says "Cannot use
+  attribute here." (4) `$ += e` is accepted at the top level, where the
+  reference has only `$ = e`. (5) An imported type does not overwrite one the
+  importer already declared under the same name; the reference's last import
+  wins.
 
 ## Status
 
@@ -352,7 +362,7 @@ lowering starts.
 2026-09-17: lexer, AST, expression tree and parser landed in
 `crates/core/src/hexpat/`, with `crates/core/examples/hexpat_parse.rs` as the
 syntax oracle. 309/310 patterns and 46/46 includes parse; the three facts above
-are confirmed. 56 unit tests, one per case of the reference's language tests
+are confirmed. 57 unit tests, one per case of the reference's language tests
 plus the strictness checks. No lowering yet: the imperative half parses into
 `ast::Statement`, which keeps a coarse kind, the byte range and the source text
 of each construct, ready to become a gap.

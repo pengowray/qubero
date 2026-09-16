@@ -1968,7 +1968,7 @@ impl<'a, 'r> Parser<'a, 'r> {
 			let mut field = self.array_variable(ty, name, false, pos)?;
 			field.doc = doc;
 			field.attrs = self.trailing_attributes()?;
-			return Ok(Decl::Placement(field));
+			return Ok(Decl::Placement(global_kind(field)));
 		}
 		if self.is_op(0, Op::Star) && self.is_ident(1) && self.is_op(2, Op::Colon) {
 			self.next();
@@ -2014,7 +2014,7 @@ impl<'a, 'r> Parser<'a, 'r> {
 			let mut field = self.variable_placement(ty, name, pos)?;
 			field.doc = doc;
 			field.attrs = self.trailing_attributes()?;
-			return Ok(Decl::Placement(field));
+			return Ok(Decl::Placement(global_kind(field)));
 		}
 
 		Err(self.error_here("Invalid placement syntax."))
@@ -2342,6 +2342,16 @@ impl<'a, 'r> Parser<'a, 'r> {
 	}
 }
 
+/// A top-level `T x;` with no `@` reads nothing: it is a global variable, the
+/// same as `T x = e;` without the value. Only a placed one reads the file, so
+/// lowering never has to guess which of the two a bare declaration was.
+fn global_kind(mut field: Field) -> Field {
+	if field.kind == FieldKind::Normal && field.placement.is_none() {
+		field.kind = FieldKind::Local;
+	}
+	field
+}
+
 fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
 	let pos = lhs.pos;
 	Expr::new(ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, pos)
@@ -2377,6 +2387,11 @@ mod tests {
 	//! is that each construct arrives as the node it should be, that the
 	//! imperative ones arrive as [`Statement`]s of the right kind, and that the
 	//! cases the reference rejects are rejected.
+	//!
+	//! One case has no test: `TestPatternCustomBuiltinType`, whose
+	//! `custom_type::custom_type<1>` is a type the reference's own test runner
+	//! registers through the host API. It is not a language feature, and the
+	//! mechanism it needs is already covered by `BUILTIN_TYPES`.
 
 	use super::*;
 	use crate::hexpat::expr::ExprKind;
@@ -2961,9 +2976,11 @@ mod tests {
 		// A template parameter counts as a type inside its own declaration.
 		assert_eq!(us.ty.as_ref().map(type_named), Some("T".to_string()));
 
-		// `US<u32> v = 64;` is a local: it reads nothing.
+		// Neither of these reads the file: a top-level declaration without an
+		// `@` is a global variable, whether or not it has a value.
 		assert_eq!(placed(&program, "v").kind, FieldKind::Local);
-		assert_eq!(placed(&program, "u").kind, FieldKind::Normal);
+		assert_eq!(placed(&program, "u").kind, FieldKind::Local);
+		assert_eq!(placed(&program, "us3").kind, FieldKind::Normal);
 		// `u = 64;` after it is an assignment, which is imperative.
 		assert_eq!(statement_kinds(&program), vec![StatementKind::Assign]);
 
@@ -3337,6 +3354,43 @@ mod tests {
 		assert!(matches!(&def.members[2], Member::Statement(statement) if statement.text == "a.a = 4"));
 		assert!(matches!(&def.members[3], Member::Statement(statement) if statement.text == "b[3] = 7"));
 		assert!(matches!(&def.members[4], Member::Call { path, .. } if path == "std::assert"));
+	}
+
+	/* test_pattern_rvalues.hpp: TestPatternRValues */
+	#[test]
+	fn rvalues() {
+		let program = parse_ok(
+			"
+			union C {
+				u8 y;
+				u8 array[parent.parent.x];
+			};
+
+			struct B {
+				C *c : u8;
+			};
+
+			struct A {
+				u8 x;
+				B b;
+			};
+
+			A a @ 0x00;
+		",
+		);
+		// `parent.parent.x` climbs two structs, as three path segments.
+		let Some(ArraySize::Count(count)) = &field(struct_named(&program, "C"), "array").array else {
+			panic!("expected a counted array")
+		};
+		assert_eq!(count.to_string(), "parent.parent.x");
+		let ExprKind::Path(segments) = &count.kind else { panic!("expected a path") };
+		assert_eq!(segments.len(), 3);
+
+		// `C *c : u8;` is a pointer member: the target type, then the offset type.
+		let pointer = field(struct_named(&program, "B"), "c");
+		assert_eq!(type_named(&pointer.ty), "C");
+		assert_eq!(pointer.pointer.as_ref().map(type_named), Some("u8".to_string()));
+		assert!(pointer.placement.is_none());
 	}
 
 	/* test_pattern_arrays.hpp: TestPatternArrays */
