@@ -9,19 +9,55 @@
 //! ends short. Either way the segments stop covering the file, and that is
 //! what is asserted.
 //!
-//! It skips where those files are not present.
+//! On Linux the same goes for whatever JPEGs the desktop ships under
+//! `/usr/share/backgrounds`. It skips where neither is present.
+
+use std::path::{Path, PathBuf};
 
 use qubero_core::document::Document;
 use qubero_core::eval::{Evaluator, Value};
 use qubero_core::formats::{jpeg, sniff};
 use qubero_core::source::MemSource;
 
-const FILES: &[&str] = &[
+const WINDOWS: &[&str] = &[
     "C:/Windows/Web/Wallpaper/Theme1/img1.jpg",
     "C:/Windows/Web/Wallpaper/Theme1/img2.jpg",
     "C:/Windows/Web/Wallpaper/Theme1/img3.jpg",
     "C:/Windows/Web/Wallpaper/Theme1/img4.jpg",
 ];
+
+const LINUX: &str = "/usr/share/backgrounds";
+
+/// How many of the Linux wallpapers to read. Four, like the Windows set: they
+/// are photographs of several megabytes each, and the point is made by a few.
+const ENOUGH: usize = 4;
+
+/// The wallpapers this machine has: the Windows set where it exists, and
+/// otherwise the first few JPEGs under the Linux backgrounds directory, in
+/// path order so the same ones are read every time.
+fn wallpapers() -> Vec<PathBuf> {
+    let windows: Vec<PathBuf> = WINDOWS.iter().map(PathBuf::from).filter(|p| p.is_file()).collect();
+    if !windows.is_empty() {
+        return windows;
+    }
+    let mut found = Vec::new();
+    jpegs_under(Path::new(LINUX), &mut found);
+    found.sort();
+    found.truncate(ENOUGH);
+    found
+}
+
+fn jpegs_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            jpegs_under(&path, out);
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg")) {
+            out.push(path);
+        }
+    }
+}
 
 /// Resolve every node under a path. A table whose length is worked out wrongly
 /// is an error here rather than a row nobody opened.
@@ -39,13 +75,14 @@ fn deep(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], depth: usize)
 
 #[test]
 fn every_segment_reads_and_together_they_cover_the_file() {
-    let mut checked = 0;
-    for path in FILES {
-        let Ok(bytes) = std::fs::read(path) else {
-            eprintln!("skipped: no file at {path}");
-            continue;
-        };
-        checked += 1;
+    let files = wallpapers();
+    if files.is_empty() {
+        eprintln!("skipped: no wallpaper to read, neither {} nor a JPEG under {LINUX}", WINDOWS[0]);
+        return;
+    }
+    for path in &files {
+        let path = path.display().to_string();
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(sniff(&bytes[..64], bytes.len() as u64), Some("jpeg"), "{path}");
 
         let len = bytes.len() as u64;
@@ -74,6 +111,6 @@ fn every_segment_reads_and_together_they_cover_the_file() {
         let trailer = ev.node(&d, &[2]).unwrap();
         assert_eq!(trailer.offset_bits / 8, end, "{path}");
         assert_eq!(end + trailer.size_bits / 8, len, "the segments do not cover {path}");
+        eprintln!("{path}: {n} segments, {scans} scan(s), covered to the byte");
     }
-    assert!(checked > 0, "no wallpaper to read");
 }
