@@ -134,6 +134,7 @@ pub fn builtin(path: &str) -> Option<&'static str> {
 		"type/color" => TYPE_COLOR,
 		"type/types/c" | "type/types/win32" | "type/types/linux" | "type/types/rust"
 		| "type/types/010" => TYPE_TYPES,
+		"hex/type/json" => HEX_TYPE_JSON,
 		_ => return None,
 	})
 }
@@ -145,7 +146,7 @@ pub const BUILTIN_PATHS: &[&str] = &[
 	"std/hash", "std/io", "std/limits", "std/math", "std/mem", "std/ptr", "std/random",
 	"std/string", "std/sys", "std/time", "type/base", "type/byte", "type/color", "type/float16",
 	"type/guid", "type/leb128", "type/magic", "type/size", "type/time", "type/types/010",
-	"type/types/c", "type/types/linux", "type/types/rust", "type/types/win32",
+	"type/types/c", "type/types/linux", "type/types/rust", "type/types/win32", "hex/type/json",
 ];
 
 /// A file that declares nothing but functions, which the parser never checks.
@@ -323,6 +324,23 @@ namespace auto type {
 /// The C, Win32, Linux, Rust and 010 Editor spelling files, which are nothing
 /// but aliases for the built-in scalars. Enough of each that the patterns using
 /// them parse; a name that is not here is reported as undeclared, at its line.
+/// The six decoder wrappers `includes/hex/type/json.pat` declares.
+///
+/// Names and arities only. Each of these is read by an ImHex plugin rather than
+/// by the pattern, so [`super::types`] answers for the whole `hex::` namespace
+/// with a gap before the body is ever looked at; the parser only has to know
+/// that the name exists and takes one value argument.
+const HEX_TYPE_JSON: &str = r#"#pragma once
+namespace auto hex::type {
+	struct Json<auto Size> { };
+	struct Bson<auto Size> { };
+	struct Cbor<auto Size> { };
+	struct Bjdata<auto Size> { };
+	struct Msgpack<auto Size> { };
+	struct Ubjson<auto Size> { };
+}
+"#;
+
 const TYPE_TYPES: &str = r#"#pragma once
 namespace auto type {
 	using BYTE = u8;

@@ -1,0 +1,3229 @@
+{
+ "source": "https://github.com/WerWolv/ImHex-Patterns",
+ "licence": "GPL-2.0",
+ "generated": "tools/hexpat_index.mjs",
+ "note": "Metadata only. No pattern text is copied; the panel fetches a pattern when a reader asks for it.",
+ "patterns": [
+  {
+   "path": "3ds.hexpat",
+   "name": "3ds",
+   "description": "Autodesk 3DS Max Model",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 9
+  },
+  {
+   "path": "7z.hexpat",
+   "name": "7z",
+   "description": "7z Archive",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "377abcaf271c"
+   },
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "AC Unity/acu_data_compressed.hexpat",
+   "name": "acu_data_compressed",
+   "description": "Assassin's Creed: Unity's Compressed .data file",
+   "author": "haru233",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "AC Unity/acu_data_decompressed.hexpat",
+   "name": "acu_data_decompressed",
+   "description": "Assassin's Creed: Unity's Decompressed .data file",
+   "author": "haru233",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "AC Unity/acu_forge.hexpat",
+   "name": "acu_forge",
+   "description": "Assassin's Creed: Unity's .forge archive file",
+   "author": "haru233",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "BroEngine/anim.hexpat",
+   "name": "anim",
+   "description": "BroEngine Animation",
+   "author": "Neptuwunium",
+   "magic": null,
+   "needs": [
+    "patterns/BroEngine/bro.hexinc",
+    "patterns/BroEngine/skel.hexpat"
+   ],
+   "gaps": 0
+  },
+  {
+   "path": "BroEngine/dds.hexpat",
+   "name": "dds",
+   "description": "BroEngine DDS Texture",
+   "author": "Neptuwunium",
+   "magic": null,
+   "needs": [
+    "patterns/dds.hexpat"
+   ],
+   "gaps": 10
+  },
+  {
+   "path": "BroEngine/mesh.hexpat",
+   "name": "mesh",
+   "description": "BroEngine Mesh",
+   "author": "Neptuwunium",
+   "magic": null,
+   "needs": [
+    "patterns/BroEngine/bro.hexinc",
+    "patterns/BroEngine/skel.hexpat"
+   ],
+   "gaps": 0
+  },
+  {
+   "path": "BroEngine/morph.hexpat",
+   "name": "morph",
+   "description": "BroEngine Morph",
+   "author": "Neptuwunium",
+   "magic": null,
+   "needs": [
+    "patterns/BroEngine/bro.hexinc"
+   ],
+   "gaps": 0
+  },
+  {
+   "path": "BroEngine/skel.hexpat",
+   "name": "skel",
+   "description": "BroEngine Skeleton",
+   "author": "Neptuwunium",
+   "magic": null,
+   "needs": [
+    "patterns/BroEngine/bro.hexinc"
+   ],
+   "gaps": 0
+  },
+  {
+   "path": "CGX.hexpat",
+   "name": "CGX",
+   "description": "PlayStation Mobile Shader",
+   "author": "Li",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "Crashlvl.hexpat",
+   "name": "Crashlvl",
+   "description": "Crash Bandicoot - Back in Time (fan game) User created level",
+   "author": "AdventureT",
+   "magic": {
+    "at": 0,
+    "bytes": "43524153484c564c"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "DFIR/DISK_PARSER.hexpat",
+   "name": "DISK_PARSER",
+   "description": "DFIR_DISK_PARSER_v2.0",
+   "author": "Formula Zero One Technologies",
+   "magic": null,
+   "needs": [
+    "includes/hex/provider.pat",
+    "includes/hex/impl/imhex_check.pat",
+    "patterns/DFIR/FAT32.hexpat",
+    "patterns/DFIR/exFAT.hexpat",
+    "patterns/DFIR/NTFS.hexpat"
+   ],
+   "gaps": 61
+  },
+  {
+   "path": "DFIR/FAT32.hexpat",
+   "name": "FAT32",
+   "description": "FAT32 File System (FAT32_v2.0)",
+   "author": "Formula Zero One Technologies",
+   "magic": null,
+   "needs": [],
+   "gaps": 36
+  },
+  {
+   "path": "DFIR/NTFS.hexpat",
+   "name": "NTFS",
+   "description": "NT File System (NTFS_v2.0)",
+   "author": "MODIFIED BY: Formula Zero One Technologies",
+   "magic": null,
+   "needs": [],
+   "gaps": 17
+  },
+  {
+   "path": "DFIR/exFAT.hexpat",
+   "name": "exFAT",
+   "description": "exFAT Filesystem (exFAT_v2.0)",
+   "author": "Formula Zero One Technologies",
+   "magic": null,
+   "needs": [],
+   "gaps": 20
+  },
+  {
+   "path": "Devil May Cry HD Collection/dmc3_hd_mod.hexpat",
+   "name": "dmc3_hd_mod",
+   "description": "Devil May Cry 3 HD .mod 3D model file",
+   "author": "haru233",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "GoldBox/GB_CHR.hexpat",
+   "name": "GB_CHR",
+   "description": "Gold Box Games - Character",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [
+    "patterns/GoldBox/GB_ENUM.cs",
+    "patterns/GoldBox/GB_STRUCT.cs",
+    "patterns/GoldBox/GB_STRUCT_ITM.cs",
+    "patterns/GoldBox/GB_UTIL.cs",
+    "patterns/GoldBox/GB_UTIL_ITM.cs"
+   ],
+   "gaps": 6
+  },
+  {
+   "path": "GoldBox/GB_EXE.hexpat",
+   "name": "GB_EXE",
+   "description": "Gold Box Games - Executable",
+   "author": "Draxinusom",
+   "magic": {
+    "at": 56793,
+    "bytes": "436c65726963"
+   },
+   "needs": [],
+   "gaps": 51
+  },
+  {
+   "path": "GoldBox/GB_GEO.hexpat",
+   "name": "GB_GEO",
+   "description": "Gold Box Games - Map (GEO)",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [
+    "patterns/GoldBox/GB_ENUM_IMG.cs"
+   ],
+   "gaps": 27
+  },
+  {
+   "path": "GoldBox/GB_ITM-Base.hexpat",
+   "name": "GB_ITM-Base",
+   "description": "Gold Box Games - Item Base",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "GoldBox/GB_ITM-Record.hexpat",
+   "name": "GB_ITM-Record",
+   "description": "Gold Box Games - Item Record",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [
+    "patterns/GoldBox/GB_STRUCT_ITM.cs",
+    "patterns/GoldBox/GB_UTIL_ITM.cs"
+   ],
+   "gaps": 4
+  },
+  {
+   "path": "GoldBox/GB_UA_SCRIPT.hexpat",
+   "name": "GB_UA_SCRIPT",
+   "description": "Gold Box Games - UA Script",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "GoldBox/GB_VLT.hexpat",
+   "name": "GB_VLT",
+   "description": "Gold Box Games - Vault",
+   "author": "Draxinusom",
+   "magic": null,
+   "needs": [
+    "patterns/GoldBox/GB_STRUCT_ITM.cs",
+    "patterns/GoldBox/GB_UTIL_ITM.cs"
+   ],
+   "gaps": 6
+  },
+  {
+   "path": "SHR.hexpat",
+   "name": "SHR",
+   "description": "Apple IIgs Super Hi-Res (SHR) + PaintWorks Animation (ANI)",
+   "author": "hasseily",
+   "magic": null,
+   "needs": [],
+   "gaps": 26
+  },
+  {
+   "path": "Spore/spore-pdr.hexpat",
+   "name": "spore-pdr",
+   "description": "Spore EAPd Resource (Binary Patch)",
+   "author": "0KepOnline",
+   "magic": {
+    "at": 0,
+    "bytes": "45415044"
+   },
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "a3/a3_bmtr.hexpat",
+   "name": "a3_bmtr",
+   "description": "Arma 3 RTM animation format (binarized)",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "a3/a3_p3d_mlod.hexpat",
+   "name": "a3_p3d_mlod",
+   "description": "Arma 3 P3D model format (MLOD)",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "a3/a3_paa.hexpat",
+   "name": "a3_paa",
+   "description": "Arma 3 PAA image format",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "a3/a3_rap.hexpat",
+   "name": "a3_rap",
+   "description": "Arma 3 binary configuration format",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "a3/a3_rtm.hexpat",
+   "name": "a3_rtm",
+   "description": "Arma 3 RTM animation format (plain)",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "a3/a3_texheaders.hexpat",
+   "name": "a3_texheaders",
+   "description": "Arma 3 texture index file format",
+   "author": "MrClock",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "adtfdat.hexpat",
+   "name": "adtfdat",
+   "description": "ADTFDAT File",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "49464844"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "adts.hexpat",
+   "name": "adts",
+   "description": "AAC ADTSn (Audio Data Transport Stream) Audio",
+   "author": "zhoubo",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "afe2.hexpat",
+   "name": "afe2",
+   "description": "Nintendo Switch Atmosphère CFW Fatal Error log",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "41464530"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "amd_ucode_container.hexpat",
+   "name": "amd_ucode_container",
+   "description": "AMD Linux Kernel microcode container",
+   "author": "Antonio Vázquez Blanco <antoniovazquezblanco@gmail.com>",
+   "magic": {
+    "at": 0,
+    "bytes": "444d415c783030"
+   },
+   "needs": [
+    "patterns/amd_ucode_patch.hexpat"
+   ],
+   "gaps": 0
+  },
+  {
+   "path": "amd_ucode_patch.hexpat",
+   "name": "amd_ucode_patch",
+   "description": "AMD microcode patch",
+   "author": "Antonio Vázquez Blanco <antoniovazquezblanco@gmail.com>",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ani.hexpat",
+   "name": "ani",
+   "description": "Windows animated cursor",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "ape.hexpat",
+   "name": "ape",
+   "description": "APE audio metadata",
+   "author": "DexrnZacAttack",
+   "magic": {
+    "at": 0,
+    "bytes": "4150455441474558"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "apple_single_double.hexpat",
+   "name": "apple_single_double",
+   "description": "AppleSingle/AppleDouble file format",
+   "author": "Lexi Mayfield",
+   "magic": {
+    "at": 0,
+    "bytes": "000516"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ar.hexpat",
+   "name": "ar",
+   "description": "GNU Static library archive",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "arc.hexpat",
+   "name": "arc",
+   "description": "Minecraft LCE ARC File",
+   "author": "DexrnZacAttack",
+   "magic": null,
+   "needs": [
+    "includes/hex/core.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "aria2.hexpat",
+   "name": "aria2",
+   "description": "aria2 Control File",
+   "author": "itsmeow",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "arm_cm_vtor.hexpat",
+   "name": "arm_cm_vtor",
+   "description": "ARM Cortex M Vector Table Layout",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "bastion/map.hexpat",
+   "name": "map",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/bastion/util.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "bastion/profile.hexpat",
+   "name": "profile",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/bastion/util.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "bastion/save.hexpat",
+   "name": "save",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/bastion/util.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "bastion/util.hexpat",
+   "name": "util",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "bcss.hexpat",
+   "name": "bcss",
+   "description": "BeyondCompare Snapshot (BCSS) file",
+   "author": "ttimasdf",
+   "magic": {
+    "at": 0,
+    "bytes": "42435353"
+   },
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat",
+    "includes/hex/core.pat"
+   ],
+   "gaps": 14
+  },
+  {
+   "path": "bencode.hexpat",
+   "name": "bencode",
+   "description": "Torrent data (Bencode)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "bgcode.hexpat",
+   "name": "bgcode",
+   "description": "Prusa Binary G-Code",
+   "author": "Shadlock0133 (aka Aurora) / WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "47434445"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "bink_container.hexpat",
+   "name": "bink_container",
+   "description": "Bink Video Container - RAD Game Tools",
+   "author": "Xavier \"XJDHDR\" du Hecquet de Rauville",
+   "magic": {
+    "at": 0,
+    "bytes": "42494b"
+   },
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "binka.hexpat",
+   "name": "binka",
+   "description": "RAD Game Tools BINKA (Bink Audio)",
+   "author": "DexrnZacAttack",
+   "magic": {
+    "at": 0,
+    "bytes": "31464342"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "blend.hexpat",
+   "name": "blend",
+   "description": "Blender file",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "424c454e444552"
+   },
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 15
+  },
+  {
+   "path": "blf.hexpat",
+   "name": "blf",
+   "description": "Vector BLF Frame Logging Files",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "4c4f4747"
+   },
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 9
+  },
+  {
+   "path": "bloodborne_save.hexpat",
+   "name": "bloodborne_save",
+   "description": "Bloodborne Save file",
+   "author": "Noxde",
+   "magic": null,
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "bmp.hexpat",
+   "name": "bmp",
+   "description": "OS2/Windows Bitmap",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "bplist.hexpat",
+   "name": "bplist",
+   "description": "Apple binary property list",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 25
+  },
+  {
+   "path": "bson.hexpat",
+   "name": "bson",
+   "description": "BSON (Binary JSON)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "bsp_goldsrc.hexpat",
+   "name": "bsp_goldsrc",
+   "description": "GoldSrc engine map (Half-Life 1)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 26
+  },
+  {
+   "path": "btrfs_send_stream.hexpat",
+   "name": "btrfs_send_stream",
+   "description": "BTRFS Send Stream format - see https://btrfs.readthedocs.io/en/latest/dev/dev-send-stream.html. Currently supports versions 1 and 2.",
+   "author": "Glenn Hartmann",
+   "magic": {
+    "at": 0,
+    "bytes": "62747266732d73747265616d"
+   },
+   "needs": [],
+   "gaps": 15
+  },
+  {
+   "path": "bzip3.hexpat",
+   "name": "bzip3",
+   "description": "Parses BZip3 compression (file format) by Kamila Szewczyk",
+   "author": "Sewer56",
+   "magic": {
+    "at": 0,
+    "bytes": "425a337631"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "cab.hexpat",
+   "name": "cab",
+   "description": "Microsoft Cabinet (CAB) Files",
+   "author": "The Wandering Trader",
+   "magic": {
+    "at": 0,
+    "bytes": "4d534346"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "cchva.hexpat",
+   "name": "cchva",
+   "description": "Command and Conquer Voxel Animation",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ccpal.hexpat",
+   "name": "ccpal",
+   "description": "Command and Conquer Voxel Palette",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ccvxl.hexpat",
+   "name": "ccvxl",
+   "description": "Command and Conquer Voxel Model",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "cda.hexpat",
+   "name": "cda",
+   "description": "Compact Disc Audio track",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "52494646"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "chd.hexpat",
+   "name": "chd",
+   "description": "MAME Compressed Hunks of Data",
+   "author": "Lexi Mayfield",
+   "magic": null,
+   "needs": [],
+   "gaps": 22
+  },
+  {
+   "path": "chm.hexpat",
+   "name": "chm",
+   "description": "Windows HtmlHelp Data (ITSF / CHM)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 8
+  },
+  {
+   "path": "chromium_pak.hexpat",
+   "name": "chromium_pak",
+   "description": "Chromium Pak File",
+   "author": "East_Arctica",
+   "magic": null,
+   "needs": [],
+   "gaps": 15
+  },
+  {
+   "path": "coff.hexpat",
+   "name": "coff",
+   "description": "Common Object File Format (COFF) executable",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "commodore_basic.hexpat",
+   "name": "commodore_basic",
+   "description": "Commodore BASIC",
+   "author": "Stephen Hewitt",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "cpio.hexpat",
+   "name": "cpio",
+   "description": "Old Binary CPIO",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "cpio_new_ascii.hexpat",
+   "name": "cpio_new_ascii",
+   "description": "\"New\" ASCII CPIO",
+   "author": "gunjambi",
+   "magic": {
+    "at": 0,
+    "bytes": "303730373031"
+   },
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "cpio_portable_ascii.hexpat",
+   "name": "cpio_portable_ascii",
+   "description": "Portable ASCII CPIO",
+   "author": "gunjambi",
+   "magic": {
+    "at": 0,
+    "bytes": "303730373037"
+   },
+   "needs": [],
+   "gaps": 9
+  },
+  {
+   "path": "credhist.hexpat",
+   "name": "credhist",
+   "description": "\"CREDHIST\"",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "csnap.hexpat",
+   "name": "csnap",
+   "description": "ClipboardEdit Clipboard Snapshot format",
+   "author": "FireBlade",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "dds.hexpat",
+   "name": "dds",
+   "description": "DirectDraw Surface",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 9
+  },
+  {
+   "path": "dex.hexpat",
+   "name": "dex",
+   "description": "Dalvik EXecutable",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "dicom.hexpat",
+   "name": "dicom",
+   "description": "DICOM Digital Imaging and Communications in Medicine",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "dmc3_hd_mod.hexpat",
+   "name": "dmc3_hd_mod",
+   "description": "Devil May Cry 3 HD .mod 3D model file",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "dmg.hexpat",
+   "name": "dmg",
+   "description": "Apple Disk Image Trailer (DMG)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "dmp64.hexpat",
+   "name": "dmp64",
+   "description": "\"KERNEL DUMP\"",
+   "author": "\"5h4rrK\"",
+   "magic": {
+    "at": 0,
+    "bytes": "50414745"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "dod-save.hexpat",
+   "name": "dod-save",
+   "description": "Dig Or Die Save File",
+   "author": "ddmitv",
+   "magic": {
+    "at": 0,
+    "bytes": "1f09534156452046494c45"
+   },
+   "needs": [
+    "includes/hex/core.pat",
+    "includes/hex/impl/imhex_check.pat",
+    "includes/hex/provider.pat",
+    "includes/hex/dec.pat"
+   ],
+   "gaps": 9
+  },
+  {
+   "path": "dos.hexpat",
+   "name": "dos",
+   "description": "MSDOS executable file",
+   "author": "Stephen Hewitt",
+   "magic": null,
+   "needs": [],
+   "gaps": 17
+  },
+  {
+   "path": "dotnet_binaryformatter.hexpat",
+   "name": "dotnet_binaryformatter",
+   "description": ".NET BinaryFormatter (System.Runtime.Serialization.Formatters.Binary, obsolete)",
+   "author": "ODeux",
+   "magic": null,
+   "needs": [],
+   "gaps": 130
+  },
+  {
+   "path": "dpapiblob.hexpat",
+   "name": "dpapiblob",
+   "description": "\"DPAPI Blob\"",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "dpapimasterkey.hexpat",
+   "name": "dpapimasterkey",
+   "description": "\"DPAPIMasterKey\"",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "dsstore.hexpat",
+   "name": "dsstore",
+   "description": "macOS .DS_Store",
+   "author": "",
+   "magic": {
+    "at": 4,
+    "bytes": "42756431"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "dted.hexpat",
+   "name": "dted",
+   "description": "Digital Terrain Elevation Data",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "4c4855"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "ebu_stl.hexpat",
+   "name": "ebu_stl",
+   "description": "EBU STL Subtitle File Format (EBU Tech 3264)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "elf.hexpat",
+   "name": "elf",
+   "description": "Executable and Linkable Format executable (ELF)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 9
+  },
+  {
+   "path": "esp32_image.hexpat",
+   "name": "esp32_image",
+   "description": "ESP32 Firmware Image Format",
+   "author": "timschneeb",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "esp8266.hexpat",
+   "name": "esp8266",
+   "description": "ESP8266 Firmware Image v1",
+   "author": "lopqto",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "evtx.hexpat",
+   "name": "evtx",
+   "description": "MS Windows Vista Event Log",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "fas_oskasoftware.hexpat",
+   "name": "fas_oskasoftware",
+   "description": "Oska Software DeskMates FAS (Frames and Sequences)",
+   "author": "DmitriLeon2000",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "fas_oskasoftware_old.hexpat",
+   "name": "fas_oskasoftware_old",
+   "description": "Oska Software DeskMates FAS (Frames and Sequences) (Oska DeskMate 1.03 and 2.06)",
+   "author": "DmitriLeon2000",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "fbx.hexpat",
+   "name": "fbx",
+   "description": "Kaydara FBX Binary",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "4b617964617261204642582042696e6172792020001a00"
+   },
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 30
+  },
+  {
+   "path": "fdt.hexpat",
+   "name": "fdt",
+   "description": "Flat Linux Device Tree blob",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "d00dfeed"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "fez.hexpat",
+   "name": "fez",
+   "description": "FEZ Game Save File Format",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/all/a_abilities.bin.hexpat",
+   "name": "a_abilities.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/all/btl.bin.hexpat",
+   "name": "btl.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/buki_get.bin.hexpat",
+   "name": "buki_get.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/mon.bin.hexpat",
+   "name": "mon.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": null
+  },
+  {
+   "path": "ffx/all/ply_save.bin.hexpat",
+   "name": "ply_save.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "ffx/all/sphere_grid_layout.dat.hexpat",
+   "name": "sphere_grid_layout.dat",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/sphere_grid_nodes.dat.hexpat",
+   "name": "sphere_grid_nodes.dat",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/st_number.bin.hexpat",
+   "name": "st_number.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/sum_assure.bin.hexpat",
+   "name": "sum_assure.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/takara.bin.hexpat",
+   "name": "takara.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/all/weapon.bin.hexpat",
+   "name": "weapon.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ffx/en/important.bin.hexpat",
+   "name": "important.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/item.bin.hexpat",
+   "name": "item.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/moncom.hexpat",
+   "name": "moncom",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/panel.bin.hexpat",
+   "name": "panel.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/pccom.hexpat",
+   "name": "pccom",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/sphere.bin.hexpat",
+   "name": "sphere.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/txt/double0.hexpat",
+   "name": "double0",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "ffx/en/txt/double1.hexpat",
+   "name": "double1",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/txt/double2.hexpat",
+   "name": "double2",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/txt/single2.hexpat",
+   "name": "single2",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/en/w_name.bin.hexpat",
+   "name": "w_name.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "ffx/jp/txt/double0.hexpat",
+   "name": "double0",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "ffx/jp/txt/double1.hexpat",
+   "name": "double1",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/jp/txt/double2.hexpat",
+   "name": "double2",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "ffx/jp/txt/single2.hexpat",
+   "name": "single2",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": null
+  },
+  {
+   "path": "ffx/jp/w_name.bin.hexpat",
+   "name": "w_name.bin",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [
+    "patterns/ffx/utils.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "ffx/utils.hexpat",
+   "name": "utils",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "flac.hexpat",
+   "name": "flac",
+   "description": "Free Lossless Audio Codec, FLAC Audio Format",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "flc.hexpat",
+   "name": "flc",
+   "description": "FLC/FLIC animation file",
+   "author": "",
+   "magic": {
+    "at": 4,
+    "bytes": "12af"
+   },
+   "needs": [],
+   "gaps": 14
+  },
+  {
+   "path": "flipper_settings.hexpat",
+   "name": "flipper_settings",
+   "description": "Flipper Zero Settings",
+   "author": "Jan Wiesemann",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "flp.hexpat",
+   "name": "flp",
+   "description": "A pattern for FL Studio project files",
+   "author": "Lautaro Martínez (PentaChess413)",
+   "magic": null,
+   "needs": [],
+   "gaps": 13
+  },
+  {
+   "path": "flv.hexpat",
+   "name": "flv",
+   "description": "flv Archive",
+   "author": "ZN123 version 1.0",
+   "magic": {
+    "at": 0,
+    "bytes": "464c56"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "fs/apfs.hexpat",
+   "name": "apfs",
+   "description": "Apple File System (APFS)",
+   "author": "Hrant Tadevosyan (Axcient, now ConnectWise)",
+   "magic": null,
+   "needs": [],
+   "gaps": 41
+  },
+  {
+   "path": "fs/exfat.hexpat",
+   "name": "exfat",
+   "description": "Extensible File Allocation Table (exFAT)",
+   "author": "Khoo Hao Yit",
+   "magic": {
+    "at": 3,
+    "bytes": "4558464154202020"
+   },
+   "needs": [],
+   "gaps": 24
+  },
+  {
+   "path": "fs/ext4.hexpat",
+   "name": "ext4",
+   "description": "ext4 volume layout parser (until inodes)",
+   "author": "endes",
+   "magic": {
+    "at": 1080,
+    "bytes": "53ef"
+   },
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "fs/fat32.hexpat",
+   "name": "fat32",
+   "description": "",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "fs/mbr.hexpat",
+   "name": "mbr",
+   "description": "Master boot record - IBM",
+   "author": "Xavier \"XJDHDR\" du Hecquet de Rauville",
+   "magic": {
+    "at": 510,
+    "bytes": "55aa"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "fs/ntfs.hexpat",
+   "name": "ntfs",
+   "description": "NT File System (NTFS)",
+   "author": "Hrant Tadevosyan (Axcient, now ConnectWise)",
+   "magic": null,
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "fs/pattern.hexpat",
+   "name": "pattern",
+   "description": "Drive File System",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [
+    "patterns/fs/fat32.hexpat",
+    "patterns/fs/exfat.hexpat",
+    "patterns/fs/ntfs.hexpat"
+   ],
+   "gaps": 21
+  },
+  {
+   "path": "fs/refs.hexpat",
+   "name": "refs",
+   "description": "ReFS-File-System",
+   "author": "5h4rrK // https://www.github.com/5h4rrK",
+   "magic": null,
+   "needs": [],
+   "gaps": 33
+  },
+  {
+   "path": "fs.hexpat",
+   "name": "fs",
+   "description": "Drive File System",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "gb.hexpat",
+   "name": "gb",
+   "description": "Gameboy ROM",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "gba.hexpat",
+   "name": "gba",
+   "description": "Game Boy Advance ROM Header",
+   "author": "GekySan",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "gbx.hexpat",
+   "name": "gbx",
+   "description": "GameBoy ROM file GBX footer",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [
+    "patterns/gb.hexpat"
+   ],
+   "gaps": 2
+  },
+  {
+   "path": "gen.hexpat",
+   "name": "gen",
+   "description": "Sega Genesis/MegaDrive header",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "gguf.hexpat",
+   "name": "gguf",
+   "description": "ggml GGUF v3",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "47475546"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "gif.hexpat",
+   "name": "gif",
+   "description": "GIF image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "gltf.hexpat",
+   "name": "gltf",
+   "description": "GL Transmission Format binary 3D model (.glb)",
+   "author": "H. Utku Maden, xZise",
+   "magic": {
+    "at": 0,
+    "bytes": "676c5446"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "gmd.hexpat",
+   "name": "gmd",
+   "description": "Game Maker 4.0-6.1A data (GMD/GMR/GM6)",
+   "author": "DmitriLeon2000",
+   "magic": {
+    "at": 0,
+    "bytes": "91d51200"
+   },
+   "needs": [],
+   "gaps": 22
+  },
+  {
+   "path": "gmf.hexpat",
+   "name": "gmf",
+   "description": "Game Maker 3.x data",
+   "author": "DmitriLeon2000",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "gtasa_save.hexpat",
+   "name": "gtasa_save",
+   "description": "GTA San Andreas Save Game",
+   "author": "haru233",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "gvas.hexpat",
+   "name": "gvas",
+   "description": "Unreal Engine Save Game",
+   "author": "Scott Anderson",
+   "magic": {
+    "at": 0,
+    "bytes": "47564153"
+   },
+   "needs": [],
+   "gaps": 19
+  },
+  {
+   "path": "gzip.hexpat",
+   "name": "gzip",
+   "description": "GZip compressed data",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "hinf_luas.hexpat",
+   "name": "hinf_luas",
+   "description": "Halo Infinite HavokScript 5.1 \"luas\"",
+   "author": "Surasia",
+   "magic": {
+    "at": 0,
+    "bytes": "75637368"
+   },
+   "needs": [],
+   "gaps": 8
+  },
+  {
+   "path": "hinf_module.hexpat",
+   "name": "hinf_module",
+   "description": "Halo Infinite Module",
+   "author": "Surasia",
+   "magic": {
+    "at": 0,
+    "bytes": "6d6f6864"
+   },
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "hinf_tag.hexpat",
+   "name": "hinf_tag",
+   "description": "Halo Infinite Tag",
+   "author": "Surasia",
+   "magic": {
+    "at": 0,
+    "bytes": "75637368"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "hldem.hexpat",
+   "name": "hldem",
+   "description": "GoldSRC DEM",
+   "author": "den4iklovelinux",
+   "magic": {
+    "at": 0,
+    "bytes": "484c44454d4f"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "hprof.hexpat",
+   "name": "hprof",
+   "description": "Java HPROF Profiler Data Format",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "4a4156412050524f46494c45"
+   },
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "hsdt.hexpat",
+   "name": "hsdt",
+   "description": "HiSilicon HSDT device-tree table",
+   "author": "xtex",
+   "magic": {
+    "at": 0,
+    "bytes": "48534454"
+   },
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "ico.hexpat",
+   "name": "ico",
+   "description": "Windows Icon (.ico) or Cursor (.cur)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [
+    "patterns/bmp.hexpat",
+    "patterns/png.hexpat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "id3.hexpat",
+   "name": "id3",
+   "description": "MP3 ID3 tags",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "ifile.hexpat",
+   "name": "ifile",
+   "description": "Windows Recycling Bin $I file",
+   "author": "RedHare-Exe",
+   "magic": {
+    "at": 0,
+    "bytes": "0200000000000000"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "imah.hexpat",
+   "name": "imah",
+   "description": "DJI Encrypted/Signed Firmware (IM*H)",
+   "author": "Hrant (0xZ3R0)",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "intel_hex.hexpat",
+   "name": "intel_hex",
+   "description": "Intel hex",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ip.hexpat",
+   "name": "ip",
+   "description": "Ethernet II Frames (IP Packets)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ips.hexpat",
+   "name": "ips",
+   "description": "IPS (International Patching System)",
+   "author": "gmestanley",
+   "magic": {
+    "at": 0,
+    "bytes": "5041544348"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "iso.hexpat",
+   "name": "iso",
+   "description": "ISO 9660 file system",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "java_class.hexpat",
+   "name": "java_class",
+   "description": "Java Class",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 9
+  },
+  {
+   "path": "job.hexpat",
+   "name": "job",
+   "description": "WindowsTaskScheduler v1.0 job",
+   "author": "Sabhya // shark",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "jpeg.hexpat",
+   "name": "jpeg",
+   "description": "JPEG Image",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "keytab.hexpat",
+   "name": "keytab",
+   "description": "MIT Kerberos 5 keytab file",
+   "author": "Mikle_Bond",
+   "magic": {
+    "at": 0,
+    "bytes": "05"
+   },
+   "needs": [],
+   "gaps": 10
+  },
+  {
+   "path": "kindle_update.hexpat",
+   "name": "kindle_update",
+   "description": "Kindle Update Package",
+   "author": "ptrpaws",
+   "magic": {
+    "at": 0,
+    "bytes": "53503031"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "ktx.hexpat",
+   "name": "ktx",
+   "description": "Khronos TeXture 1.0",
+   "author": "Lexi Mayfield",
+   "magic": {
+    "at": 0,
+    "bytes": "ab4b5458203131bb0d0a1a0a"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "lcesave.hexpat",
+   "name": "lcesave",
+   "description": "Minecraft LCE Save File",
+   "author": "DexrnZacAttack",
+   "magic": null,
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat",
+    "includes/hex/core.pat"
+   ],
+   "gaps": 6
+  },
+  {
+   "path": "lnk.hexpat",
+   "name": "lnk",
+   "description": "Windows Shell Link / Shortcut",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 11
+  },
+  {
+   "path": "loc.hexpat",
+   "name": "loc",
+   "description": "Minecraft LCE LOC file",
+   "author": "DexrnZacAttack",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "lua40.hexpat",
+   "name": "lua40",
+   "description": "Lua 4.0 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756140"
+   },
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "lua50.hexpat",
+   "name": "lua50",
+   "description": "Lua 5.0 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756150"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "lua51.hexpat",
+   "name": "lua51",
+   "description": "Lua 5.1 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756151"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "lua52.hexpat",
+   "name": "lua52",
+   "description": "Lua 5.2 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756152"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "lua53.hexpat",
+   "name": "lua53",
+   "description": "Lua 5.3 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756153"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "lua54.hexpat",
+   "name": "lua54",
+   "description": "Lua 5.4 bytecode",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756154"
+   },
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "lz4.hexpat",
+   "name": "lz4",
+   "description": "LZ4 Frame Format",
+   "author": "Gemini",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "lznt1.hexpat",
+   "name": "lznt1",
+   "description": "LZNT1",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "macho.hexpat",
+   "name": "macho",
+   "description": "Mach-O executable",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 10
+  },
+  {
+   "path": "magic.hexpat",
+   "name": "magic",
+   "description": "file / libmagic Magic Database",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "1c041ef1"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "max_v104.hexpat",
+   "name": "max_v104",
+   "description": "Mechanized Assault and Exploration v1.04 (strategy game) save",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "midi.hexpat",
+   "name": "midi",
+   "description": "MIDI Musical Instrument Digital Interface",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "mifare/mifare-1k.hexpat",
+   "name": "mifare-1k",
+   "description": "MIFARE Classic EV1 1K (MF1S50yyX/V1), ISO/IEC 14443-3 Type A",
+   "author": "Bananz0",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "mifare/mifare-4k.hexpat",
+   "name": "mifare-4k",
+   "description": "MIFARE Classic EV1 4K (MF1S70yyX/V1), ISO/IEC 14443-3 Type A",
+   "author": "Bananz0",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "minidump.hexpat",
+   "name": "minidump",
+   "description": "Windows MiniDump",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "mo.hexpat",
+   "name": "mo",
+   "description": "GNU Machine Object (MO) files containing translations for gettext",
+   "author": "dvob",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "moduleanalysiscache.hexpat",
+   "name": "moduleanalysiscache",
+   "description": "PSModuleCacheFile (ModuleAnalysisCache)",
+   "author": "Sabhya (shark)",
+   "magic": {
+    "at": 0,
+    "bytes": "50534d4f44554c454341434845"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "mp4.hexpat",
+   "name": "mp4",
+   "description": "MPEG-4 Part 14 digital multimedia container (MP4)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "msf.hexpat",
+   "name": "msf",
+   "description": "Microsoft debugging files",
+   "author": "bwrsandman",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "msgpack.hexpat",
+   "name": "msgpack",
+   "description": "MessagePack",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "msscmp.hexpat",
+   "name": "msscmp",
+   "description": "MSSCMP (Miles Sound System Compressed Archive)",
+   "author": "DexrnZacAttack",
+   "magic": {
+    "at": 0,
+    "bytes": "42414e4b"
+   },
+   "needs": [
+    "includes/hex/core.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 5
+  },
+  {
+   "path": "n64.hexpat",
+   "name": "n64",
+   "description": "Nintendo 64 ROM header",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "nacp.hexpat",
+   "name": "nacp",
+   "description": "Nintendo Switch NACP",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "nbt.hexpat",
+   "name": "nbt",
+   "description": "Minecraft NBT",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "nds.hexpat",
+   "name": "nds",
+   "description": "DS Cartridge Header",
+   "author": "GekySan",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ne.hexpat",
+   "name": "ne",
+   "description": "Microsoft DOS NE executable",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "nes.hexpat",
+   "name": "nes",
+   "description": "Nintendo Entertainment System ROM",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "notepad-cache.hexpat",
+   "name": "notepad-cache",
+   "description": "Windows Notepad Cache Files",
+   "author": "sethhall",
+   "magic": {
+    "at": 0,
+    "bytes": "4e5000"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "notepad-state.hexpat",
+   "name": "notepad-state",
+   "description": "Windows Notepad State Files",
+   "author": "Gal1leo",
+   "magic": {
+    "at": 0,
+    "bytes": "4e5000"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "notepadwindowstate.hexpat",
+   "name": "notepadwindowstate",
+   "description": "Windows 11 Notepad Window State file",
+   "author": "ogmini https://github.com/ogmini",
+   "magic": {
+    "at": 0,
+    "bytes": "4e50"
+   },
+   "needs": [],
+   "gaps": null
+  },
+  {
+   "path": "nro.hexpat",
+   "name": "nro",
+   "description": "Nintendo Switch NRO",
+   "author": "WerWolv",
+   "magic": {
+    "at": 16,
+    "bytes": "4e524f30"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "nsf.hexpat",
+   "name": "nsf",
+   "description": "NES Sound Format file",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "nsfe.hexpat",
+   "name": "nsfe",
+   "description": "NSFe file format",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "nso.hexpat",
+   "name": "nso",
+   "description": "Nintendo Switch NSO",
+   "author": "smiRaphi",
+   "magic": {
+    "at": 0,
+    "bytes": "4e534f30"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "ntag.hexpat",
+   "name": "ntag",
+   "description": "NTAG213/NTAG215/NTAG216, NFC Forum Type 2 Tag compliant IC",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "ogg.hexpat",
+   "name": "ogg",
+   "description": "OGG Audio",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "openssh.hexpat",
+   "name": "openssh",
+   "description": "OpenSSH private key",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "2d2d2d2d2d424547494e204f50454e5353482050524956415445204b4559"
+   },
+   "needs": [
+    "includes/type/base64.pat"
+   ],
+   "gaps": 3
+  },
+  {
+   "path": "optee_ta.hexpat",
+   "name": "optee_ta",
+   "description": "ARM OPTEE Trusted Application",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [
+    "patterns/elf.hexpat"
+   ],
+   "gaps": 12
+  },
+  {
+   "path": "orp.hexpat",
+   "name": "orp",
+   "description": "OpenRGB Profile",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "4f50454e5247425f50524f46494c4500"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "parquet.hexpat",
+   "name": "parquet",
+   "description": "Apache Parquet File Format",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 43
+  },
+  {
+   "path": "pbz.hexpat",
+   "name": "pbz",
+   "description": "Apple pbz",
+   "author": "Nicolás Alvarez",
+   "magic": {
+    "at": 0,
+    "bytes": "70627a"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "pcap.hexpat",
+   "name": "pcap",
+   "description": "pcap header and packets",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "pcapng.hexpat",
+   "name": "pcapng",
+   "description": "PcapNG",
+   "author": "5h4rrK",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "pck.hexpat",
+   "name": "pck",
+   "description": "Minecraft LCE .pck files",
+   "author": "nullptr",
+   "magic": null,
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "pcx.hexpat",
+   "name": "pcx",
+   "description": "PCX Image",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "pe.hexpat",
+   "name": "pe",
+   "description": "Microsoft PE Portable Executable (exe/dll)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 13
+  },
+  {
+   "path": "pef.hexpat",
+   "name": "pef",
+   "description": "Preffered Executable Format executable (for Mac OS 7.1.2 - Mac OS 10.4 / BeOS)",
+   "author": "domin568",
+   "magic": null,
+   "needs": [],
+   "gaps": 21
+  },
+  {
+   "path": "pex.hexpat",
+   "name": "pex",
+   "description": "Bethesda Papyrus executable compiled script file",
+   "author": "Scrivener07 and Jonathan Ostrus",
+   "magic": {
+    "at": 0,
+    "bytes": "fa57c0de"
+   },
+   "needs": [],
+   "gaps": 7
+  },
+  {
+   "path": "pf.hexpat",
+   "name": "pf",
+   "description": "Parse forensically relevant parts of Windows Prefetch(*.pf) (only uncompressed SCCA version)",
+   "author": "MrMcX",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "pfs0.hexpat",
+   "name": "pfs0",
+   "description": "Nintendo Switch PFS0 archive (.nsp)",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "50465330"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "pickle.hexpat",
+   "name": "pickle",
+   "description": "Python Binary Object Serialization Protocol",
+   "author": "ODeux",
+   "magic": null,
+   "needs": [],
+   "gaps": 27
+  },
+  {
+   "path": "pif.hexpat",
+   "name": "pif",
+   "description": "PIF Image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "pkm.hexpat",
+   "name": "pkm",
+   "description": "PKM (PacKMan) files containing ETC (Ericsson Texture Compression)",
+   "author": "applecuckoo",
+   "magic": {
+    "at": 0,
+    "bytes": "504b4d20"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "png.hexpat",
+   "name": "png",
+   "description": "PNG image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "png2.hexpat",
+   "name": "png2",
+   "description": "PNG image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "popcap_luc.hexpat",
+   "name": "popcap_luc",
+   "description": "PopCap's proprietary Lua bytecode (.luc)",
+   "author": "gluecia",
+   "magic": {
+    "at": 0,
+    "bytes": "1b4c756156"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "prodinfo.hexpat",
+   "name": "prodinfo",
+   "description": "Nintendo Switch PRODINFO",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "43414c30"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "protobuf.hexpat",
+   "name": "protobuf",
+   "description": "Google Protobuf wire encoding (.pb)",
+   "author": "WerWolv and Glenn Hartmann",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "psafe3.hexpat",
+   "name": "psafe3",
+   "description": "Password Safe V3",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "50575333"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "psp_self.hexpat",
+   "name": "psp_self",
+   "description": "PlayStation Portable SELF",
+   "author": "Li",
+   "magic": {
+    "at": 0,
+    "bytes": "7e505350"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "pyc.hexpat",
+   "name": "pyc",
+   "description": "Python bytecode",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 8
+  },
+  {
+   "path": "pyinstaller.hexpat",
+   "name": "pyinstaller",
+   "description": "PyInstaller binray",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "q3demo.hexpat",
+   "name": "q3demo",
+   "description": "Quake 3 Engine demo",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 14
+  },
+  {
+   "path": "qbcl.hexpat",
+   "name": "qbcl",
+   "description": "Qubicle voxel scene project",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "qoi.hexpat",
+   "name": "qoi",
+   "description": "QOI image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "quantized-mesh.hexpat",
+   "name": "quantized-mesh",
+   "description": "Cesium quantized-mesh terrain",
+   "author": "applecuckoo",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "rar.hexpat",
+   "name": "rar",
+   "description": "RAR archive file format",
+   "author": "targodan",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "ras.hexpat",
+   "name": "ras",
+   "description": "RAS image",
+   "author": "Fl3ch4",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "rcf_v1_2.hexpat",
+   "name": "rcf_v1_2",
+   "description": "Radcore Cement Library file header (.rcf) v1.2",
+   "author": "blu",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "rgbds.hexpat",
+   "name": "rgbds",
+   "description": "Object files for the RGBDS Game Boy assembly toolchain",
+   "author": "ISSOtm <imhex@eldred.fr>",
+   "magic": {
+    "at": 0,
+    "bytes": "52474239"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "rkvd.hexpat",
+   "name": "rkvd",
+   "description": "Rockchip Vendor Storage",
+   "author": "Tom Roozen",
+   "magic": {
+    "at": 0,
+    "bytes": "44564b52"
+   },
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "roblox_pack.hexpat",
+   "name": "roblox_pack",
+   "description": "Roblox .pack shader archive format",
+   "author": "marduk.ru",
+   "magic": {
+    "at": 0,
+    "bytes": "52425853"
+   },
+   "needs": [
+    "includes/hex/core.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 1
+  },
+  {
+   "path": "rpm.hexpat",
+   "name": "rpm",
+   "description": "RPM package format",
+   "author": "k0tran",
+   "magic": {
+    "at": 0,
+    "bytes": "edabeedb"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "rsc.hexpat",
+   "name": "rsc",
+   "description": "BYOND Resource Cache file",
+   "author": "itsmeow",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "sdb.hexpat",
+   "name": "sdb",
+   "description": "SDB File (Shim DataBase file)",
+   "author": "learn_more",
+   "magic": {
+    "at": 8,
+    "bytes": "73646266"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "selinux.hexpat",
+   "name": "selinux",
+   "description": "SE Linux module",
+   "author": "Ange Albertini",
+   "magic": {
+    "at": 0,
+    "bytes": "8cff7cf9"
+   },
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "selinuxpp.hexpat",
+   "name": "selinuxpp",
+   "description": "SE Linux package",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "8fff7cf9"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "sfo.hexpat",
+   "name": "sfo",
+   "description": "PlayStation SFO",
+   "author": "Li",
+   "magic": {
+    "at": 0,
+    "bytes": "00505346"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "shp.hexpat",
+   "name": "shp",
+   "description": "ESRI shapefile",
+   "author": "Calcoph",
+   "magic": {
+    "at": 0,
+    "bytes": "0000270a"
+   },
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "shx.hexpat",
+   "name": "shx",
+   "description": "ESRI shapefile indices",
+   "author": "Calcoph",
+   "magic": {
+    "at": 0,
+    "bytes": "0000270a"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "sit5.hexpat",
+   "name": "sit5",
+   "description": "StuffIt V5 archive",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "smk.hexpat",
+   "name": "smk",
+   "description": "Smacker video file",
+   "author": "xZise",
+   "magic": {
+    "at": 0,
+    "bytes": "534d4b32"
+   },
+   "needs": [],
+   "gaps": 23
+  },
+  {
+   "path": "snes.hexpat",
+   "name": "snes",
+   "description": "Super Nintendo Entertainment System ROM header",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "spc.hexpat",
+   "name": "spc",
+   "description": "SNES SPC-700 Sound File",
+   "author": "DexrnZacAttack",
+   "magic": {
+    "at": 0,
+    "bytes": "534e45532d53504337303020536f756e642046696c652044617461"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "spirv.hexpat",
+   "name": "spirv",
+   "description": "Khronos Group SPIR-V",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "sqlite3.hexpat",
+   "name": "sqlite3",
+   "description": "SQLite 3 database",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "stdfv4.hexpat",
+   "name": "stdfv4",
+   "description": "STDFv4 (Standard Test Data Format)",
+   "author": "andreasWallner",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "stl.hexpat",
+   "name": "stl",
+   "description": "STL 3D Model",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "sup.hexpat",
+   "name": "sup",
+   "description": "SUP Bluray Subtitle",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "5047"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "swf.hexpat",
+   "name": "swf",
+   "description": "Shockwave Flash Movie (SWF)",
+   "author": "saturnaliam",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "tar.hexpat",
+   "name": "tar",
+   "description": "GNU Tar",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "tarc.hexpat",
+   "name": "tarc",
+   "description": "KEX Engine TARC format",
+   "author": "Lexi Mayfield",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "terminfo.hexpat",
+   "name": "terminfo",
+   "description": "Compiled term info entry",
+   "author": "Nightowl286",
+   "magic": {
+    "at": 0,
+    "bytes": "1e02"
+   },
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "tga.hexpat",
+   "name": "tga",
+   "description": "Truevision TGA/TARGA image",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "thumbcache.hexpat",
+   "name": "thumbcache",
+   "description": "Windows thumbcache files",
+   "author": "MrMcX",
+   "magic": null,
+   "needs": [
+    "includes/hex/core.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 10
+  },
+  {
+   "path": "tiff.hexpat",
+   "name": "tiff",
+   "description": "Tag Image File Format (TIFF)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 35
+  },
+  {
+   "path": "tmd.hexpat",
+   "name": "tmd",
+   "description": "Nintendo TMD",
+   "author": "smiRaphi",
+   "magic": {
+    "at": 576,
+    "bytes": "526f6f742d4341303030303030"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "ttf.hexpat",
+   "name": "ttf",
+   "description": "TrueType/OpenType font",
+   "author": "Shimogawa (aka Rebuild)",
+   "magic": null,
+   "needs": [],
+   "gaps": 29
+  },
+  {
+   "path": "ubiquiti.hexpat",
+   "name": "ubiquiti",
+   "description": "Ubiquiti Firmware (update) image",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "55424e54"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "uefi.hexpat",
+   "name": "uefi",
+   "description": "UEFI efivars",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "uefi_boot_entry.hexpat",
+   "name": "uefi_boot_entry",
+   "description": "UEFI Boot Entry (Load option)",
+   "author": "iTrooz",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "uefi_fv_varstore.hexpat",
+   "name": "uefi_fv_varstore",
+   "description": "UEFI Firmware Volume Variable Store",
+   "author": "Marc Jones",
+   "magic": null,
+   "needs": [],
+   "gaps": 5
+  },
+  {
+   "path": "uf2.hexpat",
+   "name": "uf2",
+   "description": "USB Flashing Format (.uf2)",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "5546320a57515d9e"
+   },
+   "needs": [],
+   "gaps": 3
+  },
+  {
+   "path": "unif.hexpat",
+   "name": "unif",
+   "description": "Universal NES Image Format",
+   "author": "gmestanley",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "unity-asset-bundle.hexpat",
+   "name": "unity-asset-bundle",
+   "description": "Unity Asset Bundle",
+   "author": "Khoo Hao Yit",
+   "magic": {
+    "at": 0,
+    "bytes": "556e6974795765625c30"
+   },
+   "needs": [
+    "includes/hex/dec.pat",
+    "includes/hex/impl/imhex_check.pat"
+   ],
+   "gaps": 17
+  },
+  {
+   "path": "unity_web_data.hexpat",
+   "name": "unity_web_data",
+   "description": "Unity Web Data 1.0",
+   "author": "unidentifiedfox",
+   "magic": {
+    "at": 0,
+    "bytes": "556e69747957656244617461312e305c30"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "upk-ue3.hexpat",
+   "name": "upk-ue3",
+   "description": "Unreal Engine 3 UPK",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "c1832a9e"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "usb.hexpat",
+   "name": "usb",
+   "description": "USB Device Descriptor",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "valve_vpk.hexpat",
+   "name": "valve_vpk",
+   "description": "Valve VPK",
+   "author": "Enaium",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "vbmeta.hexpat",
+   "name": "vbmeta",
+   "description": "Android VBMeta image",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "41564230"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "vdf.hexpat",
+   "name": "vdf",
+   "description": "Valve Binary Value Data Format (.vdf)",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "veado.hexpat",
+   "name": "veado",
+   "description": "Veadotube Mini Avatar File",
+   "author": "bake",
+   "magic": {
+    "at": 0,
+    "bytes": "564541444f54554245"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "vgm.hexpat",
+   "name": "vgm",
+   "description": "VGM (Video Game Music) sound log",
+   "author": "applecuckoo",
+   "magic": null,
+   "needs": [],
+   "gaps": 6
+  },
+  {
+   "path": "vhd.hexpat",
+   "name": "vhd",
+   "description": "Virtual Hard Disk file - Connectix / Microsoft",
+   "author": "Xavier \"XJDHDR\" du Hecquet de Rauville",
+   "magic": null,
+   "needs": [
+    "patterns/fs/mbr.hexpat"
+   ],
+   "gaps": 5
+  },
+  {
+   "path": "vhdx.hexpat",
+   "name": "vhdx",
+   "description": "Microsoft Hyper-V Virtual Hard Disk",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "vox.hexpat",
+   "name": "vox",
+   "description": "MagicaVoxel scene description format",
+   "author": "Jake Ryan",
+   "magic": {
+    "at": 0,
+    "bytes": "564f5820"
+   },
+   "needs": [],
+   "gaps": 12
+  },
+  {
+   "path": "wad.hexpat",
+   "name": "wad",
+   "description": "DOOM WAD Archive",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "50574144"
+   },
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "was_oskasoftware.hexpat",
+   "name": "was_oskasoftware",
+   "description": "Oska Software DeskMates WAS/WA3 (WAVE/MP3 Set)",
+   "author": "DmitriLeon2000",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "wav.hexpat",
+   "name": "wav",
+   "description": "RIFF/WAVE/PCM (.wav)",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 33
+  },
+  {
+   "path": "webp.hexpat",
+   "name": "webp",
+   "description": "Google WebP",
+   "author": "applecuckoo",
+   "magic": null,
+   "needs": [],
+   "gaps": 11
+  },
+  {
+   "path": "wintec_tes.hexpat",
+   "name": "wintec_tes",
+   "description": "Wintec TES GPS log",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "xbeh.hexpat",
+   "name": "xbeh",
+   "description": "Xbox executable",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "xci.hexpat",
+   "name": "xci",
+   "description": "Nintendo Switch XCI cartridge ROM",
+   "author": "WerWolv",
+   "magic": {
+    "at": 0,
+    "bytes": "48465330"
+   },
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "xex.hexpat",
+   "name": "xex",
+   "description": "Atari 8-bit binary format (.xex)",
+   "author": "Adiee5",
+   "magic": {
+    "at": 0,
+    "bytes": "ffff"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "xgspak.hexpat",
+   "name": "xgspak",
+   "description": "Exient XGS Engine Pak",
+   "author": "LolHacksRule",
+   "magic": null,
+   "needs": [],
+   "gaps": 17
+  },
+  {
+   "path": "xgstexture.hexpat",
+   "name": "xgstexture",
+   "description": "Exient XGS Engine Texture",
+   "author": "LolHacksRule",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "xilinx_bit.hexpat",
+   "name": "xilinx_bit",
+   "description": "Xilinx FPGA Bitstream",
+   "author": "WerWolv",
+   "magic": null,
+   "needs": [],
+   "gaps": 0
+  },
+  {
+   "path": "xilinx_bootgen.hexpat",
+   "name": "xilinx_bootgen",
+   "description": "Xilinx Zynq UltraScale+ Boot Image",
+   "author": "",
+   "magic": {
+    "at": 36,
+    "bytes": "584e4c58"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "zim.hexpat",
+   "name": "zim",
+   "description": "ZIM file format",
+   "author": "",
+   "magic": {
+    "at": 0,
+    "bytes": "5a494d04"
+   },
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "zip.hexpat",
+   "name": "zip",
+   "description": "ZIP compression archive",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 1
+  },
+  {
+   "path": "zlib.hexpat",
+   "name": "zlib",
+   "description": "ZLIB compressed data",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  },
+  {
+   "path": "zone.hexpat",
+   "name": "zone",
+   "description": "Minecraft Infdev 20100624 Zone File",
+   "author": "DexrnZacAttack",
+   "magic": {
+    "at": 0,
+    "bytes": "13737000"
+   },
+   "needs": [],
+   "gaps": 4
+  },
+  {
+   "path": "zstd.hexpat",
+   "name": "zstd",
+   "description": "Zstandard compressed data",
+   "author": "",
+   "magic": null,
+   "needs": [],
+   "gaps": 2
+  }
+ ]
+}

@@ -554,16 +554,30 @@ pub fn kaitai_names() -> Vec<String> {
         .collect()
 }
 
+/// The names of the bundled ImHex patterns, each with the `hexpat:` on the
+/// front that [`template`] opens it by.
+pub fn hexpat_names() -> Vec<String> {
+    crate::hexpat::bundled::names()
+        .into_iter()
+        .map(|id| format!("{}{id}", crate::hexpat::bundled::PREFIX))
+        .collect()
+}
+
 /// The template any name opens: a builtin by its own name, a bundled Kaitai
-/// format by `ksy:` and its `meta/id`.
+/// format by `ksy:` and its `meta/id`, a bundled ImHex pattern by `hexpat:`
+/// and the file's stem.
 ///
 /// This is what a name from [`sniff`] should be handed to, since `sniff`
-/// answers with either kind. The conversion report a `.ksy` comes with is
+/// answers with either kind. The conversion report a description comes with is
 /// dropped here; a caller that wants it, and the panel does, asks
-/// [`crate::ksy::bundled::template`] instead.
+/// [`crate::ksy::bundled::template`] or
+/// [`crate::hexpat::bundled::template`] instead.
 pub fn template(name: &str) -> Option<Template> {
     if let Some(id) = name.strip_prefix(crate::ksy::bundled::PREFIX) {
         return crate::ksy::bundled::template(id)?.ok().map(|c| c.template);
+    }
+    if let Some(id) = name.strip_prefix(crate::hexpat::bundled::PREFIX) {
+        return crate::hexpat::bundled::template(id)?.ok().map(|c| c.template);
     }
     builtin(name)
 }

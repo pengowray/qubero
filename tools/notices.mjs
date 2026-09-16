@@ -311,17 +311,61 @@ if (ksy.length > 0) {
   for (const f of ksy) md += `| ${f.id} | ${f.licence} | [${f.source}](${KSY_UPSTREAM}/${f.source}) |\n`;
 }
 
+// ---- ImHex patterns ----
+//
+// The ImHex-Patterns repository is GPL-2.0 as a whole, so the only files copied
+// into `crates/core/formats-hexpat` are the handful carrying a licence of their
+// own in the header. The licence is read from the header, which is the only
+// place it is stated: there is no `meta/license` key in this language.
+const HEXPAT_DIR = join(ROOT, "crates", "core", "formats-hexpat");
+const HEXPAT_UPSTREAM = "https://github.com/WerWolv/ImHex-Patterns/blob/master/patterns";
+
+function hexpatFiles(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) hexpatFiles(path, out);
+    else if (name.endsWith(".hexpat")) out.push(path);
+  }
+  return out;
+}
+
+const hexpat = hexpatFiles(HEXPAT_DIR).map((path) => {
+  const source = relative(HEXPAT_DIR, path).replaceAll("\\", "/");
+  const head = readFileSync(path, "utf8").slice(0, 4000);
+  const licence = /Mozilla Public License/.test(head)
+    ? "MPL-2.0"
+    : /Permission is hereby granted, free of charge/.test(head)
+      ? "MIT"
+      : "**no licence in the header: this file may not be bundled**";
+  const author = /^\s*#pragma\s+author\s+(.*)$/m.exec(head)?.[1]?.trim() ?? "";
+  return { source, id: (source.split("/").pop() ?? "").replace(/\.hexpat$/, ""), licence, author };
+});
+
+const hexpatLicences = [...new Set(hexpat.map((f) => f.licence))].sort();
+
+if (hexpat.length > 0) {
+  md +=
+    `\n## ImHex patterns\n\n${hexpat.length} \`.hexpat\` files from\n[ImHex-Patterns](https://github.com/WerWolv/ImHex-Patterns) are copied verbatim\ninto \`crates/core/formats-hexpat\` and compiled into the core, where they are\nconverted into templates. The repository is GPL-2.0 as a whole and none of it\nis bundled under that licence: these files each carry a licence of their own in\nthe header, and those headers travel with them. Nothing from the ImHex pattern\nlanguage runtime, which is LGPL-2.1, is used here. Which files these are and\nwhy is \`crates/core/formats-hexpat/README.md\`.\n\n` +
+    `Every other pattern in that library stays where it is. The converter panel\nfetches the one a reader asks for, uses it for that session and does not store\nit.\n\n| Pattern | Licence | Author | Source |\n| --- | --- | --- | --- |\n`;
+  for (const f of hexpat) md += `| ${f.id} | ${f.licence} | ${f.author} | [${f.source}](${HEXPAT_UPSTREAM}/${f.source}) |\n`;
+}
+
 md += `\n## Licence texts\n\nOne section per shipped crate and bundled package, in its own words.\n`;
 
-if (ksy.length > 0) {
-  md += `\nThe licences the format descriptions are under come first, once each, since\n${ksy.length} files share ${ksyLicences.length} of them. The texts are SPDX's, with SPDX's own\nmatching markup taken out.\n`;
-  for (const spdx of ksyLicences) {
+// The `.ksy` and `.hexpat` files share a handful of licences between them, so
+// the texts are written once each here rather than once per file.
+const descriptions = [...ksy, ...hexpat];
+const descLicences = [...new Set([...ksyLicences, ...hexpatLicences])].sort();
+if (descriptions.length > 0) {
+  md += `\nThe licences the format descriptions are under come first, once each, since\n${descriptions.length} files share ${descLicences.length} of them. The texts are SPDX's, with SPDX's own\nmatching markup taken out.\n`;
+  for (const spdx of descLicences) {
     const path = join(ROOT, "tools", "licences", `${spdx}.txt`);
     if (!existsSync(path)) {
       md += `\n### ${spdx}\n\n**No text for this licence in \`tools/licences\`: add \`${spdx}.txt\` from https://spdx.org/licenses/${spdx}.txt.**\n`;
       continue;
     }
-    const used = ksy.filter((f) => f.licence === spdx);
+    const used = descriptions.filter((f) => f.licence === spdx);
     md += `\n### ${spdx}\n\nThe licence of ${used.length} of the format descriptions above.  \nSource: https://spdx.org/licenses/${spdx}.html\n`;
     md += `\n<details><summary>${spdx}</summary>\n\n\`\`\`\n${readFileSync(path, "utf8").trim()}\n\`\`\`\n\n</details>\n`;
   }

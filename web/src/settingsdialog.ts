@@ -6,7 +6,7 @@ import { el } from "./dom.ts";
 import type { RightColumn } from "./hexview.ts";
 import { loadSignatures, type Compiled } from "./signatures.ts";
 import { searchTemplates, spacedPattern, type Reason, type TemplateEntry } from "./templatesearch.ts";
-import { KAITAI_TEMPLATE, KSY, SETTINGS } from "./strings.ts";
+import { HEXPAT, HEXPAT_TEMPLATE, KAITAI_TEMPLATE, KSY, SETTINGS } from "./strings.ts";
 
 /** What the hex pane reads and sets. The owner keeps the state; the dialog
  *  only shows it. */
@@ -21,9 +21,10 @@ export type HexHost = {
   setColumn(c: RightColumn): void;
 };
 
-/** A template the chooser lists beyond the built-ins and Kaitai formats: the
- *  file's own signature template, and a converted `.ksy`. */
-export type ExtraTemplate = { readonly value: string; readonly label: string; readonly kind: "signature" | "ksy" };
+/** A template the chooser lists beyond the built-ins and the bundled format
+ *  descriptions: the file's own signature template, a converted `.ksy`, and a
+ *  converted ImHex pattern. */
+export type ExtraTemplate = { readonly value: string; readonly label: string; readonly kind: "signature" | "ksy" | "hexpat" };
 
 /** How many signature-only rows a search lists before it asks to be narrowed. */
 const SIGNATURE_ROWS = 50;
@@ -49,6 +50,7 @@ export class SettingsDialog {
   readonly el: HTMLDialogElement;
   onPickTemplate: (value: string) => void = () => {};
   onConvertKsy: () => void = () => {};
+  onConvertHexpat: () => void = () => {};
 
   private readonly entries: TemplateEntry[];
   private extras: ExtraTemplate[] = [];
@@ -60,6 +62,7 @@ export class SettingsDialog {
   private readonly currentLine: HTMLElement;
   private readonly templatePane: HTMLElement;
   private readonly convert: HTMLButtonElement;
+  private readonly convertHexpat: HTMLButtonElement;
   private readonly modeGroup: HTMLElement;
   private readonly rowGroup: HTMLElement;
   private readonly textToggle: HTMLButtonElement;
@@ -104,6 +107,11 @@ export class SettingsDialog {
       this.el.close();
       this.onConvertKsy();
     });
+    this.convertHexpat = el("button", { type: "button", className: "set-convert set-convert-hexpat", textContent: HEXPAT.menuEntry });
+    this.convertHexpat.addEventListener("click", () => {
+      this.el.close();
+      this.onConvertHexpat();
+    });
     this.templatePane = el(
       "section",
       { className: "set-pane set-template" },
@@ -112,7 +120,7 @@ export class SettingsDialog {
       el("div", { className: "set-searchbox" }, this.search, this.clear),
       el("p", { className: "set-hint", id: hintId, textContent: SETTINGS.searchHint }),
       this.list,
-      el("div", { className: "set-foot" }, this.convert),
+      el("div", { className: "set-foot" }, this.convert, this.convertHexpat),
     );
 
     // ---- hex view ----
@@ -352,7 +360,10 @@ export class SettingsDialog {
     const extraRow = (x: ExtraTemplate, reason?: Reason): HTMLElement =>
       x.kind === "signature"
         ? this.templateRow(x.value, x.label, { ...(reason ? { reason } : {}), sub: SETTINGS.fileSignatureSub })
-        : this.templateRow(x.value, x.label, { ...(reason ? { reason } : {}), tag: SETTINGS.ksyTag });
+        : this.templateRow(x.value, x.label, {
+            ...(reason ? { reason } : {}),
+            tag: x.kind === "hexpat" ? SETTINGS.hexpatTag : SETTINGS.ksyTag,
+          });
     if (q === "") {
       this.list.append(this.templateRow("", SETTINGS.noTemplate));
       for (const x of this.extras.filter((x) => x.kind === "signature")) this.list.append(extraRow(x));
@@ -362,7 +373,12 @@ export class SettingsDialog {
         this.list.append(el("div", { className: "set-group", textContent: KAITAI_TEMPLATE.group }));
         for (const e of kaitai) this.list.append(this.templateRow(e.value, e.label));
       }
-      for (const x of this.extras.filter((x) => x.kind === "ksy")) this.list.append(extraRow(x));
+      const imhex = this.entries.filter((e) => e.kind === "hexpat");
+      if (imhex.length > 0) {
+        this.list.append(el("div", { className: "set-group", textContent: HEXPAT_TEMPLATE.group }));
+        for (const e of imhex) this.list.append(this.templateRow(e.value, e.label));
+      }
+      for (const x of this.extras.filter((x) => x.kind === "ksy" || x.kind === "hexpat")) this.list.append(extraRow(x));
       this.setActive(this.rows().findIndex((r) => r.dataset.template === this.current));
       return;
     }

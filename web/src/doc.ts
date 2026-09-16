@@ -160,6 +160,22 @@ export type KsyReport = {
   readonly notes: readonly KsyLine[];
 };
 
+/** What converting an ImHex pattern had to say.
+ *
+ *  The same three lists a `.ksy` conversion gives, with `path` written as
+ *  `line:column` in the pattern rather than as a YAML path, plus `missing`:
+ *  the include files the pattern asks for that Qubero has not got. The ImHex
+ *  include tree is GPL-2.0 and is not shipped, so a pattern that needs one of
+ *  those files needs the reader to hand it over. */
+export type HexpatReport = {
+  /** The name the template goes by once it is in use. */
+  readonly name: string;
+  readonly fields: readonly KsyLine[];
+  readonly gaps: readonly KsyLine[];
+  readonly notes: readonly KsyLine[];
+  readonly missing?: readonly string[];
+};
+
 /** One entry in the Template menu. `name` is what `setTemplate` takes; a
  *  bundled Kaitai format's name starts `ksy:`. `title` is that format's own
  *  `meta/title`, empty for the third of them that carry none and for every
@@ -167,7 +183,7 @@ export type KsyReport = {
 export type TemplateChoice = {
   readonly name: string;
   readonly title: string;
-  readonly source: "builtin" | "kaitai";
+  readonly source: "builtin" | "kaitai" | "hexpat";
   /** A bundled Kaitai format's `meta/file-extension`; empty for a built-in. */
   readonly ext: readonly string[];
   /** The bytes a bundled Kaitai format pins, as offset and hex. */
@@ -2507,6 +2523,59 @@ export class Doc {
   ksyReport(): KsyReport | null {
     const json = this.editor.ksy_report(this.space);
     return json === "" ? null : (JSON.parse(json) as KsyReport);
+  }
+
+  /**
+   * Read the file with an ImHex pattern, converted to a template.
+   *
+   * `includes` maps an include path such as `std/mem.pat` to the text of that
+   * file, for a pattern that needs one Qubero does not have; `name` is what the
+   * template goes by afterwards. What comes back is the conversion report, or
+   * an error carrying the line and column in the pattern and, where the
+   * conversion stopped on a file it could not find, the paths still wanted.
+   */
+  setHexpatTemplate(text: string, includes: Record<string, string> = {}, name = ""): HexpatReport {
+    if (this.space !== 0) throw new Error("an ImHex pattern reads the file, not an unpacked stream");
+    const reply = JSON.parse(this.editor.set_hexpat_template(text, JSON.stringify(includes), name)) as
+      | { status: "ok"; node: HexpatReport }
+      | { status: "error"; message: string; missing?: readonly string[] };
+    if (reply.status === "error") throw new Error(reply.message);
+    this.template = reply.node.name;
+    this.notify();
+    return reply.node;
+  }
+
+  /**
+   * Convert an ImHex pattern and say what it became, without reading anything
+   * with it. The document keeps the template it had.
+   */
+  previewHexpatTemplate(
+    text: string,
+    includes: Record<string, string> = {},
+    name = "",
+  ):
+    | { readonly status: "ok"; readonly report: HexpatReport; readonly text: string }
+    | { readonly status: "error"; readonly message: string; readonly missing: readonly string[] } {
+    const reply = JSON.parse(this.editor.preview_hexpat_template(text, JSON.stringify(includes), name)) as
+      | { status: "ok"; node: { report: HexpatReport; text: string } }
+      | { status: "error"; message: string; missing?: readonly string[] };
+    if (reply.status === "error") return { status: "error", message: reply.message, missing: reply.missing ?? [] };
+    return { status: "ok", report: reply.node.report, text: reply.node.text };
+  }
+
+  /**
+   * A bundled ImHex pattern, byte for byte, by its id: `vhd` for the template
+   * named `hexpat:vhd`. Empty for an id nothing is bundled under.
+   */
+  bundledHexpatText(id: string): string {
+    return this.editor.bundled_hexpat_text(id);
+  }
+
+  /** The report from the last ImHex pattern read into this space, or null when
+   *  the template in use did not come from one. */
+  hexpatReport(): HexpatReport | null {
+    const json = this.editor.hexpat_report(this.space);
+    return json === "" ? null : (JSON.parse(json) as HexpatReport);
   }
 
   private handleReply<T>(json: string): TemplateReply<T> {

@@ -3430,6 +3430,119 @@ export const KSY = {
   notHere: "A .ksy reads the file, not an unpacked stream.",
 } as const;
 
+/** The ImHex pattern converter. The panel is the same tool as the `.ksy` one,
+ *  so anything that means the same thing is worded the same way; what is new
+ *  here is the list of include files a pattern still needs, and the browser for
+ *  the ImHex pattern library. */
+export const HEXPAT = {
+  /** The button under the template list, beside the `.ksy` one. */
+  menuEntry: "Convert an ImHex pattern…",
+  /** What the chooser calls the template a converted pattern produced, in
+   *  place of a built-in's name. The toolbar puts "Template:" in front. */
+  menuApplied: (id: string): string => `${id} (from .hexpat)`,
+  regionLabel: "ImHex pattern converter",
+
+  // ---- the three columns ----
+
+  openButton: "Open .hexpat…",
+  openTitle: "Open a .hexpat file from this computer",
+  /** The list of shipped patterns, beside the file picker. */
+  bundledPlaceholder: "Bundled pattern…",
+  bundledLabel: "Bundled pattern",
+  bundledTitle: "One of the ImHex patterns Qubero ships with",
+  bundledOption: (id: string, title: string): string => (title === "" ? id : `${id} · ${title}`),
+  bundledName: (id: string): string => `${id}.hexpat (bundled)`,
+  placeholder: "Paste an ImHex pattern here, or drop a .hexpat on the window.",
+  sourceLabel: "ImHex pattern",
+  reportLabel: "Conversion report",
+  templateLabel: "Template",
+  templateEmpty: "The template appears here as you type.",
+  templateFailed: "No template: the pattern did not convert.",
+
+  // ---- the report ----
+
+  gapsHeading: (n: number): string => `Could not be expressed (${n.toLocaleString()})`,
+  gapsTitle:
+    "These parts of the pattern have no equivalent in a template. Each field is read as plain bytes instead, never guessed at.",
+  notesHeading: (n: number): string => `Converted another way (${n.toLocaleString()})`,
+  notesTitle: "The same reading, reached differently: a string compared as its bytes read as one big-endian number, say.",
+  fieldsHeading: (n: number): string => `What each field became (${n.toLocaleString()})`,
+  /** On every report line. A path here is the line and column in the pattern,
+   *  so clicking goes there. */
+  lineTitle: "Go to this line of the pattern",
+  failedHeading: "The pattern did not convert",
+
+  // ---- include files the pattern still needs ----
+
+  /** Over the boxes, in the report column. */
+  includesHeading: (n: number): string => (n === 1 ? "Needs 1 more file" : `Needs ${n} more files`),
+  /** Under that heading. Says what to do; the file may be one of the ImHex
+   *  library's, which Qubero does not ship, or one of the reader's own. */
+  includesNote: "Qubero does not have these files. Paste each one to finish converting.",
+  includeLabel: (path: string): string => `Text of ${path}`,
+  includePlaceholder: (path: string): string => `Paste ${path}`,
+  /** On a box that has been filled in. */
+  includeFilled: "Added",
+
+  // ---- the library browser ----
+
+  libraryButton: "Library…",
+  libraryButtonTitle: "Browse the patterns in the ImHex pattern library",
+  libraryTitle: "ImHex pattern library",
+  libraryClose: "Close",
+  libraryCloseLabel: "Close the pattern list",
+  librarySearchLabel: "Search patterns",
+  librarySearchPlaceholder: "Name or description",
+  libraryCount: (shown: number, total: number): string =>
+    shown === total ? `${total.toLocaleString()} patterns` : `${shown.toLocaleString()} of ${total.toLocaleString()} patterns`,
+  libraryEmpty: (q: string): string => `No pattern matches "${q}".`,
+  libraryLoading: "Loading the pattern list…",
+  libraryFailed: "The pattern list did not load.",
+  /** What the converter makes of a pattern, on its row. The counts come from a
+   *  run over the whole library, so a row says this before it is fetched. */
+  libraryWhole: "Converts whole",
+  libraryGaps: (n: number): string => (n === 1 ? "1 part read as bytes" : `${n} parts read as bytes`),
+  libraryRefused: "Does not convert",
+  /** A pattern that needs other files from the library alongside it. Those are
+   *  fetched with it. */
+  libraryNeeds: (n: number): string => (n === 1 ? "1 extra file" : `${n} extra files`),
+  /** Over the picked pattern, before anything is downloaded. */
+  noticeHeading: "Downloaded when you use it",
+  noticeBody:
+    "Qubero fetches this pattern from GitHub, uses it for this session and does not save it. The ImHex pattern library is under the GPL-2.0 licence.",
+  /** The one button that reaches the network. It names the files it will get. */
+  fetch: (file: string, extra: number): string =>
+    extra === 0 ? `Fetch ${file}` : extra === 1 ? `Fetch ${file} and 1 more file` : `Fetch ${file} and ${extra} more files`,
+  fetching: "Fetching…",
+  fetchFailed: (file: string, why: string): string => `Could not fetch ${file}: ${why}`,
+
+  // ---- the bottom bar ----
+
+  apply: "Use this template",
+  applyTitle: "Read the open file with this template (Ctrl+Enter)",
+  close: "Close",
+  closeTitle: "Close the converter (Escape)",
+  applied: (id: string): string => `Reading the file as ${id}.`,
+  cannotApply: (id: string): string => `Could not read the file as ${id}: the bundled pattern was refused.`,
+  /** A .hexpat dropped with no file open. */
+  needsFile: "Open a file first. An ImHex pattern says how to read one.",
+  /** A .hexpat dropped on a tab of unpacked bytes. */
+  notHere: "An ImHex pattern reads the file, not an unpacked stream.",
+} as const;
+
+/** The note under a template converted from a bundled ImHex pattern, in the
+ *  overview panel, and the chooser's heading for those patterns. */
+export const HEXPAT_TEMPLATE = {
+  group: "From ImHex patterns",
+  note: (gaps: number): string =>
+    gaps === 0
+      ? "ImHex pattern, converted in full."
+      : `ImHex pattern. ${gaps === 1 ? "1 part" : `${gaps} parts`} of it could not be converted and read as plain bytes.`,
+  /** On the note, after it. It opens the converter with the pattern in it. */
+  source: "Show the pattern",
+  sourceTitle: "Open the ImHex pattern this template was converted from",
+};
+
 /** The settings dialog, and the two toolbar controls that open it: the
  *  template in use, and the gear. Only the hex view has settings here so far. */
 export const SETTINGS = {
@@ -3474,6 +3587,7 @@ export const SETTINGS = {
   fileSignatureSub: "Marks only the signature bytes this file was identified by",
   kaitaiTag: "Kaitai Struct",
   ksyTag: "from .ksy",
+  hexpatTag: "from .hexpat",
 
   // ---- why a row matched ----
 

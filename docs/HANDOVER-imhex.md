@@ -537,7 +537,39 @@ counts the sample as an error; neither is in the converter.
   `fbx.hexpat` over its own sample.
 * `eval/size.rs:441`, `attempt to divide by zero`, twice.
 
-### Still to do
+### The panel, the library and the bundled subset, 2026-09-17
 
-The panel, the library and the browser test, which are a separate task, and
-`crates/core/formats-hexpat/` for the vetted subset.
+All landed. What is worth knowing beyond the plan:
+
+* **The panel is shared with the `.ksy` one.** `web/src/convertpanel.ts` holds
+  the layout, the debounced conversion, the report, the caret jump and the
+  bottom bar; `ksypanel.ts` and `hexpatpanel.ts` each supply the entries of the
+  core they call, how a report path finds its line, and what they offer beside
+  the text box. Both keep the `kp` class and its stylesheet, and each adds
+  `kp-ksy` or `kp-hexpat` so a rule or a test can tell them apart.
+* **`set_hexpat_template` takes a third argument, `name`.** A `.ksy` names
+  itself in `meta/id`; a pattern has no such key, so the template's name comes
+  from the file it was dropped or fetched as, and a bare paste is `pattern`.
+  The same goes for `preview_hexpat_template`.
+* **A failed conversion carries `missing`.** Parsing stops at the first include
+  it cannot find, so the wasm layer also scans the text for every `#include`
+  and `import` and reports every path neither the caller nor the built-in table
+  answers for. The panel gives each a box. An include's own includes appear as
+  they are supplied, which is one round each; nothing pretends otherwise.
+* **`hex/type/json` joined the built-in declarations.** `gltf.hexpat` imports
+  it, and without it the bundled copy did not parse. Six type names and their
+  arity, written out fresh; `types::known` already answers for the whole `hex::`
+  namespace with a gap, so the bodies are never lowered.
+* **`#pragma magic @ -0x0200` is read as no magic at all.** `parse_magic` takes
+  a `u64` address, so a magic measured back from the end of the file fails to
+  parse and is noted as "a magic that starts with a byte it does not care
+  about", which is the wrong reason. It costs `vhd.hexpat` its signature and
+  nothing else. Worth fixing when negative offsets are worth having.
+* **Nothing sniffs by a bundled pattern.** The four carry their `#pragma magic`
+  in the table, and the template search matches a typed-in byte query against
+  it, but no dropped file is claimed by one: the built-in probes and the Kaitai
+  collection already answer that, and `mbr`'s two bytes at 0x1FE are not
+  evidence they lack.
+* **The four bundled patterns all have gaps**, 16 between them, which is the
+  language rather than the files: `crates/core/formats-hexpat/README.md` says
+  which gaps each has and why they are off the path through the file.

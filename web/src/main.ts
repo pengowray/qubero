@@ -21,10 +21,11 @@ import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
-import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
+import { HexpatPanel } from "./hexpatpanel.ts";
 import { reloadForStaleAssets, watchForStaleAssets } from "./staleassets.ts";
 import {
   CODEPAGES_A,
@@ -52,9 +53,10 @@ const formatSize = formatBytes;
 
 /** The main views: one reading of the file at a time, in the same area. The
  *  graph is behind `?graph` and is not offered until it has been unlocked.
- *  `ksy` is the converter, which takes the same area without being a reading of
- *  the file: it is a tool, and it is opened from the template menu. */
-type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "ksy";
+ *  `ksy` and `hexpat` are the two converters, which take the same area without
+ *  being a reading of the file: they are tools, opened from the template
+ *  menu. */
+type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "ksy" | "hexpat";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -180,6 +182,8 @@ let say: (text: string, warn?: boolean) => void = () => {};
  *  refusal for a tab of unpacked bytes, which no template of the reader's
  *  choosing reads. */
 let dropKsy: ((text: string, name: string) => void) | null = null;
+/** The same for a dropped `.hexpat` or `.pat`. */
+let dropHexpat: ((text: string, name: string) => void) | null = null;
 
 const DROP_TITLE = "Drop to open";
 const discardMsg = (open: string, next: string): string =>
@@ -209,6 +213,10 @@ const KAITAI_PREFIX = "ksy:";
 /** The menu entry for the template a converted `.ksy` produced, added once one
  *  is in use. Neither value can collide with a built-in's name. */
 const KSY_VALUE = "converted-ksy";
+/** What a bundled ImHex pattern's template name starts with. */
+const IMHEX_PREFIX = "hexpat:";
+/** The menu entry for the template a converted ImHex pattern produced. */
+const HEXPAT_VALUE = "converted-hexpat";
 
 /**
  * Open a file from disk, in place of everything already open. Unsaved edits
@@ -683,7 +691,7 @@ function build(tab: Tab): Page {
   const choices = doc.templateChoices;
   rememberKaitaiTitles(choices);
   const templateEntries: TemplateEntry[] = choices.map((c) => {
-    const magic = c.source === "kaitai" ? magicPattern(c.magic ?? []) : null;
+    const magic = c.source === "builtin" ? null : magicPattern(c.magic ?? []);
     return {
       value: c.name,
       label: templateLabel(c.name),
@@ -735,12 +743,17 @@ function build(tab: Tab): Page {
       applyKsy();
       return;
     }
+    if (value === HEXPAT_VALUE) {
+      applyHexpat();
+      return;
+    }
     doc.setTemplate(value === "" ? null : value);
     // A bundled Kaitai format says where it came from, and says so again with
     // a count when its description holds things the template does not: those
     // fields are missing or read another way, and a reader who is not told
     // has no way to know which.
     if (value.startsWith(KAITAI_PREFIX)) showKaitaiNote(value);
+    else if (value.startsWith(IMHEX_PREFIX)) showImhexNote(value);
     // Picking a template is asking to read fields, so the panel goes back to
     // them. It is left on the raw reading only for a file that has none.
     if (value !== "") inspector.setMode("structure");
@@ -1048,6 +1061,7 @@ function build(tab: Tab): Page {
   dialog.setExtras(extraTemplates);
   dialog.onPickTemplate = chooseTemplate;
   dialog.onConvertKsy = () => openKsyPanel();
+  dialog.onConvertHexpat = () => openHexpatPanel();
   tab.release.push(() => dialog.el.remove());
   const gear = el("button", { type: "button", className: "icon-btn tb-settings", title: SETTINGS.gearTitle }, gearIcon());
   gear.setAttribute("aria-label", SETTINGS.gearLabel);
@@ -1528,9 +1542,75 @@ function build(tab: Tab): Page {
     });
   };
 
+  /** The ImHex pattern converter, built the first time it is opened. */
+  let hexpatPanel: HexpatPanel | null = null;
+  /** Which view it was opened over, so closing it goes back there. */
+  let hexpatCameFrom: View = "hex";
+  const applyHexpat = (): void => hexpatPanel?.apply();
+
+  /**
+   * Open the ImHex pattern converter over the main pane, with a pattern in it
+   * where one was dropped or picked. The same tool as the `.ksy` converter and
+   * the same rules: nothing reaches the document until it is applied.
+   */
+  const openHexpatPanel = (load?: { text: string; name: string | null } | { bundled: string }): void => {
+    if (hexpatPanel === null) {
+      const panel = new HexpatPanel(doc);
+      hexpatPanel = panel;
+      panel.onMessage = (message, warn) => say(message, warn);
+      panel.onClose = () => setView(hexpatCameFrom === "hexpat" ? "hex" : hexpatCameFrom);
+      panel.onApply = (id, bundled) => {
+        if (bundled) {
+          // A shipped pattern nobody has edited is the format the menu already
+          // lists, so it is applied by name and the menu goes on showing it.
+          const name = `${IMHEX_PREFIX}${id}`;
+          if (doc.setTemplate(name)) {
+            setTemplateValue(name);
+            dropExtra("hexpat");
+            say(HEXPAT.applied(id));
+            showImhexNote(name);
+          } else say(HEXPAT.cannotApply(id), true);
+        } else {
+          setExtra({ value: HEXPAT_VALUE, label: HEXPAT.menuApplied(id), kind: "hexpat" });
+          setTemplateValue(HEXPAT_VALUE);
+          overview.setNote("");
+        }
+        structure.setMatched(true);
+        inspector.setMode("structure");
+        diagramFor = null;
+        keepCounting = false;
+        setView("listing");
+      };
+      panel.el.hidden = true;
+      workspaceLeft.append(panel.el);
+      tab.release.push(() => panel.dispose());
+    }
+    if (load !== undefined && "bundled" in load) {
+      const text = doc.bundledHexpatText(load.bundled);
+      if (text !== "") hexpatPanel.loadBundled(load.bundled, text);
+    } else if (load !== undefined) hexpatPanel.load(load.text, load.name);
+    if (showingView !== "hexpat") hexpatCameFrom = showingView;
+    setView("hexpat");
+  };
+
+  /** The note under a template converted from a bundled ImHex pattern: where it
+   *  came from, how much of it the template leaves out, and the way there. */
+  const showImhexNote = (name: string): void => {
+    const id = name.slice(IMHEX_PREFIX.length);
+    overview.setNote(HEXPAT_TEMPLATE.note(doc.hexpatReport()?.gaps.length ?? 0), {
+      label: HEXPAT_TEMPLATE.source,
+      title: HEXPAT_TEMPLATE.sourceTitle,
+      run: () => openHexpatPanel({ bundled: id }),
+    });
+  };
+
   const setView = (which: View): void => {
     showingView = which;
     const ksyOn = which === "ksy";
+    const hexpatOn = which === "hexpat";
+    // Either converter takes the main pane the same way, so everything that
+    // asks whether a tool is showing asks this.
+    const toolOn = ksyOn || hexpatOn;
     const listingOn = which === "listing";
     const textOn = which === "text";
     const stringsOn = which === "strings";
@@ -1545,6 +1625,7 @@ function build(tab: Tab): Page {
     if (graph !== null) graph.el.hidden = !graphOn;
     if (diagram !== null) diagram.el.hidden = !diagramOn;
     if (ksyPanel !== null) ksyPanel.el.hidden = !ksyOn;
+    if (hexpatPanel !== null) hexpatPanel.el.hidden = !hexpatOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
     for (const c of textOnly) c.hidden = !textOn;
     for (const c of stringsOnly) c.hidden = !stringsOn;
@@ -1561,7 +1642,7 @@ function build(tab: Tab): Page {
     }
     // The converter is not a reading of the file, so it is not what a reader
     // meant to come back to next time.
-    if (!ksyOn) localStorage.setItem("qubero.view", which);
+    if (!toolOn) localStorage.setItem("qubero.view", which);
     // A hidden view ignores the cursor, since scrolling something nobody is
     // looking at only loses their place in it. So when it comes back it has
     // wherever the cursor was left to catch up on.
@@ -1578,8 +1659,9 @@ function build(tab: Tab): Page {
       void showGraph();
     } else if (diagramOn) {
       void showDiagram();
-    } else if (!ksyOn) view.relayout();
+    } else if (!toolOn) view.relayout();
     if (ksyOn) ksyPanel?.focus();
+    else if (hexpatOn) hexpatPanel?.focus();
     else
       (listingOn
         ? structure.el
@@ -1599,8 +1681,13 @@ function build(tab: Tab): Page {
   // it: Tab in the text box indents rather than moving the focus out, so the
   // keys have to work while the caret is in there.
   key((e) => {
-    if (showingView !== "ksy" || ksyPanel === null) return;
-    if (ksyPanel.handleKey(e)) e.preventDefault();
+    if (showingView === "ksy" && ksyPanel !== null) {
+      if (ksyPanel.handleKey(e)) e.preventDefault();
+      return;
+    }
+    if (showingView === "hexpat" && hexpatPanel !== null) {
+      if (hexpatPanel.handleKey(e)) e.preventDefault();
+    }
   });
   hexBtn.addEventListener("click", () => setView("hex"));
   listBtn.addEventListener("click", () => setView("listing"));
@@ -1876,6 +1963,7 @@ function build(tab: Tab): Page {
     };
     // So does a dropped `.ksy`.
     dropKsy = doc.isFile ? (text, name) => openKsyPanel({ text, name }) : () => say(KSY.notHere, true);
+    dropHexpat = doc.isFile ? (text, name) => openHexpatPanel({ text, name }) : () => say(HEXPAT.notHere, true);
     if (!started) {
       started = true;
       // A saved "graph" from a browser where it was once unlocked is not a
@@ -1915,6 +2003,8 @@ function build(tab: Tab): Page {
         diagram: () => diagram,
         ksy: () => ksyPanel,
         openKsy: openKsyPanel,
+        hexpat: () => hexpatPanel,
+        openHexpat: openHexpatPanel,
       },
     });
   }
@@ -2286,6 +2376,10 @@ document.addEventListener("drop", (e) => {
     openKsy(f);
     return;
   }
+  if (/\.(hexpat|pat)$/i.test(f.name)) {
+    openHexpat(f);
+    return;
+  }
   openFile(f);
 });
 
@@ -2300,6 +2394,20 @@ function openKsy(f: File): void {
   void f
     .text()
     .then((text) => dropKsy?.(text, f.name))
+    .catch(openFailed);
+}
+
+/** A dropped `.hexpat` or `.pat` goes into the ImHex pattern converter over the
+ *  open file, for the same reason a `.ksy` does. */
+function openHexpat(f: File): void {
+  if (dropHexpat === null) {
+    if (welcomeStatus !== null) welcomeStatus.textContent = HEXPAT.needsFile;
+    else say(HEXPAT.needsFile, true);
+    return;
+  }
+  void f
+    .text()
+    .then((text) => dropHexpat?.(text, f.name))
     .catch(openFailed);
 }
 // A drag that ends outside the window, or one the browser abandons, still has
