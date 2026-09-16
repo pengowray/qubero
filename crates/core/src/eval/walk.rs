@@ -137,6 +137,14 @@ impl Evaluator {
                 return Ok(ends as u64);
             }
             self.spend(start)?;
+            if let Until::While(e) = until {
+                if !self.carries_on(doc, path, e, ends, start, r.limit)? {
+                    let m = self.list_mut(path);
+                    m.repeat_done = true;
+                    m.repeat_end = Some(start);
+                    return Ok(ends as u64);
+                }
+            }
             // A short run is remembered whole: most runs are short, and having
             // one in memory is what makes reading it cheap. Once a run proves
             // long, the walk starts keeping a journal and dropping what it has
@@ -179,6 +187,36 @@ impl Evaluator {
             self.note_element(doc, path, &p, end, until, before)?;
             p.pop();
         }
+    }
+
+    /// Whether the run at `path` takes another element, asked before that
+    /// element is read rather than after it. See [`Until::While`].
+    ///
+    /// Asked as if the question were a field of the list's own structure
+    /// standing where element `idx` would start: the frame is a child of the
+    /// list that the memo has nothing at, which is what makes a name climb
+    /// past the list to its siblings while the index still counts elements of
+    /// the run, and the room is from where that element would begin to the
+    /// end of the list's own container.
+    ///
+    /// Apart from the walk for the sake of the stack, the same as
+    /// `note_element` is: a run can hold a run, so this can be open inside
+    /// itself once per level of nesting, and what it takes has no business
+    /// sitting in the frame of every list that does not ask it.
+    #[inline(never)]
+    fn carries_on<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        e: &Expr,
+        idx: usize,
+        start: u64,
+        limit: u64,
+    ) -> R<bool> {
+        let e = e.clone();
+        let mut frame = path.to_vec();
+        frame.push(idx);
+        Ok(self.eval_expr_at(doc, &frame, &e, Some((start, limit)))? != 0)
     }
 
     /// A run whose declared room ends part-way through an element that would
@@ -257,7 +295,10 @@ impl Evaluator {
         before: usize,
     ) -> R<()> {
         let stop = match until {
-            Until::End => false,
+            // Asked before the next element instead, in `count_from`: by the
+            // time an element has been read, the question this one asks is
+            // about the one after it.
+            Until::End | Until::While(_) => false,
             Until::FieldBytes { field, bytes } => self.child_raw_bytes(doc, elem, field)? == *bytes,
             Until::FieldValue { field, value } => self.child_int(doc, elem, field)? == Some(*value),
             // Asked of the element that was just read, from where its last

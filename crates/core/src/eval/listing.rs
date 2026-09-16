@@ -367,6 +367,13 @@ impl Evaluator {
         let Some((&idx, parent)) = path.split_last() else { return false };
         let Some(r) = self.memo.get(parent) else { return false };
         let Ty::Struct(s) = r.ty.base() else { return false };
+        // Every field of a union but the first is a second reading of bytes
+        // the first already describes, so only the first is counted. Without
+        // this a union of four readings of sixteen bytes would be sixty-four
+        // bytes as far as any total is concerned. See `StructDef::overlap`.
+        if s.overlap && idx > 0 {
+            return true;
+        }
         s.fields.get(idx).is_some_and(|f| f.aside)
     }
 

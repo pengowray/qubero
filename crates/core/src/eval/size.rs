@@ -84,9 +84,16 @@ impl Evaluator {
         // be answered by the wrong field or by none.
         if let Ty::Struct(s) = elem {
             let mut total = 0u64;
+            // A union is as wide as its widest field rather than as their
+            // sum, since every one of them starts where the record does. See
+            // `StructDef::overlap`.
+            let add = |total: &mut u64, bits: u64| match s.overlap {
+                true => *total = (*total).max(bits),
+                false => *total += bits,
+            };
             for f in &s.fields {
                 if let Some(bits) = fixed_bits(&f.ty) {
-                    total += bits;
+                    add(&mut total, bits);
                     continue;
                 }
                 let Ty::UIntExpr { bits, .. } = f.ty.without_sentinel() else { return Ok(None) };
@@ -99,7 +106,7 @@ impl Evaluator {
                 if !(0..=128).contains(&n) {
                     return Ok(None);
                 }
-                total += n as u64;
+                add(&mut total, n as u64);
             }
             // Nothing at all, which an array can count and a repeat cannot,
             // for the reason a bare width of nought is kept to an array above.
@@ -119,6 +126,28 @@ impl Evaluator {
         // which says why.
         let n = self.eval_expr(doc, path, size)?;
         Ok(if n > 0 { bits_in(n) } else { None })
+    }
+
+    /// How far the furthest of a union's `n` fields reaches past `from`, which
+    /// is how long the union is. Every field has to be measured rather than
+    /// only the last: which of them is the widest is a fact about the file
+    /// whenever any of them is sized by what it reads. See
+    /// [`crate::template::StructDef::overlap`].
+    ///
+    /// Apart from `size_within` for the sake of the stack, which it sits at
+    /// the bottom of: what measuring a union takes has no business in the
+    /// frame of every node that is not one.
+    #[inline(never)]
+    fn longest_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], n: usize, from: u64) -> R<u64> {
+        let mut longest = 0;
+        let mut f = path.to_vec();
+        for i in 0..n {
+            f.push(i);
+            self.resolve(doc, &f)?;
+            longest = longest.max(self.memo[&f].offset + self.size_of(doc, &f)? - from);
+            f.pop();
+        }
+        Ok(longest)
     }
 
     /// The type `ty` stands for once every name in front of it is looked up,
@@ -153,6 +182,12 @@ impl Evaluator {
             f
         } else {
             match &r.ty {
+                // A union is as long as its longest field, so every one of
+                // them has to be measured rather than only the last. There is
+                // no other way round it: which field is the widest is a fact
+                // about the file whenever any of them is sized by what it
+                // reads. See `StructDef::overlap`.
+                Ty::Struct(s) if s.overlap => self.longest_field(doc, path, s.fields.len(), r.offset)?,
                 Ty::Struct(s) => {
                     if s.fields.is_empty() {
                         0
@@ -514,11 +549,17 @@ pub(super) fn uniform(e: &Expr) -> bool {
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => {
             uniform(a) && uniform(b)
         }
-        Expr::Log2(a) => uniform(a),
+        Expr::Log2(a) | Expr::BitNot(a) => uniform(a),
+        // How big the whole space is, which is the same number wherever in it
+        // the asking is done. `SpacePos` is not: it is where this element
+        // starts, and no two elements start in the same place.
+        Expr::SpaceSize => true,
         // A real reads nothing, and the three that take one apart ask what
         // their operand asks.
         Expr::Real(_) => true,

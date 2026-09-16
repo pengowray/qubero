@@ -2672,6 +2672,18 @@ export const PROPERTIES = {
      * the fields the core names, rather than counting them.
      */
     gathered: (c: HowContext): string => (c.field === undefined ? "where a descriptor points" : `where descriptor ${c.field} points`),
+    /**
+     * A field of a union: one stretch of bytes with several readings laid over
+     * it, so every field of it starts at the same place. The same shape as
+     * `first`, down to taking the parent's own word for its children, since it
+     * is answering the same question about the same kind of parent.
+     *
+     * It says what is true rather than naming the construct. "union member"
+     * would be shorter and is the word a C programmer would reach for, but not
+     * every structure marked this way came from a `union`, and a row claiming
+     * one where the file never said so is a claim the reader cannot check.
+     */
+    overlap: (c: HowContext): string => `same start as every ${c.child ?? "field"} of ${c.parent ?? "its parent"}`,
     address: fromFields,
     /**
      * A step of a decoder's trace, which is now the fallback rather than the
