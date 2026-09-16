@@ -61,6 +61,21 @@ Two templates now read a pickle, and the file decides which is offered:
   shape and storage order before its numbers. A file no form matches fails to
   resolve, so the chooser falls back to `pickle`.
 
+A matched file has no byte left over, and that is the point rather than a
+tidiness. A form fixes its instructions: the MEMOIZE after a string and the
+SETITEM that files it under its key are not noise around the data, they are
+the shape of the data, written down and matched exactly. So each of them is a
+field named for what `pickletools` calls it, sitting inside the value it
+builds and marked as that value's machinery, which folds it away for a reader
+following the data and keeps it named for one following the program. The run
+that rebuilds a NumPy array is a couple of dozen instructions and one act, so
+it is one `ndarray reconstruct call` field holding the names and letters the
+form matched inside it: `module`, `callable`, `class module`, `class`,
+`dtype class`, `dtype` and `byte order`, each read as the text it is.
+`crates/core/tests/pickle_real.rs` walks every matched sample and asserts
+that every node's children tile it, so an instruction that stopped being
+named would fail rather than quietly become a gap.
+
 Ranking: `PROBES` asks `picklefpf` immediately before `pickle`, and only when
 the sniff window holds the whole file, since a form matches all of a file or
 none of it. So a matched file over `SNIFF_WINDOW` (36 KiB) still opens as the
@@ -80,9 +95,12 @@ that a form growing quietly is a failing test.
 
 An array's numbers read in storage order and are not folded into rows: a 4-by-6
 matrix is 24 values, and the shape is a row beside them rather than the shape of
-the listing. Nothing here navigates from a value to the opcodes that built it,
-and nothing writes a value back through the recogniser. The frame header inside
-the `header` node is unnamed: what its length means belongs to the listing.
+the listing. An instruction's operand is shown as its bytes rather than read: a
+`BININT1` holding a dimension is two bytes in the listing and the shape it
+belongs to is the row above. Nothing here navigates from a value to the opcodes
+that built it, and nothing writes a value back through the recogniser: an edit
+invalidates the recognition, and a changed instruction byte means the form no
+longer matches at all.
 
 The committed matrix fixture was copied from the existing sibling sample corpus;
 its producer version is unknown. Its expected payload is a 4-by-6 matrix of f32

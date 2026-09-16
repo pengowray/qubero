@@ -75,12 +75,20 @@ try {
     await page.getByText(form, { exact: true }).first().waitFor({ state: "visible" });
     const said = await page.locator("body").innerText();
     assert.match(said, /Template: Python pickle \(familiar form\)/, "the chooser did not pick the familiar form");
-    // The decoded data: the dictionary key, what the array is, and its numbers.
-    for (const shown of ["weights", "<f4", "4 x 6", "24 values"]) {
+    // The decoded data, and the instructions the form fixed around it: the
+    // dictionary key, what the array is, the call that rebuilt it, and the
+    // names that call was made with.
+    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray", "memoize"]) {
       assert.ok(said.includes(shown), `the listing does not show ${shown}`);
     }
     await mkdir(out, { recursive: true });
     await shot(page, "pickle-familiar.png");
+
+    // The numbers themselves, which the hex view shows against their bytes.
+    await page.getByRole("button", { name: "Hex", exact: true }).click();
+    await page.getByText("24 values", { exact: false }).first().waitFor({ state: "visible", timeout: 10000 });
+    await shot(page, "pickle-familiar-hex.png");
+    await page.getByRole("button", { name: "Listing", exact: true }).click();
 
     // Both templates are offered, and only those two.
     await search(page, "pickle");
