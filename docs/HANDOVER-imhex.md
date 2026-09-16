@@ -108,7 +108,7 @@ Counts are files-using / occurrences over 310 patterns.
 | `le`/`be` prefix (20/72) | overrides the field's `Endian` | |
 | `T x[N]` | `Array {count}` | `N` any integer expression |
 | `T x[]` (23/75) | `Repeat {Until::End}` | until the enclosing window or file ends |
-| `T x[while(c)]` (55/106) | new `Until::While(c)` (below) | `while(!std::mem::eof())` (17) -> `Until::End`; `while($ < e)` (18) -> `Until::While(Pos < e)` |
+| `T x[while(c)]` (55/106) | new `Until::While(c)` (below) | `while(!std::mem::eof())` (17) -> `Until::End`; `while($ < e)` (18) -> `Until::While(SpacePos < e)` |
 | `padding[N]` (57/245) | `Bytes(N)` named `padding`, machinery | |
 | `T x @ addr;` at top level (139/381) | root struct field `At {anchor: File, at: addr, inner}` | `@ $` (11) and `@ addressof(f)` (15) as expressions |
 | `T x @ addr;` inside a struct | `At {anchor: File, ..}` | hexpat addresses are absolute unless `[[pointer_base]]` says otherwise |
@@ -132,7 +132,7 @@ Counts are files-using / occurrences over 310 patterns.
 | `type::Hex`, `RGBA8`, `Nibbles`, `escape_bytes` (5/10) | `UInt` (hex flag), the RGBA struct, two 4-bit fields, `Bytes` | |
 | `std::mem::eof()` | `Remaining == 0` | |
 | `std::mem::size()` (23/45) | new `Expr::SpaceSize` (below) | |
-| `std::mem::read_unsigned/read_signed(addr, n[, endian])` (30/49) | `PeekAt` from the space start | `read_string` -> gap |
+| `std::mem::read_unsigned/read_signed(addr, n[, endian])` (30/49) | `PeekAt` for `$` and `$ + k`, new `Expr::PeekIn` for everything else (below) | `read_string` -> gap |
 | `std::mem::create_section` and friends (7) | gap | |
 | `std::core::member_count`, `array_index` (18/39) | `LenOf`, `Idx` where the argument is a field in scope | |
 | `std::assert`, `assert_warn`, `warning`, `error` (41/115) | note, with the condition rendered | a value constraint type is still not worth adding (same call as the ksy `valid`) |
@@ -168,13 +168,20 @@ Each with the count that justifies it. Land these first, on main, with
 `eval`, `relate.rs`/`template_text.rs` rendering and tests, before the
 converter is merged.
 
+**All four landed 2026-09-17**, with `Expr::PeekIn` beside them for the
+absolute read (see the paragraph after this list), evaluation, rendering,
+unit tests over a `MemSource`, and a `tests/snapshots/template_text/notation.txt`
+snapshot of what the notation reads like.
+
 * `Expr::BitOr`, `BitXor`, `BitNot`. 19 + 2 + 3 files here, and on the
   Kaitai follow-up list already. `Expr::Or` stays the value-or; the new
-  names say what they are.
+  names say what they are. `BitNot` is over the whole 128-bit number, so a
+  pattern meaning `~x` within a word lowers with the mask it wrote.
 * `Until::While(Expr)`: checked *before* each element, in the list's own
   scope (`Ref` names the list's siblings, `Idx` the element about to be
   read, `Pos`/`SpacePos` where it would start). 55 files. `Until::Cond` is
-  the after-the-element check and stays.
+  the after-the-element check and stays. Written `repeat(while ...)` where
+  `Until::Cond` is `repeat(until ...)`.
 * `Expr::SpacePos` and `Expr::SpaceSize`: position and size measured from
   the start of the whole space (the file at the top level, the unpacked
   bytes inside a compressed run), regardless of any `Sized` window
@@ -185,9 +192,13 @@ converter is merged.
 * `StructDef::overlap: bool`: the fields start at the same offset and the
   struct is as long as the longest. 5 files with `union` and 6 with
   `[[no_unique_address]]`. Read: each field at offset 0 of the struct;
-  size: the maximum. The listing shows overlapping fields as the hex view
-  already can (aside fields exist), and the inspector's Position row says
-  "same start as its siblings".
+  size: the maximum. Only the *first* field is counted towards any total,
+  the others being second readings of the same bytes the way `Field::aside`
+  marks one by hand, so a union of four readings of sixteen bytes is sixteen
+  bytes of file and not sixty-four. The cursor lands on the first field, as
+  it does for any overlapping stretch. Constructor `Ty::union_structure`;
+  written `(overlap)` in the IR text; the inspector's Position row says
+  "same start as every field of colour".
 * No `Time` additions: `Time::unix`, `Time::filetime`, `Time::dos` and
   `Time::dos_halves` (template.rs, after line 1724) already cover
   `time32_t`, `time64_t`, `FILETIME`, `DOSTime` and `DOSDate`.
@@ -196,10 +207,32 @@ Not added, and why: a hidden flag (24 files; display-only, so a note);
 float expressions (20 files, all inside display functions); sections; `$`
 assignment (8 files, imperative by nature).
 
-`std::mem::read_unsigned(addr, n)` reads at an absolute address and
-`PeekAt {skip, ..}` is relative to the current position. The IR work
-decides between lowering as `skip = addr - SpacePos` and an anchored peek,
-and records the choice here.
+**Decided 2026-09-17: an anchored peek, `Expr::PeekIn {at, bits, endian}`,
+landed with the four additions above.** `std::mem::read_unsigned(addr, n)`
+reads at an absolute address and `PeekAt {skip, ..}` is relative to the
+current position, so `skip = addr - SpacePos` was the other candidate. It is
+unsound: a negative skip on `PeekAt` already means something else, counting
+back from the end of the container, so every address behind the field asking
+would be read from the wrong end of the file, silently. `at` is bits from the
+start of the space, the same stretch `SpacePos` counts from and
+`Anchor::Space` anchors to, and it is held to the space rather than to the
+container, since a record naming an address is usually inside a window that
+does not hold it.
+
+The corpus says how much each form is worth. Of about 130 `read_unsigned` and
+`read_signed` calls, 77 pass a bare `$` and another two dozen pass `$ + k` for
+a constant `k`: those lower to `PeekAt {skip: k * 8}` and want nothing new.
+The rest are what `PeekIn` is for: eight backward reads (`$ - 4` three times,
+`$ - 1`, `$ - 32`, `$ - wordsize()`, `current_address - 20`,
+`std::mem::size() - 256*3 - 1`) and about fifteen absolute ones, literal
+(`0x3c`, `0`, `4096`, `0x8`) or read from a field (`EOCD64.CDOffset`,
+`offset`, `start_offset`). A machinery `At {anchor: Space, ..}` field beside
+the reader, referenced by name, would cover the absolute ones without new IR,
+and it changes the field list the reader sees for what is only a read; it also
+cannot help a `[while(...)]` condition, which has no field to hang machinery
+on, and `Set set[while (std::mem::read_unsigned($ - 1, 1) != Type::EndSet)]`
+in the corpus is exactly that. So: lower `$` and `$ + k` as `PeekAt`, and
+everything else as `PeekIn`.
 
 ## To confirm against the reference tests before lowering
 

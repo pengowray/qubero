@@ -5401,6 +5401,35 @@ fn the_bitwise_operators_work_on_the_bits() {
     assert_eq!(ev.node(&d, &[6]).unwrap().value, Value::Int(0b1100));
 }
 
+/// The relations panel writes the new operators and the new measurements the
+/// way it writes the rest: as the template writes it, then with each field's
+/// value in its place.
+#[test]
+fn the_new_expressions_are_written_out_for_the_panel() {
+    let t = T::structure(
+        "Root",
+        vec![
+            ("flags", T::u8()),
+            ("set", T::computed(E::field("flags").bit_or(E::lit(0x20)))),
+            ("clear", T::computed(E::field("flags").bit_not().and(E::lit(0xff)))),
+            ("run", T::bytes(E::SpaceSize.sub(E::field("flags")))),
+        ],
+    );
+    // A file of four bytes, so the run is three: everything after the flags.
+    let d = doc(&[1, 0, 0, 0]);
+    let mut ev = Evaluator::new(Template::new("t", t));
+    let one = |ev: &mut Evaluator, i: usize| {
+        let r = ev.relations(&d, &[i]).unwrap();
+        assert_eq!(r.len(), 1, "{r:?}");
+        (r[0].written.clone(), r[0].substituted.clone(), r[0].result.clone())
+    };
+    assert_eq!(one(&mut ev, 1), ("flags | 0x20".into(), "1 | 0x20".into(), "33".into()));
+    assert_eq!(one(&mut ev, 2), ("~flags & 0xff".into(), "~1 & 0xff".into(), "254".into()));
+    // The size of the space is read in like any other leaf, so the row shows
+    // the number it came to rather than the words for it.
+    assert_eq!(one(&mut ev, 3), ("size of space - flags".into(), "4 - 1".into(), "3".into()));
+}
+
 /// A run that stops once it has read as many elements as a field ahead of it
 /// said. The question is asked before each element, so the count is the index
 /// of the element that is never read.
