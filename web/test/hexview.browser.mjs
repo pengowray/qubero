@@ -2,7 +2,7 @@
 // Timings are diagnostic; assertions check bounded work and visible behavior.
 import assert from "node:assert/strict";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
   await page.goto(process.env.TEST_URL || "http://127.0.0.1:17272");

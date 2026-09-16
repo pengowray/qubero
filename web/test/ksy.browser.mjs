@@ -28,7 +28,7 @@ const gifKsy = await readFile(join(formats, "image/gif.ksy"), "utf8");
 const pngKsy = await readFile(join(formats, "image/png.ksy"), "utf8");
 const sample = join(samples, "pico8/p8png-test.p8.png");
 
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = [];

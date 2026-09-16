@@ -3,7 +3,7 @@
 import { deflateSync, crc32 } from "node:zlib";
 import { randomBytes } from "node:crypto";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
   page.on("pageerror", e => console.error(e));

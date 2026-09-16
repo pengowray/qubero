@@ -2,7 +2,7 @@
 // Playwright installation; no browser dependency is needed by the unit suite.
 import assert from "node:assert/strict";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
   const errors = [];

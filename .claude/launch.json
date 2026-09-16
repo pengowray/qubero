@@ -14,11 +14,10 @@
     },
     {
       "name": "web-local",
-      "runtimeExecutable": "pwsh",
+      "runtimeExecutable": "sh",
       "runtimeArgs": [
-        "-NoProfile",
-        "-Command",
-        "$env:QUBERO_FILES='D:/'; npm run dev"
+        "-c",
+        "QUBERO_FILES=/home/pengo npm run dev"
       ],
       "cwd": "web",
       "port": 17273,
@@ -26,11 +25,10 @@
     },
     {
       "name": "web-samples",
-      "runtimeExecutable": "pwsh",
+      "runtimeExecutable": "sh",
       "runtimeArgs": [
-        "-NoProfile",
-        "-Command",
-        "$env:QUBERO_FILES='C:/Users/pengo/Dropbox/projects/qubero-samples'; npm run dev"
+        "-c",
+        "QUBERO_FILES=/home/pengo/sync/dropbox/projects/qubero-samples npm run dev"
       ],
       "cwd": "web",
       "port": 17274,

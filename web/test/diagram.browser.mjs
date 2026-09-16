@@ -40,7 +40,7 @@ const cases = [
  *  two lines drawn over each other rather than a fan into one place. */
 const MERGE_STUB = 14;
 
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   for (const c of cases) {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });

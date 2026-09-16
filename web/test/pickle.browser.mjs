@@ -5,7 +5,7 @@ import { mkdir } from "node:fs/promises";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const message = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   for (const [name, bytes, matched] of [
     ["familiar.pickle", [0x80, 4, 0x4e, 0x2e], true],

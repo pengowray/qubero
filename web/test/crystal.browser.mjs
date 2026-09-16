@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 }, colorScheme: "light" });
   const errors = [];
