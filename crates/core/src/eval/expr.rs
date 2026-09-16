@@ -462,60 +462,15 @@ impl Evaluator {
             // an address of the whole file, and a record that names one is
             // usually a record inside a window that does not hold it.
             Expr::PeekIn { at: addr, bits, endian } => self.peek_in(doc, at, addr, *bits, *endian, here)?,
-            // Walk forward for what ends an unmeasured stream. A lead is told
-            // apart from an escape by the byte after it, so blocks overlap by
-            // the length of the lead: one straddling the seam between two
-            // blocks, or ending at it with its successor in the next, is whole
-            // in one of them.
-            Expr::ToMarker { lead, unless } => {
-                let Some((offset, limit)) = here else { return fail("nothing to measure") };
-                if limit < offset {
-                    return fail("nothing to measure");
-                }
-                if lead.is_empty() {
-                    return fail("nothing to measure to");
-                }
-                let total = (limit - offset) / 8;
-                let (lead, unless) = (lead.clone(), unless.clone());
-                let n = lead.len();
-                // The lead alone when there is nothing to tell it apart from,
-                // the lead and the byte after it when there is.
-                let overlap = if unless.is_empty() { n as u64 - 1 } else { n as u64 };
-                let hit = scan_blocks(self, doc, self.space_at(at), offset, total, overlap, Dir::Forward, |b| {
-                    (0..b.len().saturating_sub(n - 1)).find(|&i| {
-                        b[i..i + n] == lead[..]
-                            && (unless.is_empty() || b.get(i + n).is_some_and(|next| !unless.contains(next)))
-                    })
-                })?;
-                // A lead with nothing after it to tell it from an escape is
-                // not a marker: nothing has said so, so the run measures to
-                // the end.
-                hit.unwrap_or(total) as i128
-            }
+            // The three that walk the bytes, for a marker, for a word and for
+            // where a stream stops, each in a function of its own: the buffers
+            // and closures of a walk would otherwise sit in the frame of every
+            // expression read, and this function is recursive, with how deep
+            // a read may go measured against a stack of a fixed size.
+            Expr::ToMarker { lead, unless } => return self.to_marker_at(doc, at, lead, unless, here),
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
-            // Walk for a word rather than for a byte. Blocks overlap by all
-            // but one byte of the needle, so a word written across the seam
-            // between two of them is still found.
-            Expr::Find { needle, last } => {
-                let Some((offset, limit)) = here else { return fail("nothing to search") };
-                if limit < offset {
-                    return fail("nothing to search");
-                }
-                if needle.is_empty() {
-                    return fail("nothing to look for");
-                }
-                let total = (limit - offset) / 8;
-                let n = needle.len();
-                let dir = if *last { Dir::Backward } else { Dir::Forward };
-                let hit = scan_blocks(self, doc, self.space_at(at), offset, total, n as u64 - 1, dir, |b| match dir {
-                    Dir::Backward => b.windows(n).rposition(|w| w == needle.as_slice()),
-                    Dir::Forward => b.windows(n).position(|w| w == needle.as_slice()),
-                })?;
-                // Not written again: the run measures to the end of its
-                // container, as a stream with no marker after it does. A file
-                // cut off before the word it promised is still worth showing.
-                hit.unwrap_or(total) as i128
-            }
+            Expr::Find { needle, last } => return self.find_at(doc, at, needle, *last, here),
+            Expr::StreamLen(codec) => return self.stream_len_at(doc, at, *codec, here),
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             // A field beside this one, and a path down into it.
             Expr::Within(field) => {
@@ -876,6 +831,114 @@ impl Evaluator {
             return fail(format!("{what} {REAL_IS_NOT_WHOLE}"));
         }
         Ok(info.value.as_int())
+    }
+
+    /// The bytes from `here` to the next marker, or to the end of the
+    /// container when there is none. See [`Expr::ToMarker`].
+    ///
+    /// Walks forward for what ends an unmeasured stream. A lead is told apart
+    /// from an escape by the byte after it, so blocks overlap by the length of
+    /// the lead: one straddling the seam between two blocks, or ending at it
+    /// with its successor in the next, is whole in one of them.
+    #[inline(never)]
+    fn to_marker_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        lead: &[u8],
+        unless: &[u8],
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some((offset, limit)) = here else { return fail("nothing to measure") };
+        if limit < offset {
+            return fail("nothing to measure");
+        }
+        if lead.is_empty() {
+            return fail("nothing to measure to");
+        }
+        let total = (limit - offset) / 8;
+        let n = lead.len();
+        // The lead alone when there is nothing to tell it apart from, the
+        // lead and the byte after it when there is.
+        let overlap = if unless.is_empty() { n as u64 - 1 } else { n as u64 };
+        let hit = scan_blocks(self, doc, self.space_at(at), offset, total, overlap, Dir::Forward, |b| {
+            (0..b.len().saturating_sub(n - 1)).find(|&i| {
+                b[i..i + n] == lead[..] && (unless.is_empty() || b.get(i + n).is_some_and(|next| !unless.contains(next)))
+            })
+        })?;
+        // A lead with nothing after it to tell it from an escape is not a
+        // marker: nothing has said so, so the run measures to the end.
+        Ok(hit.unwrap_or(total) as i128)
+    }
+
+    /// The bytes from `here` to the next place `needle` is written, or the
+    /// last, or to the end of the container when it is nowhere. See
+    /// [`Expr::Find`].
+    ///
+    /// Walks for a word rather than for a byte. Blocks overlap by all but one
+    /// byte of the needle, so a word written across the seam between two of
+    /// them is still found.
+    #[inline(never)]
+    fn find_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        needle: &[u8],
+        last: bool,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some((offset, limit)) = here else { return fail("nothing to search") };
+        if limit < offset {
+            return fail("nothing to search");
+        }
+        if needle.is_empty() {
+            return fail("nothing to look for");
+        }
+        let total = (limit - offset) / 8;
+        let n = needle.len();
+        let dir = if last { Dir::Backward } else { Dir::Forward };
+        let hit = scan_blocks(self, doc, self.space_at(at), offset, total, n as u64 - 1, dir, |b| match dir {
+            Dir::Backward => b.windows(n).rposition(|w| w == needle),
+            Dir::Forward => b.windows(n).position(|w| w == needle),
+        })?;
+        // Not written again: the run measures to the end of its container, as
+        // a stream with no marker after it does. A file cut off before the
+        // word it promised is still worth showing.
+        Ok(hit.unwrap_or(total) as i128)
+    }
+
+    /// The bytes from `here` to where a stream packed with `codec` stops. See
+    /// [`Expr::StreamLen`]. Decodes the stream in front of here to find where
+    /// it stops; the bytes it comes to are dropped, and a run that is opened
+    /// later is decoded again, which is one inflate more than the run would
+    /// otherwise cost and the price of a length nothing wrote down. Nothing
+    /// measured when it will not decode, so that the template can say what
+    /// the run is then.
+    #[inline(never)]
+    fn stream_len_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        codec: crate::codec::Codec,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some((offset, limit)) = here else { return fail("nothing to measure") };
+        if limit < offset {
+            return fail("nothing to measure");
+        }
+        if offset % 8 != 0 {
+            return fail("a stream that does not start on a byte");
+        }
+        // Up to the cap and no further. A stream that ends inside that is
+        // measured however long the file goes on after it; one that does not
+        // runs out of bytes and measures as nothing, the way one past the cap
+        // is refused when opened.
+        let total = ((limit - offset) / 8).min(crate::codec::CAP_BYTES as u64);
+        let data = self.read_in(doc, self.space_at(at), offset, total * 8)?;
+        Ok(match crate::codec::stream_len(codec, &data) {
+            Ok(n) => n as i128,
+            Err(_) => 0,
+        })
     }
 
     /// Where the window around the field at `at` starts and ends, in bits of

@@ -107,7 +107,8 @@ fn block() -> T {
     // the blocks. Still marked as a packing, so the records that start in the
     // block under the cursor can be found from it.
     let member =
-        super::gzip::member("BgzfBlock", extra(), T::bytes(E::Remaining)).packed_as(super::bam_records::PACKING);
+        super::gzip::member("BgzfBlock", extra(), E::Remaining.sub(E::lit(8)), T::bytes(E::Remaining))
+            .packed_as(super::bam_records::PACKING);
     T::sized(size, member.counted_as("block"))
 }
 

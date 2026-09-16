@@ -129,6 +129,9 @@ fn says_only_bytes(ty: &Ty) -> bool {
     match ty {
         Ty::Bytes(_) | Ty::Str { .. } => true,
         Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::When { inner, .. } => says_only_bytes(inner),
+        // A piece of something longer is bytes whatever it looks like the
+        // front of. See [`StructDef::cut`](crate::template::StructDef::cut).
+        Ty::Struct(s) if s.cut => false,
         Ty::Struct(s) => s.fields.len() == 1 && says_only_bytes(&s.fields[0].ty),
         _ => false,
     }

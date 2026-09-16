@@ -142,6 +142,48 @@ fn the_block_check_of_a_default_xz_is_taken_and_passes() {
     assert_eq!(after.covered_bytes, 210, "what the block actually unpacked to");
 }
 
+/// Every trailer of a gzip of several members checks its own member's output.
+///
+/// `eight-members-split-tar.tgz` is a tar cut into eight pieces and packed
+/// piece by piece, which the format allows and `gzip -t` accepts. Read as one
+/// member, as it once was, the first stream's output was summed against the
+/// last member's trailer and a good file reported itself broken. Each member
+/// is placed where its stream stops, and each trailer passes over its own
+/// piece; joined, the pieces open as the tar they are.
+#[test]
+fn every_member_of_a_split_gzip_checks_its_own_piece() {
+    let Some(root) = samples() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let path = root.join("gzip").join("eight-members-split-tar.tgz");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skipped: no {}", path.display());
+        return;
+    };
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("gzip").expect("the gzip template"));
+    let members = ev.child_named(&doc, &[], "members").unwrap().expect("a gzip is its members");
+    let n = ev.node(&doc, &members).unwrap().child_count;
+    assert_eq!(n, 8, "the file's name says how many there are");
+    for i in 0..n as usize {
+        let member = [&members[..], &[i]].concat();
+        let crc = ev.child_named(&doc, &member, "crc32").unwrap().expect("every member has a trailer");
+        let v = ev.run_check(&doc, &crc).unwrap().expect("the trailer checks the member");
+        assert!(v.ok, "member {i}: computed {}, stored {}", v.computed, v.stored);
+    }
+    // The members' outputs joined are the tar the pieces were cut from, and
+    // it reads as one: each piece alone is a piece.
+    let decoded = ev.child_named(&doc, &[], "decoded").unwrap().expect("the joined stream");
+    let id = ev.open_space(&doc, 0, &decoded).unwrap().expect("the joined stream opens");
+    let space = ev.space(id).expect("just opened");
+    assert_eq!(space.template, "tar");
+    assert!(space.recognised);
+    assert_eq!(space.len_bytes(), 7 * 1000 + 168, "every piece, in full");
+    ev.tab_node(&doc, id, &[]).expect("the tar reads whole");
+    eprintln!("{}: {n} member checks passed, joined stream reads as tar", path.display());
+}
+
 /// The same, for a check whose format never writes down what the run comes to.
 ///
 /// zlib's Adler-32 covers everything the stream unpacks to and the header says

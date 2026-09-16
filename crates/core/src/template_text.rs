@@ -1306,6 +1306,7 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::PeekAt { .. }
         | Expr::ToMarker { .. }
         | Expr::Find { .. }
+        | Expr::StreamLen(..)
         | Expr::Prev(..)
         | Expr::Sibling(..)
         | Expr::Within(..)
@@ -1421,6 +1422,7 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
             let word = if *last { "findlast" } else { "find" };
             format!("{word}({})", bytes_lit(needle))
         }
+        Expr::StreamLen(codec) if probes => format!("streamlen({})", codec.as_str()),
         _ => return None,
     })
 }

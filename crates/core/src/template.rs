@@ -388,6 +388,24 @@ pub enum Expr {
     /// The distance stops before the needle, so the word belongs to whatever
     /// is declared next rather than to the run before it.
     Find { needle: Vec<u8>, last: bool },
+    /// The bytes from here to where a stream packed with `codec` ends, as the
+    /// decoder finds it: a deflate stream's last block says it is the last,
+    /// and nothing short of decoding the stream says which block that is.
+    ///
+    /// What sizes a compressed run the format wrote no length for and did not
+    /// put last: a gzip of several members is one stream and trailer after
+    /// another, and the second member starts where the first stream stopped.
+    /// Only a codec whose streams end themselves can answer; see
+    /// [`crate::codec::stream_len`]. Zero when the stream will not decode, or
+    /// comes to more than a stream may, so that `.or(...)` can say what the
+    /// run measures as then, the way a length that is not written down is
+    /// given a fallback everywhere else.
+    ///
+    /// Costs a decode of the stream, whose output is thrown away; a run that
+    /// is then opened is decoded again. Measured from where the expression
+    /// stands to the end of its container, so it belongs in the size of a
+    /// `Sized` wrapped round the run and nowhere else.
+    StreamLen(crate::codec::Codec),
     /// The value of field `name` in the element before this one, in the nearest
     /// enclosing list. Zero for the first element, and for anything not in a
     /// list. This is what a format carrying state between elements needs.
@@ -901,6 +919,11 @@ impl Expr {
     /// start code is `00 00 01`. See [`Expr::ToMarker`].
     pub fn to_marker_seq(lead: &[u8], unless: &[u8]) -> Expr {
         Expr::ToMarker { lead: lead.to_vec(), unless: unless.to_vec() }
+    }
+    /// The bytes from here to where a stream packed with `codec` ends, or
+    /// zero when it will not decode. See [`Expr::StreamLen`].
+    pub fn stream_len(codec: crate::codec::Codec) -> Expr {
+        Expr::StreamLen(codec)
     }
     /// The bytes from here to the next place `needle` is written, or to the
     /// end of the container when there is none.
@@ -3050,6 +3073,16 @@ pub struct StructDef {
     /// template can describe; this is the hook the format's own unpacker is
     /// found by.
     pub packed: Option<Arc<str>>,
+    /// What this holds is a cut through something longer, and reads as the
+    /// bytes it is rather than as whatever those bytes look like the front of.
+    ///
+    /// A stream that says only "bytes" is opened as what the bytes turn out to
+    /// be, so a gzip of a tar opens as a tar. One member of a gzip that has
+    /// several is a piece of that tar, and its first thousand bytes are a
+    /// tar header as much as the whole file's are; opened as a tar, it reads
+    /// off the end of the piece. The piece is bytes, and the stream the
+    /// pieces are joined into is the tar.
+    pub cut: bool,
     /// Fields that are this structure's own machinery, whatever the shapes
     /// say. What a field decides is worked out from the template itself (see
     /// [`crate::machinery`]), and a field nothing reads still ends up here
@@ -3270,6 +3303,7 @@ impl Ty {
             inline: false,
             overlap: false,
             packed: None,
+            cut: false,
             machinery: Vec::new(),
             payload: Vec::new(),
             line: Vec::new(),
@@ -3456,6 +3490,15 @@ impl Ty {
     pub fn counted_as(self, unit: &str) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { unit: Some(unit.into()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// A structure that is one piece of something longer, never to be opened
+    /// as what its front looks like. See [`StructDef::cut`].
+    pub fn as_cut(self) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { cut: true, ..(*s).clone() })),
             other => other,
         }
     }

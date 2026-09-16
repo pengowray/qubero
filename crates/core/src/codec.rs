@@ -1068,6 +1068,26 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
     Ok((out, trace))
 }
 
+/// How many bytes of `data` a stream packed with `codec` takes, for a codec
+/// whose streams end themselves. Deflate does: its last block says it is the
+/// last. Nothing else here does yet, and asking about one of those is
+/// [`Refusal::Settings`], the same answer a run packed a way this cannot work
+/// out gets: nothing says how long it is.
+///
+/// What a template sizes a run by when the format wrote no length and the run
+/// is not the last thing in its container: a gzip of several members is one
+/// deflate stream and trailer after another, and the second member starts
+/// wherever the first stream stopped. See [`inflate::inflate_len`].
+pub fn stream_len(codec: Codec, data: &[u8]) -> Result<u64, Refusal> {
+    if data.len() > CAP_BYTES {
+        return Err(Refusal::TooLarge);
+    }
+    match codec {
+        Codec::Deflate => inflate::inflate_len(data),
+        _ => Err(Refusal::Settings),
+    }
+}
+
 /// Open a compressed run. `data` is the whole of it.
 pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
     if data.len() > CAP_BYTES {
