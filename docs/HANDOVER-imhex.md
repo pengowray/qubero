@@ -96,19 +96,19 @@ Counts are files-using / occurrences over 310 patterns.
 | `struct S : Base` (4) | Base's fields copied first | converter-side |
 | `struct S<auto N, T>` (20/51) | monomorphised per instantiation, as the ksy `params` lowering does | value params become zero-width `Computed` machinery fields; type params substitute |
 | `union U { .. }` (5/7) | new `StructDef::overlap` (below) | |
-| `bitfield B { a : 3; padding : 2; signed s : 4; bool f : 1; E e : 2; }` (68/184) | `SizedBits` over `UInt/Int {bits}` and `Enum` of those; `padding : n` -> `UInt {bits: n}` named `padding`, machinery | bit order: default is LSB-first within each byte read in the pragma endian; `[[left_to_right]]`/`[[right_to_left]]`/`bitfield_order` (12 files) -> the `Endian` on each bit field. Nested bitfields and bitfield arrays as they come; `[[bitfield_order]]` with an explicit size is a gap unless it matches |
+| `bitfield B { a : 3; padding : 2; signed s : 4; bool f : 1; E e : 2; }` (68/184) | `SizedBits` over `UInt/Int {bits}` and `Enum` of those; `padding : n` -> `UInt {bits: n}` named `padding`, machinery | bit order: confirmed, fields pack from bit 0 of each byte upwards under the pragma endian's `little` (the default) and from bit 7 downwards under `big`, running across byte boundaries either way. `[[left_to_right]]` and `[[right_to_left]]` no longer exist: the reference throws E0008 on both. `[[bitfield_order(direction, size)]]` takes exactly two arguments, `direction` 0 = most-to-least significant and 1 = least-to-most, `size` > 0, and it reverses the layout when `direction` disagrees with the endian. Nested bitfields and bitfield arrays as they come |
 | `enum E : u16 { A, B = 5, C = 0x10 ... 0x1F }` (118/319; ranges 9/24) | `EnumDef` with `cases`; ranges -> `EnumSpan {from, step: 1}` | implicit values continue from the previous one, as C does |
 | `u8..u128`, `s8..s128` | `UInt`/`Int {bits, endian}` | `u128` must be checked against the evaluator's `i128` arithmetic; if 128-bit unsigned overflows, gap |
-| `float`, `double`, `float16` (31/176) | `F32`, `F64`, `F16` | |
+| `float`, `double` (31/176) | `F32`, `F64` | `float16` is not a built-in type: `includes/type/float16.pat` declares `using float16 = u16 [[format("type::impl::format_float16")]]`, so it arrives as a `type::` name (2 files). Lower it to `F16` by name, not by keyword |
 | `bool` (34/167) | `Enum {0: false, 1: true}` over `UInt {8}` | |
-| `char x[N]` (121/523) | `Str {Padded {size: N, pad: 0}, Ascii}` | the reference stops at the first NUL when displaying |
+| `char x[N]` (121/523) | `Str {Padded {size: N, pad: 0}, Ascii}` | confirmed: the field owns all N bytes and its value is all N bytes, embedded NULs included. Only the *display* trims, and it trims trailing NULs, not everything after the first one. `Padded` is right; a `Terminated` would be wrong |
 | `char x[]` (22/65) | `Str {Terminated {end: 0}}` | |
 | `char16 x[N]` (16/47) | `Str` with UTF-16 in the pragma endian | |
 | `str` field (15/38) | gap | only meaningful with functions |
 | `le`/`be` prefix (20/72) | overrides the field's `Endian` | |
 | `T x[N]` | `Array {count}` | `N` any integer expression |
 | `T x[]` (23/75) | `Repeat {Until::End}` | until the enclosing window or file ends |
-| `T x[while(c)]` (55/106) | new `Until::While(c)` (below) | `while(!std::mem::eof())` (17) -> `Until::End`; `while($ < e)` (18) -> `Until::While(Pos < e)` |
+| `T x[while(c)]` (55/106) | new `Until::While(c)` (below) | confirmed: the condition is checked *before* each element, and `$` in it is the absolute position the element would start at. It sees the list's own siblings and everything further out (`this` is the enclosing struct, `parent` climbs), but never the element about to be read. `while(!std::mem::eof())` (17) -> `Until::End`; `while($ < e)` (18) -> `Until::While(SpacePos < e)` |
 | `padding[N]` (57/245) | `Bytes(N)` named `padding`, machinery | |
 | `T x @ addr;` at top level (139/381) | root struct field `At {anchor: File, at: addr, inner}` | `@ $` (11) and `@ addressof(f)` (15) as expressions |
 | `T x @ addr;` inside a struct | `At {anchor: File, ..}` | hexpat addresses are absolute unless `[[pointer_base]]` says otherwise |
@@ -201,16 +201,61 @@ assignment (8 files, imperative by nature).
 decides between lowering as `skip = addr - SpacePos` and an anchored peek,
 and records the choice here.
 
-## To confirm against the reference tests before lowering
+## Confirmed against the reference tests, 2026-09-17
 
-Three facts in the table read plausibly and may be wrong. Check each
-against `~/github/PatternLanguage/tests/include/test_patterns/` and one
-corpus file with a known layout, then write "confirmed against
-test_pattern_X" into the row: the default bit order inside a `bitfield`
-(`test_pattern_bitfields.hpp`); whether `char x[N]` shows all N bytes or
-stops at the first NUL (`test_pattern_strings.hpp`, `test_pattern_arrays.hpp`);
-and which names a `[while(c)]` condition can see and what `$` is inside it
-(`test_pattern_arrays.hpp`, `test_pattern_dollar.hpp`).
+All three checked, and the rows above rewritten. Two of the three were
+wrong in the first draft.
+
+**Bit order inside a `bitfield`: bits pack from the low bit up under
+`little`, from the high bit down under `big`, and the default is `little`.**
+Confirmed against `TestPatternBitfields` in `test_pattern_bitfields.hpp` and
+`Evaluator::readBits` (`lib/source/pl/core/evaluator.cpp:114`). The test reads
+`be TestBitfield testBitfield @ 0x25` over bytes `49 44 41 54 78`: `a : 2`
+is `0b01` = 1, `b : 3` is `0b001` = 1, the nested `c.nestedA : 4` takes the
+last three bits of `0x49` and the top bit of `0x44` and is 2. That is
+most-significant-bit first, packing across the byte boundary, which is what
+`readBits` does for `big`; for `little` it takes `bitOffset` from the low end
+instead. Nothing in the language changes the *order fields are declared in*,
+only which end of the byte bit 0 sits at.
+
+Two corrections came with it. `[[left_to_right]]` and `[[right_to_left]]` are
+**gone**: `ASTNodeBitfield::createPatterns` throws E0008, "Attribute ... is no
+longer supported", on either one, so a pattern using them is rejected, not
+reordered. And `[[bitfield_order]]` is not a bare marker: it takes exactly two
+arguments, a direction (0 most-to-least significant, 1 least-to-most) and a
+fixed size in bits that must be greater than zero, and it reverses the layout
+only when the direction disagrees with the bitfield's endian
+(`TestPatternReversedBitfields` writes `[[bitfield_order(1, 16)]]` under
+`#pragma endian big` and expects the reversed layout).
+
+**`char x[N]` is all N bytes, not up to the first NUL.** The plan's note was
+wrong. `PatternString::getValue(size)` (`lib/include/pl/patterns/pattern_string.hpp`)
+reads exactly `size` bytes into a string of that length and returns it,
+embedded NULs and all, and `sizeof` on the field is N. The only trimming is in
+`formatDisplayValue`, which does `find_last_not_of('\x00')` and so drops
+*trailing* NULs before printing. `test_pattern_strings.hpp` covers `str`
+literals only and has no `char[N]` case; the char-array path is
+`ast_node_array_variable_decl.cpp:253`, and `TestPatternAttributes`
+(`test_pattern_attributes.hpp`) has the one `char s[5]`. `Str {Padded {size: N,
+pad: 0}}` is therefore the right lowering, and a `Terminated` would read the
+wrong length.
+
+**A `[while(c)]` condition is checked before each element, and `$` inside it
+is the absolute position that element would start at.** Confirmed against
+`TestPatternArrays` in `test_pattern_arrays.hpp` and `TestPatternDollar` in
+`test_pattern_dollar.hpp`. In the first, `u8 second[while(!end_of_signature())]`
+with `fn end_of_signature() { return $ >= 8; }` starts at offset 4 and the test
+asserts `sizeof(sign.second) == 4`: the check runs at 4, 5, 6, 7 and fails at
+8, so it is a before-the-element check over the position the element would
+occupy, not an after-the-element one. In the second,
+`u8 array[while($ == addressof(this) || $[$-1] != 0x36)]` reads `$` as that
+same position, `addressof(this)` as the enclosing struct's start, and `$[i]`
+as a read at an absolute address, and the same `ReadArray` placed at four
+offsets gives four different lengths. The condition's scope is the ordinary
+one: the list's earlier siblings, `this` for the enclosing struct, `parent` to
+climb out, and functions; the element being read does not exist yet and cannot
+be named. `Until::While(Expr)` with `SpacePos` for `$` matches this exactly.
+`Until::Cond`, the after-the-element check, does not.
 
 ## Panel and library
 
@@ -238,7 +283,15 @@ The template chooser lists an applied pattern as an extra template
   subset are tests that the converter reports the right gap.
 * Syntax: `cargo run --example hexpat_parse` over `IMHEX_PATTERNS` reports
   how many of the 310 patterns and 46 includes parse, imperative bodies as
-  opaque statements. The parser is done at 310/310 and 46/46, not before.
+  opaque statements. The bar was 310/310 and 46/46; it stands at **309/310
+  and 46/46**, and the one that is left is an upstream typo, not a gap here:
+  `patterns/ffx/jp/txt/single2.hexpat:4` writes `String2jp` where
+  `patterns/ffx/utils.hexpat:382` declares `String2Jp`, and the sibling
+  `double2.hexpat` in the same directory spells it correctly. The reference
+  rejects an undeclared type in type position, so it rejects that file too.
+  Nothing upstream caught it because `tests/patterns/CMakeLists.txt` globs
+  `patterns/*.hexpat` and never descends into subdirectories. Treat 309/310 as
+  the ceiling until upstream fixes the spelling.
 * Corpus: `cargo run --example hexpat_gaps` over `~/github/ImHex-Patterns/patterns`
   (gated by `IMHEX_PATTERNS=<path>`) prints, per pattern, clean / gaps
   with counts, and the totals go in this file's status section. Then for
@@ -249,6 +302,57 @@ The template chooser lists an applied pattern as an extra template
   paste a small pattern, apply, see the fields; open the library list, pick
   one (served from a local fixture, not the network), see the notice.
 
+## What the parser turned up that the plan did not say
+
+Found while building `crates/core/src/hexpat/`, and worth knowing before
+lowering starts.
+
+* **The parser has to resolve includes itself.** It is type aware: a name in
+  type position must already be declared, and whether a `<...>` argument is
+  read as a type or as an expression depends on the declared parameter's kind.
+  So `parse` takes a `Resolver` (`path -> name + text`, the search order of
+  `resolvers.cpp`) and parses `#include` and `import` as it goes. Without
+  `includes/`, about a third of the corpus does not parse at all. The
+  `Includes` trait the plan puts in `includes.rs` should adapt to this rather
+  than replace it.
+* **`#include` and `import` are not the same thing.** `import` is its own
+  translation unit: it is parsed with a fresh type table and only its
+  declared types come back. `#include` splices tokens, so the included file is
+  parsed with the includer's table *and hands the whole table back* --
+  `patterns/GoldBox/GB_CHR.hexpat` includes `GB_ENUM.cs` and then
+  `GB_STRUCT.cs`, and the second only parses because it can see the first's
+  `COLORNAME`. Each file is spliced once, and the two once-guards check each
+  other, as the reference's do.
+* **Eight host-registered types live under `builtin::`.** ImHex's decode plugin
+  declares `builtin::hex::dec::{Json, Bson, Cbor, Bjdata, Msgpack, Ubjson}`
+  with one value parameter each, `EncodedString` with two and `Instruction`
+  with four. `includes/hex/type/*.pat` wrap them, so those four include files
+  do not parse without the table. It is in `parser.rs` as `BUILTIN_TYPES`.
+* **Precedence is not C's.** Bitwise `| ^ &` bind *tighter* than the
+  comparisons, so `a & 1 == 0` is `(a & 1) == 0` in a `.hexpat` and
+  `a & (1 == 0)` in C. Any expression the report prints, and any condition
+  lowering hands to `Expr`, has to keep that shape.
+* **`#pragma` takes a key and the rest of its line.** The lexer reads the first
+  word after the directive as the key and everything to the end of the line as
+  the value, unprocessed, which is how `#pragma magic [ 4D 5A ] @ 0x00` keeps
+  its brackets. Pragma names are not checked when parsing; the reference
+  rejects an unknown one when the pattern runs, so that check belongs to
+  lowering.
+* **Two strictness checks are not implemented**, because both only reject and
+  neither fires on the corpus: the reference refuses an `in`/`out` variable
+  whose type does not resolve to an integer, float, `bool`, `char`, `str` or
+  enum, and it refuses a `namespace auto` alias substitution that the corpus
+  never triggers (nothing is imported with an alias except `import * from`,
+  which does not parse the file).
+
 ## Status
 
 2026-09-17: planned. Census run once from the scratchpad.
+
+2026-09-17: lexer, AST, expression tree and parser landed in
+`crates/core/src/hexpat/`, with `crates/core/examples/hexpat_parse.rs` as the
+syntax oracle. 309/310 patterns and 46/46 includes parse; the three facts above
+are confirmed. 56 unit tests, one per case of the reference's language tests
+plus the strictness checks. No lowering yet: the imperative half parses into
+`ast::Statement`, which keeps a coarse kind, the byte range and the source text
+of each construct, ready to become a gap.
