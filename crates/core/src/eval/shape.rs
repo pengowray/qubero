@@ -248,7 +248,7 @@ impl Evaluator {
             // A member of a JSON object is placed by the parse, but it is
             // placed after the member before it, which is what the reader is
             // being told.
-            Ty::Struct(_) | Ty::Json(..) => {
+            Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => {
                 if idx == 0 {
                     Placed::First
                 } else {
@@ -315,6 +315,10 @@ impl Evaluator {
             Ty::Json(shape, _) if shape.composite() => Sizing::Children,
             // A JSON scalar is as long as the text the parse gave it.
             Ty::Json(..) => Sizing::Encoded,
+            // A recognised pickle is as long as the bytes its production
+            // consumed, which is not what its children come to: the opcodes
+            // between them belong to the container and to nothing below it.
+            Ty::Pickle(..) => Sizing::Encoded,
             Ty::Array { .. } => Sizing::Count,
             Ty::Repeat { until: Until::End, .. } => Sizing::Remaining,
             // A run told to stop after the element that says so: the same

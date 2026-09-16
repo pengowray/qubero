@@ -345,6 +345,10 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         Ty::Computed(_) | Ty::ComputedText(_) | Ty::ComputedReal(_) => "computed".to_string(),
         Ty::Insn { .. } => "insn".to_string(),
         Ty::Json(..) => "json".to_string(),
+        // The object a pickle builds, whose nodes are placed from a recognised
+        // form rather than from a declaration. Composite, always: a leaf of
+        // one is given the ordinary type its bytes are.
+        Ty::Pickle(..) => "pickle".to_string(),
         Ty::Struct(_) => "struct".to_string(),
         Ty::Array { .. } => "array".to_string(),
         Ty::Repeat { .. } => "repeat".to_string(),
@@ -435,6 +439,8 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         Ty::Json(shape, _) if shape.composite() => "composite",
         Ty::Json(crate::json::Shape::Number, _) => "int",
         Ty::Json(..) => "str",
+        // Every node of a recognised pickle that keeps this type holds others.
+        Ty::Pickle(..) => "composite",
         // A Huffman code reads as a string of noughts and ones, and is not
         // text, the same distinction an instruction is kept apart for: a
         // picture of what a file is made of should count a compressed block's

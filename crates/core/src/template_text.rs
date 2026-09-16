@@ -912,6 +912,7 @@ fn inline(ty: &Ty) -> Option<String> {
             Some(s) if !s.is_empty() => format!("json {} {s}", shape.name()),
             _ => format!("json {}", shape.name()),
         },
+        Ty::Pickle(shape) => format!("pickle {}", shape.name()),
         Ty::Match { on, cases, default } => {
             let mut parts = Vec::new();
             for (k, t) in cases.iter() {

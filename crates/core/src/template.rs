@@ -10,6 +10,9 @@ use std::sync::Arc;
 
 use crate::json;
 pub use crate::checksum::Checksum;
+/// What a node of a recognised pickle holds. Defined with the recogniser that
+/// hands the tree back, the way [`json::Shape`] is defined with the parser.
+pub use crate::formats::pickle::familiar::Shape as PickleShape;
 
 /// Which end of the field the low bits come from.
 ///
@@ -2618,6 +2621,18 @@ pub enum Ty {
     /// difference between a row typed `colour` and a row typed `string`.
     /// Nothing about the parse changes; only the name the type column shows.
     Json(json::Shape, Option<Arc<JsonSchema>>),
+    /// The object a pickle builds, read out of the file by a Familiar Pickle
+    /// Form rather than by running the stack machine, so that every value in
+    /// it is a node of its own at the bytes it was written at.
+    ///
+    /// The same idea as [`Ty::Json`] and for the same reason: a parser in Rust
+    /// hands back a tree with a place for every value, and the evaluator
+    /// places the tree's nodes instead of walking a declaration. A template
+    /// writes [`Ty::pickle`], which is the whole file; the shapes below that
+    /// are what the nodes found inside it are given, and a leaf is given the
+    /// ordinary type its bytes are so that it reads, edits and displays like
+    /// any other field. See [`crate::formats::pickle::familiar`].
+    Pickle(PickleShape),
     /// Pick a type by the text of an earlier field, for a format that names
     /// its types in words rather than in numbers: a safetensors tensor says
     /// `"dtype": "F8_E4M3"`. `on` names the field, the way `Switch` does with
@@ -3095,6 +3110,10 @@ impl Ty {
     /// The same, with what the format knows about the values inside it.
     pub fn json_as(schema: JsonSchema) -> Ty {
         Ty::Json(json::Shape::Doc, Some(Arc::new(schema)))
+    }
+    /// The whole file, read as the object a Familiar Pickle Form says it is.
+    pub fn pickle() -> Ty {
+        Ty::Pickle(PickleShape::Doc)
     }
     /// Pick a type by the text of the field `on` names.
     pub fn matches(on: Expr, cases: Vec<(&str, Ty)>, default: Ty) -> Ty {
@@ -3813,6 +3832,7 @@ impl Ty {
                 Some(name) => name,
                 None => shape.name().to_string(),
             },
+            Ty::Pickle(shape) => shape.name().to_string(),
             Ty::Enum { def, .. } => def.name.clone(),
             Ty::Flags { def, .. } => def.name.clone(),
             Ty::Named(n) => n.to_string(),

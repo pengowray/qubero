@@ -1391,6 +1391,9 @@ impl Evaluator {
         if matches!(self.memo[path].ty, Ty::Json(..)) {
             return self.json_index(doc, path, name);
         }
+        if matches!(self.memo[path].ty, Ty::Pickle(..)) {
+            return self.pickle_index(doc, path, name);
+        }
         // A list has no named children, so a number is the only thing a path
         // can mean there, and it means the same thing it means in JSON. What
         // needs it is a format that wraps a value in a list of parts: a FITS

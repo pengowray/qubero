@@ -62,6 +62,14 @@ pub(super) fn cases() -> Vec<T> {
     out
 }
 
+/// A run of `count` values of `descr`, for a reader that already knows how
+/// many there are. The opcode listing asks the machine how many; a Familiar
+/// Pickle Form counted them out of the shape it matched.
+pub(crate) fn run(descr: &str, count: u64) -> Option<T> {
+    let elem = npy::dtypes().into_iter().find(|(k, _, _)| k == descr).map(|(_, elem, _)| elem)?;
+    Some(T::array(elem, E::lit(count as i128)))
+}
+
 /// Where a dtype sits in the list, and how wide one value of it is.
 pub(super) fn dtype(descr: &str) -> Option<(usize, u64)> {
     static TABLE: OnceLock<Vec<(String, u64)>> = OnceLock::new();

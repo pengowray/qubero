@@ -348,6 +348,16 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // A pickle a Familiar Pickle Form matches whole, which is the strongest
+    // evidence anything here has: a reviewed grammar consumed every byte of
+    // the file, opcodes and operands, and knows what each one is. So it is
+    // asked before the walk that only says the bytes read as some program.
+    //
+    // Only where the window is the whole file. A form matches all of a file or
+    // none of it, and a window that stops early cannot say which: the answer
+    // for a file longer than `SNIFF_WINDOW` is the opcode listing, and the
+    // reader can pick the other template themselves.
+    Probe::Is("picklefpf", |h, len| h.len() as u64 == len && pickle::familiar::recognise(h).is_some()),
     // A pickle, which is a program rather than a document: protocol 2 and up
     // open with two bytes and protocol 0 and 1 open with an opcode that could
     // be any byte, so what recognises one is running it to its full stop.

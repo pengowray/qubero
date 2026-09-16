@@ -131,6 +131,16 @@ pub fn pickle() -> Template {
     Template::new("pickle", ops()).with_type("Op", op()).deduced_by(familiar::Program)
 }
 
+/// The same file, read as the object it builds rather than as the program
+/// that builds it.
+///
+/// Only for a file a Familiar Pickle Form matches whole: there is no partial
+/// answer here, and a file no form matches is a file for [`pickle`]. See
+/// [`familiar`] for what a form is and why the machine is not run.
+pub fn familiar_pickle() -> Template {
+    Template::new("picklefpf", T::pickle())
+}
+
 /// A run of opcodes, ending at the `.` that stops the machine.
 ///
 /// The same run at the top of the file and inside a frame, because they are

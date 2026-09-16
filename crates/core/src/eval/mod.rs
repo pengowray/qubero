@@ -31,6 +31,7 @@ mod kinds;
 mod listing;
 mod memo;
 mod origin;
+mod pickletree;
 mod placed;
 mod expr;
 mod read;
@@ -920,6 +921,12 @@ impl Evaluator {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
+            // Every node of a recognised pickle that kept this type holds
+            // others: the leaves were given the types their bytes are.
+            Ty::Pickle(..) => {
+                let n = self.child_count(doc, path)?;
+                (Value::Composite { count: n }, n, true)
+            }
             // A stream holds one thing when it opens and nothing when it does
             // not, so asking about the node opens it. That is a read of the
             // whole run, done once and kept: what stops it from being a read
@@ -1245,6 +1252,16 @@ impl Evaluator {
                 _ => None,
             };
         }
+        // What a recognised pickle's containers hold, counted the way Python
+        // counts them.
+        if let Ty::Pickle(shape) = ty {
+            use crate::template::PickleShape as P;
+            return match shape {
+                P::Doc | P::Entry | P::Array => None,
+                P::Dict => Some("entry"),
+                P::List | P::Tuple => Some("item"),
+            };
+        }
         // What a trace holds at each level: blocks, and then codes. An LZ4
         // block has one run of sequences rather than blocks, and counting
         // those as blocks would say something the format does not.
@@ -1347,6 +1364,11 @@ impl Evaluator {
         if matches!(pr.ty, Ty::Json(..)) {
             self.resolve_json_child(doc, path)?;
             return Ok(None);
+        }
+        // The same for a value inside a recognised pickle: the form said where
+        // every value is, so nothing below applies to one either.
+        if matches!(pr.ty, Ty::Pickle(..)) {
+            return self.place_pickle_child(doc, path);
         }
         // The one thing a stitched stream holds, in the space its parts make.
         if let Ty::Stitched { inner, .. } = &pr.ty {
