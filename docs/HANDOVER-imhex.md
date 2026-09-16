@@ -536,17 +536,17 @@ naming the field now, each with a unit test in `eval/tests.rs`, and the corpus
 run is free of panics.
 
 * `eval/read.rs`, `self.str_span(doc, r, size)?.expect("text field")`, on
-  `fbx.hexpat` and `wad.hexpat` over their own samples. `str_span` measures by
-  the field's own type, and an enum on a text type reaches the text arm with
+  `blend`, `fbx`, `tar` and `wad` over their own samples. `str_span` measures
+  by the field's own type, and an enum on a text type reaches the text arm with
   the field's type still the enum. Now `typeCode is not a text field, so it
-  cannot be read as text`.
+  cannot be read as text`. Tar reads to a gap now, which is the one sample the
+  pass rate gained; blend goes on to a real error of its own.
 * `eval/size.rs`, `attempt to divide by zero`, counting a run to the end by
-  dividing the room by a fixed element size that came to nought: `mp4.hexpat`,
-  `qoi.hexpat`, and `blend.hexpat` and `tar.hexpat` before their first real
-  error. `stride` now keeps a fixed width of nought to arrays, as it already
-  did for a computed one, so the run is walked and the walk refuses the element
-  with `data repeats an element of zero size`. Tar reads to a gap now, which is
-  the one sample the pass rate gained.
+  dividing the room by a fixed element size that came to nought: `mp4.hexpat`
+  and `qoi.hexpat`. The division itself is unchanged; `stride` now keeps a
+  fixed width of nought to arrays, as it already did for a computed one, so
+  every way it can answer for a repeat is non-zero, and the run is walked and
+  the walk refuses the element with `data repeats an element of zero size`.
 
 The error messages are built in cold, out-of-line helpers on purpose. The walk
 and the value arms sit in frames the depth backstop is measured against, and a
