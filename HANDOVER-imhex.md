@@ -113,12 +113,13 @@ Counts are files-using / occurrences over 310 patterns.
 | `T x @ addr;` at top level (139/381) | root struct field `At {anchor: File, at: addr, inner}` | `@ $` (11) and `@ addressof(f)` (15) as expressions |
 | `T x @ addr;` inside a struct | `At {anchor: File, ..}` | hexpat addresses are absolute unless `[[pointer_base]]` says otherwise |
 | `T *p : u32;` (7/19) | inline struct `{offset: u32, target: At {File, offset, T}}` | the exact shape the pointer-display work of 2026-09-17 renders; `[[pointer_base("fn")]]` (2) is a gap |
-| `if (c) { .. } else { .. }` (110/519; else 70/341) | `When {cond, inner}` per branch, the else branch `When {Not(cond)}` | `else if` chains likewise |
+| `if (c) { .. } else { .. }` (110/519; else 70/341) | one `When {cond, inner}` per block, `inner` an inline struct (`StructDef::inline`) of the block's fields; the else block `When {Not(cond), ..}`; `else if` chains likewise | one `When` per block, not per field: the condition then appears once in the relations panel and the diagram |
+| `u32 x = <expr>;` local inside a struct (56/225) | zero-width `Computed(expr)` machinery field, the same lowering as a ksy `instances: value` | only when the right side is a pure expression over fields in scope. Reassignment later, `$` arithmetic with side effects, or a call to a `fn` on the right side is a gap |
 | `match (a, b) { (1, _): T x; (2 ... 5, _): ..; (_, _): .. }` (23/66) | `Switch` when every arm is a literal or `_` on one scrutinee; ranges -> repeated cases when short, else gap; two scrutinees -> gap | |
 | `[[name("x")]]` (21/130) | `Field::name` becomes the display name, the source name kept in the report | |
 | `[[comment("..")]]` (19/137) | `Field::doc` | |
 | `[[inline]]` (29/79) | `StructDef::inline` on a copy of the type | |
-| `[[hidden]]` (24/55) | `Field::aside`? No: aside is for double-described bytes. Gap until the IR has a hidden flag; note in the report | 24 files is not yet worth a flag; revisit |
+| `[[hidden]]` (24/55) | note: the field is read and shown | display-only; a hidden flag on `Field` is not worth adding for 24 files |
 | `[[format("fn")]]`, `[[format_read]]`, `[[transform]]` (68 / 6 / 3) | note: raw value shown | the functions are not run |
 | `[[sealed]]` (36/57) | note | the reference shows the struct as one value; our listing already joins short structs on one line |
 | `[[color]]`, `[[single_color]]`, `[[static]]`, `[[export]]`, `[[fixed_size]]`, `[[hex::visualize]]`, `[[highlight_hidden]]`, `[[no_unique_address]]` | ignored with a note | `no_unique_address` (6/9) is a union of one field; lower it as `overlap` when it appears beside a sibling at the same offset |
@@ -136,7 +137,7 @@ Counts are files-using / occurrences over 310 patterns.
 | `std::core::member_count`, `array_index` (18/39) | `LenOf`, `Idx` where the argument is a field in scope | |
 | `std::assert`, `assert_warn`, `warning`, `error` (41/115) | note, with the condition rendered | a value constraint type is still not worth adding (same call as the ksy `valid`) |
 | `std::format`, `std::print` (77/254) | note | |
-| every other `std::` call, `fn`, statement `while`/`for`, local variables (56/225), `in`/`out`, `try`, `$ = ..` (8/22) | gap on the field that uses it; the field is left as `Bytes` of its static size when it has one, else the struct ends there with a gap | |
+| every other `std::` call, `fn`, statement `while`/`for`, reassigned locals, `in`/`out`, `try`, `$ = ..` (8/22) | gap on the field that uses it; the field is left as `Bytes` of its static size when it has one, else the struct ends there with a gap | |
 
 ### Expressions
 
@@ -191,10 +192,25 @@ converter is merged.
   `Time::dos_halves` (template.rs, after line 1724) already cover
   `time32_t`, `time64_t`, `FILETIME`, `DOSTime` and `DOSDate`.
 
-Not added, and why: a hidden flag (24 files; the listing's machinery
-folding covers padding, which is most of the use); float expressions (20
-files, all inside display functions); sections; `$` assignment (8 files,
-imperative by nature).
+Not added, and why: a hidden flag (24 files; display-only, so a note);
+float expressions (20 files, all inside display functions); sections; `$`
+assignment (8 files, imperative by nature).
+
+`std::mem::read_unsigned(addr, n)` reads at an absolute address and
+`PeekAt {skip, ..}` is relative to the current position. The IR work
+decides between lowering as `skip = addr - SpacePos` and an anchored peek,
+and records the choice here.
+
+## To confirm against the reference tests before lowering
+
+Three facts in the table read plausibly and may be wrong. Check each
+against `~/github/PatternLanguage/tests/include/test_patterns/` and one
+corpus file with a known layout, then write "confirmed against
+test_pattern_X" into the row: the default bit order inside a `bitfield`
+(`test_pattern_bitfields.hpp`); whether `char x[N]` shows all N bytes or
+stops at the first NUL (`test_pattern_strings.hpp`, `test_pattern_arrays.hpp`);
+and which names a `[while(c)]` condition can see and what `$` is inside it
+(`test_pattern_arrays.hpp`, `test_pattern_dollar.hpp`).
 
 ## Panel and library
 
@@ -220,6 +236,9 @@ The template chooser lists an applied pattern as an extra template
   case that is within the declarative subset into a Rust test with our own
   bytes; the reference's expected values are the oracle. Cases outside the
   subset are tests that the converter reports the right gap.
+* Syntax: `cargo run --example hexpat_parse` over `IMHEX_PATTERNS` reports
+  how many of the 310 patterns and 46 includes parse, imperative bodies as
+  opaque statements. The parser is done at 310/310 and 46/46, not before.
 * Corpus: `cargo run --example hexpat_gaps` over `~/github/ImHex-Patterns/patterns`
   (gated by `IMHEX_PATTERNS=<path>`) prints, per pattern, clean / gaps
   with counts, and the totals go in this file's status section. Then for
