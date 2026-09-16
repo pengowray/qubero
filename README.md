@@ -36,4 +36,4 @@ Qubero is MIT ([LICENSE](LICENSE)). The crates and the rule database it ships
 carry their own terms, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md);
 regenerate that file with `node tools/notices.mjs` after changing dependencies.
 
-See [DESIGN.md](DESIGN.md) for architecture and roadmap.
+See [docs/DESIGN.md](docs/DESIGN.md) for architecture and roadmap; the other files in `docs/` are the plans and handover notes for each piece of work.
