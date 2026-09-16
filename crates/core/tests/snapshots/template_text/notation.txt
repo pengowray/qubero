@@ -1,0 +1,20 @@
+template notation
+
+root Header {
+  flags: u8be
+  count: u8be
+  set: computed flags | 0x20
+  toggled: computed flags ^ 0x0f
+  clear: computed ~flags & 0xff
+  here: computed pos in space
+  whole: computed size of space
+  magic: computed peek(u32be at 0 bits in space)
+  colour: Colour (overlap) {
+    packed: u32be
+    bytes: u8be[4]
+    high: u16be
+  }
+  counted: repeat(while index < count) u8be
+  while_room: repeat(while pos in space < size of space) u16be
+  until_zero: repeat(until value == 0) u8be
+}

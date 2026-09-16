@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use crate::template::{Expr, StrLen, StructDef, Ty};
+use crate::template::{Expr, StrLen, StructDef, Ty, Until};
 
 /// For each field of `def`, the first later sibling whose length, count, type
 /// or position that field settles. `None` for a field no sibling reads, which
@@ -77,6 +77,17 @@ fn refs(def: &StructDef, selectors: bool) -> Vec<Option<usize>> {
     out
 }
 
+/// Every sibling an expression reads by name. What [`consumers`] is worked out
+/// from, for a caller that has one expression in hand and wants to know
+/// whether a particular field is in it: the offset a pointer is read from is
+/// the field that pointer points from, and a reading that says so has to be
+/// sure it is naming the right one.
+pub fn names_in(e: &Expr) -> Vec<Arc<str>> {
+    let mut out = Vec::new();
+    expr_refs(e, &mut out);
+    out
+}
+
 /// What the template itself says about field `i`: `Some(true)` for machinery,
 /// `Some(false)` for payload, `None` when it has no opinion and [`consumers`]
 /// is all there is to go on.
@@ -112,7 +123,16 @@ fn ty_refs(ty: &Ty, out: &mut Vec<Arc<str>>, selectors: bool) {
         // element would be marked as machinery for a run it has nothing to do
         // with. Leaving it unmarked shows it as an ordinary row, which is the
         // safe way to be wrong.
-        Ty::Repeat { elem, .. } => ty_refs(elem, out, selectors),
+        //
+        // `Until::While` is the one that is asked beside the list rather than
+        // inside an element, so the names in it *are* siblings, and a field
+        // that decides where a run stops is that run's machinery.
+        Ty::Repeat { elem, until } => {
+            if let Until::While(e) = until {
+                expr_refs(e, out);
+            }
+            ty_refs(elem, out, selectors);
+        }
         Ty::PointerList { offsets, adjust, elem, .. } => {
             out.push(offsets.clone());
             expr_refs(adjust, out);
@@ -248,6 +268,8 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => {
             expr_refs(a, out);
@@ -261,12 +283,13 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
             expr_refs(then, out);
             expr_refs(otherwise, out);
         }
-        Expr::Log2(a) | Expr::Not(a) => expr_refs(a, out),
+        Expr::Log2(a) | Expr::Not(a) | Expr::BitNot(a) => expr_refs(a, out),
         // Where a field is rather than what it says, but the field is named
         // the same way, and a field something is placed from is plumbing the
         // same as one something is sized from.
         Expr::StartOf(a) => expr_refs(a, out),
         Expr::PeekAt { skip, .. } => expr_refs(skip, out),
+        Expr::PeekIn { at, .. } => expr_refs(at, out),
         Expr::PadTo { n, .. } => expr_refs(n, out),
         Expr::Bit(a, _) => expr_refs(a, out),
         // A NIfTI-1 header's `vox_offset` places the voxels through its whole

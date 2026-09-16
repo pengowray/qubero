@@ -5,7 +5,7 @@
 import type { TemplateNode } from "./doc.ts";
 
 /** What the trail reads of a node. */
-export type TrailNode = Pick<TemplateNode, "name" | "type" | "composite" | "list" | "size_bits" | "child_count">;
+export type TrailNode = Pick<TemplateNode, "name" | "type" | "composite" | "list" | "size_bits" | "child_count" | "inline">;
 
 /** One crumb: what it says, the field it goes to, and whether that field is
  *  the one the trail was asked for. */
@@ -54,7 +54,11 @@ export function trailItems(path: readonly number[], node: (path: readonly number
       continue;
     }
     // A struct field is often called `body`; its type says what it holds.
-    const label = n.composite && n.type !== n.name ? `${n.name} (${n.type})` : n.name;
+    // Except where the structure is a value written as several fields: the
+    // name the template gave that structure is the template's own business,
+    // and `value (Elsewhere)` names a thing no reader of the format has heard
+    // of. See `StructDef::inline`.
+    const label = n.composite && n.type !== n.name && !n.inline ? `${n.name} (${n.type})` : n.name;
     const previous = items[items.length - 1];
     if (previous !== undefined && previous.label === label) {
       // Repeated `object`/`body` wrappers are one logical step. Keep the

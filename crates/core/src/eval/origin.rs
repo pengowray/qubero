@@ -200,9 +200,79 @@ impl Evaluator {
                     value: String::new(),
                     target_bits: Some(bits),
                 });
+            } else if let Some(o) = self.points_from(doc, path)? {
+                out.push(o);
             }
         }
         Ok(())
+    }
+
+    /// Where this field points, for an offset a sibling reads to place what it
+    /// holds: a TIFF entry's four bytes and the text they lead to, a header's
+    /// address and the table at it. The commonest pointer in any format, and
+    /// the one a table of offsets does not cover.
+    ///
+    /// The far end is the sibling's contents rather than the sibling, since
+    /// the sibling covers no bytes of its own: it is written here and read
+    /// there. What comes back names it as the reader sees it, `values`, and
+    /// says what is at the other end, so a row can lead with the address and
+    /// still say what is there.
+    fn points_from<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Origin>> {
+        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
+        let Some(Ty::Struct(def)) = self.memo.get(parent).map(|r| r.ty.base().clone()) else { return Ok(None) };
+        let Some(me) = def.fields.get(idx).map(|f| f.name.clone()) else { return Ok(None) };
+        // The sibling this field settles the shape of, which the template
+        // already says. Asking it rather than every sibling in turn keeps a
+        // record of three hundred fields to one field resolved.
+        let Some(j) = crate::machinery::consumers(&def).get(idx).copied().flatten() else { return Ok(None) };
+        let Some(name) = def.fields.get(j).map(|f| f.name.to_string()) else { return Ok(None) };
+        let mut there = parent.to_vec();
+        there.push(j);
+        if self.resolve(doc, &there).is_err() {
+            return Ok(None);
+        }
+        // What the field turned out to be, not what it was declared as: an
+        // ELF section's name is a switch over whether the file has a name
+        // table at all, and only the case this file took is read at an
+        // address. A case nobody took points nowhere.
+        let Some(at) = self.address_of(&there) else { return Ok(None) };
+        // The sibling may be placed by an address of its own that this field
+        // has nothing to do with: it settled its length, or how many of it
+        // there are. Then the two are related, but not by pointing.
+        if !crate::machinery::names_in(&at).iter().any(|n| *n == me) {
+            return Ok(None);
+        }
+        // The one thing the pointer holds, which is where the bytes are.
+        there.push(0);
+        let Ok(info) = self.node(doc, &there) else { return Ok(None) };
+        let value = match &info.line {
+            Some(line) => line.clone(),
+            None => brief(&info.value),
+        };
+        Ok(Some(Origin {
+            role: Role::Points,
+            label: name,
+            stored: None,
+            path: Vec::new(),
+            value,
+            target_bits: Some(info.offset_bits),
+        }))
+    }
+
+    /// The address a resolved field is read at, for a field that is somewhere
+    /// other than where it is written. None for a field that is where it is
+    /// written, which is nearly all of them.
+    fn address_of(&self, path: &[usize]) -> Option<Expr> {
+        let mut ty = self.memo.get(path)?.ty.clone();
+        for _ in 0..8 {
+            match ty {
+                Ty::At { at, .. } => return Some(at),
+                Ty::Named(n) => ty = self.template.types.get(&*n)?.clone(),
+                Ty::Sized { inner, .. } | Ty::Origin { inner } => ty = *inner,
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// Where this field points, for a field an earlier list of pointers reads
@@ -683,6 +753,8 @@ impl Evaluator {
             | Expr::Shl(a, b)
             | Expr::Shr(a, b)
             | Expr::And(a, b)
+            | Expr::BitOr(a, b)
+            | Expr::BitXor(a, b)
             | Expr::Min(a, b)
             | Expr::Max(a, b) => {
                 self.from_expr(doc, at, a, role, out)?;
@@ -704,7 +776,7 @@ impl Evaluator {
                 };
                 self.from_expr(doc, at, &taken.clone(), role, out)?;
             }
-            Expr::Log2(a) | Expr::Not(a) => self.from_expr(doc, at, a, role, out)?,
+            Expr::Log2(a) | Expr::Not(a) | Expr::BitNot(a) => self.from_expr(doc, at, a, role, out)?,
             // The field whose start this is. It decided where something else
             // went, so the row a reader wants is the one naming it, not a
             // number with nowhere to go.

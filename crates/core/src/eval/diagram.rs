@@ -342,7 +342,15 @@ fn static_bits(t: &Template, ty: &Ty, depth: u32) -> Option<u64> {
                 if f.aside {
                     continue;
                 }
-                total = total.checked_add(static_bits(t, &f.ty, depth + 1)?)?;
+                let bits = static_bits(t, &f.ty, depth + 1)?;
+                // A union is as wide as its widest field: every field of one
+                // starts where the record does, so a sibling after it would
+                // be drawn at an offset no file agrees with if these added
+                // up. See `StructDef::overlap`.
+                total = match sd.overlap {
+                    true => total.max(bits),
+                    false => total.checked_add(bits)?,
+                };
             }
             Some(total)
         }
@@ -408,6 +416,9 @@ fn size_text(t: &Template, ty: &Ty) -> String {
                 _ => format!("until {field} matches"),
             },
             Until::Cond(e) => write_expr(e).map_or(String::new(), |s| format!("until {s}")),
+            // Read before each element rather than after it, and the word
+            // says which: the run carries on while this holds.
+            Until::While(e) => write_expr(e).map_or(String::new(), |s| format!("while {s}")),
         },
         _ => String::new(),
     }
@@ -598,6 +609,10 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
         Ty::Repeat { elem, until } => {
             match until {
                 Until::Cond(e) => out.push(Source { expr: e.clone(), role: Role::Count, inside: true }),
+                // Asked beside the list, not inside the element: the arrow
+                // belongs on the row of a sibling of the list, since that is
+                // what the names in it reach. See `Until::While`.
+                Until::While(e) => out.push(Source { expr: e.clone(), role: Role::Count, inside: false }),
                 Until::FieldValue { field, .. } | Until::FieldBytes { field, .. } => {
                     out.push(Source { expr: Expr::field(field), role: Role::Count, inside: true })
                 }
@@ -692,12 +707,14 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         | Expr::Bit(inner, _)
         | Expr::PadTo { n: inner, .. }
         | Expr::Not(inner)
+        | Expr::BitNot(inner)
         | Expr::StartOf(inner)
         | Expr::RealText(inner)
         | Expr::Pow2(inner)
         | Expr::Pow10(inner)
         | Expr::Trunc(inner) => names_in(inner, out),
         Expr::PeekAt { skip, .. } => names_in(skip, out),
+        Expr::PeekIn { at, .. } => names_in(at, out),
         Expr::Cond { when, then, otherwise } => {
             names_in(when, out);
             names_in(then, out);
@@ -721,6 +738,8 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         | Expr::Shl(a, b)
         | Expr::Shr(a, b)
         | Expr::And(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
         | Expr::Min(a, b)
         | Expr::Max(a, b) => {
             names_in(a, out);
@@ -728,8 +747,9 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
         }
         // What is left names no field: a literal, an index, a peek at bits, a
         // search for a pattern, where the cursor is, how big the window is.
-        // `Pos` and `WindowSize` are facts about the frame rather than about
-        // any row, so there is nothing to draw an arrow from.
+        // `Pos`, `WindowSize`, `SpacePos` and `SpaceSize` are facts about the
+        // frame rather than about any row, so there is nothing to draw an
+        // arrow from.
         _ => {}
     }
 }
@@ -865,6 +885,10 @@ impl<'a> Walk<'a> {
                 kind: value_kind(self.t, &f.ty),
             });
             at = match (at, static_bits(self.t, &f.ty, 0)) {
+                // Every field of a union is drawn at the record's own start,
+                // so the running offset never moves on. See
+                // `StructDef::overlap`.
+                (Some(a), _) if sd.overlap => Some(a),
                 (Some(a), Some(b)) if !f.aside => Some(a + b),
                 (Some(a), Some(_)) => Some(a),
                 _ => None,

@@ -63,6 +63,10 @@ pub enum Placed {
     Trace,
     /// The front of what a compressed run unpacked to.
     Stream,
+    /// One of several readings of the same bytes: a field of a union, which
+    /// starts where the union does and so where every other field of it does.
+    /// See [`crate::template::StructDef::overlap`].
+    Overlap,
     /// The front of a stream joined from runs elsewhere: a PDB stream from its
     /// blocks, a BAM from its BGZF members. What each byte of it came from is
     /// a part, which [`crate::eval::Evaluator::part_of`] names.
@@ -86,6 +90,7 @@ impl Placed {
             Placed::Address => "address",
             Placed::Trace => "trace",
             Placed::Stream => "stream",
+            Placed::Overlap => "overlap",
             Placed::Stitched => "stitched",
             Placed::Unknown => "unknown",
         }
@@ -248,6 +253,13 @@ impl Evaluator {
             // A member of a JSON object is placed by the parse, but it is
             // placed after the member before it, which is what the reader is
             // being told.
+            // Every field of a union starts where the union does, including
+            // the first: "first field of" would be true of it and would say
+            // the one thing about it that is not the point.
+            Ty::Struct(s) if s.overlap => {
+                let _ = s;
+                Placed::Overlap
+            }
             Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => {
                 if idx == 0 {
                     Placed::First
@@ -410,6 +422,8 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
         | Expr::Either(a, b)
         | Expr::Both(a, b)
         | Expr::And(a, b)
+        | Expr::BitOr(a, b)
+        | Expr::BitXor(a, b)
         | Expr::Less(a, b)
         | Expr::Eq(a, b)
         | Expr::Ne(a, b)
@@ -429,7 +443,7 @@ fn expr_reads(e: &Expr) -> (bool, bool) {
             (rc || rt, nc || nt)
         }
         Expr::PadTo { n, .. } => expr_reads(n),
-        Expr::Log2(a) | Expr::Not(a) => expr_reads(a),
+        Expr::Log2(a) | Expr::Not(a) | Expr::BitNot(a) => expr_reads(a),
         Expr::Bit(a, _) => expr_reads(a),
         // A power and a whole part are written down when what they take apart
         // is. `real(...)` reads a field, and so falls to the arm below.

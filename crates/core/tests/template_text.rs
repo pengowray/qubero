@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use qubero_core::formats;
-use qubero_core::template::{StructDef, Ty};
+use qubero_core::template::{Endian, Expr as E, StructDef, Template, Ty, Until};
 use qubero_core::template_text::render;
 
 /// The formats whose whole text is kept: a signature and a chunk stream, a
@@ -97,4 +97,51 @@ fn the_snapshots_still_read_the_same_way() {
         }
     }
     assert!(stale.is_empty(), "{}\nRerun with UPDATE_SNAPSHOTS=1 to rewrite them.", stale.join("\n"));
+}
+
+/// The notation for the parts of the IR no built-in format uses yet, kept in a
+/// snapshot for the same reason the ten formats are: the notation is for a
+/// reader, and a line that gets worse should show up as a diff somebody can
+/// read. Everything here exists for the ImHex pattern converter, and this is
+/// what it will write.
+#[test]
+fn the_newest_notation_still_reads_the_same_way() {
+    let t = written_out();
+    let text = render(&t);
+    let path = snapshot_dir().join("notation.txt");
+    if std::env::var("UPDATE_SNAPSHOTS").is_ok_and(|v| v == "1") {
+        std::fs::create_dir_all(snapshot_dir()).expect("snapshot directory");
+        std::fs::write(&path, &text).expect("write snapshot");
+        return;
+    }
+    let want = std::fs::read_to_string(&path).expect("no snapshot for the notation");
+    assert_eq!(want.replace("\r\n", "\n"), text, "Rerun with UPDATE_SNAPSHOTS=1 to rewrite it.");
+}
+
+/// One structure using each of the bitwise operators, both kinds of repeat
+/// question, both space measurements, a peek at an address, and a union.
+fn written_out() -> Template {
+    let flags = E::field("flags");
+    let union = Ty::union_structure(
+        "Colour",
+        vec![("packed", Ty::u32(Endian::Big)), ("bytes", Ty::array(Ty::u8(), E::lit(4))), ("high", Ty::u16(Endian::Big))],
+    );
+    let root = Ty::structure(
+        "Header",
+        vec![
+            ("flags", Ty::u8()),
+            ("count", Ty::u8()),
+            ("set", Ty::computed(flags.clone().bit_or(E::lit(0x20)))),
+            ("toggled", Ty::computed(flags.clone().bit_xor(E::lit(0x0f)))),
+            ("clear", Ty::computed(flags.clone().bit_not().and(E::lit(0xff)))),
+            ("here", Ty::computed(E::SpacePos)),
+            ("whole", Ty::computed(E::SpaceSize)),
+            ("magic", Ty::computed(E::PeekIn { at: Box::new(E::lit(0)), bits: 32, endian: Endian::Big })),
+            ("colour", union),
+            ("counted", Ty::repeat(Ty::u8(), Until::While(E::Idx.less_than(E::field("count"))))),
+            ("while_room", Ty::repeat(Ty::u16(Endian::Big), Until::While(E::SpacePos.less_than(E::SpaceSize)))),
+            ("until_zero", Ty::repeat(Ty::u8(), Until::Cond(E::field("value").equal_to(E::lit(0))))),
+        ],
+    );
+    Template::new("notation", root)
 }

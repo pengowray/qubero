@@ -156,6 +156,47 @@ pub enum Expr {
     /// `_io.size` is this. In bytes and rounded down, for the reason
     /// [`Expr::Pos`] is.
     WindowSize,
+    /// How many bytes into the whole space this field starts: the file at the
+    /// top level, and the bytes a compressed run came to for anything inside
+    /// one. Whatever windows lie in between are passed straight through.
+    ///
+    /// [`Expr::Pos`] is the same question asked of the nearest window, which is
+    /// what a format keeping offsets inside a page or a table needs. This is
+    /// what a format whose addresses are addresses needs: an ImHex pattern's
+    /// `$` is this, and so is a Kaitai `_root._io.pos`, and inside a `Sized`
+    /// the two answer different numbers. Reading a field at a written-down
+    /// address is what it is for, and it pairs with [`Anchor::Space`] the way
+    /// [`Expr::Pos`] pairs with [`Anchor::Window`].
+    ///
+    /// In bytes and rounded down, for the reason [`Expr::Pos`] is.
+    SpacePos,
+    /// How many bytes the whole space holds, ignoring any window around the
+    /// field asking. An ImHex `std::mem::size()` is this, and at the top level
+    /// it is the length of the file.
+    ///
+    /// [`Expr::WindowSize`] is the nearest window's size, which is the right
+    /// answer for a field measuring the record it sits in and the wrong one
+    /// for a field measuring the file.
+    SpaceSize,
+    /// `bits` bits read at `at` bits from the start of the space, without
+    /// consuming anything.
+    ///
+    /// [`Expr::PeekAt`] looks a distance on from where the field is, which is
+    /// what a record deciding its own shape needs, and it cannot be handed an
+    /// address: a negative skip there already means something else, counting
+    /// back from the end of the container, so `at - SpacePos` reads from the
+    /// wrong end for every address behind the field asking. A format whose
+    /// pattern says "the four bytes at 0x3c" means the file's 0x3c however far
+    /// into the file the asking is done, and this says that.
+    ///
+    /// Counted from the front of the space, the same stretch [`Expr::SpacePos`]
+    /// counts from and [`Anchor::Space`] anchors to, so the three agree: `at`
+    /// is an address of the file at the top level and of the unpacked bytes
+    /// inside a decoded run. In bits, as [`Expr::PeekAt`]'s skip is.
+    ///
+    /// Reading past the end of the space fails, as a peek past the end of a
+    /// container does, rather than answering with a number nothing wrote.
+    PeekIn { at: Box<Expr>, bits: u32, endian: Endian },
     /// How many elements the earlier list field `name` holds.
     ///
     /// [`Expr::SizeOf`] measures a field in bytes, which for a list of records
@@ -481,6 +522,28 @@ pub enum Expr {
     /// read as signed can hold one, and quietly answering something else would
     /// be worse than answering the arithmetic.
     And(Box<Expr>, Box<Expr>),
+    /// The two numbers' bits, ored together: what setting a flag is.
+    ///
+    /// Not [`Expr::Or`], which answers a *value* (the left side, or the right
+    /// when the left comes to zero), and not [`Expr::Either`], which answers a
+    /// *truth*. All three are here because a template has to be able to say
+    /// which of the three it meant, and for `flags` at 12 and a right side of
+    /// 4 the three answer 12, 12 and 1. The name says which this is.
+    BitOr(Box<Expr>, Box<Expr>),
+    /// The bits set in one of the two and not in both. What a format that
+    /// scrambles a word against a key does, and what a parity word over a run
+    /// of records is.
+    BitXor(Box<Expr>, Box<Expr>),
+    /// Every bit of a number flipped.
+    ///
+    /// Counted over the whole 128-bit number, as the arithmetic here is, and
+    /// not over the width of whatever field the number was read from: `~0` is
+    /// -1 and `~1` is -2. A format that means the complement within a 32-bit
+    /// word says so by masking, `~x & 0xffffffff`, and a template that leaves
+    /// the mask off is asking for the number this answers. The alternative was
+    /// to carry a width on the operator, which would be a width no file wrote
+    /// and one more thing for every reader of the expression to check.
+    BitNot(Box<Expr>),
     /// The smaller of the two, and the larger of the two.
     ///
     /// What a length that must not run past the end of the file needs.
@@ -969,6 +1032,20 @@ impl Expr {
     pub fn and(self, rhs: Expr) -> Expr {
         Expr::And(Box::new(self), Box::new(rhs))
     }
+    /// This or `rhs`, bit by bit. Not [`Expr::or`], which answers a value, nor
+    /// [`Expr::either`], which answers a truth. See [`Expr::BitOr`].
+    pub fn bit_or(self, rhs: Expr) -> Expr {
+        Expr::BitOr(Box::new(self), Box::new(rhs))
+    }
+    /// The bits set in one of the two and not in both.
+    pub fn bit_xor(self, rhs: Expr) -> Expr {
+        Expr::BitXor(Box::new(self), Box::new(rhs))
+    }
+    /// Every bit of this one flipped. See [`Expr::BitNot`] for how wide that
+    /// is, which is not the width of the field it came from.
+    pub fn bit_not(self) -> Expr {
+        Expr::BitNot(Box::new(self))
+    }
     /// A run of `width` bits of `src`, the topmost of them bit `top_bit`,
     /// counting from the least significant, read as an unsigned number.
     ///
@@ -1070,6 +1147,30 @@ pub enum Until {
     /// still has the elements it wrote, and refusing to place them would hide
     /// the very thing that went wrong.
     Cond(Expr),
+    /// Carry on while this expression comes to something other than zero,
+    /// asked *before* each element rather than after it. The element it
+    /// answers zero for is not read at all, so a run may hold nothing.
+    ///
+    /// [`Until::Cond`] is the other way round: it reads an element and then
+    /// asks the element whether the run is over, so the element that ends the
+    /// run is part of it. Both shapes exist in the formats. A list of records
+    /// each carrying an end marker is the first; a list that stops when the
+    /// bytes ahead of it stop looking like a record is this one, and reading
+    /// the element to find out would be reading whatever came after the list.
+    ///
+    /// Asked in the *list's* own scope, as if it were a field standing where
+    /// the next element would start: [`Expr::Ref`] names the list's siblings
+    /// and climbs out through the structures the list sits in, the same as a
+    /// name anywhere else does, and reaches nothing inside the element, which
+    /// has not been read. [`Expr::Idx`] is the index of the element about to
+    /// be read, so a run of `n` stops at `Idx < n`. [`Expr::Pos`],
+    /// [`Expr::SpacePos`] and [`Expr::Remaining`] are measured where that
+    /// element would begin, which is what "while there is still room for one"
+    /// asks about.
+    ///
+    /// Stops at the end of the container as well, exactly as [`Until::End`]
+    /// does.
+    While(Expr),
 }
 
 /// What a format knows about the values inside a JSON field, laid over the
@@ -2924,6 +3025,25 @@ pub struct StructDef {
     /// views honour it: `locate` still walks inside, so the cursor keeps its
     /// bit precision and the field tree still opens the structure up.
     pub inline: bool,
+    /// Every field starts where the structure does, and the structure is as
+    /// long as its longest field. What a C `union` is.
+    ///
+    /// Ordinarily a field starts where the one before it ended, and that is
+    /// nearly always what a format means. A union means the other thing: one
+    /// stretch of bytes with several readings laid over it, which is how a
+    /// record whose shape depends on a tag elsewhere is written down when the
+    /// writer did not want a `Switch`, and how a file describes the same four
+    /// bytes as a colour and as a word.
+    ///
+    /// Only the *first* field's bytes are counted towards any total. The
+    /// others are second readings of bytes the first already describes, the
+    /// same as [`Field::aside`] marks one by hand, and counting them all would
+    /// say a sixteen-byte union is sixty-four bytes of file. The first field
+    /// rather than the longest, so that which reading is the accounted one is
+    /// a fact about the declaration and not about the file; a union whose
+    /// first field is the shorter one leaves the bytes past it uncounted,
+    /// which is a smaller wrong than counting the same bytes four times.
+    pub overlap: bool,
     /// Names a packing whose contents only the format can take apart, where
     /// the fields say where the packed bytes are but not what they hold. A
     /// ggml `q4_k` block is 256 weights in 144 bytes, packed in an order no
@@ -3148,6 +3268,7 @@ impl Ty {
             contents: None,
             unit: None,
             inline: false,
+            overlap: false,
             packed: None,
             machinery: Vec::new(),
             payload: Vec::new(),
@@ -3411,6 +3532,15 @@ impl Ty {
     pub fn inline_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         match Ty::structure(name, fields) {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { inline: true, ..(*s).clone() })),
+            other => other,
+        }
+    }
+
+    /// A structure whose fields all start where it does, as long as its
+    /// longest: what a C `union` is. See [`StructDef::overlap`].
+    pub fn union_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
+        match Ty::structure(name, fields) {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { overlap: true, ..(*s).clone() })),
             other => other,
         }
     }
