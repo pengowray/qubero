@@ -77,48 +77,124 @@ pub fn parse(text: &str) -> Result<Program, HexpatError> {
 /// `__IMHEX__`, the reference's own test runner defines `__PL_UNIT_TESTS__`,
 /// and patterns in the corpus read `#ifdef` on both.
 pub fn parse_with(file: &str, text: &str, resolver: &dyn Resolver, defines: &[String]) -> Result<Program, HexpatError> {
-	let mut session = Session { resolver, defines: defines.to_vec(), cache: HashMap::new(), loading: HashSet::new() };
-	let (program, _types) = parse_unit(file, text, &mut session)?;
+	let mut session = Session {
+		resolver,
+		defines: defines.to_vec(),
+		imported: HashMap::new(),
+		included: HashSet::new(),
+		loading: HashSet::new(),
+	};
+	let (program, _types) = parse_unit(file, text, &mut session, HashMap::new())?;
 	Ok(program)
+}
+
+/// The types the host registers under `builtin::`, with how many template
+/// arguments each takes. ImHex's decode plugin declares them; the include files
+/// in `includes/hex/type/` wrap them, so a pattern that reads JSON or
+/// disassembly does not parse without them. Every parameter is a value.
+const BUILTIN_TYPES: &[(&str, usize)] = &[
+	("builtin::hex::dec::Bjdata", 1),
+	("builtin::hex::dec::Bson", 1),
+	("builtin::hex::dec::Cbor", 1),
+	("builtin::hex::dec::EncodedString", 2),
+	("builtin::hex::dec::Instruction", 4),
+	("builtin::hex::dec::Json", 1),
+	("builtin::hex::dec::Msgpack", 1),
+	("builtin::hex::dec::Ubjson", 1),
+];
+
+fn builtin_types() -> HashMap<String, TypeInfo> {
+	BUILTIN_TYPES
+		.iter()
+		.map(|(name, count)| {
+			let template = (0..*count)
+				.map(|index| TemplateParam { name: format!("$param{index}$"), is_type: false, pos: Pos::default() })
+				.collect();
+			(name.to_string(), TypeInfo { template, forward: false })
+		})
+		.collect()
 }
 
 struct Session<'r> {
 	resolver: &'r dyn Resolver,
 	defines: Vec<String>,
-	cache: HashMap<String, (Arc<Program>, HashMap<String, TypeInfo>)>,
+	/// Files an `import` has parsed, which are separate units and so cacheable.
+	imported: HashMap<String, (Arc<Program>, HashMap<String, TypeInfo>)>,
+	/// Files an `#include` has already spliced in, which happens once.
+	included: HashSet<String>,
 	/// Files being parsed right now, so a cycle stops instead of recurring.
 	loading: HashSet<String>,
 }
 
 impl Session<'_> {
-	/// Find, parse and remember one file. `None` means the resolver has no
-	/// such path.
-	fn load(&mut self, path: &str) -> Option<Res<(Arc<Program>, HashMap<String, TypeInfo>)>> {
+	/// Find and parse one imported file. `None` means the resolver has no such
+	/// path. An `import` is its own translation unit, so its result is cached.
+	fn import_file(&mut self, path: &str) -> Option<Res<(Arc<Program>, HashMap<String, TypeInfo>)>> {
 		let found = self.resolver.resolve(path)?;
-		if let Some(cached) = self.cache.get(&found.name) {
+		if let Some(cached) = self.imported.get(&found.name) {
 			return Some(Ok(cached.clone()));
 		}
-		if !self.loading.insert(found.name.clone()) {
-			// A cycle. The reference's once-guards stop here too.
-			let empty = Program { file: found.name, decls: Vec::new(), pragmas: Vec::new(), docs: Vec::new() };
-			return Some(Ok((Arc::new(empty), HashMap::new())));
+		if self.included.contains(&found.name) || !self.loading.insert(found.name.clone()) {
+			// Already spliced in by an `#include`, or a cycle. The reference's
+			// once-guards check each other the same way.
+			return Some(Ok((Arc::new(empty_program(&found.name)), HashMap::new())));
 		}
-		let parsed = parse_unit(&found.name, &found.text, self);
+		// An imported file is its own translation unit, so it starts with an
+		// empty include guard of its own.
+		let outer = std::mem::take(&mut self.included);
+		let parsed = parse_unit(&found.name, &found.text, self, HashMap::new());
+		self.included = outer;
 		self.loading.remove(&found.name);
 		let (program, types) = match parsed {
 			Ok(value) => value,
 			Err(error) => return Some(Err(error)),
 		};
 		let entry = (Arc::new(program), types);
-		self.cache.insert(found.name, entry.clone());
+		self.imported.insert(found.name, entry.clone());
 		Some(Ok(entry))
+	}
+
+	/// Find and parse one `#include`d file.
+	///
+	/// An `#include` splices tokens, so the file is parsed with the types the
+	/// includer has so far and hands its whole table back: `#include <a>` then
+	/// `#include <b>` lets `b` name a type `a` declared, which is what the
+	/// GoldBox patterns rely on. That makes the result context-dependent, so it
+	/// is not cached; only the once-guard stops the work repeating.
+	fn include_file(&mut self, path: &str, types: HashMap<String, TypeInfo>) -> Option<Res<(Arc<Program>, HashMap<String, TypeInfo>)>> {
+		let found = self.resolver.resolve(path)?;
+		if self.included.contains(&found.name) || self.imported.contains_key(&found.name) || !self.loading.insert(found.name.clone()) {
+			return Some(Ok((Arc::new(empty_program(&found.name)), types)));
+		}
+		let parsed = parse_unit(&found.name, &found.text, self, types);
+		self.loading.remove(&found.name);
+		self.included.insert(found.name.clone());
+		let (program, types) = match parsed {
+			Ok(value) => value,
+			Err(error) => return Some(Err(error)),
+		};
+		Some(Ok((Arc::new(program), types)))
 	}
 }
 
-fn parse_unit(file: &str, text: &str, session: &mut Session<'_>) -> Res<(Program, HashMap<String, TypeInfo>)> {
+fn empty_program(name: &str) -> Program {
+	Program { file: name.to_string(), decls: Vec::new(), pragmas: Vec::new(), docs: Vec::new() }
+}
+
+fn parse_unit(
+	file: &str,
+	text: &str,
+	session: &mut Session<'_>,
+	types: HashMap<String, TypeInfo>,
+) -> Res<(Program, HashMap<String, TypeInfo>)> {
 	let defines = session.defines.clone();
 	let lexed = lexer::lex(file, text, &defines)?;
 	let mut parser = Parser::new(file, text, lexed, session);
+	if types.is_empty() {
+		parser.types = builtin_types();
+	} else {
+		parser.types = types;
+	}
 	parser.run()?;
 	let types = std::mem::take(&mut parser.types);
 	let program = Program {
@@ -196,13 +272,12 @@ impl<'a, 'r> Parser<'a, 'r> {
 	}
 
 	fn include(&mut self, include: &lexer::Include) -> Res<Decl> {
-		match self.session.load(&include.path) {
+		let types = std::mem::take(&mut self.types);
+		match self.session.include_file(&include.path, types) {
 			None => Err(HexpatError::new(self.file, include.pos, format!("Could not find file {}", include.path))),
 			Some(Err(error)) => Err(error),
 			Some(Ok((program, types))) => {
-				for (name, info) in types {
-					self.types.entry(name).or_insert(info);
-				}
+				self.types = types;
 				Ok(Decl::Include { path: include.path.clone(), program: Some(program), pos: include.pos })
 			}
 		}
@@ -1765,6 +1840,15 @@ impl<'a, 'r> Parser<'a, 'r> {
 	/* ---------------------------------------------------------------- */
 
 	fn statements(&mut self) -> Res<Vec<Decl>> {
+		let decls = self.one_statements()?;
+		// The reference eats superfluous semicolons at the end of every
+		// top-level statement, which is what lets a `while (..) { .. };` carry
+		// a semicolon it does not need.
+		while self.sep(Sep::Semicolon) {}
+		Ok(decls)
+	}
+
+	fn one_statements(&mut self) -> Res<Vec<Decl>> {
 		let from = self.at;
 		let pos = self.pos();
 		let doc = self.doc_here(from);
@@ -2244,7 +2328,7 @@ impl<'a, 'r> Parser<'a, 'r> {
 			None
 		};
 
-		let loaded = match self.session.load(&path) {
+		let loaded = match self.session.import_file(&path) {
 			None => return Err(HexpatError::new(self.file, pos, format!("Failed to resolve import: {path}"))),
 			Some(Err(error)) => return Err(error),
 			Some(Ok(loaded)) => loaded,

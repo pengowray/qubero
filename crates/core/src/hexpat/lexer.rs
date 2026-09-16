@@ -721,6 +721,7 @@ impl<'a> Lexer<'a> {
 				}
 				let name = std::str::from_utf8(&self.src[self.cursor..self.cursor + length]).unwrap_or("").to_string();
 				let pos = self.pos();
+				let line = self.line;
 				let Some(directive) = Directive::from_name(&name) else {
 					return Err(self.err(pos, format!("Unknown directive: {name}")));
 				};
@@ -729,6 +730,8 @@ impl<'a> Lexer<'a> {
 
 				// The token-valued directives take their arguments as ordinary
 				// tokens; the rest take a word and then the rest of the line.
+				// Each step stops if the line ran out, which is how `#pragma once`
+				// gets a key and no value.
 				if matches!(directive, Directive::Define | Directive::Undef | Directive::IfDef | Directive::IfNDef | Directive::EndIf) {
 					continue;
 				}
@@ -741,7 +744,7 @@ impl<'a> Lexer<'a> {
 					continue;
 				}
 				self.directive_value()?;
-				if self.peek(0) == 0 {
+				if self.line != line || self.peek(0) == 0 {
 					continue;
 				}
 				let ended = self.peek(0);
