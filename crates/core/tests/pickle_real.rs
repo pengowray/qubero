@@ -621,8 +621,61 @@ fn the_forms_match_these_samples_and_no_others() {
     }
 }
 
-/// A matched file's decoded values are reachable under the other template, and
-/// an unmatched one has nothing there.
+/// One row of the familiar-form template: how deep it sits, what it is called,
+/// what type it is, where it starts, how long it is and what it says.
+#[derive(Debug)]
+struct Row {
+    path: Vec<usize>,
+    depth: usize,
+    name: String,
+    ty: String,
+    at: u64,
+    len: u64,
+    value: Value,
+}
+
+/// Every row the template shows for this file, in file order.
+fn familiar_rows(bytes: Vec<u8>) -> Vec<Row> {
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let mut out = Vec::new();
+    walk_rows(&doc, &mut ev, &[], 0, &mut out);
+    out
+}
+
+fn walk_rows(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], depth: usize, out: &mut Vec<Row>) {
+    let node = ev.node(doc, path).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+    out.push(Row {
+        path: path.to_vec(),
+        depth,
+        name: node.name.clone(),
+        ty: node.type_name.clone(),
+        at: node.offset_bits / 8,
+        len: node.size_bits / 8,
+        value: node.value.clone(),
+    });
+    // A run of numbers is counted rather than walked: it is a value, not a
+    // part of the file's shape.
+    if node.type_name.ends_with("[]") {
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = path.to_vec();
+        next.push(i);
+        walk_rows(doc, ev, &next, depth + 1, out);
+    }
+}
+
+fn row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
+    rows.iter().find(|r| r.name == name).unwrap_or_else(|| panic!("no {name} row"))
+}
+
+/// A matched file's decoded values are reachable under the other template, an
+/// unmatched one has nothing there, and a matched one has no byte left over.
+///
+/// The last of those is the point of a form. A form fixes its instructions, so
+/// a byte no field covers is a byte the grammar matched and the template could
+/// not account for, which is the thing this reading is supposed to rule out.
 #[test]
 fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
     let Some(dir) = folder() else { return };
@@ -630,48 +683,79 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
     for path in pickles(&dir) {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let bytes = std::fs::read(&path).unwrap();
-        let matched = formats::pickle::familiar::recognise(&bytes).map(|m| m.form.to_string());
-        let doc = Document::new(MemSource(bytes));
-        let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
-        match matched {
-            None => assert!(ev.node(&doc, &[]).is_err(), "{name}: read as a familiar form"),
-            Some(form) => {
-                let root = ev.node(&doc, &[]).unwrap();
-                assert_eq!(root.child_count, 2, "{name}");
-                assert_eq!(ev.node(&doc, &[0, 1]).unwrap().value, Value::Str(form), "{name}");
-                assert_eq!(
-                    ev.node(&doc, &[0, 0]).unwrap().value,
-                    Value::Str(formats::pickle::familiar::MESSAGE.to_string()),
-                    "{name}"
-                );
-                // The data is there and is inside the file.
-                let data = ev.node(&doc, &[1]).unwrap();
-                assert!(data.offset_bits + data.size_bits <= doc.len_bits(), "{name}");
-                checked += 1;
-            }
-        }
+        let Some(form) = formats::pickle::familiar::recognise(&bytes).map(|m| m.form.to_string()) else {
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            assert!(ev.node(&doc, &[]).is_err(), "{name}: read as a familiar form");
+            continue;
+        };
+        let rows = familiar_rows(bytes.clone());
+        assert_eq!(rows[0].len, bytes.len() as u64, "{name}: the root is not the file");
+        assert_eq!(row(&rows, "message").value, Value::Str(formats::pickle::familiar::MESSAGE.to_string()), "{name}");
+        assert_eq!(row(&rows, "form").value, Value::Str(form), "{name}");
+        assert_eq!(row(&rows, "protocol").value, Value::UInt(4), "{name}");
+        covers(&rows, &name);
+        checked += 1;
     }
     assert!(checked >= 3, "only {checked} samples matched a form");
 }
 
-/// The numbers of the one matched array, read through the template.
+/// Every node's children tile it: they start where it starts, they follow each
+/// other, and the last of them ends where it ends. Rows worked out from the
+/// match have no bytes and are not part of the tiling.
+fn covers(rows: &[Row], what: &str) {
+    for (i, row) in rows.iter().enumerate() {
+        let kids: Vec<&Row> = rows[i + 1..]
+            .iter()
+            .take_while(|r| r.depth > row.depth)
+            .filter(|r| r.depth == row.depth + 1)
+            .collect();
+        if kids.is_empty() {
+            continue;
+        }
+        let mut want = row.at;
+        for kid in kids {
+            if kid.len == 0 {
+                assert_eq!(kid.at, row.at, "{what}: {} is nowhere", kid.name);
+                continue;
+            }
+            assert_eq!(kid.at, want, "{what}: {} in {} leaves {want:#x} over", kid.name, row.name);
+            want = kid.at + kid.len;
+        }
+        assert_eq!(want, row.at + row.len, "{what}: {} has bytes over at {want:#x}", row.name);
+    }
+}
+
+/// The numbers of the one matched array, and the call that rebuilt it.
 #[test]
 fn a_matched_array_reads_as_its_numbers_under_the_familiar_template() {
     let Some(dir) = folder() else { return };
     let Ok(bytes) = std::fs::read(dir.join("proto4-numpy-array.pickle")) else { return };
-    let doc = Document::new(MemSource(bytes));
-    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let rows = familiar_rows(bytes);
     // One entry, called `weights`, holding an array of 24 floats 0 to 23.
-    let entry = ev.node(&doc, &[1, 0]).unwrap();
-    assert_eq!((entry.name.as_str(), entry.type_name.as_str()), ("weights", "entry"));
-    let array = ev.node(&doc, &[1, 0, 1]).unwrap();
-    assert_eq!(array.type_name, "array");
-    let said = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[1, 0, 1, i]).unwrap().value;
-    assert_eq!(said(&mut ev, 0), Value::Str("<f4".into()));
-    assert_eq!(said(&mut ev, 1), Value::Str("4 x 6".into()));
-    assert_eq!(said(&mut ev, 2), Value::Str("C".into()));
-    let data = ev.node(&doc, &[1, 0, 1, 3]).unwrap();
-    assert_eq!((data.type_name.as_str(), data.child_count), ("f32 le[]", 24));
-    let numbers: Vec<Value> = (0..24).map(|i| ev.node(&doc, &[1, 0, 1, 3, i]).unwrap().value).collect();
-    assert_eq!(numbers, (0..24).map(|n| Value::Float(n as f64)).collect::<Vec<_>>());
+    assert_eq!(row(&rows, "weights").ty, "entry");
+    assert_eq!(row(&rows, "value").ty, "array");
+    assert_eq!(row(&rows, "dtype").value, Value::Str("<f4".into()));
+    assert_eq!(row(&rows, "shape").value, Value::Str("4 x 6".into()));
+    assert_eq!(row(&rows, "order").value, Value::Str("C".into()));
+    // The call, with the names the form matched inside it.
+    assert_eq!(row(&rows, "ndarray reconstruct call").ty, "call");
+    assert_eq!(row(&rows, "module").value, Value::Str("numpy._core.multiarray".into()));
+    assert_eq!(row(&rows, "callable").value, Value::Str("_reconstruct".into()));
+    assert_eq!(row(&rows, "class module").value, Value::Str("numpy".into()));
+    assert_eq!(row(&rows, "class").value, Value::Str("ndarray".into()));
+    let numbers = row(&rows, "numbers");
+    assert_eq!((numbers.ty.as_str(), numbers.len), ("f32 le[]", 96));
+
+    // And the numbers themselves, read through the template.
+    let doc = Document::new(MemSource(std::fs::read(dir.join("proto4-numpy-array.pickle")).unwrap()));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let read: Vec<Value> = (0..24)
+        .map(|i| {
+            let mut at = numbers.path.clone();
+            at.push(i);
+            ev.node(&doc, &at).unwrap().value
+        })
+        .collect();
+    assert_eq!(read, (0..24).map(|n| Value::Float(n as f64)).collect::<Vec<_>>());
 }

@@ -554,6 +554,12 @@ struct Resolved {
     /// the part an editor writes and a reader is shown. None for a field
     /// whose value is the whole of it, which is nearly all of them.
     payload: Option<(u64, u64)>,
+    /// True for a field that is the structure's own plumbing rather than
+    /// anything it holds, where nothing declared it and so
+    /// [`machinery::hint`] has nothing to read. A node placed from a parse
+    /// rather than from a template says so here: the instructions a Familiar
+    /// Pickle Form fixed are machinery of the value they build.
+    machinery: bool,
 }
 
 /// What a computed field came to, kept on its node: a whole number for a
@@ -581,6 +587,8 @@ struct Place {
     offset: u64,
     limit: u64,
     space: u32,
+    /// See [`Resolved::machinery`]. False for every place a template made.
+    machinery: bool,
 }
 
 pub struct Evaluator {
@@ -841,6 +849,10 @@ impl Evaluator {
             None => reading,
         };
         let (consumed_by, mut machinery, contents) = self.in_parent(path);
+        // A node nothing declared says for itself whether it is plumbing.
+        if r.machinery {
+            machinery = Some(true);
+        }
         // What the decoder read is machinery for what it produced: a reader
         // who wants the contents of a stream is not asking about its Huffman
         // tables, and a view that folds machinery should fold these.
@@ -1252,15 +1264,12 @@ impl Evaluator {
                 _ => None,
             };
         }
-        // What a recognised pickle's containers hold, counted the way Python
-        // counts them.
-        if let Ty::Pickle(shape) = ty {
-            use crate::template::PickleShape as P;
-            return match shape {
-                P::Doc | P::Header | P::Entry | P::Array => None,
-                P::Dict => Some("entry"),
-                P::List | P::Tuple => Some("item"),
-            };
+        // Nothing here has a word of its own. A recognised pickle's
+        // containers hold the instructions that built them as well as what
+        // they hold, and counting a dictionary's rows as entries would say
+        // there are more entries in it than there are.
+        if let Ty::Pickle(_) = ty {
+            return None;
         }
         // What a trace holds at each level: blocks, and then codes. An LZ4
         // block has one run of sequences rather than blocks, and counting
@@ -1346,7 +1355,9 @@ impl Evaluator {
         // Reading the child is what goes deeper, and a file that nests pays
         // for every frame still open above it.
         let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
-        let r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
+        let machinery = place.machinery;
+        let mut r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
+        r.machinery = machinery;
         self.remember(path, r);
         Ok(())
     }
@@ -1408,6 +1419,7 @@ impl Evaluator {
                     offset: at,
                     limit: pr.limit,
                     space: pr.space,
+                    machinery: false,
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
@@ -1427,7 +1439,7 @@ impl Evaluator {
                 space::Opened::Refused(_) => return fail("this stream did not open"),
             };
             let limit = self.spaces.len_bits(space);
-            return Ok(Some(Place { name, ty, offset: 0, limit, space }));
+            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false }));
         }
         // A field that reads its contents from somewhere else in the file is
         // not bounded by the structure it was declared in: an object header
@@ -1460,6 +1472,7 @@ impl Evaluator {
                         computed: None,
                         space: pr.space,
                         payload: None,
+                        machinery: false,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -1562,7 +1575,7 @@ impl Evaluator {
                 return fail("runs past the end of the file");
             }
         }
-        Ok(Some(Place { name, ty, offset, limit, space }))
+        Ok(Some(Place { name, ty, offset, limit, space, machinery: false }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -2008,6 +2021,7 @@ impl Evaluator {
                         computed: None,
                         space,
                         payload: None,
+                        machinery: false,
                     });
                 }
                 Ty::Match { on, cases, default } => {
@@ -2057,6 +2071,7 @@ impl Evaluator {
                         computed: None,
                         space,
                         payload: None,
+                        machinery: false,
                     });
                 }
             }
@@ -2432,7 +2447,7 @@ impl Evaluator {
             return fail("this stream is no longer open");
         };
         let place = |name: String, ty: Ty, at: u64| {
-            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space }))
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false }))
         };
         match part {
             TracedPart::Blocks => {
