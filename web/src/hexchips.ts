@@ -116,6 +116,11 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   const shown = extra ? continuedDetail(detail) : detail;
   setText(el.lastElementChild as HTMLElement, shown);
   const path = [...s.trail, s.name].join(" ");
+  // What the field is, for the tooltips that name it. Nothing for a structure
+  // the template wrote to hold one value in several fields: the name on such a
+  // structure is the template's own and names nothing a reader of the format
+  // could look up.
+  const typed = s.inline ? "" : ` · ${s.type}`;
   let title: string;
   let label: string | null = null;
   if (c.run.length > 0) {
@@ -137,10 +142,10 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
     // The chip shows its value and nothing else, so which element it is has to
     // be said in words: on screen that is its place in the row, which a reader
     // going through the column one button at a time never sees.
-    title = `${path} · ${s.type}`;
+    title = `${path}${typed}`;
     label = `${s.name} ${detail}`;
   } else {
-    title = `${path} · ${s.type}`;
+    title = `${path}${typed}`;
   }
   // Said in words as well as drawn: a glyph in a corner is a thing to work
   // out, and this is the one chip whose second gesture does something a reader

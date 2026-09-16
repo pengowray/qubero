@@ -305,6 +305,10 @@ export type Span = {
    *  or the contents of one. What the annotation column marks so a reader
    *  running down the bytes can see there is a file in front of them. */
   readonly opens: boolean;
+  /** The template wrote this structure to hold one value in several fields, so
+   *  the name it gave the structure is its own bookkeeping: `Elsewhere` is not
+   *  a word the TIFF specification uses, and nothing shows it to a reader. */
+  readonly inline: boolean;
 };
 
 /** One element of a folded run, for the value table beside the bytes. A span

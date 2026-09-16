@@ -75,6 +75,44 @@ fn an_offset_points_at_what_its_sibling_read() {
     assert_eq!(points.value, "2003:07:19");
 }
 
+/// A pointer the file chose between several shapes still points where it
+/// landed: an ELF section's name is a switch over whether the file has a name
+/// table at all, and the case it took is read at an address.
+#[test]
+fn a_pointer_a_switch_picked_points_where_it_landed() {
+    let mut bytes = vec![0u8; 0x2c];
+    bytes[..4].copy_from_slice(&0x20u32.to_be_bytes());
+    bytes[0x20..0x2a].copy_from_slice(b"2003:07:19");
+    let template = Template::new(
+        "picked",
+        T::structure(
+            "Root",
+            vec![(
+                "value",
+                T::inline_structure(
+                    "Elsewhere",
+                    vec![
+                        ("offset", T::u32(Big)),
+                        (
+                            "values",
+                            T::switch(
+                                E::field("offset"),
+                                vec![(0, T::bytes(E::lit(0)))],
+                                T::at(E::field("offset"), T::text(StrLen::Fixed(E::lit(10)), Encoding::Ascii)),
+                            ),
+                        ),
+                    ],
+                ),
+            )],
+        ),
+    );
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(template);
+    let origins = ev.origins(&doc, &[0, 0]).unwrap();
+    let points = origins.iter().find(|o| o.role == Role::Points).expect("the offset points somewhere");
+    assert_eq!((points.label.as_str(), points.target_bits, points.value.as_str()), ("values", Some(0x20 * 8), "2003:07:19"));
+}
+
 /// A field no pointer reads points nowhere, which is nearly every field.
 #[test]
 fn a_plain_field_points_nowhere() {

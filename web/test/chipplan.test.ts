@@ -46,6 +46,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     parts: [],
     bits: null,
     opens: false,
+    inline: false,
     ...o,
   };
 }

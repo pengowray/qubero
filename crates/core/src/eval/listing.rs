@@ -39,6 +39,12 @@ pub struct Span {
     /// varint whose bytes have not been read yet: the split is worth drawing
     /// when it is known and worth nothing guessed.
     pub bits: Option<crate::varintbits::BitRoles>,
+    /// True when the template wrote this structure to hold one value in
+    /// several fields, so the name it gave the structure is its own
+    /// bookkeeping: `Elsewhere` is not a word the TIFF specification uses, and
+    /// a tooltip offering it names a thing nobody can look up. See
+    /// [`crate::template::StructDef::inline`].
+    pub inline: bool,
     /// True when these bytes are a document of their own and can be opened as
     /// one: a compressed run that unpacked, or the contents of one.
     ///
@@ -963,6 +969,7 @@ impl Evaluator {
             sample: Vec::new(),
             parts: Vec::new(),
             bits: self.bit_roles(doc, path, info),
+            inline: matches!(self.memo[path].ty.base(), Ty::Struct(s) if s.inline),
             // A stream that would not open is not an offer. `space_root` is
             // the node the stream holds, which is what the listing hangs Open
             // unpacked off; a template may fold the stream itself away and
