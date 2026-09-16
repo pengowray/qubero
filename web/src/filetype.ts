@@ -193,21 +193,26 @@ const TEMPLATE_LABEL: Record<string, string> = {
   compactpro: "Compact Pro archive",
 };
 
-/** The titles of the bundled Kaitai formats, keyed by the `ksy:` name, filled
- *  in once from the template list. A title is the format's own `meta/title`,
- *  which a third of them do not carry; those are shown by their id. */
+/** The titles of the bundled format descriptions, keyed by the `ksy:` or
+ *  `hexpat:` name, filled in once from the template list. A Kaitai title is the
+ *  format's own `meta/title`, which a third of them do not carry, and an ImHex
+ *  one is its `#pragma description`; a file with neither is shown by its id. */
 const KAITAI_TITLE = new Map<string, string>();
 
-/** Remember what each bundled Kaitai format calls itself, so that a name
+/** Remember what each bundled format description calls itself, so that a name
  *  reaching a label anywhere in the app reads as a format and not as an
  *  internal identifier. Called once, when the toolbar reads the list. */
 export const rememberKaitaiTitles = (choices: readonly TemplateChoice[]): void => {
-  for (const choice of choices) if (choice.source === "kaitai" && choice.title !== "") KAITAI_TITLE.set(choice.name, choice.title);
+  for (const choice of choices) {
+    if ((choice.source === "kaitai" || choice.source === "hexpat") && choice.title !== "") KAITAI_TITLE.set(choice.name, choice.title);
+  }
 };
 
 /** A template's human-facing name; internal names remain stable API values. */
 export const templateLabel = (name: string): string =>
-  TEMPLATE_LABEL[name] ?? KAITAI_TITLE.get(name) ?? (name.startsWith("ksy:") ? name.slice("ksy:".length) : name);
+  TEMPLATE_LABEL[name] ??
+  KAITAI_TITLE.get(name) ??
+  (name.startsWith("ksy:") ? name.slice("ksy:".length) : name.startsWith("hexpat:") ? name.slice("hexpat:".length) : name);
 
 /** A useful identity when the full template recognises a format the rule
  * database does not. A label that is already plural is what the file is:

@@ -5677,6 +5677,190 @@ summary.kp-group-heading:hover {
   background: var(--panel);
 }
 
+/* ---- ImHex patterns: the files one still needs ---- */
+/* Above the report, because until these are here the report is about a pattern
+   that stopped part way. Warn-coloured heading for the same reason the gap
+   count is: it is the one thing in the column to act on. */
+.kp-needs {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.kp-needs-heading {
+  color: var(--warn);
+  cursor: default;
+}
+.kp-needs-note {
+  margin: 0 8px 6px;
+  font: 11px/1.4 var(--sans);
+  color: var(--muted);
+}
+.kp-need {
+  padding: 0 8px 6px;
+}
+.kp-need-path {
+  display: block;
+  font: 11px var(--mono);
+  color: var(--addr);
+  overflow-wrap: anywhere;
+}
+.kp-need-text {
+  width: 100%;
+  height: 4.5em;
+  resize: vertical;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: 11px/1.4 var(--mono);
+  padding: 4px;
+}
+.kp-need-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- ImHex patterns: the library list ---- */
+/* A dialog over the panel: the list is a detour, and a detour that rearranges
+   the panel behind it costs the reader their place. */
+.kp-lib {
+  width: min(46rem, 92vw);
+  max-height: 84vh;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+}
+.kp-lib[open] {
+  display: flex;
+}
+.kp-lib-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.kp-lib-head h3 {
+  margin: 0;
+  font: 600 13px var(--sans);
+}
+.kp-lib-searchbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.kp-lib-search {
+  flex: 1;
+  min-width: 0;
+  font: 12px var(--sans);
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+}
+.kp-lib-count {
+  margin: 0;
+  font: 12px var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.kp-lib-list {
+  flex: 1;
+  min-height: 6rem;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+.kp-lib-row {
+  display: grid;
+  grid-template-columns: 9rem 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--fg);
+  padding: 3px 12px;
+  font: 12px var(--sans);
+  cursor: pointer;
+}
+.kp-lib-row:hover {
+  background: var(--accent-soft);
+}
+.kp-lib-row.is-picked {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.kp-lib-name {
+  font: 12px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kp-lib-desc {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* How much of a pattern converts. Three states, each with its own words, so
+   the colour is a second signal and never the only one. */
+.kp-lib-state {
+  font: 11px var(--sans);
+  white-space: nowrap;
+}
+.kp-lib-state.is-whole {
+  color: var(--ok, var(--muted));
+}
+.kp-lib-state.is-gaps {
+  color: var(--warn);
+}
+.kp-lib-state.is-refused {
+  color: var(--muted);
+}
+.kp-lib-empty {
+  margin: 8px 12px;
+  font: 12px var(--sans);
+  color: var(--muted);
+}
+/* What picking a row shows, above the one button that reaches the network. */
+.kp-lib-detail:not(:empty) {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px 12px;
+}
+.kp-lib-picked {
+  margin: 0;
+  font: 12px var(--mono);
+}
+.kp-lib-author,
+.kp-lib-extra {
+  margin: 2px 0 0;
+  font: 11px var(--sans);
+  color: var(--muted);
+}
+.kp-lib-notice-heading {
+  margin: 8px 0 2px;
+  font: 600 12px var(--sans);
+}
+.kp-lib-notice {
+  margin: 0 0 8px;
+  font: 11px/1.45 var(--sans);
+  color: var(--muted);
+  max-width: 44em;
+}
+.kp-lib-status:empty {
+  display: none;
+}
+.kp-lib-status {
+  margin: 6px 0 0;
+  font: 11px var(--sans);
+  color: var(--warn);
+}
+
 /* ---- diagram: what the open file has ---- */
 /* The drawing is of the format; these say which parts of it this file is an
    example of. Quiet, because a count is a note on a box and not the box. */

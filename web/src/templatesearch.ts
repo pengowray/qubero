@@ -13,7 +13,7 @@ import { parseCString, parseHex, signatureHolds, type Where } from "./bytequery.
 export type TemplateEntry = {
   readonly value: string;
   readonly label: string;
-  readonly kind: "builtin" | "kaitai" | "extra";
+  readonly kind: "builtin" | "kaitai" | "hexpat" | "extra";
   /** Extensions, lowercase, no dot. */
   readonly ext: readonly string[];
   /** Byte patterns the format declares, in PRONOM syntax, from the start. */
