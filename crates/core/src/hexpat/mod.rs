@@ -19,6 +19,7 @@
 //! as a gap and show the text it could not express.
 
 pub mod ast;
+pub mod bundled;
 pub mod expr;
 pub mod includes;
 pub mod lexer;
