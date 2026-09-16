@@ -50,9 +50,12 @@ with `-`, which the compiler ignores and we read where useful
 
 ### Only a leading magic can claim a dropped file
 DESIGN.md's rule for detection holds: a bundled Kaitai format is offered by
-sniffing only when its first `seq` field is a `contents` at offset 0 (117 of
-185 formats have `contents` somewhere; the count at offset 0 is what the
-bundling agent must measure). Everything else is opened by choosing it.
+sniffing only when the first thing it reads is a `contents` at offset 0,
+nested types looked through (117 of 185 formats have `contents` somewhere;
+the count at offset 0 is what the bundling agent must measure). Everything
+else is opened by choosing it. Two formats with the same magic both stay out
+of sniffing; `bundled::sniff_named` then offers one of them when the file's
+extension is its `meta/file-extension` (`.shp` against `.shx`).
 
 ### The diagram is laid out in layers, not by force
 fCoSe (the Graph view) is force-directed and wrong for a structure diagram.

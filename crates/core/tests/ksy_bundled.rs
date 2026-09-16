@@ -13,12 +13,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use qubero_core::decode::fixed_bits;
 use qubero_core::document::Document;
 use qubero_core::eval::Evaluator;
 use qubero_core::ksy::bundled;
 use qubero_core::source::MemSource;
-use qubero_core::template::Ty;
 
 #[test]
 fn there_are_bundled_formats_at_all() {
@@ -85,14 +83,14 @@ fn the_readme_says_the_gap_count_each_bundled_format_has() {
 }
 
 /// The signature in the table is derived from the converted template, and the
-/// table is written by a script. This re-derives it the same way and insists
-/// they agree, so a `.ksy` whose first field changed cannot go on claiming
-/// files by the magic it used to have.
+/// table is written by a script. This derives it again from today's
+/// conversion and insists they agree, so a `.ksy` whose first field changed
+/// cannot go on claiming files by the magic it used to have.
 #[test]
 fn the_table_signature_is_the_one_the_template_derives() {
     for entry in bundled::all() {
         let converted = bundled::template(entry.id).expect("in the table").expect("converts");
-        let derived = derive(&converted.template.root);
+        let derived = qubero_core::ksy::signature(&converted.template);
         let written: Vec<(u64, Vec<u8>)> =
             entry.signature.iter().map(|(at, b)| (*at, b.to_vec())).collect();
         assert_eq!(derived, written, "{}'s signature is stale", entry.id);
@@ -143,6 +141,35 @@ fn no_two_bundled_formats_claim_the_same_file() {
         }
         assert_eq!(bundled::sniff(&head), Some(entry.name), "{} does not answer for itself", entry.id);
     }
+}
+
+/// ESRI's main and index files open with the same file code and the same
+/// hundred-byte header, so neither sniffs on bytes alone. With the name in
+/// hand the pair is told apart, and a name that says nothing leaves it open.
+#[test]
+fn a_shapefile_is_told_from_its_index_by_the_extension_alone() {
+    let main = bundled::find("shapefile_main").expect("bundled");
+    let index = bundled::find("shapefile_index").expect("bundled");
+    assert_eq!(main.signature, index.signature, "the pair no longer shares a magic; this test is about a tie");
+    assert!(!main.sniffs && !index.sniffs);
+    let mut head = vec![0u8; 0x80];
+    for (at, bytes) in main.signature {
+        head[*at as usize..*at as usize + bytes.len()].copy_from_slice(bytes);
+    }
+    assert_eq!(head[..4], [0x00, 0x00, 0x27, 0x0a], "the ESRI file code is what the signature opens with");
+    assert_eq!(bundled::sniff(&head), None);
+    assert_eq!(bundled::sniff_named(&head, "shp"), Some("ksy:shapefile_main"));
+    assert_eq!(bundled::sniff_named(&head, "SHX"), Some("ksy:shapefile_index"));
+    assert_eq!(bundled::sniff_named(&head, "dbf"), None);
+    assert_eq!(bundled::sniff_named(&head, ""), None);
+    // And through the front door, name and all.
+    let len = head.len() as u64;
+    assert_eq!(qubero_core::formats::sniff_named(&head, len, "one-station.shx"), Some("ksy:shapefile_index"));
+    assert_eq!(qubero_core::formats::sniff_named(&head, len, "C:\\gis\\one-station.shp"), Some("ksy:shapefile_main"));
+    assert_eq!(qubero_core::formats::sniff_named(&head, len, "one-station"), None);
+    // The extension never overrides the bytes.
+    head[3] = 0x0b;
+    assert_eq!(bundled::sniff_named(&head, "shx"), None);
 }
 
 /// A format made of itself: five of the bundled files hold another whole one
@@ -207,8 +234,10 @@ fn a_pasted_ksy_can_import_from_the_bundled_collection() {
 // The sample collection was put together for the formats Qubero already reads,
 // so most bundled Kaitai formats have nothing in it. RIFF is the exception and
 // there are twenty-five of them, every one a real file written by a real
-// encoder. `SAMPLES` below is the whole of what the collection can test; the
-// formats it cannot are named in the skip message rather than left unsaid.
+// encoder; a shapefile and its index are the other, made for the pair of
+// formats that share a magic. `SAMPLES` below is the whole of what the
+// collection can test; the formats it cannot are named in the skip message
+// rather than left unsaid.
 
 /// `(template, folder, file)` for every bundled format the sample collection
 /// has a real file of.
@@ -219,6 +248,8 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     ("ksy:riff", "wav", "multiple-data-chunks-pcm16.wav"),
     ("ksy:riff", "wav", "broadcast-pcm16-bext-peak.wav"),
     ("ksy:riff", "wav", "ms-adpcm-stereo-22050.wav"),
+    ("ksy:shapefile_main", "shapefile", "one-station.shp"),
+    ("ksy:shapefile_index", "shapefile", "one-station.shx"),
 ];
 
 /// Bundled formats worth a real file, that the collection has none of. Printed
@@ -226,7 +257,7 @@ const SAMPLES: &[(&str, &str, &str)] = &[
 const NO_SAMPLE: &[&str] = &[
     "avi", "dex", "dicom", "ds_store", "edid", "ext2", "gpt_partition_table", "icc_4",
     "java_class", "mbr_partition_table", "mcap", "minecraft_nbt", "openpgp_message", "pcap",
-    "python_pyc_27", "regf", "shapefile_main", "ssh_public_key", "ttf", "vfat",
+    "python_pyc_27", "regf", "ssh_public_key", "ttf", "vfat",
     "windows_minidump",
 ];
 
@@ -296,24 +327,6 @@ fn a_real_wave_reads_as_riff_chunks() {
 /// The same derivation `tools/ksy_bundle.mjs` asks the `ksy_gaps` example for:
 /// the root's leading `contents`, plus every further one the walk reaches
 /// through fields whose width does not depend on the data.
-fn derive(root: &Ty) -> Vec<(u64, Vec<u8>)> {
-    let mut out = Vec::new();
-    let Ty::Struct(def) = root else { return out };
-    let mut at = 0u64;
-    for field in &def.fields {
-        if let Ty::Magic(bytes) = &field.ty {
-            out.push((at / 8, bytes.clone()));
-        } else if out.is_empty() {
-            return out;
-        }
-        match fixed_bits(&field.ty) {
-            Some(bits) if (at + bits) % 8 == 0 => at += bits,
-            _ => break,
-        }
-    }
-    out
-}
-
 /// Whether a file matching `a` would also match `b`.
 fn fits(a: &[(u64, &[u8])], b: &[(u64, &[u8])]) -> bool {
     b.iter().all(|(at, bytes)| {

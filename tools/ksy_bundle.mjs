@@ -154,6 +154,7 @@ function writeTable(rows) {
         `\t\toffered: ${r.offered ?? false},\n` +
         `\t\tsignature: ${r.signature ?? "&[]"},\n` +
         `\t\tsniffs: ${r.sniffs ?? false},\n` +
+        `\t\textensions: &[${(r.extensions ?? []).map(rust).join(", ")}],\n` +
         `\t},\n`,
     )
     .join("");
@@ -180,7 +181,9 @@ const report = new Map(JSON.parse(json).map((r) => [r.id, r]));
 
 // A pattern claims a file no other bundled pattern could also claim. Two
 // formats whose leading magic is the same are both dropped: picking either
-// would be a guess, and a guess is what sniffing exists not to do.
+// would be a guess, and a guess is what sniffing exists not to do. What is
+// left to them is the file's extension: `bundled::sniff_named` offers one of
+// a rival pair when its `meta/file-extension` is the dropped file's own.
 function conflicts(a, b) {
   const fits = (x, y) => y.every(([at, hex]) => {
     const known = x.find(([xat, xhex]) => xat <= at && xat + xhex.length / 2 >= at + hex.length / 2);
@@ -196,12 +199,15 @@ const decided = files.map((f) => {
   if (!r) throw new Error(`ksy_gaps said nothing about ${f.id}`);
   const gaps = r.gaps ?? [];
   const offered = !r.error && !DROPPED.some(([id]) => id === f.id) && r.params === 0 && !IMPORT_ONLY.has(f.id);
-  return { ...f, gaps: gaps.length, magics: r.magics ?? [], params: r.params, offered, error: r.error };
+  return { ...f, gaps: gaps.length, magics: r.magics ?? [], extensions: r.extensions ?? [], params: r.params, offered, error: r.error };
 });
 
 for (const d of decided) {
   const rivals = decided.filter((o) => o !== d && o.magics.length && conflicts(d.magics, o.magics));
   d.rivals = rivals.map((o) => o.id);
+  // The extensions that pick this one out from its rivals, if any do: an
+  // extension a rival also claims settles nothing.
+  d.ownExtensions = d.extensions.filter((e) => !rivals.some((o) => o.extensions.includes(e)));
   d.sniffs = d.offered && d.magics.length > 0 && rivals.length === 0 && d.magics.reduce((n, m) => n + m[1].length / 2, 0) >= 2;
   d.signature = d.magics.length
     ? `&[${d.magics.map(([at, hex]) => `(${at}, &[${(hex.match(/../g) ?? []).map((b) => `0x${b}`).join(", ")}])`).join(", ")}]`
@@ -227,7 +233,8 @@ const rows = decided
   .sort((a, b) => a.id.localeCompare(b.id))
   .map((d) => {
     const bundled = d.offered ? "yes" : "import";
-    const sniff = d.sniffs ? `${d.magics.reduce((n, m) => n + m[1].length / 2, 0)} bytes` : d.magics.length ? "no, " + (d.rivals.length ? `same magic as ${d.rivals.join(", ")}` : "magic under 2 bytes") : "no magic";
+    const byName = d.rivals.length && d.ownExtensions.length ? `; picked by the extension ${d.ownExtensions.map((e) => `.${e}`).join(" or ")}` : "";
+    const sniff = d.sniffs ? `${d.magics.reduce((n, m) => n + m[1].length / 2, 0)} bytes` : d.magics.length ? "no, " + (d.rivals.length ? `same magic as ${d.rivals.join(", ")}${byName}` : "magic under 2 bytes") : "no magic";
     return `| \`${d.id}\` | ${d.category} | ${d.license} | ${bundled} | ${d.gaps} | ${sniff} | ${reason(d)} |`;
   });
 
@@ -259,9 +266,12 @@ only licences that may appear are ${ALLOWED.map((l) => `\`${l}\``).join(", ")}.
   report names every one of them, and the panel shows them. A test asserts this
   number, so the table cannot drift from the code.
 * **Sniffs** is how much evidence a dropped file has to match for this format to
-  be offered: the first \`seq\` field's \`contents\`, plus any further \`contents\`
-  the walk reaches through fields of a fixed width. Built-in formats are asked
-  first, always, so this only ever answers for a file no builtin claims.
+  be offered: the \`contents\` the format reads first, nested types looked
+  through, plus any further \`contents\` the walk reaches through fields of a
+  fixed width. Built-in formats are asked first, always, so this only ever
+  answers for a file no builtin claims. Two formats with the same magic are
+  both kept out, and a dropped file whose bytes fit both opens as the one whose
+  \`meta/file-extension\` it carries.
 * **Reason** is filled in only where a row needs explaining: why a format with
   gaps ships anyway, or why a file is here to be imported and not offered. A
   blank means the format converts whole and a reader can pick it.
