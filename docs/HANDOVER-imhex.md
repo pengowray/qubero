@@ -406,3 +406,138 @@ are confirmed. 57 unit tests, one per case of the reference's language tests
 plus the strictness checks. No lowering yet: the imperative half parses into
 `ast::Statement`, which keeps a coarse kind, the byte range and the source text
 of each construct, ready to become a gap.
+
+2026-09-17: the lowering landed, in `crates/core/src/hexpat/{lower,types,includes}.rs`
+with `pub fn convert(text, &dyn Includes)` in `hexpat/mod.rs`, and the
+`Report`/`Became`/`Gap`/`Note` shape moved out of `ksy/` into
+`crates/core/src/report.rs` so both converters share it. 41 tests in
+`crates/core/tests/hexpat_lower.rs`, one per mapping row and one per imperative
+construct, each reading bytes written by hand for it, plus three
+`template_text::render` snapshots in
+`crates/core/tests/snapshots/template_text/hexpat_*.txt`.
+
+`cargo run -p qubero-core --example hexpat_gaps -- ~/github/ImHex-Patterns`, as
+it stands:
+
+```text
+81 clean / 226 with gaps of 1744 total, 3 refused, of 310 patterns
+samples: 36 read to the end, 108 stopped at a gap, 41 errored, 5 without a converted pattern, of 231 files under test_data
+pass rate: 144/185 read without an error (78%)
+```
+
+The three verdicts are defined in the example's own header, so the number means
+the same thing next time: **reads to the end** is every node resolved and a
+report with no gaps, **stopped at a gap** is every node resolved and a report
+with gaps, and **error** is a node that did not resolve, with the path that
+failed. The three refusals are the parser's, not the lowering's:
+`ffx/jp/txt/single2.hexpat` is the upstream spelling mistake described above,
+and `ffx/all/mon.bin.hexpat` and `notepadwindowstate.hexpat` both redeclare a
+name an include already declared, which is looseness (5) in the parser's list,
+the other way round.
+
+The commonest gap reasons, which is what says what to do next:
+
+```text
+    293  left unread: the member before it was not placed
+    203  an assignment
+     54  a local variable of a function at the top level
+     50  Offset is not a field in scope here
+     42  an `if` statement outside a structure at the top level
+     41  [[transform]] replaces the value with what a function returns
+     35  `$` reached through a path
+     28  a `break`
+     24  addressof(this)
+     23  an in/out variable
+```
+
+`left unread` is not a gap of its own: it is the marker on every structure that
+ended early because the member before it could not be placed, so the count of
+things that could not be said is nearer 1,450. Taking the rest in order, the
+imperative half is most of it and none of it is an IR question. The three that
+*are* IR questions, and what each would cost:
+
+* **A name declared inside an `if` block, read after the block** (lua40, lua50,
+  lua51, gmd, tiff, wav, and about ninety gaps between them once the `left
+  unread` each one causes is counted). `Expr::Ref` is resolved by
+  `Evaluator::find_field`, which searches the fields before this one in this
+  structure and then climbs out, and never descends into an earlier sibling's
+  inline structure. A hexpat `if` block is not a scope, so the pattern can name
+  what it declared inside one. Either the IR's name search steps into an inline
+  `When`'s structure, or `if` blocks stop being structures. The first is a
+  change to one function and to what `Within` means; the second gives up the
+  one-condition-per-block the mapping chose on purpose.
+* **`addressof(this)`** (24). The enclosing structure's own start. Nothing in
+  `Expr` names it: `Pos` and `SpacePos` are where the *field* is, and `StartOf`
+  wants a field to be the start of. An `Expr::HereStart` counted the way
+  `SpacePos` counts would cover it, and `bson.hexpat`'s
+  `[while($ < addressof(this) + listLength - 1)]` is the shape asking.
+* **A low-bit-first bitfield field that crosses a byte** (about forty, across
+  `3ds`, `lnk`, `lz4`, `ape`, `ne`, `id3`, `BroEngine/dds`). `decode::lsb_offset`
+  refuses one and says why: a twelve-bit field packed from the bottom is the
+  whole of one byte and the low nibble of the next, which is not one range in
+  an address space numbered from the top of each byte. This is the same gap
+  Kaitai's `bit-endian: le` hits, so whatever is done for one does both. Note
+  what does *not* hit it: under `big` every width works, since the IR's own
+  packing is most significant bit first, and under `little` a field that is a
+  whole number of bytes on a byte boundary is an ordinary little-endian number.
+
+### What the plan got wrong
+
+Four things, each found by running it:
+
+* **`char x[N]` is `StrLen::Fixed`, not `StrLen::Padded`.** The reference's
+  reading is right in the plan, all N bytes with the embedded NULs, and the IR
+  type named for it is the wrong one: `StrLen::Padded` ends the *value* at the
+  first pad byte, so `char s[6]` holding `ab\0cd` would read as `ab` and
+  `s == "ab"` would come out true where the reference says false. `Fixed` is
+  the exact one. The one difference left is the display, where the reference
+  drops trailing NULs before printing and the IR prints what the field holds.
+* **An unknown `#pragma` is not an error, and neither is an unknown
+  attribute.** `Preprocessor::process` (`preprocessor.cpp:623`) runs the
+  handler for a pragma it has one for and passes over every other, and
+  `Attributable::hasAttribute` looks its named attributes up by name and never
+  asks what the others were. So `#pragma organization` in `fs/refs.hexpat`,
+  `#pragma authors` in `gguf.hexpat`, `#pragma little` in `msf.hexpat` and
+  `[[attribute("hidden")]]` in `job.hexpat` all run upstream and do nothing.
+  Both are notes here. Refusing them cost six patterns for no reason.
+* **`[[transform]]` is a gap, not a note.** A `[[format]]` changes what is
+  printed and a `[[transform]]` changes what the field *is*: a `cpio` header's
+  `filesize` is a `u32` with a byte-swapping transform on it, and the field
+  after it is that many bytes long. Showing the raw number would be a note;
+  letting a length read it is reading the file wrongly and saying nothing,
+  which is the one thing this converter exists not to do. 41 gaps.
+* **An enum range is written out as one case per value, not as an
+  `EnumSpan`.** `EnumSpan` has a start and a step and no end, and
+  `EnumSpan::count` answers for every value from `from` upwards, so
+  `A = 0x10 ... 0x1F` as a span would name 0x20 as A as well. The values are
+  written out up to 4,096 of them and anything longer is a gap.
+
+Two smaller ones. `[[name("x")]]` cannot become `Field::name`: the IR has one
+name per field and every expression, path and edit goes through it, so the
+declared name stays the name and the display name goes in the field's prose. And
+a top-level `T x = e;` is not only a gap, because later placements name it, so
+it is kept as a zero-width `Computed` machinery field of the root, the same as a
+local inside a structure.
+
+One the plan did not decide, now decided: `[[no_unique_address]]` is an `At` at
+the field's own position, `Ty::at_in_window(Expr::Pos, ..)`, which reads where
+the field stands and takes no room, so the field after it starts in the same
+place. A union of the run was the other candidate and is wrong: `StructDef::overlap`
+makes the structure as long as its longest field, and `no_unique_address` means
+the field contributes nothing at all. `bmp.hexpat` is why it matters -- its
+`data` field is the whole file read at offset zero -- and with the union
+lowering every placement after it ran past the end.
+
+### Two evaluator bugs the corpus turned up
+
+Both are panics rather than errors, so `hexpat_gaps` catches them per sample and
+counts the sample as an error; neither is in the converter.
+
+* `eval/read.rs:569`, `self.str_span(doc, r, size)?.expect("text field")`, on
+  `fbx.hexpat` over its own sample.
+* `eval/size.rs:441`, `attempt to divide by zero`, twice.
+
+### Still to do
+
+The panel, the library and the browser test, which are a separate task, and
+`crates/core/formats-hexpat/` for the vetted subset.

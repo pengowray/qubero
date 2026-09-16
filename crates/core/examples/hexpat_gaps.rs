@@ -152,17 +152,14 @@ fn run() {
 /// the template its name points at.
 fn run_samples(dir: &Path, templates: &HashMap<String, (qubero_core::template::Template, bool)>) {
 	let data = dir.join("tests/patterns/test_data");
-	let mut samples = Vec::new();
-	let Ok(entries) = std::fs::read_dir(&data) else {
+	if !data.is_dir() {
 		println!("\nno samples under {}", data.display());
 		return;
-	};
-	for entry in entries.flatten() {
-		let path = entry.path();
-		if path.is_file() {
-			samples.push(path);
-		}
 	}
+	// Thirteen of the pairs are a directory deep, so the walk is recursive and
+	// a sample is any file whose own name names a pattern.
+	let mut samples = Vec::new();
+	walk_files(&data, &mut samples);
 	samples.sort();
 
 	let (mut reads, mut stopped, mut errored, mut missing) = (0usize, 0usize, 0usize, 0usize);
@@ -212,7 +209,7 @@ fn run_samples(dir: &Path, templates: &HashMap<String, (qubero_core::template::T
 	println!();
 	println!(
 		"samples: {reads} read to the end, {stopped} stopped at a gap, {errored} errored, \
-		 {missing} without a converted pattern, of {} pairs",
+		 {missing} without a converted pattern, of {} files under test_data",
 		samples.len()
 	);
 	if tried > 0 {
@@ -260,6 +257,18 @@ fn shorten(reason: &str) -> String {
 		format!("{}...", &head[..87])
 	} else {
 		head.to_string()
+	}
+}
+
+fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
+	let Ok(entries) = std::fs::read_dir(dir) else { return };
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			walk_files(&path, out);
+		} else {
+			out.push(path);
+		}
 	}
 }
 
