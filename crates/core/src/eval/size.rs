@@ -128,6 +128,28 @@ impl Evaluator {
         Ok(if n > 0 { bits_in(n) } else { None })
     }
 
+    /// How far the furthest of a union's `n` fields reaches past `from`, which
+    /// is how long the union is. Every field has to be measured rather than
+    /// only the last: which of them is the widest is a fact about the file
+    /// whenever any of them is sized by what it reads. See
+    /// [`crate::template::StructDef::overlap`].
+    ///
+    /// Apart from `size_within` for the sake of the stack, which it sits at
+    /// the bottom of: what measuring a union takes has no business in the
+    /// frame of every node that is not one.
+    #[inline(never)]
+    fn longest_field<S: Source>(&mut self, doc: &Document<S>, path: &[usize], n: usize, from: u64) -> R<u64> {
+        let mut longest = 0;
+        let mut f = path.to_vec();
+        for i in 0..n {
+            f.push(i);
+            self.resolve(doc, &f)?;
+            longest = longest.max(self.memo[&f].offset + self.size_of(doc, &f)? - from);
+            f.pop();
+        }
+        Ok(longest)
+    }
+
     /// The type `ty` stands for once every name in front of it is looked up,
     /// or `ty` itself when it is not a name. `None` when a name has no type in
     /// this template, or when the names go on longer than resolving a field
@@ -165,16 +187,7 @@ impl Evaluator {
                 // no other way round it: which field is the widest is a fact
                 // about the file whenever any of them is sized by what it
                 // reads. See `StructDef::overlap`.
-                Ty::Struct(s) if s.overlap => {
-                    let mut longest = 0;
-                    for i in 0..s.fields.len() {
-                        let mut f = path.to_vec();
-                        f.push(i);
-                        self.resolve(doc, &f)?;
-                        longest = longest.max(self.memo[&f].offset + self.size_of(doc, &f)? - r.offset);
-                    }
-                    longest
-                }
+                Ty::Struct(s) if s.overlap => self.longest_field(doc, path, s.fields.len(), r.offset)?,
                 Ty::Struct(s) => {
                     if s.fields.is_empty() {
                         0

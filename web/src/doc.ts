@@ -772,7 +772,9 @@ export type Shape = {
    *  `gathered` a descriptor the template walked to, somewhere else in the
    *  file, placed it; `address` an address the file gave; `trace` where a
    *  decoder had got to; `stream` the front of what a compressed run unpacked
-   *  to; `stitched` the front of a stream joined from several runs. */
+   *  to; `stitched` the front of a stream joined from several runs;
+   *  `overlap` one of several readings of the same bytes, as a field of a
+   *  union is. */
   readonly placed:
     | "root"
     | "first"
@@ -785,6 +787,7 @@ export type Shape = {
     | "trace"
     | "stream"
     | "stitched"
+    | "overlap"
     | "unknown";
   /** `type` the type's own width, which the type's name already carries and
    *  which the panel therefore says nothing about; `fixed` a length the format
