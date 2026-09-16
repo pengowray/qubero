@@ -1,11 +1,14 @@
 # Familiar Pickle Forms (FPF)
 
-Status: second implementation slice delivered in `crates/core/src/formats/pickle/familiar.rs`.
+Status: third implementation slice. The recogniser is in
+`crates/core/src/formats/pickle/familiar.rs`; a match is now a template of its
+own, `picklefpf`, which places the captured tree as fields.
 
 ## Implemented slice and continuation notes
 
 FPF runs first, alongside the existing symbolic decoder. A whole-document match
-bypasses that decoder and adds the requested message to the STOP row. A non-match
+bypasses that decoder, says so on the STOP row of the listing, and is read as
+the object it captured by a template of its own. A non-match
 retains existing hex, opcode and symbolic payload inspection. Those legacy
 annotations are not FPF claims. This preserves the existing viewer while the
 strict forms grow.
@@ -35,10 +38,69 @@ the complete body. They require STOP followed immediately by EOF. The matcher
 uses borrowed byte ranges, a 64-level recursion bound and a shared budget of
 100,000 values. No Python or new runtime dependency was introduced.
 
-`recognise` exposes a Rust capture tree and form ID. The existing template renders
-basic scalar operands and matched arrays as typed payloads in storage order; a dedicated
-decoded-object tree and visible form ID still need a UI/API surface. No new TS
-surface is added in this slice.
+### What is exposed now
+
+`recognise` hands back a capture tree in which every node carries the bytes its
+production consumed, and every leaf also carries the bytes its value proper sits
+in. `Ty::Pickle` places that tree as fields, the way `Ty::Json` places parsed
+JSON: `crates/core/src/eval/pickletree.rs` is the placement, and the nodes that
+hold others are the only ones that keep the type. Every leaf is given the
+ordinary type its bytes are (`BININT2` is a little-endian `u16` at its two
+operand bytes, a text is UTF-8 at its counted run, an array is its dtype's
+element type repeated by its shape), so reading, display and editing are the
+machinery every other field uses, with no second code path.
+
+Two templates now read a pickle, and the file decides which is offered:
+
+- `pickle`, the opcode listing, unchanged. On a match its STOP row names the
+  form and the other template as well as saying the contract's sentence.
+- `picklefpf`, "Python pickle (familiar form)", which shows the object. Its
+  root holds a `header` over the protocol envelope, carrying the contract's
+  message, the form ID and the protocol byte, and then `data`. A dictionary
+  holds entries, an entry holds its key and its value, an array says its dtype,
+  shape and storage order before its numbers. A file no form matches fails to
+  resolve, so the chooser falls back to `pickle`.
+
+A matched file has no byte left over, and that is the point rather than a
+tidiness. A form fixes its instructions: the MEMOIZE after a string and the
+SETITEM that files it under its key are not noise around the data, they are
+the shape of the data, written down and matched exactly. So each of them is a
+field named for what `pickletools` calls it, sitting inside the value it
+builds and marked as that value's machinery, which folds it away for a reader
+following the data and keeps it named for one following the program. The run
+that rebuilds a NumPy array is a couple of dozen instructions and one act, so
+it is one `ndarray reconstruct call` field holding the names and letters the
+form matched inside it: `module`, `callable`, `class module`, `class`,
+`dtype class`, `dtype` and `byte order`, each read as the text it is.
+`crates/core/tests/pickle_real.rs` walks every matched sample and asserts
+that every node's children tile it, so an instruction that stopped being
+named would fail rather than quietly become a gap.
+
+Ranking: `PROBES` asks `picklefpf` immediately before `pickle`, and only when
+the sniff window holds the whole file, since a form matches all of a file or
+none of it. So a matched file over `SNIFF_WINDOW` (36 KiB) still opens as the
+listing, and the reader picks the other template. `picklefpf` is deliberately
+not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
+file(1), but a reviewed grammar that accounted for every opcode and operand in
+the file is stronger than any rule keyed on its first bytes.
+
+Of the sibling corpus, three files match today:
+`proto4-numpy-array.pickle` under `numpy-numeric-array-p4-p5-v2`, and
+`awa2-pose-antelope.pickle` and `awa2-pose-elephant.pickle` under
+`basic-p4-p5-v2`. The rest do not, and
+`crates/core/tests/pickle_real.rs` writes the whole matrix out file by file so
+that a form growing quietly is a failing test.
+
+### What is not exposed yet
+
+An array's numbers read in storage order and are not folded into rows: a 4-by-6
+matrix is 24 values, and the shape is a row beside them rather than the shape of
+the listing. An instruction's operand is shown as its bytes rather than read: a
+`BININT1` holding a dimension is two bytes in the listing and the shape it
+belongs to is the row above. Nothing here navigates from a value to the opcodes
+that built it, and nothing writes a value back through the recogniser: an edit
+invalidates the recognition, and a changed instruction byte means the form no
+longer matches at all.
 
 The committed matrix fixture was copied from the existing sibling sample corpus;
 its producer version is unknown. Its expected payload is a 4-by-6 matrix of f32
@@ -53,28 +115,37 @@ the current viewer displays flat physical storage rather than logical rows.
 
 Next steps, in order:
 
-1. Expose form ID and captured values through the WASM/UI result model, with
-   source-range navigation. Distinguish legacy symbolic deductions visibly.
-2. Add provenance-backed NumPy fixtures for the expanded branches, then add
+1. Fold an array's numbers by its shape, and navigate from a value to the
+   opcodes that built it. Editing a captured value is a separate question: the
+   recognition is invalidated by the edit and has to be made again.
+2. Widen the corpus a form can speak for. Six protocol 4 samples that a reader
+   would expect to match do not: `proto4-builtins`, `proto4-collections`,
+   `proto4-numpy-shapes`, `proto4-numpy-dtypes`, `proto4-numpy-byte-order` and
+   `proto4-numpy-shared-dtype`. Each needs a reviewed production, not a
+   loosened one.
+3. Add provenance-backed NumPy fixtures for the expanded branches, then add
    protocol-5 `_frombuffer` and multiple-frame forms. Give each new production
    exact constants and negative mutation tests. Keep frame bytes visible to the
    grammar and validate boundaries; do not merely strip FRAME instructions.
-3. Add nonempty tuples and big integers deliberately, and extend container
+4. Add nonempty tuples and big integers deliberately, and extend container
    batching beyond one batch. Keep work bounded across every alternative.
-4. Add typed memo bindings for specific repeated dtype/name forms; then build
+5. Add typed memo bindings for specific repeated dtype/name forms; then build
    pandas and estimator forms from reviewed complete structures.
-5. Move recognition onto a chunk-aware source cursor for large tensors. Current
+6. Move recognition onto a chunk-aware source cursor for large tensors. Current
    evaluator size caps still apply. Do not relax completeness to obtain previews.
 
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: 29 pickle unit tests passed, including ten FPF tests; all seven
-`pickle_real` integration tests passed against the available sibling corpus.
-The template-level test verifies the exact message at STOP. The browser smoke
-test is `web/test/pickle.browser.mjs`; it checks a visible FPF message and an
-unfamiliar program's PVM listing without an FPF claim. Build/browser results
-are recorded below once verified.
+Validation: the pickle unit tests include fourteen FPF tests, four of which read
+a fixture through the `picklefpf` template and check names, values and byte
+ranges; ten `pickle_real` integration tests pass against the sibling corpus,
+including the corpus match matrix and a walk of the decoded array's 24 numbers.
+The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
+sample opens as the familiar form with its form ID and decoded values, that the
+chooser offers both templates and switches between them, that the STOP row of
+the listing names the form and the other template, and that an unfamiliar
+program still reads as a PVM listing with no FPF claim.
 
 ## Contract
 

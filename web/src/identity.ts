@@ -57,6 +57,12 @@ export type Identity = {
  * file's length, a bencoded file or a pickle is one that parses to the end.
  * file(1) may outrank these; it may not outrank a template that found a
  * magic number and read what follows.
+ *
+ * `picklefpf` is not one of them, though `pickle` is. Parsing to the end says
+ * only that the bytes read as some program; matching a Familiar Pickle Form
+ * says a reviewed grammar accounted for every opcode and operand in the file
+ * and knows what each one holds. That is stronger evidence than any rule
+ * keyed on a file's first bytes, so it does not yield to file(1).
  */
 export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
 
@@ -197,6 +203,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   spp: ["bin"],
   bencode: ["torrent"],
   pickle: ["pickle", "pkl", "p"],
+  picklefpf: ["pickle", "pkl", "p"],
   eps: ["eps", "epsf", "epsi"],
   c16: ["c16"],
   omezarr: ["json"],

@@ -368,6 +368,10 @@ impl Evaluator {
                 // values inside it come to is what the parse says, and any
                 // room left over is padding the format put there.
                 Ty::Json(..) => r.limit - r.offset,
+                // The whole file: a Familiar Pickle Form matches all of it or
+                // matches nothing. Every node under it was given its size
+                // when the recognised tree placed it.
+                Ty::Pickle(..) => r.limit - r.offset,
                 // A pointer list holds the stretch its offsets point into,
                 // which runs to the end of its container.
                 Ty::PointerList { .. } => r.limit - r.offset,
@@ -481,6 +485,7 @@ impl Evaluator {
                 })
             }
             Ty::Json(shape, _) if shape.composite() => self.json_child_count(doc, path),
+            Ty::Pickle(..) => self.pickle_child_count(doc, path),
             _ => Ok(0),
         }
     }

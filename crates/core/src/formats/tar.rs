@@ -12,10 +12,18 @@
 //! block is made on the first byte before anything tries to read a number.
 //!
 //! What this does not do is give an entry the meaning its type letter carries.
-//! A long name, a pax attribute and a sparse map are each an entry whose data
-//! is a description of the entry after it, and reading one of those would mean
-//! the template rewriting what it had already said. They are measured and
-//! named like any other entry.
+//! A long name and a pax attribute are each an entry whose data is a
+//! description of the entry after it, and reading one of those would mean the
+//! template rewriting what it had already said. They are measured and named
+//! like any other entry.
+//!
+//! The one type letter that changes the header's own shape is GNU's `S`, a
+//! sparse file. Its header keeps the sparse map where ustar keeps the prefix,
+//! and a map too long for the four slots there spills into extension blocks
+//! that follow the header and precede the data. An extension block is a
+//! record of its own: twenty-one more map entries and a flag, with no name,
+//! no size and no checksum. Read as a header it would be checked as one, and
+//! a block of offsets never sums to what its "checksum" field holds.
 
 use crate::template::{Check, Checksum, Covers, Encoding, Endian::Big, Expr as E, StrLen, Template, Time, Until, Ty as T};
 
@@ -38,7 +46,15 @@ const TYPES: &[(i128, &str)] = &[
     (b'x' as i128, "pax header"),
     (b'L' as i128, "gnu long name"),
     (b'K' as i128, "gnu long link name"),
+    (b'S' as i128, "gnu sparse file"),
+    (b'D' as i128, "gnu dump directory"),
+    (b'M' as i128, "gnu multi-volume continuation"),
+    (b'V' as i128, "gnu volume header"),
 ];
+
+/// Where the type letter sits in a header, which is what tells a GNU sparse
+/// header apart from a ustar one before either is read.
+const TYPEFLAG_AT: i128 = 156;
 
 pub fn tar() -> Template {
     Template::new(
@@ -49,53 +65,131 @@ pub fn tar() -> Template {
 
 /// One entry, or one of the blocks of zeros that end the archive. A header
 /// begins with a name and an end block begins with a zero, which is the whole
-/// of the difference at the point it has to be told.
+/// of the difference at the point it has to be told. Among headers, the type
+/// letter picks the GNU sparse shape from the ustar one.
 fn entry() -> T {
-    T::switch(E::peek(8, Big), vec![(0, end_block())], header())
+    T::switch(
+        E::peek(8, Big),
+        vec![(0, end_block())],
+        T::switch(E::peek_at(E::lit(TYPEFLAG_AT * 8), 8, Big), vec![(b'S' as i128, sparse_header())], header()),
+    )
+}
+
+/// The first 345 bytes of a header, which ustar and GNU agree on. What comes
+/// after them is where the two part.
+fn header_front() -> Vec<(&'static str, T)> {
+    vec![
+        ("name", text(100)),
+        ("mode", octal(8)),
+        ("uid", octal(8)),
+        ("gid", octal(8)),
+        // How many bytes the file holds, which is what places the header
+        // after this one.
+        ("size", octal(12)),
+        ("mtime", octal(12)),
+        // The sum of every byte of the header with this field read as
+        // spaces, which is the one check a tar has.
+        ("checksum", octal(8)),
+        ("typeflag", T::enumeration("TarType", T::u8(), TYPES)),
+        ("linkname", text(100)),
+        ("magic", text(6)),
+        ("version", text(2)),
+        // The names, rather than the numbers, of who owned the file: a
+        // number means nothing on the machine the archive is unpacked on.
+        ("uname", text(32)),
+        ("gname", text(32)),
+        ("devmajor", octal(8)),
+        ("devminor", octal(8)),
+    ]
+}
+
+/// The data an entry carries and the zeros that round it out to a block.
+fn entry_data() -> Vec<(&'static str, T)> {
+    vec![
+        ("data", T::bytes(E::field("size"))),
+        // Every entry starts on a block boundary, so a file that does not
+        // fill its last block is followed by the zeros that do.
+        ("padding", T::bytes(E::field("size").pad_to(512))),
+    ]
+}
+
+/// The one check and the one time every header has, whichever shape it is.
+fn checked_header(name: &str, fields: Vec<(&'static str, T)>) -> T {
+    T::structure_named(name, "name", "data", fields)
+        .counted_as("entry")
+        .field_check("checksum", header_sum())
+        // Octal digits, and still a count of seconds from 1970 once they are
+        // read as the number they are.
+        .field_time("mtime", Time::unix())
 }
 
 fn header() -> T {
-    T::structure_named(
-        "TarEntry",
-        "name",
-        "data",
+    let mut fields = header_front();
+    fields.extend([
+        // A name too long for the field at the front is split, and this is
+        // everything before the last slash that fits.
+        ("prefix", text(155)),
+        ("header_padding", T::bytes(E::lit(12))),
+    ]);
+    fields.extend(entry_data());
+    checked_header("TarEntry", fields)
+}
+
+/// A GNU sparse file's header: the ustar front, and in place of the prefix
+/// the first four entries of the map that says where the data goes when it
+/// is unpacked. A map longer than four entries carries on in extension
+/// blocks after the header, each saying whether another follows it.
+fn sparse_header() -> T {
+    let mut fields = header_front();
+    fields.extend([
+        ("atime", octal(12)),
+        ("ctime", octal(12)),
+        // Where this volume's piece of a multi-volume file starts.
+        ("offset", octal(12)),
+        ("longnames", T::bytes(E::lit(4))),
+        ("unused", T::bytes(E::lit(1))),
+        ("sparse", T::array(sparse_chunk(), E::lit(4))),
+        // Whether extension blocks follow the header.
+        ("isextended", T::u8()),
+        // How big the file is once its holes are put back.
+        ("realsize", octal(12)),
+        ("header_padding", T::bytes(E::lit(17))),
+        // Each extension block says whether another follows, and the header
+        // says whether the first does. A header with no extensions has an
+        // empty run here rather than a block read from the data.
+        (
+            "extensions",
+            T::switch(
+                E::field("isextended"),
+                vec![(0, T::bytes(E::lit(0)))],
+                T::repeat(sparse_extension(), Until::Cond(E::field("isextended").equal_to(E::lit(0)))),
+            ),
+        ),
+    ]);
+    fields.extend(entry_data());
+    checked_header("TarSparseEntry", fields)
+}
+
+/// One block of a sparse map that outgrew its header: twenty-one more entries
+/// and the flag that says whether another block follows. It has no checksum,
+/// and the header's check does not reach it: that check covers the first 512
+/// bytes of the entry, which is the header alone.
+fn sparse_extension() -> T {
+    T::structure(
+        "TarSparseExtension",
         vec![
-            ("name", text(100)),
-            ("mode", octal(8)),
-            ("uid", octal(8)),
-            ("gid", octal(8)),
-            // How many bytes the file holds, which is what places the header
-            // after this one.
-            ("size", octal(12)),
-            ("mtime", octal(12)),
-            // The sum of every byte of the header with this field read as
-            // spaces, which is the one check a tar has.
-            ("checksum", octal(8)),
-            ("typeflag", T::enumeration("TarType", T::u8(), TYPES)),
-            ("linkname", text(100)),
-            ("magic", text(6)),
-            ("version", text(2)),
-            // The names, rather than the numbers, of who owned the file: a
-            // number means nothing on the machine the archive is unpacked on.
-            ("uname", text(32)),
-            ("gname", text(32)),
-            ("devmajor", octal(8)),
-            ("devminor", octal(8)),
-            // A name too long for the field at the front is split, and this
-            // is everything before the last slash that fits.
-            ("prefix", text(155)),
-            ("header_padding", T::bytes(E::lit(12))),
-            ("data", T::bytes(E::field("size"))),
-            // Every entry starts on a block boundary, so a file that does not
-            // fill its last block is followed by the zeros that do.
-            ("padding", T::bytes(E::field("size").pad_to(512))),
+            ("sparse", T::array(sparse_chunk(), E::lit(21))),
+            ("isextended", T::u8()),
+            ("padding", T::bytes(E::lit(7))),
         ],
     )
-    .counted_as("entry")
-    .field_check("checksum", header_sum())
-    // Octal digits, and still a count of seconds from 1970 once they are read
-    // as the number they are.
-    .field_time("mtime", Time::unix())
+}
+
+/// One run of real data in a sparse file: where it goes in the unpacked
+/// file and how much of it there is. The runs are stored back to back in
+/// `data`, and the holes between them are not stored at all.
+fn sparse_chunk() -> T {
+    T::structure("TarSparseChunk", vec![("offset", octal(12)), ("numbytes", octal(12))])
 }
 
 /// The one check a tar has: every byte of the five-hundred-and-twelve-byte

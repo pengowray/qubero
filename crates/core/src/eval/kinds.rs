@@ -754,6 +754,7 @@ fn descends(ty: &Ty) -> bool {
         | Ty::Gather { .. }
         | Ty::At { .. } => true,
         Ty::Json(shape, _) => shape.composite(),
+        Ty::Pickle(..) => true,
         _ => false,
     }
 }

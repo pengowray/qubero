@@ -127,8 +127,34 @@ const OPCODE: &[(i128, &str)] = &[
     (0x98, "READONLY_BUFFER"),
 ];
 
+/// What `pickletools` calls the opcode this byte spells, lowercased: the name
+/// a field gets when a Familiar Pickle Form fixed the instruction and there is
+/// nothing to read in it. "opcode" for a byte that is not one, which a matched
+/// file has none of.
+pub fn opcode_name(code: u8) -> &'static str {
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        let mut out = vec!["opcode".to_string(); 256];
+        for (c, name) in OPCODE {
+            out[*c as usize] = name.to_lowercase();
+        }
+        out
+    });
+    names[code as usize].as_str()
+}
+
 pub fn pickle() -> Template {
     Template::new("pickle", ops()).with_type("Op", op()).deduced_by(familiar::Program)
+}
+
+/// The same file, read as the object it builds rather than as the program
+/// that builds it.
+///
+/// Only for a file a Familiar Pickle Form matches whole: there is no partial
+/// answer here, and a file no form matches is a file for [`pickle`]. See
+/// [`familiar`] for what a form is and why the machine is not run.
+pub fn familiar_pickle() -> Template {
+    Template::new("picklefpf", T::pickle())
 }
 
 /// A run of opcodes, ending at the `.` that stops the machine.
