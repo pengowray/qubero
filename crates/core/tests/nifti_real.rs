@@ -60,11 +60,13 @@ fn voxel<S: Source>(ev: &mut Evaluator, d: &Document<S>, index: &[usize]) -> Val
 }
 
 /// A gzipped file's stream, opened in a space of its own: the template the
-/// space was given, and the reading over it.
+/// space was given, and the reading over it. The stream is the file's
+/// `decoded`, every member's output joined; one member's own run is a piece
+/// of that and is not opened as what its front looks like.
 fn open_gzip(name: &str, check: impl FnOnce(&str, bool, &mut Evaluator, &Document<qubero_core::source::ArcSource>)) -> bool {
     let Some((d, sniffed, mut ev)) = read(name) else { return false };
     assert_eq!(sniffed, "gzip", "{name} is a gzip file first");
-    let at = path(&mut ev, &d, &["compressed"]);
+    let at = path(&mut ev, &d, &["decoded"]);
     let id = ev.open_space(&d, 0, &at).expect("resolves").expect("the stream opens");
     let space = ev.space_mut(id).expect("just opened");
     let (template, recognised) = (space.template.clone(), space.recognised);
