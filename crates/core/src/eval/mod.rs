@@ -1257,7 +1257,7 @@ impl Evaluator {
         if let Ty::Pickle(shape) = ty {
             use crate::template::PickleShape as P;
             return match shape {
-                P::Doc | P::Entry | P::Array => None,
+                P::Doc | P::Header | P::Entry | P::Array => None,
                 P::Dict => Some("entry"),
                 P::List | P::Tuple => Some("item"),
             };

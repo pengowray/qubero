@@ -318,6 +318,8 @@ impl Evaluator {
             // A recognised pickle is as long as the bytes its production
             // consumed, which is not what its children come to: the opcodes
             // between them belong to the container and to nothing below it.
+            // The whole file included: a form matched all of it, opcodes and
+            // operands, and that is what said where it ends.
             Ty::Pickle(..) => Sizing::Encoded,
             Ty::Array { .. } => Sizing::Count,
             Ty::Repeat { until: Until::End, .. } => Sizing::Remaining,

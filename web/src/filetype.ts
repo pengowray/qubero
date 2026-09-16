@@ -182,6 +182,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   tap: "ZX Spectrum TAP",
   bencode: "Bencoded data (torrent)",
   pickle: "Python pickle",
+  picklefpf: "Python pickle (familiar form)",
   gitindex: "Git index",
   gitpackidx: "Git pack index",
   appledouble: "AppleDouble",

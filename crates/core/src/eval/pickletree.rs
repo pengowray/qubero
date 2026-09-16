@@ -15,9 +15,9 @@
 //! its production consumed, and its children sit inside that with the
 //! instructions between them.
 //!
-//! The leaves are given the ordinary types their bytes are -- a `BININT2` is a
-//! little-endian `u16` at its two operand bytes -- so that reading, displaying
-//! and editing one is the machinery every other field uses. Only the nodes
+//! The leaves are given the ordinary types their bytes are: a `BININT2` is a
+//! little-endian `u16` at its two operand bytes. So reading, displaying and
+//! editing one is the machinery every other field uses, and only the nodes
 //! that hold others keep [`Ty::Pickle`].
 
 use std::sync::Arc;
@@ -27,11 +27,13 @@ use crate::formats::pickle::familiar::{self, Kind, Match, Value};
 use crate::formats::pickle::shapes;
 use crate::template::{Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
-/// The header rows, in the order they are shown: the contract's sentence, the
-/// form that matched, and then the object itself.
-const MESSAGE_FIELD: &str = "message";
-const FORM_FIELD: &str = "form";
+/// What the file holds: what matched, and then the object it matched.
+const HEADER_FIELD: &str = "header";
 const DATA_FIELD: &str = "data";
+/// What the header says: the contract's sentence, the form that matched, and
+/// the protocol the writer used, which is the one byte of the envelope that
+/// says anything.
+const HEADER_FIELDS: [&str; 3] = ["message", "form", "protocol"];
 /// What an array says about itself before its numbers.
 const ARRAY_FIELDS: [&str; 4] = ["dtype", "shape", "order", "data"];
 const ENTRY_FIELDS: [&str; 2] = ["key", "value"];
@@ -48,10 +50,12 @@ const MOST_BYTES: u64 = 256 << 20;
 
 /// Where in a recognised tree a path lands.
 enum Spot<'a> {
-    /// The whole file, which holds the header rows and the object.
+    /// The whole file, which holds the header and the object.
     Doc,
-    Message,
-    Form,
+    /// The protocol envelope, read as what matched it.
+    Header,
+    /// One of the three things the header says.
+    Said(usize),
     /// One value, which is a leaf or holds others.
     Value(&'a Value),
     /// One key and one value of a dictionary, kept as the pair it was written
@@ -66,9 +70,9 @@ enum Spot<'a> {
 fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<Spot<'a>> {
     match path.split_first() {
         None => Some(Spot::Doc),
-        Some((0, [])) => Some(Spot::Message),
-        Some((1, [])) => Some(Spot::Form),
-        Some((2, rest)) => descend(&found.value, rest),
+        Some((0, [])) => Some(Spot::Header),
+        Some((0, [i])) if *i < HEADER_FIELDS.len() => Some(Spot::Said(*i)),
+        Some((1, rest)) => descend(&found.value, rest),
         _ => None,
     }
 }
@@ -96,8 +100,9 @@ fn descend<'a>(value: &'a Value, path: &[usize]) -> Option<Spot<'a>> {
 /// How many nodes sit under this one.
 fn children(spot: &Spot) -> u64 {
     match spot {
-        Spot::Doc => 3,
-        Spot::Message | Spot::Form | Spot::Part(..) => 0,
+        Spot::Doc => 2,
+        Spot::Header => HEADER_FIELDS.len() as u64,
+        Spot::Said(_) | Spot::Part(..) => 0,
         Spot::Entry(_) => ENTRY_FIELDS.len() as u64,
         Spot::Value(v) => match &v.kind {
             Kind::Dict(entries) => entries.len() as u64,
@@ -201,7 +206,8 @@ impl Evaluator {
         let Some(here) = spot(&found, &path[root.len()..]) else { return fail("no such value") };
         let named = |names: &[&str]| Ok(names.iter().position(|n| *n == name));
         match here {
-            Spot::Doc => named(&[MESSAGE_FIELD, FORM_FIELD, DATA_FIELD]),
+            Spot::Doc => named(&[HEADER_FIELD, DATA_FIELD]),
+            Spot::Header => named(&HEADER_FIELDS),
             Spot::Entry(_) => named(&ENTRY_FIELDS),
             Spot::Value(v) => match &v.kind {
                 Kind::Array { .. } => named(&ARRAY_FIELDS),
@@ -249,7 +255,8 @@ impl Evaluator {
         // What the parent calls this child, which is the one thing the child
         // itself does not say.
         let name = match spot(&found, &parent[root.len()..]) {
-            Some(Spot::Doc) => Name::Field([MESSAGE_FIELD, FORM_FIELD, DATA_FIELD][idx.min(2)].into()),
+            Some(Spot::Doc) => Name::Field([HEADER_FIELD, DATA_FIELD][idx.min(1)].into()),
+            Some(Spot::Header) => Name::Field(HEADER_FIELDS[idx.min(2)].into()),
             Some(Spot::Entry(_)) => Name::Field(ENTRY_FIELDS[idx.min(1)].into()),
             Some(Spot::Value(v)) => match &v.kind {
                 Kind::Array { .. } => Name::Field(ARRAY_FIELDS[idx.min(3)].into()),
@@ -265,8 +272,19 @@ impl Evaluator {
             _ => Name::Index(idx),
         };
         match here {
-            Spot::Message => self.pickle_note(path, &pr, name, familiar::MESSAGE.to_string()),
-            Spot::Form => self.pickle_note(path, &pr, name, found.form.to_string()),
+            // The bytes before the object: the protocol byte, and the frame
+            // header when the writer wrote one. They say nothing about the
+            // object, so what this row holds is what matched it.
+            Spot::Header => {
+                self.pickle_node(path, &pr, name, Shape::Header, base, 0, found.body);
+                Ok(None)
+            }
+            Spot::Said(0) => self.pickle_note(path, &pr, name, familiar::MESSAGE.to_string()),
+            Spot::Said(1) => self.pickle_note(path, &pr, name, found.form.to_string()),
+            // The one byte of the envelope with something in it. PROTO is the
+            // opcode before it, and the frame's length is the listing's
+            // business rather than the object's.
+            Spot::Said(_) => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, 1, 1))),
             Spot::Entry(entry) => {
                 // The pair, from the first byte of the key to the last byte of
                 // the value: the SETITEM that joins them belongs to the

@@ -637,15 +637,15 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
             None => assert!(ev.node(&doc, &[]).is_err(), "{name}: read as a familiar form"),
             Some(form) => {
                 let root = ev.node(&doc, &[]).unwrap();
-                assert_eq!(root.child_count, 3, "{name}");
-                assert_eq!(ev.node(&doc, &[1]).unwrap().value, Value::Str(form), "{name}");
+                assert_eq!(root.child_count, 2, "{name}");
+                assert_eq!(ev.node(&doc, &[0, 1]).unwrap().value, Value::Str(form), "{name}");
                 assert_eq!(
-                    ev.node(&doc, &[0]).unwrap().value,
+                    ev.node(&doc, &[0, 0]).unwrap().value,
                     Value::Str(formats::pickle::familiar::MESSAGE.to_string()),
                     "{name}"
                 );
                 // The data is there and is inside the file.
-                let data = ev.node(&doc, &[2]).unwrap();
+                let data = ev.node(&doc, &[1]).unwrap();
                 assert!(data.offset_bits + data.size_bits <= doc.len_bits(), "{name}");
                 checked += 1;
             }
@@ -662,16 +662,16 @@ fn a_matched_array_reads_as_its_numbers_under_the_familiar_template() {
     let doc = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
     // One entry, called `weights`, holding an array of 24 floats 0 to 23.
-    let entry = ev.node(&doc, &[2, 0]).unwrap();
+    let entry = ev.node(&doc, &[1, 0]).unwrap();
     assert_eq!((entry.name.as_str(), entry.type_name.as_str()), ("weights", "entry"));
-    let array = ev.node(&doc, &[2, 0, 1]).unwrap();
+    let array = ev.node(&doc, &[1, 0, 1]).unwrap();
     assert_eq!(array.type_name, "array");
-    let said = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[2, 0, 1, i]).unwrap().value;
+    let said = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[1, 0, 1, i]).unwrap().value;
     assert_eq!(said(&mut ev, 0), Value::Str("<f4".into()));
     assert_eq!(said(&mut ev, 1), Value::Str("4 x 6".into()));
     assert_eq!(said(&mut ev, 2), Value::Str("C".into()));
-    let data = ev.node(&doc, &[2, 0, 1, 3]).unwrap();
+    let data = ev.node(&doc, &[1, 0, 1, 3]).unwrap();
     assert_eq!((data.type_name.as_str(), data.child_count), ("f32 le[]", 24));
-    let numbers: Vec<Value> = (0..24).map(|i| ev.node(&doc, &[2, 0, 1, 3, i]).unwrap().value).collect();
+    let numbers: Vec<Value> = (0..24).map(|i| ev.node(&doc, &[1, 0, 1, 3, i]).unwrap().value).collect();
     assert_eq!(numbers, (0..24).map(|n| Value::Float(n as f64)).collect::<Vec<_>>());
 }

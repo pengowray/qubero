@@ -75,6 +75,9 @@ pub enum Kind {
 pub enum Shape {
     /// The whole file, read as the one object it holds.
     Doc,
+    /// What matched, and the protocol envelope the match was made through:
+    /// the bytes before the object, which say nothing about the object.
+    Header,
     Dict,
     /// One key and one value of a dictionary, kept as the pair it is written
     /// as: two keys spelled alike are two entries, not one.
@@ -90,6 +93,7 @@ impl Shape {
     pub fn name(self) -> &'static str {
         match self {
             Shape::Doc => "pickle",
+            Shape::Header => "header",
             Shape::Dict => "dict",
             Shape::Entry => "entry",
             Shape::List => "list",
@@ -103,6 +107,9 @@ impl Shape {
 pub struct Match {
     pub form: &'static str,
     pub value: Value,
+    /// Where the object starts, which is one past the protocol byte and past
+    /// the frame header when there is one.
+    pub body: usize,
     stop: usize,
     payload: Option<(usize, Payload)>,
 }
@@ -164,6 +171,7 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
             return Some(Match {
                 form: "basic-p4-p5-v2",
                 value,
+                body,
                 stop: c.at - 1,
                 payload: None,
             });
@@ -180,6 +188,7 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     Some(Match {
         form: "numpy-numeric-array-p4-p5-v2",
         value,
+        body,
         stop: c.at - 1,
         payload: Some((at, payload)),
     })
@@ -837,34 +846,41 @@ mod tests {
             (n.name, n.type_name, n.offset_bits / 8, n.size_bits / 8, n.value)
         };
         let root = ev.node(&doc, &[]).unwrap();
-        assert_eq!((root.type_name.as_str(), root.child_count), ("pickle", 3));
+        assert_eq!((root.type_name.as_str(), root.child_count), ("pickle", 2));
+        // The envelope, read as what matched through it: the protocol byte
+        // and the frame header come to eleven bytes here.
         assert_eq!(
             seen(&mut ev, &[0]),
+            ("header".into(), "header".into(), 0, 11, V::Composite { count: 3 })
+        );
+        assert_eq!(
+            seen(&mut ev, &[0, 0]),
             ("message".into(), "computed text".into(), 0, 0, V::Str(MESSAGE.into()))
         );
         assert_eq!(
-            seen(&mut ev, &[1]),
+            seen(&mut ev, &[0, 1]),
             ("form".into(), "computed text".into(), 0, 0, V::Str("basic-p4-p5-v2".into()))
         );
+        assert_eq!(seen(&mut ev, &[0, 2]), ("protocol".into(), "u8".into(), 1, 1, V::UInt(4)));
         // The dictionary, from its EMPTY_DICT to the SETITEM that filled it.
         assert_eq!(
-            seen(&mut ev, &[2]),
+            seen(&mut ev, &[1]),
             ("data".into(), "dict".into(), 11, 15, V::Composite { count: 1 })
         );
         // The one entry, named by its key, holding the pair it was written as.
         assert_eq!(
-            seen(&mut ev, &[2, 0]),
+            seen(&mut ev, &[1, 0]),
             ("a".into(), "entry".into(), 13, 12, V::Composite { count: 2 })
         );
-        assert_eq!(seen(&mut ev, &[2, 0, 0]), ("key".into(), "utf8[]".into(), 15, 1, V::Str("a".into())));
+        assert_eq!(seen(&mut ev, &[1, 0, 0]), ("key".into(), "utf8[]".into(), 15, 1, V::Str("a".into())));
         assert_eq!(
-            seen(&mut ev, &[2, 0, 1]),
+            seen(&mut ev, &[1, 0, 1]),
             ("value".into(), "list".into(), 17, 8, V::Composite { count: 2 })
         );
         // The numbers are at their operand bytes, read as the width the
         // opcode that wrote them gave them.
-        assert_eq!(seen(&mut ev, &[2, 0, 1, 0]), ("[0]".into(), "u8".into(), 21, 1, V::UInt(1)));
-        assert_eq!(seen(&mut ev, &[2, 0, 1, 1]), ("[1]".into(), "u8".into(), 23, 1, V::UInt(2)));
+        assert_eq!(seen(&mut ev, &[1, 0, 1, 0]), ("[0]".into(), "u8".into(), 21, 1, V::UInt(1)));
+        assert_eq!(seen(&mut ev, &[1, 0, 1, 1]), ("[1]".into(), "u8".into(), 23, 1, V::UInt(2)));
     }
 
     /// The two values a pickle writes as an opcode and nothing else read as
@@ -880,7 +896,7 @@ mod tests {
         let (doc, mut ev) = read(&bytes);
         let seen: Vec<_> = (0..7)
             .map(|i| {
-                let n = ev.node(&doc, &[2, i]).unwrap();
+                let n = ev.node(&doc, &[1, i]).unwrap();
                 (n.type_name, n.size_bits / 8, n.value)
             })
             .collect();
@@ -903,16 +919,16 @@ mod tests {
     #[test]
     fn a_matched_array_carries_its_dtype_shape_and_order() {
         let (doc, mut ev) = read(MATRIX);
-        assert_eq!(ev.node(&doc, &[1]).unwrap().value, V::Str("numpy-numeric-array-p4-p5-v2".into()));
-        let array = ev.node(&doc, &[2, 0, 1]).unwrap();
+        assert_eq!(ev.node(&doc, &[0, 1]).unwrap().value, V::Str("numpy-numeric-array-p4-p5-v2".into()));
+        let array = ev.node(&doc, &[1, 0, 1]).unwrap();
         assert_eq!((array.name.as_str(), array.type_name.as_str(), array.child_count), ("value", "array", 4));
-        let said = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[2, 0, 1, i]).unwrap();
+        let said = |ev: &mut Evaluator, i: usize| ev.node(&doc, &[1, 0, 1, i]).unwrap();
         assert_eq!(said(&mut ev, 0).value, V::Str("<f4".into()));
         assert_eq!(said(&mut ev, 1).value, V::Str("4 x 6".into()));
         assert_eq!(said(&mut ev, 2).value, V::Str("C".into()));
         let data = said(&mut ev, 3);
         assert_eq!((data.name.as_str(), data.size_bits / 8, data.child_count), ("data", 96, 24));
-        assert_eq!(ev.node(&doc, &[2, 0, 1, 3, 23]).unwrap().value, V::Float(23.0));
+        assert_eq!(ev.node(&doc, &[1, 0, 1, 3, 23]).unwrap().value, V::Float(23.0));
     }
 
     /// A pickle no form matches has nothing for this template to show, and
@@ -923,6 +939,6 @@ mod tests {
         let root = ev.node(&doc, &[]);
         assert!(root.is_err(), "an unmatched file resolved to {root:?}");
         assert!(ev.node(&doc, &[0]).is_err());
-        assert!(ev.node(&doc, &[2]).is_err());
+        assert!(ev.node(&doc, &[1]).is_err());
     }
 }
