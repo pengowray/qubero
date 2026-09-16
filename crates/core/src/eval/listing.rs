@@ -1080,6 +1080,17 @@ impl Evaluator {
         // not a reading of the table: it is the table with the reader left to
         // do the work. The field tree opens it for anyone who wants them.
         let ty = self.memo[path].ty.clone();
+        // A stream reads as how many bytes it is. Asking what is inside it
+        // would unpack it, and the line for the record a stream sits in is
+        // asked for every row the annotation column draws: a reader scrolling
+        // past a file of streams would unpack the file. The same answer raw
+        // bytes give, and for the same reason.
+        if matches!(ty, Ty::Decoded { .. } | Ty::Stitched { .. }) {
+            if info.size_bits > 0 {
+                out.push(byte_text(info.size_bits / 8));
+            }
+            return Ok(());
+        }
         // A field read somewhere else says where before it says what. Without
         // the address the line hands back a value from the far side of the
         // file with nothing to say it did not come from the bytes the line is
