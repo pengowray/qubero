@@ -4,7 +4,7 @@
 // together. Nothing here holds state; writing a value chosen here goes back
 // through the callback the inspector passes in.
 
-import type { EnumInfo, FlagsInfo, FloatInfo, MagicInfo, TemplateNode, TypeInfo } from "./doc.ts";
+import type { EnumInfo, FixedInfo, FlagsInfo, FloatInfo, MagicInfo, TemplateNode, TypeInfo } from "./doc.ts";
 import { bf16ToNumber, f16ToNumber, numberToBf16, numberToF16 } from "./lenses.ts";
 import { quantBody, type GoTo } from "./quantpanel.ts";
 import { xrefBody, xrefNote } from "./xrefpanel.ts";
@@ -47,6 +47,7 @@ function headingFor(info: Shown): string {
     case "flags":
       return "Flags";
     case "float":
+    case "fixed":
       return "Bit layout";
     case "quant":
       return "Weights";
@@ -80,6 +81,8 @@ function headingNote(info: Shown): string {
   switch (info.kind) {
     case "float":
       return FLOATS[info.format]?.name ?? "";
+    case "fixed":
+      return `${info.bits - info.frac}.${info.frac} fixed point, ${info.signed ? "signed" : "unsigned"}`;
     case "quant":
       return info.name;
     case "xref":
@@ -120,6 +123,12 @@ type FloatShape = {
    *  numbers and only an all-ones significand is not one. The eight-bit e4m3
    *  is the only one here that works this way. */
   finite?: boolean;
+  /** True when the significand's leading bit is written rather than assumed:
+   *  the x87 extended float keeps it as its bit 63. */
+  explicit?: boolean;
+  /** True for IBM's hexadecimal float, which scales by 16 rather than 2,
+   *  keeps no leading 1, and has no infinities or NaNs at all. */
+  hex?: boolean;
 };
 
 /** Keyed by the name of the layout rather than by its width: a brain float and
@@ -131,6 +140,8 @@ const FLOATS: Record<string, FloatShape> = {
   bfloat16: { exp: 8, sig: 7, bias: 127, name: "bfloat16" },
   binary32: { exp: 8, sig: 23, bias: 127, name: "binary32" },
   binary64: { exp: 11, sig: 52, bias: 1023, name: "binary64" },
+  x87: { exp: 15, sig: 64, bias: 16383, name: "x87 extended", explicit: true },
+  ibm32: { exp: 7, sig: 24, bias: 64, name: "IBM hexadecimal", hex: true },
 };
 
 /**
@@ -142,7 +153,8 @@ function shortest(x: number, format: string): string {
   if (!Number.isFinite(x)) return x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
   const same = (t: string): boolean => {
     const v = Number(t);
-    if (format === "binary64") return v === x;
+    // An x87 or IBM value arrives here as the nearest double already.
+    if (format === "binary64" || format === "x87" || format === "ibm32") return v === x;
     if (format === "binary32") return Math.fround(v) === x;
     if (format === "bfloat16") return bf16ToNumber(numberToBf16(v)) === x;
     // Every eight-bit float is a double exactly, so the shortest form is the
@@ -150,7 +162,7 @@ function shortest(x: number, format: string): string {
     if (format === "e4m3" || format === "e5m2") return v === x;
     return f16ToNumber(numberToF16(v)) === x;
   };
-  const digits = format === "binary64" || format === "e4m3" || format === "e5m2" ? 17 : format === "binary32" ? 9 : format === "bfloat16" ? 4 : 5;
+  const digits = format === "binary64" || format === "x87" || format === "ibm32" || format === "e4m3" || format === "e5m2" ? 17 : format === "binary32" ? 9 : format === "bfloat16" ? 4 : 5;
   for (let p = 1; p < digits; p++) {
     const t = Number(x.toPrecision(p));
     if (same(String(t))) return String(t);
@@ -159,11 +171,11 @@ function shortest(x: number, format: string): string {
 }
 
 /** `2^-126`, with the power raised rather than written with a caret. */
-function power(e: number): DocumentFragment {
+function power(e: number, base = 2): DocumentFragment {
   const frag = document.createDocumentFragment();
   const sup = document.createElement("sup");
   sup.textContent = String(e);
-  frag.append("2", sup);
+  frag.append(String(base), sup);
   return frag;
 }
 
@@ -210,6 +222,36 @@ function floatRow(label: string, ...value: (Node | string)[]): HTMLElement {
   return row;
 }
 
+function muted(text: string): HTMLElement {
+  const e = document.createElement("p");
+  e.className = "insp-type-note";
+  e.textContent = text;
+  return e;
+}
+
+/** A value the bits name outright, in place of the rows that add one up. */
+function special(text: string, ...rest: HTMLElement[]): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const p = document.createElement("p");
+  p.className = "insp-fspecial";
+  p.textContent = text;
+  frag.append(p, ...rest);
+  return frag;
+}
+
+/** The bits of a field, from the hex the bridge sends, padded to its width. */
+function bitsOf(pattern: string, width: number): string {
+  return BigInt(`0x${pattern === "" ? "0" : pattern}`).toString(2).padStart(width, "0");
+}
+
+/** `-1.5 × 2^3 = -12`, or `0.5 × 16^2 = 128` for a hexadecimal float. */
+function valueLine(negative: boolean, significand: string, e: number, base: number, value: string): HTMLElement {
+  const line = document.createElement("div");
+  line.className = "insp-fvalue";
+  line.append(`${negative ? "-" : ""}${significand} × `, power(e, base), ` = ${value}`);
+  return line;
+}
+
 /**
  * A float taken apart: which bits are the sign, the exponent and the
  * significand, what each of them says, and the number they add up to.
@@ -218,9 +260,9 @@ function floatBody(info: FloatInfo): DocumentFragment {
   const frag = document.createDocumentFragment();
   const shape = FLOATS[info.format];
   if (shape === undefined) return frag;
-  const width = info.width;
-  const raw = BigInt(`0x${info.pattern === "" ? "0" : info.pattern}`);
-  const digits = raw.toString(2).padStart(width, "0");
+  if (shape.hex === true) return ibmBody(info, shape);
+  if (shape.explicit === true) return x87Body(info, shape);
+  const digits = bitsOf(info.pattern, info.width);
   const negative = digits[0] === "1";
   const expDigits = digits.slice(1, 1 + shape.exp);
   const sigDigits = digits.slice(1 + shape.exp);
@@ -232,40 +274,32 @@ function floatBody(info: FloatInfo): DocumentFragment {
   groups.append(bitGroup("sign", digits[0] ?? "0"), bitGroup("exponent", expDigits), bitGroup("significand", sigDigits));
   frag.append(groups);
 
-  const special = (text: string, ...rest: HTMLElement[]): DocumentFragment => {
-    const p = document.createElement("p");
-    p.className = "insp-fspecial";
-    p.textContent = text;
-    frag.append(p, ...rest);
-    return frag;
-  };
-  const muted = (text: string): HTMLElement => {
-    const e = document.createElement("p");
-    e.className = "insp-type-note";
-    e.textContent = text;
-    return e;
-  };
-
   const top = stored === (1 << shape.exp) - 1;
   const allOnes = frac === (1n << BigInt(shape.sig)) - 1n;
   if (top && shape.finite === true) {
     // This layout spends its top exponent on numbers and keeps one pattern
     // back: everything else there is read as an ordinary number below.
     if (allOnes) {
-      return special("NaN", muted("exponent and significand all 1s"), muted("this layout has no infinities"));
+      frag.append(special("NaN", muted("exponent and significand all 1s"), muted("this layout has no infinities")));
+      return frag;
     }
   } else if (top && frac === 0n) {
-    return special(negative ? "-Infinity (exponent all 1s, significand 0)" : "Infinity (exponent all 1s, significand 0)");
+    frag.append(special(negative ? "-Infinity (exponent all 1s, significand 0)" : "Infinity (exponent all 1s, significand 0)"));
+    return frag;
   } else if (top) {
     const quiet = sigDigits[0] === "1";
-    return special(
-      quiet ? "Quiet NaN" : "Signaling NaN",
-      muted("exponent all 1s, significand not 0"),
-      muted(`significand 0x${frac.toString(16)}`),
+    frag.append(
+      special(
+        quiet ? "Quiet NaN" : "Signaling NaN",
+        muted("exponent all 1s, significand not 0"),
+        muted(`significand 0x${frac.toString(16)}`),
+      ),
     );
+    return frag;
   }
   if (stored === 0 && frac === 0n) {
-    return special(negative ? "Negative zero (only the sign bit is set)" : "Zero (all bits 0)");
+    frag.append(special(negative ? "Negative zero (only the sign bit is set)" : "Zero (all bits 0)"));
+    return frag;
   }
 
   // A subnormal has no leading 1 and does not step its exponent down with the
@@ -291,11 +325,156 @@ function floatBody(info: FloatInfo): DocumentFragment {
       span("insp-frow-note", subnormal ? " (no leading 1)" : " (leading 1 not stored)"),
     ),
   );
-  frag.append(rows);
+  frag.append(rows, valueLine(negative, shortest(significand, info.format), e, 2, shortest(value, info.format)));
+  return frag;
+}
 
+/**
+ * The x87 extended float: a sign, fifteen bits of exponent, and a 64-bit
+ * significand whose leading 1 is written out as its top bit rather than
+ * assumed. That bit being there lets the bits say things an IEEE float
+ * cannot, and those get a note rather than a number: a pseudo-denormal has
+ * the bit set under a zero exponent, an unnormal has it clear under a
+ * nonzero one.
+ */
+function x87Body(info: FloatInfo, shape: FloatShape): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const digits = bitsOf(info.pattern, info.width);
+  const negative = digits[0] === "1";
+  const expDigits = digits.slice(1, 1 + shape.exp);
+  const intDigit = digits[1 + shape.exp] ?? "0";
+  const fracDigits = digits.slice(2 + shape.exp);
+  const stored = parseInt(expDigits, 2);
+  const frac = BigInt(`0b${fracDigits}`);
+  const intBit = intDigit === "1";
+
+  const groups = document.createElement("div");
+  groups.className = "insp-fgroups";
+  groups.append(bitGroup("sign", digits[0] ?? "0"), bitGroup("exponent", expDigits), bitGroup("integer bit", intDigit), bitGroup("fraction", fracDigits));
+  frag.append(groups);
+
+  const top = stored === (1 << shape.exp) - 1;
+  if (top && frac === 0n) {
+    frag.append(special(negative ? "-Infinity (exponent all 1s, fraction 0)" : "Infinity (exponent all 1s, fraction 0)"));
+    if (!intBit) frag.append(muted("integer bit 0: a pseudo-infinity, which modern x86 treats as invalid"));
+    return frag;
+  }
+  if (top) {
+    const quiet = fracDigits[0] === "1";
+    frag.append(special(quiet ? "Quiet NaN" : "Signaling NaN", muted("exponent all 1s, fraction not 0"), muted(`fraction 0x${frac.toString(16)}`)));
+    if (!intBit) frag.append(muted("integer bit 0: a pseudo-NaN, which modern x86 treats as invalid"));
+    return frag;
+  }
+  if (stored === 0 && !intBit && frac === 0n) {
+    frag.append(special(negative ? "Negative zero (only the sign bit is set)" : "Zero (all bits 0)"));
+    return frag;
+  }
+
+  // The exponent of a denormal is the smallest a normal has, and so is a
+  // pseudo-denormal's: its integer bit is set, so it is a normal-sized
+  // number the hardware would have written with exponent 1.
+  const e = stored === 0 ? 1 - shape.bias : stored - shape.bias;
+  // 63 bits of fraction into a double: the low ten can round away.
+  const fraction = Number(frac) / 2 ** 63;
+  const significand = (intBit ? 1 : 0) + fraction;
+  const value = (negative ? -1 : 1) * significand * 2 ** e;
+  const rounded = (frac & 0x3ffn) !== 0n;
+
+  const rows = document.createElement("div");
+  rows.className = "insp-frows";
+  rows.append(
+    floatRow("Sign", negative ? "-" : "+", span("insp-frow-note", negative ? " negative" : " positive")),
+    floatRow("Exponent", power(e), span("insp-frow-note", stored === 0 ? " (stored 0, denormal)" : ` (stored ${stored} - bias ${shape.bias})`)),
+    floatRow("Significand", shortest(significand, info.format), span("insp-frow-note", intBit ? " (leading 1 stored)" : " (integer bit 0)")),
+  );
+  frag.append(rows, valueLine(negative, shortest(significand, info.format), e, 2, shortest(value, info.format)));
+  if (rounded) frag.append(muted("shown to double precision: the lowest fraction bits do not fit"));
+  if (stored === 0 && intBit) frag.append(muted("pseudo-denormal: the integer bit is set with exponent 0. Modern x86 reads it as a normal number"));
+  if (stored !== 0 && !intBit) frag.append(muted("unnormal: the integer bit is 0 with a nonzero exponent. Modern x86 treats it as invalid"));
+  return frag;
+}
+
+/**
+ * IBM's hexadecimal float: a sign, a seven-bit exponent of sixteen, and a
+ * fraction with the binary point in front of it and no leading 1 assumed.
+ * Nothing is special: every bit pattern is a number.
+ */
+function ibmBody(info: FloatInfo, shape: FloatShape): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const digits = bitsOf(info.pattern, info.width);
+  const negative = digits[0] === "1";
+  const expDigits = digits.slice(1, 1 + shape.exp);
+  const fracDigits = digits.slice(1 + shape.exp);
+  const stored = parseInt(expDigits, 2);
+  const frac = BigInt(`0b${fracDigits}`);
+
+  const groups = document.createElement("div");
+  groups.className = "insp-fgroups";
+  groups.append(bitGroup("sign", digits[0] ?? "0"), bitGroup("exponent", expDigits), bitGroup("fraction", fracDigits));
+  frag.append(groups);
+
+  if (frac === 0n) {
+    frag.append(special(negative ? "Negative zero (fraction 0)" : "Zero (fraction 0)"));
+    if (stored !== 0) frag.append(muted(`exponent ${stored} is ignored: a zero fraction is zero at any exponent`));
+    return frag;
+  }
+  const e = stored - shape.bias;
+  const fraction = Number(frac) / 2 ** shape.sig;
+  const value = (negative ? -1 : 1) * fraction * 16 ** e;
+  const rows = document.createElement("div");
+  rows.className = "insp-frows";
+  rows.append(
+    floatRow("Sign", negative ? "-" : "+", span("insp-frow-note", negative ? " negative" : " positive")),
+    floatRow("Exponent", power(e, 16), span("insp-frow-note", ` (stored ${stored} - bias ${shape.bias})`)),
+    floatRow("Fraction", shortest(fraction, info.format), span("insp-frow-note", " (no leading 1, point in front)")),
+  );
+  frag.append(rows, valueLine(negative, shortest(fraction, info.format), e, 16, shortest(value, info.format)));
+  if (fracDigits.startsWith("0000")) frag.append(muted("not normalised: the top hex digit of the fraction is 0"));
+  return frag;
+}
+
+/**
+ * A fixed-point number taken apart: the bits above the binary point, the
+ * bits below it, and the two parts they add up to. A negative two's
+ * complement value reads the same way, with a negative integer part and a
+ * positive fraction: 0xFFFF8000 in 16.16 is -1 + 0.5.
+ */
+function fixedBody(info: FixedInfo): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const digits = bitsOf(info.pattern, info.bits);
+  const intBits = info.bits - info.frac;
+  const intDigits = digits.slice(0, intBits);
+  const fracDigits = digits.slice(intBits);
+  const negative = info.signed && intDigits[0] === "1";
+  const rawInt = intBits === 0 ? 0n : BigInt(`0b${intDigits}`);
+  const whole = negative ? rawInt - (1n << BigInt(intBits)) : rawInt;
+  const frac = info.frac === 0 ? 0n : BigInt(`0b${fracDigits}`);
+  const scale = 2 ** info.frac;
+  const fraction = Number(frac) / scale;
+  const value = Number(whole) + fraction;
+
+  const groups = document.createElement("div");
+  groups.className = "insp-fgroups";
+  if (info.signed && intBits > 0) {
+    groups.append(bitGroup("sign", intDigits[0] ?? "0"));
+    if (intBits > 1) groups.append(bitGroup("integer", intDigits.slice(1)));
+  } else if (intBits > 0) {
+    groups.append(bitGroup("integer", intDigits));
+  }
+  if (info.frac > 0) groups.append(bitGroup("fraction", fracDigits));
+  frag.append(groups);
+
+  const rows = document.createElement("div");
+  rows.className = "insp-frows";
+  if (info.signed) rows.append(floatRow("Sign", negative ? "-" : "+", span("insp-frow-note", negative ? " negative (two's complement)" : " positive")));
+  rows.append(
+    floatRow("Integer part", String(whole), span("insp-frow-note", ` (${intBits} bits${negative ? ", two's complement" : ""})`)),
+    floatRow("Fraction part", String(fraction), span("insp-frow-note", ` (${frac} / ${scale})`)),
+  );
+  frag.append(rows);
   const line = document.createElement("div");
   line.className = "insp-fvalue";
-  line.append(`${negative ? "-" : ""}${shortest(significand, info.format)} × `, power(e), ` = ${shortest(value, info.format)}`);
+  line.append(`${whole} + ${frac}/`, power(info.frac), ` = ${value}`);
   frag.append(line);
   return frag;
 }
@@ -512,6 +691,8 @@ function body(
       return bufrBody(info);
     case "float":
       return floatBody(info);
+    case "fixed":
+      return fixedBody(info);
     case "magic":
       return magicBody(info);
     case "enum":

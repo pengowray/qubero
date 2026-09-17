@@ -20,6 +20,10 @@ The same table can be read two ways, and the reader picks:
 Clicking a row always puts the file tab's cursor on that row's bytes and marks
 them, whichever lens is on. That is an action, not a column.
 
+A cell whose value is wrong (a NaN sample under a finite constraint, an
+undefined enum in a record) is marked the way DESIGN-wrong-values.md says:
+glyph and hover text on the cell, a count in the column header.
+
 ## Where it comes from: IR first, heuristic second
 
 `web/src/records.ts` says the registry stays until two formats declare their

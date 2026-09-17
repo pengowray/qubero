@@ -232,6 +232,8 @@ export class Inspector {
   /** The type and size of what the box is showing, under the box: the reader's
    *  first question about a value is what it is. */
   private readonly shape: HTMLElement;
+  /** What the format's own description says the field is, under the type and size. */
+  private readonly docLine: HTMLElement;
   /** What a structure holds, listed under it. */
   private readonly kids: HTMLElement;
   /** What one code of a compressed block stands for, under the bits it is. */
@@ -515,6 +517,9 @@ export class Inspector {
     this.shape = document.createElement("div");
     this.shape.className = "insp-detail insp-shape";
     this.shape.hidden = true;
+    this.docLine = document.createElement("div");
+    this.docLine.className = "insp-doc";
+    this.docLine.hidden = true;
     // A structure's children, which are the value it does not have one of.
     // The rows behave as the origin rows do: a click goes to the child, and
     // pointing at one lights it in the views while the pointer rests here.
@@ -555,7 +560,7 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -1057,6 +1062,8 @@ export class Inspector {
     const named = typeText(n);
     this.shape.textContent = named === "" ? bitSizeText(n.size_bits) : `${named} · ${bitSizeText(n.size_bits)}`;
     this.shape.hidden = false;
+    this.docLine.textContent = n.doc ?? "";
+    this.docLine.hidden = n.doc === undefined;
     // The formula reads bytes of the file by address. There is no address of
     // the file for these bytes, so there is no formula to write.
     if (n.space === 0) this.showFormula(n.offset_bits, n.size_bits, false);
@@ -1748,6 +1755,7 @@ export class Inspector {
     this.fieldRow.hidden = true;
     this.detail.hidden = true;
     this.shape.hidden = true;
+    this.docLine.hidden = true;
     this.kids.hidden = true;
     this.kids.replaceChildren();
     this.formula.hidden = true;

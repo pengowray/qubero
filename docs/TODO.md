@@ -17,7 +17,8 @@ Text (done this day):
 
 Open:
 
-- [ ] Padding fields of 0 bytes (or any size) should say why they exist: text that must be aligned, general field alignment, and so on. Hooks: the type column for a Bytes field sized by `PadTo`; field-level docs. Note `Ty::doc` (template.rs) only keeps the text on a Struct, so the `.doc()` calls on `T::u8()` in dbf.rs are silently dropped.
+- [x] Field docs: `Ty::doc` on a non-struct type dropped the text silently (dbf.rs); now a debug assert, dbf uses `field_doc`, and the doc shows in the inspector under the type line and on hover of the listing name.
+- [x] Padding fields sized by `PadTo` now carry a derived doc ("Alignment padding: pads text to a 4-byte boundary. 0 bytes here because text already ends on one."); fixed-size ones like ELF ident padding get a hand-written `field_doc`. Others (mat, tiff `Remaining` padding, wav `pad()`) still say nothing.
 - [ ] Alignment: find formats where it matters; a toggle for whether alignment padding is shown, or a way to tag sections that use it (sometimes it is computed).
 - [ ] Diagram, boxes and arrows (`busybox-mips`): lines leave right and enter left without crossing, but nobody can follow the tracks. Needs a different mechanism (hover highlighting a route, endpoint labels, or bundled stubs).
 - [ ] Diagram, strips: synonyms. When there are several ways to say the same thing, sometimes use the longer form, sometimes the shorter. PNG: `Chunk[], until type 'IEND', ..., chunks last` vs `Chunk[], ..., chunk type 'IEND'`. "chunks" could cover the whole block containing `[chunk] [chunk] ... [chunk IEND]`; `chunks` and `Chunk[]` are redundant here. Boxes inside boxes, but not deeper than that.
@@ -32,7 +33,7 @@ Open:
 - [ ] `channels-structured-v2.npy` strips view: what's with all the datetime64s? Similar in `proto4-unframed-payload.pickle`.
 - [ ] Hex view: jump to top of field / previous field / next field when fields are big (e.g. `system_area 32,768 bytes · continued`).
 - [ ] Addresses: option for hex (current default) or decimal; needs its own formatting options, e.g. `4000:A002` style.
-- [ ] Use red for incorrect items: a magic number that does not match the loaded template (visible right after switching template, without clicking), bad checksums, undefined enum values, numbers out of range, unexpected NaN/Inf/-Inf, unusual NaN payloads.
+- [ ] Use red for incorrect items (design: DESIGN-wrong-values.md): a magic number that does not match the loaded template (visible right after switching template, without clicking), bad checksums, undefined enum values, numbers out of range, unexpected NaN/Inf/-Inf, unusual NaN payloads.
 - [ ] `proto4-sklearn-pipeline.pickle` hex view: at 0xe5 the SHORT_BINUNICODE opcode is a chip but the length+string after it (`\x05numpy`) gets no chip, so it is not selectable. Many similar cases.
 - [ ] `proto4-sklearn-pipeline.pickle` hex view: 1-byte opcodes are presented as an editable text string ("SHORT_BINUNICODE"), which makes them feel like strings. Wrong affordance. Design something better, do not patch it.
 - [ ] Saving a diff of edits. Binary diffs are not very standard. Not for a generated zip; there we would let them download a zip with the original files in a folder plus a diff file, or a revert file, or a python script to undo/redo, which becomes a general mechanism.

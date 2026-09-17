@@ -278,7 +278,7 @@ export type TemplateNode = {
   /** What the format's own description says this field is, where the template
    *  carries it: the field's own prose, or failing that the prose on the
    *  structure it is. Absent for a field nobody wrote prose for, which is most
-   *  of them. Nothing renders it yet. */
+   *  of them. The inspector shows it under the type line and the listing on hover. */
   readonly doc?: string;
   /** What a structure of a few fields reads as on one line, which is the same
    *  reading the annotation column puts beside the bytes: a length and the
@@ -1386,6 +1386,7 @@ export type TypeInfo =
   | EnumInfo
   | FlagsInfo
   | FloatInfo
+  | FixedInfo
   | QuantInfo
   | XrefInfo
   | ObjStmInfo
@@ -1432,6 +1433,16 @@ export type FloatInfo = {
   readonly kind: "float";
   readonly format: string;
   readonly width: number;
+  readonly pattern: string;
+};
+
+/** A fixed-point number: how wide, how many of the low bits are below the
+ *  binary point, whether it is two's complement, and its bits in hex. */
+export type FixedInfo = {
+  readonly kind: "fixed";
+  readonly bits: number;
+  readonly frac: number;
+  readonly signed: boolean;
   readonly pattern: string;
 };
 

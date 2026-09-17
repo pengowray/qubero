@@ -62,7 +62,7 @@ test("while counting, a row equal to its box so far is still unbadged, and one t
 
 test("the hover says at least, and never none, until the count is finished", () => {
   assert.equal(countTitle(12, "Chunk", census("done")), "This file has 12 of these: Chunk");
-  assert.equal(countTitle(1, "IHDR", census("done")), "This file has 1 IHDR");
+  assert.equal(countTitle(1, "IHDR", census("done")), "This file has 1 of these: IHDR");
   assert.equal(countTitle(0, "IEND", census("done")), "This file has none of these");
   assert.equal(countTitle(12, "Chunk", census("working")), "This file has at least 12 of these: Chunk. Still counting.");
   assert.equal(countTitle(0, "IEND", census("waiting")), "None of these found yet. Still counting.");

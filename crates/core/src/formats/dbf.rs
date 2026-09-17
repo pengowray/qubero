@@ -65,12 +65,12 @@ pub fn dbf() -> Template {
             "Dbf",
             vec![
                 ("version", T::enumeration_hex("DbfVersion", T::u8(), VERSION)),
-                ("year", T::u8().doc("Years since 1900, as the table was last written.")),
+                ("year", T::u8()),
                 ("month", T::u8()),
                 ("day", T::u8()),
                 ("record_count", T::u32(Little)),
-                ("header_length", T::u16(Little).doc("Bytes before the first record: this header, the descriptors, the 0x0D, and anything a writer put after it.")),
-                ("record_length", T::u16(Little).doc("One more than the columns' widths added up, for the deletion flag.")),
+                ("header_length", T::u16(Little)),
+                ("record_length", T::u16(Little)),
                 ("reserved", T::bytes(E::lit(20))),
                 // One descriptor per column, and the byte after the last one is
                 // the 0x0D. Counted this way rather than worked out from
@@ -83,6 +83,9 @@ pub fn dbf() -> Template {
                 ("end_of_file", T::if_room(T::magic(b"\x1a"))),
             ],
         )
+        .field_doc("year", "Years since 1900, as the table was last written.")
+        .field_doc("header_length", "Bytes before the first record: this header, the descriptors, the 0x0D, and anything a writer put after it.")
+        .field_doc("record_length", "One more than the columns' widths added up, for the deletion flag.")
         .field_elem_named_from("fields", E::elem_field("fields", E::idx(), &["name"]))
         .counted_as("record")
         .machinery(&["fields", "terminator", "header_rest"])
@@ -99,12 +102,13 @@ fn field() -> T {
         vec![
             ("name", T::text(StrLen::Padded { size: E::lit(11), pad: 0 }, Encoding::Ascii)),
             ("type", T::enumeration("DbfFieldType", T::u8(), FIELD_TYPE)),
-            ("address", T::u32(Little).doc("Where dBase III kept the column in memory; nothing in the file.")),
+            ("address", T::u32(Little)),
             ("length", T::u8()),
             ("decimals", T::u8()),
             ("rest", T::bytes(E::lit(14))),
         ],
     )
+    .field_doc("address", "Where dBase III kept the column in memory; nothing in the file.")
     .counted_as("field")
 }
 
