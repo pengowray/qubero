@@ -536,9 +536,15 @@ export class OverviewPanel {
   private drawProblemFact(): void {
     const root = this.doc.templateNode([]);
     if (root.status !== "ok") return;
-    const [invalid, undefinedCount] = root.node.problems_within;
-    const own = root.node.problem === undefined ? 0 : 1;
-    if (invalid + undefinedCount + own === 0) return;
+    // The root's own value counts too: a template that is a magic number and
+    // what follows has the signature at the root rather than under it, and a
+    // file whose signature is wrong is exactly the file this line is for.
+    const own = root.node.problem;
+    const [invalid, undefinedCount] = [
+      root.node.problems_within[0] + (own?.tier === "invalid" ? 1 : 0),
+      root.node.problems_within[1] + (own?.tier === "undefined" ? 1 : 0),
+    ];
+    if (invalid + undefinedCount === 0) return;
     const dt = document.createElement("dt");
     dt.textContent = PROBLEMS.wrongLabel;
     const dd = document.createElement("dd");

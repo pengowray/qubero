@@ -6482,7 +6482,10 @@ summary.kp-group-heading:hover {
    channel left over once fill means kind, and the glyph sits at the chip's
    leading edge. Both tiers get the glyph; only invalid gets the line. */
 .hv-chip-invalid {
-  border-bottom: 2px solid var(--warn);
+  /* Inset rather than a border: a border is 2px of box, and a chip that grows
+     changes the height of the row it is in, which the hex view does not allow
+     under a finger. The same way `.hv-chip-opens` draws its outline. */
+  box-shadow: inset 0 -2px 0 0 var(--warn);
 }
 .hv-chip-invalid::before,
 .hv-chip-undefined::before {

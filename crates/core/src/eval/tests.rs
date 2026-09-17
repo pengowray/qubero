@@ -2150,6 +2150,32 @@ fn the_chunk_read_longest_ago_is_the_one_that_goes() {
     assert!(store.has(2));
 }
 
+/// A float that is not a number is classified from the bits the file holds,
+/// not from the double they were read into: an f32 signalling NaN widened to
+/// a double comes back quiet, and a field read big-endian read the other way
+/// round is a different NaN again.
+#[test]
+fn a_float_that_is_not_a_number_is_read_off_the_bytes() {
+    let t = Template::new("t", T::structure("Root", vec![("sample", T::F32(Big))]));
+    let mut ev = Evaluator::new(t);
+    let d = doc(&[0x7f, 0x80, 0x00, 0x01]);
+    let node = ev.node(&d, &[0]).unwrap();
+    let problem = node.problem.expect("a NaN is worth saying");
+    assert_eq!(problem.tier, crate::eval::Tier::Undefined);
+    assert_eq!(problem.text, "Not a number (signalling NaN, payload 0x1)");
+
+    // The same four bytes the other way round are an ordinary large number.
+    let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("sample", T::F32(Little))])));
+    assert_eq!(ev.node(&d, &[0]).unwrap().problem, None);
+
+    // An infinity says which one, and a number says nothing.
+    let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("sample", T::F64(Big))])));
+    let inf = doc(&f64::NEG_INFINITY.to_bits().to_be_bytes());
+    assert_eq!(ev.node(&inf, &[0]).unwrap().problem.expect("an infinity").text, "Negative infinity");
+    let one = doc(&1.5f64.to_bits().to_be_bytes());
+    assert_eq!(ev.node(&one, &[0]).unwrap().problem, None);
+}
+
 #[test]
 fn a_signature_reads_as_the_string_it_is() {
     let t = Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))]));
