@@ -102,8 +102,9 @@ pub enum Kind {
 /// them. A `complex` is written as its two halves.
 const BOUNDS: &[&str] = &["start", "stop", "step"];
 const HALVES: &[&str] = &["real", "imaginary"];
-/// A `bytearray` is written as the one byte string it was made from.
-const CONTENT: &[&str] = &["content"];
+/// A `bytearray` is written as the one byte string it was made from, named
+/// for what it holds the way an array's numbers are.
+const CONTENT: &[&str] = &["bytes"];
 /// A frozenset's members are written in no order the file can be trusted for,
 /// so they are numbered rather than named.
 const MEMBERS: &[&str] = &[];
