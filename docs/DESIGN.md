@@ -1590,14 +1590,21 @@ mark bits of the file, so a stream whose run is bits of another stream has
 neither: one whose home is a recognised stream, or one declared inside a stream
 the file declares, whose run is not in the file's space (`SingleRun::run_space`,
 or each part's `JoinedRun::run_space`). An edit to the file or a change of template drops the spaces
-with the rest of the reading, so the tab's stream is opened again in its
-home's reading as it is now the next time a field of the tab is asked about,
-and a stream that is no longer there leaves the tab empty rather than reading
-whatever the new reading has at the old path. A field of such a tab can want
-bytes of the file, for the fields outside the stream or for a joined stream's
-stored runs, so a tab's document fetches chunks too, and they are always the
-file's. Paths in the file's reading are longer by the stream's own depth,
-which counts toward `DEEPEST_PATH`.
+with the rest of the reading, and every tab over a stream, whichever way it is
+read, is only marked stale (`Editor::forget_spaces`). The stream is opened
+again in its home's reading as it is now the next time anything of the tab is
+asked about, its bytes as much as its fields (`Editor::ensure_open`), homes
+before the streams opened from them, and a stream that is no longer there
+leaves the tab empty rather than reading whatever the new reading has at the
+old path. Opening it then rather than at the edit is what lets the reopen see
+the edit, since every edit lets go of the spaces before it is made, and costs
+one unpacking per tab however many edits came before it. Opening it again can
+want bytes of the file, and so can a field of a declared stream's tab, for the
+fields outside the stream or for a joined stream's stored runs, so a tab's
+document fetches chunks too, and they are always the file's: a byte read of a
+tab whose reopen waits on chunks answers with the chunks it waits on. Paths in
+the file's reading are longer by the stream's own depth, which counts toward
+`DEEPEST_PATH`.
 
 **What the decoder read, as fields.** A decoder that only hands back bytes
 throws away the one thing a hex editor wants, which is where. So the decoders

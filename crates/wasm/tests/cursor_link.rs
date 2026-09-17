@@ -39,7 +39,7 @@ fn editor(sample: &str, template: Option<&str>) -> Option<Editor> {
         Some(name) => name.to_string(),
         None => {
             let head = &bytes[..bytes.len().min(ed.sniff_window() as usize)];
-            ed.sniff_template(head, bytes.len() as f64)
+            ed.sniff_template(head, bytes.len() as f64, sample)
         }
     };
     assert!(!name.is_empty(), "{sample} sniffs as nothing");
@@ -147,7 +147,7 @@ fn single_run_links_the_file(sample: &str, template: Option<&str>) {
 #[test]
 fn gzip_byte_0_marks_the_first_literal_not_the_magic() {
     let Some(mut ed) = editor("gzip/gnu-gzip-9-with-name.gz", Some("gzip")) else { return };
-    let compressed = [10];
+    let compressed = [0, 0, 10];
     let run = node(&mut ed, &compressed);
     assert_eq!(run["name"], "compressed");
     let from = num(&run, "offset_bits");

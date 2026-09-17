@@ -130,3 +130,39 @@ fn samples() -> Option<PathBuf> {
     let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"));
     named.into_iter().chain(std::iter::once(beside)).find(|p| p.is_dir())
 }
+
+/// The bytes a tab holds from `at`, as text.
+fn text_at(ed: &mut Editor, space: u32, at: f64, n: usize) -> String {
+    let mut out = vec![0u8; n];
+    assert!(ed.read_bytes(space, at, &mut out).is_empty(), "space {space} still waits on chunks");
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[test]
+fn a_recognised_stream_tab_reads_the_file_as_edited() {
+    let Some(mut ed) = editor("gzip/eight-members-split-tar.tgz", "gzip") else { return };
+    // The members joined and unpacked open as a tar of their own reading.
+    let tar = opened(&mut ed, 0, &[1]);
+    assert!(ed.space_recognised(tar));
+    assert_eq!(text_at(&mut ed, tar, 0.0, 2), "f1");
+    assert_eq!(node(&mut ed, tar, &[0, 0, 0]).0, "name");
+    let name = |ed: &mut Editor| -> String {
+        let reply: Value = serde_json::from_str(&ed.field_text(tar, &[0, 0, 0])).unwrap();
+        assert_eq!(reply["status"], "ok", "{reply}");
+        reply["node"]["text"].as_str().unwrap_or("").to_string()
+    };
+    assert!(name(&mut ed).starts_with("f1"), "{}", name(&mut ed));
+    // One byte of the first member's deflate, chosen so the run still inflates
+    // to a tar of the same length whose first entry is named v1 rather than f1.
+    assert_eq!(text_at(&mut ed, 0, 27.0, 1).as_bytes(), [0x4b]);
+    ed.overwrite_bytes(27.0, &[0x2b]);
+    // The tab reads the stream as the edited file has it, bytes and fields alike.
+    assert_eq!(text_at(&mut ed, tar, 0.0, 2), "v1");
+    assert!(name(&mut ed).starts_with("v1"), "{}", name(&mut ed));
+    // And the same as a fresh reading of the edited bytes would.
+    let Some(mut fresh) = editor("gzip/eight-members-split-tar.tgz", "gzip") else { return };
+    fresh.overwrite_bytes(27.0, &[0x2b]);
+    let again = opened(&mut fresh, 0, &[1]);
+    assert_eq!(ed.len_bytes(tar), fresh.len_bytes(again));
+    assert_eq!(text_at(&mut ed, tar, 0.0, 512), text_at(&mut fresh, again, 0.0, 512));
+}

@@ -52,6 +52,12 @@ struct Sheet {
     view: Option<Vec<usize>>,
     /// What such a stream declares it holds, which the diagram is drawn from.
     read_as: Option<qubero_core::template::Template>,
+    /// The stream was unpacked from its home as it was before an edit or a
+    /// change of template, and has not been opened again since. The bytes and
+    /// reading here are the old ones, kept so a tab still waiting on chunks of
+    /// the file has a length to show; `Editor::ensure_open` opens the stream
+    /// again before anything of the tab is answered from them.
+    stale: bool,
     /// What the wasm sections say about the module, when that is the template.
     /// Built on the first listing that needs it, and thrown away whenever the
     /// document changes, since it holds paths that the change may have moved.
@@ -152,6 +158,7 @@ impl Sheet {
             eval: None,
             view: None,
             read_as: None,
+            stale: false,
             disasm: None,
             bpf: None,
             bpf_complete: false,
@@ -2725,6 +2732,15 @@ fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
     reply_with(r, 0.0, Vec::new())
 }
 
+/// The chunks a reading waits on, as a byte read reports chunks not loaded.
+/// Nothing for any other error: the read then answers from what is there.
+fn chunks_of(err: EvalError) -> Vec<f64> {
+    match err {
+        EvalError::Pending(m) => m.into_iter().map(|m| m.chunk as f64).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// What one step of a search found, as the host reads it. `status` is the same
 /// tri-state everything else here answers with, so the caller's chunk-fetching
 /// loop is the one it already has.
@@ -2935,42 +2951,64 @@ impl Editor {
         &mut self.sheets[i]
     }
 
-    /// Name the space the call is about. Every space-taking method starts here.
-    fn go(&mut self, space: u32) {
+    /// Name the space the call is about, opening its stream again first if an
+    /// edit has let go of it. Every space-taking method starts here. The error
+    /// is the reply to give instead: the reopen waits on chunks of the file.
+    fn go(&mut self, space: u32) -> Result<(), String> {
         self.live = space as usize;
+        self.ensure_open(space).map_err(|err| reply::<()>(Err(err)))
     }
 
-    /// Drop every unpacked stream. A space is worked out from bytes of the file,
-    /// so an edit or a change of template throws it away and the tab reopens it
-    /// by path. The file's own reading, space 0, stays.
+    /// Let go of every unpacked stream. A space is worked out from bytes of
+    /// the file, so an edit or a change of template throws it away and the
+    /// tab reopens it by path. The file's own reading, space 0, stays.
+    ///
+    /// The spaces are not dropped, because the tabs showing them are still
+    /// open and a tab has to keep meaning what its title says. Each is marked
+    /// stale instead, and `ensure_open` unpacks it again from the stream it
+    /// came from the next time anything of the tab is asked about, so the
+    /// tab's own number stays good; the core renumbers its own spaces from 1
+    /// and the new number is written back then. Opening it then rather than
+    /// here is what makes the reopen see the edit: every caller of this has
+    /// the edit still to make, or the reading still to tell of it, and a
+    /// stream unpacked here would be unpacked from the file as it was. It is
+    /// also at most one unpacking per tab however many edits came first.
     fn forget_spaces(&mut self) {
         self.live = 0;
-        if self.sheets.len() < 2 {
-            return;
+        for sh in self.sheets.iter_mut().skip(1) {
+            sh.stale = true;
         }
-        // The spaces are not dropped, because the tabs showing them are still
-        // open and a tab has to keep meaning what its title says. Each is
-        // unpacked again from the stream it came from, so the tab's own number
-        // stays good; the core renumbers its own spaces from 1 and the new
-        // number is written back here. A stream that no longer opens leaves an
-        // empty space rather than falling back to the file's bytes under the
-        // stream's name.
-        //
-        // In the order they were opened, so a stream opened from a recognised
-        // one is opened again in that one's new reading: a sheet's home is
-        // always opened before it.
-        //
-        // A stream read where it was declared is left for `tab` to open again
-        // when it is next asked about, since its fields are read in its home's
-        // reading, and that reading is about to change.
-        for i in 1..self.sheets.len() {
-            if self.sheets[i].view.is_some() {
-                continue;
-            }
-            let (home, origin) = (self.sheets[i].home, self.sheets[i].origin.clone());
-            let opened = self.open_in(home, &origin).ok().flatten();
-            self.sheets[i] = self.sheet_for(opened, home, origin);
+    }
+
+    /// Open the stream behind `space` again if an edit or a change of template
+    /// has let go of it since, whichever way the tab reads it. Nothing to do
+    /// for the file, or for a stream still open.
+    ///
+    /// Its home is opened first, since a stream opened from a recognised one
+    /// is opened again in that one's new reading: a sheet's home is always
+    /// opened before it. The error is only ever that a reading waits on chunks
+    /// of the file, and the sheet then stays as it was until it is asked
+    /// again. A stream that no longer opens is not an error: it leaves the tab
+    /// empty rather than reading whatever the new reading has at the old path.
+    fn ensure_open(&mut self, space: u32) -> Result<(), EvalError> {
+        let i = space as usize;
+        if i == 0 || i >= self.sheets.len() {
+            return Ok(());
         }
+        let home = self.sheets[i].home;
+        if home != i {
+            self.ensure_open(home as u32)?;
+        }
+        // A sheet still holding a stream its home's reading has since dropped
+        // is as stale as one an edit marked. The core lets go of every space
+        // whenever a reading is invalidated, so this catches a change that
+        // did not pass through `forget_spaces`, and a home opened again since
+        // with a reading of its own that has nothing open yet.
+        let dropped = self.sheets[i].core_space != 0 && self.core_space(space).is_none();
+        if !self.sheets[i].stale && !dropped {
+            return Ok(());
+        }
+        self.reopen(i)
     }
 
     /// Open the stream at `path` of sheet `home`'s own reading, with no
@@ -2998,18 +3036,11 @@ impl Editor {
 
     /// What reads the fields of `space`, lent for one call: its own reading, or
     /// for a stream read where it was declared, its home's, under the stream.
-    /// The error is the reply to give instead, when nothing reads it.
-    ///
-    /// A stream read where it was declared is opened again first when its
-    /// home's reading no longer has it open. An edit to the file and a change
-    /// of template both drop the spaces with the rest of the reading, and the
-    /// tab would otherwise read whatever the new reading has at the old path.
+    /// The error is the reply to give instead, when nothing reads it, or when
+    /// opening the stream again waits on chunks of the file.
     fn tab(&mut self, space: u32) -> Result<Tab<'_, ChunkStore>, String> {
-        self.go(space);
+        self.go(space)?;
         let i = if self.live < self.sheets.len() { self.live } else { 0 };
-        if self.sheets[i].view.is_some() && self.core_space(i as u32).is_none() {
-            self.reopen(i)?;
-        }
         let no_template = || reply::<()>(Err(EvalError::Failed("no template".into())));
         match self.sheets[i].view.clone() {
             None => {
@@ -3027,14 +3058,14 @@ impl Editor {
     }
 
     /// Open the stream sheet `i` came from again, in its home's reading as it
-    /// is now. A stream that no longer opens leaves an empty sheet, as
-    /// `forget_spaces` does; one waiting on bytes of the file says so, and is
-    /// opened when it is asked again.
-    fn reopen(&mut self, i: usize) -> Result<(), String> {
+    /// is now. A stream that no longer opens leaves an empty sheet; one waiting
+    /// on bytes of the file says so, stays stale, and is opened when it is
+    /// asked again.
+    fn reopen(&mut self, i: usize) -> Result<(), EvalError> {
         let (home, origin) = (self.sheets[i].home, self.sheets[i].origin.clone());
         let opened = match self.open_in(home, &origin) {
             Ok(opened) => opened,
-            Err(err) if err.interrupted() => return Err(reply::<()>(Err(err))),
+            Err(err) if err.interrupted() => return Err(err),
             Err(_) => None,
         };
         self.sheets[i] = self.sheet_for(opened, home, origin);
@@ -3056,6 +3087,9 @@ impl Editor {
     /// `refused` says which of the three ways a stream would not open, and the
     /// space is then 0.
     pub fn open_space(&mut self, space: u32, path: &[u32]) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<SpaceDto>(Err(err));
+        }
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let (home, at) = match self.sheets.get(space as usize) {
             Some(sh) if space != 0 => match &sh.view {
@@ -3128,6 +3162,9 @@ impl Editor {
     /// the file: one opened in a recognised stream's reading, or one declared
     /// inside a stream the file declares.
     pub fn map_out(&mut self, space: u32, byte: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<MapStepDto>>(Err(err));
+        }
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_out(core, byte as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Byte(byte as u64)))))
@@ -3138,6 +3175,9 @@ impl Editor {
     /// produced. Counted in the file and not in the run, since the file tab's
     /// cursor is what asks.
     pub fn map_in(&mut self, space: u32, bit: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<MapStepDto>>(Err(err));
+        }
         let Some(core) = self.file_core_space(space) else { return reply(Ok(None::<MapStepDto>)) };
         let Some(e) = &self.sheets[0].eval else { return reply(Ok(None::<MapStepDto>)) };
         reply(Ok(e.map_in(core, bit as u64).and_then(|s| space_step_dto(e, core, s, AskedBy::Bit(bit as u64)))))
@@ -3167,6 +3207,9 @@ impl Editor {
     /// bit nobody read, a step that is a header or a table entry rather than a
     /// symbol, and a block whose symbols the trace stopped naming.
     pub fn decode_step(&mut self, space: u32, bit: f64) -> String {
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<DecodedStepDto>>(Err(err));
+        }
         let none = || reply(Ok(None::<DecodedStepDto>));
         let (Some(core), Some(sh)) = (self.core_space(space), self.sheets.get(space as usize)) else {
             return none();
@@ -3219,7 +3262,8 @@ impl Editor {
     /// True when the template reading a space came from looking at the unpacked
     /// bytes rather than from what the stream declared: a gzip of a tar opens
     /// as a tar, and this is what says so.
-    pub fn space_recognised(&self, space: u32) -> bool {
+    pub fn space_recognised(&mut self, space: u32) -> bool {
+        self.open_again(space);
         self.core_space_of(space).is_some_and(|(_, s)| s.recognised)
     }
 
@@ -3236,6 +3280,13 @@ impl Editor {
         }
         let open = self.sheets.get(sh.home)?.eval.as_ref()?.space(sh.core_space)?;
         (open.parent == 0 && open.path == sh.origin).then_some((sh.home, open))
+    }
+
+    /// `ensure_open` for a call that answers from whatever the tab holds when
+    /// the reopen waits on chunks of the file: the old bytes, the old length,
+    /// or the old reading, which the next call opens again.
+    fn open_again(&mut self, space: u32) {
+        let _ = self.ensure_open(space);
     }
 
     /// The core's number for one of this editor's spaces, if it is still open.
@@ -3294,7 +3345,9 @@ impl Editor {
     /// `node` carrying everything found so far, so the host can draw a partial
     /// map while the rest is read. `done` on the node says when to stop asking.
     pub fn overview_step(&mut self, space: u32, buckets: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let len = sh.doc.len_bytes();
         let want = overview::Scan::range(0, len, u64::from(buckets));
@@ -3329,7 +3382,9 @@ impl Editor {
     /// bucket of a block can read as dense while the first part of it is
     /// zeroes, because a bucket is judged as a whole.
     pub fn overview_focus_step(&mut self, space: u32, from: f64, to: f64, buckets: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let (from, to) = (from as u64, to as u64);
         let fresh = !matches!(&sh.focus, Some(f) if f.start() == from && f.end() == to);
@@ -3634,7 +3689,8 @@ impl Editor {
 
     /// The report from the last `.ksy` converted into this space, as JSON.
     /// Empty when the template in use did not come from one.
-    pub fn ksy_report(&self, space: u32) -> String {
+    pub fn ksy_report(&mut self, space: u32) -> String {
+        self.open_again(space);
         self.at(space).ksy_report.clone()
     }
 
@@ -3738,7 +3794,8 @@ impl Editor {
 
     /// The report from the last ImHex pattern converted into this space, as
     /// JSON. Empty when the template in use did not come from one.
-    pub fn hexpat_report(&self, space: u32) -> String {
+    pub fn hexpat_report(&mut self, space: u32) -> String {
+        self.open_again(space);
         self.at(space).hexpat_report.clone()
     }
 
@@ -3797,7 +3854,9 @@ impl Editor {
     /// bytes to a fixed place, which is the honest answer for a format found by
     /// searching rather than by looking.
     pub fn set_magic_template(&mut self, name: &str, rules: &str, head: &[u8]) -> bool {
-        self.live = 0;
+        // A signature template has no stream for a space to have come from;
+        // see `set_template`.
+        self.forget_spaces();
         let sh = self.sm();
         // A signature template covers a format's first bytes only, so whatever
         // full template was in use no longer applies.
@@ -3901,6 +3960,9 @@ impl Editor {
     /// the stream holds says which space that is.
     pub fn part_at(&mut self, space: u32, byte: f64) -> String {
         let none = || reply(Ok(None::<StitchedPartDto>));
+        if let Err(err) = self.ensure_open(space) {
+            return reply::<Option<StitchedPartDto>>(Err(err));
+        }
         if space == 0 || !self.space_joined(space).0 {
             return none();
         }
@@ -4029,7 +4091,9 @@ impl Editor {
     /// file the same template opens. `space` picks which template, since an
     /// unpacked stream is read by one of its own.
     pub fn template_diagram(&mut self, space: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         match (&sh.eval, &sh.read_as) {
             (Some(e), _) => reply(Ok(diagram_dto(qubero_core::eval::diagram(e.template())))),
@@ -4228,7 +4292,9 @@ impl Editor {
     /// Pending while the few bytes near the front that decide it are still to
     /// come, so the host asks for them and asks again when they land.
     pub fn holds_hdf5(&mut self, space: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         // A stream read where it was declared has no reading of its own for a
         // superblock to be the root of, and asked of the file's this would
@@ -4242,7 +4308,9 @@ impl Editor {
     /// template's: {status:"ok",node:{objects,..}}. Empty for a file that holds
     /// no HDF5, since nothing else here has a group tree to walk.
     pub fn contents(&mut self, space: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let Some(e) = &mut sh.eval else {
             return reply::<ContentsDto>(Err(EvalError::Failed("no template".into())));
@@ -4317,7 +4385,9 @@ impl Editor {
     /// group's, else the first tree under the root group. `limit` caps the
     /// nodes walked, and the answer says how many children it left out.
     pub fn btree(&mut self, space: u32, path: &[u32], limit: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let Some(e) = &mut sh.eval else {
@@ -4384,7 +4454,9 @@ impl Editor {
     /// Named ELF sections and a bounded prefix of its symbols. The semantic
     /// pass is cached because resolving names crosses several linked tables.
     pub fn elf_contents(&mut self, space: u32, symbol_limit: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         // A stream read where it was declared carries the file's template name
         // and is not a program: the tables are the file's.
@@ -4448,7 +4520,9 @@ impl Editor {
     /// list of offsets nothing in the template placed. The two have no shape in
     /// common but the idea.
     pub fn root_contents(&mut self, space: u32) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         // The same for a record of a ROOT file opened as a tab, which is not a
         // ROOT file.
@@ -4564,7 +4638,8 @@ impl Editor {
     }
 
     /// The primary ISO 9660 volume and its root-directory pointer.
-    pub fn iso_volume(&self, space: u32) -> String {
+    pub fn iso_volume(&mut self, space: u32) -> String {
+        self.open_again(space);
         let sh = self.at(space);
         if sh.template != "iso9660" {
             return reply::<IsoVolumeDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
@@ -4630,7 +4705,8 @@ impl Editor {
 
     /// One ISO directory, bounded for display but counted in full. Child
     /// directories are read only when their logical row is opened.
-    pub fn iso_directory(&self, space: u32, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
+    pub fn iso_directory(&mut self, space: u32, extent: f64, size: f64, block_size: f64, limit: u32, joliet: bool) -> String {
+        self.open_again(space);
         let sh = self.at(space);
         if sh.template != "iso9660" {
             return reply::<IsoDirectoryDto>(Err(EvalError::Failed("not an ISO 9660 template".into())));
@@ -4893,7 +4969,9 @@ impl Editor {
         if space != 0 {
             return reply::<WriteDto>(Err(EvalError::Failed(qubero_core::encode::UNPACKED_MSG.into())));
         }
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
         let prepared = match &mut sh.eval {
@@ -4943,7 +5021,9 @@ impl Editor {
     /// One step of a search, from byte `from`. The reply is the same tri-state
     /// as the rest: a step, the chunks it wants, or what is wrong with it.
     pub fn search_step(&mut self, space: u32, kind: &str, text: &str, fold: bool, backward: bool, from: f64) -> String {
-        self.go(space);
+        if let Err(why) = self.go(space) {
+            return why;
+        }
         let sh = self.sm();
         let n = match needle(kind, text, fold) {
             Ok(n) => n,
@@ -4990,7 +5070,8 @@ impl Editor {
         sh.doc.source_mut().insert(chunk as u64, data.into());
     }
 
-    pub fn has_chunk(&self, space: u32, chunk: f64) -> bool {
+    pub fn has_chunk(&mut self, space: u32, chunk: f64) -> bool {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.source().has(chunk as u64)
     }
@@ -5000,24 +5081,36 @@ impl Editor {
         sh.doc.source().chunk_size() as u32
     }
 
-    pub fn len_bytes(&self, space: u32) -> f64 {
+    pub fn len_bytes(&mut self, space: u32) -> f64 {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.len_bytes() as f64
     }
 
-    pub fn len_bits(&self, space: u32) -> f64 {
+    pub fn len_bits(&mut self, space: u32) -> f64 {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.len_bits() as f64
     }
 
     /// Fill `out` with document bytes from `at`. Returns the chunk indices that
     /// were not loaded (those bytes are zero). Empty list means the read is complete.
-    pub fn read_bytes(&self, space: u32, at: f64, out: &mut [u8]) -> Vec<f64> {
+    ///
+    /// A tab whose stream has to be opened again first, and whose reopen waits
+    /// on chunks of the file, answers with those: a tab's chunks are always
+    /// the file's, and it is asked again once they are fed.
+    pub fn read_bytes(&mut self, space: u32, at: f64, out: &mut [u8]) -> Vec<f64> {
+        if let Err(waits) = self.ensure_open(space) {
+            return chunks_of(waits);
+        }
         let sh = self.at(space);
         sh.doc.read_bytes(at as u64, out).into_iter().map(|m| m.chunk as f64).collect()
     }
 
-    pub fn read_bits(&self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
+    pub fn read_bits(&mut self, space: u32, at_bit: f64, n: f64, out: &mut [u8]) -> Vec<f64> {
+        if let Err(waits) = self.ensure_open(space) {
+            return chunks_of(waits);
+        }
         let sh = self.at(space);
         sh.doc.read_bits(at_bit as u64, n as u64, out).into_iter().map(|m| m.chunk as f64).collect()
     }
@@ -5100,19 +5193,23 @@ impl Editor {
         let sh = self.sm();
         sh.doc.redo()
     }
-    pub fn can_undo(&self, space: u32) -> bool {
+    pub fn can_undo(&mut self, space: u32) -> bool {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.can_undo()
     }
-    pub fn can_redo(&self, space: u32) -> bool {
+    pub fn can_redo(&mut self, space: u32) -> bool {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.can_redo()
     }
-    pub fn is_modified(&self, space: u32) -> bool {
+    pub fn is_modified(&mut self, space: u32) -> bool {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.is_modified()
     }
-    pub fn piece_count(&self, space: u32) -> u32 {
+    pub fn piece_count(&mut self, space: u32) -> u32 {
+        self.open_again(space);
         let sh = self.at(space);
         sh.doc.piece_count() as u32
     }
@@ -5133,7 +5230,8 @@ impl Editor {
     }
 
     /// Lines starting at `from`, which must be where a line starts.
-    pub fn text_window(&self, space: u32, encoding: &str, from: f64, want: u32) -> String {
+    pub fn text_window(&mut self, space: u32, encoding: &str, from: f64, want: u32) -> String {
+        self.open_again(space);
         let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
@@ -5164,7 +5262,8 @@ impl Editor {
     /// file is hundreds of thousands of numbers, and spelling each of them out
     /// and parsing it back costs more than the scan does. The layout is
     /// `[next, lf, cr, crlf, missing count, ...missing chunks, ...starts]`.
-    pub fn text_index(&self, space: u32, encoding: &str, from: f64, to: f64) -> Vec<f64> {
+    pub fn text_index(&mut self, space: u32, encoding: &str, from: f64, to: f64) -> Vec<f64> {
+        self.open_again(space);
         let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
@@ -5183,7 +5282,8 @@ impl Editor {
     /// Where the line holding `at` starts, and where `lines` line starts back
     /// from there is. Both in one call, because scrolling text upwards wants
     /// the second and clicking in it wants the first.
-    pub fn text_back(&self, space: u32, encoding: &str, at: f64, lines: u32) -> String {
+    pub fn text_back(&mut self, space: u32, encoding: &str, at: f64, lines: u32) -> String {
+        self.open_again(space);
         let sh = self.at(space);
         let head = self.head(64);
         let r = named_encoding(encoding).map_or_else(|| textview::reading(&head), |s| textview::reading_as(s, &head));
@@ -5205,7 +5305,8 @@ impl Editor {
     /// the usual tri-state: strings, or the chunks it needs before it can
     /// answer. `next` is where the caller carries on from, which is not the
     /// end of the last string when the scan stopped for want of hits.
-    pub fn strings_scan(&self, space: u32, from: f64, want: u32, min_chars: u32, encodings: &str) -> String {
+    pub fn strings_scan(&mut self, space: u32, from: f64, want: u32, min_chars: u32, encodings: &str) -> String {
+        self.open_again(space);
         use qubero_core::stringscan;
         let sh = self.at(space);
         let pick = |name: &str| encodings.is_empty() || encodings.split(',').any(|e| e.trim() == name);
@@ -5258,7 +5359,8 @@ impl Editor {
     /// byte-reversed rows only appear for whole bytes. `first` names the
     /// encoding to put at the front, which is whatever the text view is
     /// reading the file in.
-    pub fn selection_text(&self, space: u32, at_byte: f64, len: f64, first: &str, page_a: &str, page_b: &str) -> String {
+    pub fn selection_text(&mut self, space: u32, at_byte: f64, len: f64, first: &str, page_a: &str, page_b: &str) -> String {
+        self.open_again(space);
         use qubero_core::text::CodePage;
         let sh = self.at(space);
         let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
@@ -5290,7 +5392,8 @@ impl Editor {
     /// paste into a parser being written against the file. Empty while the
     /// bytes are still being fetched, and cut to the same length the readings
     /// are, so the row says the same run the rows above it do.
-    pub fn selection_literal(&self, space: u32, at_byte: f64, len: f64, lang: &str) -> String {
+    pub fn selection_literal(&mut self, space: u32, at_byte: f64, len: f64, lang: &str) -> String {
+        self.open_again(space);
         use qubero_core::text::Lang;
         let sh = self.at(space);
         let want = (len as u64).min(SELECTION_TEXT_LIMIT) as usize;
