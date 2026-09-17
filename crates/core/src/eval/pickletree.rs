@@ -176,6 +176,19 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 Vec::new(),
                 items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))).collect(),
             ),
+            // A builtin written as a call. Its parts are named where Python
+            // names them and numbered where it does not.
+            Kind::Object { names, items, .. } => (
+                Vec::new(),
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, x)| match names.get(i) {
+                        Some(name) => (Label::Field(name), Part::Value(x)),
+                        None => (Label::Index(i), Part::Value(x)),
+                    })
+                    .collect(),
+            ),
             Kind::Array { dtype, dimensions, fortran_order, .. } => {
                 let shape = match dimensions.is_empty() {
                     true => NO_DIMENSIONS.to_string(),
@@ -193,7 +206,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 let mut kids = Vec::new();
                 // The call that rebuilt this array, when it is this array's:
                 // a form matches one, and it sits inside the array's bytes.
-                if let Some(call) = found.call.as_ref().filter(|c| c.at >= v.at && c.at + c.len <= v.at + v.len) {
+                if let Some(call) = found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len) {
                     kids.push((Label::Field(call.name), Part::Call(call)));
                 }
                 kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
@@ -240,6 +253,7 @@ fn shape_of(part: &Part) -> Option<Shape> {
             Kind::List(_) => Shape::List,
             Kind::Tuple(_) => Shape::Tuple,
             Kind::Array { .. } => Shape::Array,
+            Kind::Object { what, .. } => *what,
             _ => return None,
         },
         _ => return None,

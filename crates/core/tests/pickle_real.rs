@@ -35,13 +35,17 @@ fn every_pickle_is_opcodes_all_the_way_to_the_full_stop() {
         let bytes = std::fs::read(&path).unwrap();
 
         // A file a Familiar Pickle Form matches whole is offered the
-        // template that shows the data; everything else is the listing.
-        let want = match formats::pickle::familiar::recognise(&bytes).is_some() {
+        // template that shows the data; everything else is the listing. A
+        // form matches all of a file or none of it, so a file too long to
+        // sniff whole is offered the listing however well it would match.
+        let window = &bytes[..bytes.len().min(0x9000)];
+        let matched = formats::pickle::familiar::recognise(&bytes).is_some();
+        let want = match matched && window.len() == bytes.len() {
             true => "picklefpf",
             false => "pickle",
         };
         assert_eq!(
-            formats::sniff(&bytes[..bytes.len().min(0x9000)], bytes.len() as u64),
+            formats::sniff(window, bytes.len() as u64),
             Some(want),
             "{name}: not recognised"
         );
@@ -563,13 +567,30 @@ fn the_forms_match_these_samples_and_no_others() {
     // The whole corpus as it stands, with the form each file matches. Keep
     // this in step with the collection: a file added to it belongs here.
     let want: &[(&str, Option<&str>)] = &[
-        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v2")),
-        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v2")),
-        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v2")),
+        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v3")),
+        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v3")),
+        // A dictionary whose big value is written between two frames.
+        ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v3")),
+        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        // Several arrays in one dictionary, the later ones naming numpy's
+        // globals, dtype class, byte order or whole dtype out of the memo.
+        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v1")),
         // The rest, none of which any form accepts yet. Some are grammar the
         // forms have not reached (nonempty tuples, big integers, shared
-        // references, more than one batch); the library files need forms of
-        // their own, built from reviewed complete structures.
+        // container references, more than one batch); the library files need
+        // forms of their own, built from reviewed complete structures.
+        //
+        // The `everything` files at every protocol, and `proto4-collections`,
+        // are held back by one thing between them: each calls a class the
+        // forms do not name. `datetime.datetime`, `decimal.Decimal`,
+        // `fractions.Fraction` and `ValueError` are rebuilt by REDUCE, and
+        // the namedtuple in `collections` by NEWOBJ of a class defined in the
+        // file that wrote it. A form that took those would be accepting any
+        // class at all, which is the one thing the contract rules out.
         ("handmade-python2-modules.pickle", None),
         ("handmade-python2-opcodes.pickle", None),
         ("handmade-wide-lengths.pickle", None),
@@ -582,23 +603,17 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto2-torch-state-dict.pickle", None),
         ("proto3-everything.pickle", None),
         ("proto3-numpy-1-module-names.pickle", None),
-        ("proto4-builtins.pickle", None),
         ("proto4-collections.pickle", None),
         ("proto4-datetime.pickle", None),
         ("proto4-everything.pickle", None),
         ("proto4-newobj.pickle", None),
-        ("proto4-numpy-byte-order.pickle", None),
-        ("proto4-numpy-dtypes.pickle", None),
         ("proto4-numpy-object-array.pickle", None),
-        ("proto4-numpy-shapes.pickle", None),
-        ("proto4-numpy-shared-dtype.pickle", None),
         ("proto4-persistent-id.pickle", None),
         ("proto4-scipy-coo-matrix.pickle", None),
         ("proto4-scipy-csc-matrix.pickle", None),
         ("proto4-scipy-csr-matrix.pickle", None),
         ("proto4-sklearn-pipeline.pickle", None),
         ("proto4-sklearn-random-forest.pickle", None),
-        ("proto4-unframed-payload.pickle", None),
         ("proto5-everything.pickle", None),
         ("proto5-out-of-band.pickle", None),
         ("proto5-pandas-dataframe.pickle", None),
@@ -619,6 +634,54 @@ fn the_forms_match_these_samples_and_no_others() {
     for (name, _) in want {
         assert!(seen.iter().any(|s| s == name), "{name} is in the matrix and not in the collection");
     }
+}
+
+/// A matched sample stops being that file when any instruction byte changes.
+///
+/// A form fixes its instructions, so a byte of one that could be changed
+/// without the reading changing is a byte the form is not really matching. The
+/// check is the weaker of the two things that could be asserted, and the
+/// truthful one: the file either stops matching or is read as something else.
+/// Flipping the bit that tells NEWFALSE from NEWTRUE really does leave a
+/// matching file, holding an array in the other storage order.
+///
+/// Bytes inside a captured value are left alone on purpose: those are data, and
+/// a payload that changed the reading would mean random bytes were being read
+/// as instructions.
+#[test]
+fn a_matched_sample_stops_matching_when_its_instructions_change() {
+    let Some(dir) = folder() else {
+        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        return;
+    };
+    let read = |bytes: &[u8]| {
+        formats::pickle::familiar::recognise(bytes).map(|m| (m.form, format!("{:?}", m.value)))
+    };
+    let mut checked = 0;
+    for path in pickles(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path).unwrap();
+        let Some(found) = formats::pickle::familiar::recognise(&bytes) else { continue };
+        let before = (found.form, format!("{:?}", found.value));
+        let starts: Vec<usize> = found.ops.iter().map(|op| op.at).collect();
+
+        for at in &starts {
+            for bit in [0, 2] {
+                let mut changed = bytes.clone();
+                changed[*at] ^= 1 << bit;
+                assert_ne!(read(&changed).as_ref(), Some(&before), "{name}: bit {bit} at {at:#x} changed nothing");
+            }
+            // Truncation at every instruction boundary. A form reaches the
+            // STOP and the end of the file or it has not matched.
+            assert!(read(&bytes[..*at]).is_none(), "{name}: matched the first {at:#x} bytes");
+        }
+        let mut longer = bytes.clone();
+        longer.push(b'N');
+        assert!(read(&longer).is_none(), "{name}: matched with a value after the STOP");
+        checked += 1;
+        eprintln!("{name}: {} instructions, none of them spare", starts.len());
+    }
+    assert!(checked >= 9, "only {checked} samples matched a form");
 }
 
 /// One row of the familiar-form template: how deep it sits, what it is called,
@@ -697,7 +760,7 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
         covers(&rows, &name);
         checked += 1;
     }
-    assert!(checked >= 3, "only {checked} samples matched a form");
+    assert!(checked >= 9, "only {checked} samples matched a form");
 }
 
 /// Every node's children tile it: they start where it starts, they follow each

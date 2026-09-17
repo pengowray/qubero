@@ -1,6 +1,6 @@
 # Familiar Pickle Forms (FPF)
 
-Status: third implementation slice. The recogniser is in
+Status: fourth implementation slice. The recogniser is in
 `crates/core/src/formats/pickle/familiar.rs`; a match is now a template of its
 own, `picklefpf`, which places the captured tree as fields.
 
@@ -13,30 +13,74 @@ retains existing hex, opcode and symbolic payload inspection. Those legacy
 annotations are not FPF claims. This preserves the existing viewer while the
 strict forms grow.
 
-Implemented forms:
+Implemented forms. All three are the same grammar over the same envelope,
+differing in which value productions they allow; a file is read under the one
+form whose productions it uses, and a file mixing two of them matches neither.
 
-- `basic-p4-p5-v2`: null, bool, BININT1/BININT2/BININT, BINFLOAT, UTF-8
-  strings and byte strings with 1/4/8-byte lengths (with required MEMOIZE), empty tuples, and
-  explicit empty/single/batched list and string-key dictionary productions.
-  Only one batch of 2–1000 entries is supported. The empty/single-container
-  ambiguity uses an explicit local alternative with a shared work budget that
-  is never reset by rewinding. Nonempty tuples, long integers, shared references,
-  cycles and sets remain unsupported.
-- `numpy-numeric-array-p4-p5-v2`: a standalone array or one string-key dictionary
-  entry holding an array. Matches exact `_reconstruct` sequences for
-  `numpy._core.multiarray` and `numpy.core.multiarray`, with fixed memo positions
-  (numpy occupies slot 3 standalone, slot 5 in the dictionary). Supports plain
-  b1/i1/i2/i4/i8/u1/u2/u4/u8/f2/f4/f8/c8/c16 dtypes, little/big endian for multibyte
-  values, `|` for single-byte values, and explicit C/Fortran order. Dimensions use
-  BININT1/BININT2/nonnegative BININT; shapes have 0–32 dimensions with the exact
-  EMPTY_TUPLE/TUPLE1/TUPLE2/TUPLE3/marked TUPLE production for their arity. Storage
-  uses SHORT_BINBYTES/BINBYTES/BINBYTES8 and must match shape times item size.
+- `basic-p4-p5-v3`: null, bool, BININT1/BININT2/BININT, BINFLOAT, UTF-8
+  strings and byte strings with 1/4/8-byte lengths (with required MEMOIZE),
+  empty tuples, and explicit empty/single/batched list and string-key
+  dictionary productions. Only one batch of 2 to 1000 entries is supported.
+  The empty/single-container ambiguity uses an explicit local alternative with
+  a shared work budget that is never reset by rewinding. Nonempty tuples, long
+  integers, shared container references, cycles and sets remain unsupported.
+- `numpy-numeric-array-p4-p5-v3`: the basic productions plus an array or a
+  scalar, anywhere a value may stand, with at least one of them present.
+  Matches exact `_reconstruct` and `scalar` sequences for
+  `numpy._core.multiarray` and `numpy.core.multiarray`. Supports plain
+  b1/i1/i2/i4/i8/u1/u2/u4/u8/f2/f4/f8/c8/c16 dtypes, little/big endian for
+  multibyte values, `|` for single-byte values, and explicit C/Fortran order.
+  Dimensions use BININT1/BININT2/nonnegative BININT; shapes have 0 to 32
+  dimensions with the exact EMPTY_TUPLE/TUPLE1/TUPLE2/TUPLE3/marked TUPLE
+  production for their arity. Storage uses SHORT_BINBYTES/BINBYTES/BINBYTES8
+  and must match shape times item size; a scalar's storage is one value wide.
   Object, structured, datetime and external-buffer dtypes/layouts fall back.
+- `builtins-values-p4-p5-v1`: the basic productions plus the five builtins a
+  pickle writes as a call rather than as a literal, with at least one present.
+  `builtins.slice` of three integers or Nones, `builtins.range` of three
+  integers, `builtins.complex` of two BINFLOATs, `builtins.bytearray` of one
+  byte string, each named by STACK_GLOBAL and called by REDUCE through the
+  TUPLE1/TUPLE2/TUPLE3 its arity requires; and FROZENSET over a MARK. No other
+  module, callable or argument type is accepted, and `set` is not in the form.
 
-Both forms accept protocol 4/5 with either no frame or exactly one frame spanning
-the complete body. They require STOP followed immediately by EOF. The matcher
-uses borrowed byte ranges, a 64-level recursion bound and a shared budget of
-100,000 values. No Python or new runtime dependency was introduced.
+All three forms accept protocol 4/5. They require STOP followed immediately by
+EOF. The matcher uses borrowed byte ranges, a 64-level recursion bound, a bound
+of 100,000 memo slots and a budget of 100,000 values shared across all three
+attempts, so an alternative that failed still cost what it cost. No Python or
+new runtime dependency was introduced.
+
+### The memo, and what a reference may name
+
+A slot is bound when the file writes a memo mark, and the slot number is the
+count of marks before it, so every mark a production consumes is accounted for
+or the numbering drifts. A form binds only what it spelled out itself: a text,
+a byte string, a module-and-callable pair it named exactly, or a finished NumPy
+dtype. Everything else it builds is opaque.
+
+BINGET and LONG_BINGET are then accepted only where the grammar expects one of
+those, and only to a slot already holding exactly it. So the second array of a
+file may name `numpy._core.multiarray._reconstruct`, the `numpy.ndarray` class,
+the `numpy.dtype` class, the text `numpy`, the placeholder byte string `b'b'`,
+the byte-order letter, or the whole dtype the first array built, and a
+reference to anything else is a non-match. A dtype's slot is written at the
+REDUCE that makes it and filled in at the BUILD just after, which is where its
+byte order arrives. There is no memo interpreter and no fixed slot numbers.
+
+### Framing
+
+Frames are read as CPython's framer writes them, rather than as one frame
+spanning the body. A file may be unframed, or a run of frames; a frame may end
+only between two objects, and the next begins there. A payload of 64 KiB or
+more is written between frames: the frame being filled is committed so that it
+ends exactly at that opcode byte, the opcode and its bytes sit outside any
+frame, and a new frame begins immediately after them. The last frame ends where
+the STOP does. The one exception is a large payload with fewer than four bytes
+left to write after it, which CPython writes with no FRAME header in front
+because that is its minimum frame size; two large payloads fewer than four
+bytes apart are the same case and are not matched. A small payload at a frame
+boundary, a large one inside a frame, a frame reaching past the end of the
+file, and a frame that ends anywhere else with no large payload behind it, are
+all non-matches.
 
 ### What is exposed now
 
@@ -84,12 +128,46 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, three files match today:
-`proto4-numpy-array.pickle` under `numpy-numeric-array-p4-p5-v2`, and
-`awa2-pose-antelope.pickle` and `awa2-pose-elephant.pickle` under
-`basic-p4-p5-v2`. The rest do not, and
+Of the sibling corpus, nine files match today:
+
+| File | Form, or why not |
+| --- | --- |
+| `awa2-pose-antelope.pickle` | `basic-p4-p5-v3` |
+| `awa2-pose-elephant.pickle` | `basic-p4-p5-v3` |
+| `proto4-unframed-payload.pickle` | `basic-p4-p5-v3`, over two frames and a payload between them |
+| `proto4-numpy-array.pickle` | `numpy-numeric-array-p4-p5-v3` |
+| `proto4-numpy-byte-order.pickle` | `numpy-numeric-array-p4-p5-v3` |
+| `proto4-numpy-dtypes.pickle` | `numpy-numeric-array-p4-p5-v3` |
+| `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v3`, including a scalar |
+| `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v3` |
+| `proto4-builtins.pickle` | `builtins-values-p4-p5-v1` |
+| `proto2-everything.pickle` | calls `datetime`, `Decimal`, `Fraction`, `ValueError` and `_codecs.encode` |
+| `proto3-everything.pickle` | the same classes |
+| `proto4-everything.pickle` | the same classes |
+| `proto5-everything.pickle` | the same classes, plus EMPTY_SET/ADDITEMS and BYTEARRAY8 |
+| `proto4-collections.pickle` | OrderedDict, defaultdict, Counter, deque, and NEWOBJ of a class the writing file defined |
+| `proto4-datetime.pickle` | packed `datetime` records |
+| `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
+| `proto4-numpy-object-array.pickle` | an object dtype, whose data is pickled values |
+| `proto0-*`, `proto1-everything`, `handmade-*` | protocols and opcodes below 2, and the text protocols |
+| `proto2-memo-over-256.pickle` | shared references to values no form binds |
+| `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
+| `proto3-numpy-1-module-names.pickle` | protocol 3, where a global is a line rather than a counted string |
+| `proto4-scipy-*`, `proto4-sklearn-*`, `proto5-pandas-*`, `proto2-torch-*` | library forms, which need reviewed complete structures of their own |
+
+The `everything` files and `proto4-collections` are held back by one thing
+between them: each rebuilds a class no form names, by REDUCE or by NEWOBJ. A
+form that took those would be accepting any class at all, which is the one
+thing the contract rules out. Widening the basic form to protocols 2 and 3
+would not reach them, so no protocol 2/3 branch has been written: the
+alternatives it would need (BINUNICODE, BINPUT, LONG_BINPUT, no framing) have
+no sample a form could then match whole, and an untested branch is worse than
+no branch.
+
 `crates/core/tests/pickle_real.rs` writes the whole matrix out file by file so
-that a form growing quietly is a failing test.
+that a form growing quietly is a failing test, and separately flips two bits of
+every instruction byte in every matched sample, truncates at every instruction
+boundary, and appends a value after the STOP.
 
 ### What is not exposed yet
 
@@ -118,17 +196,21 @@ Next steps, in order:
 1. Fold an array's numbers by its shape, and navigate from a value to the
    opcodes that built it. Editing a captured value is a separate question: the
    recognition is invalidated by the edit and has to be made again.
-2. Widen the corpus a form can speak for. Six protocol 4 samples that a reader
-   would expect to match do not: `proto4-builtins`, `proto4-collections`,
-   `proto4-numpy-shapes`, `proto4-numpy-dtypes`, `proto4-numpy-byte-order` and
-   `proto4-numpy-shared-dtype`. Each needs a reviewed production, not a
-   loosened one.
+2. Decide whether a class the file names may ever be a declared data field.
+   Every remaining protocol 4 and 5 sample is held back by a REDUCE or NEWOBJ
+   of a class no form names, so the next real widening is a reviewed list of
+   named classes with the exact state each is rebuilt from: `datetime`,
+   `Decimal`, `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`.
+   A namedtuple names a class defined by the file that wrote it, and no list
+   can hold that.
 3. Add provenance-backed NumPy fixtures for the expanded branches, then add
-   protocol-5 `_frombuffer` and multiple-frame forms. Give each new production
-   exact constants and negative mutation tests. Keep frame bytes visible to the
-   grammar and validate boundaries; do not merely strip FRAME instructions.
-4. Add nonempty tuples and big integers deliberately, and extend container
-   batching beyond one batch. Keep work bounded across every alternative.
+   the protocol-5 `_frombuffer` form. Give each new production exact constants
+   and negative mutation tests.
+4. Add nonempty tuples, big integers, sets and shared container references
+   deliberately, and extend container batching beyond one batch. Add the
+   protocol 2/3 alternatives (BINUNICODE, BINPUT, LONG_BINPUT, no framing)
+   alongside a fixture a form can match whole. Keep work bounded across every
+   alternative.
 5. Add typed memo bindings for specific repeated dtype/name forms; then build
    pandas and estimator forms from reviewed complete structures.
 6. Move recognition onto a chunk-aware source cursor for large tensors. Current
@@ -137,10 +219,16 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include fourteen FPF tests, four of which read
-a fixture through the `picklefpf` template and check names, values and byte
-ranges; ten `pickle_real` integration tests pass against the sibling corpus,
-including the corpus match matrix and a walk of the decoded array's 24 numbers.
+Validation: the pickle unit tests include twenty-two FPF tests, four of which
+read a fixture through the `picklefpf` template and check names, values and
+byte ranges, and seven of which build their own bytes to exercise one set of
+alternatives each: what a later array may name out of the memo, what a
+reference may not name, the NumPy scalar call, an instruction moved, dropped,
+added or written in another width, the frame a large payload sits between, the
+builtins calls, and which form a file is read under. Eleven `pickle_real`
+integration tests pass against the sibling corpus, including the corpus match
+matrix, the per-file mutation sweep and a walk of the decoded array's 24
+numbers.
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
 sample opens as the familiar form with its form ID and decoded values, that the
 chooser offers both templates and switches between them, that the STOP row of
