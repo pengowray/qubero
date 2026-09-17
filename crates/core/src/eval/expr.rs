@@ -1539,21 +1539,49 @@ impl Evaluator {
         Ok(s.fields.iter().position(|f| *f.name == *name))
     }
 
+    /// Step onto whatever the node at `path` turned out to be: a field whose
+    /// contents are somewhere else in the file is its contents, so naming it
+    /// means the table it points at, not the nothing that stands in its
+    /// place. The one place that rule is written down for a node already
+    /// reached; `find_field` applies it to a declaration, which is the same
+    /// rule read off the template rather than off the node.
+    ///
+    /// Always inlined: it stands inside the walk while the fields it reaches
+    /// are read, and a frame of its own there is a frame on every level of a
+    /// chain of fields asking one another. See `deep_questions`.
+    #[inline(always)]
+    fn enter_at<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>) -> R<()> {
+        self.resolve(doc, path)?;
+        if matches!(self.memo[path].ty, Ty::At { .. }) {
+            path.push(0);
+        }
+        Ok(())
+    }
+
+    /// Step into the child of the node at `path` called `name`, through
+    /// whatever it turned out to be. False when it has no such child, leaving
+    /// `path` where it was. The one step [`Self::descend`] is made of, and so
+    /// what every walk down a written path takes a name at a time.
+    ///
+    /// Inlined for the reason [`Self::enter_at`] is.
+    #[inline(always)]
+    fn enter_child<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, name: &str) -> R<bool> {
+        match self.child_index(doc, path, name)? {
+            Some(j) => path.push(j),
+            None => return Ok(false),
+        }
+        // Without this a path could name a field whose contents are elsewhere
+        // and then go no further.
+        self.enter_at(doc, path)?;
+        Ok(true)
+    }
+
     /// Walk `field` down from the node at `path`, a name at a time. False when
     /// one of the names is not there, leaving `path` as far as it got.
     pub(super) fn descend<S: Source>(&mut self, doc: &Document<S>, path: &mut Vec<usize>, field: &[String]) -> R<bool> {
         for name in field {
-            match self.child_index(doc, path, name)? {
-                Some(j) => path.push(j),
-                None => return Ok(false),
-            }
-            // A field whose contents are somewhere else in the file is its
-            // contents, here as in `find_field`: naming it means the table it
-            // points at, not the nothing that stands in its place. Without
-            // this a path could name such a field and then go no further.
-            self.resolve(doc, path)?;
-            if matches!(self.memo[path].ty, Ty::At { .. }) {
-                path.push(0);
+            if !self.enter_child(doc, path, name)? {
+                return Ok(false);
             }
         }
         Ok(true)
@@ -1570,19 +1598,15 @@ impl Evaluator {
     ) -> R<Vec<usize>> {
         let Some((first, rest)) = field.split_first() else { return fail("no field named") };
         let Some(mut p) = self.find_field(at, first) else {
-            return fail(format!("unknown field {first}"));
+            return unknown_field(first);
         };
-        // A field whose contents are somewhere else in the file is its
-        // contents, here as in `descend`. `find_field` steps through an `At`
-        // the declaration shows it; a switch that chose one shows nothing
-        // until the field has been read, and an HDF5 address is written that
-        // way because the format spells "nowhere" as an address of its own.
-        self.resolve(doc, &p)?;
-        if matches!(self.memo[&p].ty, Ty::At { .. }) {
-            p.push(0);
-        }
+        // `find_field` steps through an `At` the declaration shows; one a
+        // switch chose shows nothing until the field has been read, and an
+        // HDF5 address is written that way because the format spells
+        // "nowhere" as an address of its own. So the node is asked too.
+        self.enter_at(doc, &mut p)?;
         if !self.descend(doc, &mut p, rest)? {
-            return fail(format!("{first} has no field named {}", rest.join(".")));
+            return no_field_named(first, rest);
         }
         Ok(p)
     }
@@ -1677,10 +1701,6 @@ impl Evaluator {
         })
     }
 
-    /// The path of the field named `name`, found the way `lookup` finds it.
-    /// The path to `array[index]`, then down the named fields inside it:
-    /// `tensors[i].offset` is a number, `tensors[i].dims` is an array, and
-    /// getting to either is the same walk.
     /// The path to `path[index].field`, where `path` goes down into a field
     /// declared before this one rather than naming a sibling. See
     /// [`Expr::ElemWithin`].
@@ -1700,11 +1720,16 @@ impl Evaluator {
         let mut p = self.within_path(doc, at, path)?;
         p.push(i as usize);
         if !self.descend(doc, &mut p, field)? {
-            return fail(format!("{}[{i}] has no field named {}", path.join("."), field.join(".")));
+            return no_elem_field(&path.join("."), i, field);
         }
         Ok(p)
     }
 
+    /// The path to `array[index]`, then down the named fields inside it:
+    /// `tensors[i].offset` is a number, `tensors[i].dims` is an array, and
+    /// getting to either is the same walk. The list is found the way
+    /// [`Self::find_field`] finds anything, which is why an element may name
+    /// the list it is in and read the elements before itself.
     pub(super) fn elem_path<S: Source>(
         &mut self,
         doc: &Document<S>,
@@ -1719,15 +1744,24 @@ impl Evaluator {
             return fail("negative index");
         }
         let Some(mut p) = self.find_field(at, array) else {
-            return fail(format!("unknown field {array}"));
+            return unknown_field(array);
         };
         p.push(i as usize);
         if !self.descend(doc, &mut p, field)? {
-            return fail(format!("{array}[{i}] has no field named {}", field.join(".")));
+            return no_elem_field(array, i, field);
         }
         Ok(p)
     }
 
+    /// The path of the declaration of `name` that a field at `at` can see:
+    /// the fields written before it, then the fields written before the
+    /// structure it is in, and so on out to the root, with a field whose
+    /// contents are elsewhere stepped through. None when nothing visible is
+    /// called that.
+    ///
+    /// The one climb. [`Self::lookup_bits`] reads the field it lands on and
+    /// so answers [`Expr::Ref`]; `elem_path` keeps the index behind and so
+    /// answers [`Expr::Elem`]; `within_path` walks on down into it.
     pub(super) fn find_field(&self, at: &[usize], name: &str) -> Option<Vec<usize>> {
         let mut cur = at.to_vec();
         while let Some(idx) = cur.pop() {
@@ -1736,7 +1770,10 @@ impl Evaluator {
                 // cannot read itself. A list is the exception: an element
                 // of it may read the elements before it, which is how a
                 // Java constant pool entry learns whether the one before
-                // it took two slots. `elem_path` keeps the index behind.
+                // it took two slots. `elem_path` keeps the index behind;
+                // naming the list itself, as `Expr::Ref` does, asks for the
+                // whole of it and so for the element asking, which the depth
+                // limit refuses rather than following for ever.
                 if let Some(f) = s.fields.get(idx) {
                     if is_list(&f.ty) && *f.name == *name {
                         let mut p = cur;
@@ -1770,36 +1807,47 @@ impl Evaluator {
     /// The same, measured in bits, which is what a field packed tighter than a
     /// byte has to be measured in.
     pub(super) fn lookup_bits<S: Source>(&mut self, doc: &Document<S>, at: &[usize], name: &str) -> R<(Option<i128>, i128)> {
-        let mut cur = at.to_vec();
-        while !cur.is_empty() {
-            let idx = cur.pop().expect("non-empty");
-            let parent = cur.clone();
-            if let Ty::Struct(s) = &self.memo[&parent].ty {
-                if let Some(j) = s.fields[..idx].iter().position(|f| *f.name == *name) {
-                    let pointing = matches!(s.fields[j].ty, Ty::At { .. });
-                    let mut p = parent;
-                    p.push(j);
-                    // As in `find_field`: what it points at is what it is.
-                    if pointing {
-                        p.push(0);
-                    }
-                    let info = self.value_of(doc, &p)?;
-                    // A field the file did not write holds nothing, and
-                    // nothing is not zero. Left to read as the empty node it
-                    // is, a switch keyed on an absent field would quietly
-                    // take case 0 and a length would quietly be none, which
-                    // is the file being read wrongly with nothing said. See
-                    // [`NodeInfo::absent`].
-                    if info.absent {
-                        return fail(format!("{name} is not in this file"));
-                    }
-                    // A field with no numeric reading can still be measured.
-                    return Ok((info.value.as_int(), info.size_bits as i128));
-                }
-            }
+        let Some(p) = self.find_field(at, name) else { return unknown_field(name) };
+        let info = self.value_of(doc, &p)?;
+        // A field the file did not write holds nothing, and nothing is not
+        // zero. Left to read as the empty node it is, a switch keyed on an
+        // absent field would quietly take case 0 and a length would quietly
+        // be none, which is the file being read wrongly with nothing said.
+        // See [`NodeInfo::absent`].
+        if info.absent {
+            return not_in_this_file(name);
         }
-        fail(format!("unknown field {name}"))
+        // A field with no numeric reading can still be measured.
+        Ok((info.value.as_int(), info.size_bits as i128))
     }
+}
+
+/// The refusals a walk to a named field gives, written out of line. A frame
+/// that formats a message carries room for it the whole time the fields it
+/// names are being read, and these walks stand on the stack for every level
+/// of a chain of fields asking one another. See `deep_questions`.
+#[cold]
+#[inline(never)]
+fn unknown_field<T>(name: &str) -> R<T> {
+    fail(format!("unknown field {name}"))
+}
+
+#[cold]
+#[inline(never)]
+fn not_in_this_file<T>(name: &str) -> R<T> {
+    fail(format!("{name} is not in this file"))
+}
+
+#[cold]
+#[inline(never)]
+fn no_field_named<T>(head: &str, rest: &[String]) -> R<T> {
+    fail(format!("{head} has no field named {}", rest.join(".")))
+}
+
+#[cold]
+#[inline(never)]
+fn no_elem_field<T>(head: &str, i: i128, rest: &[String]) -> R<T> {
+    fail(format!("{head}[{i}] has no field named {}", rest.join(".")))
 }
 
 /// Whether a type is a list of elements, the kind `Expr::Idx` counts through

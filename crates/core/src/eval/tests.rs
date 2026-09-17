@@ -5613,3 +5613,20 @@ fn a_run_of_zero_size_elements_is_an_error_not_a_panic() {
     let msg = failure(ev.node(&d, &[0]).unwrap_err());
     assert!(msg.contains("items"), "{msg}");
 }
+
+#[test]
+fn an_element_naming_its_own_list_is_refused_the_same_way_as_one_reading_itself() {
+    // An element that asks for the list it sits in has asked for itself, and
+    // both ways of asking take the same road out: the depth limit, not a walk
+    // that never comes back. `Expr::Elem` has always found the list this way;
+    // `Expr::Ref` used to climb past it and find nothing.
+    let by_name = T::structure("Rec", vec![("data", T::bytes(E::field("items")))]);
+    let by_index = T::structure("Rec", vec![("data", T::bytes(E::elem("items", E::lit(0))))]);
+    for each in [by_name, by_index] {
+        let t = Template::new("t", T::structure("R", vec![("items", T::array(each, E::lit(2)))]));
+        let d = doc(&[1, 2, 3, 4]);
+        let mut ev = Evaluator::new(t);
+        let msg = failure(ev.node(&d, &[0, 0, 0]).unwrap_err());
+        assert!(msg.contains("nested too deep"), "{msg}");
+    }
+}
