@@ -245,10 +245,13 @@ impl Evaluator {
         // The one thing the pointer holds, which is where the bytes are.
         there.push(0);
         let Ok(info) = self.node(doc, &there) else { return Ok(None) };
-        let value = match &info.line {
+        // A list, and a value that is there and empty, have their own answers:
+        // the same ones the line over the pointer's own bytes gives.
+        let said = match &info.line {
             Some(line) => line.clone(),
             None => brief(&info.value),
         };
+        let value = super::listing::far_end(&info, said);
         Ok(Some(Origin {
             role: Role::Points,
             label: name,

@@ -149,6 +149,38 @@ pub(super) fn count_text(n: u64, unit: &str) -> String {
     if n == 1 { format!("1 {unit}") } else { format!("{} {}", grouped(n), plural(unit)) }
 }
 
+/// What a reader sees said in the empty space where a reading should be, for
+/// a field that was read and holds nothing: ELF section 0 has a name, the name
+/// is at an address, and the string at that address is the empty string.
+pub(super) const EMPTY: &str = "(empty)";
+
+/// What a field read somewhere else reads as, after the address it was read
+/// at: the last step of the reading, shared by the line drawn over the pointer
+/// and the clause under the Points to row, so the two cannot disagree.
+///
+/// `said` is what the walk over the far end came back with. Where that is
+/// nothing there are two more answers to try before giving up. A list has no
+/// line of its own, since its elements are a table rather than a row, so it
+/// says how many it holds in the word the panel counts them by. And a value
+/// that is genuinely empty says so: without this an address with nothing after
+/// it reads as a reading the core could not produce, which is the one thing
+/// that is not the case.
+pub(super) fn far_end(there: &NodeInfo, said: String) -> String {
+    if !said.is_empty() {
+        return said;
+    }
+    if there.list {
+        return count_text(there.child_count, there.unit.as_deref().unwrap_or("value"));
+    }
+    // Only a value the core read and found empty. A composite has no value of
+    // its own, and bytes still on their way read as `…` rather than as nothing.
+    match &there.value {
+        Value::Str(s) if s.is_empty() => EMPTY.to_string(),
+        Value::Bytes { len: 0, .. } => EMPTY.to_string(),
+        _ => String::new(),
+    }
+}
+
 /// More than one of them. The nouns here are the words formats use for what
 /// they hold, so this covers the endings those run to and no more.
 fn plural(noun: &str) -> String {
@@ -1111,7 +1143,8 @@ impl Evaluator {
             let mut said = Vec::new();
             self.one_line(doc, &child, &mut said)?;
             let at = address_text(there.offset_bits, there.space);
-            out.push(if said.is_empty() { at } else { format!("{at} · {}", said.join(" ")) });
+            let reading = far_end(&there, said.join(" "));
+            out.push(if reading.is_empty() { at } else { format!("{at} · {reading}") });
             return Ok(());
         }
         if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {

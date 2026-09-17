@@ -1872,7 +1872,13 @@ export class Inspector {
       const clause = this.placedHow(path, shape, from);
       const detail = this.working(["position"], from, how, value, clause);
       if (!terse) detail.push(...this.insideRows(path, n), ...this.unpackedRows(path, stream), ...this.joinedRows(path, n));
-      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, detail, plus: plusTitle(n) });
+      // A field read somewhere else is in two places: the offset is written
+      // here, and the bytes are there. The row above answers where it is
+      // written, which is where the cursor is, so the address it does not have
+      // room for is the other one.
+      const at = n.read_at;
+      const also = at === null ? undefined : { text: PROPERTIES.readAt(formatAddress(at, n.space)), at: formatAddress(at, n.space), bit: at };
+      out.push({ key: `${prefix}position`, label: PROPERTIES.row.position, value, bit: null, how: clause, also, detail, plus: plusTitle(n) });
     }
     if (!terse || said_(["length", "width"])) {
       const value = bitSizeText(n.size_bits);
@@ -2314,6 +2320,7 @@ export class Inspector {
       if (stored !== null) how.append(storedEl(stored));
       box.append(how);
     }
+    if (p.also !== undefined) box.append(alsoEl(p.also));
     if (foldable && open) {
       const detail = document.createElement("div");
       detail.className = "insp-prop-detail";
@@ -3195,11 +3202,37 @@ type Property = {
   /** For an answer that is a place in the file: the bit it leads to. */
   readonly bit: number | null;
   readonly how: How | null;
+  /** A second clause under the row, for the one answer that has two halves:
+   *  a field read somewhere else is written where the row says and read at
+   *  this address, which is a place to go like the row's own answer. */
+  readonly also?: { readonly text: string; readonly at: string; readonly bit: number } | undefined;
   readonly detail: Node[];
   /** What the `+` of an address answer counts from, where that is not an
    *  unpacked stream. */
   readonly plus?: string;
 };
+
+/**
+ * A row's second clause, whose address is somewhere to go.
+ *
+ * The address inside the sentence is a link of its own rather than the whole
+ * line being one: the line is a sentence about two places, and a reader who
+ * clicks it means the one it names. Built by finding the address in the
+ * sentence rather than by handing the clause its halves, so the wording stays
+ * one string in `strings.ts` and cannot drift from what is linked.
+ */
+function alsoEl(also: { readonly text: string; readonly at: string; readonly bit: number }): HTMLElement {
+  const line = document.createElement("div");
+  line.className = "insp-prop-how";
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "insp-link addr";
+  link.dataset["bit"] = String(also.bit);
+  link.append(...address(also.at, DECODED_PLUS_TITLE));
+  const cut = also.text.indexOf(also.at);
+  line.append(also.text.slice(0, cut), link, also.text.slice(cut + also.at.length));
+  return line;
+}
 
 /** What the `+` in front of a field's address counts from: the stream it was
  *  joined into, or the one it was unpacked out of. */

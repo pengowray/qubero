@@ -218,6 +218,9 @@ struct NodeDto {
     value_bytes: f64,
     /// Where the value starts: past a byte-order mark, if the field has one.
     value_offset_bits: f64,
+    /// Where the bytes were read, for a field written in one place and read in
+    /// another. Null for a field that is where it is written.
+    read_at: Option<f64>,
     /// How the encoding was settled, or that the bytes do not fit it.
     read_as: Option<String>,
     /// Which sibling's length, count, type or position this field settles, as
@@ -2655,6 +2658,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         editable: n.editable,
         value_bytes: n.value_bytes as f64,
         value_offset_bits: n.value_offset_bits as f64,
+        read_at: n.read_at.map(|at| at as f64),
         read_as: n.read_as,
         consumed_by: n.consumed_by.map(|i| i as f64),
         machinery: n.machinery,

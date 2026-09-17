@@ -2888,6 +2888,19 @@ export const PROPERTIES = {
     target: (field: string, value: string): string => (value === "" ? field : `${field} · ${value}`),
   },
 
+  /**
+   * The second clause under Position, for a field written in one place and
+   * read in another: a TIFF entry's date is written as four bytes in the entry
+   * and the date itself is at the far end of them.
+   *
+   * The row's own answer is where the field is written, which is where the
+   * cursor is, so the address here is the other one and has to say which it
+   * is. `read at` rather than "value at" or "points to": Points to is the row
+   * a pointer gets, and this is not the pointer. It is the field the pointer
+   * placed, and what happened to it is that its bytes were read there.
+   */
+  readAt: (at: string): string => `read at ${at}`,
+
   readBy: {
     found: (n: number): string => (n === 0 ? "none" : countText(n, "field")),
     /** The collapsed answer where one field reads this one: which field, and

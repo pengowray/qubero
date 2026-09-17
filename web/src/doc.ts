@@ -228,6 +228,10 @@ export type TemplateNode = {
   readonly value_bytes: number;
   /** Where the value starts, past a byte-order mark if the field has one. */
   readonly value_offset_bits: number;
+  /** Where the bytes were read, for a field written in one place and read in
+   *  another: an offset in a header and the record at the far end of it. Null
+   *  for a field that is where it is written, which is nearly every field. */
+  readonly read_at: number | null;
   /** How the encoding was settled, or that the bytes do not fit it. */
   readonly read_as: string | null;
   /** Which sibling this field settles the length, count, type or position of,

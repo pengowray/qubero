@@ -256,6 +256,15 @@ pub struct NodeInfo {
     pub value_bytes: u64,
     /// Where the value starts, which is past a byte-order mark if there is one.
     pub value_offset_bits: u64,
+    /// Where the bytes were read, for a field written in one place and read in
+    /// another: an offset in a header and the record at the far end of it.
+    /// None for every field that is where it is written, which is nearly all
+    /// of them.
+    ///
+    /// Apart from `value_offset_bits`, which is the same address here but is
+    /// also where a value starts past a byte-order mark or a field's framing.
+    /// A view saying "read at" wants the one fact and not the three.
+    pub read_at: Option<u64>,
     /// How the encoding was settled when the template did not say outright, or
     /// that the bytes do not fit the encoding the template named.
     pub read_as: Option<String>,
@@ -911,7 +920,8 @@ impl Evaluator {
         // A field read somewhere else covers no bytes where it is written, so
         // the value it holds is the one at the far end: a row saying `0 bytes`
         // beside twenty bytes of text reads as the text not being there.
-        let (value_offset_bits, value_bytes) = match self.read_elsewhere(doc, path, &r, child_count)? {
+        let elsewhere = self.read_elsewhere(doc, path, &r, child_count)?;
+        let (value_offset_bits, value_bytes) = match elsewhere {
             Some(there) => there,
             None => (reading.0 .0, reading.0 .1),
         };
@@ -950,6 +960,7 @@ impl Evaluator {
             },
             value_offset_bits,
             value_bytes,
+            read_at: elsewhere.map(|(at, _)| at),
             read_as: reading.2,
             name: self.label(doc, path, &r)?,
             type_name: r.ty.display_name(),
