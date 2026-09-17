@@ -234,6 +234,15 @@ struct Frame {
 	/// something that does not exist, which is what "not a field in scope"
 	/// would say; it is naming a value only the imperative half settles.
 	unreadable: HashMap<String, String>,
+	/// Whether anything has been placed at this level yet, and how to name
+	/// where the structure starts once something has. `addressof(this)` is the
+	/// enclosing structure's own start, which the IR has no expression for:
+	/// before the first field it is where the reading is, and after it it is
+	/// the start of the first field. A first field only some condition reads
+	/// leaves this `None`, since a name that may not be there cannot say where
+	/// the structure began.
+	started: bool,
+	start: Option<Expr>,
 	/// Template value parameters bound at this level.
 	params: HashMap<String, Expr>,
 	/// Template type parameters bound at this level, so that `sizeof(T)` in a
@@ -250,6 +259,8 @@ impl Frame {
 			names: Vec::new(),
 			hidden: Vec::new(),
 			unreadable: HashMap::new(),
+			started: false,
+			start: None,
 			params: HashMap::new(),
 			bound: HashMap::new(),
 			block,
@@ -400,6 +411,7 @@ impl<'a> Lower<'a> {
 		seen: &mut HashSet<String>,
 	) -> Result<(), HexpatError> {
 		for decl in decls {
+			self.mark_start(fields);
 			match decl {
 				Decl::Include { program: Some(inner), .. } => {
 					if seen.insert(inner.file.clone()) {
@@ -878,6 +890,7 @@ impl<'a> Lower<'a> {
 			if folded.decls.contains_key(&index) {
 				continue;
 			}
+			self.mark_start(fields);
 			// A member that should have read bytes and could not moves
 			// everything after it, so the structure ends there rather than
 			// carrying on at an offset nothing in the file agrees with.
@@ -2245,6 +2258,49 @@ impl<'a> Lower<'a> {
 		None
 	}
 
+	/// Note what the first field of this level turned out to be, which is what
+	/// `addressof(this)` names once anything has been read.
+	fn mark_start(&mut self, fields: &[Field]) {
+		let Some(frame) = self.stack.last_mut() else { return };
+		if frame.started {
+			return;
+		}
+		let Some(first) = fields.first() else { return };
+		frame.started = true;
+		frame.start = match first.ty {
+			Ty::When { .. } | Ty::Switch { .. } => None,
+			_ => Some(Expr::start_of(Expr::field(&first.name))),
+		};
+	}
+
+	/// Where the structure being read began, which is what `addressof(this)`
+	/// asks for.
+	///
+	/// Only the start of the first field will do. `SpacePos` is where the
+	/// structure began when nothing has been read yet, but only if the
+	/// expression is worked out once: a `[while(..)]` condition is worked out
+	/// again before every element, and `$ == addressof(this)` written as
+	/// `SpacePos == SpacePos` is true every time, which reads the file wrongly
+	/// and says nothing. So a structure that has read nothing yet is a gap.
+	fn here_start(&self) -> R<Expr> {
+		for frame in self.stack.iter().rev() {
+			if frame.block {
+				continue;
+			}
+			if !frame.started {
+				return Err(Gap::new(
+					"addressof(this), where the structure has read nothing yet, so the IR has no field whose start says where it began",
+				));
+			}
+			return frame.start.clone().ok_or_else(|| {
+				Gap::new(
+					"addressof(this), where the first field of the structure is one only a condition reads, so nothing in the IR names where the structure began",
+				)
+			});
+		}
+		Err(Gap::new("addressof(this), which names a structure rather than a field"))
+	}
+
 	/// Why a name the pattern declares holds no value the converter can read.
 	fn unreadable(&self, name: &str) -> Option<String> {
 		self.stack.iter().rev().find_map(|frame| frame.unreadable.get(name).cloned())
@@ -2405,7 +2461,14 @@ impl<'a> Lower<'a> {
 		if rest.is_empty() {
 			return Err(Gap::new("a path naming a structure rather than a value"));
 		}
+		// `$[e]` is the one byte the file holds at the address `e`, which is a
+		// read rather than a position: the reference indexes the file with it.
 		if matches!(rest[0], PathSeg::Dollar) {
+			if climbs == 0 && rest.len() == 2 {
+				if let PathSeg::Index(address) = &rest[1] {
+					return self.byte_at(address);
+				}
+			}
 			return Err(Gap::new("`$` reached through a path, which is not a position the IR names"));
 		}
 		if matches!(rest[0], PathSeg::Null) {
@@ -2520,6 +2583,16 @@ impl<'a> Lower<'a> {
 		}
 	}
 
+	/// `$[e]`, the one byte the file holds at the address `e`.
+	fn byte_at(&mut self, address: &super::expr::Expr) -> R<Expr> {
+		let endian = self.endian;
+		if let Some(skip) = self.relative_to_dollar(address)? {
+			return Ok(Expr::peek_at(Expr::lit(i128::from(skip) * 8), 8, endian));
+		}
+		let at = self.expr(address)?;
+		Ok(Expr::PeekIn { at: Box::new(at.mul(Expr::lit(8))), bits: 8, endian })
+	}
+
 	/// `std::mem::read_unsigned(address, size)`. A bare `$` or `$ + k` is a
 	/// peek a fixed distance from here; everything else is an address.
 	fn peek(&mut self, path: &str, args: &[super::expr::Expr]) -> R<Expr> {
@@ -2587,8 +2660,13 @@ impl<'a> Lower<'a> {
 			(TypeOp::AddressOf, TypeOpArg::Value(value)) => match &value.kind {
 				// `addressof(this)` is the enclosing structure's own start,
 				// which is not a field and so not somewhere the IR can name.
+				ExprKind::Path(segments)
+					if !segments.is_empty() && segments.iter().all(|s| matches!(s, PathSeg::This)) =>
+				{
+					self.here_start()
+				}
 				ExprKind::Path(segments) if segments.iter().all(|s| matches!(s, PathSeg::This | PathSeg::Parent)) => {
-					Err(Gap::new("addressof(this), which names a structure rather than a field"))
+					Err(Gap::new("addressof(parent), which names a structure further out rather than a field"))
 				}
 				ExprKind::Path(_) => Ok(Expr::start_of(self.expr(value)?)),
 				_ => Err(Gap::new("addressof of something other than a field in scope")),

@@ -467,6 +467,48 @@ fn a_structure_ends_at_the_member_that_could_not_be_placed() {
 }
 
 /* ------------------------------------------------------------------ */
+/* `$` and addressof(this)                                             */
+/* ------------------------------------------------------------------ */
+
+/// `$[e]` is not a position: the reference indexes the file with it, so it is
+/// the one byte at the address `e`. `$[$]` is the byte about to be read, which
+/// is what the corpus writes a NUL-terminated run with.
+#[test]
+fn a_dollar_index_is_the_byte_at_that_address() {
+	let out = clean("struct S { char text[while($[$] != 0)]; u8 term; };\nS s @ 0x00;\n");
+	// A `[while(..)]` run is a repeat rather than one piece of text, so the
+	// two characters arrive as two elements and the NUL is the field after.
+	assert_eq!(read(&out, b"hi\0\x2a", &["s", "text"]), "2 children");
+	assert_eq!(read(&out, b"hi\0\x2a", &["s", "term"]), "0");
+}
+
+/// An address behind the reading is read where it is, not counted back from
+/// the end of the file, which is what a negative `PeekAt` skip would mean.
+#[test]
+fn a_dollar_index_behind_the_reading_reads_at_that_address() {
+	let out = clean("struct S { u8 first; u8 second; u8 again = $[$ - 2]; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[0x11, 0x22, 0x33], &["s", "again"]), "17");
+}
+
+/// `addressof(this)` is the enclosing structure's own start, which the IR says
+/// as the start of the structure's first field.
+#[test]
+fn addressof_this_is_the_start_of_the_structures_first_field() {
+	let out = clean("struct C { u8 size; u8 body[size - ($ - addressof(this))]; };\nC c @ 0x02;\n");
+	assert_eq!(read(&out, &[0, 0, 4, 1, 2, 3], &["c", "body"]), "3 children");
+}
+
+/// A structure that has read nothing yet has no field whose start says where
+/// it began, and `SpacePos` will not do: a `[while(..)]` condition is worked
+/// out again before every element, so `$ == addressof(this)` written as
+/// `SpacePos == SpacePos` would be true every time and read the file wrongly.
+#[test]
+fn addressof_this_before_anything_is_read_is_a_gap() {
+	let out = convert("struct C { u8 body[while($ == addressof(this))]; };\nC c @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("has read nothing yet"), "{}", gap_reasons(&out));
+}
+
+/* ------------------------------------------------------------------ */
 /* The top level                                                       */
 /* ------------------------------------------------------------------ */
 
