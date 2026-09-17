@@ -44,6 +44,7 @@ export function quantRun(o: {
       kind: "scale",
       contiguous: true,
       repeat: false,
+      problems_within: [0, 0],
     });
     for (let w = 0; w < o.weights; w++) {
       const q = (w % 16) - 8;
@@ -56,6 +57,7 @@ export function quantRun(o: {
         kind: "int",
         contiguous: o.contiguous ?? true,
         repeat: false,
+      problems_within: [0, 0],
       });
     }
   }
@@ -89,6 +91,7 @@ export function run(o: {
       kind: o.kind ?? "int",
       contiguous: o.contiguous ?? true,
       repeat: false,
+      problems_within: [0, 0],
     });
   }
   return {

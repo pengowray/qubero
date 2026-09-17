@@ -42,6 +42,7 @@ function span(o: Partial<Span> & { offset_bits: number; size_bits: number }): Sp
     count: 0,
     unit: null,
     line: null,
+    problems_within: [0, 0],
     sample: [],
     parts: [],
     bits: null,

@@ -111,6 +111,13 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   // One element of a run drawn after the chip that folded it: no name, and
   // tucked against the chip before it so the run reads as one strip.
   if (c.element === true) cls += " hv-chip-el";
+  // A value its format rules out, or one Qubero has no name for. The fill
+  // stays what it is: a chip's colour is what kind of field it is, and a red
+  // chip would spend that to say something the underline and the glyph say
+  // without taking anything away. Both marks are the stylesheet's, drawn on
+  // the chip itself, because this function writes the chip's two children by
+  // position and anything appended here is written over on the next redraw.
+  if (s.problem !== undefined) cls += s.problem.tier === "invalid" ? " hv-chip-invalid" : " hv-chip-undefined";
   if (el.className !== cls) el.className = cls;
   setText(el.firstElementChild as HTMLElement, name);
   const shown = extra ? continuedDetail(detail) : detail;
@@ -151,6 +158,9 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   // out, and this is the one chip whose second gesture does something a reader
   // has no way of guessing.
   if (s.opens) title = `${title}\n${OPENS}`;
+  // What is wrong with the value, on its own line: the mark on the chip only
+  // says look here, and this is the hover that says what at.
+  if (s.problem !== undefined) title = `${title}\n${s.problem.text}`;
   if (el.title !== title) el.title = title;
   if (label === null) el.removeAttribute("aria-label");
   else el.setAttribute("aria-label", label);

@@ -17,7 +17,7 @@
 // last named.
 
 import { formatBytes, formatOffset, percentText } from "./doc.ts";
-import { BTREES, NO_TEMPLATE, REPORT } from "./strings.ts";
+import { BTREES, NO_TEMPLATE, PROBLEMS, REPORT } from "./strings.ts";
 import type { Doc } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
 import { factRow, noneLine, noteLine } from "./dom.ts";
@@ -159,6 +159,12 @@ function stripSegments(parts: readonly Part[]): MapSegment[] {
   }
   return out;
 }
+
+/** How many nodes the walk to the first wrong value may read. The counts it
+ *  follows cover the children the core has already read, so the walk is short
+ *  in every ordinary file; this is what stops a file whose counts point into a
+ *  million-element run from turning one press into a read of the file. */
+const FIRST_PROBLEM_NODES = 2000;
 
 export class OverviewPanel {
   readonly el: HTMLElement;
@@ -513,6 +519,72 @@ export class OverviewPanel {
     const type = this.identity !== "" ? this.identity : this.doc.template ?? (this.identified ? UNKNOWN_TYPE : "");
     if (type !== "") rows.push([TYPE_LABEL, type]);
     this.facts.replaceChildren(...rows.flatMap(([k, v]) => factRow(k, v)));
+    this.drawProblemFact();
+  }
+
+  /**
+   * How many values in the file are wrong, and the way to the first of them.
+   *
+   * The third fact, and only when there is one: this is the single place a
+   * reader who does not know where to look can start from, and a line saying
+   * `0 invalid` on every well-formed file would be three quarters of the
+   * files saying nothing.
+   *
+   * The count is the root node's, which is a count of what has been read. It
+   * grows as the file is read, and this row is redrawn on every pump.
+   */
+  private drawProblemFact(): void {
+    const root = this.doc.templateNode([]);
+    if (root.status !== "ok") return;
+    const [invalid, undefinedCount] = root.node.problems_within;
+    const own = root.node.problem === undefined ? 0 : 1;
+    if (invalid + undefinedCount + own === 0) return;
+    const dt = document.createElement("dt");
+    dt.textContent = PROBLEMS.wrongLabel;
+    const dd = document.createElement("dd");
+    dd.append(PROBLEMS.overview(invalid, undefinedCount));
+    const first = document.createElement("button");
+    first.type = "button";
+    first.className = "ov-showfirst";
+    first.textContent = PROBLEMS.showFirst;
+    first.addEventListener("click", () => this.showFirstProblem());
+    dd.append(" \u00b7 ", first);
+    this.facts.append(dt, dd);
+  }
+
+  /**
+   * Go to the first value in the file that is wrong.
+   *
+   * A walk from the root, down only into the nodes that say something under
+   * them is wrong: the counts are what makes this cheap, since a structure
+   * with nothing wrong in it is one node read and not a subtree. Bounded all
+   * the same, because the counts cover the children the core has read and a
+   * walk following them must not become a walk of the file.
+   */
+  private showFirstProblem(): void {
+    const found = this.firstProblem([], 0);
+    if (found === null) return;
+    this.onPick(found);
+  }
+
+  private firstProblem(path: readonly number[], spent: number): FieldPick | null {
+    if (spent > FIRST_PROBLEM_NODES) return null;
+    const reply = this.doc.templateNode(path);
+    if (reply.status !== "ok") return null;
+    const n = reply.node;
+    if (n.problem !== undefined) return { path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits };
+    const [invalid, undefinedCount] = n.problems_within;
+    if (invalid + undefinedCount === 0) return null;
+    const kids = this.doc.templateChildren(path, 0, Math.min(n.child_count, FIRST_PROBLEM_NODES));
+    if (kids.status !== "ok") return null;
+    let at = spent;
+    for (const kid of kids.node) {
+      at += 1;
+      if (kid.problem === undefined && kid.problems_within[0] + kid.problems_within[1] === 0) continue;
+      const found = this.firstProblem(kid.path, at);
+      if (found !== null) return found;
+    }
+    return null;
   }
 
   // ----- the tabs -----

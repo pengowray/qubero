@@ -57,7 +57,7 @@ function build(spec: Spec, path: number[], start: number): Fixture {
     value: "",
     edit_text: "",
     kind: composite ? "composite" : (spec.kind ?? "uint"),
-    ok: true,
+    problems_within: [0, 0],
     child_count: spec.count ?? kids.length,
     composite,
     list: spec.list ?? false,

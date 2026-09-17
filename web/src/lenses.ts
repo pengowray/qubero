@@ -105,8 +105,12 @@ function readFloat(text: string): number | null {
   return Number.isNaN(x) ? null : x;
 }
 
+/** How a float reads at the cursor: the same spelling the core writes in the
+ *  value column, so one double is not spelled two ways in two panels. `readFloat`
+ *  above takes either spelling back, since the old one was on screen for long
+ *  enough to be what a reader types. */
 function showFloat(x: number): string {
-  return Number.isFinite(x) ? String(x) : x > 0 ? "Infinity" : x < 0 ? "-Infinity" : "NaN";
+  return Number.isFinite(x) ? String(x) : x > 0 ? "inf" : x < 0 ? "-inf" : "NaN";
 }
 
 function floatLens(label: string, size: 2 | 4 | 8): Lens {

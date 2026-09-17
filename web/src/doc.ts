@@ -196,6 +196,22 @@ export type TemplateChoice = {
  *  than in whichever of them happens to be showing. */
 export type FieldPick = { readonly path: readonly number[]; readonly startBit: number; readonly endBit: number };
 
+/** What is wrong with one value, in the words the core built. `invalid` is the
+ *  format ruling the value out: a signature that is not the one the template
+ *  requires, a checksum that does not match. `undefined` is Qubero having no
+ *  name for the value, which the format may well allow: an enum value with no
+ *  case, flag bits nobody named, a NaN in a field that never said its values
+ *  are finite. Only `invalid` is marked in red. */
+export type Problem = {
+  readonly tier: "invalid" | "undefined";
+  readonly text: string;
+};
+
+/** Wrong values found under a node so far: invalid, then undefined. Counted
+ *  over the children the core has already read and never by reading more, so a
+ *  collapsed run's count is a count so far and the row that draws it says so. */
+export type ProblemCount = readonly [invalid: number, undefined: number];
+
 export type TemplateNode = {
   readonly path: readonly number[];
   readonly name: string;
@@ -208,7 +224,11 @@ export type TemplateNode = {
   /** `unset` is a number holding the value its format writes for a slot
    *  nobody filled in; `edit_text` is still the number underneath it. */
   readonly kind: "uint" | "int" | "float" | "bytes" | "unread" | "str" | "insn" | "magic" | "enum" | "flags" | "unset" | "composite";
-  readonly ok: boolean;
+  /** What is wrong with this value, when something is. Absent for nearly every
+   *  field, which holds what its format allows. */
+  readonly problem?: Problem;
+  /** Wrong values found under this node so far. */
+  readonly problems_within: ProblemCount;
   readonly child_count: number;
   /** What one child is called, for counting them. Absent when they are items. */
   readonly unit?: string;
@@ -329,6 +349,12 @@ export type Span = {
    *  the name it gave the structure is its own bookkeeping: `Elsewhere` is not
    *  a word the TIFF specification uses, and nothing shows it to a reader. */
   readonly inline: boolean;
+  /** What is wrong with this field's value, when something is. The node's own:
+   *  a chip that cannot say a signature is wrong is a view the reader has to
+   *  leave to find out. */
+  readonly problem?: Problem;
+  /** Wrong values found under this span so far. */
+  readonly problems_within: ProblemCount;
 };
 
 /** One element of a folded run, for the value table beside the bytes. A span
@@ -361,6 +387,10 @@ export type Cell = {
    *  what it says, for the tooltip and for the width the table is laid out
    *  to. */
   readonly repeat: boolean;
+  /** What is wrong with this element's value, when something is. */
+  readonly problem?: Problem;
+  /** Wrong values found under this element so far. */
+  readonly problems_within: ProblemCount;
 };
 
 /** What a decoder does with one run of bits: `more` and `stop` are the

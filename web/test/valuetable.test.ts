@@ -233,6 +233,7 @@ function symbols(): RunCells[] {
       kind: "symbol",
       contiguous: true,
       repeat: false,
+      problems_within: [0, 0],
     });
     at += match ? 17 : 9;
   }
@@ -307,6 +308,7 @@ test("a label wider than the column takes a line rather than none", () => {
           kind: "symbol",
           contiguous: true,
           repeat: false,
+      problems_within: [0, 0],
         },
       ] as Cell[],
     },

@@ -7,6 +7,12 @@
   --accent: #2457c5;
   --accent-soft: #dbe5fb;
   --warn: #b4361f;
+  /* The other end of --warn: a check that passed, a value that is what the
+     format asked for. `.insp-check-result.ok` has wanted this since it was
+     written and fell back to the browser's own colour, so Valid was not
+     green. Dark enough on this ground to read at 4.5:1, like every other
+     colour a word is written in here. */
+  --good: #1a7f37;
   --addr: #737982;
   /* The two tints a code's bits are banded with, one per stored byte, chosen
      on the byte's own address so a byte keeps its tint across every code that
@@ -28,6 +34,7 @@
     --accent: #7ea2ff;
     --accent-soft: #2a3a63;
     --warn: #ff8a6a;
+    --good: #3fb950;
     --addr: #858c95;
     /* A wider step than the light pair takes. The same difference in lightness
        reads as less of one against a dark ground, and these two bands have to
@@ -6429,4 +6436,89 @@ summary.kp-group-heading:hover {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* ----- wrong values -----
+
+   A value its format rules out, or one Qubero has no name for, is marked
+   wherever it is shown. Two tiers and one glyph: the words carry the tier,
+   the colour repeats it, and the glyph only says look here, which is what is
+   left in monochrome. --warn is for invalid alone, and nothing here fills
+   anything: a chip's fill is what kind of field it is, and spending it on
+   this would take that away to say something the underline already says.
+   See docs/DESIGN-wrong-values.md. */
+
+.problem-glyph {
+  font-size: 0.6em;
+  line-height: 1;
+  vertical-align: 0.15em;
+  margin-right: 0.35em;
+}
+.problem-glyph.is-invalid {
+  color: var(--warn);
+}
+.problem-glyph.is-undefined {
+  color: var(--muted);
+}
+
+/* The reason on a listing row, after the value and before the type column.
+   It gives way to the value when the row runs out of room: the value is what
+   the row is for, and the whole reason is on the row's hover either way. */
+.rp-problem {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+/* A value the format rules out, in the one colour that means that. Only the
+   value: the name, the type and the size are facts about the field and are
+   not in question. */
+.rp-value.is-invalid {
+  color: var(--warn);
+}
+
+/* An annotation chip over bytes whose value is wrong. The underline is the
+   channel left over once fill means kind, and the glyph sits at the chip's
+   leading edge. Both tiers get the glyph; only invalid gets the line. */
+.hv-chip-invalid {
+  border-bottom: 2px solid var(--warn);
+}
+.hv-chip-invalid::before,
+.hv-chip-undefined::before {
+  content: "\25cf";
+  font-size: 0.6em;
+  line-height: 1;
+  vertical-align: 0.15em;
+  margin-right: 3px;
+}
+.hv-chip-invalid::before {
+  color: var(--warn);
+}
+.hv-chip-undefined::before {
+  color: var(--muted);
+}
+
+/* The inspector's own row, directly under the value and above the format's
+   words about the field. */
+.insp-problem {
+  margin: 2px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.insp-problem.is-invalid {
+  color: var(--warn);
+}
+
+/* The way into the first wrong value, on the overview panel's third fact. */
+.ov-showfirst {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-showfirst:hover {
+  text-decoration: underline;
 }

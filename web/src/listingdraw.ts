@@ -25,7 +25,7 @@ import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
 import { JOINED_WHOLE_CAP_BITS } from "./joinedpart.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, REPORT, UNPACKED } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, PROBLEMS, REPORT, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -248,7 +248,7 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
     if (box !== null) value.prepend(box);
   }
   if (item.reads !== null) value.append(readsLink(item.reads));
-  row.append(value);
+  markProblem(row, value, n, item.open);
   // A row that stands for a pointer and what it points at says so here, and
   // only here: `at → ObjectHeader` names the thing and says it was reached
   // rather than contained, which is what the step of indent above it cannot
@@ -264,6 +264,57 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   // and it is the same offer there.
   offerUnpacked(c, row, item, n);
   return row;
+}
+
+
+/** The mark on a row whose value is wrong, and the count on a row with wrong
+ *  values under it.
+ *
+ *  A glyph leads the value either way, since one shape in one place is what a
+ *  reader learns to scan for. What follows it depends on who says the value is
+ *  wrong: the format ruling a value out is a finding, so the reason is on the
+ *  row and the value takes the warning colour; Qubero having no name for a
+ *  value is not, so the glyph stands alone and the reason is on the row's
+ *  hover. Nothing here fills or recolours anything else: colour on these rows
+ *  is already spent on what kind of field it is.
+ *
+ *  The count on a composite says `so far` while the row is closed, because
+ *  that is exactly when the children under it are the ones the core happened
+ *  to read rather than all of them. An open row has its children below it,
+ *  each carrying its own mark. */
+function markProblem(row: HTMLElement, value: HTMLElement, n: TemplateNode, open: boolean): void {
+  const problem = n.problem;
+  if (problem !== undefined) {
+    const invalid = problem.tier === "invalid";
+    value.prepend(glyph(invalid));
+    if (invalid) {
+      value.classList.add("is-invalid");
+      row.append(value);
+      const why = el("span", "rp-problem", problem.text);
+      why.title = problem.text;
+      row.append(why);
+    } else {
+      // The words are one hover away rather than on the row: an undefined
+      // value is not a finding, and a column of reasons beside every wasm
+      // opcode nobody has catalogued would bury the ones that are.
+      row.title = problem.text;
+      row.append(value);
+    }
+    return;
+  }
+  row.append(value);
+  const [invalid, undefinedCount] = n.problems_within;
+  if (invalid === 0 && undefinedCount === 0) return;
+  const count = el("span", "rp-problem rp-within", PROBLEMS.within(invalid, undefinedCount, !open));
+  row.append(count);
+}
+
+/** The one mark both tiers wear, which only says look here. Hidden from a
+ *  screen reader, which is given the words instead. */
+function glyph(invalid: boolean): HTMLElement {
+  const dot = el("span", `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`, PROBLEMS.glyph);
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
 }
 
 function drawGap(c: DrawContext, item: Extract<Item, { kind: "gap" }>): HTMLElement {

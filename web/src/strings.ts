@@ -1809,6 +1809,51 @@ function plural(noun: string): string {
 }
 
 /**
+ * What the views say about a value its format rules out, or one Qubero has no
+ * name for. The reason itself is the core's: it is built there so that a row,
+ * a chip's tooltip and the inspector say the same words about the same bytes,
+ * and nothing here rewrites it. These are the words around it: the counts an
+ * ancestor carries, and the line the overview panel opens with.
+ *
+ * `invalid` and `undefined` are the two tiers, and the difference is who says
+ * the value is wrong. The format ruling a value out is a finding; Qubero
+ * having no name for one is not, so only the first is marked in red. See
+ * `docs/DESIGN-wrong-values.md`.
+ */
+export const PROBLEMS = {
+  /** A structure or a run with wrong values under it, at the end of its row.
+   * The dot leads, the way every other trailing fact on these rows does.
+   * Counted over what has been read, so a row that may yet find more says so
+   * rather than offering a total it cannot stand behind. */
+  within: (invalid: number, undefined_: number, soFar: boolean): string => {
+    const parts: string[] = [];
+    if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    if (parts.length === 0) return "";
+    return `\u00b7 ${parts.join(", ")}${soFar ? " so far" : ""}`;
+  },
+  /** The overview panel's third fact, when the file has any: how many wrong
+   * values are in it, and the one way in for a reader who does not know where
+   * to look. Either half is dropped when it is zero. */
+  overview: (invalid: number, undefined_: number): string => {
+    const parts: string[] = [];
+    if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid ${invalid === 1 ? "value" : "values"}`);
+    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
+    return parts.join(", ");
+  },
+  /** The name of the overview panel's third fact, beside the count. The other
+   * two are `Size` and `Type`; this one is what is wrong with what is in it. */
+  wrongLabel: "Wrong values",
+  /** What the overview line's control does: it opens the listing on the first
+   * of them, which is where a reader starts from. */
+  showFirst: "Show first",
+  /** The glyph itself, one shape for both tiers so a reader learns one: the
+   * colour repeats the tier and the words carry it. A screen reader gets the
+   * words, not this, so it is hidden from one. */
+  glyph: "\u25cf",
+} as const;
+
+/**
  * The report listing's own words. The mockup that settled them,
  * `c2-listing.html`, lives outside this repository in
  * `../qubero2-extras/mockups/`; it has the reviewed wording for the SQLite

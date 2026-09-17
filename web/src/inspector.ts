@@ -12,7 +12,7 @@ import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROBLEMS, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -232,6 +232,10 @@ export class Inspector {
    *  first question about a value is what it is. */
   private readonly shape: HTMLElement;
   /** What the format's own description says the field is, under the type and size. */
+  /** What is wrong with the value, directly under it and above the format's
+   *  own words about the field: the reader is looking at the value, and this
+   *  is the sentence about the value they are looking at. */
+  private readonly problemLine: HTMLElement;
   private readonly docLine: HTMLElement;
   /** What a structure holds, listed under it. */
   private readonly kids: HTMLElement;
@@ -514,6 +518,9 @@ export class Inspector {
     this.shape = document.createElement("div");
     this.shape.className = "insp-detail insp-shape";
     this.shape.hidden = true;
+    this.problemLine = document.createElement("div");
+    this.problemLine.className = "insp-problem";
+    this.problemLine.hidden = true;
     this.docLine = document.createElement("div");
     this.docLine.className = "insp-doc";
     this.docLine.hidden = true;
@@ -557,7 +564,7 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -1059,6 +1066,7 @@ export class Inspector {
     const named = typeText(n);
     this.shape.textContent = named === "" ? bitSizeText(n.size_bits) : `${named} · ${bitSizeText(n.size_bits)}`;
     this.shape.hidden = false;
+    this.showProblem(n);
     this.docLine.textContent = n.doc ?? "";
     this.docLine.hidden = n.doc === undefined;
     // The formula reads bytes of the file by address. There is no address of
@@ -1716,6 +1724,28 @@ export class Inspector {
     this.formula.hidden = false;
   }
 
+  /** What is wrong with this field's value, when something is: the glyph the
+   *  other views mark with, and the core's own words, so that the panel and
+   *  the row the reader came from say the same thing. The tier decides the
+   *  colour and nothing else. */
+  private showProblem(n: TemplateNode): void {
+    const problem = n.problem;
+    this.problemLine.hidden = problem === undefined;
+    if (problem === undefined) {
+      this.problemLine.replaceChildren();
+      return;
+    }
+    const invalid = problem.tier === "invalid";
+    this.problemLine.className = `insp-problem ${invalid ? "is-invalid" : "is-undefined"}`;
+    const glyph = document.createElement("span");
+    glyph.className = `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`;
+    glyph.textContent = PROBLEMS.glyph;
+    glyph.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.textContent = problem.text;
+    this.problemLine.replaceChildren(glyph, text);
+  }
+
   /** Nothing to show about a field: no template, no field, or not read yet. */
   private hideField(): void {
     // The dependency rows go out of sight with the rest, and the pointer cannot
@@ -1724,6 +1754,7 @@ export class Inspector {
     this.fieldRow.hidden = true;
     this.detail.hidden = true;
     this.shape.hidden = true;
+    this.problemLine.hidden = true;
     this.docLine.hidden = true;
     this.kids.hidden = true;
     this.kids.replaceChildren();
