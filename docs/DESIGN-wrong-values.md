@@ -15,25 +15,40 @@ The core already knows most of this and the web throws it away.
 - `Value::Magic { ok, bytes, expected }` (eval/read.rs) and
   `magic_reading` print `PK\3\4 does not match \x89PNG` into the value
   column. That is the only trace of a mismatch in any view.
-- `Value::Enum { name: None }` prints `{num} (unknown)`.
+- `Value::Enum { name: None }` prints `{num} (unknown)` from the wasm node,
+  but the listing's own `brief` (eval/listing.rs:80) prints the bare number
+  with no marker, so the two views disagree about the same field.
 - `Value::Flags { unnamed }` prints `+3 unnamed`.
 - `NodeDto.ok` (wasm/src/lib.rs `shown`) is false for both of the above and
   is read by no file under `web/src`. `TemplateNode.ok` exists in doc.ts and
-  is unused.
-- Checksums: twenty-one `Check`s across ten formats, run by `run_check` only
-  when the inspector shows the field and only after the reader clicks
-  `Check the CRC-32` for anything over the run cap. The verdict lives in the
-  Integrity section and nowhere else. ZIP placeholder sums have their own
-  states (`ARCHIVE_SUMS`).
-- Kaitai `valid:` is dropped with a conversion note ("templates check
-  checksums, not a field's value"). ImHex `std::assert` becomes a note on
-  the field. Neither reaches the reader as a check.
-- Floats print through `f64::Display`, so `NaN` and `inf` appear as text with
-  nothing said about them. The inspector's bit layout (d0c677e) can show a
-  NaN's payload but does not name it.
-- `--warn` is the one red, used for `.insp-check-result.bad`, edit refusals
-  and the huffman mismatch note. Chip fill is `--field-color`, one colour per
-  value kind (number, text, marker, category, structure, binary).
+  is unused. `SpanDto` (hex chips) and `CellDto` (value table) carry no
+  status at all, so those two views cannot say anything is wrong today.
+- Checksums: `Check`s in thirteen format files, run by `run_check` only when
+  the inspector shows the field. The inspector runs one on its own under
+  `AUTO_CHECK_BYTES` (1 MiB) and offers `Check the CRC-32` above that. The
+  verdict lives in the Integrity section and nowhere else. ZIP placeholder
+  sums have their own states (`ARCHIVE_SUMS`). `.insp-check-result.ok`
+  colours with `--good`, which no stylesheet defines, so Valid is not green.
+- Kaitai `valid:` is parsed in full (`ValidSpec`: Eq, Min, Max, Range,
+  AnyOf, InEnum, Expr) and one case survives: `valid: [bytes]` on a bytes
+  field becomes `Ty::magic`, as `contents:` does. The rest are dropped with a
+  conversion note ("templates check checksums, not a field's value"). ImHex
+  `std::assert` becomes a note on the field. Neither reaches the reader as a
+  check.
+- Floats print through `f64::Display` in core (`NaN`, `inf`, `-inf`) and the
+  web's float lens prints `Infinity` and `-Infinity`, so the value column and
+  the At-cursor lens spell the same double two ways. The type panel's bit
+  layout (d0c677e, typepanel.ts) already names quiet and signalling NaN,
+  infinities, subnormals and the x87 pseudo forms, with the fraction as the
+  payload. That knowledge does not reach the node.
+- `--warn` is the one alarm token, used in eighteen places: `.insp-check-result
+  .bad`, `input.invalid`, the toolbar message, `.dlg-disagrees` in the file
+  type dialog, the converter panels' gap counts, and `.is-warn` notes on the
+  graph and diagram views. There is no `--good`, `--err` or `--warn-soft`
+  (`--warn-soft` is referenced once and falls back to blue). Chip fill is
+  `--field-color`, one colour per value kind, and style.css:347 already
+  states the rule this design follows: "overlapping UI state is carried by
+  background, underline and outline instead."
 
 ## Two tiers, and a third state that is neither
 
@@ -74,11 +89,10 @@ Kaitai `valid: {in-enum: true}` makes an unnamed enum value invalid.
 | Magic does not match the loaded template | invalid | `Value::Magic.ok`, already | yes, already |
 | Bad checksum | invalid | `run_check`, already | only under the eager cap (below) |
 | Undefined enum value | undefined | `Value::Enum.name == None`, already | yes, already |
+| Unnamed flag bits set | undefined | `Value::Flags.unnamed`, already | yes, already |
 | Number out of range | invalid | new `Field::valid` | yes, one expression |
 | NaN, +Inf, -Inf | undefined, or invalid under `Field::valid` | new, in `shown`'s float arm | yes |
 | Unusual NaN payload | undefined | new, same arm | yes |
-
-Flags with unnamed bits set are a seventh, undefined, and already detected.
 
 ## IR
 
@@ -141,8 +155,12 @@ pub problem: Option<Problem>,
 pub problems_within: (u32, u32),
 ```
 
-The text is built in core, as `magic_reading` is, so the listing, the chip
-tooltip, the inspector and the table say the same words about the same bytes.
+The same `problem` goes on `SpanDto` and `CellDto`, since the hex chips and
+the value table are built from those and not from nodes. The text is built in
+core, as `magic_reading` is, so the listing, the chip tooltip, the inspector
+and the table say the same words about the same bytes. The float text is
+built there too, and `showFloat` in lenses.ts is changed to print what core
+prints, so a double is spelled one way.
 The value column stops carrying the reason: `magic_reading` prints the bytes
 only, and the reason moves to `problem.text`. The `(unknown)` suffix on enum
 values goes the same way.
@@ -157,12 +175,15 @@ through. No view triggers a walk of the file to complete a count.
 ### Which checks run on their own
 
 Everything except checksums is one expression or one comparison against a
-table and runs during `node`. Checksums read bytes, so they run eagerly only
-when the covered run is at most `EAGER_CHECK_BYTES` (64 KiB, the `gapcheck`
-cap and the same reasoning: past this, nobody looked) and every byte of it is
-already loaded. A check that fails that test is Not checked and unmarked until
-the reader opens the inspector and asks. The inspector's `Check the CRC-32`
-button and `ensureRange` stay as they are.
+table and runs during `node`. Checksums read bytes, so they run on their own
+only when the covered run is at most `EAGER_CHECK_BYTES` (64 KiB, the
+`gapcheck` cap and the same reasoning: past this, nobody looked) and every
+byte of it is already loaded. That is smaller than the inspector's own
+`AUTO_CHECK_BYTES` (1 MiB) on purpose: the inspector sums one field the
+reader is looking at, and this sums every field the listing draws. A check
+that fails the test is Not checked and unmarked until the reader opens the
+inspector, where the 1 MiB rule and the `Check the CRC-32` button stay as
+they are.
 
 An eager check is cached on the node like the value is and invalidated with
 it, so scrolling the listing does not re-sum a PNG's chunks.
@@ -177,8 +198,9 @@ read the reason without opening a panel.
 template answer is not "Qubero read the file's structure" any more, because
 it did not. `identity.ts` gets the root problem and the answer's evidence
 line becomes `Template {label} was applied, but the signature does not match`
-with `disagrees: true`, so the file type dialog lists it the same way it lists
-a file(1) disagreement. This is what makes a template switch visible at once:
+with `disagrees: true`, so the file type dialog lists it with the
+`.dlg-disagrees` class it already uses for a file(1) rule that names another
+format. This is what makes a template switch visible at once:
 picking PNG for a ZIP turns the toolbar answer red before anything is clicked.
 The menu-pick path in main.ts does not currently update the toolbar answer at
 all; it has to, for this to work.
