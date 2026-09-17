@@ -1556,34 +1556,63 @@ mod tests {
             framed(b"]\x94(N\x88\x89M\x39\x30J\xff\xff\xff\xffG\x3f\xf0\x00\x00\x00\x00\x00\x00C\x02\xde\xad\x94e."),
             framed(b"}\x94."),
             MATRIX.to_vec(),
+            // An array of shape 0: its numbers are a field the file wrote and
+            // a run of no bytes at once.
+            framed(&cat(&[b"}\x94", &word("a"), &one_array(2, "f8", b'<', b"K\0\x85\x94", &[]), b"s."])),
         ] {
             let seen = dump(&bytes);
             assert_eq!(seen[0].len, bytes.len() as u64, "the root is the file");
-            // Every node's children tile it: they start where it does, they
-            // follow each other, and the last of them ends where it ends.
-            for (i, row) in seen.iter().enumerate() {
-                let kids: Vec<&Row> = seen[i + 1..]
-                    .iter()
-                    .take_while(|r| r.depth > row.depth)
-                    .filter(|r| r.depth == row.depth + 1)
-                    .collect();
-                if kids.is_empty() {
+            tiles(&seen);
+        }
+    }
+
+    /// Every node's children tile it: they start where it does, they follow
+    /// each other, and the last of them ends where it ends. A row worked out
+    /// from the match is not read from the file and sits where its parent
+    /// starts; a field the file did write takes its turn in the tiling even
+    /// when it reads no bytes.
+    fn tiles(seen: &[Row]) {
+        for (i, row) in seen.iter().enumerate() {
+            let kids: Vec<&Row> = seen[i + 1..]
+                .iter()
+                .take_while(|r| r.depth > row.depth)
+                .filter(|r| r.depth == row.depth + 1)
+                .collect();
+            if kids.is_empty() {
+                continue;
+            }
+            let mut want = row.at;
+            for kid in &kids {
+                if kid.ty.starts_with("computed") {
+                    assert_eq!(kid.at, row.at, "{}: {} is worked out from the match, so it belongs where {} starts", row.name, kid.name, row.name);
                     continue;
                 }
-                let mut want = row.at;
-                for kid in &kids {
-                    // A row worked out from the match has no bytes and sits
-                    // where its parent starts.
-                    if kid.len == 0 {
-                        assert_eq!(kid.at, row.at, "{}: {} is nowhere", row.name, kid.name);
-                        continue;
-                    }
-                    assert_eq!(kid.at, want, "{}: {} leaves bytes over at {want:#x}", row.name, kid.name);
-                    want = kid.at + kid.len;
-                }
-                assert_eq!(want, row.at + row.len, "{}: bytes left over at {want:#x}", row.name);
+                assert_eq!(kid.at, want, "{}: {} leaves bytes over at {want:#x}", row.name, kid.name);
+                want = kid.at + kid.len;
             }
+            assert_eq!(want, row.at + row.len, "{}: bytes left over at {want:#x}", row.name);
         }
+    }
+
+    /// An array whose shape is 0 holds no numbers, and the row that says so is
+    /// still a field of the file: it sits at the byte the payload would have
+    /// started at, right after the SHORT_BINBYTES that wrote a length of zero,
+    /// rather than being pushed back to the start of the array.
+    #[test]
+    fn an_empty_array_reads_its_numbers_where_they_would_have_been() {
+        let bytes = framed(&cat(&[b"}\x94", &word("a"), &one_array(2, "f8", b'<', b"K\0\x85\x94", &[]), b"s."]));
+        let seen = dump(&bytes);
+        assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v3".into()));
+        assert_eq!(named_row(&seen, "shape").value, V::Str("0".into()));
+        let numbers = named_row(&seen, "numbers");
+        assert_eq!((numbers.ty.as_str(), numbers.len, &numbers.value), ("f64 le[]", 0, &V::Composite { count: 0 }));
+        // The SHORT_BINBYTES before it is the opcode and the length byte, so
+        // the numbers begin two bytes later and end where they begin.
+        let header = seen.iter().rev().find(|r| r.name == "short_binbytes" && r.at < numbers.at).unwrap();
+        assert_eq!((header.len, numbers.at), (2, header.at + 2));
+        let array = named_row(&seen, "value");
+        assert!(numbers.at > array.at, "the numbers are placed, not pushed back to {:#x}", array.at);
+        tiles(&seen);
     }
 
     /// The two values a pickle writes as an opcode and nothing else read as
