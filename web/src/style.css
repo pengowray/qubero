@@ -6629,7 +6629,7 @@ summary.kp-group-heading:hover {
 .rp-problem {
   /* The reason takes what the value leaves, and is cut short first: the
      value is the fact and the reason is about it, so a narrow column shows
-     `9 (unknown)` whole and `Not allowed: must be…` trailing off. */
+     `9 (unknown)` whole and `Unknown or invalid: must be…` trailing off. */
   flex: 1 1 0;
   min-width: 0;
   overflow: hidden;

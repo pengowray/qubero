@@ -303,17 +303,17 @@ State first, then cause, matching `Not checked · why`.
 | Problem text, magic | `Does not match: expected {bytes}` | value column shows the actual bytes only |
 | Problem text, checksum | `Mismatch: computed {sum}` | value column shows the stored sum |
 | Problem text, range | `Out of range: must be {min} to {max}` | also `at least {min}`, `at most {max}` |
-| Problem text, set | `Not allowed: must be one of {a}, {b}, {c}` | up to four listed, then `and {n} more` |
+| Problem text, set | `Unknown or invalid: must be one of {a}, {b}, {c}` | up to four listed, then `and {n} more` |
 | Problem text, equality | `Must be {value}` | |
 | Problem text, expression | `Fails the check: {msg}` | ImHex's assert message when given, else the expression in the template's own text; the expression always on hover; uncertain |
 | Problem text, enum, undefined | `Undefined in {enum}` | on hover and in the inspector; the value keeps `{num} (unknown)`; agreed 2026-09-17 |
-| Problem text, enum, invalid (InEnum) | `Not allowed: undefined in {enum}` | |
+| Problem text, enum, invalid (InEnum) | `Unknown or invalid: undefined in {enum}` | |
 | Problem text, flags | `{n} unnamed bits set` | replaces `+{n} unnamed` in the value |
 | Problem text, float | `Not a number (quiet NaN)` / `Not a number (signalling NaN, payload 0x{p})` / `Infinity` / `Negative infinity` | |
-| Problem text, float, invalid (Finite) | `Not allowed: not a number` etc. | |
+| Problem text, float, invalid (Finite) | `Unknown or invalid: not a number` etc. | |
 | Structure row count | `· {n} invalid` / `· {n} undefined` / `· {n} invalid, {m} undefined` | with ` so far` while pending |
 | Overview line | `{n} invalid values, {m} undefined · Show first` | either half dropped when zero |
-| Toolbar evidence | `Template {label} was applied, but the signature does not match` | |
+| Toolbar line | the name only, in `--warn`, with no words added | the dialog's Source row says `Template {label} was applied, but the signature does not match`; that sentence is on hover |
 | Table header | `{column} ({n} invalid)` | |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 

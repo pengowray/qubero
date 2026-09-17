@@ -553,12 +553,10 @@ export function fileType(): FileType {
     else if (answers.file === null) line = UNKNOWN_TYPE_MSG;
     else line = "";
     kindLabel.textContent = line;
-    // The toolbar copy is cut short, so the whole sentence stays reachable
-    // on hover as well as in the dialog. A name that is only the template's,
-    // over a signature the file does not have, is in the warning colour with
-    // the reason on hover: it is the one toolbar answer that is not a finding
-    // about the file, and it is exactly the answer a reader who picked the
-    // wrong template is looking at.
+    // A name that is only the template's, over a signature the file does not
+    // have, is in the warning colour, with no words added: the toolbar has no
+    // room for them, and the colour is enough to send a reader to the dialog,
+    // where the Source row says what is wrong. The sentence is on hover too.
     const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
     kindLabel.classList.toggle("is-warn", mismatch);
     kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : mismatch ? (id.candidates[0]?.evidence ?? line) : line;

@@ -263,8 +263,8 @@ impl Evaluator {
         // `unknown`. The type is behind whatever wraps it, the way every other
         // question about what a field really is looks through a sentinel.
         let named = match enum_name(&self.memo[path].ty) {
-            Some(n) => format!("Not allowed: undefined in {n}"),
-            None => "Not allowed: undefined in this enum".to_string(),
+            Some(n) => format!("Unknown or invalid: undefined in {n}"),
+            None => "Unknown or invalid: undefined in this enum".to_string(),
         };
         Ok(fails(named))
     }
@@ -283,8 +283,8 @@ impl Evaluator {
             return Ok(holds());
         };
         Ok(match (f.is_nan(), f.is_infinite()) {
-            (true, _) => fails("Not allowed: not a number".to_string()),
-            (_, true) => fails("Not allowed: infinite".to_string()),
+            (true, _) => fails("Unknown or invalid: not a number".to_string()),
+            (_, true) => fails("Unknown or invalid: infinite".to_string()),
             _ => holds(),
         })
     }
@@ -332,7 +332,7 @@ fn one_of(items: impl ExactSizeIterator<Item = String>) -> String {
     if n > shown {
         listed.push(format!("and {} more", n - shown));
     }
-    format!("Not allowed: must be one of {}", listed.join(", "))
+    format!("Unknown or invalid: must be one of {}", listed.join(", "))
 }
 
 fn holds() -> ValidVerdict {
@@ -454,16 +454,16 @@ mod tests {
     /// that, so a row says what is allowed rather than filling with numbers.
     #[test]
     fn a_set_lists_what_is_allowed_and_counts_the_rest() {
-        assert_eq!(why(&bad(), 4), "Not allowed: must be one of 0, 2, 3");
-        assert_eq!(why(&bad(), 5), "Not allowed: must be one of 0, 1, 2, 3, and 2 more");
+        assert_eq!(why(&bad(), 4), "Unknown or invalid: must be one of 0, 2, 3");
+        assert_eq!(why(&bad(), 5), "Unknown or invalid: must be one of 0, 1, 2, 3, and 2 more");
         // One past the cap is listed whole: PNG's five colour types.
-        assert_eq!(one_of(["0", "2", "3", "4", "6"].into_iter().map(String::from)), "Not allowed: must be one of 0, 2, 3, 4, 6");
+        assert_eq!(one_of(["0", "2", "3", "4", "6"].into_iter().map(String::from)), "Unknown or invalid: must be one of 0, 2, 3, 4, 6");
     }
 
     /// The enum's own name, which is what says who has no name for the value.
     #[test]
     fn an_enum_bound_names_the_enum() {
-        assert_eq!(why(&bad(), 6), "Not allowed: undefined in ColorType");
+        assert_eq!(why(&bad(), 6), "Unknown or invalid: undefined in ColorType");
     }
 
     /// A condition is shown as the sentence its source wrote when it wrote
@@ -476,11 +476,11 @@ mod tests {
 
     #[test]
     fn a_float_that_is_not_a_number_is_said_to_be_one() {
-        assert_eq!(why(&bad(), 9), "Not allowed: not a number");
+        assert_eq!(why(&bad(), 9), "Unknown or invalid: not a number");
 
         let mut infinite = bad();
         infinite[9..13].copy_from_slice(&f32::INFINITY.to_le_bytes());
-        assert_eq!(why(&infinite, 9), "Not allowed: infinite");
+        assert_eq!(why(&infinite, 9), "Unknown or invalid: infinite");
     }
 
     /// Worked out at the end of the structure, so a bound may name a field
@@ -501,7 +501,7 @@ mod tests {
         let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(Template::new("t", ty));
         assert!(ev.valid_of(&d, &[0, 0]).unwrap().unwrap().ok);
-        assert_eq!(ev.valid_of(&d, &[0, 1]).unwrap().unwrap().text, "Not allowed: not a number");
+        assert_eq!(ev.valid_of(&d, &[0, 1]).unwrap().unwrap().text, "Unknown or invalid: not a number");
         // The list itself is not what the claim is about.
         assert_eq!(ev.valid_of(&d, &[0]).unwrap(), None);
     }
