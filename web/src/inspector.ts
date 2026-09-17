@@ -12,7 +12,8 @@ import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
 import type { DecodedCode, DecodedStep, Doc, FieldGraph, MapStep, Origin, Relation, Shape, TemplateNode, TemplateReply } from "./doc.ts";
 import { LENSES, type Lens } from "./lenses.ts";
-import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
+import { tablePlan } from "./tableplan.ts";
+import { ARCHIVE_SUMS, bitSizeText, CHECKED, childWord, childrenHead, countText, DECODED, INSIDE, JOINED, PROPERTIES, REPORT, ROLE_GROUP, DECODED_INSIDE, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, STORED_PATHS, TABLE, TIME, timeNoteText, UNPACKED, unpackedOriginRow } from "./strings.ts";
 import { stepBits } from "./unpackedlink.ts";
 import { startsInGroup, streamOffer, tabGroups, type PartGroup } from "./joinedpart.ts";
 import { withinGroup } from "./within.ts";
@@ -329,6 +330,8 @@ export class Inspector {
   onOpenTab: (bytes: Uint8Array, name: string, origin: string) => void = () => {};
   /** A compressed run was asked for as a document of its own. */
   onOpenUnpacked: (path: readonly number[]) => void = () => {};
+  /** Open a list as a table of its own. */
+  onOpenTable: (path: readonly number[]) => void = () => {};
 
   constructor(private readonly doc: Doc) {
     this.el = document.createElement("section");
@@ -1165,6 +1168,21 @@ export class Inspector {
       why.textContent = JOINED.tooLarge;
       parts.push(why);
     }
+    // A list of records, or a run of samples, read as rows. Offered on the
+    // list itself and on anything inside it: a reader whose cursor is on one
+    // field of one record is looking at a table, and having to find the row
+    // above it first is a step that answers nothing.
+    const table = this.tableAbove(path);
+    if (table !== null) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "insp-check-button";
+      button.textContent = TABLE.open(table.rowWord);
+      button.title = TABLE.tabTooltip(table.rowWord, table.name, this.doc.name);
+      const at = table.path;
+      button.addEventListener("click", () => this.onOpenTable(at));
+      parts.push(button);
+    }
     const plan = openPlan(this.doc, path, n);
     if (plan !== null) {
       const detail = document.createElement("div");
@@ -1180,6 +1198,19 @@ export class Inspector {
     }
     this.openAs.replaceChildren(...parts);
     this.openAs.hidden = false;
+  }
+
+  /** The field at the cursor read as a table, or the nearest thing above it
+   *  that reads as one. Null when nothing on the way to the root does. */
+  private tableAbove(path: readonly number[]): { readonly path: readonly number[]; readonly name: string; readonly rowWord: string } | null {
+    for (let i = path.length; i >= 0; i--) {
+      const at = path.slice(0, i);
+      const node = this.doc.templateNode(at);
+      if (node.status !== "ok") continue;
+      const plan = tablePlan(this.doc, node.node);
+      if (plan !== null) return { path: at, name: node.node.name, rowWord: plan.rowWord };
+    }
+    return null;
   }
 
   private openButton(plan: OpenPlan): HTMLElement {

@@ -672,6 +672,10 @@ export const TABLE = {
    *  about the sound and not about the bytes. */
   storedAt: "Stored at",
   size: "Size",
+  /** The tab is open on a field the file no longer has: the template changed
+   *  under it, or the bytes it read did. Said rather than left blank, since an
+   *  empty tab reads as something broken. */
+  gone: "These rows are no longer in the file",
   /** The checkbox that adds them. "byte" rather than "file": inside an
    *  unpacked stream the addresses are of the stream, and what is true of both
    *  is that they are addresses of bytes. */
