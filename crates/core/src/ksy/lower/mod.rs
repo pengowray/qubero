@@ -2328,24 +2328,20 @@ types:
 		assert!(out.report.gaps.is_empty(), "{:?}", out.report.gaps);
 	}
 
-	/// `valid: in-enum` needs an enum to be in, and a field read as a plain
-	/// number has none. A constraint the evaluator could not answer is worse
-	/// than none, so that one stays a note.
+	/// `valid: in-enum` makes a value the enum does not list something the
+	/// format rules out rather than something Qubero has no name for. The
+	/// `.ksy` parser is what stops it being written on a field that is not an
+	/// enum, so by the time it reaches here there is always one to be in.
 	#[test]
-	fn in_enum_needs_the_field_to_be_an_enum() {
+	fn in_enum_becomes_a_constraint_on_the_enum_field() {
 		let out = convert_text(&format(
 			"seq:\n  \
-			 - id: a\n    type: u1\n    enum: kind\n    valid:\n      in-enum: true\n  \
-			 - id: b\n    type: u1\n    valid:\n      in-enum: true\n\
+			 - id: a\n    type: u1\n    enum: kind\n    valid:\n      in-enum: true\n\
 			 enums:\n  kind:\n    0: none\n    1: some\n",
 		));
 		let text = template_text::render(&out.template);
 		assert_eq!(text.matches("valid in enum").count(), 1, "{text}");
-		assert!(
-			out.report.notes.iter().any(|n| n.message.contains("not read as an enum")),
-			"{:?}",
-			out.report.notes
-		);
+		assert!(!out.report.notes.iter().any(|n| n.path.ends_with("/valid")), "{:?}", out.report.notes);
 	}
 
 	#[test]
