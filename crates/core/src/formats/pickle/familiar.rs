@@ -1644,4 +1644,433 @@ mod tests {
         assert!(ev.node(&doc, &[0]).is_err());
         assert!(ev.node(&doc, &[1]).is_err());
     }
+
+    // Everything below builds its own bytes rather than editing a fixture, so
+    // that a test says which alternative it is exercising. A memo slot is the
+    // count of memo marks before it, so the comments count them out.
+
+    fn cat(pieces: &[&[u8]]) -> Vec<u8> {
+        pieces.concat()
+    }
+
+    /// SHORT_BINUNICODE and the memo mark after it.
+    fn word(text: &str) -> Vec<u8> {
+        let mut out = vec![0x8c, text.len() as u8];
+        out.extend_from_slice(text.as_bytes());
+        out.push(0x94);
+        out
+    }
+
+    /// SHORT_BINBYTES and the memo mark after it.
+    fn blob(data: &[u8]) -> Vec<u8> {
+        let mut out = vec![b'C', data.len() as u8];
+        out.extend_from_slice(data);
+        out.push(0x94);
+        out
+    }
+
+    /// BINGET.
+    fn get(slot: u8) -> Vec<u8> {
+        vec![b'h', slot]
+    }
+
+    /// `numpy._core.multiarray._reconstruct(numpy.ndarray, (0,), b'b')` with
+    /// every name written out, which is what the first array of a file does.
+    ///
+    /// Counting from the slot its first word lands in: 2 is the reconstructor,
+    /// 3 the text `numpy`, 5 the `ndarray` class, 7 the placeholder byte
+    /// string, and 9 the call's result.
+    fn reconstruct() -> Vec<u8> {
+        cat(&[
+            &word("numpy._core.multiarray"),
+            &word("_reconstruct"),
+            b"\x93\x94",
+            &word("numpy"),
+            &word("ndarray"),
+            b"\x93\x94",
+            b"K\0\x85\x94",
+            &blob(b"b"),
+            b"\x87\x94R\x94",
+        ])
+    }
+
+    /// The dtype construction and the BUILD that gives it its byte order, with
+    /// the class's module taken from the slot it was written in.
+    ///
+    /// Counting from the slot its first word lands in: 1 is the `dtype` text,
+    /// 2 the `numpy.dtype` class, 5 the finished dtype, and 6 the byte order.
+    fn dtype_state(numpy_slot: u8, kind: &str, order: u8) -> Vec<u8> {
+        cat(&[
+            &get(numpy_slot),
+            &word("dtype"),
+            b"\x93\x94",
+            &word(kind),
+            b"\x89\x88\x87\x94R\x94",
+            b"(K\x03",
+            &word(std::str::from_utf8(&[order]).unwrap()),
+            b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t\x94b",
+        ])
+    }
+
+    /// One array written out in full. `base` is the slot the reconstructor's
+    /// first word lands in, since whatever the file wrote before it has taken
+    /// slots of its own.
+    fn one_array(base: u8, kind: &str, order: u8, shape: &[u8], data: &[u8]) -> Vec<u8> {
+        cat(&[
+            &reconstruct(),
+            b"(K\x01",
+            shape,
+            &dtype_state(base + 3, kind, order),
+            b"\x89",
+            &blob(data),
+            b"t\x94b",
+        ])
+    }
+
+    /// Two arrays under one dictionary, the second naming what the first
+    /// wrote: both globals, the placeholder byte string, and whatever
+    /// `second_dtype` says about the dtype. This is the shape
+    /// `proto4-numpy-shared-dtype` has.
+    ///
+    /// Slot 0 is the dictionary and 1 the first key, so the reconstructor runs
+    /// from slot 2: 4 is the `_reconstruct` global, 5 the text `numpy`, 7 the
+    /// `ndarray` class, 9 the placeholder byte string, 14 the `numpy.dtype`
+    /// class, 17 the finished dtype and 18 the byte order.
+    fn two_arrays(second_dtype: &[u8]) -> Vec<u8> {
+        cat(&[
+            b"}\x94(",
+            &word("a"),
+            &reconstruct(),
+            b"(K\x01K\x02\x85\x94",
+            &dtype_state(5, "i1", b'|'),
+            b"\x89",
+            &blob(&[1, 2]),
+            b"t\x94b",
+            &word("b"),
+            &get(4),
+            &get(7),
+            b"K\0\x85\x94",
+            &get(9),
+            b"\x87\x94R\x94",
+            b"(K\x01K\x03\x85\x94",
+            second_dtype,
+            b"\x89",
+            &blob(&[1, 2, 3]),
+            b"t\x94b",
+            b"u.",
+        ])
+    }
+
+    /// Every way the second array of a file may name what the first one wrote,
+    /// and the ones that are not a way.
+    #[test]
+    fn a_later_array_may_name_what_an_earlier_one_wrote() {
+        // The whole finished dtype, out of the slot its REDUCE filed it in.
+        let shared = two_arrays(&get(17));
+        let found = recognise(&framed(&shared)).unwrap();
+        assert_eq!(found.form, "numpy-numeric-array-p4-p5-v3");
+        let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
+        let dtypes: Vec<&str> = entries
+            .iter()
+            .map(|(_, v)| match &v.kind {
+                Kind::Array { dtype, .. } => dtype.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(dtypes, vec!["|i1", "|i1"]);
+        // The class and the letter separately: the dtype class out of its
+        // slot and the byte order out of the slot the first array wrote it in.
+        let apart = two_arrays(&cat(&[
+            &get(14),
+            &word("i1"),
+            b"\x89\x88\x87\x94R\x94(K\x03",
+            &get(18),
+            b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t\x94b",
+        ]));
+        assert!(recognise(&framed(&apart)).is_some());
+        // And the whole dtype written out again, which is what a file with two
+        // unlike arrays does. Its module name may be a reference or a word.
+        let again = two_arrays(&dtype_state(5, "i1", b'|'));
+        assert!(recognise(&framed(&again)).is_some());
+        let again = two_arrays(&dtype_state(9, "i1", b'|'));
+        assert!(recognise(&framed(&again)).is_none(), "slot 9 holds a byte string, not a module name");
+    }
+
+    /// A reference is only ever to a slot the form itself filled with the
+    /// thing the grammar expects to find there.
+    #[test]
+    fn a_reference_to_the_wrong_slot_is_a_non_match() {
+        assert!(recognise(&framed(&two_arrays(&get(17)))).is_some());
+        // Past the end of the memo, at a slot the file has not written yet,
+        // and at slots holding the dictionary, a key, a global, a byte string
+        // and the byte order: none of those is a dtype.
+        for slot in [255u8, 30, 0, 1, 4, 9, 18] {
+            assert!(recognise(&framed(&two_arrays(&get(slot)))).is_none(), "accepted a dtype at slot {slot}");
+        }
+        // The ndarray class where the reconstructor belongs, and the other way
+        // round: both slots hold a global, and neither holds the right one.
+        let swapped = cat(&[
+            b"}\x94(",
+            &word("a"),
+            &reconstruct(),
+            b"(K\x01K\x02\x85\x94",
+            &dtype_state(5, "i1", b'|'),
+            b"\x89",
+            &blob(&[1, 2]),
+            b"t\x94b",
+            &word("b"),
+            &get(7),
+            &get(4),
+            b"K\0\x85\x94",
+            &get(9),
+            b"\x87\x94R\x94(K\x01K\x03\x85\x94",
+            &get(17),
+            b"\x89",
+            &blob(&[1, 2, 3]),
+            b"t\x94bu.",
+        ]);
+        assert!(recognise(&framed(&swapped)).is_none());
+        // LONG_BINGET reaches the same slots the long way round, which is what
+        // a file with more than 256 of them has to do.
+        let long = cat(&[
+            b"}\x94(",
+            &word("a"),
+            &reconstruct(),
+            b"(K\x01K\x02\x85\x94",
+            &dtype_state(5, "i1", b'|'),
+            b"\x89",
+            &blob(&[1, 2]),
+            b"t\x94b",
+            &word("b"),
+            b"j\x04\0\0\0j\x07\0\0\0K\0\x85\x94j\x09\0\0\0\x87\x94R\x94(K\x01K\x03\x85\x94j\x11\0\0\0\x89",
+            &blob(&[1, 2, 3]),
+            b"t\x94b",
+            b"u.",
+        ]);
+        assert!(recognise(&framed(&long)).is_some());
+    }
+
+    /// A NumPy scalar is one number written as a call of its own.
+    #[test]
+    fn a_numpy_scalar_is_one_number_of_its_dtype() {
+        let scalar = |data: &[u8]| {
+            cat(&[
+                b"}\x94(",
+                &word("a"),
+                &reconstruct(),
+                b"(K\x01K\x02\x85\x94",
+                &dtype_state(5, "i2", b'<'),
+                b"\x89",
+                &blob(&[1, 0, 2, 0]),
+                b"t\x94b",
+                &word("b"),
+                &get(2),
+                &word("scalar"),
+                b"\x93\x94",
+                &get(17),
+                &blob(data),
+                b"\x86\x94R\x94",
+                b"u.",
+            ])
+        };
+        let found = recognise(&framed(&scalar(&[7, 0]))).unwrap();
+        let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
+        let Kind::Array { dtype, dimensions, len, .. } = &entries[1].1.kind else { panic!("array") };
+        assert_eq!((dtype.as_str(), dimensions.as_slice(), *len), ("<i2", &[][..], 2));
+        assert_eq!(found.calls.len(), 2);
+        assert_eq!(found.calls[1].name, "numpy scalar call");
+        // One value of the dtype and no more: a scalar is not an array of one.
+        assert!(recognise(&framed(&scalar(&[7, 0, 8, 0]))).is_none(), "two values in a scalar");
+        assert!(recognise(&framed(&scalar(&[7]))).is_none(), "half a value in a scalar");
+    }
+
+    /// An instruction moved, dropped or added, a length written in another
+    /// width, bytes after the STOP, and every truncation of the file.
+    #[test]
+    fn a_changed_instruction_leaves_no_match() {
+        let body = two_arrays(&get(17));
+        let whole = framed(&body);
+        assert!(recognise(&whole).is_some());
+
+        for end in 0..whole.len() {
+            assert!(recognise(&whole[..end]).is_none(), "accepted {end} bytes of the file");
+        }
+        let mut after = whole.clone();
+        after.push(b'N');
+        assert!(recognise(&after).is_none(), "accepted a value after the STOP");
+
+        // One instruction dropped: the memo mark that files the dictionary,
+        // the TUPLE1 that closes the placeholder shape, and a BUILD.
+        for cut in [0x94u8, 0x85, b'b'] {
+            let at = body.iter().position(|b| *b == cut).unwrap();
+            let mut short = body.clone();
+            short.remove(at);
+            assert!(recognise(&framed(&short)).is_none(), "accepted the file without {cut:#x}");
+        }
+        // One instruction inserted, beside every memo mark in the file.
+        for at in 0..body.len() {
+            if body[at] != 0x94 {
+                continue;
+            }
+            let mut longer = body.clone();
+            longer.insert(at, 0x94);
+            assert!(recognise(&framed(&longer)).is_none(), "accepted an extra memo mark at {at}");
+        }
+        // Two instructions swapped: the flags a dtype is built with.
+        let mut reordered = body.clone();
+        let at = reordered.windows(2).position(|w| w == b"\x89\x88").unwrap();
+        reordered.swap(at, at + 1);
+        assert!(recognise(&framed(&reordered)).is_none(), "accepted NEWTRUE before NEWFALSE");
+
+        // A length in another width. BINBYTES is an alternative of its own, so
+        // it is matched; a length that no longer comes to the declared shape
+        // is not.
+        let at = body.windows(4).position(|w| w == b"C\x03\x01\x02").unwrap();
+        let mut wide = body.clone();
+        wide.splice(at..at + 2, [b'B', 3, 0, 0, 0]);
+        assert!(recognise(&framed(&wide)).is_some());
+        let mut mismatched = wide.clone();
+        mismatched[at + 1] = 4;
+        assert!(recognise(&framed(&mismatched)).is_none(), "a length past the shape it declared");
+    }
+
+    /// Frames, as CPython writes them: a run of them, with a payload of
+    /// [`BIG_PAYLOAD`] bytes or more written between two rather than inside
+    /// one.
+    #[test]
+    fn a_payload_too_large_to_frame_sits_between_frames() {
+        let head = cat(&[b"}\x94(", &word("a"), b"K\x01", &word("big")]);
+        let tail = cat(&[b"\x94", &word("c"), b"K\x02u."]);
+        let carrying = |size: usize| {
+            let mut out = vec![b'B'];
+            out.extend_from_slice(&(size as u32).to_le_bytes());
+            out.resize(out.len() + size, 0xa5);
+            out
+        };
+        let build = |payload: &[u8]| {
+            let mut out = vec![0x80, 4, 0x95];
+            out.extend_from_slice(&(head.len() as u64).to_le_bytes());
+            out.extend_from_slice(&head);
+            out.extend_from_slice(payload);
+            out.push(0x95);
+            out.extend_from_slice(&(tail.len() as u64).to_le_bytes());
+            out.extend_from_slice(&tail);
+            out
+        };
+        let whole = build(&carrying(BIG_PAYLOAD));
+        let found = recognise(&whole).unwrap();
+        assert_eq!(found.form, "basic-p4-p5-v3");
+        let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
+        assert_eq!(entries.len(), 3);
+        assert!(matches!(entries[1].1.kind, Kind::Bytes { len, .. } if len == BIG_PAYLOAD));
+
+        // The first frame one byte short of the payload's opcode, so the
+        // opcode would begin inside a frame rather than after one.
+        let mut early = whole.clone();
+        early[3] -= 1;
+        assert!(recognise(&early).is_none(), "a frame that ends before the payload");
+        // The whole body inside one frame, payload and all.
+        let inside = cat(&[&head, &carrying(BIG_PAYLOAD), &tail]);
+        let mut once = vec![0x80, 4, 0x95];
+        once.extend_from_slice(&(inside.len() as u64).to_le_bytes());
+        once.extend_from_slice(&inside);
+        assert!(recognise(&once).is_none(), "a large payload inside a frame");
+        // A payload one byte short of large, written between frames anyway.
+        assert!(recognise(&build(&carrying(BIG_PAYLOAD - 1))).is_none(), "a small payload between frames");
+        // No new frame after the payload.
+        let mut headless = vec![0x80, 4, 0x95];
+        headless.extend_from_slice(&(head.len() as u64).to_le_bytes());
+        headless.extend_from_slice(&head);
+        headless.extend_from_slice(&carrying(BIG_PAYLOAD));
+        headless.extend_from_slice(&tail);
+        assert!(recognise(&headless).is_none(), "no frame after the payload");
+        // Truncation, since a frame's length is a claim about bytes that may
+        // not have arrived.
+        for end in [0, 3, 11, head.len() + 11, whole.len() - 1] {
+            assert!(recognise(&whole[..end]).is_none(), "accepted {end} bytes");
+        }
+    }
+
+    /// The builtins a pickle writes as a call: what each one accepts, and what
+    /// none of them do.
+    #[test]
+    fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
+        let call = |name: &str, args: &[u8], arity: u8| {
+            cat(&[&word("builtins"), &word(name), b"\x93\x94", args, &[0x84 + arity, 0x94, b'R', 0x94]])
+        };
+        let one = |body: Vec<u8>| framed(&cat(&[&body, b"."]));
+        let cases: Vec<(Vec<u8>, Shape)> = vec![
+            (call("slice", b"K\x01K\x0aK\x02", 3), Shape::Slice),
+            (call("slice", b"NNN", 3), Shape::Slice),
+            (call("slice", b"M\x39\x30J\xff\xff\xff\xffK\x02", 3), Shape::Slice),
+            (call("range", b"K\0K\x0aK\x02", 3), Shape::Range),
+            (call("complex", b"G\x3f\xf8\0\0\0\0\0\0G\xc0\x04\0\0\0\0\0\0", 2), Shape::Complex),
+            (b"(K\x01K\x02\x91\x94".to_vec(), Shape::FrozenSet),
+            (b"(\x91\x94".to_vec(), Shape::FrozenSet),
+            (call("bytearray", &blob(b"ab"), 1), Shape::ByteArray),
+        ];
+        for (body, want) in &cases {
+            let found = recognise(&one(body.clone())).unwrap_or_else(|| panic!("{want:?} was not matched"));
+            assert_eq!(found.form, "builtins-values-p4-p5-v1", "{want:?}");
+            let Kind::Object { what, .. } = &found.value.kind else { panic!("{want:?} is not an object") };
+            assert_eq!(what, want);
+        }
+
+        // The values themselves, read from the bytes they were written in.
+        let found = recognise(&one(call("complex", b"G\x3f\xf8\0\0\0\0\0\0G\xc0\x04\0\0\0\0\0\0", 2))).unwrap();
+        let Kind::Object { items, names, .. } = &found.value.kind else { panic!("object") };
+        assert_eq!(*names, HALVES);
+        let halves: Vec<f64> = items
+            .iter()
+            .map(|v| match v.kind {
+                Kind::Float { value, .. } => value,
+                _ => panic!("not a float"),
+            })
+            .collect();
+        assert_eq!(halves, vec![1.5, -2.5]);
+
+        // And what none of them take: another callable of the same module, the
+        // wrong arity, a value of the wrong kind, and a module that is not
+        // builtins.
+        for body in [
+            call("eval", b"K\x01K\x0aK\x02", 3),
+            call("slice", b"K\x01K\x0a", 2),
+            call("slice", b"K\x01K\x0aK\x02K\x03", 3),
+            call("range", b"NK\x0aK\x02", 3),
+            call("complex", b"K\x01K\x02", 2),
+            call("bytearray", &word("ab"), 1),
+            cat(&[&word("os"), &word("system"), b"\x93\x94)\x94R\x94"]),
+        ] {
+            assert!(recognise(&one(body.clone())).is_none(), "accepted {body:?}");
+        }
+    }
+
+    /// A form is the productions it allows, and a file is read under exactly
+    /// one of them.
+    #[test]
+    fn a_form_is_the_productions_it_allows() {
+        assert_eq!(recognise(&framed(b"}\x94.")).unwrap().form, "basic-p4-p5-v3");
+        let slice = cat(&[
+            b"}\x94",
+            &word("s"),
+            &word("builtins"),
+            &word("slice"),
+            b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94s.",
+        ]);
+        assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v1");
+        let array = cat(&[b"}\x94", &word("a"), &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]), b"s."]);
+        assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-numeric-array-p4-p5-v3");
+        // A file holding both is read under neither: no form that allows both
+        // has been reviewed.
+        let both = cat(&[
+            b"}\x94(",
+            &word("a"),
+            &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]),
+            &word("s"),
+            &word("builtins"),
+            &word("slice"),
+            b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94u.",
+        ]);
+        assert!(recognise(&framed(&both)).is_none());
+    }
 }
