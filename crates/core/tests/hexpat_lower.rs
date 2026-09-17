@@ -516,6 +516,44 @@ fn addressof_this_is_the_start_of_the_structures_first_field() {
 	assert_eq!(read(&out, &[0, 0, 4, 1, 2, 3], &["c", "body"]), "3 children");
 }
 
+/// A zero-width value worked out before the first read is still the field the
+/// structure starts at, so it says where the structure began.
+#[test]
+fn addressof_this_reads_through_a_computed_first_field() {
+	let out = clean(
+		"struct C { u32 n = 4; u8 size; u8 body[size - ($ - addressof(this))]; };\nC c @ 0x02;\n",
+	);
+	assert_eq!(read(&out, &[0, 0, 4, 1, 2, 3], &["c", "body"]), "3 children");
+}
+
+/// A placed first field is where it points rather than where it stands, so it
+/// does not say where the structure began.
+#[test]
+fn addressof_this_after_a_placed_first_field_is_a_gap() {
+	let out = convert("struct C { u32 x @ 0x10; u8 body[addressof(this)]; };\nC c @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("addressof(this)"), "{}", gap_reasons(&out));
+}
+
+/// A local one `if` settles is readable after that `if` and not inside it, and
+/// the gap inside says so rather than that the name is missing.
+#[test]
+fn a_folded_local_says_it_is_readable_after_the_if_and_not_inside_it() {
+	let out = convert(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 1;\n\
+		 \tif (kind == 1) {\n\
+		 \t\tsize = 3;\n\
+		 \t} else {\n\
+		 \t\tu8 over[size];\n\
+		 \t\tsize = 2;\n\
+		 \t}\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert!(gap_reasons(&out).contains("can be read after it, not inside it"), "{}", gap_reasons(&out));
+}
+
 /// A structure that has read nothing yet has no field whose start says where
 /// it began, and `SpacePos` will not do: a `[while(..)]` condition is worked
 /// out again before every element, so `$ == addressof(this)` written as
@@ -562,6 +600,24 @@ fn a_top_level_if_that_places_fields_is_one_when_per_block() {
 	);
 	assert_eq!(read(&out, &[1, 0x34, 0x12], &["if_1", "wide"]), "4660");
 	assert_eq!(read(&out, &[2, 0x34, 0x12], &["else_2", "narrow"]), "52");
+}
+
+/// `@ $` is the end of the placement before it, and after an `if` that placed
+/// a field there is no one such end: the field is only there when the
+/// condition held. A guess at which would read the file wrongly.
+#[test]
+fn a_dollar_address_after_a_top_level_if_that_placed_a_field_is_a_gap() {
+	let out = convert("u8 k @ 0x00;\nif (k == 1) {\n\tu8 a @ 0x01;\n}\nu8 b @ $;\n");
+	assert!(gap_reasons(&out).contains("depends on the condition"), "{}", gap_reasons(&out));
+	assert!(!render(&out.template).contains("b:"), "{}", render(&out.template));
+}
+
+/// An unconditional placement after the `if` settles it again, so the `@ $`
+/// after that one is the ordinary meaning.
+#[test]
+fn a_placement_after_the_if_settles_where_the_next_dollar_address_is() {
+	let out = clean("u8 k @ 0x00;\nif (k == 1) {\n\tu8 a @ 0x01;\n}\nu16 m @ 0x02;\nu8 b @ $;\n");
+	assert_eq!(read(&out, &[0, 0, 0, 0, 7], &["b"]), "7");
 }
 
 /// A block that places nothing is left as one gap naming the `if`. A gap on

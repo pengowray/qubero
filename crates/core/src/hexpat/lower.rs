@@ -84,6 +84,7 @@ pub fn lower(name: &str, program: &Program) -> Result<Converted, HexpatError> {
 		depth: 0,
 		resolving: HashSet::new(),
 		folded: HashSet::new(),
+		previous_conditional: false,
 	};
 
 	let pragmas = lower.read_pragmas(program)?;
@@ -293,6 +294,11 @@ struct Lower<'a> {
 	/// address of the statement, so the walk through the `if`'s own members
 	/// passes over them rather than reporting the same thing twice.
 	folded: HashSet<usize>,
+	/// Whether the last thing placed at the top level was placed inside a
+	/// block of a top-level `if`. A `@ $` after one of those means the end of
+	/// a field that is only there when the condition held, which is not one
+	/// address, so it is a gap rather than a guess at which.
+	previous_conditional: bool,
 }
 
 /// What happened to one field that could not be said.
@@ -521,10 +527,15 @@ impl<'a> Lower<'a> {
 			}
 		};
 		self.report.became(path, source, "one condition over the whole block, not one per field");
+		// What `@ $` means outside the `if` is the end of the last placement
+		// outside it, which the blocks' own placements must not move.
+		let before = previous.clone();
+		let mut placed_in_a_block = false;
 		for (half, negated) in [(&branches.then, false), (&branches.otherwise, true)] {
 			if half.is_empty() {
 				continue;
 			}
+			*previous = before.clone();
 			self.blocks += 1;
 			let name = format!("{}_{}", if negated { "else" } else { "if" }, self.blocks);
 			let mut inner: Vec<Field> = Vec::new();
@@ -549,6 +560,11 @@ impl<'a> Lower<'a> {
 			let when = if negated { cond.clone().negate() } else { cond.clone() };
 			machinery.push(Arc::from(name.as_str()));
 			fields.push(named_field(&name, Ty::when(when, ty), false));
+			placed_in_a_block = true;
+		}
+		*previous = before;
+		if placed_in_a_block {
+			self.previous_conditional = true;
 		}
 		Ok(())
 	}
@@ -625,6 +641,7 @@ impl<'a> Lower<'a> {
 					machinery.push(field.name.clone());
 				}
 				*previous = Some(field.name.to_string());
+				self.previous_conditional = false;
 				self.stack.last_mut().expect("a frame").names.push(name);
 				fields.push(field);
 			}
@@ -637,6 +654,7 @@ impl<'a> Lower<'a> {
 					let mut field = named_field(&name, Ty::at(address, ty), false);
 					field.doc = Some(Arc::from("the converter could not say what this is; see the report"));
 					*previous = Some(field.name.to_string());
+					self.previous_conditional = false;
 					self.stack.last_mut().expect("a frame").names.push(name);
 					fields.push(field);
 				}
@@ -650,6 +668,11 @@ impl<'a> Lower<'a> {
 	fn top_address(&mut self, address: &super::expr::Expr, previous: Option<&str>) -> R<Expr> {
 		if let ExprKind::Path(segments) = &address.kind {
 			if segments.len() == 1 && matches!(segments[0], PathSeg::Dollar) {
+				if self.previous_conditional {
+					return Err(Gap::new(
+						"`@ $` after a top-level `if` that placed a field, where the end of the placement before this one depends on the condition and is not one address",
+					));
+				}
 				return match previous {
 					Some(name) => Ok(Expr::start_of(Expr::field(name)).add(Expr::size_of(name))),
 					None => Ok(Expr::lit(0)),
@@ -1054,6 +1077,14 @@ impl<'a> Lower<'a> {
 					self.folded.insert(statement as *const _ as usize);
 				}
 			}
+			// The declaration waits for its `if`, so a reference inside the
+			// `if` itself has nothing to name yet. Say that rather than let it
+			// fall through to "not a field in scope here".
+			let at = self.at(member_pos(&members[fold.at]));
+			self.cannot_read(
+				name,
+				format!("{name} is settled by the `if` at {at} and can be read after it, not inside it"),
+			);
 			out.at_if.entry(fold.at).or_default().push(index);
 			out.decls.insert(index, fold);
 		}
@@ -2281,7 +2312,10 @@ impl<'a> Lower<'a> {
 		let Some(first) = fields.first() else { return };
 		frame.started = true;
 		frame.start = match first.ty {
-			Ty::When { .. } | Ty::Switch { .. } => None,
+			// A field only a condition reads may not be there to be the start
+			// of, and a placed field's start is where it points rather than
+			// where it stands, so neither says where the structure began.
+			Ty::When { .. } | Ty::Switch { .. } | Ty::At { .. } => None,
 			_ => Some(Expr::start_of(Expr::field(&first.name))),
 		};
 	}

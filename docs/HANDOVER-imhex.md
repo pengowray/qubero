@@ -410,7 +410,7 @@ of each construct, ready to become a gap.
 2026-09-17: the lowering landed, in `crates/core/src/hexpat/{lower,types,includes}.rs`
 with `pub fn convert(text, &dyn Includes)` in `hexpat/mod.rs`, and the
 `Report`/`Became`/`Gap`/`Note` shape moved out of `ksy/` into
-`crates/core/src/report.rs` so both converters share it. 58 tests in
+`crates/core/src/report.rs` so both converters share it. 63 tests in
 `crates/core/tests/hexpat_lower.rs`, one per mapping row and one per imperative
 construct, each reading bytes written by hand for it, plus three
 `template_text::render` snapshots in
@@ -470,8 +470,10 @@ and the totals were measured again after each.
   the file with it, so it is the one byte at the address `e`, a `PeekAt` for
   `$` and `$ + k` and a `PeekIn` otherwise. `addressof(this)` needs no
   `Expr::HereStart` after all: it is `StartOf` of the structure's first field,
-  which `Frame` now records as each level's first field is placed. A structure
-  that has read nothing yet is still a gap, and deliberately: `SpacePos` would
+  which `Frame` now records as each level's first field is placed. A first
+  field that is placed, or that only a condition reads, does not answer either:
+  a placed field's start is where it points. A structure that has read nothing
+  yet is still a gap, and deliberately: `SpacePos` would
   be right once and a `[while(..)]` condition is worked out again before every
   element, so `$ == addressof(this)` would become `SpacePos == SpacePos`, true
   every time.
@@ -483,6 +485,18 @@ and the totals were measured again after each.
   is not a table of end-anchored ones, it is one hand-written rule for the ZIP
   central directory. `bundled.rs` keeps `signature: &[(u64, bytes)]` for the
   same reason.
+
+Two holes the five left open, neither of them costing a gap in the corpus and
+both worth knowing:
+
+* **A `$ = e` inside an `if` block ends the block and not the structure.**
+  `conditional` returns true whatever the block managed, so the members after
+  the `if` are read where they were. The structure-level hole is closed and
+  this one is not: closing it means a block that could not be placed has to
+  end the structure around it, which is a change to what `When` promises.
+* **`@ $` after a top-level `if` that placed a field is a gap**, because the
+  end of the placement before it depends on the condition and is not one
+  address. An unconditional placement after the `if` settles it again.
 
 `HEXPAT_DUMP=1` on the example prints every gap as `GAP<tab>pattern<tab>line:col
 <tab>reason<tab>source`, which is how the five were classified. The histogram
