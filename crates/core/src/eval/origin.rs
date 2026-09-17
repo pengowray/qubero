@@ -65,6 +65,12 @@ pub enum Role {
     /// picks that shape". Nothing produces one from a file, since a resolved
     /// node has taken its case already; see [`crate::eval::diagram`].
     Case,
+    /// Not about the field's shape at all: this field says what the one asking
+    /// *holds*. A run of samples is as long as the chunk says whatever the
+    /// sound in it is, and the channel count, the rate and the sample width
+    /// are what make the run a table of sound rather than a run of numbers.
+    /// See [`crate::template::TableShape`].
+    Describes,
 }
 
 impl Role {
@@ -80,6 +86,7 @@ impl Role {
             Role::Points => "points",
             Role::Condition => "condition",
             Role::Case => "case",
+            Role::Describes => "describes",
         }
     }
 }
@@ -122,7 +129,7 @@ pub struct Origin {
 /// expression walking below is one piece of code, and the decision about
 /// values is made once, here.
 pub(super) struct Sink {
-    out: Vec<Origin>,
+    pub(super) out: Vec<Origin>,
     /// Read what each named field says, and work out what an aggregate over a
     /// list comes to.
     values: bool,
@@ -131,7 +138,7 @@ pub(super) struct Sink {
 impl Sink {
     /// An empty collection, saying whether the reader wants what each field
     /// says as well as which field it was.
-    fn told(values: bool) -> Sink {
+    pub(super) fn told(values: bool) -> Sink {
         Sink { out: Vec::new(), values }
     }
 
@@ -627,7 +634,7 @@ impl Evaluator {
 
     /// Every field an expression reads, in the order it reads them. An
     /// expression made only of numbers names no field and produces nothing.
-    fn from_expr<S: Source>(
+    pub(super) fn from_expr<S: Source>(
         &mut self,
         doc: &Document<S>,
         at: &[usize],
@@ -639,6 +646,18 @@ impl Evaluator {
             Expr::Ref(name) => {
                 if let Some(p) = self.find_field(at, name) {
                     let o = self.origin(doc, out.values, role, name.to_string(), p);
+                    out.push(o);
+                }
+            }
+            // A field of an earlier element of the enclosing list, which is
+            // how one chunk reads what another declared: a WAV `data` chunk
+            // asks the `fmt ` chunk before it how wide its samples are. The
+            // number is somewhere a reader can go, so it is an answer like any
+            // other, named by the path the template wrote.
+            Expr::Sibling(field) => {
+                let field = field.clone();
+                if let Some(p) = self.sibling_field_path(doc, at, &field)? {
+                    let o = self.origin_from(doc, out.values, role, field.join("."), p, at)?;
                     out.push(o);
                 }
             }

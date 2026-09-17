@@ -668,6 +668,9 @@ fn field_extras(f: &Field) -> Vec<String> {
     if let Some(c) = &f.elem_check {
         out.push(format!("element check {}", check_text(c)));
     }
+    if let Some(t) = &f.table {
+        out.push(table_text(t));
+    }
     out
 }
 
@@ -693,6 +696,39 @@ fn valid_text(v: &Valid) -> String {
         },
         Valid::Finite => "valid finite".to_string(),
     }
+}
+
+/// What a field claims about reading as a table, in the order a reader asks:
+/// how a row is made, how fast rows come, what a row and a column are called,
+/// what the columns are, and which fields describe the whole thing.
+///
+/// The lists are bracketed rather than run on, because every part of this is
+/// separated by commas already and `named left, right, describes ...` reads as
+/// one list of four things.
+fn table_text(t: &TableShape) -> String {
+    let mut parts = Vec::new();
+    if let Some(e) = &t.columns {
+        parts.push(format!("columns {}", expr(e)));
+    }
+    if let Some(e) = &t.rate {
+        parts.push(format!("rate {}", expr(e)));
+    }
+    if let Some(w) = &t.row_word {
+        parts.push(format!("rows {w}"));
+    }
+    if let Some(w) = &t.column_word {
+        parts.push(format!("column word {w}"));
+    }
+    if !t.names.is_empty() {
+        parts.push(format!("named [{}]", t.names.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")));
+    }
+    if t.units.iter().any(|u| !u.is_empty()) {
+        parts.push(format!("units [{}]", t.units.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(", ")));
+    }
+    if !t.facts.is_empty() {
+        parts.push(format!("describes [{}]", t.facts.iter().map(expr).collect::<Vec<_>>().join(", ")));
+    }
+    format!("table {}", parts.join(", "))
 }
 
 fn check_text(c: &Check) -> String {

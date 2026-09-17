@@ -426,6 +426,11 @@ export class HexView {
    *  document of their own. The same thing the listing's Open unpacked does,
    *  reached from the bytes rather than from the list of parts. */
   onOpenUnpacked: (path: readonly number[]) => void = () => {};
+  /** Open a run of records as a table, on the same second press. */
+  onOpenTable: (path: readonly number[]) => void = () => {};
+  /** Whether a list reads as a table. Answered by the page: it takes the file,
+   *  which the view does not read for itself. */
+  tableAt: (path: readonly number[]) => boolean = () => false;
   /** The selection after it changed, or null when there is none. */
   onSelectionChange: (r: BitRange | null) => void = () => {};
   /** The stretch of the file on screen, after every draw. The rail marks the
@@ -451,7 +456,12 @@ export class HexView {
     this.el.setAttribute("role", "grid");
     this.el.setAttribute("aria-label", "File contents");
 
-    this.grid = new HexRows({ field: this.pickField, value: this.pickValue, heading: this.pressHeading });
+    this.grid = new HexRows({
+      field: this.pickField,
+      value: this.pickValue,
+      heading: this.pressHeading,
+      isTable: (path) => this.tableAt(path),
+    });
     this.rowsEl = document.createElement("div");
     this.rowsEl.className = "hv-rows";
     this.links = new HexLinks((byte) => this.byteBox(byte));
@@ -492,9 +502,17 @@ export class HexView {
       const t = e.target;
       if (!(t instanceof HTMLElement)) return;
       const at = t.closest<HTMLElement>("[data-opens]")?.dataset["opens"];
-      if (at === undefined) return;
+      if (at !== undefined) {
+        e.preventDefault();
+        this.onOpenUnpacked(at === "" ? [] : at.split(".").map(Number));
+        return;
+      }
+      // The other thing a second press opens: the run under the chip, read as
+      // the rows it is.
+      const table = t.closest<HTMLElement>("[data-table]")?.dataset["table"];
+      if (table === undefined) return;
       e.preventDefault();
-      this.onOpenUnpacked(at === "" ? [] : at.split(".").map(Number));
+      this.onOpenTable(table === "" ? [] : table.split(".").map(Number));
     });
     this.el.addEventListener("relayout", () => this.relayout());
     this.rowsEl.addEventListener("pointerdown", (e) => this.onPointerDown(e));

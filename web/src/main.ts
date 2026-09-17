@@ -17,11 +17,13 @@ import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY
 import { Crystal } from "./crystal.ts";
 import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
+import { isTable, tablePlan } from "./tableplan.ts";
+import { TableView } from "./tableview.ts";
 import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
 import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateSignatureMismatch, templateTypeName } from "./filetype.ts";
-import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
+import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin, childWord, TABLE } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
 import { KsyPanel } from "./ksypanel.ts";
@@ -141,7 +143,10 @@ function linkCursor(from: Tab, bitOffset: number): MapStep | null {
     return step;
   }
   for (const t of tabs.all) {
-    if (t.doc.isFile) continue;
+    // A table has no bits of its own: its rows are the file's, and it is told
+    // where the cursor is by `markTables` rather than by mapping between two
+    // address spaces.
+    if (t.doc.isFile || t.kind.view !== "document") continue;
     const mark = markFromRange(t.doc.mapIn(bitOffset));
     links.get(t)?.mark(mark?.startBit ?? null, mark?.endBit);
     if (mark === null) markedBy.delete(t);
@@ -310,6 +315,84 @@ function mount(doc: Doc): void {
   tabs.only({ doc, title: doc.name });
 }
 
+/** Build the page a tab wants: the whole of a document, or one list inside
+ *  one read as a table. */
+function build(tab: Tab): Page {
+  const kind = tab.kind;
+  return kind.view === "table" ? buildTable(tab, kind.path) : buildDocument(tab);
+}
+
+/**
+ * The tab a table opens in: the view and nothing else.
+ *
+ * No toolbar and no status bar, because neither would have anything to say
+ * here. A table is a reading of somebody else's bytes, so every control that
+ * is about the file -- the template, the encoding, saving -- belongs to the
+ * document tab this one was opened from, and the two are tied together by the
+ * cursor rather than by a second copy of the controls.
+ */
+function buildTable(tab: Tab, path: readonly number[]): Page {
+  const doc = tab.doc;
+  const page = el("div", { className: "tabpage tabpage-table" });
+  const reply = doc.templateNode(path);
+  const plan = reply.status === "ok" ? tablePlan(doc, reply.node) : null;
+  if (reply.status !== "ok" || plan === null) {
+    // The field is gone, or the template that named it is. Nothing to draw and
+    // nothing to fix from in here: the reader closes the tab.
+    page.append(el("p", { className: "rp-empty", textContent: TABLE.gone }));
+    return { el: page, shown: () => {} };
+  }
+  const view = new TableView(doc, plan, { title: reply.node.name });
+  page.append(view.el);
+  /** The document tab these rows are stored in, which is where a pick goes. */
+  const home = (): Tab | undefined => tabs.all.find((t) => t.kind.view === "document" && t.doc === doc);
+  const goHome = (startBit: number, endBit: number): void => {
+    const at = home();
+    if (at === undefined) return;
+    links.get(at)?.goTo(startBit);
+    links.get(at)?.mark(startBit, endBit);
+  };
+  view.onPick = ({ startBit, endBit }) => goHome(startBit, endBit);
+  // A fact, or a link in a cell, names another field: the cursor goes to it
+  // the same way picking a row goes to the row's own bytes.
+  view.onFactPick = (at) => {
+    const n = doc.templateNode(at);
+    if (n.status !== "ok") return;
+    goHome(n.node.offset_bits, n.node.offset_bits + n.node.size_bits);
+  };
+  // What the document tab may do to this one: put the selection on the row its
+  // cursor is in, and bring the table up with a row selected.
+  links.set(tab, {
+    mark: (startBit) => {
+      if (startBit === null) view.clearSelection();
+      else view.setBit(startBit);
+    },
+    goTo: (bit) => {
+      view.setBit(bit);
+      view.el.focus();
+    },
+  });
+  tab.release.push(() => links.delete(tab));
+  return {
+    el: page,
+    shown: () => {
+      // The status slot is the document page's. Nothing here writes to it, so
+      // it is left saying nothing rather than saying whatever the page before
+      // this one left in it.
+      say = () => {};
+      dropKsy = () => {};
+      dropHexpat = () => {};
+      view.shown();
+    },
+  };
+}
+
+/** Every table open on one document follows its cursor: a cursor inside the
+ *  table selects the row holding it, and one outside leaves the table alone. */
+function markTables(doc: Doc, bitOffset: number): void {
+  for (const t of tabs.all) if (t.kind.view === "table" && t.doc === doc) links.get(t)?.mark(bitOffset);
+}
+
 /**
  * Build the page for one tab: the toolbar, the three views, the rail, the
  * inspector and the status bar, all over that tab's document.
@@ -319,7 +402,7 @@ function mount(doc: Doc): void {
  * showing before it acts, and has to come off again when the tab closes. `key`
  * is how a page does both.
  */
-function build(tab: Tab): Page {
+function buildDocument(tab: Tab): Page {
   const doc = tab.doc;
   const key = (fn: (e: KeyboardEvent) => void): void => {
     const on = (e: KeyboardEvent): void => {
@@ -651,6 +734,34 @@ function build(tab: Tab): Page {
   };
   structure.onOpenUnpacked = openUnpacked;
   inspector.onOpenUnpacked = openUnpacked;
+  /** Open one list as a table of its own, or bring the table already open on
+   *  it to the front. The rows are read where they are asked for, so a second
+   *  ask for the same list is the same tab rather than the same work twice. */
+  const openTable = (path: readonly number[]): void => {
+    const n = doc.templateNode(path);
+    if (n.status !== "ok") return;
+    const already = tabs.forTable(doc, path);
+    if (already >= 0) {
+      tabs.focus(already);
+      return;
+    }
+    const rows = tablePlan(doc, n.node)?.rowWord ?? childWord(n.node);
+    tabs.add({
+      doc,
+      title: TABLE.tabTitle(n.node.name, doc.name),
+      origin: TABLE.tabTooltip(rows, n.node.name, doc.name),
+      kind: { view: "table", path },
+    });
+  };
+  structure.onOpenTable = openTable;
+  inspector.onOpenTable = openTable;
+  view.onOpenTable = openTable;
+  // Whether a run of bytes reads as a table, for the chips beside them: the
+  // view draws the mark, and what it means is worked out here.
+  view.tableAt = (path) => {
+    const n = doc.templateNode(path);
+    return n.status === "ok" && isTable(doc, n.node);
+  };
   // And from the bytes themselves: a chip marked as holding a file opens it on
   // a second press, which is what a second press means on every other picture
   // in this app.
@@ -1841,6 +1952,7 @@ function build(tab: Tab): Page {
   };
   view.onCursorChange = (c) => {
     inspector.setOffset(c.bitOffset);
+    markTables(doc, c.bitOffset);
     if (!text.el.hidden) void text.setByte(Math.floor(c.bitOffset / 8));
     if (!picking) {
       followCursor(c.bitOffset);

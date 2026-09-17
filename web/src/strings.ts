@@ -618,6 +618,71 @@ export const UNPACKED = {
 };
 
 /**
+ * A list read as a table of its own, in a tab beside the file's.
+ *
+ * Every word for what a row is comes from the format: samples of a WAV,
+ * records of a dBase file, values of a list nothing has a better word for. So
+ * the strings take the singular and make the plural here, rather than each
+ * caller working out whether it holds one word or two.
+ */
+export const TABLE = {
+  /** The button that opens the table, wherever it is offered: the panel at the
+   *  cursor, the listing heading, a run chip's tooltip. The row word carries
+   *  what the table is of, so a reader who presses it knows what the rows will
+   *  be before the tab opens. */
+  open: (rowWord: string): string => `View ${plural(rowWord)} as table`,
+  /** Names the tab. The file stays on it because several tables can be open at
+   *  once, and `samples as table` alone names the wrong one as readily as the
+   *  right one. */
+  tabTitle: (field: string, file: string): string => `${field} as table · ${file}`,
+  /** The same on hover, spelled out: what the rows are, and where they came
+   *  from. */
+  tabTooltip: (rowWord: string, field: string, file: string): string =>
+    `Table of ${plural(rowWord)} from ${field} of ${file}`,
+  /** How many rows there are, in the bar above them. */
+  count: (n: number, rowWord: string): string => countText(n, rowWord),
+  /**
+   * What one row is, said once above the table so the columns do not have to
+   * say it. A rate makes the spacing worth stating: 44,100 rows a second is
+   * the fact that turns a quarter of a million rows into five seconds of
+   * sound.
+   */
+  rowMeaning: (rowWord: string, columnWord: string, rate: string): string =>
+    `Each row is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
+  /** The same where the shape has no word for a column. */
+  rowMeaningPlain: (rowWord: string, rate: string): string => `Each row is one ${rowWord}, 1/${rate} s apart.`,
+  /** Following one of those facts to where it is stored. Not on the button
+   *  itself, which is read as a fact rather than as a control: the label and
+   *  the value are what the reader came for, and where it lives is the answer
+   *  to pressing it. */
+  factTitle: (label: string): string => `Show where ${label} is stored`,
+  /** The row's number. A bare `#` because the column beside it already says
+   *  what the rows are. */
+  index: "#",
+  /** When the rows are spaced in time, where they are in it. The unit is in
+   *  the heading rather than in every cell. */
+  time: "time (s)",
+  /** A column the shape's names do not cover, numbered from 1 the way the
+   *  format numbers its channels. */
+  column: (columnWord: string, n: number): string => `${columnWord} ${n}`,
+  /** The word to number columns by when the shape gives none. */
+  columnFallback: "column",
+  /** The two columns of the data lens: where the row is kept, and how much of
+   *  the file it is. Off until the reader asks, since a table of samples is
+   *  about the sound and not about the bytes. */
+  storedAt: "Stored at",
+  size: "Size",
+  /** The tab is open on a field the file no longer has: the template changed
+   *  under it, or the bytes it read did. Said rather than left blank, since an
+   *  empty tab reads as something broken. */
+  gone: "These rows are no longer in the file",
+  /** The checkbox that adds them. "byte" rather than "file": inside an
+   *  unpacked stream the addresses are of the stream, and what is true of both
+   *  is that they are addresses of bytes. */
+  addresses: "Show byte addresses",
+} as const;
+
+/**
  * One line saying where a byte of an unpacked stream came from, as the status
  * bar and the inspector both say it:
  * `from bits 0x1a3.5 to 0x1a4.2 of hello.txt.zst: match, 5 bytes back 12`,

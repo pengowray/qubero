@@ -286,6 +286,9 @@ struct NodeDto {
     /// the annotation column puts beside the bytes. Null for a leaf, for a
     /// list, and for a structure too long to read on a line.
     line: Option<String>,
+    /// True when the template says this field reads as a table: interleaved
+    /// samples, a list of records. `table_shape` says what of.
+    table: bool,
 }
 
 /// One element of a folded run, as the value table draws it.
@@ -1028,6 +1031,43 @@ struct CheckDto {
     /// over a record the field sits inside and they are read as something else
     /// while it runs. A tar header is summed with its checksum read as spaces.
     blanked: Option<[f64; 3]>,
+}
+
+/// What table a field reads as, with the template's expressions worked out in
+/// the file at hand. See [`qubero_core::eval::TableShapeInfo`].
+#[derive(Serialize)]
+struct TableShapeDto {
+    /// Elements per row. Null when one element is one row, and null as well
+    /// when the template said how many but this file does not answer.
+    columns: Option<f64>,
+    /// What the columns are called, used when there are exactly this many.
+    names: Vec<String>,
+    /// The units the columns are measured in, as UCUM codes, parallel to
+    /// `names`. An empty string for a column with no unit.
+    units: Vec<String>,
+    /// What to call a column that `names` does not reach: "channel" gives
+    /// "channel 1", "channel 2". Null when the format has no word for one.
+    column_word: Option<String>,
+    /// What one row is: "sample", "record". Null when the format has no word.
+    row_word: Option<String>,
+    /// Rows per second, when the rows are spaced in time. Null otherwise.
+    rate: Option<f64>,
+    /// The fields that describe the table, to be shown above it with links to
+    /// where they are stored.
+    facts: Vec<TableFactDto>,
+}
+
+/// One field that describes a table: what it is called, where it is, and what
+/// it says.
+#[derive(Serialize)]
+struct TableFactDto {
+    /// The field as the reader would name it: `body.sample_rate`.
+    label: String,
+    /// Where it is, so the reader can go there. Empty when it is nowhere this
+    /// reading can point at.
+    path: Vec<f64>,
+    /// What it says, in brief. Empty when it could not be read.
+    value: String,
 }
 
 /// The moment a field means, once the template's epoch has been applied to the
@@ -2731,6 +2771,7 @@ fn dto(n: NodeInfo) -> NodeDto {
         absent: n.absent,
         doc: n.doc,
         line: n.line,
+        table: n.table,
     }
 }
 
@@ -4094,6 +4135,45 @@ impl Editor {
                             },
                             step_nanos: t.step_nanos as f64,
                         }
+                    })
+                }))
+            }
+        }
+    }
+
+    /// What table the field at `path` reads as, or null when the template
+    /// makes no such claim about it. JSON, in the same reply shape as the
+    /// rest.
+    ///
+    /// Asked once when a table is opened, not on the way past: it reads the
+    /// fields the shape names, which is a handful of numbers somewhere else in
+    /// the file. `NodeDto::table` is the cheap answer to whether there is one
+    /// at all. A part of the shape this file does not answer comes back null
+    /// rather than guessed; bytes that have not arrived answer pending like
+    /// every other call.
+    pub fn table_shape(&mut self, space: u32, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        match self.tab(space) {
+            Err(why) => why,
+            Ok(mut tab) => {
+                tab.ev.begin_slice();
+                reply(tab.table_shape(&p).map(|t| {
+                    t.map(|t| TableShapeDto {
+                        columns: t.columns.map(|c| c as f64),
+                        names: t.names,
+                        units: t.units,
+                        column_word: t.column_word,
+                        row_word: t.row_word,
+                        rate: t.rate.map(|r| r as f64),
+                        facts: t
+                            .facts
+                            .into_iter()
+                            .map(|o| TableFactDto {
+                                label: o.label,
+                                path: o.path.into_iter().map(|x| x as f64).collect(),
+                                value: o.value,
+                            })
+                            .collect(),
                     })
                 }))
             }

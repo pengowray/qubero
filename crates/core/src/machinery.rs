@@ -62,6 +62,15 @@ fn refs(def: &StructDef, selectors: bool) -> Vec<Option<usize>> {
     for (i, f) in def.fields.iter().enumerate() {
         names.clear();
         ty_refs(&f.ty, &mut names, selectors);
+        // What the field says it is a table of counts too: a run of samples
+        // whose rows are as wide as `channels` says is settled by that field
+        // as much as its length is, and a view of what depends on what that
+        // left the shape out would draw the samples depending on nothing.
+        if let Some(t) = &f.table {
+            for e in t.columns.iter().chain(t.rate.iter()).chain(t.facts.iter()) {
+                expr_refs(e, &mut names);
+            }
+        }
         if names.is_empty() {
             continue;
         }

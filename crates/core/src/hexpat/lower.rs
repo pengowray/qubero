@@ -2849,6 +2849,7 @@ fn named_field(name: &str, ty: Ty, aside: bool) -> Field {
 		valid: None,
 		time: None,
 		elem_check: None,
+		table: None,
 	}
 }
 
