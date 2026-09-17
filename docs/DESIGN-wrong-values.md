@@ -161,9 +161,11 @@ core, as `magic_reading` is, so the listing, the chip tooltip, the inspector
 and the table say the same words about the same bytes. The float text is
 built there too, and `showFloat` in lenses.ts is changed to print what core
 prints, so a double is spelled one way.
-The value column stops carrying the reason: `magic_reading` prints the bytes
-only, and the reason moves to `problem.text`. The `(unknown)` suffix on enum
-values goes the same way.
+The value column stops carrying the magic reason: `magic_reading` prints the
+bytes only, and the reason moves to `problem.text`. The `(unknown)` suffix on
+an unnamed enum value and the `+{n} unnamed` suffix on flags stay in the
+value text, since that is how the rest of the app says it and the words
+already carry the fact. The listing's `brief` is made to print them too.
 
 `problems_within` is what an ancestor shows. It is counted over the children
 the core has already read, never by reading more: the listing walks a
@@ -205,11 +207,12 @@ picking PNG for a ZIP turns the toolbar answer red before anything is clicked.
 The menu-pick path in main.ts does not currently update the toolbar answer at
 all; it has to, for this to work.
 
-**Listing.** A leaf with a problem gets a glyph before the value and the
-reason in the muted colour after it, on the same row, truncated to the column
-with the full text on hover. Invalid rows colour the value text `--warn`.
-Undefined rows keep the value in its kind colour and put only the glyph and
-reason in muted. A structure or run row with `problems_within` above zero
+**Listing.** An invalid leaf gets a glyph before the value, the value text in
+`--warn`, and the reason in the muted colour after it on the same row,
+truncated to the column with the full text on hover. An undefined leaf gets
+the glyph only, with the reason on hover: the value already says `(unknown)`
+or `+2 unnamed`, and repeating it in a second phrase would make the quiet
+tier as long as the loud one. A structure or run row with `problems_within` above zero
 shows the count at the end of its row: `· 3 invalid`, `· 12 undefined`, both
 when both. The count is a button that opens the row and scrolls to the first.
 
@@ -301,7 +304,7 @@ State first, then cause, matching `Not checked · why`.
 | Problem text, set | `Not allowed: must be one of {a}, {b}, {c}` | up to four listed, then `and {n} more` |
 | Problem text, equality | `Must be {value}` | |
 | Problem text, expression | `Fails the check: {msg}` | ImHex's assert message when given, else the expression in the template's own text; the expression always on hover; uncertain |
-| Problem text, enum, undefined | `Undefined in {enum}` | replaces `{num} (unknown)`; agreed 2026-09-17 |
+| Problem text, enum, undefined | `Undefined in {enum}` | on hover and in the inspector; the value keeps `{num} (unknown)`; agreed 2026-09-17 |
 | Problem text, enum, invalid (InEnum) | `Not allowed: undefined in {enum}` | |
 | Problem text, flags | `{n} unnamed bits set` | replaces `+{n} unnamed` in the value |
 | Problem text, float | `Not a number (quiet NaN)` / `Not a number (signalling NaN, payload 0x{p})` / `Infinity` / `Negative infinity` | |
@@ -312,11 +315,13 @@ State first, then cause, matching `Not checked · why`.
 | Table header | `{column} ({n} invalid)` | |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 
-On `Undefined in {enum}`: `{num} (unknown)` was ambiguous about who does not
-know. `Not a named value of {enum}` and `No name for {num} in {enum}` were
-considered; the short form was chosen because naming the enum is the context
-that removes the ambiguity, and the word matching the tier is a feature: the
-count row says `2 undefined` and each of those rows says `Undefined in …`.
+On `Undefined in {enum}`: the value text keeps `{num} (unknown)`, which is
+what the app says for an unnamed enum value elsewhere and is fine on a row.
+The problem text is for the hover and the inspector row, where naming the
+enum is the context that says whose table has no entry. `Not a named value
+of {enum}` and `No name for {num} in {enum}` were considered; the short form
+was chosen, and the word matching the tier is a feature: the count row says
+`2 undefined` and each of those rows says `Undefined in …` on hover.
 `{enum}` is the enum type's own name, which is the field name for most
 built-in templates and the declared type name for ImHex and Kaitai ones.
 
