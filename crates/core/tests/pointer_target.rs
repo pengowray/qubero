@@ -113,6 +113,86 @@ fn a_pointer_a_switch_picked_points_where_it_landed() {
     assert_eq!((points.label.as_str(), points.target_bits, points.value.as_str()), ("values", Some(0x20 * 8), "2003:07:19"));
 }
 
+/// A string that is there and is empty, which ELF section 0 has: its name is
+/// read at an address, and the string at that address is the empty string.
+/// Saying only the address leaves the row looking like a reading the core
+/// could not produce.
+#[test]
+fn a_pointer_at_an_empty_string_says_it_is_empty() {
+    let mut bytes = vec![0u8; 0x2c];
+    bytes[..4].copy_from_slice(&0x20u32.to_be_bytes());
+    let template = Template::new(
+        "empty",
+        T::structure(
+            "Root",
+            vec![(
+                "value",
+                T::inline_structure(
+                    "Elsewhere",
+                    vec![
+                        ("offset", T::u32(Big)),
+                        ("values", T::at(E::field("offset"), T::text(StrLen::Terminated { end: 0, or_end: true }, Encoding::Ascii))),
+                    ],
+                ),
+            )],
+        ),
+    );
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(template);
+    let node = ev.node(&doc, &[0]).unwrap();
+    assert_eq!(node.line.as_deref(), Some("@0x20 · (empty)"));
+    // The chip beside the bytes reads off the same line.
+    let spans = ev.spans(&doc, 0, 4 * 8, 16).unwrap();
+    let span = spans.iter().find(|s| s.name == "value").expect("a span for the pointer");
+    assert_eq!(span.line.as_deref(), Some("@0x20 · (empty)"));
+    // And the panel about the four bytes of the offset, which is the same
+    // reading arrived at by the other road.
+    let origins = ev.origins(&doc, &[0, 0]).unwrap();
+    let points = origins.iter().find(|o| o.role == Role::Points).expect("the offset points somewhere");
+    assert_eq!((points.label.as_str(), points.value.as_str()), ("values", "(empty)"));
+}
+
+/// A pointer at a list. The list has no line of its own, since its elements
+/// are a table rather than a row, so the row says how many it holds in the
+/// word the panel over the elements counts them by.
+#[test]
+fn a_pointer_at_a_list_says_how_many_are_there() {
+    let mut bytes = vec![0u8; 0x2c];
+    bytes[..4].copy_from_slice(&0x20u32.to_be_bytes());
+    let file = T::structure("File", vec![("size", T::u32(Big))]).counted_as("file");
+    let template = Template::new(
+        "listed",
+        T::structure(
+            "Root",
+            vec![(
+                "value",
+                T::inline_structure(
+                    "Elsewhere",
+                    vec![("offset", T::u32(Big)), ("files", T::at(E::field("offset"), T::array(file, E::lit(3))))],
+                ),
+            )],
+        ),
+    );
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(template);
+    let origins = ev.origins(&doc, &[0, 0]).unwrap();
+    let points = origins.iter().find(|o| o.role == Role::Points).expect("the offset points somewhere");
+    assert_eq!((points.label.as_str(), points.value.as_str()), ("files", "3 files"));
+    // The line over the pointer's own bytes says the same, which is the point
+    // of the two of them sharing the last step of the reading.
+    assert_eq!(ev.node(&doc, &[0]).unwrap().line.as_deref(), Some("@0x20 · 3 files"));
+}
+
+/// A field read somewhere else says where it was read, for the row that has
+/// to say where it is written as well.
+#[test]
+fn a_field_read_elsewhere_says_where_it_was_read() {
+    let (doc, mut ev) = file();
+    assert_eq!(ev.node(&doc, &[0, 1]).unwrap().read_at, Some(0x20 * 8));
+    // The offset beside it is where it is written, so it has no such address.
+    assert_eq!(ev.node(&doc, &[0, 0]).unwrap().read_at, None);
+}
+
 /// A field no pointer reads points nowhere, which is nearly every field.
 #[test]
 fn a_plain_field_points_nowhere() {
