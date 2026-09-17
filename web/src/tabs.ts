@@ -16,8 +16,18 @@
 import { el } from "./dom.ts";
 import type { Doc } from "./doc.ts";
 
+/**
+ * What a tab is a tab of. A document is the whole of one: its bytes, its
+ * template, its cursor, and every view of them. A table is one list inside a
+ * document read as rows, which is a page over somebody else's bytes: it has no
+ * cursor of its own to save and nothing of its own to lose when it closes.
+ */
+export type TabKind = { readonly view: "document" } | { readonly view: "table"; readonly path: readonly number[] };
+
 export type Tab = {
   readonly doc: Doc;
+  /** Which of the two this tab is. See `TabKind`. */
+  readonly kind: TabKind;
   /** What the strip calls it. */
   readonly title: string;
   /** Where the bytes came from, shown on hover. Null for a file from disk. */
@@ -48,6 +58,8 @@ export type NewTab = {
   title: string;
   origin?: string | null;
   closable?: boolean;
+  /** A document tab unless the caller says otherwise. */
+  kind?: TabKind;
 };
 
 export class Tabs {
@@ -100,9 +112,24 @@ export class Tabs {
     return this.list.find((t) => t.doc.modified) ?? null;
   }
 
-  /** The tab showing a given space of the file, if it is already open. */
+  /** The tab showing a given space of the file, if it is already open. A
+   *  table of a list inside that space is not it: it shows some of the same
+   *  bytes, and none of the things a document tab is asked for. */
   forSpace(space: number): number {
-    return this.list.findIndex((t) => t.doc.space === space);
+    return this.list.findIndex((t) => t.kind.view === "document" && t.doc.space === space);
+  }
+
+  /** The tab showing one list of a document as a table, if it is already open.
+   *  A second ask for the same table brings that one to the front rather than
+   *  opening the same rows twice. */
+  forTable(doc: Doc, path: readonly number[]): number {
+    return this.list.findIndex(
+      (t) =>
+        t.kind.view === "table" &&
+        t.doc === doc &&
+        t.kind.path.length === path.length &&
+        t.kind.path.every((step, i) => step === path[i]),
+    );
   }
 
   /** Show this file on its own, closing whatever was open. */
@@ -129,6 +156,7 @@ export class Tabs {
   add(t: NewTab): void {
     this.list.push({
       doc: t.doc,
+      kind: t.kind ?? { view: "document" },
       title: t.title,
       origin: t.origin ?? null,
       closable: t.closable ?? true,
@@ -151,7 +179,10 @@ export class Tabs {
   close(i: number): void {
     const tab = this.list[i];
     if (tab === undefined || !tab.closable) return;
-    if (tab.doc.modified && !this.onConfirmClose(tab)) return;
+    // Only a document tab is asked about unsaved edits. A table is a reading
+    // of a document that stays open; closing it throws nothing away, and
+    // asking would name a file the reader is not closing.
+    if (tab.kind.view === "document" && tab.doc.modified && !this.onConfirmClose(tab)) return;
     this.discard(tab);
     this.list.splice(i, 1);
     if (this.at >= this.list.length) this.at = this.list.length - 1;
@@ -225,7 +256,9 @@ export class Tabs {
         close.addEventListener("click", () => this.close(i));
         item.append(close);
       }
-      if (tab.doc.modified) item.classList.add("is-edited");
+      // The edited mark says this tab holds the unsaved edits. A table of the
+      // same document does not: saving or closing it changes nothing.
+      if (tab.kind.view === "document" && tab.doc.modified) item.classList.add("is-edited");
       list.append(item);
     });
     strip.append(list);
