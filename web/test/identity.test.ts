@@ -97,3 +97,21 @@ test("nothing answered yet is no name and no candidates", () => {
   assert.equal(id.name, null);
   assert.deepEqual(id.candidates, []);
 });
+
+test("a template applied over a signature that does not match says so, and disagrees", () => {
+  // Picking PNG for a ZIP: the fields were read, the file is not a PNG, and
+  // the answer has to say which of the two happened.
+  const png = { name: "png", label: "PNG image", sentence: null, signatureMismatch: true };
+  const id = decide({ template: png, file: rule("Zip archive data, at least v2.0 to extract", ["zip"], "application/zip") });
+  const chosen = id.candidates.find((c) => c.source === "template");
+  assert.equal(chosen?.evidence, "Template PNG image was applied, but the signature does not match");
+  assert.equal(chosen?.disagrees, true);
+  // And with nothing else having answered it still disagrees: what it
+  // disagrees with is the file's own first bytes.
+  const alone = decide({ template: png });
+  assert.equal(alone.candidates[0]?.disagrees, true);
+  // A template whose signature matched reads as it always did.
+  const ok = decide({ template: { ...png, signatureMismatch: false } });
+  assert.equal(ok.candidates[0]?.evidence, "Qubero read the file's structure");
+  assert.equal(ok.candidates[0]?.disagrees, false);
+});

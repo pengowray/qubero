@@ -21,6 +21,12 @@ export type TemplateAnswer = {
   readonly sentence: string | null;
   /** The plain name for the format, `Parquet file`. */
   readonly label: string;
+  /** True when the template was applied to a file whose signature is not the
+   *  one it requires: the fields were read, but by a template the file's own
+   *  first bytes contradict. Picking PNG for a ZIP is exactly this, and until
+   *  the toolbar said so the answer read as if Qubero had recognised the
+   *  file. */
+  readonly signatureMismatch?: boolean;
 };
 
 /** Everything that has answered so far. Null is "not asked or not yet". */
@@ -262,6 +268,12 @@ const bytesAt = (m: SigMatch): string => {
   return m.fromEnd ? `${n} within the last ${m.offset.toLocaleString("en")} bytes` : `${n} at offset ${m.offset}`;
 };
 
+/** What the file type dialog says about a template applied to a file whose
+ *  signature is not the one it requires. The label is the format the template
+ *  reads, which is the thing the file is being read as rather than the thing
+ *  it is. */
+const SIGNATURE_MISMATCH = (label: string): string => `Template ${label} was applied, but the signature does not match`;
+
 /**
  * Decide the file's name from whatever has answered, and list every answer
  * with the chosen one first.
@@ -307,8 +319,11 @@ export function decide(a: Answers): Identity {
     candidates.push({
       source: "template",
       name: templateName ?? t.label,
-      evidence: "Qubero read the file's structure",
-      disagrees: f !== null && !fileAgrees && !isHalfMatch(f) && source === "file",
+      // A template whose signature does not match read the file's structure
+      // in the sense that it laid its fields over the bytes; it did not
+      // recognise the file, and the answer says which of the two happened.
+      evidence: t.signatureMismatch === true ? SIGNATURE_MISMATCH(t.label) : "Qubero read the file's structure",
+      disagrees: t.signatureMismatch === true || (f !== null && !fileAgrees && !isHalfMatch(f) && source === "file"),
     });
   }
   if (f !== null) {

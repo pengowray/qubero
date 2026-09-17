@@ -20,7 +20,7 @@ import { Tabs, type Page, type Tab } from "./tabs.ts";
 import { markFromRange, markFromStep, stepBits } from "./unpackedlink.ts";
 import { SearchBar } from "./searchbar.ts";
 import { el, svgEl } from "./dom.ts";
-import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateTypeName } from "./filetype.ts";
+import { fileType, builtinTemplate, rememberKaitaiTitles, SIGNATURE_TEMPLATE, templateLabel, templateSentence, templateSignatureMismatch, templateTypeName } from "./filetype.ts";
 import { DATASET_MEMBER, DIAGRAM, DUMP, EDITOR_WONT_LOAD, FOLDER, GRAPH, HEXGLYPHS, HEXPAT, HEXPAT_TEMPLATE, JOINED, KAITAI_TEMPLATE, KSY, LINKS, PAGE_OUT_OF_DATE, SAVE_AS, SETTINGS, strideSegment, STRINGSVIEW, TEXTVIEW, UNPACKED, unpackedOrigin } from "./strings.ts";
 import { CRC_AT_OPEN_MAX_BYTES, datasetIn, dropIsFolder, leafOf, missingFromDataset, orderForArchive, readDrop, readPicked, Stopped, storedZip, type BuiltZip, type Dropped, type FolderFile } from "./folderzip.ts";
 import { ArchiveSums, SumJob } from "./sumjob.ts";
@@ -732,6 +732,15 @@ function build(tab: Tab): Page {
   // The generated template is not one of the built-ins, so switching back to it
   // rebuilds it rather than looking it up by name.
   let reapplySignature: (() => Promise<void>) | null = null;
+  /** What the toolbar says about the template now reading the file. Both ways
+   *  in go through this: a template picked from the menu changes the answer
+   *  exactly as much as one Qubero sniffed, and picking the wrong one is the
+   *  case where saying so matters most. */
+  const sayTemplate = (name: string, label: string): void => {
+    kind.setTemplate({ name, label, sentence: templateSentence(doc, name), signatureMismatch: templateSignatureMismatch(doc) });
+    kind.setNote(builtinTemplate(name));
+  };
+
   const chooseTemplate = (value: string): void => {
     setTemplateValue(value);
     overview.setNote("");
@@ -748,6 +757,15 @@ function build(tab: Tab): Page {
       return;
     }
     doc.setTemplate(value === "" ? null : value);
+    // The toolbar answered for the template Qubero sniffed and then said
+    // nothing when the reader picked another, so the name above the file was
+    // the old one until the page was reloaded.
+    if (value === "") {
+      kind.setTemplate(null);
+      kind.setNote(null);
+    } else {
+      sayTemplate(value, extraTemplates.find((x) => x.value === value)?.label ?? templateTypeName(value));
+    }
     // A bundled Kaitai format says where it came from, and says so again with
     // a count when its description holds things the template does not: those
     // fields are missing or read another way, and a reader who is not told
@@ -782,8 +800,7 @@ function build(tab: Tab): Page {
       if (name.startsWith(KAITAI_PREFIX)) showKaitaiNote(name);
       // The template's answer goes up at once: it is the one source that
       // has read the file, and the one that answers before anything else.
-      kind.setTemplate({ name, label: templateTypeName(name), sentence: templateSentence(doc, name) });
-      kind.setNote(builtinTemplate(name));
+      sayTemplate(name, templateTypeName(name));
     } else {
       // Nothing to read a field from, so start on the raw reading instead.
       inspector.setMode("le");

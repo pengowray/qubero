@@ -259,6 +259,27 @@ export const templateSentence = (doc: Doc, name: string): string | null => {
   }
 };
 
+/**
+ * Whether the template reading the file is one the file's own signature
+ * contradicts.
+ *
+ * The signature is the root when a template is a magic number and what
+ * follows, and the root's first field when the template wraps the two in a
+ * structure, which nearly all of them do. A file still arriving answers no:
+ * bytes that have not landed are not a mismatch, and the toolbar is redrawn
+ * when they do.
+ */
+export const templateSignatureMismatch = (doc: Doc): boolean => {
+  const root = doc.templateNode([]);
+  if (root.status !== "ok") return false;
+  if (wrongSignature(root.node)) return true;
+  if (root.node.child_count === 0) return false;
+  const first = doc.templateNode([0]);
+  return first.status === "ok" && wrongSignature(first.node);
+};
+
+const wrongSignature = (n: TemplateNode): boolean => n.kind === "magic" && n.problem?.tier === "invalid";
+
 /** What a BGZF file holds, by what its first block unpacks to. */
 const BGZF_HOLDS: Record<string, string> = {
   bam: "BAM alignments",
