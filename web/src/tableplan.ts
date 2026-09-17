@@ -50,6 +50,9 @@ export type TablePlan = {
   /** What one row is: a sample, a record, a value. */
   readonly rowWord: string;
   readonly columns: readonly TableColumn[];
+  /** What the shape calls one column, for the sentence saying what a row is.
+   *  Null for a table whose columns are named individually or not at all. */
+  readonly columnWord: string | null;
   /** The fields that describe the table, shown above it. Empty for a table
    *  nothing describes, which is every table without a shape. */
   readonly facts: readonly TableFact[];
@@ -57,6 +60,11 @@ export type TablePlan = {
   readonly rate: number | null;
   /** Row `i`, or null while its bytes are still being read. */
   row: (i: number) => TableRow | null;
+  /** Which row a bit of the file falls in, or null for a bit outside the
+   *  table. The cursor moving is the one question the view cannot answer for
+   *  itself: how a row is put together out of elements is the plan's business,
+   *  and a table of a format reader's rows is not made of elements at all. */
+  rowFor: (bit: number) => number | null;
   /** Throw away what has been read. The plan has no listener of its own: what
    *  a row said may have been read from bytes that have since arrived or been
    *  edited, and the view holding the plan is the one that hears about it. */
@@ -241,6 +249,16 @@ function childrenOf(doc: Doc, node: TemplateNode): readonly TemplateNode[] | nul
   return reply.status === "ok" ? reply.node : null;
 }
 
+/** Which element of a list a bit falls in, by walking the tree down to it.
+ *  A list is its own index, so this is a step of the path rather than a
+ *  search. Null for a bit that is not inside the list at all. */
+function elementAt(doc: Doc, path: readonly number[], bit: number): number | null {
+  const at = doc.locate(bit);
+  if (at.status !== "ok" || at.node.length <= path.length) return null;
+  if (!path.every((step, i) => at.node[i] === step)) return null;
+  return at.node[path.length] ?? null;
+}
+
 /** One element of a list flattened into the fields a row is made of. */
 function rowFields(doc: Doc, element: TemplateNode): TemplateNode[] | null {
   const kids = childrenOf(doc, element);
@@ -258,9 +276,14 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
   return {
     path: node.path,
     forget: () => elements.clear(),
+    rowFor: (bit) => {
+      const at = elementAt(doc, node.path, bit);
+      return at === null ? null : Math.floor(at / columns);
+    },
     count: rowCount(node.child_count, columns),
     rowWord: shape.row_word ?? childWord(node),
     columns: shapeColumns(shape, columns),
+    columnWord: shape.column_word,
     facts: shape.facts,
     rate: shape.rate,
     row: (i) => {
@@ -304,9 +327,20 @@ function recordsPlan(doc: Doc, node: TemplateNode): TablePlan | null {
     forget: () => {
       built = null;
     },
+    // A format reader's rows are not elements of anything: a SQLite page's
+    // cells are scattered through it and one row can even be a field of the
+    // page header. So the row holding a bit is found by asking the rows where
+    // they are, which is cheap because a page holds tens of them, not
+    // millions.
+    rowFor: (bit) => {
+      const rows = table()?.rows ?? [];
+      const at = rows.findIndex((r) => bit >= r.offsetBits && bit < r.offsetBits + r.sizeBits);
+      return at < 0 ? null : at;
+    },
     count: built.rows.length,
     rowWord: childWord(node),
     columns: built.columns.map((name) => ({ name, unit: "" })),
+    columnWord: null,
     facts: [],
     rate: null,
     row: (i) => {
@@ -344,9 +378,11 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
   return {
     path: node.path,
     forget: () => elements.clear(),
+    rowFor: (bit) => elementAt(doc, node.path, bit),
     count: node.child_count,
     rowWord: childWord(node),
     columns: columns.map((name) => ({ name, unit: "" })),
+    columnWord: null,
     facts: [],
     rate: null,
     row: (i) => {

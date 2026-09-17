@@ -651,6 +651,11 @@ export const TABLE = {
     `Each row is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
   /** The same where the shape has no word for a column. */
   rowMeaningPlain: (rowWord: string, rate: string): string => `Each row is one ${rowWord}, 1/${rate} s apart.`,
+  /** Following one of those facts to where it is stored. Not on the button
+   *  itself, which is read as a fact rather than as a control: the label and
+   *  the value are what the reader came for, and where it lives is the answer
+   *  to pressing it. */
+  factTitle: (label: string): string => `Show where ${label} is stored`,
   /** The row's number. A bare `#` because the column beside it already says
    *  what the rows are. */
   index: "#",

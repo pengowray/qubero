@@ -3722,6 +3722,138 @@ button.insp-xrow-where:hover {
   font-style: italic;
 }
 
+/* ---- the table view ---- */
+/* A list read as rows in a tab of its own. The bar says what the table is and
+   what describes it, the header names the columns, and the rows are placed by
+   arithmetic on --tv-row the way the list pane's are. One grid track list,
+   written on the view as --tv-cols, lines the header up with every row without
+   either of them measuring the other. */
+.tableview {
+  --tv-row: 22px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.tv-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.tv-title {
+  font-size: 13px;
+}
+.tv-count,
+.tv-meaning {
+  color: var(--muted);
+}
+/* A fact is read as a fact; that it can be followed is what the tooltip and
+   the dotted underline say. Sized like the links in a record table rather than
+   like the toolbar's buttons, which would make the bar twice as tall. */
+.tv-fact {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--addr);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.tv-fact:hover {
+  color: var(--fg);
+}
+/* The one control here, so it sits at the far end away from the facts. */
+.tv-addr {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tv-head,
+.tv-row {
+  display: grid;
+  grid-template-columns: var(--tv-cols);
+  gap: 0 10px;
+  align-items: center;
+  padding-inline: 10px;
+}
+.tv-head {
+  flex: none;
+  height: var(--tv-row);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-weight: 600;
+}
+.tv-th,
+.tv-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: start;
+}
+.tv-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.tv-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.tv-canvas {
+  position: relative;
+}
+.tv-row {
+  position: absolute;
+  inset-inline: 0;
+  height: var(--tv-row);
+  cursor: pointer;
+}
+.tv-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.tv-row.is-on {
+  background: var(--accent-soft);
+}
+/* The row's own number and its address are about where it is, not about what
+   it says, so they are coloured the way every other address in this app is. */
+.tv-index,
+.tv-at {
+  color: var(--addr);
+}
+.tv-size {
+  color: var(--muted);
+}
+/* A link inside a cell is a button in a grid track: it has to sit in the track
+   rather than stretch it. */
+.tv-cell.rec-link {
+  text-align: start;
+}
+/* A row still being read. Dim and italic, the same treatment every other view
+   gives a stretch it cannot speak for yet. */
+.tv-waiting .tv-cell {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* ---- the byte strip (rules 5 and 6) ---- */
 /* One column per field: dim hex digits, a coloured bracket clipped to the
    field's own width, and a chip in the same hue below. The digits are dim on
