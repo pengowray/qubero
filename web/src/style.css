@@ -3799,13 +3799,15 @@ button.insp-xrow-where:hover {
   align-items: center;
   padding-inline: 10px;
 }
+/* The headings share the rows' monospace face: the tracks are sized in
+   characters from the heading and the values, and a heading in a wider face
+   would be the one thing the arithmetic did not cover. */
 .tv-head {
   flex: none;
   height: var(--tv-row);
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
-  font-family: var(--sans);
   font-weight: 600;
 }
 .tv-th,
@@ -3814,6 +3816,13 @@ button.insp-xrow-where:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: start;
+  font-variant-numeric: tabular-nums;
+}
+/* Numbers sit against the right edge so their digits line up down the column,
+   which is what makes a bigger one look bigger. The row number, the time and
+   the size are numbers too; an address is read as a name and stays left. */
+.tv-num {
+  text-align: end;
 }
 .tv-scroll {
   position: relative;

@@ -23,7 +23,7 @@ import { el } from "./dom.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { bitSizeText, REPORT, TABLE } from "./strings.ts";
-import { timeText, type TablePlan, type TableRow } from "./tableplan.ts";
+import { fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
@@ -57,6 +57,12 @@ export class TableView {
   /** The rows already read, by index. Cleared whenever the file changes, since
    *  that is when what one of them says can stop being true. */
   private readonly have = new Map<number, TableRow>();
+  /** How wide each data column is drawn and which side its values sit, one
+   *  per column, grown by the rows as they are read. */
+  private fits: ColumnFit[] = [];
+  /** The header cell of each data column, so a column found to be numeric can
+   *  be turned to face its values without the header being built again. */
+  private heads: HTMLElement[] = [];
   private addresses = false;
   private selected: number | null = null;
   /** True while a pick this view made is being sent out, so the cursor move it
@@ -83,6 +89,7 @@ export class TableView {
     this.scroller.append(this.canvas);
     this.el.append(this.bar(opts.title), this.head, this.scroller);
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
+    this.fits = plan.columns.map((_, c) => fitOf(this.headingOf(c)));
     this.layColumns();
     this.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
@@ -144,30 +151,57 @@ export class TableView {
   // ----- the columns -----
 
   /** One track list for the header and every row, so the two line up without
-   *  either measuring the other. The data columns share what is left over, so
-   *  a table of three columns and a table of thirty both fill the tab and
-   *  neither scrolls sideways. */
+   *  either measuring the other. Every track is a fixed width: the data
+   *  columns are as wide as what has been seen in them (see `ColumnFit`), so a
+   *  table of one channel is a narrow table and not one number adrift in a
+   *  tab-wide column. */
   private layColumns(): void {
-    const time = this.plan.rate !== null && this.plan.rate > 0 ? " 12ch" : "";
-    const data = this.plan.columns.map(() => "minmax(6ch, 1fr)").join(" ");
+    const time = this.plan.rate !== null && this.plan.rate > 0 ? ` ${timeWidth(this.plan.count, this.plan.rate)}ch` : "";
+    const data = this.fits.map((fit) => `${fit.width}ch`).join(" ");
     const addresses = this.addresses ? " 12ch 9ch" : "";
-    this.el.style.setProperty("--tv-cols", `8ch${time} ${data}${addresses}`);
+    this.el.style.setProperty("--tv-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
+  }
+
+  /** The heading of one data column, unit included. */
+  private headingOf(c: number): string {
+    const column = this.plan.columns[c];
+    if (column === undefined) return "";
+    return column.unit === "" ? column.name : `${column.name} (${column.unit})`;
+  }
+
+  /** A row has been read: widen any column it does not fit, and settle the
+   *  side of any column whose first value this is. The track list is written
+   *  again only when a width changed, which is a few times at the start and
+   *  then not at all. */
+  private fitRow(row: TableRow): void {
+    let widened = false;
+    for (let c = 0; c < this.fits.length; c++) {
+      const was = this.fits[c];
+      if (was === undefined) continue;
+      const now = fitCell(was, row.cells[c]);
+      if (now === was) continue;
+      this.fits[c] = now;
+      if (now.width !== was.width) widened = true;
+      if (now.numeric !== was.numeric) this.heads[c]?.classList.toggle("tv-num", now.numeric === true);
+    }
+    if (widened) this.layColumns();
   }
 
   private fillHead(): void {
-    const cells: HTMLElement[] = [el("span", { className: "tv-th tv-index", textContent: TABLE.index })];
+    const cells: HTMLElement[] = [el("span", { className: "tv-th tv-index tv-num", textContent: TABLE.index })];
     if (this.plan.rate !== null && this.plan.rate > 0) {
-      cells.push(el("span", { className: "tv-th", textContent: TABLE.time }));
+      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.time }));
     }
-    for (const column of this.plan.columns) {
-      const text = column.unit === "" ? column.name : `${column.name} (${column.unit})`;
-      const cell = el("span", { className: "tv-th", textContent: text });
+    this.heads = this.plan.columns.map((_, c) => {
+      const text = this.headingOf(c);
+      const cell = el("span", { className: this.fits[c]?.numeric === true ? "tv-th tv-num" : "tv-th", textContent: text });
       cell.title = text;
-      cells.push(cell);
-    }
+      return cell;
+    });
+    cells.push(...this.heads);
     if (this.addresses) {
       cells.push(el("span", { className: "tv-th", textContent: TABLE.storedAt }));
-      cells.push(el("span", { className: "tv-th", textContent: TABLE.size }));
+      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.size }));
     }
     this.head.replaceChildren(...cells);
   }
@@ -242,30 +276,33 @@ export class TableView {
     const known = this.have.get(i);
     if (known !== undefined) return known;
     const row = this.plan.row(i);
-    if (row !== null) this.have.set(i, row);
+    if (row !== null) {
+      this.have.set(i, row);
+      this.fitRow(row);
+    }
     return row;
   }
 
   private drawRow(i: number, row: TableRow): HTMLElement {
     const element = el("div", { className: i === this.selected ? "tv-row is-on" : "tv-row" });
-    element.append(el("span", { className: "tv-cell tv-index", textContent: i.toLocaleString() }));
+    element.append(el("span", { className: "tv-cell tv-index tv-num", textContent: i.toLocaleString() }));
     const rate = this.plan.rate;
     if (rate !== null && rate > 0) {
-      element.append(el("span", { className: "tv-cell tv-time", textContent: timeText(i, rate) }));
+      element.append(el("span", { className: "tv-cell tv-time tv-num", textContent: timeText(i, rate) }));
     }
     for (let c = 0; c < this.plan.columns.length; c++) {
-      element.append(this.drawCell(row.cells[c]));
+      element.append(this.drawCell(row.cells[c], this.fits[c]?.numeric === true));
     }
     if (this.addresses) {
       element.append(el("span", { className: "tv-cell tv-at", textContent: formatOffset(row.offsetBits) }));
-      element.append(el("span", { className: "tv-cell tv-size", textContent: bitSizeText(row.sizeBits) }));
+      element.append(el("span", { className: "tv-cell tv-size tv-num", textContent: bitSizeText(row.sizeBits) }));
     }
     return element;
   }
 
   /** One cell. A cell naming another part of the file is a link to it, the
    *  same cross-reference a record table in the listing draws. */
-  private drawCell(cell: RecordCell | undefined): HTMLElement {
+  private drawCell(cell: RecordCell | undefined, numeric: boolean): HTMLElement {
     if (cell === undefined) return el("span", { className: "tv-cell" });
     const link = cell.link;
     if (link !== undefined) {
@@ -277,7 +314,7 @@ export class TableView {
       });
       return button;
     }
-    const element = el("span", { className: `tv-cell ${fieldClass(cell.kind)}`, textContent: cell.text });
+    const element = el("span", { className: `tv-cell ${fieldClass(cell.kind)}${numeric ? " tv-num" : ""}`, textContent: cell.text });
     element.title = cell.text;
     return element;
   }
