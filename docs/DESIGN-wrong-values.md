@@ -313,7 +313,7 @@ State first, then cause, matching `Not checked · why`.
 | Problem text, float, invalid (Finite) | `Unknown or invalid: not a number` etc. | |
 | Structure row count | `· {n} invalid` / `· {n} undefined` / `· {n} invalid, {m} undefined` | with ` so far` while pending |
 | Overview line | `{n} invalid values, {m} undefined · Show first` | either half dropped when zero |
-| Toolbar line | the name only, in `--warn`, with no words added | the dialog's Source row says `Template {label} was applied, but the signature does not match`; that sentence is on hover |
+| Toolbar line | the name only, in `--warn` | the file type dialog ends with `Signature does not match.` in red; the same words on hover |
 | Table header | `{column} ({n} invalid)` | |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 

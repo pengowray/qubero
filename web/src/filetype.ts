@@ -326,6 +326,9 @@ export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
 const SOURCE_KEY = "Source";
+/** The dialog's last line when the template reading the file is one the
+ *  file's own signature contradicts. */
+const SIGNATURE_MISMATCH_LINE = "Signature does not match.";
 /** Where the name came from, said in the dialog under it. */
 const SOURCE_TEXT: Record<Source, (detail: string) => string> = {
   template: (label) => `Qubero's ${label} template`,
@@ -559,7 +562,7 @@ export function fileType(): FileType {
     // where the Source row says what is wrong. The sentence is on hover too.
     const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
     kindLabel.classList.toggle("is-warn", mismatch);
-    kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : mismatch ? (id.candidates[0]?.evidence ?? line) : line;
+    kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : mismatch ? `${line} · ${SIGNATURE_MISMATCH_LINE}` : line;
     // The overview hears the name once there is one, or once the rules have
     // said there is none: an empty name before that reads as "no answer"
     // when the answer is still on its way.
@@ -600,12 +603,7 @@ export function fileType(): FileType {
       rows.push(el("p", { textContent: NO_MATCH_BODY }));
     } else {
       rows.push(el("p", { className: "dlg-sentence", textContent: id.name }));
-      // A template the file's signature contradicts is only ever chosen when
-      // nothing else has answered, and then the Source row is where the
-      // reader learns that the name above it is what the file is being read
-      // as rather than what it is.
-      const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
-      rows.push(row(SOURCE_KEY, mismatch ? el("span", { className: "dlg-disagrees", textContent: id.candidates[0]?.evidence ?? "" }) : sourceText(id)));
+      rows.push(row(SOURCE_KEY, sourceText(id)));
     }
     // What the rules know about the format, whichever answer was chosen: a
     // media type and extensions are facts about the file either way.
@@ -636,6 +634,10 @@ export function fileType(): FileType {
       rows.push(el("p", { textContent: SIGNATURES_INTRO }), ...signatureRows(sigs.matches, sigs.extension));
       rows.push(el("p", { className: "dlg-muted", textContent: SIGNATURES_CREDIT(sigs.fetched) }));
     }
+    // Last, in red: the template reading the file is one its first bytes
+    // contradict. Whatever named the file above, this is the one thing a
+    // reader who picked the wrong template needs to see.
+    if (answers.template?.signatureMismatch === true) rows.push(el("p", { className: "dlg-disagrees", textContent: SIGNATURE_MISMATCH_LINE }));
     return rows;
   };
 
