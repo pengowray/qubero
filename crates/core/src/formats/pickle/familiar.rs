@@ -13,6 +13,28 @@ pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack
 pub const FAMILIAR_LABEL: &str = "Python pickle (familiar form)";
 const MAX_VALUES: usize = 100_000;
 const MAX_DEPTH: usize = 64;
+/// The most memo slots a form will follow. A slot is bound when the file
+/// writes one, so this bounds the table rather than describing any file.
+const MAX_MEMO: usize = 100_000;
+/// The most entries one batch of a container may carry. CPython's batching
+/// writes a thousand at a time and starts another batch after that; the forms
+/// here take one batch, so a longer one is a non-match rather than a slice.
+const MAX_BATCH: usize = 1000;
+/// The most dimensions a shape may declare, which is NumPy's own limit.
+const MAX_DIMENSIONS: usize = 32;
+/// A payload this size or larger is written between frames rather than inside
+/// one: CPython's framer commits the frame it is filling, writes the opcode
+/// and the bytes straight out, and starts a new frame after them.
+const BIG_PAYLOAD: usize = 1 << 16;
+/// A frame's contents shorter than this are written without a FRAME header,
+/// so a run of unframed bytes this short may end the file.
+const MIN_FRAME: usize = 4;
+
+/// The forms, each a named grammar over the same envelope. They differ in
+/// which value productions they allow, and every one of those is enumerated.
+const BASIC: &str = "basic-p4-p5-v3";
+const NUMPY: &str = "numpy-numeric-array-p4-p5-v3";
+const BUILTINS: &str = "builtins-values-p4-p5-v1";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.
@@ -67,11 +89,32 @@ pub enum Kind {
         dimensions: Vec<u64>,
         fortran_order: bool,
     },
+    /// One of the builtin types a pickle has to write as a call rather than
+    /// as a literal. `names` names its parts, in the order they were written.
+    Object {
+        what: Shape,
+        names: &'static [&'static str],
+        items: Vec<Value>,
+    },
 }
+
+/// What a `slice` and a `range` are written as, in the order Python writes
+/// them. A `complex` is written as its two halves.
+const BOUNDS: &[&str] = &["start", "stop", "step"];
+const HALVES: &[&str] = &["real", "imaginary"];
+/// A `bytearray` is written as the one byte string it was made from.
+const CONTENT: &[&str] = &["content"];
+/// A frozenset's members are written in no order the file can be trusted for,
+/// so they are numbered rather than named.
+const MEMBERS: &[&str] = &[];
 
 /// A named operand inside a run of fixed instructions: the module and class
 /// names a form matched exactly, and the letters that spell a dtype. The
 /// instructions around it are the grammar's; these bytes are what varies.
+///
+/// A name the file wrote once and referred to again is spelled only where it
+/// was written, so the reference is named as the instruction it is and no
+/// `Said` points outside the run it belongs to.
 #[derive(Debug, PartialEq)]
 pub struct Said {
     pub name: &'static str,
@@ -123,6 +166,11 @@ pub enum Shape {
     Array,
     /// A run of instructions the form matched as one act. See [`Call`].
     Call,
+    Slice,
+    Range,
+    Complex,
+    FrozenSet,
+    ByteArray,
 }
 
 impl Shape {
@@ -136,6 +184,11 @@ impl Shape {
             Shape::Tuple => "tuple",
             Shape::Array => "array",
             Shape::Call => "call",
+            Shape::Slice => "slice",
+            Shape::Range => "range",
+            Shape::Complex => "complex",
+            Shape::FrozenSet => "frozenset",
+            Shape::ByteArray => "bytearray",
         }
     }
 }
@@ -147,21 +200,19 @@ pub struct Match {
     /// Where the object starts, which is one past the protocol byte and past
     /// the frame header when there is one.
     pub body: usize,
-    /// The one run of instructions this form matched as an act of its own.
-    pub call: Option<Call>,
+    /// The runs of instructions this form matched as acts of their own, one
+    /// per array or scalar it rebuilt.
+    pub calls: Vec<Call>,
     /// Every instruction in the file, in order, so that the bytes no value
     /// covers can be named rather than left over.
     pub ops: Vec<Instr>,
     stop: usize,
-    payload: Option<(usize, Payload)>,
+    payloads: Vec<(usize, Payload)>,
 }
 
 impl Deduced for Match {
     fn int(&self, what: Deduce, at: u64) -> Option<i128> {
-        let (offset, payload) = self.payload?;
-        if at != offset as u64 {
-            return None;
-        }
+        let payload = self.payloads.iter().find(|(offset, _)| *offset as u64 == at).map(|(_, p)| p)?;
         match what {
             Deduce::PayloadShape => Some(payload.shape as i128),
             Deduce::PayloadCount => Some(payload.count as i128),
@@ -188,58 +239,90 @@ impl Deducer for Program {
     }
 }
 
-/// Initial envelope: protocol 4/5, either unframed or exactly one whole-body
-/// frame. Other framing arrangements remain available through inspection.
+/// Which value productions a form allows beyond the basic ones. A form that
+/// allows a production also requires the file to use it, so a file holding
+/// nothing but basic values is read under the basic form and not another.
+#[derive(Debug, Clone, Copy)]
+struct Allow {
+    numpy: bool,
+    builtins: bool,
+}
+
+/// What a memo slot holds, as far as a form is prepared to say.
+///
+/// A slot a form cannot name is [`Bound::Opaque`], and a reference to one is
+/// a non-match. Only the things a form spelled out itself can be referred to
+/// again, which is what keeps `BINGET` from being an arbitrary stack effect.
+#[derive(Debug, Clone, PartialEq)]
+enum Bound {
+    Opaque,
+    Text { at: usize, len: usize },
+    Bytes { at: usize, len: usize },
+    /// A module and a callable the form named exactly, spelled `module.name`.
+    Global(String),
+    /// A completed NumPy dtype, as the `<f4` spelling it ends up with. The
+    /// slot is written at the REDUCE that makes the dtype and the byte order
+    /// arrives at the BUILD just after, so the binding is filled in there.
+    Dtype(String),
+}
+
+/// Where a frame boundary stands. CPython writes a pickle as a run of frames:
+/// a frame is committed when it fills, and a payload of [`BIG_PAYLOAD`] bytes
+/// or more is written between frames instead of inside one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Framing {
+    /// The file has no frames at all, which protocol 4 permits.
+    Unframed,
+    /// Inside a frame ending at this offset.
+    Inside(usize),
+    /// A frame has ended here and the next has not begun.
+    Between(usize),
+}
+
+/// Everything a rewind has to put back. The work budget is deliberately not
+/// in it: an alternative that failed still cost what it cost.
+#[derive(Debug, Clone, Copy)]
+struct Save {
+    at: usize,
+    memo: usize,
+    says: usize,
+    calls: usize,
+    payloads: usize,
+    framing: Framing,
+    arrays: usize,
+    objects: usize,
+}
+
+/// Initial envelope: protocol 4/5, unframed or framed the way CPython frames.
+/// Each form is tried in turn over the same bytes, under one shared budget.
 pub fn recognise(bytes: &[u8]) -> Option<Match> {
+    let mut left = MAX_VALUES;
+    let forms = [
+        (BASIC, Allow { numpy: false, builtins: false }),
+        (NUMPY, Allow { numpy: true, builtins: false }),
+        (BUILTINS, Allow { numpy: false, builtins: true }),
+    ];
+    forms.into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left))
+}
+
+/// One form's whole grammar over the whole file.
+fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize) -> Option<Match> {
     let mut c = Cursor {
         bytes,
         at: 0,
-        left: MAX_VALUES,
+        left: *left,
         says: Vec::new(),
+        memo: Vec::new(),
+        framing: Framing::Unframed,
+        allow,
+        calls: Vec::new(),
+        payloads: Vec::new(),
+        arrays: 0,
+        objects: 0,
     };
-    c.exact(&[0x80])?;
-    if !matches!(c.byte()?, 4 | 5) {
-        return None;
-    }
-    if c.peek() == Some(0x95) {
-        c.byte()?;
-        let size = u64::from_le_bytes(c.take(8)?.try_into().ok()?);
-        if size != (bytes.len() - c.at) as u64 {
-            return None;
-        }
-    }
-    let body = c.at;
-    if let Some(value) = c.value(0) {
-        if c.exact(b".").is_some() && c.at == bytes.len() {
-            return Some(Match {
-                form: "basic-p4-p5-v2",
-                value,
-                body,
-                call: None,
-                ops: instructions(bytes),
-                stop: c.at - 1,
-                payload: None,
-            });
-        }
-    }
-    // A second bounded, exact production, derived from the existing NumPy
-    // matrix fixture. No memo interpreter: each reference has a fixed slot.
-    c.at = body;
-    c.says.clear();
-    let (value, at, call, payload) = c.array()?;
-    c.exact(b".")?;
-    if c.at != bytes.len() {
-        return None;
-    }
-    Some(Match {
-        form: "numpy-numeric-array-p4-p5-v2",
-        value,
-        body,
-        call: Some(call),
-        ops: instructions(bytes),
-        stop: c.at - 1,
-        payload: Some((at, payload)),
-    })
+    let found = c.whole(form);
+    *left = c.left;
+    found
 }
 
 /// Every instruction of a file a form has just matched.
@@ -264,9 +347,64 @@ struct Cursor<'a> {
     left: usize,
     /// The named operands the form has matched so far inside its fixed runs.
     says: Vec<Said>,
+    /// What the file has filed under each memo slot, in the order it wrote
+    /// them. A slot number is the count of memo marks before it, so every
+    /// mark a production consumes has to land here or the numbering drifts.
+    memo: Vec<Bound>,
+    framing: Framing,
+    allow: Allow,
+    calls: Vec<Call>,
+    payloads: Vec<(usize, Payload)>,
+    /// How many of each specific production fired, which is what says the
+    /// file belongs to the form that allows it.
+    arrays: usize,
+    objects: usize,
 }
 
 impl<'a> Cursor<'a> {
+    fn whole(&mut self, form: &'static str) -> Option<Match> {
+        self.exact(&[0x80])?;
+        if !matches!(self.byte()?, 4 | 5) {
+            return None;
+        }
+        if self.peek() == Some(0x95) {
+            self.frame_header()?;
+        }
+        let body = self.at;
+        let value = self.value(0)?;
+        self.exact(b".")?;
+        if self.at != self.bytes.len() {
+            return None;
+        }
+        // The last frame ends where the STOP does. A file whose tail was too
+        // short to frame ends outside one instead, which is the only way a
+        // framed file may finish between frames.
+        match self.framing {
+            Framing::Unframed => {}
+            Framing::Inside(end) if end == self.at => {}
+            Framing::Between(from) if self.at - from < MIN_FRAME => {}
+            _ => return None,
+        }
+        let needed = match (form, self.arrays, self.objects) {
+            (BASIC, 0, 0) => true,
+            (NUMPY, arrays, 0) => arrays > 0,
+            (BUILTINS, 0, objects) => objects > 0,
+            _ => false,
+        };
+        if !needed {
+            return None;
+        }
+        Some(Match {
+            form,
+            value,
+            body,
+            calls: std::mem::take(&mut self.calls),
+            ops: instructions(self.bytes),
+            stop: self.at - 1,
+            payloads: std::mem::take(&mut self.payloads),
+        })
+    }
+
     fn take(&mut self, len: usize) -> Option<&'a [u8]> {
         let end = self.at.checked_add(len)?;
         let out = self.bytes.get(self.at..end)?;
@@ -282,15 +420,203 @@ impl<'a> Cursor<'a> {
     fn exact(&mut self, expected: &[u8]) -> Option<()> {
         (self.take(expected.len())? == expected).then_some(())
     }
+
+    fn save(&self) -> Save {
+        Save {
+            at: self.at,
+            memo: self.memo.len(),
+            says: self.says.len(),
+            calls: self.calls.len(),
+            payloads: self.payloads.len(),
+            framing: self.framing,
+            arrays: self.arrays,
+            objects: self.objects,
+        }
+    }
+
+    /// Put everything back except the work already spent, which an
+    /// alternative that failed does not get to spend again.
+    fn restore(&mut self, s: Save) {
+        self.at = s.at;
+        self.memo.truncate(s.memo);
+        self.says.truncate(s.says);
+        self.calls.truncate(s.calls);
+        self.payloads.truncate(s.payloads);
+        self.framing = s.framing;
+        self.arrays = s.arrays;
+        self.objects = s.objects;
+    }
+
+    /// FRAME and its eight-byte length, which must land inside the file.
+    fn frame_header(&mut self) -> Option<()> {
+        self.exact(&[0x95])?;
+        let size = u64::from_le_bytes(self.take(8)?.try_into().ok()?);
+        let end = self.at.checked_add(usize::try_from(size).ok()?)?;
+        if end > self.bytes.len() {
+            return None;
+        }
+        self.framing = Framing::Inside(end);
+        Some(())
+    }
+
+    /// The boundary between two objects, where a frame may end and the next
+    /// one begin. Every object production starts here.
+    fn gate(&mut self) -> Option<()> {
+        if let Framing::Inside(end) = self.framing {
+            if self.at > end {
+                return None;
+            }
+            if self.at == end {
+                self.framing = Framing::Between(end);
+            }
+        }
+        if matches!(self.framing, Framing::Between(_)) && self.peek() == Some(0x95) {
+            self.frame_header()?;
+        }
+        Some(())
+    }
+
+    /// A counted run of bytes, and the framing a large one demands.
+    ///
+    /// The opcode byte has already been read and sits at `self.at - 1`. A
+    /// payload of [`BIG_PAYLOAD`] bytes or more begins exactly where a frame
+    /// ended and a new frame begins after it; a smaller one is inside a frame.
+    fn counted(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<(usize, usize)> {
+        let opcode_at = self.at - 1;
+        let framed = !matches!(self.framing, Framing::Unframed);
+        let between = matches!(self.framing, Framing::Between(from) if from == opcode_at);
+        let len = self.length(code, short, wide, widest)?;
+        if framed && (len >= BIG_PAYLOAD) != between {
+            return None;
+        }
+        let at = self.at;
+        self.take(len)?;
+        if between {
+            // The writer starts a new frame right after the bytes it wrote
+            // between frames, unless what is left is too short to frame.
+            self.framing = Framing::Between(self.at);
+            self.gate()?;
+        }
+        Some((at, len))
+    }
+
+    fn length(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<usize> {
+        let n = if code == short {
+            u64::from(self.byte()?)
+        } else if code == wide {
+            u32::from_le_bytes(self.take(4)?.try_into().ok()?) as u64
+        } else if code == widest {
+            u64::from_le_bytes(self.take(8)?.try_into().ok()?)
+        } else {
+            return None;
+        };
+        usize::try_from(n).ok()
+    }
+
+    /// MEMOIZE, which files the value just built in the next slot. Protocol 4
+    /// writes no index: the slot is the count of marks before it.
+    fn memoize(&mut self, bound: Bound) -> Option<usize> {
+        self.exact(&[0x94])?;
+        if self.memo.len() >= MAX_MEMO {
+            return None;
+        }
+        self.memo.push(bound);
+        Some(self.memo.len() - 1)
+    }
+
+    /// BINGET or LONG_BINGET, and what the slot it names holds. A slot past
+    /// the end, or one the file has not written, is a non-match.
+    fn reference(&mut self) -> Option<&Bound> {
+        let slot = match self.byte()? {
+            b'h' => self.byte()? as usize,
+            b'j' => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
+            _ => return None,
+        };
+        self.memo.get(slot)
+    }
+
+    fn at_reference(&self) -> bool {
+        matches!(self.peek(), Some(b'h') | Some(b'j'))
+    }
+
+    /// SHORT_BINUNICODE with exactly this spelling, and the memo mark that
+    /// files it. Comes back as the bytes the word sits in.
+    fn word(&mut self, text: &str) -> Option<(usize, usize)> {
+        self.exact(&[0x8c, u8::try_from(text.len()).ok()?])?;
+        let at = self.at;
+        self.exact(text.as_bytes())?;
+        self.memoize(Bound::Text { at, len: text.len() })?;
+        Some((at, text.len()))
+    }
+
+    /// The same word, spelled out here or referred to where it was spelled.
+    /// A reference has no bytes of its own to read as text, so it comes back
+    /// as nothing to name and the BINGET stays an instruction.
+    fn word_or_reference(&mut self, text: &str) -> Option<Option<(usize, usize)>> {
+        if self.at_reference() {
+            let here = self.save();
+            let held = self.reference().cloned();
+            if let Some(Bound::Text { at, len }) = held {
+                if self.bytes.get(at..at + len) == Some(text.as_bytes()) {
+                    return Some(None);
+                }
+            }
+            self.restore(here);
+            return None;
+        }
+        Some(Some(self.word(text)?))
+    }
+
+    /// A module and a callable, joined by STACK_GLOBAL, or a reference to the
+    /// slot the same pair was filed in earlier. `modules` is every spelling
+    /// the form accepts, each written out.
+    fn global(
+        &mut self,
+        modules: &[&str],
+        name: &str,
+        module_says: &'static str,
+        name_says: &'static str,
+    ) -> Option<String> {
+        // A slot holding this exact module and callable stands for the pair.
+        // Any other reference here is the module name on its own, which the
+        // spelled-out production below reads.
+        if self.at_reference() {
+            let here = self.save();
+            if let Some(Bound::Global(full)) = self.reference().cloned() {
+                if modules.iter().any(|m| full == format!("{m}.{name}")) {
+                    return Some(full);
+                }
+            }
+            self.restore(here);
+        }
+        let here = self.save();
+        let module = modules.iter().find_map(|m| {
+            self.restore(here);
+            self.word_or_reference(m).map(|said| {
+                if let Some((at, len)) = said {
+                    self.says(module_says, at, len);
+                }
+                (*m).to_string()
+            })
+        })?;
+        let (at, len) = self.word(name)?;
+        self.says(name_says, at, len);
+        self.exact(&[0x93])?;
+        let full = format!("{module}.{name}");
+        self.memoize(Bound::Global(full.clone()))?;
+        Some(full)
+    }
+
     fn text(&mut self) -> Option<Value> {
+        self.gate()?;
         let start = self.at;
         let code = self.byte()?;
-        let len = self.length(code, 0x8c, 0x58, 0x8d)?;
-        let at = self.at;
-        std::str::from_utf8(self.take(len)?).ok()?;
-        self.exact(&[0x94])?;
+        let (at, len) = self.counted(code, 0x8c, 0x58, 0x8d)?;
+        std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+        self.memoize(Bound::Text { at, len })?;
         Some(self.span(start, Kind::Text { at, len }))
     }
+
     /// A value and the bytes it was written in, which is everything the
     /// production consumed.
     fn span(&self, start: usize, kind: Kind) -> Value {
@@ -300,11 +626,34 @@ impl<'a> Cursor<'a> {
             kind,
         }
     }
+
+    /// Remember a named operand inside the run of instructions being matched.
+    fn says(&mut self, name: &'static str, at: usize, len: usize) {
+        self.says.push(Said { name, at, len });
+    }
+
     fn value(&mut self, depth: usize) -> Option<Value> {
         if depth >= MAX_DEPTH {
             return None;
         }
         self.left = self.left.checked_sub(1)?;
+        self.gate()?;
+        // The productions a form adds to the basic ones. Each is tried whole
+        // and rewound whole, and the budget above is spent either way.
+        if self.allow.numpy {
+            let here = self.save();
+            match self.numpy() {
+                Some(value) => return Some(value),
+                None => self.restore(here),
+            }
+        }
+        if self.allow.builtins {
+            let here = self.save();
+            match self.builtin(depth) {
+                Some(value) => return Some(value),
+                None => self.restore(here),
+            }
+        }
         if matches!(self.peek()?, 0x8c | 0x58 | 0x8d) {
             return self.text();
         }
@@ -334,15 +683,13 @@ impl<'a> Cursor<'a> {
                 len: 8,
             },
             code @ (b'C' | b'B' | 0x8e) => {
-                let len = self.length(code, b'C', b'B', 0x8e)?;
-                let at = self.at;
-                self.take(len)?;
-                self.exact(&[0x94])?;
+                let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
+                self.memoize(Bound::Bytes { at, len })?;
                 Kind::Bytes { at, len }
             }
             b')' => Kind::Tuple(Vec::new()),
             b']' => {
-                self.exact(&[0x94])?;
+                self.memoize(Bound::Opaque)?;
                 let mut values = Vec::new();
                 if self.peek() == Some(b'(') {
                     self.byte()?;
@@ -350,26 +697,24 @@ impl<'a> Cursor<'a> {
                         values.push(self.value(depth + 1)?);
                     }
                     self.byte()?;
-                    if values.len() < 2 || values.len() > 1000 {
+                    if values.len() < 2 || values.len() > MAX_BATCH {
                         return None;
                     }
                 } else {
                     // EMPTY_LIST and a single-item list share a prefix. Try
                     // the whole single-item production before accepting empty.
                     // Rewinding never restores the shared work budget.
-                    let start = self.at;
-                    if let Some(value) =
-                        self.value(depth + 1).filter(|_| self.exact(b"a").is_some())
-                    {
+                    let here = self.save();
+                    if let Some(value) = self.value(depth + 1).filter(|_| self.exact(b"a").is_some()) {
                         values.push(value);
                     } else {
-                        self.at = start;
+                        self.restore(here);
                     }
                 }
                 Kind::List(values)
             }
             b'}' => {
-                self.exact(&[0x94])?;
+                self.memoize(Bound::Opaque)?;
                 let mut entries = Vec::new();
                 if self.peek() == Some(b'(') {
                     self.byte()?;
@@ -377,21 +722,20 @@ impl<'a> Cursor<'a> {
                         entries.push((self.text()?, self.value(depth + 1)?));
                     }
                     self.byte()?;
-                    if entries.len() < 2 || entries.len() > 1000 {
+                    if entries.len() < 2 || entries.len() > MAX_BATCH {
                         return None;
                     }
                 } else {
-                    let start = self.at;
+                    let here = self.save();
                     let entry = (|| {
                         let key = self.text()?;
                         let value = self.value(depth + 1)?;
                         self.exact(b"s")?;
                         Some((key, value))
                     })();
-                    if let Some(entry) = entry {
-                        entries.push(entry);
-                    } else {
-                        self.at = start;
+                    match entry {
+                        Some(entry) => entries.push(entry),
+                        None => self.restore(here),
                     }
                 }
                 Kind::Dict(entries)
@@ -401,19 +745,8 @@ impl<'a> Cursor<'a> {
         Some(self.span(start, kind))
     }
 
-    fn length(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<usize> {
-        let n = if code == short {
-            u64::from(self.byte()?)
-        } else if code == wide {
-            u32::from_le_bytes(self.take(4)?.try_into().ok()?) as u64
-        } else if code == widest {
-            u64::from_le_bytes(self.take(8)?.try_into().ok()?)
-        } else {
-            return None;
-        };
-        usize::try_from(n).ok()
-    }
-
+    /// One dimension of a shape, which is written as a nonnegative integer in
+    /// whichever of the three widths holds it.
     fn dimension(&mut self) -> Option<u64> {
         match self.byte()? {
             b'K' => Some(self.byte()? as u64),
@@ -423,6 +756,9 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// A shape, as the tuple its arity is written with: EMPTY_TUPLE for none,
+    /// TUPLE1 to TUPLE3 for one to three, and MARK..TUPLE past that. Only the
+    /// counted tuples carry a memo mark; CPython never files an empty one.
     fn dimensions(&mut self) -> Option<Vec<u64>> {
         if self.peek()? == b')' {
             self.byte()?;
@@ -434,7 +770,7 @@ impl<'a> Cursor<'a> {
         }
         let mut dims = Vec::new();
         loop {
-            if dims.len() == 32 {
+            if dims.len() == MAX_DIMENSIONS {
                 return None;
             }
             dims.push(self.dimension()?);
@@ -445,146 +781,312 @@ impl<'a> Cursor<'a> {
         let end = self.byte()?;
         let expected = match dims.len() {
             1..=3 if !marked => 0x84 + dims.len() as u8,
-            4..=32 if marked => b't',
+            4..=MAX_DIMENSIONS if marked => b't',
             _ => return None,
         };
         if end != expected {
             return None;
         }
-        self.exact(&[0x94])?;
+        self.memoize(Bound::Opaque)?;
         Some(dims)
     }
 
-    /// Remember a named operand inside the run of instructions being matched.
-    fn says(&mut self, name: &'static str, at: usize, len: usize) {
-        self.says.push(Said { name, at, len });
-    }
-
-    fn array(&mut self) -> Option<(Value, usize, Call, Payload)> {
-        let outer = self.at;
-        let key = if self.peek() == Some(b'}') {
-            self.exact(b"}\x94")?;
-            Some(self.text()?)
-        } else {
-            None
-        };
-        let start = self.at;
-        // The dictionary and key add exactly two memo slots. No arbitrary
-        // memo lookup or stack effect is supported by this production.
-        let numpy_slot = if key.is_some() { 5 } else { 3 };
-        self.exact(b"\x8c")?;
-        let module = self.at + 1;
-        let module_len = match self.byte()? {
-            22 => {
-                self.exact(b"numpy._core.multiarray")?;
-                22
+    /// The dtype of an array: the whole `numpy.dtype` construction and the
+    /// BUILD that gives it its byte order, or a reference to a slot already
+    /// holding a completed one.
+    ///
+    /// Comes back as the `<f4` spelling, which is the one thing that says how
+    /// to read the numbers.
+    fn dtype(&mut self) -> Option<String> {
+        // A slot holding a finished dtype stands for the whole construction.
+        // Any other reference here is the module name of the `numpy.dtype`
+        // class, which the construction itself reads.
+        if self.at_reference() {
+            let here = self.save();
+            if let Some(Bound::Dtype(dtype)) = self.reference().cloned() {
+                return Some(dtype);
             }
-            21 => {
-                self.exact(b"numpy.core.multiarray")?;
-                21
-            }
-            _ => return None,
+            self.restore(here);
+        }
+        self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
+        let (kind_at, kind_len) = {
+            self.exact(&[0x8c])?;
+            let len = self.byte()? as usize;
+            let at = self.at;
+            self.take(len)?;
+            (at, len)
         };
-        self.says("module", module, module_len);
-        let run = self.at;
-        self.exact(b"\x94\x8c\x0c_reconstruct\x94\x93\x94")?;
-        self.says("callable", run + 3, 12);
-        let run = self.at;
-        self.exact(
-            b"\x8c\x05numpy\x94\x8c\x07ndarray\x94\x93\x94K\0\x85\x94C\x01b\x94\x87\x94R\x94(K\x01",
-        )?;
-        self.says("class module", run + 2, 5);
-        self.says("class", run + 10, 7);
-        let dimensions = self.dimensions()?;
-        self.exact(&[b'h', numpy_slot])?;
-        let run = self.at;
-        self.exact(b"\x8c\x05dtype\x94\x93\x94\x8c")?;
-        self.says("dtype class", run + 2, 5);
-        let dtype_len = self.byte()? as usize;
-        let kind_at = self.at;
-        let kind = std::str::from_utf8(self.take(dtype_len)?).ok()?;
-        self.says("dtype", kind_at, dtype_len);
+        let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?;
         // Only these plain numeric dtype productions have this exact state.
         if !matches!(
             kind,
-            "b1" | "i1"
-                | "i2"
-                | "i4"
-                | "i8"
-                | "u1"
-                | "u2"
-                | "u4"
-                | "u8"
-                | "f2"
-                | "f4"
-                | "f8"
-                | "c8"
-                | "c16"
+            "b1" | "i1" | "i2" | "i4" | "i8" | "u1" | "u2" | "u4" | "u8" | "f2" | "f4" | "f8" | "c8" | "c16"
         ) {
             return None;
         }
-        self.exact(b"\x94\x89\x88\x87\x94R\x94(K\x03\x8c\x01")?;
-        let order_at = self.at;
-        let order = self.byte()?;
-        self.says("byte order", order_at, 1);
+        let kind = kind.to_string();
+        self.says("dtype", kind_at, kind_len);
+        self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
+        // NEWFALSE NEWTRUE TUPLE3, the two flags every plain dtype is built
+        // with, and then the call that makes it.
+        self.exact(b"\x89\x88\x87")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        let slot = self.memoize(Bound::Opaque)?;
+        // The state the BUILD sets: version 3, the byte order, three Nones,
+        // no field offsets, and an alignment of zero.
+        self.exact(b"(K\x03")?;
+        let order = self.byte_order(kind.as_str())?;
+        self.exact(b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"b")?;
+        let dtype = format!("{order}{kind}");
+        self.memo[slot] = Bound::Dtype(dtype.clone());
+        Some(dtype)
+    }
+
+    /// The letter that says which way round a dtype's bytes go, spelled out
+    /// here or referred to where it was spelled. A single-byte dtype has no
+    /// order and says so with `|`.
+    fn byte_order(&mut self, kind: &str) -> Option<char> {
+        let (at, len) = if self.at_reference() {
+            let here = self.save();
+            match self.reference().cloned() {
+                Some(Bound::Text { at, len }) => (at, len),
+                _ => {
+                    self.restore(here);
+                    return None;
+                }
+            }
+        } else {
+            self.exact(&[0x8c, 1])?;
+            let at = self.at;
+            self.byte()?;
+            self.memoize(Bound::Text { at, len: 1 })?;
+            self.says("byte order", at, 1);
+            (at, 1)
+        };
+        if len != 1 {
+            return None;
+        }
+        let order = *self.bytes.get(at)?;
         let one_byte = matches!(kind, "b1" | "i1" | "u1");
         if (one_byte && order != b'|') || (!one_byte && !matches!(order, b'<' | b'>')) {
             return None;
         }
-        let dtype = format!("{}{kind}", char::from(order));
-        let (shape, width) = shapes::dtype(&dtype)?;
-        self.exact(b"\x94NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t\x94b")?;
-        let fortran_order = match self.byte()? {
-            0x89 => false,
-            0x88 => true,
-            _ => return None,
-        };
+        Some(char::from(order))
+    }
+
+    /// The bytes an array's numbers sit in, checked against its shape.
+    fn numbers(&mut self, dtype: &str, dimensions: &[u64]) -> Option<(usize, usize, Payload)> {
+        let (shape, width) = shapes::dtype(dtype)?;
         let code = self.byte()?;
-        let len = self.length(code, b'C', b'B', 0x8e)?;
+        let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
         // Check every dimension even when another one is zero. Dimensions
         // originate from nonnegative i32 values; the product is bounded too.
         let count = if dimensions.contains(&0) {
             0
         } else {
-            dimensions
-                .iter()
-                .try_fold(1u64, |n, dim| n.checked_mul(*dim))?
+            dimensions.iter().try_fold(1u64, |n, dim| n.checked_mul(*dim))?
         };
         if len as u64 != count.checked_mul(width)? {
             return None;
         }
-        let at = self.at;
-        // The call is everything the form fixed before the numbers: the
-        // globals it named, the shape it declared, and the dtype state it
-        // built. The numbers themselves are the value it produced.
-        let call = Call {
-            name: "ndarray reconstruct call",
-            at: start,
-            len: at - start,
-            says: std::mem::take(&mut self.says),
-        };
-        self.take(len)?;
-        self.exact(b"\x94t\x94b")?;
-        let array = self.span(
-            start,
-            Kind::Array {
-                at,
-                len,
-                dtype,
-                dimensions,
-                fortran_order,
-            },
-        );
-        let value = if let Some(key) = key {
-            self.exact(b"s")?;
-            self.span(outer, Kind::Dict(vec![(key, array)]))
+        Some((at, len, Payload { shape, count }))
+    }
+
+    /// A NumPy array or a NumPy scalar, each rebuilt by the one call the form
+    /// names and fixed instruction for instruction around it.
+    fn numpy(&mut self) -> Option<Value> {
+        let start = self.at;
+        let here = self.save();
+        match self.reconstructed(start) {
+            Some(value) => Some(value),
+            None => {
+                self.restore(here);
+                self.scalar(start)
+            }
+        }
+    }
+
+    /// `numpy._core.multiarray._reconstruct(ndarray, (0,), b'b')` and the
+    /// BUILD that hands the result its shape, dtype, storage order and bytes.
+    fn reconstructed(&mut self, start: usize) -> Option<Value> {
+        const MODULES: &[&str] = &["numpy._core.multiarray", "numpy.core.multiarray"];
+        self.global(MODULES, "_reconstruct", "module", "callable")?;
+        self.global(&["numpy"], "ndarray", "class module", "class")?;
+        // The placeholder the reconstructor is given: shape (0,) and a dtype
+        // letter, both replaced by the BUILD that follows.
+        self.exact(b"K\0\x85")?;
+        self.memoize(Bound::Opaque)?;
+        if self.at_reference() {
+            match self.reference().cloned() {
+                Some(Bound::Bytes { at, len: 1 }) if self.bytes.get(at) == Some(&b'b') => {}
+                _ => return None,
+            }
         } else {
-            array
+            self.exact(b"C\x01b")?;
+            let at = self.at - 1;
+            self.memoize(Bound::Bytes { at, len: 1 })?;
+        }
+        self.exact(b"\x87")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"(K\x01")?;
+        let dimensions = self.dimensions()?;
+        let dtype = self.dtype()?;
+        let fortran_order = match self.byte()? {
+            0x89 => false,
+            0x88 => true,
+            _ => return None,
         };
-        Some((value, at, call, Payload { shape, count }))
+        let call_ends = self.at;
+        let (at, len, payload) = self.numbers(&dtype, &dimensions)?;
+        self.finish_call("ndarray reconstruct call", start, call_ends);
+        self.memoize(Bound::Bytes { at, len })?;
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"b")?;
+        self.arrays += 1;
+        self.payloads.push((at, payload));
+        Some(self.span(
+            start,
+            Kind::Array { at, len, dtype, dimensions, fortran_order },
+        ))
+    }
+
+    /// `numpy._core.multiarray.scalar(dtype, bytes)`, which is how a single
+    /// NumPy number is written. Its shape has no dimensions, so its bytes are
+    /// exactly one value wide.
+    fn scalar(&mut self, start: usize) -> Option<Value> {
+        const MODULES: &[&str] = &["numpy._core.multiarray", "numpy.core.multiarray"];
+        self.global(MODULES, "scalar", "module", "callable")?;
+        let dtype = self.dtype()?;
+        let call_ends = self.at;
+        let (at, len, payload) = self.numbers(&dtype, &[1])?;
+        self.finish_call("numpy scalar call", start, call_ends);
+        self.memoize(Bound::Bytes { at, len })?;
+        self.exact(b"\x86")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        self.memoize(Bound::Opaque)?;
+        self.arrays += 1;
+        self.payloads.push((at, payload));
+        Some(self.span(
+            start,
+            Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false },
+        ))
+    }
+
+    /// The run of instructions just matched, with the names spelled inside it.
+    fn finish_call(&mut self, name: &'static str, at: usize, end: usize) {
+        let says = std::mem::take(&mut self.says);
+        self.calls.push(Call { name, at, len: end - at, says });
+    }
+
+    /// The builtin types a pickle writes as a call rather than as a literal.
+    fn builtin(&mut self, depth: usize) -> Option<Value> {
+        let start = self.at;
+        // A frozenset is the one of these with an opcode of its own, and a
+        // MARK can begin nothing else where a value is expected.
+        if self.peek()? == b'(' {
+            self.byte()?;
+            let mut items = Vec::new();
+            while self.peek()? != 0x91 {
+                if items.len() == MAX_BATCH {
+                    return None;
+                }
+                items.push(self.value(depth + 1)?);
+            }
+            self.byte()?;
+            self.memoize(Bound::Opaque)?;
+            self.objects += 1;
+            return Some(self.span(start, Kind::Object { what: Shape::FrozenSet, names: MEMBERS, items }));
+        }
+        let here = self.save();
+        for (name, what, names, arity) in [
+            ("slice", Shape::Slice, BOUNDS, 3usize),
+            ("range", Shape::Range, BOUNDS, 3),
+            ("complex", Shape::Complex, HALVES, 2),
+            ("bytearray", Shape::ByteArray, CONTENT, 1),
+        ] {
+            self.restore(here);
+            let made = (|| {
+                self.global(&["builtins"], name, "module", "class")?;
+                let mut items = Vec::new();
+                for _ in 0..arity {
+                    items.push(match what {
+                        // A slice's bounds are integers or None; a range's are
+                        // always integers; a complex is two floats; and a
+                        // bytearray is made from one byte string.
+                        Shape::Slice => self.small_int_or_none()?,
+                        Shape::Range => self.small_int()?,
+                        Shape::Complex => self.binfloat()?,
+                        _ => self.byte_string()?,
+                    });
+                }
+                self.exact(&[0x84 + arity as u8])?;
+                self.memoize(Bound::Opaque)?;
+                self.exact(b"R")?;
+                self.memoize(Bound::Opaque)?;
+                Some(self.span(start, Kind::Object { what, names, items }))
+            })();
+            if let Some(value) = made {
+                // The names the call was made with stay as the instructions
+                // they are; the value already says what it is.
+                self.says.truncate(here.says);
+                self.objects += 1;
+                return Some(value);
+            }
+        }
+        self.restore(here);
+        None
+    }
+
+    fn small_int(&mut self) -> Option<Value> {
+        let start = self.at;
+        let kind = match self.byte()? {
+            b'K' => Kind::Int { value: self.byte()? as i128, at: start + 1, len: 1 },
+            b'M' => Kind::Int {
+                value: u16::from_le_bytes(self.take(2)?.try_into().ok()?) as i128,
+                at: start + 1,
+                len: 2,
+            },
+            b'J' => Kind::Int {
+                value: i32::from_le_bytes(self.take(4)?.try_into().ok()?) as i128,
+                at: start + 1,
+                len: 4,
+            },
+            _ => return None,
+        };
+        Some(self.span(start, kind))
+    }
+
+    fn small_int_or_none(&mut self) -> Option<Value> {
+        if self.peek()? == b'N' {
+            let start = self.at;
+            self.byte()?;
+            return Some(self.span(start, Kind::None));
+        }
+        self.small_int()
+    }
+
+    fn binfloat(&mut self) -> Option<Value> {
+        let start = self.at;
+        self.exact(b"G")?;
+        let value = f64::from_be_bytes(self.take(8)?.try_into().ok()?);
+        Some(self.span(start, Kind::Float { value, at: start + 1, len: 8 }))
+    }
+
+    fn byte_string(&mut self) -> Option<Value> {
+        let start = self.at;
+        let code = self.byte()?;
+        let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
+        self.memoize(Bound::Bytes { at, len })?;
+        Some(self.span(start, Kind::Bytes { at, len }))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,7 +1102,7 @@ mod tests {
     fn captures_basic_values_without_a_machine() {
         let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
         let found = recognise(&bytes).unwrap();
-        assert_eq!(found.form, "basic-p4-p5-v2");
+        assert_eq!(found.form, "basic-p4-p5-v3");
         // Every node spans the bytes its production consumed, and a leaf says
         // where inside that its value proper sits.
         assert_eq!((found.value.at, found.value.len), (11, 15));
@@ -624,7 +1126,7 @@ mod tests {
         );
         assert_eq!(
             found.text(Deduce::Builds, bytes.len() as u64).as_deref(),
-            Some(stop_message("basic-p4-p5-v2").as_str())
+            Some(stop_message("basic-p4-p5-v3").as_str())
         );
         assert!(recognise(b"\x80\x05N.").is_some());
     }
@@ -670,7 +1172,7 @@ mod tests {
     #[test]
     fn captures_numpy_payload_and_rejects_changed_structure() {
         let found = recognise(MATRIX).unwrap();
-        assert_eq!(found.form, "numpy-numeric-array-p4-p5-v2");
+        assert_eq!(found.form, "numpy-numeric-array-p4-p5-v3");
         let Kind::Dict(entries) = &found.value.kind else {
             panic!("dict expected")
         };
@@ -919,7 +1421,7 @@ mod tests {
         let node = ev.node(&doc, &[2, 1]).unwrap();
         // The contract's sentence, the form that matched, and where the data
         // is. The first sentence is the one the design document fixes.
-        let said = stop_message("basic-p4-p5-v2");
+        let said = stop_message("basic-p4-p5-v3");
         assert_eq!(node.value, crate::eval::Value::Str(said.clone()));
         assert!(said.starts_with("Matched a Familiar Pickle Form ("));
         assert!(said.contains(": bypassed Pickle stack machine decoding."));
@@ -1026,7 +1528,7 @@ mod tests {
             ]
         );
         assert_eq!(named_row(&seen, "message").value, V::Str(MESSAGE.into()));
-        assert_eq!(named_row(&seen, "form").value, V::Str("basic-p4-p5-v2".into()));
+        assert_eq!(named_row(&seen, "form").value, V::Str("basic-p4-p5-v3".into()));
         assert_eq!(named_row(&seen, "protocol").value, V::UInt(4));
         assert_eq!(named_row(&seen, "key").value, V::Str("a".into()));
         assert_eq!(named_row(&seen, "[0]").value, V::UInt(1));
@@ -1114,7 +1616,7 @@ mod tests {
     #[test]
     fn a_matched_array_carries_its_dtype_shape_and_order() {
         let seen = dump(MATRIX);
-        assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v2".into()));
+        assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v3".into()));
         assert_eq!(named_row(&seen, "value").ty, "array");
         assert_eq!(named_row(&seen, "dtype").value, V::Str("<f4".into()));
         assert_eq!(named_row(&seen, "shape").value, V::Str("4 x 6".into()));
