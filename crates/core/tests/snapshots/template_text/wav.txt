@@ -830,37 +830,43 @@ type Chunk (named by id, contents body) {
         }
       }
     }
-    'data' => switch earlier(body.format) {
-      0xfffe => switch earlier(body.extra.sub_format.format) {
-        1 => switch earlier(body.bits_per_sample) {
-          8 => u8be[remaining / 1]
-          16 => i16le[remaining / 2]
-          24 => i24le[remaining / 3]
-          32 => i32le[remaining / 4]
+    'data' => Samples {
+      samples: switch earlier(body.format) {
+        0xfffe => switch earlier(body.extra.sub_format.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16le[remaining / 2]
+            24 => i24le[remaining / 3]
+            32 => i32le[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32le[remaining / 4]
+            64 => f64le[remaining / 8]
+            _ => bytes[remaining]
+          }
           _ => bytes[remaining]
         }
-        3 => switch earlier(body.bits_per_sample) {
-          32 => f32le[remaining / 4]
-          64 => f64le[remaining / 8]
+        _ => switch earlier(body.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16le[remaining / 2]
+            24 => i24le[remaining / 3]
+            32 => i32le[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32le[remaining / 4]
+            64 => f64le[remaining / 8]
+            _ => bytes[remaining]
+          }
           _ => bytes[remaining]
         }
-        _ => bytes[remaining]
       }
-      _ => switch earlier(body.format) {
-        1 => switch earlier(body.bits_per_sample) {
-          8 => u8be[remaining / 1]
-          16 => i16le[remaining / 2]
-          24 => i24le[remaining / 3]
-          32 => i32le[remaining / 4]
-          _ => bytes[remaining]
-        }
-        3 => switch earlier(body.bits_per_sample) {
-          32 => f32le[remaining / 4]
-          64 => f64le[remaining / 8]
-          _ => bytes[remaining]
-        }
-        _ => bytes[remaining]
-      }
+          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+              column word channel, named [left, right], describes
+              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+              earlier(body.bits_per_sample)]
     }
     _ => bytes[remaining]
   }
@@ -1689,37 +1695,43 @@ type ChunkBE = Chunk (named by id, contents body) {
         }
       }
     }
-    'data' => switch earlier(body.format) {
-      0xfffe => switch earlier(body.extra.sub_format.format) {
-        1 => switch earlier(body.bits_per_sample) {
-          8 => u8be[remaining / 1]
-          16 => i16be[remaining / 2]
-          24 => i24be[remaining / 3]
-          32 => i32be[remaining / 4]
+    'data' => Samples {
+      samples: switch earlier(body.format) {
+        0xfffe => switch earlier(body.extra.sub_format.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16be[remaining / 2]
+            24 => i24be[remaining / 3]
+            32 => i32be[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32be[remaining / 4]
+            64 => f64be[remaining / 8]
+            _ => bytes[remaining]
+          }
           _ => bytes[remaining]
         }
-        3 => switch earlier(body.bits_per_sample) {
-          32 => f32be[remaining / 4]
-          64 => f64be[remaining / 8]
+        _ => switch earlier(body.format) {
+          1 => switch earlier(body.bits_per_sample) {
+            8 => u8be[remaining / 1]
+            16 => i16be[remaining / 2]
+            24 => i24be[remaining / 3]
+            32 => i32be[remaining / 4]
+            _ => bytes[remaining]
+          }
+          3 => switch earlier(body.bits_per_sample) {
+            32 => f32be[remaining / 4]
+            64 => f64be[remaining / 8]
+            _ => bytes[remaining]
+          }
           _ => bytes[remaining]
         }
-        _ => bytes[remaining]
       }
-      _ => switch earlier(body.format) {
-        1 => switch earlier(body.bits_per_sample) {
-          8 => u8be[remaining / 1]
-          16 => i16be[remaining / 2]
-          24 => i24be[remaining / 3]
-          32 => i32be[remaining / 4]
-          _ => bytes[remaining]
-        }
-        3 => switch earlier(body.bits_per_sample) {
-          32 => f32be[remaining / 4]
-          64 => f64be[remaining / 8]
-          _ => bytes[remaining]
-        }
-        _ => bytes[remaining]
-      }
+          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+              column word channel, named [left, right], describes
+              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+              earlier(body.bits_per_sample)]
     }
     _ => bytes[remaining]
   }

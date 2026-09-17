@@ -154,6 +154,20 @@ impl<'a, S: Source> Tab<'a, S> {
         self.ev.time_of(self.doc, &self.path_in(path))
     }
 
+    /// What table the field at `path` is, with each fact's path mapped into
+    /// the tab's own numbering the way `origins` does it.
+    pub fn table_shape(&mut self, path: &[usize]) -> R<Option<TableShapeInfo>> {
+        let found = self.ev.table_shape(self.doc, &self.path_in(path))?;
+        Ok(found.map(|t| TableShapeInfo {
+            facts: t
+                .facts
+                .into_iter()
+                .map(|o| Origin { path: self.path_out(&o.path).unwrap_or_default(), ..o })
+                .collect(),
+            ..t
+        }))
+    }
+
     pub fn relations(&mut self, path: &[usize]) -> R<Vec<Relation>> {
         self.ev.relations(self.doc, &self.path_in(path))
     }

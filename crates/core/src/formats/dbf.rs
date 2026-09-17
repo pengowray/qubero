@@ -12,7 +12,7 @@
 //! sized by looking the column up at the same index, the way `hdf4` sizes a
 //! Vdata record from its header.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Until};
 
 /// The version byte, which really packs three things: the dBase generation
 /// in the low bits, whether a memo file goes with the table in the high ones.
@@ -87,6 +87,8 @@ pub fn dbf() -> Template {
         .field_doc("header_length", "Bytes before the first record: this header, the descriptors, the 0x0D, and anything a writer put after it.")
         .field_doc("record_length", "One more than the columns' widths added up, for the deletion flag.")
         .field_elem_named_from("fields", E::elem_field("fields", E::idx(), &["name"]))
+        // Each record is a row and no more.
+        .field_table("records", TableShape { row_word: Some("record".into()), facts: vec![E::field("record_count")], ..Default::default() })
         .counted_as("record")
         .machinery(&["fields", "terminator", "header_rest"])
         .payload(&["records"]),

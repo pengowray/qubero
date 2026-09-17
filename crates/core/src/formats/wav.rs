@@ -19,7 +19,7 @@
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
 //! read by the same template that reads one at the front of an MP3.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Until};
 
 /// A four-character chunk id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -90,9 +90,9 @@ pub fn wav() -> Template {
             ],
         ),
     )
-    .with_type("Chunk", chunk(chunk_body_endian(Some(samples(Little)), Little), Little))
+    .with_type("Chunk", chunk(chunk_body_endian(Some(sample_table(Little)), Little), Little))
     .with_type("ListItem", list_item(Little))
-    .with_type("ChunkBE", chunk(chunk_body_endian(Some(samples(Big)), Big), Big))
+    .with_type("ChunkBE", chunk(chunk_body_endian(Some(sample_table(Big)), Big), Big))
     .with_type("ListItemBE", list_item(Big))
 }
 
@@ -213,6 +213,35 @@ fn samples(endian: Endian) -> T {
         vec![(0xfffe, by_format(E::sibling(&["body", "extra", "sub_format", "format"])))],
         by_format(E::sibling(&["body", "format"])),
     )
+}
+
+/// The samples, and what makes a table of them: the channels interleaved into
+/// rows, the rate those rows come at, and the fields of the `fmt ` chunk a
+/// reader wants to see above the table.
+///
+/// A structure of one field, so that the shape sits beside the run it
+/// describes. `Chunk.body` is every chunk's field and cannot carry a claim
+/// about one of them, and the run itself is a switch on the sample width with
+/// an array at the end of each branch, which has no field either. So the run
+/// is wrapped, and `Samples.samples` is a field the shape can hang on. See
+/// [`crate::template::TableShape`].
+fn sample_table(endian: Endian) -> T {
+    let shape = TableShape {
+        // Interleaved: one row is one sample of each channel.
+        columns: Some(E::sibling(&["body", "channels"])),
+        names: vec!["left".into(), "right".into()],
+        units: vec!["".into(), "".into()],
+        column_word: Some("channel".into()),
+        row_word: Some("sample".into()),
+        rate: Some(E::sibling(&["body", "sample_rate"])),
+        facts: vec![
+            E::sibling(&["body", "format"]),
+            E::sibling(&["body", "channels"]),
+            E::sibling(&["body", "sample_rate"]),
+            E::sibling(&["body", "bits_per_sample"]),
+        ],
+    };
+    T::structure("Samples", vec![("samples", samples(endian))]).field_table("samples", shape)
 }
 
 /// What is inside a chunk, by its id. `data` is left as bytes unless a format
@@ -602,8 +631,8 @@ mod tests {
         let mut ev = Evaluator::new(wav());
         assert_eq!(ev.node(&d, &[1]).unwrap().value, Value::UInt(40));
         assert_eq!(ev.node(&d, &[3, 0, 2, 2]).unwrap().value, Value::UInt(8000));
-        assert_eq!(ev.node(&d, &[3, 1, 2, 0]).unwrap().value, Value::Int(1));
-        assert_eq!(ev.node(&d, &[3, 1, 2, 1]).unwrap().value, Value::Int(-2));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0, 1]).unwrap().value, Value::Int(-2));
     }
 
     #[test]
@@ -635,8 +664,8 @@ mod tests {
         assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 3);
         assert_eq!(ev.node(&d, &[3, 0, 2, 1]).unwrap().value, Value::UInt(4));
         assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().size_bits, 32);
-        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().value, Value::Int(1));
-        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Int(-2));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 0]).unwrap().value, Value::Int(1));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::Int(-2));
     }
 
     pub(super) fn sample() -> Vec<u8> {
@@ -933,11 +962,11 @@ mod tests {
         let mut ev = Evaluator::new(wav());
         // chunks[2] is data; its body is the frames.
         // Two channels interleaved: eight samples, left and right in turn.
-        let samples = ev.node(&d, &[3, 2, 2]).unwrap();
+        let samples = ev.node(&d, &[3, 2, 2, 0]).unwrap();
         assert_eq!(samples.child_count, 8);
-        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Int(-1));
-        assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().value, Value::Int(32767));
-        assert_eq!(ev.node(&d, &[3, 2, 2, 7]).unwrap().value, Value::Int(8));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::Int(-1));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 2]).unwrap().value, Value::Int(32767));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 7]).unwrap().value, Value::Int(8));
     }
 
     #[test]
@@ -945,14 +974,14 @@ mod tests {
         let body: Vec<u8> = [1.0f32, -0.5, 0.25].iter().flat_map(|v| v.to_le_bytes()).collect();
         let d = Document::new(MemSource(with_samples(32, 3, 1, &body)));
         let mut ev = Evaluator::new(wav());
-        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().child_count, 3);
-        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Float(-0.5));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::Float(-0.5));
 
         // 8-bit PCM is unsigned, with 128 for silence.
         let d = Document::new(MemSource(with_samples(8, 1, 1, &[0, 128, 255])));
         let mut ev = Evaluator::new(wav());
-        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().child_count, 3);
-        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::UInt(128));
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::UInt(128));
     }
 
     #[test]
@@ -967,9 +996,11 @@ mod tests {
         out.extend_from_slice(&inner);
         let d = Document::new(MemSource(out));
         let mut ev = Evaluator::new(wav());
-        let body = ev.node(&d, &[3, 0, 2]).unwrap();
-        assert!(!body.composite);
-        assert_eq!(body.size_bits, 8 * 8);
+        // The wrapper the shape hangs on is still there; what is inside it is
+        // bytes, not samples of a width nobody declared.
+        let bytes = ev.node(&d, &[3, 0, 2, 0]).unwrap();
+        assert!(!bytes.composite);
+        assert_eq!(bytes.size_bits, 8 * 8);
     }
 
     /// A little `fmt ` and a little `data`, and the RIFF size around them.

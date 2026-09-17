@@ -43,6 +43,7 @@ mod size;
 mod space;
 mod stitch;
 mod tab;
+mod table;
 mod time;
 mod traced;
 mod walk;
@@ -59,6 +60,7 @@ pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
+pub use table::TableShapeInfo;
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
@@ -378,6 +380,12 @@ pub struct NodeInfo {
     /// fields than a line can hold. A panel with one line to spend on a
     /// structure shows this before it falls back to counting the fields.
     pub line: Option<String>,
+    /// True when the template says this field reads as a table: a run of
+    /// samples with the channels interleaved, a list of records. What the
+    /// table is made of is [`Evaluator::table_shape`]; this is the one bit a
+    /// view needs to know whether to offer it. See
+    /// [`crate::template::TableShape`].
+    pub table: bool,
 }
 
 /// What an expression reads of a field. See [`Evaluator::value_of`].
@@ -1009,6 +1017,7 @@ impl Evaluator {
             // did not write: a field that is there resolves to what is inside.
             absent: matches!(r.ty, Ty::When { .. }),
             doc: self.doc_of(path, &r.ty, size),
+            table: self.table_declared(path),
         })
     }
 

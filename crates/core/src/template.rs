@@ -1831,6 +1831,53 @@ pub struct Field {
     /// make either. A 7z `kCRC` is the second: a sum per stream, and the one
     /// at index *i* is about the stream at index *i*.
     pub elem_check: Option<Check>,
+    /// How this field reads as a table, when the format knows: how many of its
+    /// elements make one row, what the columns are called, and what one row
+    /// is. See [`TableShape`].
+    ///
+    /// `Arc` for the reason [`Field::doc`] is one: a type is cloned every time
+    /// an element of a list is placed, and the shape is a handful of vectors
+    /// nobody changes once the template is built.
+    pub table: Option<Arc<TableShape>>,
+}
+
+/// How a run of values reads as a table of rows and columns.
+///
+/// A list of samples is a run of numbers to the reader of bytes and a table to
+/// anyone who wants to know what the file holds: two channels of sound, forty
+/// four thousand rows a second. Nothing in the bytes says which, and no
+/// heuristic can find it either, because a WAV's channel count is in a
+/// different chunk and its rate is a field beside that one. The template knows
+/// both, so the template says so, here, beside the field it is about.
+///
+/// Declared on the field holding the run rather than on the structure around
+/// it, so that a format whose chunk bodies all share one type can still say
+/// this about the one body that holds samples. See `formats::wav`.
+///
+/// Nothing here is a fact about the file until it is evaluated:
+/// [`Evaluator::table_shape`](crate::eval::Evaluator::table_shape) reads the
+/// expressions in the file being looked at and answers with numbers, and with
+/// nothing where an expression names a field this file has not got.
+#[derive(Debug, Clone, Default)]
+pub struct TableShape {
+    /// Elements per row. None: one element is one row.
+    pub columns: Option<Expr>,
+    /// Column names, used when there are exactly this many columns.
+    pub names: Vec<Arc<str>>,
+    /// Units per column, parallel to `names`, as UCUM codes ("s", "Hz", "dB",
+    /// "" for none). Shown in the header as `name (unit)`. A crate like `uom`
+    /// could validate these later; for now they are strings the view shows.
+    pub units: Vec<Arc<str>>,
+    /// What to call a column when `names` does not fit: "channel" gives
+    /// "channel 1", "channel 2", ...
+    pub column_word: Option<Arc<str>>,
+    /// What one row is: "sample", "record".
+    pub row_word: Option<Arc<str>>,
+    /// Rows per second, when rows are spaced in time. Gives the time column.
+    pub rate: Option<Expr>,
+    /// Fields that describe the table, shown above it with links to where they
+    /// are stored: sample rate, channels, bits per sample.
+    pub facts: Vec<Expr>,
 }
 
 /// A field holds a moment in time, and this says how to read the number in it.
@@ -3294,6 +3341,7 @@ impl Ty {
                     checks: Vec::new(),
                     elem_check: None,
                     time: None,
+                    table: None,
                 })
                 .collect(),
             doc: None,
@@ -3331,6 +3379,21 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.name_from = Some(from);
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+    /// Say how the run called `field` reads as a table: how many elements make
+    /// one row, what the columns and the rows are called, and which fields
+    /// describe it. See [`TableShape`].
+    pub fn field_table(self, field: &str, shape: TableShape) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.table = Some(Arc::new(shape));
                 }
                 Ty::Struct(Arc::new(s))
             }
