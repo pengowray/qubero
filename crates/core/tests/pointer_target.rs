@@ -141,6 +141,10 @@ fn a_pointer_at_an_empty_string_says_it_is_empty() {
     let mut ev = Evaluator::new(template);
     let node = ev.node(&doc, &[0]).unwrap();
     assert_eq!(node.line.as_deref(), Some("@0x20 · (empty)"));
+    // The chip beside the bytes reads off the same line.
+    let spans = ev.spans(&doc, 0, 4 * 8, 16).unwrap();
+    let span = spans.iter().find(|s| s.name == "value").expect("a span for the pointer");
+    assert_eq!(span.line.as_deref(), Some("@0x20 · (empty)"));
     // And the panel about the four bytes of the offset, which is the same
     // reading arrived at by the other road.
     let origins = ev.origins(&doc, &[0, 0]).unwrap();
