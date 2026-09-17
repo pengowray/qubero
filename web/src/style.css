@@ -109,6 +109,11 @@
   /* The stacks behind each name are what draws a character the subsets left
      out, such as the control pictures `textview.ts` shows a stray byte as,
      and what draws everything if a font file ever fails to arrive. */
+  /* How much of a field's own colour a zero byte keeps. See `.hv-zero`: the
+     number is whatever takes the faintest of the five field colours down to
+     the address column's contrast and no further, and that is a different
+     number under a dark ground. */
+  --zero-weight: 85%;
   --mono: "Roboto Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light dark;
@@ -130,6 +135,9 @@
        be told apart at a glance in a string of a dozen characters. */
     --bitbyte-even: #272b33;
     --bitbyte-odd: #3d4552;
+    /* More weight comes off here. The same drop in contrast reads as less
+       against a dark ground, and these colours start further from it. */
+    --zero-weight: 78%;
   }
 }
 
@@ -778,11 +786,11 @@ button.welcome-crystal {
 }
 /* A zero inside a field keeps the field's hue and gives up its weight, so a
    run of them still reads as part of that field rather than as a hole in it.
-   85% is the most weight that can come off before the faintest of the five
-   field colours drops under the address column's own contrast, which is the
-   quietest this view already asks anyone to read. */
+   `--zero-weight` is the most that can come off before the faintest of the
+   five field colours drops under the address column's own contrast, which is
+   the quietest this view already asks anyone to read. */
 .hv-zero.hv-tint {
-  color: color-mix(in srgb, var(--tint) 85%, var(--bg));
+  color: color-mix(in srgb, var(--tint) var(--zero-weight), var(--bg));
 }
 /* Wherever the reader has actually put the byte in question — under the
    cursor, inside their selection, in the field the inspector is reading — it
