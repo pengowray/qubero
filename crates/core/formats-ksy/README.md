@@ -23,9 +23,12 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
   report names every one of them, and the panel shows them. A test asserts this
   number, so the table cannot drift from the code.
 * **Sniffs** is how much evidence a dropped file has to match for this format to
-  be offered: the first `seq` field's `contents`, plus any further `contents`
-  the walk reaches through fields of a fixed width. Built-in formats are asked
-  first, always, so this only ever answers for a file no builtin claims.
+  be offered: the `contents` the format reads first, nested types looked
+  through, plus any further `contents` the walk reaches through fields of a
+  fixed width. Built-in formats are asked first, always, so this only ever
+  answers for a file no builtin claims. Two formats with the same magic are
+  both kept out, and a dropped file whose bytes fit both opens as the one whose
+  `meta/file-extension` it carries.
 * **Reason** is filled in only where a row needs explaining: why a format with
   gaps ships anyway, or why a file is here to be imported and not offered. A
   blank means the format converts whole and a reader can pick it.
@@ -37,9 +40,9 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `allegro_dat` | game | CC0-1.0 | yes | 0 | no magic |  |
 | `amlogic_emmc_partitions` | filesystem | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `android_bootldr_asus` | archive | CC0-1.0 | yes | 1 | no, same magic as android_bootldr_qcom | one instance naming a file inside the image is text, and the IR's expressions are integers |
-| `android_bootldr_huawei` | archive | CC0-1.0 | yes | 0 | no magic |  |
+| `android_bootldr_huawei` | archive | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `android_bootldr_qcom` | archive | CC0-1.0 | yes | 0 | no, same magic as android_bootldr_asus |  |
-| `android_dto` | archive | CC0-1.0 | yes | 0 | no magic |  |
+| `android_dto` | archive | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `android_img` | archive | CC0-1.0 | yes | 0 | 8 bytes |  |
 | `android_nanoapp_header` | executable | Apache-2.0 | yes | 0 | no magic |  |
 | `android_super` | filesystem | CC0-1.0 | yes | 3 | no magic | three bit fields, all of them reserved padding, are read most-significant-bit first instead of least |
@@ -50,17 +53,17 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `bcd` | common | CC0-1.0 | import | 0 | no magic | a root type with 3 parameters: nothing can open a file as it, and it is here to be imported |
 | `bitcoin_transaction` | network | MIT | yes | 0 | no magic |  |
 | `bson` | serialization | CC0-1.0 | yes | 1 | no magic | the one instance that unpacks a three-byte integer needs a bitwise or; every element is placed |
-| `btrfs_stream` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
+| `btrfs_stream` | filesystem | CC0-1.0 | yes | 0 | 13 bytes |  |
 | `bytes_with_io` | common | MIT | import | 0 | no magic | imported by six formats that need a sub-stream; on its own it says the file is bytes, which is what no template says already |
 | `chrome_pak` | serialization | CC0-1.0 | yes | 0 | no magic |  |
-| `compressed_resource` | macos | MIT | yes | 1 | no magic | one instance reads inside another field's stream; the header and the compressed run are placed |
+| `compressed_resource` | macos | MIT | yes | 1 | 4 bytes | one instance reads inside another field's stream; the header and the compressed run are placed |
 | `cramfs` | filesystem | MIT | yes | 0 | no magic |  |
 | `creative_voice_file` | media | CC0-1.0 | yes | 3 | 20 bytes | three sample-rate instances are floating point; every block is placed |
 | `dcmp_0` | macos | MIT | yes | 2 | no magic | two instances of the decompressor's own bookkeeping; the compressed run is placed |
 | `dcmp_1` | macos | MIT | yes | 2 | no magic | two instances of the decompressor's own bookkeeping; the compressed run is placed |
 | `dcmp_2` | macos | MIT | import | 2 | no magic | a root type with 2 parameters: nothing can open a file as it, and it is here to be imported |
 | `dcmp_variable_length_integer` | macos | MIT | yes | 1 | no magic | the one instance that reassembles the integer needs a bitwise or |
-| `dex` | executable | Apache-2.0 | yes | 0 | no magic |  |
+| `dex` | executable | Apache-2.0 | yes | 0 | 4 bytes |  |
 | `dicom` | image | MIT | yes | 3 | no magic | two tag numbers and one transfer-syntax test are instances; every data element is placed |
 | `dime_message` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `dns_packet` | network | CC0-1.0 | yes | 0 | no magic |  |
@@ -83,7 +86,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `hashcat_restore` | log | CC0-1.0 | yes | 0 | no magic |  |
 | `hccap` | network | Unlicense | yes | 1 | no magic | one instance re-reads the EAPOL buffer as its own stream |
 | `hccapx` | network | Unlicense | yes | 0 | no magic |  |
-| `heaps_pak` | game | MIT | yes | 0 | no magic |  |
+| `heaps_pak` | game | MIT | yes | 0 | 3 bytes |  |
 | `heroes_of_might_and_magic_agg` | game | CC0-1.0 | yes | 1 | no magic | one instance measures a field the IR does not let it measure; the entry table is placed |
 | `heroes_of_might_and_magic_bmp` | game | CC0-1.0 | yes | 0 | no magic |  |
 | `icc_4` | image | CC0-1.0 | yes | 4 | no magic | the 8-bit and 16-bit LUT tag types need an exclusive or for the size of their table, which costs those two tags' last two fields; the header and the tag table are placed |
@@ -91,11 +94,11 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `ipv4_packet` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `ipv6_packet` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `java_class` | executable | CC0-1.0 | yes | 0 | 4 bytes |  |
-| `luks` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
+| `luks` | filesystem | CC0-1.0 | yes | 0 | 8 bytes |  |
 | `mac_os_resource_snd` | macos | MIT | yes | 2 | no magic | two sample-rate instances are floating point |
 | `magicavoxel_vox` | media | MIT | yes | 0 | 4 bytes |  |
 | `mbr_partition_table` | filesystem | CC0-1.0 | yes | 0 | no magic |  |
-| `mcap` | log | Apache-2.0 | yes | 2 | no magic | two instances, one measuring the file and one reading a value worked out later; every record is placed |
+| `mcap` | log | Apache-2.0 | yes | 2 | 8 bytes | two instances, one measuring the file and one reading a value worked out later; every record is placed |
 | `microsoft_network_monitor_v2` | network | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `mifare_classic` | hardware | BSD-2-Clause | yes | 7 | no magic | seven instances: access-condition arithmetic and the value-block checks, all of which need bitwise operators |
 | `minecraft_nbt` | game | CC0-1.0 | yes | 0 | no magic |  |
@@ -112,15 +115,15 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `protocol_body` | network | CC0-1.0 | import | 0 | no magic | a root type with 1 parameter: nothing can open a file as it, and it is here to be imported |
 | `psx_tim` | image | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `python_pyc_27` | executable | CC0-1.0 | yes | 0 | no magic |  |
-| `regf` | windows | CC0-1.0 | yes | 0 | no magic |  |
+| `regf` | windows | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `resource_fork` | macos | MIT | yes | 3 | no magic | three instances reading the name table and the data blocks as their own streams; the map and the type list are placed |
 | `riff` | common | CC0-1.0 | yes | 6 | no magic | six instances re-reading a chunk's data as its own stream, and one spelling the chunk id; every chunk is placed |
 | `rtp_packet` | network | Unlicense | import | 0 | no magic | imported by rtpdump; a packet on the wire, with no file form of its own |
-| `rtpdump` | network | Unlicense | yes | 0 | no magic |  |
+| `rtpdump` | network | Unlicense | yes | 0 | 13 bytes |  |
 | `ruby_marshal` | serialization | CC0-1.0 | yes | 1 | 2 bytes | the one instance that unpacks a small integer needs a bitwise complement |
 | `saints_row_2_vpp_pc` | game | MIT | yes | 2 | 5 bytes | two instances reading the name tables as their own streams; the entry table is placed |
-| `shapefile_index` | geospatial | CC0-1.0 | yes | 0 | no magic |  |
-| `shapefile_main` | geospatial | CC0-1.0 | yes | 0 | no magic |  |
+| `shapefile_index` | geospatial | CC0-1.0 | yes | 0 | no, same magic as shapefile_main; picked by the extension .shx |  |
+| `shapefile_main` | geospatial | CC0-1.0 | yes | 0 | no, same magic as shapefile_index; picked by the extension .shp |  |
 | `specpr` | scientific | Unlicense | yes | 2 | no magic | two floating-point instances |
 | `ssh_public_key` | security | CC0-1.0 | yes | 0 | no magic |  |
 | `sudoers_ts` | log | CC0-1.0 | yes | 0 | no magic |  |
@@ -131,7 +134,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `ttf` | font | MIT | yes | 3 | no magic | three instances reading a sub-table through its parent's stream; every table is placed |
 | `udp_datagram` | network | CC0-1.0 | yes | 0 | no magic |  |
 | `uefi_te` | executable | CC0-1.0 | yes | 1 | no magic | one instance measures a field the IR does not let it measure |
-| `uimage` | firmware | CC0-1.0 | yes | 0 | no magic |  |
+| `uimage` | firmware | CC0-1.0 | yes | 0 | 4 bytes |  |
 | `utf8_string` | common | CC0-1.0 | yes | 1 | no magic | the one instance that assembles a code point needs a bitwise or |
 | `vfat` | filesystem | CC0-1.0 | yes | 8 | no magic | the packed date and time read most-significant-bit first instead of least, and six instances only zero-pad the parts for display |
 | `vlq_base128_be` | common | CC0-1.0 | yes | 0 | no magic |  |
@@ -143,7 +146,7 @@ only licences that may appear are `CC0-1.0`, `MIT`, `Unlicense`, `Apache-2.0`, `
 | `windows_minidump` | windows | CC0-1.0 | yes | 0 | 6 bytes |  |
 | `windows_shell_items` | windows | CC0-1.0 | yes | 0 | no magic |  |
 | `windows_systemtime` | windows | CC0-1.0 | yes | 0 | no magic |  |
-| `wmf` | image | CC0-1.0 | yes | 0 | no magic |  |
+| `wmf` | image | CC0-1.0 | yes | 0 | 10 bytes |  |
 | `xwd` | image | CC0-1.0 | yes | 0 | no magic |  |
 | `zisofs` | archive | CC0-1.0 | yes | 1 | no magic | one instance with no `pos`, which has no place in the file the IR can name |
 
@@ -181,8 +184,8 @@ From the gap list. These are not copied into this repository at all.
 
 * 21 of the 112 files carry no `meta/title`. Nothing invents one: the
   chooser shows those by their id.
-* 22 formats declare a magic and 20 of them sniff. None was dropped for
-  having a one-byte magic, because none has one; 2 were dropped for sharing
+* 36 formats declare a magic and 32 of them sniff. None was dropped for
+  having a one-byte magic, because none has one; 4 were dropped for sharing
   a magic with each other, which the table names.
 * `ruby_marshal` (`04 08`) and `psx_tim` (`10 00 00 00`) pass the two-byte rule
   with weak evidence: both are version numbers rather than a name. They sniff

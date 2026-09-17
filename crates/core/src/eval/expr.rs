@@ -1342,10 +1342,7 @@ impl Evaluator {
         let mut out = Vec::new();
         let mut cur = at.to_vec();
         while let Some(idx) = cur.pop() {
-            let listy = matches!(
-                self.memo.get(&cur).map(|r| &r.ty),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
-            );
+            let listy = self.memo.get(&cur).is_some_and(|r| is_list(&r.ty));
             if listy {
                 out.push((cur.clone(), idx));
             }
@@ -1735,6 +1732,18 @@ impl Evaluator {
         let mut cur = at.to_vec();
         while let Some(idx) = cur.pop() {
             if let Some(Ty::Struct(s)) = self.memo.get(&cur).map(|r| &r.ty) {
+                // The field at `idx` is the one being read, and a field
+                // cannot read itself. A list is the exception: an element
+                // of it may read the elements before it, which is how a
+                // Java constant pool entry learns whether the one before
+                // it took two slots. `elem_path` keeps the index behind.
+                if let Some(f) = s.fields.get(idx) {
+                    if is_list(&f.ty) && *f.name == *name {
+                        let mut p = cur;
+                        p.push(idx);
+                        return Some(p);
+                    }
+                }
                 if let Some(j) = s.fields.iter().take(idx).position(|f| *f.name == *name) {
                     let mut p = cur.clone();
                     p.push(j);
@@ -1791,6 +1800,12 @@ impl Evaluator {
         }
         fail(format!("unknown field {name}"))
     }
+}
+
+/// Whether a type is a list of elements, the kind `Expr::Idx` counts through
+/// and an element may read the earlier elements of.
+fn is_list(ty: &Ty) -> bool {
+    matches!(ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
 }
 
 /// Which end of a container a block walk starts from.

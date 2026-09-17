@@ -421,8 +421,8 @@ it stands:
 
 ```text
 81 clean / 226 with gaps of 1744 total, 3 refused, of 310 patterns
-samples: 36 read to the end, 108 stopped at a gap, 41 errored, 5 without a converted pattern, of 231 files under test_data
-pass rate: 144/185 read without an error (78%)
+samples: 36 read to the end, 109 stopped at a gap, 40 errored, 5 without a converted pattern, of 231 files under test_data
+pass rate: 145/185 read without an error (78%)
 ```
 
 The three verdicts are defined in the example's own header, so the number means
@@ -530,12 +530,28 @@ lowering every placement after it ran past the end.
 
 ### Two evaluator bugs the corpus turned up
 
-Both are panics rather than errors, so `hexpat_gaps` catches them per sample and
-counts the sample as an error; neither is in the converter.
+Both were panics rather than errors, caught per sample by `hexpat_gaps` and
+counted as errors; neither was in the converter. Both are evaluation errors
+naming the field now, each with a unit test in `eval/tests.rs`, and the corpus
+run is free of panics.
 
-* `eval/read.rs:569`, `self.str_span(doc, r, size)?.expect("text field")`, on
-  `fbx.hexpat` over its own sample.
-* `eval/size.rs:441`, `attempt to divide by zero`, twice.
+* `eval/read.rs`, `self.str_span(doc, r, size)?.expect("text field")`, on
+  `blend`, `fbx`, `tar` and `wad` over their own samples. `str_span` measures
+  by the field's own type, and an enum on a text type reaches the text arm with
+  the field's type still the enum. Now `typeCode is not a text field, so it
+  cannot be read as text`. Tar reads to a gap now, which is the one sample the
+  pass rate gained; blend goes on to a real error of its own.
+* `eval/size.rs`, `attempt to divide by zero`, counting a run to the end by
+  dividing the room by a fixed element size that came to nought: `mp4.hexpat`
+  and `qoi.hexpat`. The division itself is unchanged; `stride` now keeps a
+  fixed width of nought to arrays, as it already did for a computed one, so
+  every way it can answer for a repeat is non-zero, and the run is walked and
+  the walk refuses the element with `data repeats an element of zero size`.
+
+The error messages are built in cold, out-of-line helpers on purpose. The walk
+and the value arms sit in frames the depth backstop is measured against, and a
+`format!` in either put `a_run_that_holds_a_run_is_refused_at_the_same_depth`
+over the stack budget one field short of the count.
 
 ### The panel, the library and the bundled subset, 2026-09-17
 

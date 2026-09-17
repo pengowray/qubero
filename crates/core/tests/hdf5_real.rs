@@ -482,8 +482,18 @@ fn walk(
         match ev.explain(doc, path, None) {
             Ok(Explain::Hdf5Chunk { packed_bytes, decoded_bytes, steps, values, element_type, problem, .. }) => {
                 assert!(problem.is_none(), "{}: {path:?}: {problem:?}", file.display());
-                assert!(decoded_bytes >= packed_bytes, "{}: a filtered chunk that got smaller", file.display());
                 assert!(!steps.is_empty(), "{}: a filtered chunk with no filters undone", file.display());
+                // What a filter chain can promise is that it is one chain:
+                // the first step takes the bytes the file stores, each step
+                // hands the next what it made, and the last hands over what
+                // was decoded. Not that the chunk grew: the stored size is
+                // whatever the filters wrote, and deflate on two floats
+                // writes more than it read.
+                let ends = (steps.first().map(|s| s.in_bytes as u64), steps.last().map(|s| s.out_bytes as u64));
+                assert_eq!(ends, (Some(packed_bytes), Some(decoded_bytes)), "{}: {path:?}: {steps:?}", file.display());
+                for pair in steps.windows(2) {
+                    assert_eq!(pair[0].out_bytes, pair[1].in_bytes, "{}: {path:?}: {steps:?}", file.display());
+                }
                 if names.len() < 24 {
                     names.push(format!(
                         "[chunk {packed_bytes}->{decoded_bytes} {element_type} {}]",
