@@ -93,8 +93,13 @@ export function fillPlain(el: ChipEl, cls: string, text: string, title: string):
  * `extra` marks a chip drawn above the bytes it names: it shows that the field
  * runs on through them, and only what the chip shows changes — the title and
  * the aria-label already say it in words.
+ *
+ * `isTable` is asked of a run whether the list it belongs to reads as rows
+ * under columns. It comes in as a function rather than as a fact on the span
+ * because the answer needs the file, and this module is loaded by the tests
+ * under `node --test`, which have neither the file nor a DOM.
  */
-export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): void {
+export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false, isTable?: (path: readonly number[]) => boolean): void {
   const s = c.span;
   const { name, detail } = text;
   let cls = "hv-chip";
@@ -171,6 +176,15 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
   // redraws, so what a chip offers has to live on the element.
   if (s.opens) el.dataset["opens"] = s.path.join(".");
   else delete el.dataset["opens"];
+  // A run of elements the file keeps as a table. The chip stands for the run,
+  // so the list it opens is the run's own list: the chip that folded a run is
+  // drawn on the first element, and one the core folded is the list itself.
+  const list = c.run.length > 0 ? s.path.slice(0, -1) : s.path;
+  const run = !s.gap && (c.run.length > 0 || s.count > 1);
+  if (run && isTable?.(list) === true) {
+    el.dataset["table"] = list.join(".");
+    if (el.title !== `${title}\n${OPENS_TABLE}`) el.title = `${title}\n${OPENS_TABLE}`;
+  } else delete el.dataset["table"];
   el.disabled = s.gap;
 }
 
@@ -179,6 +193,10 @@ export function fillChip(el: ChipEl, c: Chip, text: ChipText, extra = false): vo
  *  under `node --test`, which will not follow a `.js` specifier from a `.ts`
  *  file. */
 const OPENS = "Double-click to open these bytes as a document of their own";
+
+/** And what a chip standing for a run of records says. Same gesture, same
+ *  place in the tooltip, and here for the same reason as `OPENS`. */
+const OPENS_TABLE = "Double-click to view as table";
 
 /**
  * Put the chips a block wants into it, reusing the elements already there and
@@ -193,6 +211,7 @@ export function fillNote(
   continued: boolean,
   tail: boolean,
   onPick: ChipPick,
+  isTable?: (path: readonly number[]) => boolean,
 ): void {
   const n = b === null ? 0 : b.shown;
   const rest = b !== null && b.shown < b.entries.length;
@@ -216,7 +235,7 @@ export function fillNote(
   // its width whether or not this row has a field.
   el.classList.toggle("hv-empty", want === 0 && (vals === null || vals.classList.contains("hv-empty")));
   for (let i = 0; i < n && b !== null; i++) {
-    fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued);
+    fillChip(el.children[i] as ChipEl, b.entries[i] as Chip, b.texts[i] as ChipText, continued, isTable);
   }
   let at = n;
   if (rest && b !== null) {

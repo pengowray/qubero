@@ -21,11 +21,12 @@ import { drawCard } from "./contentcard.ts";
 import { drawJpegCard } from "./jpegcards.ts";
 import { fileMap } from "./filemap.ts";
 import { recordTable } from "./records.ts";
+import { tablePlan } from "./tableplan.ts";
 import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
 import { JOINED_WHOLE_CAP_BITS } from "./joinedpart.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, REPORT, UNPACKED } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, REPORT, TABLE, UNPACKED } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -197,6 +198,11 @@ function drawHeading(c: DrawContext, item: Extract<Item, { kind: "heading" }>, f
   // Only a list too long to draw: for anything the window already holds
   // whole, a pane of its own would be the same rows somewhere else.
   if (item.node !== null && item.node.child_count > PAGE) row.append(listButton(item.path));
+  // Beside it, where the list reads as rows under columns: the pane shows a
+  // long list one element to a line, and a table shows the same elements as
+  // the records they are. The two are different questions about one list, so
+  // both are offered rather than one replacing the other.
+  offerTable(c, row, item.node);
   // The facts about the part's place in the file sit together at the right:
   // how big it is, how much of the file that is, and where.
   const share = space === 0 ? shareText(item.sizeBits, fileBits) : "";
@@ -463,6 +469,19 @@ function unpackedButton(path: readonly number[], name: string, joined: boolean):
   b.title = UNPACKED.openTitle(name);
   b.dataset["unpacked"] = pathKey(path);
   return b;
+}
+
+/** Offer the table, where this node reads as one. The row word comes from the
+ *  plan, so a run of samples says samples and a dBase file says records. */
+function offerTable(c: DrawContext, row: HTMLElement, node: TemplateNode | null): void {
+  if (node === null) return;
+  const plan = tablePlan(c.doc, node);
+  if (plan === null) return;
+  const b = el("button", "rp-bytes rp-table", TABLE.open(plan.rowWord));
+  b.type = "button";
+  b.title = TABLE.tabTooltip(plan.rowWord, node.name, c.doc.name);
+  b.dataset["table"] = pathKey(node.path);
+  row.append(b);
 }
 
 function listButton(path: readonly number[]): HTMLElement {

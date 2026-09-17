@@ -179,6 +179,8 @@ export class ListingReport {
   /** A long list was asked for on its own. The pane is the caller's, since
    *  where it goes on the screen is not this view's business. */
   onOpenList: (path: readonly number[]) => void = () => {};
+  /** A list read as a table in a tab of its own. */
+  onOpenTable: (path: readonly number[]) => void = () => {};
   /** A compressed run was asked for as a document of its own. Which tab that
    *  becomes is the caller's business, not this view's. */
   onOpenUnpacked: (path: readonly number[]) => void = () => {};
@@ -812,6 +814,11 @@ export class ListingReport {
     const list = target.closest<HTMLElement>("[data-list]")?.dataset["list"];
     if (list !== undefined) {
       this.onOpenList(list === "" ? [] : list.split(".").map(Number));
+      return;
+    }
+    const table = target.closest<HTMLElement>("[data-table]")?.dataset["table"];
+    if (table !== undefined) {
+      this.onOpenTable(table === "" ? [] : table.split(".").map(Number));
       return;
     }
     const unpacked = target.closest<HTMLElement>("[data-unpacked]")?.dataset["unpacked"];
