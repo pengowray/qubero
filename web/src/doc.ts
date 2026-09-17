@@ -287,6 +287,44 @@ export type TemplateNode = {
    *  its own value, for a list, whose elements are a table rather than a line,
    *  and for a structure of more fields than a line can hold. */
   readonly line: string | null;
+  /** True when the template says this field's elements are rows of a table:
+   *  the samples of a WAV, the records of a dBase file. `tableShape` says how
+   *  many elements make a row and what the columns are called. */
+  readonly table?: boolean;
+};
+
+/** A field the shape names as describing the table, shown above it with a link
+ *  to where it is stored: the sample rate, the channel count. The same label,
+ *  path and value the panel at the cursor shows, since both come from the
+ *  origins of the expressions the shape was written with. */
+export type TableFact = {
+  readonly label: string;
+  readonly path: readonly number[];
+  readonly value: string;
+};
+
+/**
+ * How the template says a list reads as a table: what one row is, what the
+ * columns are, and what describes them.
+ *
+ * Every part of it can be missing. A shape whose `columns` or `rate` is an
+ * expression the file does not answer comes back with that part null rather
+ * than with a guess, and the view drops the column it would have drawn.
+ */
+export type TableShape = {
+  /** Elements to one row. Null when one element is one row. */
+  readonly columns: number | null;
+  /** The columns' names, used when there are exactly as many as a row has. */
+  readonly names: readonly string[];
+  /** UCUM codes beside those names, `""` where a column has no unit. */
+  readonly units: readonly string[];
+  /** What to call a column the names do not cover: `channel 1`, `channel 2`. */
+  readonly column_word: string | null;
+  /** What one row is: a sample, a record. */
+  readonly row_word: string | null;
+  /** Rows a second, when the rows are spaced in time. Gives the time column. */
+  readonly rate: number | null;
+  readonly facts: readonly TableFact[];
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -2672,6 +2710,23 @@ export class Doc {
 
   templateChildren(path: readonly number[], from: number, to: number): TemplateReply<TemplateNode[]> {
     return this.handleReply(this.editor.template_children(this.space, Uint32Array.from(path), from, to));
+  }
+
+  /**
+   * The table shape the template put on this field, with its expressions
+   * worked out against the file. Null for a field that has none, which is
+   * nearly every field.
+   *
+   * Asked through a cast that admits the call may not be there: the shape is
+   * new, and a `src/pkg` built before it answers everything else this page
+   * asks. Without it every node reads as having no shape, which is the same
+   * answer the core gives for a field the template says nothing about, so the
+   * page is a table view short of its first lens rather than broken.
+   */
+  tableShape(path: readonly number[]): TemplateReply<TableShape | null> {
+    const call = (this.editor as { table_shape?: (space: number, path: Uint32Array) => string }).table_shape;
+    if (call === undefined) return { status: "ok", node: null };
+    return this.handleReply<TableShape | null>(call.call(this.editor, this.space, Uint32Array.from(path)));
   }
 
   /**
