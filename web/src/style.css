@@ -150,9 +150,16 @@ body {
   flex-direction: column;
 }
 
+/* Every control that carries text or a caret. The list is types and not a
+   bare `input`, because a checkbox drawn with this padding and border stops
+   looking like a checkbox. The strings toolbar's minimum length and filter are
+   why `number` and `search` are here: without them those two fields kept the
+   browser's own box and the browser's own face. */
 button,
 select,
-input[type="text"] {
+input[type="text"],
+input[type="number"],
+input[type="search"] {
   font: inherit;
   color: inherit;
   background: var(--panel);
