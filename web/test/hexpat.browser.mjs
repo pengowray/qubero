@@ -240,7 +240,12 @@ try {
   assert(library.length > 0, "the fetched pattern came back empty");
   assert.equal(library.failed, 0, "the fetched pattern did not convert");
   assert.equal(library.needs, 0, "the imported file was fetched but not handed to the converter");
-  assert.match(library.gaps, /^Could not be expressed \(5\)/, "the gap count is not the one the index recorded");
+  // The index is regenerated from the converter, so the count it records is
+  // the one the panel must show; a literal here would go stale with every
+  // converter gain.
+  const index = JSON.parse(await readFile(new URL("../public/hexpat-index.json", import.meta.url), "utf8"));
+  const recorded = index.patterns.find((p) => p.path === "vhd.hexpat")?.gaps;
+  assert.match(library.gaps, new RegExp(`^Could not be expressed \\(${recorded}\\)`), "the gap count is not the one the index recorded");
   // The panel with a library pattern in it, converted, before it is applied.
   await page.screenshot({ path: join(outDir, "hexpat-fetched.png") });
 

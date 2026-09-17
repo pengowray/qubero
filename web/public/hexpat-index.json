@@ -11,7 +11,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 9
+   "gaps": 8
   },
   {
    "path": "7z.hexpat",
@@ -143,7 +143,7 @@
     "patterns/DFIR/exFAT.hexpat",
     "patterns/DFIR/NTFS.hexpat"
    ],
-   "gaps": 61
+   "gaps": 60
   },
   {
    "path": "DFIR/FAT32.hexpat",
@@ -152,7 +152,7 @@
    "author": "Formula Zero One Technologies",
    "magic": null,
    "needs": [],
-   "gaps": 36
+   "gaps": 24
   },
   {
    "path": "DFIR/NTFS.hexpat",
@@ -161,7 +161,7 @@
    "author": "MODIFIED BY: Formula Zero One Technologies",
    "magic": null,
    "needs": [],
-   "gaps": 17
+   "gaps": 16
   },
   {
    "path": "DFIR/exFAT.hexpat",
@@ -170,7 +170,7 @@
    "author": "Formula Zero One Technologies",
    "magic": null,
    "needs": [],
-   "gaps": 20
+   "gaps": 9
   },
   {
    "path": "Devil May Cry HD Collection/dmc3_hd_mod.hexpat",
@@ -268,7 +268,7 @@
    "author": "hasseily",
    "magic": null,
    "needs": [],
-   "gaps": 26
+   "gaps": 1
   },
   {
    "path": "Spore/spore-pdr.hexpat",
@@ -289,7 +289,7 @@
    "author": "MrClock",
    "magic": null,
    "needs": [],
-   "gaps": 4
+   "gaps": 3
   },
   {
    "path": "a3/a3_p3d_mlod.hexpat",
@@ -520,7 +520,7 @@
     "includes/hex/impl/imhex_check.pat",
     "includes/hex/core.pat"
    ],
-   "gaps": 14
+   "gaps": 13
   },
   {
    "path": "bencode.hexpat",
@@ -529,7 +529,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 4
+   "gaps": 5
   },
   {
    "path": "bgcode.hexpat",
@@ -553,7 +553,7 @@
     "bytes": "42494b"
    },
    "needs": [],
-   "gaps": 6
+   "gaps": 5
   },
   {
    "path": "binka.hexpat",
@@ -631,7 +631,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "bsp_goldsrc.hexpat",
@@ -652,7 +652,7 @@
     "bytes": "62747266732d73747265616d"
    },
    "needs": [],
-   "gaps": 15
+   "gaps": 11
   },
   {
    "path": "bzip3.hexpat",
@@ -894,7 +894,7 @@
    "author": "Stephen Hewitt",
    "magic": null,
    "needs": [],
-   "gaps": 17
+   "gaps": 15
   },
   {
    "path": "dotnet_binaryformatter.hexpat",
@@ -972,7 +972,7 @@
    "author": "timschneeb",
    "magic": null,
    "needs": [],
-   "gaps": 3
+   "gaps": 0
   },
   {
    "path": "esp8266.hexpat",
@@ -981,7 +981,7 @@
    "author": "lopqto",
    "magic": null,
    "needs": [],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "evtx.hexpat",
@@ -1055,7 +1055,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/all/btl.bin.hexpat",
@@ -1158,7 +1158,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/item.bin.hexpat",
@@ -1169,7 +1169,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/moncom.hexpat",
@@ -1180,7 +1180,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/panel.bin.hexpat",
@@ -1191,7 +1191,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/pccom.hexpat",
@@ -1202,7 +1202,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/sphere.bin.hexpat",
@@ -1213,7 +1213,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/txt/double0.hexpat",
@@ -1224,7 +1224,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "ffx/en/txt/double1.hexpat",
@@ -1235,7 +1235,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/txt/double2.hexpat",
@@ -1246,7 +1246,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/txt/single2.hexpat",
@@ -1257,7 +1257,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/en/w_name.bin.hexpat",
@@ -1268,7 +1268,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "ffx/jp/txt/double0.hexpat",
@@ -1279,7 +1279,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "ffx/jp/txt/double1.hexpat",
@@ -1290,7 +1290,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/jp/txt/double2.hexpat",
@@ -1301,7 +1301,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "ffx/jp/txt/single2.hexpat",
@@ -1323,7 +1323,7 @@
    "needs": [
     "patterns/ffx/utils.hexpat"
    ],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "ffx/utils.hexpat",
@@ -1353,7 +1353,7 @@
     "bytes": "12af"
    },
    "needs": [],
-   "gaps": 14
+   "gaps": 7
   },
   {
    "path": "flipper_settings.hexpat",
@@ -1425,7 +1425,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 4
+   "gaps": 3
   },
   {
    "path": "fs/mbr.hexpat",
@@ -1459,7 +1459,7 @@
     "patterns/fs/exfat.hexpat",
     "patterns/fs/ntfs.hexpat"
    ],
-   "gaps": 21
+   "gaps": 14
   },
   {
    "path": "fs/refs.hexpat",
@@ -1468,7 +1468,7 @@
    "author": "5h4rrK // https://www.github.com/5h4rrK",
    "magic": null,
    "needs": [],
-   "gaps": 33
+   "gaps": 3
   },
   {
    "path": "fs.hexpat",
@@ -1477,7 +1477,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 6
+   "gaps": 5
   },
   {
    "path": "gb.hexpat",
@@ -1486,7 +1486,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 12
+   "gaps": 4
   },
   {
    "path": "gba.hexpat",
@@ -1515,7 +1515,7 @@
    "author": "gmestanley",
    "magic": null,
    "needs": [],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "gguf.hexpat",
@@ -1590,7 +1590,7 @@
     "bytes": "47564153"
    },
    "needs": [],
-   "gaps": 19
+   "gaps": 17
   },
   {
    "path": "gzip.hexpat",
@@ -1611,7 +1611,7 @@
     "bytes": "75637368"
    },
    "needs": [],
-   "gaps": 8
+   "gaps": 7
   },
   {
    "path": "hinf_module.hexpat",
@@ -1623,7 +1623,7 @@
     "bytes": "6d6f6864"
    },
    "needs": [],
-   "gaps": 3
+   "gaps": 2
   },
   {
    "path": "hinf_tag.hexpat",
@@ -1635,7 +1635,7 @@
     "bytes": "75637368"
    },
    "needs": [],
-   "gaps": 2
+   "gaps": 3
   },
   {
    "path": "hldem.hexpat",
@@ -1752,7 +1752,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 5
+   "gaps": 2
   },
   {
    "path": "java_class.hexpat",
@@ -1761,7 +1761,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 9
+   "gaps": 7
   },
   {
    "path": "job.hexpat",
@@ -1791,7 +1791,7 @@
     "bytes": "05"
    },
    "needs": [],
-   "gaps": 10
+   "gaps": 11
   },
   {
    "path": "kindle_update.hexpat",
@@ -1837,7 +1837,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 11
+   "gaps": 9
   },
   {
    "path": "loc.hexpat",
@@ -2032,7 +2032,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 3
+   "gaps": 2
   },
   {
    "path": "msf.hexpat",
@@ -2050,7 +2050,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 2
+   "gaps": 4
   },
   {
    "path": "msscmp.hexpat",
@@ -2119,7 +2119,7 @@
    "author": "gmestanley",
    "magic": null,
    "needs": [],
-   "gaps": 12
+   "gaps": 7
   },
   {
    "path": "notepad-cache.hexpat",
@@ -2197,7 +2197,7 @@
     "bytes": "4e534f30"
    },
    "needs": [],
-   "gaps": 4
+   "gaps": 3
   },
   {
    "path": "ntag.hexpat",
@@ -2261,7 +2261,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 43
+   "gaps": 41
   },
   {
    "path": "pbz.hexpat",
@@ -2351,7 +2351,7 @@
    "author": "MrMcX",
    "magic": null,
    "needs": [],
-   "gaps": 4
+   "gaps": 3
   },
   {
    "path": "pfs0.hexpat",
@@ -2402,7 +2402,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 12
+   "gaps": 10
   },
   {
    "path": "png2.hexpat",
@@ -2411,7 +2411,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 12
+   "gaps": 10
   },
   {
    "path": "popcap_luc.hexpat",
@@ -2690,7 +2690,7 @@
    "author": "WerWolv",
    "magic": null,
    "needs": [],
-   "gaps": 2
+   "gaps": 3
   },
   {
    "path": "smk.hexpat",
@@ -2702,7 +2702,7 @@
     "bytes": "534d4b32"
    },
    "needs": [],
-   "gaps": 23
+   "gaps": 21
   },
   {
    "path": "snes.hexpat",
@@ -2711,7 +2711,7 @@
    "author": "gmestanley",
    "magic": null,
    "needs": [],
-   "gaps": 3
+   "gaps": 1
   },
   {
    "path": "spc.hexpat",
@@ -2810,7 +2810,7 @@
     "bytes": "1e02"
    },
    "needs": [],
-   "gaps": 6
+   "gaps": 4
   },
   {
    "path": "tga.hexpat",
@@ -2861,7 +2861,7 @@
    "author": "Shimogawa (aka Rebuild)",
    "magic": null,
    "needs": [],
-   "gaps": 29
+   "gaps": 4
   },
   {
    "path": "ubiquiti.hexpat",
@@ -2921,7 +2921,7 @@
    "author": "gmestanley",
    "magic": null,
    "needs": [],
-   "gaps": 1
+   "gaps": 0
   },
   {
    "path": "unity-asset-bundle.hexpat",
@@ -2936,7 +2936,7 @@
     "includes/hex/dec.pat",
     "includes/hex/impl/imhex_check.pat"
    ],
-   "gaps": 17
+   "gaps": 10
   },
   {
    "path": "unity_web_data.hexpat",
@@ -2969,7 +2969,7 @@
    "author": "",
    "magic": null,
    "needs": [],
-   "gaps": 2
+   "gaps": 0
   },
   {
    "path": "valve_vpk.hexpat",
@@ -3031,7 +3031,7 @@
    "needs": [
     "patterns/fs/mbr.hexpat"
    ],
-   "gaps": 5
+   "gaps": 4
   },
   {
    "path": "vhdx.hexpat",
