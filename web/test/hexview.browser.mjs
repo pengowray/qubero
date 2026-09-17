@@ -81,6 +81,46 @@ try {
     checks.editVisible = view.el.querySelector('.hv-hex [data-off="48"]').textContent === "7b";
     view.setCursor(doc.lengthBytes - 8);
     checks.boundaryRefetched = view.fetch.spanCache.spans.some(s => s.value === "IEND");
+    // A row taller than the view is stood on its head, not its foot. The first
+    // row of a file is as tall as the headings that start on it, and a view
+    // shorter than that row used to bring the row's foot up to the bottom edge,
+    // pushing its head, the headings and the first bytes, off the top. Checked
+    // as a precondition so a fixture whose first row lost its headings fails
+    // here instead of passing the clamp check vacuously.
+    view.el.style.height = "60px";
+    view.relayout();
+    view.scrollToY(0);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const rowsBox = () => view.rowsEl.getBoundingClientRect();
+    const inside = off => {
+      const c = cellAt(off)?.getBoundingClientRect();
+      const box = rowsBox();
+      return c !== undefined && c.top >= box.top - 0.5 && c.bottom <= box.bottom + 0.5;
+    };
+    checks.tallRowFixture = view.ledger.heightOf(0) > view.viewH;
+    view.setCursor(3);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    checks.tallRowKeepsHead = view.scrollY === 0 && inside(3);
+    // A hidden view is nothing tall, so every row is taller than it; a cursor
+    // moved while it was hidden used to scroll the row off the top entirely.
+    view.scrollToY(0);
+    view.el.hidden = true;
+    view.relayout();
+    view.setCursor(5);
+    view.el.hidden = false;
+    view.relayout();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    checks.hiddenKeepsRow = view.topRow === 0 && view.scrollY === 0 && inside(5);
+    // And a row that does fit still lands with its foot on the bottom edge.
+    const shortRow = 40;
+    view.setCursor(shortRow * view.bytesPerRow);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const footCell = cellAt(shortRow * view.bytesPerRow).getBoundingClientRect();
+    checks.shortRowFootAtBottom = view.topRow > 0 && Math.abs(footCell.bottom - rowsBox().bottom) <= 1;
+    view.el.style.height = "700px";
+    view.relayout();
+    view.setCursor(doc.lengthBytes - 8);
+    await new Promise(resolve => requestAnimationFrame(resolve));
     // Growing the viewport needs more rows, but leaves the ones already drawn
     // alive and in the elements they were drawn in. Not asked of the top row:
     // a resize keeps the reader on the same byte, which can put a different
@@ -123,7 +163,7 @@ try {
       line: null, sample: [], parts: [], bits: null, opens: false,
     });
     const picks = [];
-    const el = newChip((path, throughBit) => picks.push({ path, throughBit }));
+    const el = newChip((path, bits, throughBit) => picks.push({ path, bits, throughBit }));
     document.body.append(el);
     // A run of three four-byte elements starting at byte 100, drawn as one
     // chip: the pick has to be all twelve bytes and not the first four.
