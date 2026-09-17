@@ -513,6 +513,48 @@ fn a_top_level_if_that_places_nothing_is_one_gap_for_the_whole_if() {
 	assert!(gap_reasons(&out).contains("`if` statement outside a structure"), "{}", gap_reasons(&out));
 }
 
+/// A name the pattern declares and the converter cannot read a value for is
+/// not a name that is missing. Saying "not a field in scope" of a global the
+/// pattern fills in as it runs sends a reader looking for a typo, so the gap
+/// says which of the four it is instead.
+#[test]
+fn a_name_with_no_readable_value_says_why_rather_than_that_it_is_missing() {
+	let cases: &[(&str, &str)] = &[
+		// A global with no value, which only a later assignment fills in.
+		("u32 Offset;\nu8 body[4] @ Offset;\n", "a global the pattern fills in while it runs"),
+		// A variable the host supplies.
+		("u32 Size in;\nu8 body[Size] @ 0x00;\n", "the host supplies rather than the file"),
+		// A local of a structure whose own value could not be worked out.
+		(
+			"fn f() { return 1; };\nstruct S { u32 n = f(); u8 body[n]; };\nS s @ 0x00;\n",
+			"has no value the converter could work out",
+		),
+		// A local the pattern assigns to again.
+		(
+			"struct S { u8 tag; u32 n = 0; if (tag == 1) { n = 1; } if (tag == 2) { n = 2; } u8 body[n]; };\nS s @ 0x00;\n",
+			"is a value the pattern changes as it runs",
+		),
+		// A placement that could not be placed, which later placements name.
+		(
+			"fn f() { return 1; };\nstruct H { u8 a; };\nH head @ f();\nu8 body[4] @ head.a;\n",
+			"is placed at an address the converter could not work out",
+		),
+	];
+	for (text, want) in cases {
+		let reasons = gap_reasons(&convert(text));
+		assert!(reasons.contains(want), "{text}\nwanted {want}, got:\n{reasons}");
+		assert!(!reasons.contains("is not a field in scope here"), "{text}\n{reasons}");
+	}
+}
+
+/// A name nothing declares still says so: that is the one case where the
+/// reader should be looking for a typo.
+#[test]
+fn a_name_nothing_declares_is_still_reported_as_missing() {
+	let out = convert("struct S { u8 count; u8 body[num_point]; };\nS s @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("num_point is not a field in scope here"), "{}", gap_reasons(&out));
+}
+
 /* ------------------------------------------------------------------ */
 /* Assignments                                                         */
 /* ------------------------------------------------------------------ */

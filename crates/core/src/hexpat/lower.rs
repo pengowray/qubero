@@ -229,6 +229,11 @@ struct Frame {
 	/// in the pattern's scope and sit one structure deeper in the IR, where a
 	/// later sibling's `Ref` does not reach them.
 	hidden: Vec<String>,
+	/// Names this level declares and the converter cannot read a value for,
+	/// with the reason. A pattern that names one of these is not naming
+	/// something that does not exist, which is what "not a field in scope"
+	/// would say; it is naming a value only the imperative half settles.
+	unreadable: HashMap<String, String>,
 	/// Template value parameters bound at this level.
 	params: HashMap<String, Expr>,
 	/// Template type parameters bound at this level, so that `sizeof(T)` in a
@@ -241,7 +246,14 @@ struct Frame {
 
 impl Frame {
 	fn new(block: bool) -> Frame {
-		Frame { names: Vec::new(), hidden: Vec::new(), params: HashMap::new(), bound: HashMap::new(), block }
+		Frame {
+			names: Vec::new(),
+			hidden: Vec::new(),
+			unreadable: HashMap::new(),
+			params: HashMap::new(),
+			bound: HashMap::new(),
+			block,
+		}
 	}
 }
 
@@ -535,7 +547,13 @@ impl<'a> Lower<'a> {
 				// way a local inside a structure is.
 				let name = unique(&name, fields);
 				match &placement.init {
-					None => self.report.note(path, source, "a global variable, which reads nothing"),
+					None => {
+						self.report.note(path, source, "a global variable, which reads nothing");
+						self.cannot_read(
+							&name,
+							format!("{name} is a global the pattern fills in while it runs, and the converter runs nothing"),
+						);
+					}
 					Some(init) => match self.expr(init) {
 						Ok(value) => {
 							self.report.became(path, source, "a value worked out before anything is read");
@@ -543,13 +561,18 @@ impl<'a> Lower<'a> {
 							self.stack.last_mut().expect("a frame").names.push(name.clone());
 							fields.push(named_field(&name, Ty::computed(value), false));
 						}
-						Err(gap) => self.report.gap(path, source, gap.reason),
+						Err(gap) => {
+							let at = self.at(placement.pos);
+							self.report.gap(path, source, gap.reason);
+							self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
+						}
 					},
 				}
 				return Ok(());
 			}
 			FieldKind::In | FieldKind::Out => {
 				self.report.gap(path, source, "an in/out variable, which the host supplies rather than the file");
+				self.cannot_read(&name, format!("{name} is a variable the host supplies rather than the file"));
 				return Ok(());
 			}
 			FieldKind::Normal => {}
@@ -560,10 +583,12 @@ impl<'a> Lower<'a> {
 		};
 		// `@ $` means the end of the placement before it: nothing has been read
 		// at the top level except what the earlier placements placed.
+		let at = self.at(placement.pos);
 		let address = match self.top_address(address, previous.as_deref()) {
 			Ok(address) => address,
 			Err(gap) => {
 				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, at {at}, is placed at an address the converter could not work out"));
 				return Ok(());
 			}
 		};
@@ -580,6 +605,9 @@ impl<'a> Lower<'a> {
 			}
 			Err(gap) => {
 				self.report.gap(path, source, gap.reason);
+				if gap.fallback.is_none() {
+					self.cannot_read(&name, format!("{name}, at {at}, is a field the converter could not read"));
+				}
 				if let Some(ty) = gap.fallback {
 					let mut field = named_field(&name, Ty::at(address, ty), false);
 					field.doc = Some(Arc::from("the converter could not say what this is; see the report"));
@@ -1045,7 +1073,11 @@ impl<'a> Lower<'a> {
 				self.stack.last_mut().expect("a frame").names.push(name.clone());
 				fields.push(named_field(&name, Ty::computed(value), false));
 			}
-			Err(gap) => self.report.gap(path, source, gap.reason),
+			Err(gap) => {
+				let at = self.at(field.pos);
+				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
+			}
 		}
 	}
 
@@ -1066,6 +1098,9 @@ impl<'a> Lower<'a> {
 			// An in/out variable reads nothing of the file, so what follows it
 			// is still where the file says it is.
 			self.report.gap(path, source, "an in/out variable, which the host supplies rather than the file");
+			for name in &field.names {
+				self.cannot_read(name, format!("{name} is a variable the host supplies rather than the file"));
+			}
 			return true;
 		}
 		if field.kind == FieldKind::Local {
@@ -1140,12 +1175,15 @@ impl<'a> Lower<'a> {
 		let source = field_source(field);
 		let path = self.at(field.pos);
 		let name = field.name().to_string();
+		let at = self.at(field.pos);
 		let Some(init) = &field.init else {
 			self.report.gap(path, source, "a local with no value, which only a later assignment fills in");
+			self.cannot_read(&name, format!("{name}, declared at {at}, is filled in by a later assignment the converter does not run"));
 			return;
 		};
 		if !field.init_list.is_empty() {
 			self.report.gap(path, source, "a local list, which the converter does not compute");
+			self.cannot_read(&name, format!("{name}, declared at {at}, is a list the converter does not compute"));
 			return;
 		}
 		if assigned_later(siblings, &name) {
@@ -1154,6 +1192,7 @@ impl<'a> Lower<'a> {
 				source,
 				"a local the pattern assigns to again, which is a value that changes as the pattern runs",
 			);
+			self.cannot_read(&name, format!("{name}, declared at {at}, is a value the pattern changes as it runs"));
 			return;
 		}
 		match self.expr(init) {
@@ -1163,7 +1202,10 @@ impl<'a> Lower<'a> {
 				self.stack.last_mut().expect("a frame").names.push(name.clone());
 				fields.push(named_field(&name, Ty::computed(value), false));
 			}
-			Err(gap) => self.report.gap(path, source, gap.reason),
+			Err(gap) => {
+				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
+			}
 		}
 	}
 
@@ -2203,6 +2245,20 @@ impl<'a> Lower<'a> {
 		None
 	}
 
+	/// Why a name the pattern declares holds no value the converter can read.
+	fn unreadable(&self, name: &str) -> Option<String> {
+		self.stack.iter().rev().find_map(|frame| frame.unreadable.get(name).cloned())
+	}
+
+	/// Remember that `name` is declared here and holds no value the converter
+	/// can read, so that a later use says why rather than saying the name is
+	/// not there at all.
+	fn cannot_read(&mut self, name: &str, why: impl Into<String>) {
+		if let Some(frame) = self.stack.last_mut() {
+			frame.unreadable.insert(name.to_string(), why.into());
+		}
+	}
+
 	/// Whether a name is one declared inside an `if` block or a `match` arm,
 	/// which the pattern can still see and an IR expression cannot reach.
 	fn is_hidden(&self, name: &str) -> bool {
@@ -2365,6 +2421,9 @@ impl<'a> Lower<'a> {
 				return Err(Gap::new(format!(
 					"{first} is declared inside an `if` block, and a field after the block cannot name it in the IR"
 				)));
+			}
+			if let Some(reason) = self.unreadable(first) {
+				return Err(Gap::new(reason));
 			}
 			return Err(Gap::new(format!("{first} is not a field in scope here")));
 		}
