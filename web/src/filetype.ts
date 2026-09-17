@@ -12,7 +12,7 @@ import { el } from "./dom.ts";
 import type { Doc, Identification, TemplateChoice, TemplateNode, ToolMatch, SigVerdict } from "./doc.ts";
 import { OWN_SOURCE } from "./doc.ts";
 import { wikidataUrl, wikipediaUrl, type SigMatch } from "./signatures.ts";
-import { decide, nameAndVersion, type Answers, type Candidate, type Source, type TemplateAnswer } from "./identity.ts";
+import { decide, nameAndVersion, type Answers, type Candidate, type TemplateAnswer } from "./identity.ts";
 
 
 const IDENTIFYING_MSG = "Identifying file type...";
@@ -24,7 +24,6 @@ const DIALOG_TITLE = "File type";
 const DIALOG_CLOSE = "Close";
 const NO_MATCH_BODY = `No match in the rule database of the Unix "file" command.`;
 const TEMPLATE_KEY = "Template";
-const SIGNATURE_ONLY = "signature only";
 const TEMPLATE_LABEL: Record<string, string> = {
   ar: "Unix archive",
   aseprite: "Aseprite",
@@ -325,21 +324,15 @@ export const builtinTemplate = (name: string): TemplateNote => ({ kind: "builtin
 export const SIGNATURE_TEMPLATE: TemplateNote = { kind: "signature" };
 const MATCHED_AGAINST = "Matched against the signature database of the Detect It Easy project.";
 const READ_FROM_STUB = "Identified from the loader stub the compiler placed at the end of the program.";
-const SOURCE_KEY = "Source";
 /** The dialog's last line when the template reading the file is one the
  *  file's own signature contradicts. */
 const SIGNATURE_MISMATCH_LINE = "Signature does not match.";
-/** Where the name came from, said in the dialog under it. */
-const SOURCE_TEXT: Record<Source, (detail: string) => string> = {
-  template: (label) => `Qubero's ${label} template`,
-  file: () => `The rules of the Unix "file" command`,
-  tools: () => "The Detect It Easy signature rules",
-  signature: (which) => which,
-};
-const SIGNATURE_SOURCE: Record<SigMatch["format"]["source"], string> = {
-  wikidata: "A format signature listed on Wikidata",
-  file: `A signature from the rules of the Unix "file" command`,
-};
+/** Where the template reading the file came from, in brackets after its name:
+ *  a built-in of Qubero's, a bundled Kaitai or ImHex description, or the one
+ *  field a file(1) rule's signature makes. */
+const TEMPLATE_FROM = { qubero: "(Qubero)", kaitai: "(Kaitai)", imhex: "(ImHex)", signature: "(file rules signature)" } as const;
+/** The word each signature source goes by on a match row. The Wikidata one is
+ *  the link to the entry. */
 const SIGNATURE_WORD: Record<SigMatch["format"]["source"], string> = { wikidata: "Wikidata", file: "file rules" };
 const OTHERS_HEADING = "Other answers:";
 const DISAGREES = "disagrees with the answer above";
@@ -363,6 +356,13 @@ const bytesAt = (m: SigMatch): string => {
   const n = m.fixed === 1 ? "1 byte" : `${m.fixed} bytes`;
   return m.fromEnd ? `${n} within the last ${m.offset.toLocaleString("en")} bytes` : `${n} at offset ${m.offset}`;
 };
+/** Where the bytes on a match row sit, with the bytes themselves beside it:
+ *  an address the way the rest of the app writes one, or a distance from the
+ *  end. */
+const whereAt = (m: SigMatch): string => (m.fromEnd ? `in the last ${m.offset.toLocaleString("en")} bytes` : `@0x${m.offset.toString(16)}`);
+/** A PRONOM pattern as spaced hex. A pattern with wildcards or ranges in it is
+ *  shown as written, since spacing it by pairs would split its syntax. */
+const hexOf = (pattern: string): string => (/^[0-9A-Fa-f]+$/.test(pattern) ? pattern.replace(/(..)(?=.)/g, "$1 ") : pattern);
 
 /**
  * The database writes its categories as slugs. Two of them are not words, and
@@ -471,7 +471,7 @@ export function fileType(): FileType {
   const dlgBody = el("div", { className: "dlg-body" });
   const dialog = el(
     "dialog",
-    { className: "dlg" },
+    { className: "dlg dlg-filetype" },
     el("h2", { textContent: DIALOG_TITLE }),
     dlgBody,
     el("form", { method: "dialog", className: "dlg-close" }, el("button", { type: "submit", textContent: DIALOG_CLOSE })),
@@ -559,7 +559,7 @@ export function fileType(): FileType {
     // A name that is only the template's, over a signature the file does not
     // have, is in the warning colour, with no words added: the toolbar has no
     // room for them, and the colour is enough to send a reader to the dialog,
-    // where the Source row says what is wrong. The sentence is on hover too.
+    // whose last line says what is wrong. The same words are on hover.
     const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
     kindLabel.classList.toggle("is-warn", mismatch);
     kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : mismatch ? `${line} · ${SIGNATURE_MISMATCH_LINE}` : line;
@@ -577,24 +577,6 @@ export function fileType(): FileType {
   const row = (label: string, value: Node | string): HTMLElement =>
     el("div", { className: "dlg-row" }, el("span", { className: "dlg-key", textContent: label }), value);
 
-  /** Where the chosen name came from, in a sentence. */
-  const sourceText = (id: ReturnType<typeof decide>): string => {
-    switch (id.source) {
-      case "template":
-        return SOURCE_TEXT.template(answers.template === null ? "" : templateLabel(answers.template.name));
-      case "signature": {
-        const m = (answers.signatures ?? []).find((s) => s.format.label === id.name);
-        return SOURCE_TEXT.signature(SIGNATURE_SOURCE[m?.format.source ?? "wikidata"]);
-      }
-      case "file":
-        return SOURCE_TEXT.file("");
-      case "tools":
-        return SOURCE_TEXT.tools("");
-      case null:
-        return "";
-    }
-  };
-
   /** The dialog's contents for what has answered so far. */
   const details = (id: ReturnType<typeof decide>): HTMLElement[] => {
     const rows: HTMLElement[] = [];
@@ -603,7 +585,6 @@ export function fileType(): FileType {
       rows.push(el("p", { textContent: NO_MATCH_BODY }));
     } else {
       rows.push(el("p", { className: "dlg-sentence", textContent: id.name }));
-      rows.push(row(SOURCE_KEY, sourceText(id)));
     }
     // What the rules know about the format, whichever answer was chosen: a
     // media type and extensions are facts about the file either way.
@@ -615,8 +596,12 @@ export function fileType(): FileType {
     // Which template the Fields table is reading with, next to what the file
     // is rather than under the credits: it is an answer about this file too.
     if (note !== null) {
-      const value = note.kind === "builtin" ? templateLabel(note.name) : el("em", { textContent: SIGNATURE_ONLY });
-      rows.push(row(TEMPLATE_KEY, value));
+      const from = note.kind === "signature" ? TEMPLATE_FROM.signature
+        : note.name.startsWith("ksy:") ? TEMPLATE_FROM.kaitai
+        : note.name.startsWith("hexpat:") ? TEMPLATE_FROM.imhex
+        : TEMPLATE_FROM.qubero;
+      const name = note.kind === "builtin" ? templateLabel(note.name) : (id.name ?? "");
+      rows.push(row(TEMPLATE_KEY, el("span", {}, name, " ", el("span", { className: "dlg-muted", textContent: from }))));
     }
     // Every other answer, with what it rests on. The signatures come last and
     // grouped, since most files match a crowd of them.
@@ -653,27 +638,39 @@ export function fileType(): FileType {
     return el("li", {}, ...parts);
   };
 
-  /** One format a signature names: its name, linked, what matched, and where to read more. */
+  /** One format a signature names, as a table row: the name, the bytes that
+   *  matched and where, the extensions, then where the signature is listed
+   *  (the link to its Wikidata entry) and where to read more. The bytes are
+   *  on the row, in the open: they are the evidence, and a reader comparing
+   *  two matches wants them side by side. */
   const signatureRow = (m: SigMatch): HTMLElement => {
     const f = m.format;
-    const parts: (Node | string)[] = [];
-    if (f.source === "wikidata") {
-      parts.push(el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: f.label }));
-    } else parts.push(el("span", { textContent: f.unfinished === true ? `${f.label}\u2026` : f.label }));
-    parts.push(el("span", { className: "dlg-muted", textContent: SIGNATURE_WORD[f.source] }));
+    const name = el("td", { className: "dlg-sig-name", textContent: f.unfinished === true ? `${f.label}\u2026` : f.label });
+    const bytes = el("td", { className: "dlg-sig-bytes", textContent: hexOf(m.pattern) });
+    const where = el("td", { className: "dlg-muted", textContent: whereAt(m) });
     const exts = [...(f.ext ?? []), ...(f.wpExt ?? [])];
-    if (exts.length > 0) {
-      parts.push(el("span", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") }));
-    }
-    parts.push(el("span", { className: "dlg-muted", textContent: bytesAt(m) }));
+    const ext = el("td", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") });
+    const links: (Node | string)[] = [];
+    if (f.source === "wikidata") links.push(el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: SIGNATURE_WORD.wikidata }));
+    else links.push(el("span", { className: "dlg-muted", textContent: SIGNATURE_WORD.file }));
     // An article about the format itself, or failing that about the format it
     // is a version or part of, named so the link says where it goes.
     const wp = f.wp !== undefined ? { title: f.wp, text: WIKIPEDIA_LINK } : f.parent !== undefined ? { title: f.parent.wp, text: `${WIKIPEDIA_LINK}: ${f.parent.label}` } : null;
-    if (wp !== null) parts.push(el("a", { href: wikipediaUrl(wp.title), target: "_blank", rel: "noopener", textContent: wp.text }));
-    const li = el("li", { title: m.pattern }, ...parts);
-    if (m.extensionAgrees) li.classList.add("dlg-wiki-ext-agrees");
-    return li;
+    if (wp !== null) links.push(el("a", { href: wikipediaUrl(wp.title), target: "_blank", rel: "noopener", textContent: wp.text }));
+    const tr = el("tr", {}, name, bytes, where, ext, el("td", { className: "dlg-sig-links" }, ...links));
+    if (m.extensionAgrees) tr.classList.add("dlg-wiki-ext-agrees");
+    return tr;
   };
+  /** A group's rows as a table. Every group is its own table, so a crowd can
+   *  fold; the column widths are fixed and shared, so the tables line up as
+   *  one. */
+  const table = (ms: readonly SigMatch[]): HTMLElement =>
+    el(
+      "table",
+      { className: "dlg-sigs" },
+      el("colgroup", {}, ...["name", "bytes", "where", "ext", "links"].map((c) => el("col", { className: `dlg-sig-col-${c}` }))),
+      el("tbody", {}, ...ms.map(signatureRow)),
+    );
 
   /**
    * The matches as rows: the best few in the open, the rest folded away, and
@@ -699,8 +696,8 @@ export function fileType(): FileType {
     const render = (g: Group): HTMLElement => {
       const first = g.members[0];
       if (first === undefined) throw new Error("empty group");
-      if (g.members.length < SIGNATURES_CROWD) return el("ul", { className: "dlg-wiki" }, ...g.members.map(signatureRow));
-      const hex = first.pattern.replace(/(..)(?=.)/g, "$1 ");
+      if (g.members.length < SIGNATURES_CROWD) return table(g.members);
+      const hex = hexOf(first.pattern);
       return el(
         "details",
         { className: "dlg-more" },
@@ -709,7 +706,7 @@ export function fileType(): FileType {
             ? SIGNATURES_SHARED_EXT(g.members.length, bytesAt(first), hex, extension)
             : SIGNATURES_SHARED(g.members.length, bytesAt(first), hex),
         }),
-        el("ul", { className: "dlg-wiki" }, ...g.members.map(signatureRow)),
+        table(g.members),
       );
     };
     const shown = groups.slice(0, SIGNATURES_SHOWN).map(render);

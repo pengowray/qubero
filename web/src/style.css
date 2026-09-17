@@ -1896,7 +1896,8 @@ qubero-spinner svg {
   color: var(--accent);
 }
 .dlg {
-  max-width: min(46em, calc(100vw - 32px));
+  /* Wide enough for a row of the signature table; the viewport is the cap. */
+  max-width: min(72em, calc(100vw - 32px));
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2147,6 +2148,51 @@ qubero-spinner svg {
   margin-bottom: 2px;
 }
 .dlg-wiki li > * + * {
+  margin-left: 0.6em;
+}
+/* The signature matches as a table, one format a row: name, the bytes that
+   matched, where they sit, the extensions, then the links. Columns rather
+   than a run of spans, so two matches can be compared by eye down a column. */
+.dlg-sigs {
+  border-collapse: collapse;
+  margin: 0 0 6px;
+  width: 100%;
+  /* Fixed, so every group's table shares one set of column widths and a
+     long pattern wraps inside its column rather than widening the dialog. */
+  table-layout: fixed;
+}
+/* The file type dialog takes the width it is allowed, since its match table
+   has five columns; the other dialogs size to their contents. */
+.dlg-filetype {
+  width: min(72em, calc(100vw - 32px));
+}
+.dlg-sig-col-name {
+  width: 26%;
+}
+.dlg-sig-col-bytes {
+  width: 30%;
+}
+.dlg-sig-col-where {
+  width: 13%;
+}
+.dlg-sig-col-ext {
+  width: 8%;
+}
+.dlg-sigs td {
+  padding: 1px 12px 1px 0;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.dlg-sigs td:last-child {
+  padding-right: 0;
+}
+/* A pattern wraps at a byte, never at a nibble: the spaces between pairs
+   are the only break points. */
+.dlg-sig-bytes {
+  font-family: var(--mono);
+  overflow-wrap: normal;
+}
+.dlg-sig-links > * + * {
   margin-left: 0.6em;
 }
 .dlg-wiki-ext {

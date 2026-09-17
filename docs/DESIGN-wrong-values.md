@@ -314,6 +314,8 @@ State first, then cause, matching `Not checked · why`.
 | Structure row count | `· {n} invalid` / `· {n} undefined` / `· {n} invalid, {m} undefined` | with ` so far` while pending |
 | Overview line | `{n} invalid values, {m} undefined · Show first` | either half dropped when zero |
 | Toolbar line | the name only, in `--warn` | the file type dialog ends with `Signature does not match.` in red; the same words on hover |
+| File type dialog, Template row | `{label} (Qubero)` / `(Kaitai)` / `(ImHex)` / `(file rules signature)` | bracket in `--muted`; the Source row is gone (2026-09-18) |
+| File type dialog, match table | name · bytes · `@0x{offset}` or `in the last {n} bytes` · `.ext` · `Wikidata` (link) or `file rules` · `Wikipedia` | one row per format, bytes in the open, never in a tooltip |
 | Table header | `{column} ({n} invalid)` | |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 
