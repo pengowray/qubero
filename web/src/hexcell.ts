@@ -214,6 +214,11 @@ export function cellDraw(c: CellInput): CellDraw {
     const glyph = c.glyphs[b] ?? "";
     asciiText = complete ? (glyph === "" ? STAND_IN : glyph) : " ";
     if (complete && glyph === "") ac += " hv-np";
+    // A zero byte, marked on the cell in both hex and binary so the style
+    // sheet can let runs of them recede. Only where the byte is known: a cell
+    // still being read draws `··` and is quiet already, for a different
+    // reason.
+    if (complete && b === 0) hc += " hv-zero";
     if (!binary) {
       text = complete ? HEX[b] ?? "" : "··";
       if (!complete) hc += " hv-pending";
