@@ -276,8 +276,13 @@ enum Framing {
     Unframed,
     /// Inside a frame ending at this offset.
     Inside(usize),
-    /// A frame has ended here and the next has not begun.
+    /// A frame has ended here and the next has not begun. The next thing is a
+    /// FRAME header, or the payload too large to frame that ended it.
     Between(usize),
+    /// After a payload written between frames. What follows is a new frame, or
+    /// the end of the file within [`MIN_FRAME`] bytes, which is the one run of
+    /// unframed bytes CPython writes without a header in front of it.
+    Tail(usize),
 }
 
 /// Everything a rewind has to put back. The work budget is deliberately not
@@ -377,13 +382,14 @@ impl<'a> Cursor<'a> {
         if self.at != self.bytes.len() {
             return None;
         }
-        // The last frame ends where the STOP does. A file whose tail was too
-        // short to frame ends outside one instead, which is the only way a
-        // framed file may finish between frames.
+        // The last frame ends where the STOP does. The one exception is a file
+        // whose large payload left fewer than MIN_FRAME bytes to write after
+        // it, since CPython writes those with no FRAME header in front. A
+        // frame that simply stopped early is a non-match.
         match self.framing {
             Framing::Unframed => {}
             Framing::Inside(end) if end == self.at => {}
-            Framing::Between(from) if self.at - from < MIN_FRAME => {}
+            Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
         }
         let needed = match (form, self.arrays, self.objects) {
@@ -471,7 +477,7 @@ impl<'a> Cursor<'a> {
                 self.framing = Framing::Between(end);
             }
         }
-        if matches!(self.framing, Framing::Between(_)) && self.peek() == Some(0x95) {
+        if matches!(self.framing, Framing::Between(_) | Framing::Tail(_)) && self.peek() == Some(0x95) {
             self.frame_header()?;
         }
         Some(())
@@ -495,7 +501,7 @@ impl<'a> Cursor<'a> {
         if between {
             // The writer starts a new frame right after the bytes it wrote
             // between frames, unless what is left is too short to frame.
-            self.framing = Framing::Between(self.at);
+            self.framing = Framing::Tail(self.at);
             self.gate()?;
         }
         Some((at, len))
@@ -1990,6 +1996,20 @@ mod tests {
         for end in [0, 3, 11, head.len() + 11, whole.len() - 1] {
             assert!(recognise(&whole[..end]).is_none(), "accepted {end} bytes");
         }
+
+        // A frame that ends early with no large payload behind it. The short
+        // unframed tail is only ever what CPython leaves after one of those,
+        // so an empty frame followed by the whole object is a non-match, and
+        // so is a frame that stops one value before the STOP.
+        let mut empty = vec![0x80, 4, 0x95];
+        empty.extend_from_slice(&0u64.to_le_bytes());
+        empty.extend_from_slice(b"N.");
+        assert!(recognise(&empty).is_none(), "a frame holding none of the object");
+        let mut early_stop = vec![0x80, 4, 0x95];
+        let body = cat(&[b"]\x94(K\x01K\x02e."]);
+        early_stop.extend_from_slice(&((body.len() - 1) as u64).to_le_bytes());
+        early_stop.extend_from_slice(&body);
+        assert!(recognise(&early_stop).is_none(), "a frame that ends before the STOP");
     }
 
     /// The builtins a pickle writes as a call: what each one accepts, and what

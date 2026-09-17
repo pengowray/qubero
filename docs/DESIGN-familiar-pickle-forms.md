@@ -74,10 +74,13 @@ only between two objects, and the next begins there. A payload of 64 KiB or
 more is written between frames: the frame being filled is committed so that it
 ends exactly at that opcode byte, the opcode and its bytes sit outside any
 frame, and a new frame begins immediately after them. The last frame ends where
-the STOP does, unless what followed a large payload was shorter than the four
-bytes CPython needs before it writes a FRAME header at all. A small payload at
-a frame boundary, a large one inside a frame, a frame reaching past the end of
-the file and a frame that ends anywhere else are all non-matches.
+the STOP does. The one exception is a large payload with fewer than four bytes
+left to write after it, which CPython writes with no FRAME header in front
+because that is its minimum frame size; two large payloads fewer than four
+bytes apart are the same case and are not matched. A small payload at a frame
+boundary, a large one inside a frame, a frame reaching past the end of the
+file, and a frame that ends anywhere else with no large payload behind it, are
+all non-matches.
 
 ### What is exposed now
 
