@@ -2384,7 +2384,9 @@ export class Doc {
     // An OME-Zarr store is a directory, so its identifying record is JSON
     // metadata rather than a byte signature.
     if (isOmeZarrMetadata(this.name, head)) return "omezarr";
-    let name = this.editor.sniff_template(head, this.lengthBytes);
+    // The name goes along for the one case the bytes cannot settle: two
+    // bundled formats that open with the same magic, as `.shp` and `.shx` do.
+    let name = this.editor.sniff_template(head, this.lengthBytes, this.name);
     // A ZIP's front names only the entries it starts, and a BP5 dataset or a
     // Zarr store zipped behind a large data file shows none of its own there.
     // Its central directory, at the end, names every entry.

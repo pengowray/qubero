@@ -36,10 +36,11 @@ fn every_sample_still_reads() {
         let bytes = std::fs::read(&path).unwrap();
         let head = &bytes[..bytes.len().min(0x9000)];
         // A `.COM` file has no header to say what it is, so the extension is
-        // what says it. Everything else the file itself announces.
+        // what says it. Everything else the file itself announces, and the
+        // name only breaks a tie the bytes cannot, as between `.shp` and `.shx`.
         let name = match path.extension().is_some_and(|e| e.eq_ignore_ascii_case("com")) {
             true => "com",
-            false => match formats::sniff(head, bytes.len() as u64) {
+            false => match formats::sniff_named(head, bytes.len() as u64, &path.to_string_lossy()) {
                 Some(name) => name,
                 None if meant_to_fail => panic!("no template matches {}, so nothing tested it", path.display()),
                 None => panic!("nothing reads {}", path.display()),
