@@ -680,6 +680,18 @@ export const TABLE = {
    *  unpacked stream the addresses are of the stream, and what is true of both
    *  is that they are addresses of bytes. */
   addresses: "Show byte addresses",
+  /** The copy button. It names how many rows it will copy, which is the one
+   *  thing the reader wants to know before pressing it; with nothing selected
+   *  it is disabled and says only what it is. */
+  copy: "Copy",
+  copyRows: (n: number, rowWord: string): string => `Copy ${countText(n, rowWord)}`,
+  copyTitle: "Copy the selected rows as tab-separated text (Ctrl+C)",
+  copyTitleNone: "Select rows to copy them as tab-separated text",
+  copied: (n: number, rowWord: string): string => `Copied ${countText(n, rowWord)} as tab-separated text.`,
+  copyTooBig: (n: number, limit: number): string =>
+    `Selection too large to copy: ${n.toLocaleString()} rows, limit ${limit.toLocaleString()}.`,
+  copyPending: "Rows are still loading. Try again in a moment.",
+  copyFailed: "Couldn't copy to the clipboard.",
 } as const;
 
 /**

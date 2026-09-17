@@ -35,6 +35,12 @@ const OVERSCAN = 8;
 /** How tall the canvas is allowed to get. Past this the scroll bar stands for
  *  the rows by ratio rather than by pixels. */
 const MAX_CANVAS = 16_000_000;
+/** How many rows one copy may hold. The text is built in memory before the
+ *  clipboard sees it, and a hundred thousand rows of samples is already a few
+ *  megabytes; a reader after more than that wants an export, not a paste. */
+const COPY_LIMIT_ROWS = 100_000;
+/** How long a notice stays up before it goes away on its own. */
+const NOTICE_MS = 5000;
 /** Whether the reader last left the address columns on. Per browser, not per
  *  table: it is a way of reading, and a reader who wants the bytes wants them
  *  for the next file too. */
@@ -64,7 +70,14 @@ export class TableView {
    *  be turned to face its values without the header being built again. */
   private heads: HTMLElement[] = [];
   private addresses = false;
-  private selected: number | null = null;
+  /** The selected rows: the one the selection started on, and the one it was
+   *  last extended to. Equal for a single row; the range runs between them
+   *  either way round. Null when nothing is selected. */
+  private anchor: number | null = null;
+  private focus: number | null = null;
+  private readonly copyButton: HTMLButtonElement;
+  private readonly notice: HTMLElement;
+  private noticeTimer = 0;
   /** True while a pick this view made is being sent out, so the cursor move it
    *  causes does not come back and undo the scroll position. */
   private picking = false;
@@ -87,7 +100,11 @@ export class TableView {
     this.scroller.tabIndex = 0;
     this.canvas = el("div", { className: "tv-canvas" });
     this.scroller.append(this.canvas);
-    this.el.append(this.bar(opts.title), this.head, this.scroller);
+    this.copyButton = el("button", { type: "button", className: "tv-copy" });
+    this.copyButton.addEventListener("click", () => void this.copySelection());
+    this.notice = el("div", { className: "tv-notice", hidden: true });
+    this.el.append(this.bar(opts.title), this.head, this.scroller, this.notice);
+    this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
     this.fits = plan.columns.map((_, c) => fitOf(this.headingOf(c)));
     this.layColumns();
@@ -145,6 +162,7 @@ export class TableView {
       this.paintAgain();
     });
     bar.append(el("label", { className: "tv-addr" }, box, TABLE.addresses));
+    bar.append(this.copyButton);
     return bar;
   }
 
@@ -283,8 +301,16 @@ export class TableView {
     return row;
   }
 
+  /** The selected rows as a half-open range, or null when none are. */
+  private range(): { from: number; to: number } | null {
+    if (this.anchor === null || this.focus === null) return null;
+    return { from: Math.min(this.anchor, this.focus), to: Math.max(this.anchor, this.focus) + 1 };
+  }
+
   private drawRow(i: number, row: TableRow): HTMLElement {
-    const element = el("div", { className: i === this.selected ? "tv-row is-on" : "tv-row" });
+    const range = this.range();
+    const on = range !== null && i >= range.from && i < range.to;
+    const element = el("div", { className: on ? "tv-row is-on" : "tv-row" });
     element.append(el("span", { className: "tv-cell tv-index tv-num", textContent: i.toLocaleString() }));
     const rate = this.plan.rate;
     if (rate !== null && rate > 0) {
@@ -340,14 +366,28 @@ export class TableView {
     if (this.picking) return;
     const at = this.plan.rowFor(bit);
     if (at === null) return;
-    this.selected = at;
+    this.anchor = at;
+    this.focus = at;
     this.scrollToRow(at);
+    this.refreshCopy();
     this.paintAgain();
   }
 
   clearSelection(): void {
-    this.selected = null;
+    this.anchor = null;
+    this.focus = null;
+    this.refreshCopy();
     this.paintAgain();
+  }
+
+  /** The copy button says how many rows it will copy, and is disabled until
+   *  there are any. */
+  private refreshCopy(): void {
+    const range = this.range();
+    const n = range === null ? 0 : range.to - range.from;
+    this.copyButton.disabled = n === 0;
+    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n, this.plan.rowWord);
+    this.copyButton.title = n === 0 ? TABLE.copyTitleNone : TABLE.copyTitle;
   }
 
   private scrollToRow(i: number): void {
@@ -371,7 +411,7 @@ export class TableView {
     if (!(target instanceof Element)) return;
     const at = target.closest<HTMLElement>(".tv-row")?.dataset["index"];
     if (at === undefined) return;
-    this.pick(Number(at));
+    this.pick(Number(at), e.shiftKey);
   }
 
   /**
@@ -383,33 +423,106 @@ export class TableView {
    * the reader was stepping through.
    */
   private onKey(e: KeyboardEvent): void {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "c") {
+      if (this.range() === null) return;
+      e.preventDefault();
+      void this.copySelection();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      this.anchor = 0;
+      this.pick(this.plan.count - 1, true);
+      return;
+    }
     const page = Math.max(1, this.onScreen() - 1);
     const by: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page };
     const move = by[e.key];
-    const from = this.selected ?? this.firstVisible();
+    const from = this.focus ?? this.firstVisible();
     if (move !== undefined) {
       e.preventDefault();
-      this.pick(Math.max(0, Math.min(this.plan.count - 1, from + move)));
+      this.pick(Math.max(0, Math.min(this.plan.count - 1, from + move)), e.shiftKey);
       return;
     }
     if (e.key === "Home") {
       e.preventDefault();
-      this.pick(0);
+      this.pick(0, e.shiftKey);
     } else if (e.key === "End") {
       e.preventDefault();
-      this.pick(this.plan.count - 1);
+      this.pick(this.plan.count - 1, e.shiftKey);
     }
   }
 
-  private pick(i: number): void {
-    const row = this.rowAt(i);
-    this.selected = i;
+  /**
+   * Select row `i`, or with `extend` make it the far end of the selection
+   * that began at the anchor, the way shift-click and shift-arrow work in
+   * every list. The file tab is sent the bytes of the whole selection: its
+   * cursor goes to the first row and the mark covers to the last.
+   */
+  private pick(i: number, extend = false): void {
+    this.focus = i;
+    if (!extend || this.anchor === null) this.anchor = i;
     this.scrollToRow(i);
+    this.refreshCopy();
     this.paintAgain();
-    if (row === null) return;
+    const range = this.range();
+    if (range === null) return;
+    const first = this.rowAt(range.from);
+    if (first === null) return;
+    // The last row of a long selection may not be read yet; then the mark
+    // reaches as far as the row the reader just picked, which is read.
+    const last = this.rowAt(range.to - 1) ?? this.rowAt(i) ?? first;
     this.picking = true;
-    this.onPick({ path: row.path, startBit: row.offsetBits, endBit: row.offsetBits + row.sizeBits });
+    this.onPick({ path: first.path, startBit: first.offsetBits, endBit: last.offsetBits + last.sizeBits });
     this.picking = false;
+  }
+
+  // ----- copying -----
+
+  /**
+   * Put the selected rows on the clipboard as tab-separated text, with a
+   * heading line: what a spreadsheet or a script takes as it is. The columns
+   * are the ones on screen, address columns included when they are shown, so
+   * what is copied is what the reader is looking at.
+   */
+  private async copySelection(): Promise<void> {
+    const range = this.range();
+    if (range === null) return;
+    const n = range.to - range.from;
+    if (n > COPY_LIMIT_ROWS) return this.say(TABLE.copyTooBig(n, COPY_LIMIT_ROWS));
+    const rate = this.plan.rate !== null && this.plan.rate > 0 ? this.plan.rate : null;
+    const head: string[] = [TABLE.index];
+    if (rate !== null) head.push(TABLE.time);
+    for (let c = 0; c < this.plan.columns.length; c++) head.push(this.headingOf(c));
+    if (this.addresses) head.push(TABLE.storedAt, TABLE.size);
+    const lines = [head.join("\t")];
+    for (let i = range.from; i < range.to; i++) {
+      const row = this.rowAt(i);
+      if (row === null) return this.say(TABLE.copyPending);
+      const cells = [String(i)];
+      if (rate !== null) cells.push(timeText(i, rate));
+      for (let c = 0; c < this.plan.columns.length; c++) cells.push(row.cells[c]?.text ?? "");
+      if (this.addresses) cells.push(formatOffset(row.offsetBits), bitSizeText(row.sizeBits));
+      lines.push(cells.join("\t"));
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+    } catch {
+      return this.say(TABLE.copyFailed);
+    }
+    this.say(TABLE.copied(n, this.plan.rowWord));
+  }
+
+  /** A message about something the reader just asked for, which goes away on
+   *  its own. */
+  private say(text: string): void {
+    this.notice.textContent = text;
+    this.notice.hidden = false;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.hidden = true;
+    }, NOTICE_MS);
   }
 }
 

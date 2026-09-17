@@ -3037,7 +3037,8 @@ qubero-spinner svg {
   stroke-width: 3;
   stroke-linejoin: round;
 }
-.hv-notice {
+.hv-notice,
+.tv-notice {
   position: absolute;
   right: 22px;
   bottom: 8px;
@@ -3737,6 +3738,7 @@ button.insp-xrow-where:hover {
    either of them measuring the other. */
 .tableview {
   --tv-row: 22px;
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -3782,7 +3784,7 @@ button.insp-xrow-where:hover {
 .tv-fact:hover {
   color: var(--fg);
 }
-/* The one control here, so it sits at the far end away from the facts. */
+/* The two controls sit at the far end away from the facts. */
 .tv-addr {
   display: flex;
   align-items: center;
@@ -3790,6 +3792,22 @@ button.insp-xrow-where:hover {
   margin-inline-start: auto;
   color: var(--muted);
   cursor: pointer;
+}
+.tv-copy {
+  font: inherit;
+  padding: 2px 8px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tv-copy:hover:not(:disabled) {
+  border-color: var(--fg);
+}
+.tv-copy:disabled {
+  color: var(--muted);
+  cursor: default;
 }
 .tv-head,
 .tv-row {
