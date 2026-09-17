@@ -36,10 +36,10 @@ reasons, which live in the script.
 
 | Pattern | Licence | Bundled | Gaps | Magic | Reason |
 | --- | --- | --- | --- | --- | --- |
-| `bink_container` | MPL-2.0 | yes | 6 | 3 bytes at 0x0 | six bit fields cross a byte boundary packed from the low bit up; every frame offset is placed |
+| `bink_container` | MPL-2.0 | yes | 5 | 3 bytes at 0x0 | three bit fields cross a byte boundary packed from the low bit up, and one cursor move ends the audio track list; every frame offset is placed |
 | `gltf` | MIT | yes | 4 | 4 bytes at 0x0 | the JSON chunk is decoded by an ImHex plugin rather than by the pattern, so its bytes are left unread; the header and the chunk table are placed |
 | `mbr` | MPL-2.0 | yes | 1 | 2 bytes at 0x1fe | one `break` inside the partition loop; all four partition entries are placed |
-| `vhd` | MPL-2.0 | yes | 5 | no magic | two assignments and a `break` in the disc geometry; the footer and the dynamic-disc header are placed |
+| `vhd` | MPL-2.0 | yes | 4 | no magic | one cursor move to the footer and one `try`; the footer magic, read 512 bytes back from the end, and the dynamic-disc header are placed |
 
 ## Licences
 

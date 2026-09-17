@@ -410,20 +410,83 @@ of each construct, ready to become a gap.
 2026-09-17: the lowering landed, in `crates/core/src/hexpat/{lower,types,includes}.rs`
 with `pub fn convert(text, &dyn Includes)` in `hexpat/mod.rs`, and the
 `Report`/`Became`/`Gap`/`Note` shape moved out of `ksy/` into
-`crates/core/src/report.rs` so both converters share it. 41 tests in
+`crates/core/src/report.rs` so both converters share it. 58 tests in
 `crates/core/tests/hexpat_lower.rs`, one per mapping row and one per imperative
 construct, each reading bytes written by hand for it, plus three
 `template_text::render` snapshots in
 `crates/core/tests/snapshots/template_text/hexpat_*.txt`.
 
+2026-09-17: five of the gap reasons worked through, in count order. The numbers
+below are after all five; the ones that stood before are in the item lines.
 `cargo run -p qubero-core --example hexpat_gaps -- ~/github/ImHex-Patterns`, as
 it stands:
 
 ```text
-81 clean / 226 with gaps of 1744 total, 3 refused, of 310 patterns
-samples: 36 read to the end, 109 stopped at a gap, 40 errored, 5 without a converted pattern, of 231 files under test_data
-pass rate: 145/185 read without an error (78%)
+103 clean / 204 with gaps of 1533 total, 3 refused, of 310 patterns
+samples: 40 read to the end, 108 stopped at a gap, 37 errored, 5 without a converted pattern, of 231 files under test_data
+pass rate: 148/185 read without an error (80%)
 ```
+
+What it took, one line each. Every item has unit tests in
+`crates/core/tests/hexpat_lower.rs` over hand-written pattern text and bytes,
+and the totals were measured again after each.
+
+* **Assignments (203).** 1744 -> 1673 gaps. Not what the plan supposed: no
+  assignment in the corpus is inside a `fn` body, because `Decl::Function` is
+  skipped whole in `root_decls` and a body is never walked. 51 of the 217
+  assign to `$`. `$ += e` is the cursor moved forward and nothing else, which
+  is what `padding[e]` says, so it lowers to `Bytes(e)` named `padding`. `$ = e`
+  and `$ -= e` end the structure: `ASTNodeStruct::createPatterns` sizes a
+  structure as the distance from where it started to where the cursor ended, and
+  an `At` in the IR advances nothing, so wrapping the rest of the structure in
+  one would read the right bytes and report the wrong length. That also fixed a
+  silent wrong: `members` used to carry on after *any* assignment, so every
+  field after a `$ +=` was read at an offset the file does not agree with. None
+  of the 36 `$ = e` is the `addressof(x) + k` the plan named; that form has zero
+  instances. A local set in the two halves of one `if` and nowhere else becomes
+  a `Cond` emitted where the `if` ends; `ast::Statement` grew `assign`, so the
+  lowering reads the parts instead of matching the source text.
+* **Top-level locals (54) and top-level `if` (42).** 1673 -> 1596 gaps.
+  All 54 are `const T X = e;`, which `one_statements` had no branch for, so it
+  fell through to `function_statement` and arrived as a local of a function.
+  One branch in the parser makes it a global, which is what the reference
+  declares, and the cascade of names it settles goes with it. Only 7 of the 42
+  top-level `if`s hold a placement at all; those lower as one `When` per block
+  over an inline structure, and the rest stay one gap naming the `if`, because a
+  gap per statement inside a block of `std::print` calls says less and counts
+  more.
+* **"X is not a field in scope here" (50).** 1596 gaps, unchanged; the reasons
+  are what changed. The plan guessed a template parameter or a `using` alias;
+  it is none of those. GB_EXE's `Offset` is `u32 Offset[DataTypeCount];`, a
+  global with no value that a top-level `for` loop fills in, and the other
+  classes are an `in`/`out` variable, a local whose own value could not be
+  worked out, a placement that could not be placed, and a name nothing declares
+  (shp's `num_point` is an upstream typo). Each now says which, with the line
+  the declaration is on. 190 gaps reworded; 25 still read "not a field in scope
+  here", which is now the answer only when the reader should look for a typo.
+* **`$` through a path (35) and `addressof(this)` (24).** 1596 -> 1533 gaps,
+  and 83 -> 103 clean: the twenty `ffx/*` patterns went clean between them.
+  `$[e]` is not a position, which is what the plan said: the reference indexes
+  the file with it, so it is the one byte at the address `e`, a `PeekAt` for
+  `$` and `$ + k` and a `PeekIn` otherwise. `addressof(this)` needs no
+  `Expr::HereStart` after all: it is `StartOf` of the structure's first field,
+  which `Frame` now records as each level's first field is placed. A structure
+  that has read nothing yet is still a gap, and deliberately: `SpacePos` would
+  be right once and a `[while(..)]` condition is worked out again before every
+  element, so `$ == addressof(this)` would become `SpacePos == SpacePos`, true
+  every time.
+* **`#pragma magic @ -0x200`.** No change to the totals; `vhd.hexpat` gets its
+  signature read. `parse_magic` takes an `i64` and a negative address lowers to
+  `Ty::at(SpaceSize + at, Magic)`, which reads the footer 512 bytes from the
+  end. Nothing claims a dropped file by it and the note says exactly why: the
+  sniffer matches a signature at a fixed offset from the front, and `sniff_ends`
+  is not a table of end-anchored ones, it is one hand-written rule for the ZIP
+  central directory. `bundled.rs` keeps `signature: &[(u64, bytes)]` for the
+  same reason.
+
+`HEXPAT_DUMP=1` on the example prints every gap as `GAP<tab>pattern<tab>line:col
+<tab>reason<tab>source`, which is how the five were classified. The histogram
+prints the first three reasons only; the dump is the whole list.
 
 The three verdicts are defined in the example's own header, so the number means
 the same thing next time: **reads to the end** is every node resolved and a
@@ -438,23 +501,24 @@ the other way round.
 The commonest gap reasons, which is what says what to do next:
 
 ```text
-    293  left unread: the member before it was not placed
-    203  an assignment
-     54  a local variable of a function at the top level
-     50  Offset is not a field in scope here
-     42  an `if` statement outside a structure at the top level
+    286  left unread: the member before it was not placed
+    128  an assignment
+     50  Offset is a global the pattern fills in while it runs
      41  [[transform]] replaces the value with what a function returns
-     35  `$` reached through a path
+     41  an `if` statement outside a structure at the top level
      28  a `break`
-     24  addressof(this)
      23  an in/out variable
+     21  a field placed in a section the pattern created
+     20  std::mem::create_section is run by the reference
+     19  a path the converter cannot follow
 ```
 
 `left unread` is not a gap of its own: it is the marker on every structure that
 ended early because the member before it could not be placed, so the count of
-things that could not be said is nearer 1,450. Taking the rest in order, the
-imperative half is most of it and none of it is an IR question. The three that
-*are* IR questions, and what each would cost:
+things that could not be said is nearer 1,250. Taking the rest in order, the
+imperative half is most of it and none of it is an IR question. The two that
+*are* IR questions, and what each would cost (`addressof(this)` was the third
+and is answered above):
 
 * **A name declared inside an `if` block, read after the block** (lua40, lua50,
   lua51, gmd, tiff, wav, and about ninety gaps between them once the `left
@@ -466,11 +530,6 @@ imperative half is most of it and none of it is an IR question. The three that
   `When`'s structure, or `if` blocks stop being structures. The first is a
   change to one function and to what `Within` means; the second gives up the
   one-condition-per-block the mapping chose on purpose.
-* **`addressof(this)`** (24). The enclosing structure's own start. Nothing in
-  `Expr` names it: `Pos` and `SpacePos` are where the *field* is, and `StartOf`
-  wants a field to be the start of. An `Expr::HereStart` counted the way
-  `SpacePos` counts would cover it, and `bson.hexpat`'s
-  `[while($ < addressof(this) + listLength - 1)]` is the shape asking.
 * **A low-bit-first bitfield field that crosses a byte** (about forty, across
   `3ds`, `lnk`, `lz4`, `ape`, `ne`, `id3`, `BroEngine/dds`). `decode::lsb_offset`
   refuses one and says why: a twelve-bit field packed from the bottom is the
@@ -527,6 +586,25 @@ makes the structure as long as its longest field, and `no_unique_address` means
 the field contributes nothing at all. `bmp.hexpat` is why it matters -- its
 `data` field is the whole file read at offset zero -- and with the union
 lowering every placement after it ran past the end.
+
+Four more, found by working through the gap reasons on 2026-09-17:
+
+* **An assignment does not always leave the next field where it was.** The old
+  rule was that an assignment reads nothing, so the structure carries on. True
+  of `cnt = 5`, false of `$ += dataLength`, and the converter read every field
+  after one of those at an offset the file does not agree with, silently. A `$`
+  assignment now either lowers exactly or ends the structure.
+* **No assignment in the corpus is inside a `fn` body.** `root_decls` skips
+  `Decl::Function` whole, so a body is never walked and there is nothing to
+  count once per function.
+* **A top-level `const` was a local of a function.** `one_statements` had no
+  branch for `Keyword::Const`, so all 54 of them fell through to
+  `function_statement`. The reference declares them in the global scope.
+* **`addressof(this)` needs no IR addition.** The `Expr::HereStart` this file
+  asked for is `StartOf` of the structure's first field, which the lowering
+  knows as it goes. Only a structure that has read nothing yet is left, and
+  `SpacePos` will not answer for that one, for the reason in the item line
+  above.
 
 ### Two evaluator bugs the corpus turned up
 
