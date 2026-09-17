@@ -43,6 +43,13 @@ pub struct Cell {
     /// for. The text stays on the cell for its tooltip, and for the width the
     /// table is laid out to.
     pub repeat: bool,
+    /// What is wrong with this element's value, when something is. The node's
+    /// own: a table of values is a view like any other and says the same words
+    /// about the same bytes. See `NodeInfo::problem`.
+    pub problem: Option<Problem>,
+    /// Wrong values found under this element so far. See
+    /// `NodeInfo::problems_within`.
+    pub problems_within: (u32, u32),
     /// False when the element's bits are not one contiguous run: a `q5_0`
     /// weight is four bits of `qs` and a fifth a dozen bytes away, so no run
     /// of bits on the row is the weight, and the view lays those out uniformly
@@ -178,6 +185,8 @@ impl Evaluator {
                 kind: "symbol",
                 repeat: false,
                 contiguous: true,
+                problem: None,
+                problems_within: (0, 0),
             });
         }
         Ok(out)
@@ -375,6 +384,8 @@ impl Evaluator {
                 kind: "scale",
                 repeat: false,
                 contiguous: true,
+                problem: None,
+                problems_within: (0, 0),
             });
         }
         for (j, w) in block.weights.iter().enumerate() {
@@ -387,6 +398,8 @@ impl Evaluator {
                 kind: "int",
                 repeat: false,
                 contiguous: w.high.is_none(),
+                problem: None,
+                problems_within: (0, 0),
             });
         }
         // A K type keeps its scale after its weights, so nothing may assume
@@ -490,6 +503,8 @@ impl Evaluator {
             kind: kind_of(&info.value),
             repeat: false,
             contiguous: true,
+            problem: info.problem.clone(),
+            problems_within: info.problems_within,
         })
     }
 }
@@ -578,11 +593,11 @@ mod tests {
         assert_eq!(
             said,
             [
-                "0xb3 \u{b7} seq 4903 \u{b7} 231 bytes",
+                "0xb3 (unknown) \u{b7} seq 4903 \u{b7} 231 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
                 "idle packet \u{b7} seq 0 \u{b7} 8 bytes",
-                "0x12 \u{b7} seq 7 \u{b7} 8 bytes",
+                "0x12 (unknown) \u{b7} seq 7 \u{b7} 8 bytes",
             ]
         );
     }

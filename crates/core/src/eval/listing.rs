@@ -45,6 +45,14 @@ pub struct Span {
     /// a tooltip offering it names a thing nobody can look up. See
     /// [`crate::template::StructDef::inline`].
     pub inline: bool,
+    /// What is wrong with this field's value, when something is. The node's
+    /// own, since a span is a node: the hex view's chips are built from these
+    /// and not from nodes, and a chip that cannot say a signature is wrong is
+    /// a view the reader has to leave to find out. See `NodeInfo::problem`.
+    pub problem: Option<Problem>,
+    /// Wrong values found under this span so far, invalid then undefined. See
+    /// `NodeInfo::problems_within`.
+    pub problems_within: (u32, u32),
     /// True when these bytes are a document of their own and can be opened as
     /// one: a compressed run that unpacked, or the contents of one.
     ///
@@ -77,10 +85,14 @@ pub(super) fn brief(v: &Value) -> String {
         Value::Int(n) => n.to_string(),
         Value::Float(n) => format!("{n}"),
         Value::Str(s) => s.clone(),
+        // A named value gives its name and drops the number behind it, which
+        // is this reading's whole point. A value with no name has only the
+        // number, and says so in the words the node says them in, so that a
+        // row and the panel beside it do not word the same value two ways.
         Value::Enum { raw, name, hex } => match name {
             Some(n) => n.clone(),
-            None if *hex => format!("0x{raw:x}"),
-            None => raw.to_string(),
+            None if *hex && *raw >= 0 => format!("0x{raw:02x} (unknown)"),
+            None => format!("{raw} (unknown)"),
         },
         Value::Flags { set, unnamed, .. } => {
             let mut s = set.join("|");
@@ -102,7 +114,7 @@ pub(super) fn brief(v: &Value) -> String {
         // A slot nobody filled in. The number underneath is in the file and in
         // the hex view; saying -12345 here would read as a measurement.
         Value::Unset(_) => "unset".to_string(),
-        Value::Magic { ok, bytes, expected } => magic_reading(*ok, bytes, expected),
+        Value::Magic { bytes, .. } => magic_reading(bytes),
         Value::Composite { .. } => String::new(),
     }
 }
@@ -198,18 +210,16 @@ fn plural(noun: &str) -> String {
 /// How a signature reads in one line.
 ///
 /// The bytes as C would write a string, so a reader sees the name in them and
-/// the bytes that are not a name at once. A file that has what the format
-/// asked for needs nothing further said about it. One that does not is told
-/// what was wanted as well as what is there, since a signature that is wrong
-/// is only worth reading beside the one it should have been; before this the
-/// line said the bytes did not match without saying what they did not match.
+/// the bytes that are not a name at once. What was wanted instead, for a
+/// signature that is not what the template asked for, is not said here: the
+/// value column says what the bytes are and `NodeInfo::problem` says what is
+/// wrong with them, in one place every view reads. See `eval::problem`.
 ///
 /// One caveat, and it is not this function's: `text::c_string` puts two bases
 /// in one line, so Matroska's reads `"\032E\xdf\xa3"` where `\032` is the byte
 /// the gutter calls `0x1a`. See the gap of its own about that.
-pub fn magic_reading(ok: bool, bytes: &[u8], expected: &[u8]) -> String {
-    let text = crate::text::c_string(bytes);
-    if ok { text } else { format!("{text} does not match {}", crate::text::c_string(expected)) }
+pub fn magic_reading(bytes: &[u8]) -> String {
+    crate::text::c_string(bytes)
 }
 
 /// A run of these is worth one entry rather than one each.
@@ -1010,6 +1020,8 @@ impl Evaluator {
             parts: Vec::new(),
             bits: self.bit_roles(doc, path, info),
             inline: matches!(self.memo[path].ty.base(), Ty::Struct(s) if s.inline),
+            problem: info.problem.clone(),
+            problems_within: info.problems_within,
             // A stream that would not open is not an offer. `space_root` is
             // the node the stream holds, which is what the listing hangs Open
             // unpacked off; a template may fold the stream itself away and

@@ -33,6 +33,7 @@ mod memo;
 mod origin;
 mod pickletree;
 mod placed;
+mod problem;
 mod expr;
 mod read;
 mod relate;
@@ -244,6 +245,31 @@ impl Value {
     }
 }
 
+/// Who says a value is wrong, which is what decides how loudly it is marked.
+/// See `docs/DESIGN-wrong-values.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// The format rules the value out: a signature that is not the one the
+    /// template requires, a sum that is not the sum of the bytes it covers.
+    /// A file with one of these is damaged, not the format the template
+    /// thinks it is, or written by a tool that got the specification wrong.
+    Invalid,
+    /// Qubero has no name for the value, and the format may well allow it: an
+    /// enum value with no case, flag bits nobody named, a NaN in a field whose
+    /// format never said its values are finite. Not a finding, so not red.
+    Undefined,
+}
+
+/// What is wrong with a value, when something is. The words are built in the
+/// core so that the listing, the chip tooltip, the inspector and the value
+/// table say the same thing about the same bytes. See [`problem`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    pub tier: Tier,
+    /// One line, state first: `Does not match: expected \x89PNG`.
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeInfo {
     pub path: Vec<usize>,
@@ -378,6 +404,18 @@ pub struct NodeInfo {
     /// fields than a line can hold. A panel with one line to spend on a
     /// structure shows this before it falls back to counting the fields.
     pub line: Option<String>,
+    /// What is wrong with this field's value, when something is. None for the
+    /// overwhelming majority of fields, which hold what their format allows.
+    pub problem: Option<Problem>,
+    /// How many descendants carry a problem: invalid first, then undefined.
+    /// Zero on a leaf.
+    ///
+    /// Counted over the children the core has already read, never by reading
+    /// more: a collapsed run of 40,000 records has had a handful read, so this
+    /// is a count so far and the row that draws it says so. The count becomes
+    /// exact when the run is opened. No view triggers a walk of the file to
+    /// complete one.
+    pub problems_within: (u32, u32),
 }
 
 /// What an expression reads of a field. See [`Evaluator::value_of`].
@@ -671,6 +709,53 @@ pub struct Evaluator {
     /// node: without this the answer for a structure would be the answer for
     /// its first child, and so on down, which is a loop rather than a reading.
     lining: bool,
+    /// Every field found to have a problem so far, and how many of them sit
+    /// under each ancestor. A field is counted once however often its node is
+    /// asked for, and the tally is what [`NodeInfo::problems_within`] reads:
+    /// an answer that costs nothing to give and never reads a byte on its own.
+    /// Dropped whole whenever the memo is, since a value that is read again
+    /// may not be the value it was.
+    problems: problems::Tally,
+}
+
+/// The running count of fields found wrong, kept as the file is read.
+mod problems {
+    use rustc_hash::{FxHashMap, FxHashSet};
+
+    use super::Tier;
+
+    #[derive(Default)]
+    pub(super) struct Tally {
+        /// The fields already counted, so a node asked for twice is not two.
+        seen: FxHashSet<Vec<usize>>,
+        /// Invalid and undefined descendants, by ancestor. Depth is small, so
+        /// this is written on the way up and read in one lookup.
+        within: FxHashMap<Vec<usize>, (u32, u32)>,
+    }
+
+    impl Tally {
+        pub(super) fn note(&mut self, path: &[usize], tier: Tier) {
+            if !self.seen.insert(path.to_vec()) {
+                return;
+            }
+            for k in 0..path.len() {
+                let entry = self.within.entry(path[..k].to_vec()).or_default();
+                match tier {
+                    Tier::Invalid => entry.0 += 1,
+                    Tier::Undefined => entry.1 += 1,
+                }
+            }
+        }
+
+        pub(super) fn within(&self, path: &[usize]) -> (u32, u32) {
+            self.within.get(path).copied().unwrap_or((0, 0))
+        }
+
+        pub(super) fn forget(&mut self) {
+            self.seen.clear();
+            self.within.clear();
+        }
+    }
 }
 
 impl Evaluator {
@@ -686,6 +771,7 @@ impl Evaluator {
             open: Vec::new(),
             schemas: schema::Schemas::default(),
             lining: false,
+            problems: problems::Tally::default(),
         }
     }
 
@@ -832,6 +918,12 @@ impl Evaluator {
             self.open.clear();
         }
         self.memo.forget_after(bit);
+        // A value read again may not be the value it was, so the running count
+        // of wrong ones starts over rather than keeping a verdict on bytes
+        // that have changed. Coarse, like the memo's own invalidation: the
+        // count is a count so far in any case, and it fills again as the views
+        // ask for their rows.
+        self.problems.forget();
     }
 
     /// Drop every cached offset/size. Call after any document change that is
@@ -841,6 +933,7 @@ impl Evaluator {
         self.placed.forget();
         self.spaces.forget();
         self.open.clear();
+        self.problems.forget();
         self.journals.clear();
         self.forget_schemas();
         self.go.restart();
@@ -914,6 +1007,25 @@ impl Evaluator {
         }
     }
 
+    /// A float field's own bit pattern and the layout it is in, for working
+    /// out which sort of NaN the file holds. None for a float with no stored
+    /// pattern -- a computed real, a JSON number -- and for IBM hexadecimal,
+    /// which has neither NaN nor infinity. The bytes are already loaded, since
+    /// the value was read from them; a read that fails anyway leaves the
+    /// classification to the double.
+    fn float_pattern<S: Source>(&mut self, doc: &Document<S>, r: &Resolved) -> Option<(u128, problem::Layout)> {
+        let ty = r.ty.without_sentinel();
+        let endian = match ty {
+            Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) | Ty::F80(e) => *e,
+            // One byte, so there is no order to it.
+            Ty::F8 { .. } => crate::template::Endian::Big,
+            _ => return None,
+        };
+        let l = problem::layout(ty)?;
+        let raw = self.read(doc, r, r.offset, u64::from(l.width)).ok()?;
+        Some((read_uint(&raw, l.width, endian), l))
+    }
+
     pub fn node<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<NodeInfo> {
         self.resolve(doc, path)?;
         let size = self.size_of(doc, path)?;
@@ -957,8 +1069,22 @@ impl Evaluator {
         if self.is_trace_field(path) {
             machinery = Some(true);
         }
+        // What is wrong with the value, if anything, and how many wrong values
+        // have been found under this node so far. A float is classified from
+        // its own bits rather than from the double it was read into: widening
+        // an f32 quiets a signalling NaN.
+        let problem = match &value {
+            Value::Float(f) if !f.is_finite() => problem::of(&value, &r.ty, self.float_pattern(doc, &r)),
+            v => problem::of(v, &r.ty, None),
+        };
+        if let Some(p) = &problem {
+            self.problems.note(path, p.tier);
+        }
+        let problems_within = self.problems.within(path);
         Ok(NodeInfo {
             path: path.to_vec(),
+            problem,
+            problems_within,
             space: r.space,
             refused: match self.spaces.get(path) {
                 Some(space::Opened::Refused(why)) => Some(why.as_str().to_string()),

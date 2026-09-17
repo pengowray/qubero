@@ -209,7 +209,14 @@ struct NodeDto {
     edit_text: String,
     /// "uint" | "int" | "float" | "bytes" | "str" | "magic" | "enum" | "flags" | "composite"
     kind: &'static str,
-    ok: bool,
+    /// What is wrong with this value, when something is. Absent for the
+    /// overwhelming majority of fields, which hold what their format allows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<ProblemDto>,
+    /// Wrong values found under this node so far: invalid, then undefined.
+    /// Counted over the children already read, never by reading more, so a
+    /// collapsed run's count is a count so far.
+    problems_within: [u32; 2],
     child_count: f64,
     /// What one child is called, for counting them: empty when they are items.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -306,6 +313,11 @@ struct CellDto {
     /// cell is drawn without its text. `text` is still what it says, for the
     /// tooltip and for the width the table is laid out to.
     repeat: bool,
+    /// What is wrong with this element's value, when something is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<ProblemDto>,
+    /// Wrong values found under this element so far: invalid, then undefined.
+    problems_within: [u32; 2],
 }
 
 /// What the byte-class scan has found so far. `classes` is one digit per
@@ -1542,7 +1554,7 @@ fn explain_dto(e: Explain) -> ExplainDto {
                 columns: columns
                     .into_iter()
                     .map(|c| {
-                        let (value_kind, value, _, _) = shown(&c.value);
+                        let (value_kind, value, _) = shown(&c.value);
                         SqliteColumnDto { type_name: c.type_name, value, value_kind, at: c.at as f64, len: c.len as f64 }
                     })
                     .collect(),
@@ -2504,9 +2516,33 @@ struct SpanDto {
     /// so the name it gave the structure is the template's own bookkeeping and
     /// is not shown to a reader.
     inline: bool,
+    /// What is wrong with this field's value, when something is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<ProblemDto>,
+    /// Wrong values found under this span so far: invalid, then undefined.
+    problems_within: [u32; 2],
 }
 
 /// The bit split of one variable-length number, in the order it is stored.
+/// What is wrong with one value, in the words the core built. `tier` says who
+/// says so: `invalid` is the format ruling the value out, `undefined` is
+/// Qubero having no name for it.
+#[derive(Serialize)]
+struct ProblemDto {
+    tier: &'static str,
+    text: String,
+}
+
+fn problem_dto(p: qubero_core::eval::Problem) -> ProblemDto {
+    ProblemDto {
+        tier: match p.tier {
+            qubero_core::eval::Tier::Invalid => "invalid",
+            qubero_core::eval::Tier::Undefined => "undefined",
+        },
+        text: p.text,
+    }
+}
+
 #[derive(Serialize)]
 struct BitRolesDto {
     /// Which rule a reader has to know to follow the split. The view keys its
@@ -2562,9 +2598,11 @@ fn is_machine(type_name: &str) -> bool {
 }
 
 fn span_dto(s: Span) -> SpanDto {
-    let (kind, value, _, _) = shown(&s.value);
+    let (kind, value, _) = shown(&s.value);
     SpanDto {
         path: s.path,
+        problem: s.problem.map(problem_dto),
+        problems_within: [s.problems_within.0, s.problems_within.1],
         name: s.name,
         trail: s.trail,
         type_name: s.type_name,
@@ -2591,37 +2629,40 @@ fn span_dto(s: Span) -> SpanDto {
     }
 }
 
-/// How a value reads: its kind, what to show, what an editor starts with, and
-/// whether the format says it is right.
-fn shown(v: &Value) -> (&'static str, String, String, bool) {
+/// How a value reads: its kind, what to show, and what an editor starts with.
+/// Whether the format says it is right is `NodeDto::problem`, built in the
+/// core so that every view says the same words about the same bytes.
+fn shown(v: &Value) -> (&'static str, String, String) {
     match v {
-        Value::UInt(v) => ("uint", v.to_string(), v.to_string(), true),
-        Value::Int(v) => ("int", v.to_string(), v.to_string(), true),
-        Value::Float(v) => ("float", v.to_string(), v.to_string(), true),
+        Value::UInt(v) => ("uint", v.to_string(), v.to_string()),
+        Value::Int(v) => ("int", v.to_string(), v.to_string()),
+        Value::Float(v) => ("float", v.to_string(), v.to_string()),
         Value::Bytes { len, preview } => {
             let hex: Vec<String> = preview.iter().map(|b| format!("{b:02x}")).collect();
             let mut s = hex.join(" ");
             if *len as usize > preview.len() {
                 s.push('…');
             }
-            ("bytes", s.clone(), s, true)
+            ("bytes", s.clone(), s)
         }
         // The bytes have not arrived; the row stands on what the file's own
         // table already said about where they are and how many there are.
-        Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new(), true),
+        Value::Unread { .. } => ("unread", "\u{2026}".into(), String::new()),
         // A slot the file left at its format's "nobody filled this in" value.
         // The editor still starts from the number that is written there, so
         // opening the field shows what would be overwritten.
-        Value::Unset(inner) => ("unset", "unset".into(), shown(inner).2, true),
-        Value::Str(s) => ("str", s.clone(), s.clone(), true),
-        Value::Magic { ok, bytes, expected } => {
+        Value::Unset(inner) => ("unset", "unset".into(), shown(inner).2),
+        Value::Str(s) => ("str", s.clone(), s.clone()),
+        Value::Magic { bytes, .. } => {
             // How a signature reads is core's answer, not this crate's, so
             // that the listing and the type table say the same thing about
-            // the same bytes. See `eval::magic_reading`.
-            let s = qubero_core::eval::magic_reading(*ok, bytes, expected);
-            ("magic", s.clone(), s, *ok)
+            // the same bytes. What is wrong with a signature that does not
+            // match is `problem`, not part of the value. See
+            // `eval::magic_reading`.
+            let s = qubero_core::eval::magic_reading(bytes);
+            ("magic", s.clone(), s)
         }
-        Value::Composite { count } => ("composite", count.to_string(), count.to_string(), true),
+        Value::Composite { count } => ("composite", count.to_string(), count.to_string()),
         Value::Flags { raw, set, unnamed } => {
             // The names, then a count of the set bits nobody named, which is
             // the anomaly worth noticing in a field like this.
@@ -2635,21 +2676,21 @@ fn shown(v: &Value) -> (&'static str, String, String, bool) {
             if s.is_empty() {
                 s.push_str("none set");
             }
-            ("flags", s, raw.to_string(), true)
+            ("flags", s, raw.to_string())
         }
         Value::Enum { raw, name, hex } => {
             let num = if *hex && *raw >= 0 { format!("0x{raw:02x}") } else { raw.to_string() };
             match name {
-                Some(n) => ("enum", format!("{n} ({num})"), n.clone(), true),
+                Some(n) => ("enum", format!("{n} ({num})"), n.clone()),
                 // A value the format does not define. Worth flagging, still editable.
-                None => ("enum", format!("{num} (unknown)"), num, false),
+                None => ("enum", format!("{num} (unknown)"), num),
             }
         }
     }
 }
 
 fn dto(n: NodeInfo) -> NodeDto {
-    let (kind, value, edit_text, ok) = shown(&n.value);
+    let (kind, value, edit_text) = shown(&n.value);
     // A field the file did not write has nothing to show. Its node reads as an
     // empty composite, and a value column saying `0` there is a number nobody
     // wrote and one a reader would take for the field's contents. `absent` is
@@ -2666,7 +2707,8 @@ fn dto(n: NodeInfo) -> NodeDto {
         // the digits the file wrote rather than as a reading of them.
         edit_text: n.edit_text.unwrap_or(edit_text),
         kind,
-        ok,
+        problem: n.problem.map(problem_dto),
+        problems_within: [n.problems_within.0, n.problems_within.1],
         child_count: n.child_count as f64,
         unit: n.unit.unwrap_or_default(),
         composite: n.composite,
@@ -2703,6 +2745,8 @@ fn cell_dto(c: qubero_core::eval::Cell) -> CellDto {
         kind: c.kind,
         contiguous: c.contiguous,
         repeat: c.repeat,
+        problem: c.problem.map(problem_dto),
+        problems_within: [c.problems_within.0, c.problems_within.1],
     }
 }
 

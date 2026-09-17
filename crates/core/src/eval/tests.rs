@@ -2157,15 +2157,16 @@ fn a_signature_reads_as_the_string_it_is() {
     let d = doc(b"\x89PNG\r\n\x1a\n");
     assert_eq!(listing::brief(&ev.node(&d, &[0]).unwrap().value), r#""\x89PNG\r\n\x1a\n""#);
 
-    // The bytes that are there, and the bytes that were wanted. A signature
-    // that is wrong is only worth reading beside the one it should have been.
+    // The bytes that are there. What was wanted instead is the field's
+    // `problem`, not part of the value: a reader sees the bytes in the value
+    // column and the reason beside them, in the same words in every view.
     let wrong = doc(b"\x89PNh\r\n\x1a\n");
     let mut ev = Evaluator::new(Template::new("t", T::structure("Root", vec![("magic", T::magic(b"\x89PNG\r\n\x1a\n"))])));
     let node = ev.node(&wrong, &[0]).unwrap();
-    assert_eq!(
-        listing::brief(&node.value),
-        r#""\x89PNh\r\n\x1a\n" does not match "\x89PNG\r\n\x1a\n""#
-    );
+    assert_eq!(listing::brief(&node.value), r#""\x89PNh\r\n\x1a\n""#);
+    let problem = node.problem.clone().expect("a wrong signature is a problem");
+    assert_eq!(problem.tier, crate::eval::Tier::Invalid);
+    assert_eq!(problem.text, r#"Does not match: expected "\x89PNG\r\n\x1a\n""#);
     // The expected bytes are on the value, not only in the template, which is
     // what lets anything holding one say what was wanted.
     assert_eq!(
