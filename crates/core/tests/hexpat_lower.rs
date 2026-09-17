@@ -451,9 +451,32 @@ fn a_call_that_computes_is_a_gap_and_one_that_only_says_something_is_a_note() {
 	let out = convert("fn f() { return 1; };\nstruct S { u8 a; u8 b[f()]; };\nS s @ 0x00;\n");
 	assert!(gap_reasons(&out).contains("the converter runs nothing"), "{}", gap_reasons(&out));
 
-	let checked = convert("struct S { u8 a; std::assert(a == 1, \"no\"); u8 b; };\nS s @ 0x00;\n");
+	// An assert about more than the field it sits after: the IR works a
+	// constraint out at the end of the structure, where naming two fields would
+	// put the verdict on whichever row the assert happened to follow.
+	let checked = convert("struct S { u8 a; u8 b; std::assert(a == b, \"no\"); u8 c; };\nS s @ 0x00;\n");
 	assert!(checked.report.is_complete(), "{}", gap_reasons(&checked));
 	assert!(checked.report.notes.iter().any(|n| n.message.contains("checks that")), "{:?}", checked.report.notes);
+}
+
+/// An `std::assert` about the field written just before it is that field's
+/// constraint, with the pattern author's own message kept: it is the sentence
+/// they meant a reader to see. `std::assert_warn` lowers the same way.
+#[test]
+fn an_assert_about_the_field_before_it_becomes_that_field_s_constraint() {
+	let out = clean("struct S { u8 a; std::assert(a == 1, \"a must be one\"); u8 b; };\nS s @ 0x00;\n");
+	let text = render(&out.template);
+	assert!(text.contains("valid a == 1 saying \"a must be one\""), "{text}");
+	// Nothing is said twice: the constraint is not also a note about a check
+	// the IR does not make.
+	assert!(!out.report.notes.iter().any(|n| n.message.contains("checks that")), "{:?}", out.report.notes);
+
+	let warned = clean("struct S { u8 a; std::assert_warn(a > 2, \"a is small\"); };\nS s @ 0x00;\n");
+	assert!(render(&warned.template).contains("valid a > 2 saying \"a is small\""), "{}", render(&warned.template));
+
+	// An assert with no message shows the condition itself.
+	let bare = clean("struct S { u8 a; std::assert(a == 1); };\nS s @ 0x00;\n");
+	assert!(render(&bare.template).contains("valid a == 1"), "{}", render(&bare.template));
 }
 
 /// A field that should have read bytes and could not moves everything after it,

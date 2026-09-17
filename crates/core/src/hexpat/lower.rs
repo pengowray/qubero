@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::report::Report;
 use crate::template::{
-	Encoding, Endian, EnumDef, Expr, Field, StrLen, StructDef, Template, Time, Ty, Until,
+	Encoding, Endian, EnumDef, Expr, Field, StrLen, StructDef, Template, Time, Ty, Until, Valid,
 };
 
 use super::ast::{
@@ -694,6 +694,62 @@ impl<'a> Lower<'a> {
 		}
 	}
 
+	/// An `std::assert` about the field written just before it, carried over as
+	/// that field's constraint. True when it was, and then nothing is said in
+	/// the report but that it became one.
+	///
+	/// Only that one shape. A pattern's assert may say anything the reference
+	/// can run, about anything in scope, and most of them are about several
+	/// fields, about a variable, or about a call the converter runs nothing of.
+	/// Those stay notes, as they were. What is lowered here is the common one:
+	/// a field, then a line saying what that field has to be, which is a
+	/// specification written out in the place the IR has a slot for.
+	///
+	/// `std::assert_warn` lowers the same way and loses the one thing that told
+	/// it apart, since the IR has no softer tier than a constraint. That is the
+	/// right way round: an author who wrote the condition down meant a reader
+	/// to see it, and the two tiers in the design note are about who says the
+	/// value is wrong, not how loudly the pattern said it.
+	fn lower_assert(
+		&mut self,
+		path: &str,
+		args: &[super::expr::Expr],
+		pos: Pos,
+		fields: &mut [Field],
+	) -> bool {
+		if !matches!(path, "std::assert" | "std::assert_warn") {
+			return false;
+		}
+		let Some(condition) = args.first() else { return false };
+		let Some(field) = fields.last_mut() else { return false };
+		// One constraint per field, and the first is kept: two asserts after
+		// one field are two claims, and joining them would put a sentence the
+		// author did not write in front of a reader.
+		if field.valid.is_some() {
+			return false;
+		}
+		let name = field.name.clone();
+		let Ok(expr) = self.expr(condition) else { return false };
+		// Only about the field it sits after. A condition reaching anything
+		// else is worked out at the end of the structure, where a name means
+		// whichever field of the whole structure has it, and hanging that on
+		// this row would say the wrong field is wrong.
+		let names = crate::machinery::names_in(&expr);
+		if names.is_empty() || names.iter().any(|n| *n != name) {
+			return false;
+		}
+		let msg = match args.get(1).map(|a| &a.kind) {
+			Some(ExprKind::Lit(Lit::Str(text))) => Some(Arc::from(text.as_str())),
+			_ => None,
+		};
+		let source = format!("{path}({})", args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "));
+		self.report.became(self.at(pos), source, format!("a constraint on {name}"));
+		if let Some(field) = fields.last_mut() {
+			field.valid = Some(Arc::new(Valid::Expr { expr, msg }));
+		}
+		true
+	}
+
 	/// What a call written as a statement is worth saying about, for the calls
 	/// that only display or check something.
 	fn call_note(&self, path: &str, args: &[super::expr::Expr]) -> Option<String> {
@@ -975,7 +1031,9 @@ impl<'a> Lower<'a> {
 					false
 				}
 				Member::Call { path, args, pos } => {
-					self.top_call(path, args, *pos);
+					if !self.lower_assert(path, args, *pos, fields) {
+						self.top_call(path, args, *pos);
+					}
 					true
 				}
 				Member::Statement(statement) => self.statement_member(statement, fields, machinery),
@@ -2788,6 +2846,7 @@ fn named_field(name: &str, ty: Ty, aside: bool) -> Field {
 		elem_name_from: None,
 		aside,
 		checks: Vec::new(),
+		valid: None,
 		time: None,
 		elem_check: None,
 	}

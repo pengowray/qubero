@@ -126,6 +126,12 @@ impl<'a> Lower<'a> {
 				}
 			}
 			"_" => {
+				// Inside a `valid: expr:`, `_` on its own is the value being
+				// checked, which the IR says as `This`. Everywhere else it is
+				// the whole element of a repeat, and that is not a value.
+				if segs.is_empty() && self.in_valid {
+					return Ok(Expr::This);
+				}
 				let Some(Seg::Name(field)) = segs.first() else {
 					return Err("`_` on its own is the whole element, which a template expression cannot name".to_string());
 				};

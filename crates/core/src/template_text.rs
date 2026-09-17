@@ -659,6 +659,9 @@ fn field_extras(f: &Field) -> Vec<String> {
     if let Some(t) = &f.time {
         out.push(time_text(t));
     }
+    if let Some(v) = &f.valid {
+        out.push(valid_text(v));
+    }
     for c in &f.checks {
         out.push(format!("check {}", check_text(c)));
     }
@@ -666,6 +669,30 @@ fn field_extras(f: &Field) -> Vec<String> {
         out.push(format!("element check {}", check_text(c)));
     }
     out
+}
+
+/// What a field's constraint reads as on the field's own line.
+///
+/// One clause per shape rather than one clause with an operator in it, so that
+/// the common ones read as English and the general one reads as the expression
+/// it is. A message the source wrote down is kept: it is the sentence a reader
+/// of that pattern was meant to see.
+fn valid_text(v: &Valid) -> String {
+    match v {
+        Valid::Eq(e) => format!("valid {}", expr(e)),
+        Valid::Min(e) => format!("valid min {}", expr(e)),
+        Valid::Max(e) => format!("valid max {}", expr(e)),
+        Valid::Range { min, max } => format!("valid min {} max {}", expr(min), expr(max)),
+        Valid::AnyOf(items) => {
+            format!("valid one of {}", items.iter().map(expr).collect::<Vec<_>>().join(", "))
+        }
+        Valid::InEnum => "valid in enum".to_string(),
+        Valid::Expr { expr: e, msg } => match msg {
+            Some(m) => format!("valid {} saying {m:?}", expr(e)),
+            None => format!("valid {}", expr(e)),
+        },
+        Valid::Finite => "valid finite".to_string(),
+    }
 }
 
 fn check_text(c: &Check) -> String {
@@ -1286,6 +1313,7 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::SizeOf(..)
         | Expr::BitsOf(..)
         | Expr::Idx
+        | Expr::This
         | Expr::Pos
         | Expr::WindowSize
         | Expr::SpacePos
@@ -1347,6 +1375,10 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::SizeOf(n) => format!("sizeof({n})"),
         Expr::BitsOf(n) => format!("bitsof({n})"),
         Expr::Idx => "index".to_string(),
+        // What the field the constraint sits on holds. Only ever inside a
+        // `valid`, where the field has no name to write: it is the row the
+        // clause is on.
+        Expr::This => "this".to_string(),
         Expr::Pos => "pos".to_string(),
         Expr::WindowSize => "size of window".to_string(),
         // The same two measured from the front of the file, or of what a

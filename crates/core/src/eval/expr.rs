@@ -279,6 +279,11 @@ impl Evaluator {
             // The index of the element this sits in, which is what a field
             // whose type comes from a list read earlier needs.
             Expr::Idx => self.enclosing_lists(at).first().map_or(0, |(_, i)| *i as i128),
+            // The value of the field a constraint is about. Out of line and
+            // cold: it reads a field, and what a reading takes has no business
+            // in the frame of every expression that reads nothing. See
+            // `Expr::This`.
+            Expr::This => return self.this_whole(doc),
             // How far into the window this field starts, and how big that
             // window is. Both in bytes, rounded down: see `Expr::Pos`.
             Expr::Pos => {
@@ -732,7 +737,8 @@ impl Evaluator {
             | Expr::Tagged(_)
             | Expr::Placer(_)
             | Expr::Sibling(_)
-            | Expr::Prev(_) => match self.field_value(doc, at, e, here)? {
+            | Expr::Prev(_)
+            | Expr::This => match self.field_value(doc, at, e, here)? {
                 Leaf::Value(v, what) => match real_reading(&v) {
                     Some(f) => f,
                     None if matches!(v, Value::Str(_) | Value::Bytes { .. }) => {
@@ -803,6 +809,14 @@ impl Evaluator {
                 elem.push(j);
                 (elem, name.to_string())
             }
+            // The field a constraint is about, which `valid_of` put there
+            // before it ran the expression. Named `this` in a refusal, since
+            // that is what the template wrote and an element of a list has no
+            // other name.
+            Expr::This => match &self.this {
+                Some(p) => (p.clone(), "this".to_string()),
+                None => return fail("`this` is only a value inside a field's own constraint"),
+            },
             _ => return fail("that expression names no field"),
         };
         let info = self.value_of(doc, &path)?;
@@ -810,6 +824,33 @@ impl Evaluator {
             return fail(format!("{what} is not in this file"));
         }
         Ok(Leaf::Value(info.value, what))
+    }
+
+    /// What the field a constraint is about holds, as a whole number.
+    ///
+    /// Apart from `whole_at` and never inlined for the reason `peek_in` is:
+    /// this reads a field, and `whole_at` is open once for every expression
+    /// inside another, so what one reading takes must not sit in the frame of
+    /// every expression that reads nothing. The depth tests measure exactly
+    /// that. See [`Expr::This`](crate::template::Expr::This).
+    #[cold]
+    #[inline(never)]
+    fn this_whole<S: Source>(&mut self, doc: &Document<S>) -> R<i128> {
+        let Some(path) = self.this.clone() else {
+            return fail("`this` is only a value inside a field's own constraint");
+        };
+        let info = self.value_of(doc, &path)?;
+        if info.absent {
+            return fail("this field is not in this file");
+        }
+        match info.value.as_int() {
+            Some(v) => Ok(v),
+            // A float compared as a whole number would round, and a bound that
+            // rounds is a bound about a different number. `real_at` is where a
+            // float bound is worked out; this is the whole-number reading.
+            None if real_reading(&info.value).is_some() => fail(format!("this field {REAL_IS_NOT_WHOLE}")),
+            None => fail("this field is not a number"),
+        }
     }
 
     /// The number the node at `path` holds, for an expression that reached it

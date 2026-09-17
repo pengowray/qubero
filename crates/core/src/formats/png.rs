@@ -1,6 +1,6 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
-use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Check, Checksum, Covers, Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until, Valid};
 
 /// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
 /// one shows the number with no name.
@@ -42,6 +42,12 @@ pub(crate) fn ihdr() -> T {
             ("interlace", T::enumeration("Interlace", T::u8(), &[(0, "none"), (1, "adam7")])),
         ],
     )
+    // The two the specification writes out as lists rather than as ranges. A
+    // PNG with a seventh colour type or a bit depth of three is not a PNG with
+    // something Qubero has no name for; it is one no decoder will open, which
+    // is what the reader came to find out.
+    .field_valid("bit_depth", Valid::AnyOf(vec![E::lit(1), E::lit(2), E::lit(4), E::lit(8), E::lit(16)]))
+    .field_valid("color_type", Valid::AnyOf(vec![E::lit(0), E::lit(2), E::lit(3), E::lit(4), E::lit(6)]))
 }
 
 /// tEXt: a NUL-terminated keyword, then the text filling the rest. Both are

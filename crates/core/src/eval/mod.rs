@@ -46,6 +46,7 @@ mod stitch;
 mod tab;
 mod time;
 mod traced;
+mod valid;
 mod walk;
 
 #[cfg(test)]
@@ -60,6 +61,7 @@ pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
+pub use valid::ValidVerdict;
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
@@ -716,6 +718,12 @@ pub struct Evaluator {
     /// Dropped whole whenever the memo is, since a value that is read again
     /// may not be the value it was.
     problems: problems::Tally,
+    /// The field a constraint is being worked out about, which is what
+    /// [`Expr::This`](crate::template::Expr::This) means. Set only while
+    /// [`Evaluator::valid_of`] is running an expression, and put back to what
+    /// it was afterwards: a bound may name a field whose own reading asks
+    /// another question, and the `this` of the outer bound has to survive it.
+    this: Option<Vec<usize>>,
 }
 
 /// The running count of fields found wrong, kept as the file is read.
@@ -772,6 +780,7 @@ impl Evaluator {
             schemas: schema::Schemas::default(),
             lining: false,
             problems: problems::Tally::default(),
+            this: None,
         }
     }
 
