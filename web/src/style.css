@@ -781,7 +781,7 @@ button.welcome-crystal {
    they are drawn at the weight of the address column — quiet, still legible,
    and no longer competing with the bytes that carry something. The digits
    still read `00`, so nothing here is said by colour alone. */
-.hv-zero {
+.hv-zero:not(.hv-cur, .hv-sel, .hv-sel-weak, .hv-hl) {
   color: var(--addr);
 }
 /* A zero inside a field keeps the field's hue and gives up its weight, so a
@@ -789,24 +789,24 @@ button.welcome-crystal {
    `--zero-weight` is the most that can come off before the faintest of the
    five field colours drops under the address column's own contrast, which is
    the quietest this view already asks anyone to read. */
-.hv-zero.hv-tint {
+.hv-zero.hv-tint:not(.hv-cur, .hv-sel, .hv-sel-weak, .hv-hl) {
   color: color-mix(in srgb, var(--tint) var(--zero-weight), var(--bg));
 }
 /* Wherever the reader has actually put the byte in question — under the
    cursor, inside their selection, in the field the inspector is reading — it
-   comes back to full strength. Every one of those marks is a wash over the
-   cell, and a dimmed digit on top of one falls under 4.5:1. Receding is for
-   what is worth ignoring, and none of these are. */
-.hv-zero.hv-cur,
-.hv-zero.hv-sel,
-.hv-zero.hv-sel-weak,
-.hv-zero.hv-hl {
+   is simply left alone at full strength. Every one of those marks is a wash
+   over the cell, and a dimmed digit on top of one falls under 4.5:1. Receding
+   is for what is worth ignoring, and none of these are. */
+/* In binary a mark narrower than the whole byte is written on the bits rather
+   than on the cell, so the marked bits take their colour back while the rest
+   of the byte stays quiet — which is the only way to read a two-bit field
+   inside a zero. Not the insert caret: it draws a bar and leaves the cell
+   unwashed, so there is nothing there to read against. */
+.hv-zero > .hv-cur:not(.hv-ins),
+.hv-zero > .hv-sel,
+.hv-zero > .hv-sel-weak,
+.hv-zero > .hv-hl {
   color: var(--tint, var(--fg));
-}
-/* Except the far half of the cursor's own byte, which is written on the accent
-   and takes the page colour like any other nibble under the caret. */
-.hv-zero.hv-nib1 {
-  color: var(--bg);
 }
 .hv-end {
   outline: 1px dashed var(--muted);
