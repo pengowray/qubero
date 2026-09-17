@@ -4758,6 +4758,29 @@ fn a_node_carries_what_the_format_says_about_it() {
     assert_eq!(ev.node(&d, &[]).unwrap().doc, None);
 }
 
+/// A padding field sized to a boundary says so without anyone writing it
+/// down, and one of no bytes says why there are none.
+#[test]
+fn alignment_padding_explains_itself() {
+    let rec = T::structure(
+        "Rec",
+        vec![("len", T::u8()), ("text", T::bytes(E::field("len"))), ("padding", T::bytes(E::size_of("text").pad_to(4)))],
+    );
+    let t = Template::new("t", T::array(rec, E::lit(2)));
+    let mut ev = Evaluator::new(t);
+    // Three bytes of text: one byte of padding. Four bytes: none.
+    let d = doc(&[3, b'a', b'b', b'c', 0, 4, b'a', b'b', b'c', b'd']);
+    assert_eq!(ev.node(&d, &[0, 2]).unwrap().doc.as_deref(), Some("Alignment padding: pads text to a 4-byte boundary."));
+    assert_eq!(
+        ev.node(&d, &[1, 2]).unwrap().doc.as_deref(),
+        Some("Alignment padding: pads text to a 4-byte boundary. 0 bytes here because text already ends on one.")
+    );
+    // A field with prose of its own keeps it.
+    let said = T::structure("Rec", vec![("len", T::u8()), ("padding", T::bytes(E::field("len").pad_to(2)))]).field_doc("padding", "Reserved.");
+    let mut ev = Evaluator::new(Template::new("t", said));
+    assert_eq!(ev.node(&doc(&[1, 0]), &[1]).unwrap().doc.as_deref(), Some("Reserved."));
+}
+
 /// What an enum value means is a fact about the value, kept beside it in the
 /// definition rather than folded into the field's own prose.
 #[test]

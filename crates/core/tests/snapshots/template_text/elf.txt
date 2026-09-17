@@ -10,6 +10,8 @@ root ELF {
     9 = FreeBSD, 12 = OpenBSD, 13 = OpenVMS, 64 = ARM EABI, 97 = ARM, 255 = standalone
   }
   abi_version: u8be
+  // Reserved: the rest of the 16-byte identification, unused since the first ELF and written as
+      zeros.
   padding: bytes[7]
   header: switch class {
     1 => switch data {

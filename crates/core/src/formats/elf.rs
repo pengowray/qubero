@@ -243,6 +243,7 @@ fn ident() -> T {
             ),
         ],
     )
+    .field_doc("padding", "Reserved: the rest of the 16-byte identification, unused since the first ELF and written as zeros.")
 }
 
 fn by_endian(bits: u32) -> T {

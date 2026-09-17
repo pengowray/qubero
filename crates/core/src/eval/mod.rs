@@ -106,6 +106,32 @@ fn fail<T>(msg: impl Into<String>) -> R<T> {
     Err(EvalError::Failed(msg.into()))
 }
 
+/// Why a run of bytes sized by [`Expr::PadTo`] is there, for a field nobody
+/// wrote prose for. Padding is the one kind of field a reader meets in every
+/// other format and is told nothing about, and its size expression already
+/// says all there is to say: what it pads and to what boundary. A field of no
+/// bytes is the case that puzzles most, so that one says why there are none,
+/// but only when the size is the padding itself and not the padding cut short
+/// by the end of the file.
+fn padding_doc(ty: &Ty, size_bits: u64) -> Option<String> {
+    let Ty::Bytes(len) = ty.base() else { return None };
+    let (pad, whole) = match len {
+        Expr::PadTo { .. } => (len, true),
+        Expr::Min(a, _) if matches!(**a, Expr::PadTo { .. }) => (&**a, false),
+        _ => return None,
+    };
+    let Expr::PadTo { n, align } = pad else { return None };
+    let what = match &**n {
+        Expr::SizeOf(name) => name.to_string(),
+        _ => "the data before it".to_string(),
+    };
+    let mut text = format!("Alignment padding: pads {what} to a {align}-byte boundary.");
+    if whole && size_bits == 0 {
+        text.push_str(&format!(" 0 bytes here because {what} already ends on one."));
+    }
+    Some(text)
+}
+
 /// What a stream comes to when it is opened as a document of its own: its
 /// bytes, the trace of how they were made, what made them, what it declared
 /// they hold, and where the run it came from is: each run, for a stream joined
@@ -982,7 +1008,7 @@ impl Evaluator {
             // A `When` that is still a `When` once resolved is one the file
             // did not write: a field that is there resolves to what is inside.
             absent: matches!(r.ty, Ty::When { .. }),
-            doc: self.doc_of(path, &r.ty),
+            doc: self.doc_of(path, &r.ty, size),
         })
     }
 
@@ -1078,7 +1104,7 @@ impl Evaluator {
     /// The declaration first because it is the more specific of the two: a
     /// dozen fields may all be `Chunk`, and what this one is for is written
     /// where it was declared. See [`NodeInfo::doc`].
-    fn doc_of(&self, path: &[usize], ty: &Ty) -> Option<String> {
+    fn doc_of(&self, path: &[usize], ty: &Ty, size_bits: u64) -> Option<String> {
         let declared = path.split_last().and_then(|(&last, parent)| match self.memo.get(parent).map(|r| &r.ty) {
             Some(Ty::Struct(s)) => s.fields.get(last).and_then(|f| f.doc.clone()),
             _ => None,
@@ -1089,6 +1115,7 @@ impl Evaluator {
                 _ => None,
             })
             .map(|d| d.to_string())
+            .or_else(|| padding_doc(ty, size_bits))
     }
 
     /// What the field at `path` is machinery for, what its structure says about
