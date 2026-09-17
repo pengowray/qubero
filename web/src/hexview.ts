@@ -1085,7 +1085,14 @@ export class HexView {
       return;
     }
     if (bottom <= y + this.viewH) return;
-    const at = this.ledger.rowAtY(Math.round(Math.max(0, Math.min(this.maxScrollY, bottom - this.viewH))));
+    // Below it: bring the row's foot up to the bottom edge, but never past the
+    // row's own head. A row is as tall as the headings that start on it, and
+    // the first row of a file can carry five of them; stood on its foot, a row
+    // taller than the view has its head, the headings and its first bytes,
+    // pushed off the top. The same clamp answers a cursor moved while the view
+    // was hidden, when the height it would be stood in is nothing at all: the
+    // row goes to the top instead of off it.
+    const at = this.ledger.rowAtY(Math.round(Math.max(0, Math.min(this.maxScrollY, top, bottom - this.viewH))));
     this.topRow = at.row;
     this.topPx = at.offsetPx;
   }
