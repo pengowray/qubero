@@ -9,12 +9,15 @@
    against m. That is the same thing this app asks of a reader on every screen.
 
    Roboto Mono is the hex. Its advance is 1229/2048 of the size, the 0.6 that
-   `treemap.ts` places names by. It is loaded `block` and not `swap`,
-   because the hex view measures a drawn cell to lay out its value table, and a
-   table measured against Consolas and then redrawn in Roboto Mono is a table
-   with the columns in the wrong places. A beat with nothing on screen is the
-   better of the two. `index.html` preloads both latin files, so in practice
-   that beat is over before there is a file to draw. */
+   `treemap.ts` places names by.
+
+   The preload in `index.html` is what keeps that number true. The hex view
+   measures a cell it has drawn to lay out its value table, and a table
+   measured against Consolas and then redrawn in Roboto Mono has its columns in
+   the wrong places. Fetching the file alongside the stylesheet puts it in
+   cache long before there is a cell to measure. `block` here does not fix
+   that on its own, since a blocked face still lays out against the fallback's
+   metrics; it only keeps the swap from being watched. */
 
 @font-face {
   font-family: "Atkinson Hyperlegible Next";
