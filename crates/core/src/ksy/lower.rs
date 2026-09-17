@@ -2628,6 +2628,18 @@ types:
 	}
 
 	#[test]
+	fn an_element_that_reads_itself_is_refused_rather_than_followed_for_ever() {
+		let text = format(
+			"seq:\n  - id: n\n    type: u1\n  - id: items\n    type: 'item(items[_index].wide)'\n    repeat: expr\n    repeat-expr: n\ntypes:\n  item:\n    params:\n      - id: prev_wide\n        type: bool\n    seq:\n      - id: tag\n        type: u1\n        if: not prev_wide\n    instances:\n      wide:\n        value: 'prev_wide ? false : tag == 2'\n",
+		);
+		let template = convert_text(&text).template;
+		let doc = crate::document::Document::new(crate::source::MemSource(vec![2, 2, 7]));
+		let mut ev = crate::eval::Evaluator::new(template);
+		let err = ev.node(&doc, &[1, 0]).err().map(|e| format!("{e:?}")).unwrap_or_default();
+		assert!(err.contains("nested too deep"), "{err}");
+	}
+
+	#[test]
 	fn a_name_that_is_also_a_method_is_the_field_when_the_type_has_one() {
 		// `.value` on a type with a `value` field reads that field, and an
 		// instance that ends on a `str` is text, so a switch on it compares
