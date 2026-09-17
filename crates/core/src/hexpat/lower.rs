@@ -100,8 +100,9 @@ pub fn lower(name: &str, program: &Program) -> Result<Converted, HexpatError> {
 /// What the `#pragma` lines said.
 struct Pragmas {
 	endian: Endian,
-	/// `#pragma magic [ 4D 5A ] @ 0x00`, as bytes and an address.
-	magic: Option<(Vec<u8>, u64)>,
+	/// `#pragma magic [ 4D 5A ] @ 0x00`, as bytes and an address. The address
+	/// may be negative, which counts back from the end of the file.
+	magic: Option<(Vec<u8>, i64)>,
 	description: Option<String>,
 }
 
@@ -378,8 +379,20 @@ impl<'a> Lower<'a> {
 			// bytes again where it declares them, so this reading is a second
 			// one and is not counted twice.
 			let magic = Ty::Magic(bytes.clone());
-			let ty = if *at == 0 { magic } else { Ty::at(Expr::lit(*at as i128), magic) };
-			if *at != 0 {
+			// A negative address counts back from the end of the file, which
+			// is what a VHD footer is: the last 512 bytes.
+			let ty = match at {
+				0 => magic,
+				at if *at > 0 => Ty::at(Expr::lit(i128::from(*at)), magic),
+				at => Ty::at(Expr::SpaceSize.add(Expr::lit(i128::from(*at))), magic),
+			};
+			if *at < 0 {
+				self.report.note(
+					"0:0",
+					format!("#pragma magic @ -{:#x}", -at),
+					"a magic measured back from the end of the file is read there, and nothing claims a dropped file by it: the file sniffer matches a signature at a fixed offset from the front",
+				);
+			} else if *at != 0 {
 				self.report.note(
 					"0:0",
 					format!("#pragma magic @ {at:#x}"),
@@ -2877,7 +2890,7 @@ fn every_pragma(program: &Program) -> Vec<super::lexer::Pragma> {
 /// single `?` nibble for a byte it does not care about. A wildcard cannot be
 /// part of a fixed sequence, so the bytes before the first one are the magic
 /// and the rest is dropped; a magic that starts with one claims nothing.
-fn parse_magic(value: &str) -> Option<(Vec<u8>, u64)> {
+fn parse_magic(value: &str) -> Option<(Vec<u8>, i64)> {
 	let value = value.split("//").next().unwrap_or(value).trim().trim_end_matches(';').trim();
 	let at = value.rfind('@')?;
 	let (list, address) = value.split_at(at);
@@ -2897,12 +2910,18 @@ fn parse_magic(value: &str) -> Option<(Vec<u8>, u64)> {
 	if bytes.is_empty() {
 		return None;
 	}
+	// The address may be negative, and then it counts back from the end of the
+	// file: `vhd.hexpat` writes `@ -0x0200` for a footer 512 bytes from the end.
 	let address = address[1..].trim();
-	let address = match address.strip_prefix("0x").or_else(|| address.strip_prefix("0X")) {
-		Some(hex) => u64::from_str_radix(hex, 16).ok()?,
-		None => address.parse().ok()?,
+	let (negative, digits) = match address.strip_prefix('-') {
+		Some(rest) => (true, rest.trim()),
+		None => (false, address.strip_prefix('+').unwrap_or(address).trim()),
 	};
-	Some((bytes, address))
+	let magnitude = match digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+		Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+		None => digits.parse::<i64>().ok()?,
+	};
+	Some((bytes, if negative { -magnitude } else { magnitude }))
 }
 
 fn field_source(field: &AField) -> String {

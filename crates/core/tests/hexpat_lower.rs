@@ -466,6 +466,24 @@ fn a_structure_ends_at_the_member_that_could_not_be_placed() {
 	assert!(!render(&out.template).contains("b:"), "{}", render(&out.template));
 }
 
+/// `#pragma magic [ .. ] @ -0x200` counts back from the end of the file, which
+/// is what a VHD footer is. The bytes are read where they are; nothing claims
+/// a dropped file by them, because the sniffer matches a signature at a fixed
+/// offset from the front and has no table of end-anchored ones.
+#[test]
+fn a_magic_measured_back_from_the_end_is_read_at_the_end() {
+	let out = convert("#pragma magic [ 63 6F 6E ] @ -0x0200\nu8 first @ 0x00;\n");
+	let mut bytes = vec![0x11u8; 0x200];
+	bytes.extend_from_slice(b"con");
+	bytes.extend(std::iter::repeat_n(0u8, 0x200 - 3));
+	assert_eq!(read(&out, &bytes, &["magic"]), "magic true");
+	assert!(
+		out.report.notes.iter().any(|n| n.message.contains("measured back from the end")),
+		"{:?}",
+		out.report.notes
+	);
+}
+
 /* ------------------------------------------------------------------ */
 /* `$` and addressof(this)                                             */
 /* ------------------------------------------------------------------ */

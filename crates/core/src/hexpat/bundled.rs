@@ -47,9 +47,12 @@ pub struct Bundled {
 	/// only because another one imports it.
 	pub offered: bool,
 	/// What `#pragma magic` says a file of this format opens with, as
-	/// `(offset, bytes)`. Empty where the pattern declares none, and empty for
-	/// a magic measured back from the end of the file, which is not something
-	/// leading bytes can be matched against.
+	/// `(offset, bytes)`, counted from the front. Empty where the pattern
+	/// declares none, and empty for a magic measured back from the end of the
+	/// file: `vhd.hexpat` writes `@ -0x0200` and the converter reads those
+	/// bytes where they are, but the sniffer has no table of end-anchored
+	/// signatures to put it in, only `sniff_ends`, whose one tail rule is the
+	/// ZIP central directory and is written by hand.
 	///
 	/// This is what the template search matches a typed-in byte pattern
 	/// against. Nothing claims a dropped file by it: the built-in probes and
