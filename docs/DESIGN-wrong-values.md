@@ -5,8 +5,9 @@ is shown, without the reader clicking anything. The mark says what is wrong in
 words next to the value, in red where the format itself rules the value out
 and quietly where Qubero merely has no name for it.
 
-Status: design, no code. Written 2026-09-17 from TODO.md's "Use red for
-incorrect items" line.
+Status: steps 1 to 4 of "Order of work" landed 2026-09-18 (ac0dda5). Eager
+checksums and the table view cells are still to do. Written 2026-09-17 from
+TODO.md's "Use red for incorrect items" line.
 
 ## What exists already
 

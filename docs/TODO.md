@@ -33,7 +33,7 @@ Open:
 - [ ] `channels-structured-v2.npy` strips view: what's with all the datetime64s? Similar in `proto4-unframed-payload.pickle`.
 - [ ] Hex view: jump to top of field / previous field / next field when fields are big (e.g. `system_area 32,768 bytes · continued`).
 - [ ] Addresses: option for hex (current default) or decimal; needs its own formatting options, e.g. `4000:A002` style.
-- [ ] Use red for incorrect items (design: DESIGN-wrong-values.md): a magic number that does not match the loaded template (visible right after switching template, without clicking), bad checksums, undefined enum values, numbers out of range, unexpected NaN/Inf/-Inf, unusual NaN payloads.
+- [x] Use red for incorrect items (design: DESIGN-wrong-values.md; magic, enum, flags, floats, declared ranges landed 2026-09-18; checksums still only in the inspector): a magic number that does not match the loaded template (visible right after switching template, without clicking), bad checksums, undefined enum values, numbers out of range, unexpected NaN/Inf/-Inf, unusual NaN payloads.
 - [ ] `proto4-sklearn-pipeline.pickle` hex view: at 0xe5 the SHORT_BINUNICODE opcode is a chip but the length+string after it (`\x05numpy`) gets no chip, so it is not selectable. Many similar cases.
 - [ ] `proto4-sklearn-pipeline.pickle` hex view: 1-byte opcodes are presented as an editable text string ("SHORT_BINUNICODE"), which makes them feel like strings. Wrong affordance. Design something better, do not patch it.
 - [ ] Saving a diff of edits. Binary diffs are not very standard. Not for a generated zip; there we would let them download a zip with the original files in a folder plus a diff file, or a revert file, or a python script to undo/redo, which becomes a general mechanism.
