@@ -18,7 +18,19 @@ The same table can be read two ways, and the reader picks:
   checkbox in the tab's bar turns this on; it is remembered per session.
 
 Clicking a row always puts the file tab's cursor on that row's bytes and marks
-them, whichever lens is on. That is an action, not a column.
+them, whichever lens is on. That is an action, not a column. Shift-click and
+shift-arrow extend the selection to a range of rows; the mark then covers the
+whole range. The selected rows can be copied as tab-separated text with a
+heading line, from a `Copy {n} rows` button in the bar or Ctrl+C, so a run of
+samples or a set of records pastes into a spreadsheet as it is on screen.
+
+Columns are as wide as what has been seen in them: the heading to start with,
+widened by the longest value in the rows read so far, never narrowed, capped at
+40 characters. A table of one channel is a narrow table, not one number adrift
+in a tab-wide column. Values whose kind is a number sit against the right edge
+so their digits line up; the side is decided by the first value seen in the
+column and kept. The header shares the rows' monospace face so the character
+arithmetic holds for it too.
 
 A cell whose value is wrong (a NaN sample under a finite constraint, an
 undefined enum in a record) is marked the way DESIGN-wrong-values.md says:
@@ -40,7 +52,9 @@ count and sample rate cannot be found by any heuristic. So:
    elements are uniform records: the first few elements are composites with
    the same field names in the same order, with at least two leaf columns. One
    nested list level is flattened, so dBase's `{deleted, values[]}` becomes
-   `deleted | NAME | AGE | ...` with the element names the file gave. Nodes
+   `deleted | NAME | AGE | ...` with the element names the file gave. A shape
+   with no `columns` on a list of records (dBase's, which names the row and
+   the facts) gets its columns the same way, from the first record. Nodes
    `records.ts` already claims (SQLite, GGUF) are not offered twice; their
    plans feed the tab. Scalar runs without a shape are not offered: the list
    pane already shows those.
@@ -138,4 +152,10 @@ part null; a pending read answers pending like every other call.
 | Unnamed column | `{column word} {n}` |
 | Address columns (data lens) | `Stored at`, `Size` |
 | Address checkbox | `Show byte addresses` |
+| Copy button, nothing selected (disabled) | `Copy`; hover `Select rows to copy them as tab-separated text` |
+| Copy button, rows selected | `Copy {n} {rows}`; hover `Copy the selected rows as tab-separated text (Ctrl+C)` |
+| Copy notice | `Copied {n} {rows} as tab-separated text.` |
+| Copy refused, too many | `Selection too large to copy: {n} rows, limit 100,000.` |
+| Copy refused, still reading | `Rows are still loading. Try again in a moment.` |
+| Copy failed | `Couldn't copy to the clipboard.` |
 | Waiting cell | `Reading…` (REPORT.paneWaiting) |
