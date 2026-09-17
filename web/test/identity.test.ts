@@ -103,12 +103,16 @@ test("a template applied over a signature that does not match says so, and disag
   // the answer has to say which of the two happened.
   const png = { name: "png", label: "PNG image", sentence: null, signatureMismatch: true };
   const id = decide({ template: png, file: rule("Zip archive data, at least v2.0 to extract", ["zip"], "application/zip") });
-  const chosen = id.candidates.find((c) => c.source === "template");
-  assert.equal(chosen?.evidence, "Template PNG image was applied, but the signature does not match");
-  assert.equal(chosen?.disagrees, true);
-  // And with nothing else having answered it still disagrees: what it
-  // disagrees with is the file's own first bytes.
+  // The rules name the file, since the template did not recognise it; the
+  // template's answer is listed under that with what is wrong.
+  assert.equal(id.source, "file");
+  const listed = id.candidates.find((c) => c.source === "template");
+  assert.equal(listed?.evidence, "Template PNG image was applied, but the signature does not match");
+  assert.equal(listed?.disagrees, true);
+  // With nothing else having answered the template is all there is, and it
+  // still disagrees: what it disagrees with is the file's own first bytes.
   const alone = decide({ template: png });
+  assert.equal(alone.source, "template");
   assert.equal(alone.candidates[0]?.disagrees, true);
   // A template whose signature matched reads as it always did.
   const ok = decide({ template: { ...png, signatureMismatch: false } });

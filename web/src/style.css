@@ -292,6 +292,9 @@ button.welcome-crystal {
   white-space: nowrap;
 }
 /* With nothing to say it takes no room, and the spacer does the pushing again. */
+.tb-kind.is-warn {
+  color: var(--warn);
+}
 .tb-kind:empty {
   display: none;
 }
@@ -6465,11 +6468,19 @@ summary.kp-group-heading:hover {
    It gives way to the value when the row runs out of room: the value is what
    the row is for, and the whole reason is on the row's hover either way. */
 .rp-problem {
-  flex: 0 1 auto;
+  /* The reason takes what the value leaves, and is cut short first: the
+     value is the fact and the reason is about it, so a narrow column shows
+     `9 (unknown)` whole and `Not allowed: must be…` trailing off. */
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
+}
+.rp-value:has(+ .rp-problem) {
+  flex: 0 1 auto;
+  max-width: 50%;
 }
 /* A value the format rules out, in the one colour that means that. Only the
    value: the name, the type and the size are facts about the field and are

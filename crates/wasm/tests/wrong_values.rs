@@ -82,7 +82,7 @@ fn a_colour_type_the_format_rules_out_is_invalid_and_lists_the_allowed_ones() {
     let mut ed = editor(png(b"\x89PNG\r\n\x1a\n", 9));
     let color = node(&mut ed, &[1, 0, 2, 3]);
     assert_eq!(color["problem"]["tier"], "invalid", "{color}");
-    assert_eq!(color["problem"]["text"], "Not allowed: must be one of 0, 2, 3, 4, and 1 more", "{color}");
+    assert_eq!(color["problem"]["text"], "Not allowed: must be one of 0, 2, 3, 4, 6", "{color}");
     assert_eq!(color["value"], "9 (unknown)", "{color}");
     // The header the field sits in counts it, and so does the file.
     let ihdr = node(&mut ed, &[1, 0, 2]);

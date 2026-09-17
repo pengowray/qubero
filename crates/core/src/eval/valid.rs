@@ -323,11 +323,14 @@ fn said(e: &Expr, msg: Option<&str>) -> String {
 }
 
 /// The set a value has to be in, listing the first few and counting the rest.
+/// A set one longer than the cap is listed whole: `and 1 more` is longer than
+/// the name it stands in for.
 fn one_of(items: impl ExactSizeIterator<Item = String>) -> String {
     let n = items.len();
-    let mut listed: Vec<String> = items.take(LISTED).collect();
-    if n > LISTED {
-        listed.push(format!("and {} more", n - LISTED));
+    let shown = if n == LISTED + 1 { n } else { LISTED };
+    let mut listed: Vec<String> = items.take(shown).collect();
+    if n > shown {
+        listed.push(format!("and {} more", n - shown));
     }
     format!("Not allowed: must be one of {}", listed.join(", "))
 }
@@ -453,6 +456,8 @@ mod tests {
     fn a_set_lists_what_is_allowed_and_counts_the_rest() {
         assert_eq!(why(&bad(), 4), "Not allowed: must be one of 0, 2, 3");
         assert_eq!(why(&bad(), 5), "Not allowed: must be one of 0, 1, 2, 3, and 2 more");
+        // One past the cap is listed whole: PNG's five colour types.
+        assert_eq!(one_of(["0", "2", "3", "4", "6"].into_iter().map(String::from)), "Not allowed: must be one of 0, 2, 3, 4, 6");
     }
 
     /// The enum's own name, which is what says who has no name for the value.

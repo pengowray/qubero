@@ -305,15 +305,20 @@ export function decide(a: Answers): Identity {
   const fileAgrees = t !== null && f !== null && !isHalfMatch(f) && agrees(f, t.name, t.label);
 
   // The order of these blocks is the order of evidence, and `choose` takes
-  // the first name offered.
-  if (t !== null && t.sentence !== null) choose(t.sentence, "template");
+  // the first name offered. A template the file's own signature contradicts
+  // is the weakest evidence there is, whatever it read: it goes last, so a
+  // ZIP read with the PNG template is called a ZIP by the rules and the
+  // template's answer is listed under it with what is wrong.
+  const mismatch = t !== null && t.signatureMismatch === true;
+  if (t !== null && !mismatch && t.sentence !== null) choose(t.sentence, "template");
   if (f !== null && t !== null && !isHalfMatch(f) && (fileAgrees || WEAK_TEMPLATES.has(t.name))) choose(f.message, "file");
-  if (t !== null && templateName !== null) choose(templateName, "template");
+  if (t !== null && !mismatch && templateName !== null) choose(templateName, "template");
   if (f !== null) choose(trimmed(f), "file");
   const tool = tools[0];
   if (tool !== undefined) choose(`${nameAndVersion(tool)} (${tool.category})`, "tools");
   const best = namingMatch(sigs);
   if (best !== null) choose(best.format.label, "signature");
+  if (t !== null && templateName !== null) choose(templateName, "template");
 
   if (t !== null) {
     candidates.push({

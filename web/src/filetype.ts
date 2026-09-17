@@ -554,8 +554,14 @@ export function fileType(): FileType {
     else line = "";
     kindLabel.textContent = line;
     // The toolbar copy is cut short, so the whole sentence stays reachable
-    // on hover as well as in the dialog.
-    kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : line;
+    // on hover as well as in the dialog. A name that is only the template's,
+    // over a signature the file does not have, is in the warning colour with
+    // the reason on hover: it is the one toolbar answer that is not a finding
+    // about the file, and it is exactly the answer a reader who picked the
+    // wrong template is looking at.
+    const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
+    kindLabel.classList.toggle("is-warn", mismatch);
+    kindLabel.title = failed ? IDENTIFY_FAILED_TITLE : mismatch ? (id.candidates[0]?.evidence ?? line) : line;
     // The overview hears the name once there is one, or once the rules have
     // said there is none: an empty name before that reads as "no answer"
     // when the answer is still on its way.
@@ -596,7 +602,12 @@ export function fileType(): FileType {
       rows.push(el("p", { textContent: NO_MATCH_BODY }));
     } else {
       rows.push(el("p", { className: "dlg-sentence", textContent: id.name }));
-      rows.push(row(SOURCE_KEY, sourceText(id)));
+      // A template the file's signature contradicts is only ever chosen when
+      // nothing else has answered, and then the Source row is where the
+      // reader learns that the name above it is what the file is being read
+      // as rather than what it is.
+      const mismatch = id.source === "template" && answers.template?.signatureMismatch === true;
+      rows.push(row(SOURCE_KEY, mismatch ? el("span", { className: "dlg-disagrees", textContent: id.candidates[0]?.evidence ?? "" }) : sourceText(id)));
     }
     // What the rules know about the format, whichever answer was chosen: a
     // media type and extensions are facts about the file either way.
