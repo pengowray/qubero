@@ -765,7 +765,7 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
 
 /// Every node's children tile it: they start where it starts, they follow each
 /// other, and the last of them ends where it ends. Rows worked out from the
-/// match are worked out rather than read, and are not part of the tiling. A
+/// match, rather than read from the file, are not part of the tiling. A
 /// field the file did write is part of it even when it reads no bytes, such as
 /// the numbers of an array whose shape is 0.
 fn covers(rows: &[Row], what: &str) {
