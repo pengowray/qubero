@@ -265,7 +265,7 @@ impl Evaluator {
     /// they cover.
     pub(super) fn read_stitched<S: Source>(&self, doc: &Document<S>, stitch: &Stitch, at: u64, n: u64) -> R<Vec<u8>> {
         if at + n > stitch.len_bytes * 8 {
-            return fail("runs past the end of the joined stream");
+            return fail("field extends beyond the end of the joined stream");
         }
         let mut buf = vec![0u8; crate::bits::bytes_for(n)];
         if n == 0 {
@@ -275,7 +275,7 @@ impl Evaluator {
         let mut bytes = Vec::with_capacity((last - first) as usize);
         let mut pos = first;
         while pos < last {
-            let Some(i) = stitch.part_at(pos) else { return fail("runs past the end of the joined stream") };
+            let Some(i) = stitch.part_at(pos) else { return fail("field extends beyond the end of the joined stream") };
             let part = &stitch.parts[i];
             let take = (part.start + part.len).min(last) - pos;
             let from = pos - part.start;

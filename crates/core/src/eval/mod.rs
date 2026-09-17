@@ -1585,7 +1585,7 @@ impl Evaluator {
                 return fail("negative offset");
             }
             let Some(to) = size::bits_in(n).and_then(|bits| self.anchor_base(parent, pr.offset, anchor).checked_add(bits)) else {
-                return fail("runs past the end of its container");
+                return fail("field extends beyond its parent");
             };
             let into = if anchor == Anchor::File { 0 } else { pr.space };
             self.no_ring(parent, to, into, &what)?;
@@ -1612,7 +1612,7 @@ impl Evaluator {
             pr.offset
         } else if let Some(stride) = self.stride(doc, parent, &pr.ty)? {
             let Some(at) = stride.checked_mul(idx as u64).and_then(|bits| pr.offset.checked_add(bits)) else {
-                return fail("runs past the end of its container");
+                return fail("field extends beyond its parent");
             };
             at
         } else {
@@ -1625,7 +1625,7 @@ impl Evaluator {
         };
         let mut limit = escapes.unwrap_or(pr.limit);
         if offset > limit {
-            return fail("runs past the end of its container");
+            return fail("field extends beyond its parent");
         }
         // A pointer-list child with no size of its own runs to the next child
         // above it: its limit is that child's start.
@@ -1648,7 +1648,7 @@ impl Evaluator {
         if space != pr.space {
             limit = doc.len_bits();
             if offset > limit {
-                return fail("runs past the end of the file");
+                return fail("field extends beyond the end of the file");
             }
         }
         Ok(Some(Place { name, ty, offset, limit, space, machinery: false }))
@@ -2020,7 +2020,7 @@ impl Evaluator {
                         return fail("negative size");
                     }
                     let Some(bits) = size::bits_in(bytes).filter(|bits| offset.checked_add(*bits).is_some_and(|end| end <= limit)) else {
-                        return fail(format!("size {bytes} runs past the end of its container"));
+                        return fail(format!("field of {bytes} bytes extends beyond its parent"));
                     };
                     limit = offset + bits;
                     declared_size = Some(bits);

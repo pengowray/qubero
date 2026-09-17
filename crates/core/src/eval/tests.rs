@@ -184,17 +184,17 @@ fn a_length_too_large_to_count_in_bits_fails_rather_than_wrapping() {
     };
     for n in [0x7fff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x1fff_ffff_ffff_ffff] {
         let sized = T::sized(E::field("n"), T::u8());
-        assert_eq!(failed(sized, &[1], n), format!("size {n} runs past the end of its container"));
+        assert_eq!(failed(sized, &[1], n), format!("field of {n} bytes extends beyond its parent"));
         let sized_bits = T::SizedBits { bits: E::field("n").mul(E::lit(8)), inner: Box::new(T::u8()) };
         assert_eq!(failed(sized_bits, &[1], n), format!("{} bits run past the end of the container", n as i128 * 8));
-        assert_eq!(failed(T::bytes(E::field("n")), &[1], n), "runs past the end of its container");
-        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "runs past the end of its container");
+        assert_eq!(failed(T::bytes(E::field("n")), &[1], n), "field extends beyond its parent");
+        assert_eq!(failed(T::at(E::field("n"), T::u8()), &[1, 0], n), "field extends beyond its parent");
         // A list of them, placed by stride when eight times the size fits and
         // by walking the first element when it does not.
         let each = T::sized(E::field("n"), T::u8());
-        assert!(failed(T::array(each, E::lit(2)), &[1, 1], n).ends_with("runs past the end of its container"));
+        assert!(failed(T::array(each, E::lit(2)), &[1, 1], n).ends_with("extends beyond its parent"));
         // And a count that many elements long.
-        assert_eq!(failed(T::array(T::u16(Little), E::field("n")), &[1], n), "runs past the end of its container");
+        assert_eq!(failed(T::array(T::u16(Little), E::field("n")), &[1], n), "field extends beyond its parent");
     }
 }
 
@@ -1332,7 +1332,7 @@ fn a_real_has_no_place_in_a_size_or_a_count() {
     assert!(failure(ev.node(&d, &[2]).unwrap_err()).ends_with(hint));
     assert!(failure(ev.node(&d, &[1]).unwrap_err()).starts_with("n is a real number"));
     // And a power that is whole is the whole number it comes to.
-    assert_eq!(within(E::pow2(E::lit(4))), "runs past the end of its container");
+    assert_eq!(within(E::pow2(E::lit(4))), "field extends beyond its parent");
 }
 
 #[test]

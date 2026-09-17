@@ -788,9 +788,9 @@ impl Evaluator {
         // A row width or a heap offset in a corrupt header can be more bits
         // than a u64 counts. That is past the end of the file, and is refused
         // the way a place merely past the end is.
-        let Some(row_bits) = (image.row_bytes as u64).checked_mul(8) else { return fail("runs past the end of its container") };
+        let Some(row_bits) = (image.row_bytes as u64).checked_mul(8) else { return fail("field extends beyond its parent") };
         let Some(row_at) = index.checked_mul(row_bits).and_then(|bits| r.offset.checked_add(bits)) else {
-            return fail("runs past the end of its container");
+            return fail("field extends beyond its parent");
         };
         let row_bytes = self.read(doc, r, row_at, row_bits)?;
         let row = image.row(&row_bytes);

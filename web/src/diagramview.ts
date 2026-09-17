@@ -1043,6 +1043,8 @@ export class DiagramView {
       const line = document.createElement("div");
       line.className = cls;
       line.textContent = item.optional && cls === "dv-ssize" ? DIAGRAM.when(text) : text;
+      // A narrow box cuts the line short; the hover shows the whole of it.
+      line.title = line.textContent;
       el.append(line);
     }
     if (item.cases.length > 0) {

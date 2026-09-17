@@ -219,7 +219,7 @@ impl Evaluator {
                     if let Some(stride) = stride {
                         match self.child_count(doc, path)?.checked_mul(stride) {
                             Some(bits) => bits,
-                            None => return fail("runs past the end of its container"),
+                            None => return fail("field extends beyond its parent"),
                         }
                     } else {
                         let n = self.child_count(doc, path)?;
@@ -242,7 +242,7 @@ impl Evaluator {
             }
         };
         if r.offset.checked_add(size).is_none_or(|end| end > r.limit) {
-            return fail("runs past the end of its container");
+            return fail("field extends beyond its parent");
         }
         self.memo.get_mut(path).expect("resolved").size = Some(size);
         Ok(size)
@@ -260,7 +260,7 @@ impl Evaluator {
                     }
                     match bits_in(n) {
                         Some(bits) => bits,
-                        None => return fail("runs past the end of its container"),
+                        None => return fail("field extends beyond its parent"),
                     }
                 }
                 Ty::Str { len, .. } | Ty::TextInt { len, .. } => match len {
@@ -271,7 +271,7 @@ impl Evaluator {
                         }
                         match bits_in(n) {
                             Some(bits) => bits,
-                            None => return fail("runs past the end of its container"),
+                            None => return fail("field extends beyond its parent"),
                         }
                     }
                     // Whitespace, then the value, then the byte that ends it.

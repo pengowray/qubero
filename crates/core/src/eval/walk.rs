@@ -431,7 +431,7 @@ impl Evaluator {
             _ => return fail("not a list"),
         };
         if offset > pr.limit {
-            return fail("runs past the end of its container");
+            return fail("field extends beyond its parent");
         }
         let r = self.effective(doc, path, Name::Index(idx), ty, offset, pr.limit, pr.space)?;
         self.remember(path, r);

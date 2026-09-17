@@ -868,7 +868,7 @@ fn a_tile_placed_past_what_bits_can_count_is_refused() {
     // A row too wide: past a u64 once multiplied by eight, and only once added
     // to where the rows start.
     for width in [1 << 61, (1 << 61) - 1] {
-        assert_eq!(tile(width, 1, None).unwrap_err(), "runs past the end of its container", "NAXIS1 = {width}");
+        assert_eq!(tile(width, 1, None).unwrap_err(), "field extends beyond its parent", "NAXIS1 = {width}");
     }
     // The heap starts after the rows when no THEAP says otherwise, and here the
     // rows are more bytes than a u64 counts. Then a THEAP past a u64 once in

@@ -77,7 +77,7 @@ pub(super) fn find_unit(hay: &[u8], term: &[u8]) -> Option<usize> {
 impl Evaluator {
     pub(super) fn read<S: Source>(&self, doc: &Document<S>, r: &Resolved, at: u64, n: u64) -> R<Vec<u8>> {
         if at.checked_add(n).is_none_or(|end| end > r.limit) {
-            return fail("runs past the end of its container");
+            return fail("field extends beyond its parent");
         }
         self.read_in(doc, r.space, at, n)
     }
@@ -101,7 +101,7 @@ impl Evaluator {
         if space != 0 {
             let Some(src) = self.spaces.buf(space) else { return fail("this stream is no longer open") };
             if at + n > src.len() as u64 * 8 {
-                return fail("runs past the end of the decoded stream");
+                return fail("field extends beyond the end of the decoded stream");
             }
             crate::bits::copy_bits(src, at, &mut buf, 0, n);
             return Ok(buf);

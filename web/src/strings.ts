@@ -3049,10 +3049,10 @@ export const DIAGRAM = {
    *  Clicking it shows them. */
   more: (n: number): string => `… ${n.toLocaleString()} more field${n === 1 ? "" : "s"}`,
   moreTitle: "Show the rest of this type's fields",
-  less: "Show fewer fields",
+  less: "Show less",
   /** The same fold on a switch's box, whose rows are cases rather than fields. */
   moreCasesTitle: "Show the rest of this switch's cases",
-  lessCases: "Show fewer cases",
+  lessCases: "Show less",
   /** On a box's title. The core names a type by what the format calls it, which
    *  two types in one format may share; this says which one this is. */
   boxPath: (path: string): string => `Path: ${path}`,
@@ -3069,7 +3069,7 @@ export const DIAGRAM = {
    *  finished count leaves bare, since bare means exactly that many. */
   countSoFar: (n: number): string => `×${n.toLocaleString()}+`,
   countTitle: (n: number, what: string): string =>
-    n === 1 ? `This file has 1 ${what}` : `This file has ${n.toLocaleString()} of these: ${what}`,
+    n === 1 ? `This file has 1 of these: ${what}` : `This file has ${n.toLocaleString()} of these: ${what}`,
   /** The hover while the count is still running, the finished sentence with
    *  "at least" in it and the state after it. */
   countTitleCounting: (n: number, what: string): string =>

@@ -411,7 +411,7 @@ impl Evaluator {
             Expr::Peek { bits, endian } => {
                 let Some((offset, limit)) = here else { return fail("nothing to look at") };
                 if offset + u64::from(*bits) > limit {
-                    return fail("looks past the end of its container");
+                    return fail("field extends beyond its parent");
                 }
                 // A peek narrower than a byte is placed the same way a field
                 // of the same width would be: see `decode::lsb_offset`.
@@ -445,7 +445,7 @@ impl Evaluator {
                     offset + skip as u64
                 };
                 if from + u64::from(*bits) > limit {
-                    return fail("looks past the end of its container");
+                    return fail("field extends beyond its parent");
                 }
                 let from = match lsb_packed(*bits, *endian, from) {
                     true => match lsb_offset(*bits, from) {

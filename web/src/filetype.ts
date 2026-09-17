@@ -307,7 +307,7 @@ const READ_FROM_STUB = "Identified from the loader stub the compiler placed at t
 const SOURCE_KEY = "Source";
 /** Where the name came from, said in the dialog under it. */
 const SOURCE_TEXT: Record<Source, (detail: string) => string> = {
-  template: (label) => `Qubero's ${label} template, which read the file`,
+  template: (label) => `Qubero's ${label} template`,
   file: () => `The rules of the Unix "file" command`,
   tools: () => "The Detect It Easy signature rules",
   signature: (which) => which,
@@ -318,7 +318,7 @@ const SIGNATURE_SOURCE: Record<SigMatch["format"]["source"], string> = {
 };
 const SIGNATURE_WORD: Record<SigMatch["format"]["source"], string> = { wikidata: "Wikidata", file: "file rules" };
 const OTHERS_HEADING = "Other answers:";
-const DISAGREES = "names a different format";
+const DISAGREES = "disagrees with the answer above";
 const SIGNATURES_INTRO = "Signature matches:";
 const WIKIPEDIA_LINK = "Wikipedia";
 const SIGNATURES_CREDIT = (fetched: string): string => `Signature sources: ${fetched}.`;

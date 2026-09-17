@@ -187,9 +187,13 @@ pub(super) fn symbol_name(step: &Step) -> String {
             1 => "pixel".to_string(),
             n => format!("pixel, {n} bytes"),
         },
+        // A whole compressed block this round does not read inside.
+        StepKind::Block => "compressed block".to_string(),
+        StepKind::Table(_) => "code lengths".to_string(),
+        StepKind::Header(..) => "header field".to_string(),
         // A run the trace stopped naming, because there were too many of them
         // to name. See `codec::MAX_STEPS`.
-        _ => "codes not named one at a time".to_string(),
+        StepKind::Opaque => "unnamed codes".to_string(),
     }
 }
 
