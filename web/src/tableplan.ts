@@ -205,6 +205,62 @@ export function timeText(i: number, rate: number): string {
   return (i / rate).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
+/**
+ * How wide a column is drawn, in characters, and which way its values sit.
+ *
+ * A track list has to be one list shared by the header and every row, so the
+ * widths cannot be measured row by row the way a real table's are. They are
+ * worked out from the rows that have been read instead: the heading to start
+ * with, widened by the longest value seen and never narrowed, so a table that
+ * has settled does not shift under a scroll. The cap keeps one long string
+ * from making a column a screen wide; the rest is on hover.
+ *
+ * `numeric` is decided by the first value seen and then kept, since a column
+ * that changed sides as the rows came in would be worse than one that sits
+ * on the wrong side. Null until a value has been seen.
+ */
+export type ColumnFit = {
+  readonly width: number;
+  readonly numeric: boolean | null;
+};
+
+/** Narrower than this and a heading has nowhere to go. */
+export const FIT_MIN = 6;
+/** Wider than this and one column is most of the tab. */
+export const FIT_MAX = 40;
+
+/** A column's fit before any row has been read: its heading's width. */
+export function fitOf(header: string): ColumnFit {
+  return { width: Math.min(FIT_MAX, Math.max(FIT_MIN, header.length)), numeric: null };
+}
+
+/** The same fit after one more cell of the column has been seen. Returns the
+ *  fit it was given when nothing changed, so a caller can tell by identity. */
+export function fitCell(fit: ColumnFit, cell: RecordCell | undefined): ColumnFit {
+  if (cell === undefined) return fit;
+  const width = Math.min(FIT_MAX, Math.max(fit.width, cell.text.length));
+  const numeric = fit.numeric ?? isNumberKind(cell.kind);
+  return width === fit.width && numeric === fit.numeric ? fit : { width, numeric };
+}
+
+/** Whether a value of this kind reads as a number, which is what decides the
+ *  side of the column it sits against: digits line up on the right. The same
+ *  kinds `fieldstyle.ts` colours as numbers. */
+export function isNumberKind(kind: string): boolean {
+  return kind === "uint" || kind === "int" || kind === "float" || kind === "unset";
+}
+
+/** How wide the row-number column is, for the last row's number: a table of
+ *  twenty-six million rows needs room for the separators too. */
+export function indexWidth(count: number): number {
+  return Math.max(3, Math.max(0, count - 1).toLocaleString().length);
+}
+
+/** How wide the time column is, for the last row's time. */
+export function timeWidth(count: number, rate: number): number {
+  return Math.max(TABLE.time.length, timeText(Math.max(0, count - 1), rate).length);
+}
+
 // ----- asking the file -----
 
 /** The elements of a list, read a window at a time and kept until the file
@@ -270,9 +326,11 @@ function rowFields(doc: Doc, element: TemplateNode): TemplateNode[] | null {
 
 /** A list the template gave a shape: the columns, the row word, the rate and
  *  the facts all come from it, and a row is however many elements it says. */
-function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan {
+function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan | null {
   const columns = Math.max(1, shape.columns ?? 1);
   const elements = new Elements(doc, node.path, node.child_count);
+  const headings = shapedColumns(doc, node, shape, columns, elements);
+  if (headings === null) return null;
   return {
     path: node.path,
     forget: () => elements.clear(),
@@ -282,7 +340,7 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
     },
     count: rowCount(node.child_count, columns),
     rowWord: shape.row_word ?? childWord(node),
-    columns: shapeColumns(shape, columns),
+    columns: headings,
     columnWord: shape.column_word,
     facts: shape.facts,
     rate: shape.rate,
@@ -313,6 +371,30 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
       };
     },
   };
+}
+
+/**
+ * The columns of a shaped table.
+ *
+ * A shape that groups elements into rows names the columns itself: `columns`
+ * channels, called what `names` says. A shape that groups nothing is a claim
+ * about a list of records, dBase's, and the columns are the record's fields,
+ * read from the first element the way the heuristic reads them; the shape
+ * still says what a row is called and what describes the table. The names in
+ * the shape are used over those only when there are as many, which for a
+ * format whose fields are named in the file there never are. Null while the
+ * first element is being read.
+ */
+function shapedColumns(doc: Doc, node: TemplateNode, shape: TableShape, columns: number, elements: Elements): TableColumn[] | null {
+  if (shape.columns !== null || node.child_count === 0) return shapeColumns(shape, columns);
+  const first = elements.at(0);
+  if (first === null) return null;
+  if (!first.composite) return shapeColumns(shape, columns);
+  const fields = rowFields(doc, first);
+  if (fields === null) return null;
+  const names = flatNames(fields);
+  if (shape.names.length === names.length) return shapeColumns(shape, names.length);
+  return names.map((name) => ({ name, unit: "" }));
 }
 
 /** A table one of the format readers already builds. It answers with every row

@@ -23,7 +23,7 @@ import { el } from "./dom.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { bitSizeText, REPORT, TABLE } from "./strings.ts";
-import { timeText, type TablePlan, type TableRow } from "./tableplan.ts";
+import { fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
 /** Height of one row, which must match `--tv-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
@@ -35,6 +35,12 @@ const OVERSCAN = 8;
 /** How tall the canvas is allowed to get. Past this the scroll bar stands for
  *  the rows by ratio rather than by pixels. */
 const MAX_CANVAS = 16_000_000;
+/** How many rows one copy may hold. The text is built in memory before the
+ *  clipboard sees it, and a hundred thousand rows of samples is already a few
+ *  megabytes; a reader after more than that wants an export, not a paste. */
+const COPY_LIMIT_ROWS = 100_000;
+/** How long a notice stays up before it goes away on its own. */
+const NOTICE_MS = 5000;
 /** Whether the reader last left the address columns on. Per browser, not per
  *  table: it is a way of reading, and a reader who wants the bytes wants them
  *  for the next file too. */
@@ -57,8 +63,21 @@ export class TableView {
   /** The rows already read, by index. Cleared whenever the file changes, since
    *  that is when what one of them says can stop being true. */
   private readonly have = new Map<number, TableRow>();
+  /** How wide each data column is drawn and which side its values sit, one
+   *  per column, grown by the rows as they are read. */
+  private fits: ColumnFit[] = [];
+  /** The header cell of each data column, so a column found to be numeric can
+   *  be turned to face its values without the header being built again. */
+  private heads: HTMLElement[] = [];
   private addresses = false;
-  private selected: number | null = null;
+  /** The selected rows: the one the selection started on, and the one it was
+   *  last extended to. Equal for a single row; the range runs between them
+   *  either way round. Null when nothing is selected. */
+  private anchor: number | null = null;
+  private focus: number | null = null;
+  private readonly copyButton: HTMLButtonElement;
+  private readonly notice: HTMLElement;
+  private noticeTimer = 0;
   /** True while a pick this view made is being sent out, so the cursor move it
    *  causes does not come back and undo the scroll position. */
   private picking = false;
@@ -81,8 +100,13 @@ export class TableView {
     this.scroller.tabIndex = 0;
     this.canvas = el("div", { className: "tv-canvas" });
     this.scroller.append(this.canvas);
-    this.el.append(this.bar(opts.title), this.head, this.scroller);
+    this.copyButton = el("button", { type: "button", className: "tv-copy" });
+    this.copyButton.addEventListener("click", () => void this.copySelection());
+    this.notice = el("div", { className: "tv-notice", hidden: true });
+    this.el.append(this.bar(opts.title), this.head, this.scroller, this.notice);
+    this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
+    this.fits = plan.columns.map((_, c) => fitOf(this.headingOf(c)));
     this.layColumns();
     this.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
@@ -138,36 +162,64 @@ export class TableView {
       this.paintAgain();
     });
     bar.append(el("label", { className: "tv-addr" }, box, TABLE.addresses));
+    bar.append(this.copyButton);
     return bar;
   }
 
   // ----- the columns -----
 
   /** One track list for the header and every row, so the two line up without
-   *  either measuring the other. The data columns share what is left over, so
-   *  a table of three columns and a table of thirty both fill the tab and
-   *  neither scrolls sideways. */
+   *  either measuring the other. Every track is a fixed width: the data
+   *  columns are as wide as what has been seen in them (see `ColumnFit`), so a
+   *  table of one channel is a narrow table and not one number adrift in a
+   *  tab-wide column. */
   private layColumns(): void {
-    const time = this.plan.rate !== null && this.plan.rate > 0 ? " 12ch" : "";
-    const data = this.plan.columns.map(() => "minmax(6ch, 1fr)").join(" ");
+    const time = this.plan.rate !== null && this.plan.rate > 0 ? ` ${timeWidth(this.plan.count, this.plan.rate)}ch` : "";
+    const data = this.fits.map((fit) => `${fit.width}ch`).join(" ");
     const addresses = this.addresses ? " 12ch 9ch" : "";
-    this.el.style.setProperty("--tv-cols", `8ch${time} ${data}${addresses}`);
+    this.el.style.setProperty("--tv-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
+  }
+
+  /** The heading of one data column, unit included. */
+  private headingOf(c: number): string {
+    const column = this.plan.columns[c];
+    if (column === undefined) return "";
+    return column.unit === "" ? column.name : `${column.name} (${column.unit})`;
+  }
+
+  /** A row has been read: widen any column it does not fit, and settle the
+   *  side of any column whose first value this is. The track list is written
+   *  again only when a width changed, which is a few times at the start and
+   *  then not at all. */
+  private fitRow(row: TableRow): void {
+    let widened = false;
+    for (let c = 0; c < this.fits.length; c++) {
+      const was = this.fits[c];
+      if (was === undefined) continue;
+      const now = fitCell(was, row.cells[c]);
+      if (now === was) continue;
+      this.fits[c] = now;
+      if (now.width !== was.width) widened = true;
+      if (now.numeric !== was.numeric) this.heads[c]?.classList.toggle("tv-num", now.numeric === true);
+    }
+    if (widened) this.layColumns();
   }
 
   private fillHead(): void {
-    const cells: HTMLElement[] = [el("span", { className: "tv-th tv-index", textContent: TABLE.index })];
+    const cells: HTMLElement[] = [el("span", { className: "tv-th tv-index tv-num", textContent: TABLE.index })];
     if (this.plan.rate !== null && this.plan.rate > 0) {
-      cells.push(el("span", { className: "tv-th", textContent: TABLE.time }));
+      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.time }));
     }
-    for (const column of this.plan.columns) {
-      const text = column.unit === "" ? column.name : `${column.name} (${column.unit})`;
-      const cell = el("span", { className: "tv-th", textContent: text });
+    this.heads = this.plan.columns.map((_, c) => {
+      const text = this.headingOf(c);
+      const cell = el("span", { className: this.fits[c]?.numeric === true ? "tv-th tv-num" : "tv-th", textContent: text });
       cell.title = text;
-      cells.push(cell);
-    }
+      return cell;
+    });
+    cells.push(...this.heads);
     if (this.addresses) {
       cells.push(el("span", { className: "tv-th", textContent: TABLE.storedAt }));
-      cells.push(el("span", { className: "tv-th", textContent: TABLE.size }));
+      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.size }));
     }
     this.head.replaceChildren(...cells);
   }
@@ -242,30 +294,41 @@ export class TableView {
     const known = this.have.get(i);
     if (known !== undefined) return known;
     const row = this.plan.row(i);
-    if (row !== null) this.have.set(i, row);
+    if (row !== null) {
+      this.have.set(i, row);
+      this.fitRow(row);
+    }
     return row;
   }
 
+  /** The selected rows as a half-open range, or null when none are. */
+  private range(): { from: number; to: number } | null {
+    if (this.anchor === null || this.focus === null) return null;
+    return { from: Math.min(this.anchor, this.focus), to: Math.max(this.anchor, this.focus) + 1 };
+  }
+
   private drawRow(i: number, row: TableRow): HTMLElement {
-    const element = el("div", { className: i === this.selected ? "tv-row is-on" : "tv-row" });
-    element.append(el("span", { className: "tv-cell tv-index", textContent: i.toLocaleString() }));
+    const range = this.range();
+    const on = range !== null && i >= range.from && i < range.to;
+    const element = el("div", { className: on ? "tv-row is-on" : "tv-row" });
+    element.append(el("span", { className: "tv-cell tv-index tv-num", textContent: i.toLocaleString() }));
     const rate = this.plan.rate;
     if (rate !== null && rate > 0) {
-      element.append(el("span", { className: "tv-cell tv-time", textContent: timeText(i, rate) }));
+      element.append(el("span", { className: "tv-cell tv-time tv-num", textContent: timeText(i, rate) }));
     }
     for (let c = 0; c < this.plan.columns.length; c++) {
-      element.append(this.drawCell(row.cells[c]));
+      element.append(this.drawCell(row.cells[c], this.fits[c]?.numeric === true));
     }
     if (this.addresses) {
       element.append(el("span", { className: "tv-cell tv-at", textContent: formatOffset(row.offsetBits) }));
-      element.append(el("span", { className: "tv-cell tv-size", textContent: bitSizeText(row.sizeBits) }));
+      element.append(el("span", { className: "tv-cell tv-size tv-num", textContent: bitSizeText(row.sizeBits) }));
     }
     return element;
   }
 
   /** One cell. A cell naming another part of the file is a link to it, the
    *  same cross-reference a record table in the listing draws. */
-  private drawCell(cell: RecordCell | undefined): HTMLElement {
+  private drawCell(cell: RecordCell | undefined, numeric: boolean): HTMLElement {
     if (cell === undefined) return el("span", { className: "tv-cell" });
     const link = cell.link;
     if (link !== undefined) {
@@ -277,7 +340,7 @@ export class TableView {
       });
       return button;
     }
-    const element = el("span", { className: `tv-cell ${fieldClass(cell.kind)}`, textContent: cell.text });
+    const element = el("span", { className: `tv-cell ${fieldClass(cell.kind)}${numeric ? " tv-num" : ""}`, textContent: cell.text });
     element.title = cell.text;
     return element;
   }
@@ -303,14 +366,28 @@ export class TableView {
     if (this.picking) return;
     const at = this.plan.rowFor(bit);
     if (at === null) return;
-    this.selected = at;
+    this.anchor = at;
+    this.focus = at;
     this.scrollToRow(at);
+    this.refreshCopy();
     this.paintAgain();
   }
 
   clearSelection(): void {
-    this.selected = null;
+    this.anchor = null;
+    this.focus = null;
+    this.refreshCopy();
     this.paintAgain();
+  }
+
+  /** The copy button says how many rows it will copy, and is disabled until
+   *  there are any. */
+  private refreshCopy(): void {
+    const range = this.range();
+    const n = range === null ? 0 : range.to - range.from;
+    this.copyButton.disabled = n === 0;
+    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n, this.plan.rowWord);
+    this.copyButton.title = n === 0 ? TABLE.copyTitleNone : TABLE.copyTitle;
   }
 
   private scrollToRow(i: number): void {
@@ -334,7 +411,7 @@ export class TableView {
     if (!(target instanceof Element)) return;
     const at = target.closest<HTMLElement>(".tv-row")?.dataset["index"];
     if (at === undefined) return;
-    this.pick(Number(at));
+    this.pick(Number(at), e.shiftKey);
   }
 
   /**
@@ -346,33 +423,106 @@ export class TableView {
    * the reader was stepping through.
    */
   private onKey(e: KeyboardEvent): void {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "c") {
+      if (this.range() === null) return;
+      e.preventDefault();
+      void this.copySelection();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      this.anchor = 0;
+      this.pick(this.plan.count - 1, true);
+      return;
+    }
     const page = Math.max(1, this.onScreen() - 1);
     const by: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page };
     const move = by[e.key];
-    const from = this.selected ?? this.firstVisible();
+    const from = this.focus ?? this.firstVisible();
     if (move !== undefined) {
       e.preventDefault();
-      this.pick(Math.max(0, Math.min(this.plan.count - 1, from + move)));
+      this.pick(Math.max(0, Math.min(this.plan.count - 1, from + move)), e.shiftKey);
       return;
     }
     if (e.key === "Home") {
       e.preventDefault();
-      this.pick(0);
+      this.pick(0, e.shiftKey);
     } else if (e.key === "End") {
       e.preventDefault();
-      this.pick(this.plan.count - 1);
+      this.pick(this.plan.count - 1, e.shiftKey);
     }
   }
 
-  private pick(i: number): void {
-    const row = this.rowAt(i);
-    this.selected = i;
+  /**
+   * Select row `i`, or with `extend` make it the far end of the selection
+   * that began at the anchor, the way shift-click and shift-arrow work in
+   * every list. The file tab is sent the bytes of the whole selection: its
+   * cursor goes to the first row and the mark covers to the last.
+   */
+  private pick(i: number, extend = false): void {
+    this.focus = i;
+    if (!extend || this.anchor === null) this.anchor = i;
     this.scrollToRow(i);
+    this.refreshCopy();
     this.paintAgain();
-    if (row === null) return;
+    const range = this.range();
+    if (range === null) return;
+    const first = this.rowAt(range.from);
+    if (first === null) return;
+    // The last row of a long selection may not be read yet; then the mark
+    // reaches as far as the row the reader just picked, which is read.
+    const last = this.rowAt(range.to - 1) ?? this.rowAt(i) ?? first;
     this.picking = true;
-    this.onPick({ path: row.path, startBit: row.offsetBits, endBit: row.offsetBits + row.sizeBits });
+    this.onPick({ path: first.path, startBit: first.offsetBits, endBit: last.offsetBits + last.sizeBits });
     this.picking = false;
+  }
+
+  // ----- copying -----
+
+  /**
+   * Put the selected rows on the clipboard as tab-separated text, with a
+   * heading line: what a spreadsheet or a script takes as it is. The columns
+   * are the ones on screen, address columns included when they are shown, so
+   * what is copied is what the reader is looking at.
+   */
+  private async copySelection(): Promise<void> {
+    const range = this.range();
+    if (range === null) return;
+    const n = range.to - range.from;
+    if (n > COPY_LIMIT_ROWS) return this.say(TABLE.copyTooBig(n, COPY_LIMIT_ROWS));
+    const rate = this.plan.rate !== null && this.plan.rate > 0 ? this.plan.rate : null;
+    const head: string[] = [TABLE.index];
+    if (rate !== null) head.push(TABLE.time);
+    for (let c = 0; c < this.plan.columns.length; c++) head.push(this.headingOf(c));
+    if (this.addresses) head.push(TABLE.storedAt, TABLE.size);
+    const lines = [head.join("\t")];
+    for (let i = range.from; i < range.to; i++) {
+      const row = this.rowAt(i);
+      if (row === null) return this.say(TABLE.copyPending);
+      const cells = [String(i)];
+      if (rate !== null) cells.push(timeText(i, rate));
+      for (let c = 0; c < this.plan.columns.length; c++) cells.push(row.cells[c]?.text ?? "");
+      if (this.addresses) cells.push(formatOffset(row.offsetBits), bitSizeText(row.sizeBits));
+      lines.push(cells.join("\t"));
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+    } catch {
+      return this.say(TABLE.copyFailed);
+    }
+    this.say(TABLE.copied(n, this.plan.rowWord));
+  }
+
+  /** A message about something the reader just asked for, which goes away on
+   *  its own. */
+  private say(text: string): void {
+    this.notice.textContent = text;
+    this.notice.hidden = false;
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.hidden = true;
+    }, NOTICE_MS);
   }
 }
 

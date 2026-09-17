@@ -11,13 +11,19 @@ import type { TableShape, TemplateNode } from "../src/doc.ts";
 import {
   cellOf,
   columnNameOf,
+  FIT_MAX,
+  FIT_MIN,
+  fitCell,
+  fitOf,
   flatFields,
   flatNames,
+  indexWidth,
   rowCount,
   rowRange,
   shapeColumns,
   timeDigits,
   timeText,
+  timeWidth,
   uniformColumns,
 } from "../src/tableplan.ts";
 
@@ -165,4 +171,39 @@ test("a cell says the value, and a field of fields says how many", () => {
     cellOf(node({ name: "values", composite: true, list: true, child_count: 4, kind: "composite" })),
     { text: "4 items", kind: "composite" },
   );
+});
+
+test("a column starts as wide as its heading and only ever widens, up to the cap", () => {
+  let fit = fitOf("f");
+  assert.equal(fit.width, FIT_MIN);
+  fit = fitCell(fit, { text: "12345678", kind: "int" });
+  assert.equal(fit.width, 8);
+  // A shorter value leaves the column where it is: a settled table does not
+  // shift under a scroll.
+  assert.equal(fitCell(fit, { text: "1", kind: "int" }).width, 8);
+  assert.equal(fitCell(fit, { text: "x".repeat(200), kind: "str" }).width, FIT_MAX);
+  assert.equal(fitOf("a heading longer than any cap allows for a column").width, FIT_MAX);
+});
+
+test("the side a column sits on is decided by its first value and kept", () => {
+  const blank = fitOf("v");
+  assert.equal(blank.numeric, null);
+  const numbers = fitCell(blank, { text: "-3708", kind: "int" });
+  assert.equal(numbers.numeric, true);
+  assert.equal(fitCell(numbers, { text: "abc", kind: "str" }).numeric, true);
+  const text = fitCell(blank, { text: "NAME", kind: "str" });
+  assert.equal(text.numeric, false);
+  assert.equal(fitCell(text, { text: "7", kind: "uint" }).numeric, false);
+  // Nothing changed, so the same fit comes back and the caller can tell.
+  assert.equal(fitCell(numbers, { text: "1", kind: "int" }), numbers);
+  assert.equal(fitCell(blank, undefined), blank);
+});
+
+test("the row number and time columns are as wide as their last row", () => {
+  assert.equal(indexWidth(400), 3);
+  assert.equal(indexWidth(26_000_000), "25,999,999".length);
+  assert.equal(indexWidth(0), 3);
+  // `time (s)` is the floor: at 8 kHz the last of 400 rows is `0.04988`.
+  assert.equal(timeWidth(400, 8000), "time (s)".length);
+  assert.equal(timeWidth(26_000_000, 44100), timeText(25_999_999, 44100).length);
 });
