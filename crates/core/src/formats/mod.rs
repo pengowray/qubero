@@ -141,6 +141,7 @@ pub mod parquet_page;
 pub mod thrift;
 pub mod flatbuf;
 mod pcx;
+mod dbf;
 mod pico8;
 mod pdb;
 mod pdf;
@@ -278,6 +279,7 @@ pub use pe::pe;
 pub use pak::pak;
 pub use parquet::parquet;
 pub use pcx::pcx;
+pub use dbf::dbf;
 pub use pdb::{pdb, pdb2};
 pub use pdf::pdf;
 pub use ppdb::ppdb;
@@ -412,6 +414,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("zarrzip", |_| zarrzip()),
     ("bmp", |_| bmp()),
     ("pcx", |_| pcx()),
+    ("dbf", |_| dbf()),
     ("tga", |_| tga()),
     ("au", |_| au()),
     ("pi1", |_| pi1()),

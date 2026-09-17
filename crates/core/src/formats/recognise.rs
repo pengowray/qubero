@@ -388,6 +388,11 @@ const PROBES: &[Probe] = &[
     // have to agree with each other and with the length of the file. Late,
     // because nothing at all marks the front of one.
     Probe::Is("mat", mat::is_mat4),
+    // A dBase table, which nothing marks either: a version byte that a
+    // hundred other files could open with, and after it a header whose
+    // lengths have to agree with each other, with the 0x0D that ends the
+    // column list, and with the length of the file.
+    Probe::Is("dbf", dbf::is_dbf),
     // Last of all, because it is the weakest evidence there is: a zlib
     // stream has no signature, only two bytes that agree with each other.
     Probe::Is("zlib", |h, _| zlib::is_zlib(h)),

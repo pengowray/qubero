@@ -138,6 +138,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   tiff: "TIFF image",
   bmp: "Windows bitmap",
   pcx: "PCX image",
+  dbf: "dBase table",
   tga: "Targa image",
   qoi: "QOI image",
   pi1: "Degas PI1 image",

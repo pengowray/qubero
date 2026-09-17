@@ -151,6 +151,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   p64png: ["png"],
   bmp: ["bmp"],
   pcx: ["pcx"],
+  dbf: ["dbf"],
   pnm: ["pbm", "pgm", "ppm", "pnm", "pam"],
   ico: ["ico", "cur"],
   psd: ["psd", "psb"],
