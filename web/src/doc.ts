@@ -1348,6 +1348,7 @@ export type TypeInfo =
   | EnumInfo
   | FlagsInfo
   | FloatInfo
+  | FixedInfo
   | QuantInfo
   | XrefInfo
   | ObjStmInfo
@@ -1394,6 +1395,16 @@ export type FloatInfo = {
   readonly kind: "float";
   readonly format: string;
   readonly width: number;
+  readonly pattern: string;
+};
+
+/** A fixed-point number: how wide, how many of the low bits are below the
+ *  binary point, whether it is two's complement, and its bits in hex. */
+export type FixedInfo = {
+  readonly kind: "fixed";
+  readonly bits: number;
+  readonly frac: number;
+  readonly signed: boolean;
   readonly pattern: string;
 };
 

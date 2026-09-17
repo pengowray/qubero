@@ -623,6 +623,9 @@ enum ExplainDto {
     /// order, written in hex because a 64-bit pattern does not survive a JSON
     /// number.
     Float { format: String, width: f64, pattern: String },
+    /// A fixed-point number: its bits in hex, in value order, and where the
+    /// binary point falls.
+    Fixed { bits: f64, frac: f64, signed: bool, pattern: String },
     Quant {
         /// The block layout, as ggml's own struct is named, and how many bits
         /// one weight is worth.
@@ -1763,6 +1766,12 @@ fn explain_dto(e: Explain) -> ExplainDto {
             format: format.to_string(),
             width: f64::from(width),
             pattern: format!("{bits:0>width$x}", width = width as usize / 4),
+        },
+        Explain::Fixed { bits, frac, signed, raw } => ExplainDto::Fixed {
+            bits: f64::from(bits),
+            frac: f64::from(frac),
+            signed,
+            pattern: format!("{raw:0>width$x}", width = bits.div_ceil(4) as usize),
         },
         Explain::Flags { name, raw, bits } => ExplainDto::Flags {
             name,

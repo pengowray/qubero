@@ -27,12 +27,17 @@ pub enum Explain {
     /// Every bit of the field, from bit 0 up, whether it is set and what it is
     /// called. A bit with no name is still a bit, and is still listed.
     Flags { name: String, raw: u128, bits: Vec<FlagBit> },
-    /// A binary float, as its bits: 16, 32 or 64 of them, in value order with
-    /// the byte order already resolved, so a reader can take the sign, the
-    /// exponent and the significand apart without knowing how it was stored.
-    /// A float, by the name of its layout rather than only its width: two
-    /// sixteen-bit floats are in use and they divide their bits differently.
-    Float { format: &'static str, width: u32, bits: u64 },
+    /// A float, as its bits: 8 to 80 of them, in value order with the byte
+    /// order already resolved, so a reader can take the sign, the exponent
+    /// and the significand apart without knowing how it was stored. Named by
+    /// its layout rather than only its width: two sixteen-bit floats are in
+    /// use and they divide their bits differently, and `ibm32` is not IEEE at
+    /// all. `x87` is the eighty-bit extended float, which is why the bits are
+    /// a u128.
+    Float { format: &'static str, width: u32, bits: u128 },
+    /// A fixed-point number, as its bits: `bits` wide, the low `frac` of them
+    /// below the binary point, two's complement when `signed`.
+    Fixed { bits: u32, frac: u32, signed: bool, raw: u128 },
     /// A block of packed weights, taken apart: the block's shared scale, what
     /// it pairs with the scale, and every weight the block stands for, in the
     /// order the tensor reads them. Shown for the cursor anywhere in the block,
@@ -546,17 +551,23 @@ impl Evaluator {
             // An eight-bit float is one byte, so there is no order to it.
             Ty::F8 { e4m3 } => {
                 let raw = self.read(doc, &r, r.offset, 8)?;
-                Explain::Float { format: if *e4m3 { "e4m3" } else { "e5m2" }, width: 8, bits: raw[0] as u64 }
+                Explain::Float { format: if *e4m3 { "e4m3" } else { "e5m2" }, width: 8, bits: u128::from(raw[0]) }
             }
-            Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) => {
+            Ty::F16(e) | Ty::BF16(e) | Ty::F32(e) | Ty::F64(e) | Ty::F80(e) | Ty::IbmF32(e) => {
                 let (format, width): (&'static str, u32) = match ty {
                     Ty::F16(_) => ("binary16", 16),
                     Ty::BF16(_) => ("bfloat16", 16),
                     Ty::F32(_) => ("binary32", 32),
+                    Ty::F80(_) => ("x87", 80),
+                    Ty::IbmF32(_) => ("ibm32", 32),
                     _ => ("binary64", 64),
                 };
                 let raw = self.read(doc, &r, r.offset, u64::from(width))?;
-                Explain::Float { format, width, bits: crate::decode::read_uint(&raw, width, *e) as u64 }
+                Explain::Float { format, width, bits: crate::decode::read_uint(&raw, width, *e) }
+            }
+            Ty::Fixed { bits, frac, endian, signed } => {
+                let raw = self.read(doc, &r, r.offset, u64::from(*bits))?;
+                Explain::Fixed { bits: *bits, frac: *frac, signed: *signed, raw: crate::decode::read_uint(&raw, *bits, *endian) }
             }
             _ => return self.explain_packed(doc, path, at_bits),
         })
