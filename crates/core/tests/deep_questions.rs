@@ -18,7 +18,8 @@
 use qubero_core::document::Document;
 use qubero_core::eval::{EvalError, Evaluator, NodeInfo, Value};
 use qubero_core::source::MemSource;
-use qubero_core::template::{Endian, Expr as E, Template, Ty as T};
+use qubero_core::eval::ValidVerdict;
+use qubero_core::template::{Endian, Expr as E, Template, Ty as T, Valid};
 
 /// Links in every chain here: far past what any stack holds unguarded.
 const LINKS: usize = 10_000;
@@ -51,6 +52,27 @@ fn read_small(template: Template, bytes: Vec<u8>, path: Vec<usize>) -> (Result<N
             let doc = Document::new(MemSource(bytes));
             let mut ev = Evaluator::new(template);
             let got = ev.node(&doc, &path);
+            (got, ev.deepest_question())
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// The same, for a verdict about a field's value rather than for the field:
+/// a constraint's expression is worked out on the same stack and counted the
+/// same way, and this is what says so.
+fn judge_small(
+    template: Template,
+    bytes: Vec<u8>,
+    path: Vec<usize>,
+) -> (Result<Option<ValidVerdict>, EvalError>, usize) {
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(move || {
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(template);
+            let got = ev.valid_of(&doc, &path);
             (got, ev.deepest_question())
         })
         .unwrap()
@@ -252,4 +274,28 @@ fn the_same_chains_read_in_order_reach_the_end() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+/// A constraint's expression is worked out on the same stack a read is, and
+/// `this` reads a field, so a bound nested deep in itself has to be counted
+/// and refused like any other expression rather than taking the thread down.
+/// The read itself is fine; it is the verdict that goes deep.
+#[test]
+fn a_constraint_nested_past_the_limit_is_refused_rather_than_overflowing() {
+    let deep = |levels| {
+        let ty = T::structure("Deep", vec![("v", T::u8())])
+            .field_valid("v", Valid::Expr { expr: nested(E::This, levels), msg: None });
+        Template::new("deep", ty)
+    };
+    // Well inside the limit: the bound is worked out and holds.
+    let (got, deepest) = judge_small(deep(40), vec![7], vec![0]);
+    assert!(deepest <= LIMIT, "{deepest} expressions open at once");
+    assert_eq!(got.unwrap().map(|v| v.ok), Some(true));
+
+    // Past it: a refusal naming where it stopped, and a thread still standing.
+    let (got, _) = judge_small(deep(LIMIT + 400), vec![7], vec![0]);
+    match got {
+        Err(EvalError::Failed(why)) => assert!(why.contains("nested too deep"), "{why}"),
+        other => panic!("this verdict should be refused, not {other:?}"),
+    }
 }

@@ -45,6 +45,7 @@ mod stitch;
 mod tab;
 mod time;
 mod traced;
+mod valid;
 mod walk;
 
 #[cfg(test)]
@@ -59,6 +60,7 @@ pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
 pub use check::{Blanked, CheckInfo, Verdict};
+pub use valid::ValidVerdict;
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
