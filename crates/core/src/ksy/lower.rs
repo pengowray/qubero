@@ -25,7 +25,7 @@ use super::imports::Imports;
 use crate::report::Report;
 use super::spec::{
 	AttrSpec, ByteSource, ClassSpec, InstanceSpec, ParamSpec, ProcessSpec, RepeatSpec,
-	TypeRef, ValidSpec,
+	TypeRef, ValidSpec, ValueInstanceSpec,
 };
 use super::yaml::KsyError;
 use crate::template::Endian;
@@ -1187,7 +1187,10 @@ impl<'a> Lower<'a> {
 				let e = self
 					.lower_expr(ctx, &v.path, &v.value)
 					.map_err(|r| Gap::dropped(format!("`value`: {r}")))?;
-				let mut ty = Ty::Computed(e);
+				// An instance that names a text field is text: what a switch
+				// on it compares, and what the panel shows.
+				let text = matches!(self.landing(ctx, &v.value, 0).0, Some(attr) if matches!(attr.ty, TypeRef::Str { .. }));
+				let mut ty = if text { Ty::ComputedText(e) } else { Ty::Computed(e) };
 				if let Some(name) = &v.enum_ref {
 					let id = TypeId::plain(name.split("::").map(str::to_string).collect());
 					let bare = id.names.last().cloned().unwrap_or_default();
@@ -1300,7 +1303,26 @@ impl<'a> Lower<'a> {
 enum Seg<'a> {
 	Name(&'a str),
 	Index(&'a KExpr),
+	/// `.as<t>`: what the value so far is declared to be.
+	Cast(&'a TypeId),
 }
+
+/// The `.ksy` type a chain of names has reached, by IR name and spec, when
+/// the spec says: a field of a user type lands in that type, and a cast lands
+/// in the type it names. None where the spec is silent, as it is for a
+/// parameter, a number, or what a method answers with.
+type Land<'a> = Option<(String, &'a ClassSpec)>;
+
+/// What one name inside a type reaches: a field read from the file, or one
+/// worked out from others.
+enum Member<'a> {
+	Attr(&'a AttrSpec),
+	Value(&'a ValueInstanceSpec),
+}
+
+/// A value instance that names another that names it back would be followed
+/// for ever; this is where the following stops.
+const LANDING_DEPTH: usize = 8;
 
 /// What a chain has read so far.
 enum Acc {
@@ -1312,8 +1334,9 @@ enum Acc {
 	Done(Expr),
 }
 
-/// Split `a.b[2].c` into its base and the steps after it, dropping any cast:
-/// `.as<t>` says what a value is, and the IR reads the value either way.
+/// Split `a.b[2].c` into its base and the steps after it. A cast is kept as
+/// a step of its own: the IR reads the value either way, but `.as<t>` says
+/// which type the names after it are fields of.
 fn flatten(e: &KExpr) -> (&KExpr, Vec<Seg<'_>>) {
 	match e {
 		KExpr::Attribute { value, attr } => {
@@ -1326,7 +1349,11 @@ fn flatten(e: &KExpr) -> (&KExpr, Vec<Seg<'_>>) {
 			segs.push(Seg::Index(index));
 			(base, segs)
 		}
-		KExpr::CastToType { value, .. } => flatten(value),
+		KExpr::CastToType { value, type_name } => {
+			let (base, mut segs) = flatten(value);
+			segs.push(Seg::Cast(type_name));
+			(base, segs)
+		}
 		other => (other, Vec::new()),
 	}
 }
@@ -1493,7 +1520,7 @@ impl<'a> Lower<'a> {
 			// Something read out of a value rather than out of a field: only a
 			// cast could have come before it, and the cast is already dropped.
 			let inner = self.lower_expr(ctx, path, base)?;
-			return self.apply_segs(ctx, path, Acc::Done(inner), &segs);
+			return self.apply_segs(ctx, path, Acc::Done(inner), None, &segs);
 		};
 		match name.as_str() {
 			"_io" => {
@@ -1524,7 +1551,7 @@ impl<'a> Lower<'a> {
 				if !visible(elem).iter().any(|n| n == field) {
 					return Err(format!("`_.{field}` names no field of the element"));
 				}
-				self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), &segs[1..])
+				self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), None, &segs[1..])
 			}
 			"_root" => {
 				let root = ctx.stack[0];
@@ -1547,7 +1574,9 @@ impl<'a> Lower<'a> {
 						));
 					}
 				}
-				self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), &segs[1..])
+				let root: Land<'a> = Some((ctx.names[0].clone(), root));
+				let land = self.member_at(&root, field, 0).and_then(|(_, next)| next);
+				self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), land, &segs[1..])
 			}
 			"_parent" => self.lower_parent(ctx, path, &segs),
 			_ => {
@@ -1559,7 +1588,25 @@ impl<'a> Lower<'a> {
 						"`{name}` is worked out after this field; a template reads only what comes before"
 					));
 				}
-				self.apply_segs(ctx, path, Acc::Path(vec![name.clone()]), &segs)
+				let land = match self.find_member(ctx, name) {
+					Some(Member::Attr(a)) => self.class_of_attr(ctx, a),
+					Some(Member::Value(v)) => self.landing(ctx, &v.value, 1).1,
+					None => None,
+				};
+				// A name read out of a value instance that stands for a field
+				// is read out of that field: `name_as_info.value`, where
+				// `name_as_info` is `_root.pool[i].entry`, is the `value`
+				// field of that entry. The instance itself is a number in the
+				// IR, and nothing can be read out of a number.
+				if let (Some(Member::Value(v)), Some(Seg::Name(first))) = (Self::member_of(ctx.here(), name), segs.first()) {
+					if self.member_at(&land, first, 0).is_some() {
+						let inner = self.lower_expr(ctx, path, &v.value)?;
+						if let Some(acc) = unfinish(inner) {
+							return self.apply_segs(ctx, path, acc, land, &segs);
+						}
+					}
+				}
+				self.apply_segs(ctx, path, Acc::Path(vec![name.clone()]), land, &segs)
 			}
 		}
 	}
@@ -1612,7 +1659,7 @@ impl<'a> Lower<'a> {
 				"_parent.".repeat(depth)
 			));
 		}
-		self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), &rest[1..])
+		self.apply_segs(ctx, path, Acc::Path(vec![(*field).to_string()]), None, &rest[1..])
 	}
 
 	/// The types that place this one, `depth` levels up.
@@ -1654,15 +1701,24 @@ impl<'a> Lower<'a> {
 		None
 	}
 
+	/// `land` is the type `acc` is so far, when the spec says, and it decides
+	/// what a name that is also a method means: `x.value` reads the field
+	/// called `value` of a type that has one, and is the value itself of one
+	/// that has not.
 	fn apply_segs(
 		&mut self,
 		ctx: &Ctx<'a>,
 		path: &str,
 		mut acc: Acc,
+		mut land: Land<'a>,
 		segs: &[Seg<'_>],
 	) -> Result<Expr, String> {
 		for seg in segs {
 			acc = match seg {
+				Seg::Cast(ty) => {
+					land = self.resolve_type(ctx, ty);
+					acc
+				}
 				Seg::Index(index) => {
 					let index = self.lower_expr(ctx, path, index)?;
 					match acc {
@@ -1672,13 +1728,18 @@ impl<'a> Lower<'a> {
 						}
 					}
 				}
-				Seg::Name(name) if is_method(name) => self.apply_method(ctx, acc, name)?,
+				Seg::Name(name) if is_method(name) && self.member_at(&land, name, 0).is_none() => {
+					land = None;
+					self.apply_method(ctx, acc, name)?
+				}
 				Seg::Name(name) => match acc {
 					Acc::Path(mut p) => {
+						land = self.member_at(&land, name, 0).and_then(|(_, next)| next);
 						p.push((*name).to_string());
 						Acc::Path(p)
 					}
 					Acc::Elem { array, index, mut field } => {
+						land = self.member_at(&land, name, 0).and_then(|(_, next)| next);
 						field.push((*name).to_string());
 						Acc::Elem { array, index, field }
 					}
@@ -1689,6 +1750,85 @@ impl<'a> Lower<'a> {
 			};
 		}
 		Ok(finish(acc))
+	}
+
+	/// The type a field is declared as, when it is a user type.
+	fn class_of_attr(&self, ctx: &Ctx<'a>, attr: &'a AttrSpec) -> Land<'a> {
+		match &attr.ty {
+			TypeRef::User { name, .. } | TypeRef::UserFromBytes { name, .. } => self.resolve_type(ctx, name),
+			_ => None,
+		}
+	}
+
+	/// The member of `cls` called `name`.
+	fn member_of(cls: &'a ClassSpec, name: &str) -> Option<Member<'a>> {
+		if let Some(attr) = cls.seq.iter().find(|a| a.name() == name) {
+			return Some(Member::Attr(attr));
+		}
+		cls.instances.iter().find(|(n, _)| n == name).map(|(_, instance)| match instance {
+			InstanceSpec::Parse(p) => Member::Attr(&p.attr),
+			InstanceSpec::Value(v) => Member::Value(v),
+		})
+	}
+
+	/// The member of the type at `land` called `name`, and the field it ends
+	/// on and the type it lands in. A value instance is followed to where its
+	/// own expression lands, so `size.value` on a varint type is the number
+	/// the varint's `value` instance works out.
+	fn member_at(&self, land: &Land<'a>, name: &str, depth: usize) -> Option<(Option<&'a AttrSpec>, Land<'a>)> {
+		let (ir, cls) = land.as_ref()?;
+		let member = Self::member_of(cls, name)?;
+		let inner = self.ctx_for(ir, cls);
+		Some(match (member, inner) {
+			(Member::Attr(attr), Some(inner)) => (Some(attr), self.class_of_attr(&inner, attr)),
+			(Member::Attr(attr), None) => (Some(attr), None),
+			(Member::Value(v), Some(inner)) => self.landing(&inner, &v.value, depth + 1),
+			(Member::Value(_), None) => (None, None),
+		})
+	}
+
+	/// The field a chain of names ends on, and the type it lands in, as far
+	/// as the spec says. What decides whether an instance is text: one whose
+	/// value is `_root.pool[i].entry.as<utf8_info>.value` ends on the `value`
+	/// field of `utf8_info`, and if that is a `str` the instance is one too.
+	fn landing(&self, ctx: &Ctx<'a>, e: &KExpr, depth: usize) -> (Option<&'a AttrSpec>, Land<'a>) {
+		if depth > LANDING_DEPTH {
+			return (None, None);
+		}
+		let (base, segs) = flatten(e);
+		let KExpr::Name(name) = base else { return (None, None) };
+		let (mut attr, mut land): (Option<&'a AttrSpec>, Land<'a>) = match name.as_str() {
+			"_root" => (None, Some((ctx.names[0].clone(), ctx.stack[0]))),
+			"_" | "_parent" | "_io" | "_index" | "_sizeof" => return (None, None),
+			plain => match self.find_member(ctx, plain) {
+				Some(Member::Attr(a)) => (Some(a), self.class_of_attr(ctx, a)),
+				Some(Member::Value(v)) => self.landing(ctx, &v.value, depth + 1),
+				None => return (None, None),
+			},
+		};
+		for seg in &segs {
+			match seg {
+				Seg::Cast(ty) => land = self.resolve_type(ctx, ty),
+				// One element of a list is what the list's field is declared as.
+				Seg::Index(_) => {}
+				Seg::Name(n) => {
+					(attr, land) = match self.member_at(&land, n, depth) {
+						Some(found) => found,
+						None => (None, None),
+					};
+				}
+			}
+		}
+		(attr, land)
+	}
+
+	/// `find_attr`, but finding a value instance as well.
+	fn find_member(&self, ctx: &Ctx<'a>, name: &str) -> Option<Member<'a>> {
+		let mut classes: Vec<&'a ClassSpec> = ctx.stack.clone();
+		if let Some(elem) = ctx.elem {
+			classes.push(elem);
+		}
+		classes.iter().rev().find_map(|cls| Self::member_of(cls, name))
 	}
 
 	/// What a method on a field means in the IR.
@@ -1819,6 +1959,23 @@ impl<'a> Lower<'a> {
 			TypeRef::Switch(_) => None,
 		}
 	}
+}
+
+/// The chain an IR path expression came from, so more names can go on the end
+/// of it. None for anything that is not a path.
+fn unfinish(e: Expr) -> Option<Acc> {
+	let strings = |p: &[String]| p.to_vec();
+	Some(match e {
+		Expr::Ref(name) => Acc::Path(vec![name.to_string()]),
+		Expr::Within(p) => Acc::Path(strings(&p)),
+		Expr::Elem { array, index, field } => {
+			Acc::Elem { array: vec![array.to_string()], index: *index, field: strings(&field) }
+		}
+		Expr::ElemWithin { path, index, field } => {
+			Acc::Elem { array: strings(&path), index: *index, field: strings(&field) }
+		}
+		_ => return None,
+	})
 }
 
 fn finish(acc: Acc) -> Expr {
@@ -2444,6 +2601,46 @@ types:
 		assert!(out.contains("type inner(n) (machinery len) {"), "{out}");
 		assert!(out.contains("len: computed n"), "{out}");
 		assert!(out.contains("x: bytes[len]"), "{out}");
+	}
+
+	#[test]
+	fn an_element_reads_the_element_before_it_through_a_parameter() {
+		// A Java constant pool: an entry after a long or a double is a slot
+		// nothing is written in, and each entry learns that from the one
+		// before it. The argument is worked out in the root's scope and
+		// stands inside the element, so it names the list it is an element of.
+		let text = format(
+			"seq:\n  - id: n\n    type: u1\n  - id: items\n    type: 'item(_index != 0 ? items[_index - 1].wide : false)'\n    repeat: expr\n    repeat-expr: n\ntypes:\n  item:\n    params:\n      - id: prev_wide\n        type: bool\n    seq:\n      - id: tag\n        type: u1\n        if: not prev_wide\n    instances:\n      wide:\n        value: 'prev_wide ? false : tag == 2'\n",
+		);
+		let out = rendered(&text);
+		assert!(out.contains("prev_wide: computed index != 0 ? items[index - 1].wide : 0"), "{out}");
+		assert!(gaps(&text).is_empty(), "{:?}", gaps(&text));
+
+		// Three entries in three bytes: the first is wide, so the second is
+		// the empty slot after it and takes nothing, and the third reads on.
+		let template = convert_text(&text).template;
+		let doc = crate::document::Document::new(crate::source::MemSource(vec![3, 2, 7, 5]));
+		let mut ev = crate::eval::Evaluator::new(template);
+		let sizes: Vec<u64> = (0..3).map(|i| ev.node(&doc, &[1, i]).unwrap().size_bits / 8).collect();
+		assert_eq!(sizes, vec![1, 0, 1]);
+		assert_eq!(ev.node(&doc, &[1, 2]).unwrap().offset_bits / 8, 2);
+		assert_eq!(ev.node(&doc, &[]).unwrap().size_bits / 8, 3);
+	}
+
+	#[test]
+	fn a_name_that_is_also_a_method_is_the_field_when_the_type_has_one() {
+		// `.value` on a type with a `value` field reads that field, and an
+		// instance that ends on a `str` is text, so a switch on it compares
+		// text. On a type whose `value` is an instance the same chain reads
+		// the instance. Through an instance that stands for a field, the
+		// names after it read inside that field.
+		let out = rendered(&format(
+			"seq:\n  - id: name\n    type: label\n  - id: count\n    type: varint\n  - id: body\n    size: 2\n    type:\n      switch-on: name.value\n      cases:\n        '\"ab\"': two\ninstances:\n  as_text:\n    value: name.value\n  info:\n    value: name\n  via_info:\n    value: info.value\n  n:\n    value: count.value\ntypes:\n  label:\n    seq:\n      - id: len\n        type: u1\n      - id: value\n        type: str\n        size: len\n  varint:\n    seq:\n      - id: raw\n        type: u1\n    instances:\n      value:\n        value: raw * 2\n  two:\n    seq:\n      - id: x\n        type: u2\n",
+		));
+		assert!(out.contains("as_text: computed text name.value"), "{out}");
+		assert!(out.contains("via_info: computed text name.value"), "{out}");
+		assert!(out.contains("n: computed count.value"), "{out}");
+		assert!(out.contains("body: match name.value {\"ab\" => sized(2) two"), "{out}");
 	}
 
 	#[test]
