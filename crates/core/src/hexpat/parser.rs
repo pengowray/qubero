@@ -415,7 +415,7 @@ impl<'a, 'r> Parser<'a, 'r> {
 	fn statement(&mut self, kind: StatementKind, from: usize) -> Statement {
 		let pos = self.tokens.get(from).map_or(Pos::default(), |token| token.pos);
 		let (start, end, text) = self.span_text(from, self.at);
-		Statement { kind, pos, span: (start, end), text }
+		Statement { kind, pos, span: (start, end), text, assign: None }
 	}
 
 	/* ---------------------------------------------------------------- */
@@ -1163,22 +1163,52 @@ impl<'a, 'r> Parser<'a, 'r> {
 	/// Read one assignment, whatever shape it has, as an opaque statement.
 	fn assignment(&mut self) -> Res<Statement> {
 		let from = self.at;
-		if self.is_op(0, Op::Dollar) && (self.is_op(1, Op::Assign) || self.compound_op_at(1).is_some()) {
+		let target = if self.is_op(0, Op::Dollar) && (self.is_op(1, Op::Assign) || self.compound_op_at(1).is_some()) {
 			self.next();
+			AssignTarget::Dollar
 		} else if self.is_ident(0) && (self.is_op(1, Op::Assign) || self.compound_op_at(1).is_some()) {
-			self.next();
+			AssignTarget::Name(self.ident()?)
 		} else {
 			self.rvalue()?;
-		}
-		if let Some(width) = self.compound_op_at(0) {
+			AssignTarget::Other
+		};
+		let op = if let Some(width) = self.compound_op_at(0) {
+			let op = self.compound_binop_at(0);
 			for _ in 0..width {
 				self.next();
 			}
+			op
 		} else if !self.op(Op::Assign) {
 			return Err(self.error_here(format!("Expected value after '=' in variable assignment, got {}.", self.got())));
+		} else {
+			None
+		};
+		let value = self.expr()?;
+		let mut statement = self.statement(StatementKind::Assign, from);
+		statement.assign = Some(Assign { target, op, value });
+		Ok(statement)
+	}
+
+	/// Which operator a compound assignment applies, for the widths
+	/// [`Self::compound_op_at`] recognises.
+	fn compound_binop_at(&self, ahead: usize) -> Option<BinOp> {
+		if self.is_op(ahead, Op::Less) && self.is_op(ahead + 1, Op::Less) {
+			return Some(BinOp::Shl);
 		}
-		self.expr()?;
-		Ok(self.statement(StatementKind::Assign, from))
+		if self.is_op(ahead, Op::Greater) && self.is_op(ahead + 1, Op::Greater) {
+			return Some(BinOp::Shr);
+		}
+		Some(match self.tok(ahead) {
+			Tok::Op(Op::Plus) => BinOp::Add,
+			Tok::Op(Op::Minus) => BinOp::Sub,
+			Tok::Op(Op::Star) => BinOp::Mul,
+			Tok::Op(Op::Slash) => BinOp::Div,
+			Tok::Op(Op::Percent) => BinOp::Rem,
+			Tok::Op(Op::BitOr) => BinOp::BitOr,
+			Tok::Op(Op::BitAnd) => BinOp::BitAnd,
+			Tok::Op(Op::BitXor) => BinOp::BitXor,
+			_ => return None,
+		})
 	}
 
 	/* ---------------------------------------------------------------- */
@@ -1926,6 +1956,23 @@ impl<'a, 'r> Parser<'a, 'r> {
 			def.attrs = self.trailing_attributes()?;
 			self.semicolon()?;
 			return Ok(vec![Decl::Function(def)]);
+		}
+
+		// `const u32 X = 5;` at the top level is a global, the same as one
+		// without the `const`. It used to fall through to the imperative
+		// statements below and arrive as a local of a function, which it is
+		// not: the reference declares it in the global scope, and the rest of
+		// the pattern names it.
+		if self.is_kw(0, Keyword::Const) {
+			self.next();
+			let decl = self.placement(doc, pos)?;
+			if let Decl::Placement(field) = &decl {
+				if field.placement.is_some() {
+					return Err(self.error_prev("Cannot mark placed variable as 'const'."));
+				}
+			}
+			self.semicolon()?;
+			return Ok(vec![decl]);
 		}
 
 		if self.is_kw(0, Keyword::BigEndian) || self.is_kw(0, Keyword::LittleEndian) || self.is_any_type(0) {

@@ -26,7 +26,7 @@ use crate::template::{
 };
 
 use super::ast::{
-	ArraySize, Attribute, BitEntry, BitSign, CasePattern, CaseValue, Decl, EnumEntry, Field as AField,
+	ArraySize, AssignTarget, Attribute, BitEntry, BitSign, CasePattern, CaseValue, Decl, EnumEntry, Field as AField,
 	FieldKind, MatchArm, Member, NamespaceDecl, Program, StatementKind, TemplateArg, TemplateParam,
 	TypeKind, TypeRef,
 };
@@ -83,6 +83,7 @@ pub fn lower(name: &str, program: &Program) -> Result<Converted, HexpatError> {
 		blocks: 0,
 		depth: 0,
 		resolving: HashSet::new(),
+		folded: HashSet::new(),
 	};
 
 	let pragmas = lower.read_pragmas(program)?;
@@ -264,6 +265,10 @@ struct Lower<'a> {
 	/// Enumerations being read, so that an entry naming its own enumeration
 	/// stops rather than reading it again from the top.
 	resolving: HashSet<String>,
+	/// Assignments already said as part of a local one `if` settles, by the
+	/// address of the statement, so the walk through the `if`'s own members
+	/// passes over them rather than reporting the same thing twice.
+	folded: HashSet<usize>,
 }
 
 /// What happened to one field that could not be said.
@@ -733,7 +738,16 @@ impl<'a> Lower<'a> {
 		fields: &mut Vec<Field>,
 		machinery: &mut Vec<Arc<str>>,
 	) {
-		for member in members {
+		// A local the pattern declares and then sets in the two halves of one
+		// `if` is a value that depends on the condition and on nothing else,
+		// which the IR says with `Cond`. Working that out before the walk is
+		// what lets the declaration wait until after the `if`, where the value
+		// is settled, and lets the assignments themselves pass without a gap.
+		let folded = self.conditional_locals(members);
+		for (index, member) in members.iter().enumerate() {
+			if folded.decls.contains_key(&index) {
+				continue;
+			}
 			// A member that should have read bytes and could not moves
 			// everything after it, so the structure ends there rather than
 			// carrying on at an offset nothing in the file agrees with.
@@ -761,7 +775,14 @@ impl<'a> Lower<'a> {
 					}
 				}
 				Member::If { cond, then, otherwise, pos } => {
-					self.conditional(cond, then, otherwise, *pos, ns, endian, types, fields, machinery)
+					let carried_on =
+						self.conditional(cond, then, otherwise, *pos, ns, endian, types, fields, machinery);
+					if let Some(waiting) = folded.at_if.get(&index) {
+						for decl in waiting {
+							self.folded_local(members, cond, *decl, fields, machinery);
+						}
+					}
+					carried_on
 				}
 				Member::Match { scrutinee, arms, pos } => {
 					self.match_member(scrutinee, arms, *pos, ns, endian, types, fields, machinery)
@@ -778,22 +799,7 @@ impl<'a> Lower<'a> {
 					self.top_call(path, args, *pos);
 					true
 				}
-				Member::Statement(statement) => {
-					self.report.gap(
-						self.at(statement.pos),
-						first_line(&statement.text),
-						format!("{}, which the converter does not run", kind_name(statement.kind)),
-					);
-					// An assignment or a loop reads nothing of its own, so what
-					// comes after it is still where the file says it is.
-					matches!(
-						statement.kind,
-						StatementKind::Assign
-							| StatementKind::Call | StatementKind::Return
-							| StatementKind::Break | StatementKind::Continue
-							| StatementKind::Local
-					)
-				}
+				Member::Statement(statement) => self.statement_member(statement, fields, machinery),
 			};
 			if !carried_on {
 				self.report.gap(
@@ -803,6 +809,141 @@ impl<'a> Lower<'a> {
 				);
 				break;
 			}
+		}
+	}
+
+	/// One statement inside a structure. Two shapes of assignment to `$` are
+	/// exact and the rest are gaps.
+	///
+	/// `$ += e` moves the cursor forward by `e` bytes and nothing else, which
+	/// is what `padding[e]` says, so it lowers to the same bytes read and not
+	/// shown. `$ = e` and `$ -= e` put the cursor somewhere the structure
+	/// cannot follow: the reference sizes a structure as the distance from
+	/// where it started to where the cursor ended
+	/// (`ASTNodeStruct::createPatterns`), and an `At` in the IR advances
+	/// nothing, so wrapping the rest of the structure in one would read the
+	/// right bytes and report the wrong length. The structure ends there
+	/// instead.
+	fn statement_member(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+	) -> bool {
+		if self.folded.contains(&(statement as *const _ as usize)) {
+			return true;
+		}
+		let path = self.at(statement.pos);
+		let source = first_line(&statement.text);
+		if let Some(assign) = &statement.assign {
+			if assign.target == AssignTarget::Dollar {
+				if assign.op == Some(BinOp::Add) {
+					return match self.expr(&assign.value) {
+						Ok(value) => {
+							let name = unique("padding", fields);
+							self.report.became(path, source, "bytes skipped, read and not shown");
+							machinery.push(Arc::from(name.as_str()));
+							self.stack.last_mut().expect("a frame").names.push(name.clone());
+							fields.push(named_field(&name, Ty::bytes(value), false));
+							true
+						}
+						Err(gap) => {
+							self.report.gap(path, source, gap.reason);
+							false
+						}
+					};
+				}
+				self.report.gap(
+					path,
+					source,
+					"the cursor moved to an address of its own, and a structure in the IR reads straight through from where it started",
+				);
+				return false;
+			}
+		}
+		self.report.gap(path, source, format!("{}, which the converter does not run", kind_name(statement.kind)));
+		// An assignment to a name, or a loop, reads nothing of its own, so what
+		// comes after it is still where the file says it is.
+		matches!(
+			statement.kind,
+			StatementKind::Assign
+				| StatementKind::Call | StatementKind::Return
+				| StatementKind::Break | StatementKind::Continue
+				| StatementKind::Local
+		)
+	}
+
+	/// Which locals of this level are settled by exactly one `if`, and which
+	/// members the walk should therefore pass over.
+	///
+	/// The shape looked for is one declaration with a value, and then one `if`
+	/// among the later members whose two halves hold every assignment to that
+	/// name, at most one in each half and directly in it. Anything else --
+	/// an assignment in a loop, in a nested `if`, in two different `if`s --
+	/// stays what it was, a value that changes as the pattern runs.
+	fn conditional_locals(&mut self, members: &'a [Member]) -> Folded {
+		let mut out = Folded::default();
+		for (index, member) in members.iter().enumerate() {
+			let Member::Field(field) = member else { continue };
+			if field.kind != FieldKind::Local || field.init.is_none() || !field.init_list.is_empty() {
+				continue;
+			}
+			if field.names.len() != 1 {
+				continue;
+			}
+			let name = field.name();
+			let Some(fold) = fold_of(members, index, name) else { continue };
+			for (then_half, at) in fold.assignments() {
+				if let Some(statement) = branch_statement(&members[fold.at], then_half, at) {
+					self.folded.insert(statement as *const _ as usize);
+				}
+			}
+			out.at_if.entry(fold.at).or_default().push(index);
+			out.decls.insert(index, fold);
+		}
+		out
+	}
+
+	/// The `Cond` a folded local became, emitted where the `if` ends because
+	/// that is where the pattern has settled the value.
+	fn folded_local(
+		&mut self,
+		members: &'a [Member],
+		cond: &super::expr::Expr,
+		decl: usize,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+	) {
+		let Member::Field(field) = &members[decl] else { return };
+		let name = field.name().to_string();
+		let source = field_source(field);
+		let path = self.at(field.pos);
+		let Some(fold) = fold_of(members, decl, &name) else { return };
+		let lowered: R<Expr> = (|| {
+			let cond = self.expr(cond)?;
+			let start = self.expr(field.init.as_ref().expect("a value"))?;
+			let then = match fold.then {
+				Some(at) => self.expr(assigned_value(&members[fold.at], true, at).expect("an assignment"))?,
+				None => start.clone(),
+			};
+			let otherwise = match fold.otherwise {
+				Some(at) => self.expr(assigned_value(&members[fold.at], false, at).expect("an assignment"))?,
+				None => start,
+			};
+			Ok(Expr::cond(cond, then, otherwise))
+		})();
+		match lowered {
+			Ok(value) => {
+				self.report.became(
+					path,
+					source,
+					"a value the condition of the `if` after it settles, worked out and never read",
+				);
+				machinery.push(Arc::from(name.as_str()));
+				self.stack.last_mut().expect("a frame").names.push(name.clone());
+				fields.push(named_field(&name, Ty::computed(value), false));
+			}
+			Err(gap) => self.report.gap(path, source, gap.reason),
 		}
 	}
 
@@ -2601,21 +2742,132 @@ fn is_machinery(field: &AField) -> bool {
 	field.attrs.iter().any(|a| a.path == "hidden")
 }
 
-/// Whether anything later in this structure assigns to `name`.
+/// Whether anything in these members assigns to `name`.
 fn assigned_later(members: &[Member], name: &str) -> bool {
-	members.iter().any(|member| match member {
-		Member::Statement(statement) => {
-			statement.kind == StatementKind::Assign && starts_with_name(&statement.text, name)
-		}
+	members.iter().any(|member| assigns_to(member, name))
+}
+
+/// Whether this member, or anything inside it, assigns to `name`.
+fn assigns_to(member: &Member, name: &str) -> bool {
+	match member {
+		Member::Statement(statement) => is_assignment_to(statement, name),
 		Member::If { then, otherwise, .. } => assigned_later(then, name) || assigned_later(otherwise, name),
 		Member::Match { arms, .. } => arms.iter().any(|arm| assigned_later(&arm.body, name)),
 		Member::Try { body, catch, .. } => assigned_later(body, name) || assigned_later(catch, name),
 		_ => false,
-	})
+	}
 }
 
-fn starts_with_name(text: &str, name: &str) -> bool {
-	let text = text.trim_start();
-	text.starts_with(name)
-		&& text[name.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+fn is_assignment_to(statement: &super::ast::Statement, name: &str) -> bool {
+	match &statement.assign {
+		Some(assign) => assign.target == AssignTarget::Name(name.to_string()),
+		None => false,
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Locals one `if` settles                                             */
+/* ------------------------------------------------------------------ */
+
+/// Which members of one level the walk passes over, and what it emits instead.
+#[derive(Default)]
+struct Folded {
+	/// Local declarations that wait for their `if`, by member index.
+	decls: HashMap<usize, Fold>,
+	/// Those declarations again, by the index of the `if` that settles each.
+	at_if: HashMap<usize, Vec<usize>>,
+}
+
+/// The statement one half of a folded `if` holds.
+fn branch_statement(member: &Member, then_half: bool, at: usize) -> Option<&super::ast::Statement> {
+	let Member::If { then, otherwise, .. } = member else { return None };
+	let half = if then_half { then } else { otherwise };
+	match half.get(at) {
+		Some(Member::Statement(statement)) => Some(statement),
+		_ => None,
+	}
+}
+
+/// Where the two halves of the value of one folded local are written.
+#[derive(Clone)]
+struct Fold {
+	/// The index of the `if` that settles the value.
+	at: usize,
+	/// The assignment in the `then` half, as an index into its members.
+	then: Option<usize>,
+	/// The same for the `else` half.
+	otherwise: Option<usize>,
+}
+
+/// The `if` that settles `name`, if exactly one does and nothing else touches
+/// it.
+fn fold_of(members: &[Member], decl: usize, name: &str) -> Option<Fold> {
+	let mut found: Option<Fold> = None;
+	for (index, member) in members.iter().enumerate() {
+		if index == decl {
+			continue;
+		}
+		if !assigns_to(member, name) {
+			continue;
+		}
+		// Only an `if`, and only one of them, and only assignments written
+		// straight into one of its halves.
+		let Member::If { then, otherwise, .. } = member else { return None };
+		if found.is_some() || index < decl {
+			return None;
+		}
+		let this = branch_assignment(then, name)?;
+		let other = branch_assignment(otherwise, name)?;
+		if this.is_none() && other.is_none() {
+			return None;
+		}
+		found = Some(Fold { at: index, then: this, otherwise: other });
+	}
+	found
+}
+
+/// The one assignment to `name` written directly in a block, if the block has
+/// at most one and holds no other mention of it.
+fn branch_assignment(members: &[Member], name: &str) -> Option<Option<usize>> {
+	let mut at = None;
+	for (index, member) in members.iter().enumerate() {
+		if !assigns_to(member, name) {
+			continue;
+		}
+		let Member::Statement(statement) = member else { return None };
+		// A compound assignment reads the value it is changing, and the value
+		// before the `if` is the one the IR would have to read.
+		if statement.assign.as_ref().is_none_or(|assign| assign.op.is_some()) {
+			return None;
+		}
+		if at.is_some() {
+			return None;
+		}
+		at = Some(index);
+	}
+	Some(at)
+}
+
+/// The value one half of a folded `if` writes.
+fn assigned_value(member: &Member, then_half: bool, at: usize) -> Option<&super::expr::Expr> {
+	let Member::If { then, otherwise, .. } = member else { return None };
+	let half = if then_half { then } else { otherwise };
+	match half.get(at) {
+		Some(Member::Statement(statement)) => statement.assign.as_ref().map(|assign| &assign.value),
+		_ => None,
+	}
+}
+
+impl Fold {
+	/// Where in the `if`'s two halves this fold's assignments are written.
+	fn assignments(&self) -> Vec<(bool, usize)> {
+		let mut out = Vec::new();
+		if let Some(at) = self.then {
+			out.push((true, at));
+		}
+		if let Some(at) = self.otherwise {
+			out.push((false, at));
+		}
+		out
+	}
 }

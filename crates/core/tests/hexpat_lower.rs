@@ -466,6 +466,102 @@ fn a_structure_ends_at_the_member_that_could_not_be_placed() {
 	assert!(!render(&out.template).contains("b:"), "{}", render(&out.template));
 }
 
+/* ------------------------------------------------------------------ */
+/* Assignments                                                         */
+/* ------------------------------------------------------------------ */
+
+/// `$ += n` moves the cursor forward and reads nothing, which is what
+/// `padding[n]` says, so the two lower the same way and the field after it is
+/// where the pattern puts it.
+#[test]
+fn a_forward_cursor_move_is_the_bytes_it_skips() {
+	let out = clean("struct S { u8 first; $ += 2; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[1, 0xaa, 0xbb, 9], &["s", "first"]), "1");
+	assert_eq!(read(&out, &[1, 0xaa, 0xbb, 9], &["s", "last"]), "9");
+	let padded = clean("struct S { u8 first; padding[2]; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(render(&out.template), render(&padded.template));
+}
+
+/// The skipped length may be worked out from the fields before it, the same as
+/// any other `padding`.
+#[test]
+fn a_cursor_move_may_skip_a_length_the_file_states() {
+	let out = clean("struct S { u8 skip; $ += skip; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[3, 0, 0, 0, 7], &["s", "last"]), "7");
+}
+
+/// `$ = e` and `$ -= e` put the cursor where the structure cannot follow. The
+/// reference sizes a structure as the distance from where it started to where
+/// the cursor ended, and an `At` in the IR advances nothing, so a structure
+/// wrapped in one would read the right bytes and report the wrong length. The
+/// structure ends at the move instead, and the report says both things.
+#[test]
+fn a_cursor_move_the_ir_cannot_follow_ends_the_structure() {
+	for text in [
+		"struct S { u8 first; $ = 0x10; u8 last; };\nS s @ 0x00;\n",
+		"struct S { u8 first; $ -= 1; u8 last; };\nS s @ 0x00;\n",
+	] {
+		let out = convert(text);
+		let reasons = gap_reasons(&out);
+		assert!(reasons.contains("the cursor moved to an address of its own"), "{text}\n{reasons}");
+		assert!(reasons.contains("the rest of the structure"), "{text}\n{reasons}");
+		assert!(!render(&out.template).contains("last"), "{text}\n{}", render(&out.template));
+	}
+}
+
+/// A local set in the two halves of one `if` and nowhere else is a value that
+/// depends on the condition and on nothing else, which `Cond` says exactly. It
+/// is emitted where the `if` ends, because that is where the pattern has
+/// settled it.
+#[test]
+fn a_local_two_halves_of_one_if_settle_is_a_choice_between_them() {
+	let out = clean(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 0;\n\
+		 \tif (kind == 1) {\n\
+		 \t\tsize = 4;\n\
+		 \t} else {\n\
+		 \t\tsize = 2;\n\
+		 \t}\n\
+		 \tu8 body[size];\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert_eq!(read(&out, &[1, 1, 2, 3, 4], &["s", "size"]), "4");
+	assert_eq!(read(&out, &[1, 1, 2, 3, 4], &["s", "body"]), "4 children");
+	assert_eq!(read(&out, &[2, 1, 2, 3, 4], &["s", "size"]), "2");
+	assert_eq!(read(&out, &[2, 1, 2, 3, 4], &["s", "body"]), "2 children");
+}
+
+/// Only the `then` half need write it: the other half leaves the value the
+/// declaration gave.
+#[test]
+fn a_local_only_one_half_settles_keeps_its_declared_value_in_the_other() {
+	let out = clean(
+		"struct S { u8 kind; u8 size = 1; if (kind == 1) { size = 3; } u8 body[size]; };\nS s @ 0x00;\n",
+	);
+	assert_eq!(read(&out, &[1, 9, 9, 9], &["s", "size"]), "3");
+	assert_eq!(read(&out, &[0, 9, 9, 9], &["s", "size"]), "1");
+}
+
+/// The fold is only taken when one `if` holds every assignment. A local two
+/// `if`s write to, or one a loop writes to, is still a value that changes as
+/// the pattern runs.
+#[test]
+fn a_local_more_than_one_if_writes_to_is_still_a_gap() {
+	let out = convert(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 0;\n\
+		 \tif (kind == 1) { size = 4; }\n\
+		 \tif (kind == 2) { size = 2; }\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert!(gap_reasons(&out).contains("a local the pattern assigns to again"), "{}", gap_reasons(&out));
+}
+
 /// A name declared inside an `if` block is in the pattern's scope from there on
 /// and sits one structure deeper in the IR, where a later sibling's name does
 /// not reach it. Naming it anyway would read the wrong field, so it is a gap.

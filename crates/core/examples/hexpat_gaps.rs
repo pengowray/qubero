@@ -117,6 +117,11 @@ fn run() {
 						gaps.iter().take(3).map(|g| format!("{} {}", g.path, shorten(&g.reason))).collect();
 					println!("{rel}: {} gaps: {}", gaps.len(), first.join("; "));
 				}
+				if std::env::var("HEXPAT_DUMP").is_ok() {
+					for gap in gaps {
+						println!("GAP\t{rel}\t{}\t{}\t{}", gap.path, gap.reason, gap.source.replace('\n', " "));
+					}
+				}
 				for gap in gaps {
 					let entry = reasons
 						.entry(shorten(&gap.reason))
