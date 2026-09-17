@@ -327,7 +327,7 @@ pub use zstd::zstd;
 pub use wasm::wasm;
 pub use wasm_disasm::Module as WasmModule;
 
-pub use recognise::{sniff, sniff_ends, SNIFF_TAIL_WINDOW, SNIFF_WINDOW};
+pub use recognise::{sniff, sniff_ends, sniff_named, SNIFF_TAIL_WINDOW, SNIFF_WINDOW};
 
 use crate::template::{Template, Ty};
 

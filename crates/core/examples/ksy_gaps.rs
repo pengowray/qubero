@@ -13,7 +13,6 @@
 //! Usage: `cargo run -p qubero-core --example ksy_gaps -- <dir> [imports-dir]`
 
 use qubero_core::ksy::{self, MapImports};
-use qubero_core::template::Ty;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -56,6 +55,11 @@ fn main() {
                 // arguments, so nothing can open a file as it: it is in the
                 // collection to be imported and nothing else.
                 print!(",\"params\":{}", spec.params.len());
+                print!(",\"extensions\":[");
+                for (j, ext) in meta.file_extension.iter().enumerate() {
+                    print!("{}{}", if j > 0 { "," } else { "" }, quote(&ext.trim_start_matches('.').to_ascii_lowercase()));
+                }
+                print!("]");
                 print!(",\"imports\":[");
                 for (j, name) in meta.imports.iter().enumerate() {
                     print!("{}{}", if j > 0 { "," } else { "" }, quote(name));
@@ -69,7 +73,7 @@ fn main() {
                 print!(",\"fields\":{}", converted.report.fields.len());
                 print!(",\"notes\":{}", converted.report.notes.len());
                 print!(",\"magics\":[");
-                for (j, (at, bytes)) in signature(&converted.template.root).iter().enumerate() {
+                for (j, (at, bytes)) in ksy::signature(&converted.template).iter().enumerate() {
                     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
                     print!("{}[{at},{}]", if j > 0 { "," } else { "" }, quote(&hex));
                 }
@@ -92,37 +96,6 @@ fn main() {
         println!("}}{}", if i + 1 == files.len() { "" } else { "," });
     }
     println!("]");
-}
-
-/// The bytes a dropped file must open with for this format to claim it, as
-/// `(offset, bytes)` pairs.
-///
-/// Eligibility is the rule from DESIGN.md: the root's first field has to be a
-/// magic at offset 0, and a format that starts with anything else is never
-/// offered for a dropped file. Everything after that is evidence: the walk
-/// carries on through fields whose width does not depend on the data, and
-/// every further magic it steps over joins the pattern. That is what keeps
-/// `avi` from claiming every RIFF file, since a RIFF's fourth word is what
-/// says which RIFF it is.
-///
-/// Empty when the first field is not a magic.
-fn signature(root: &Ty) -> Vec<(u64, Vec<u8>)> {
-    let mut out = Vec::new();
-    let Ty::Struct(def) = root else { return out };
-    let mut at = 0u64;
-    for field in &def.fields {
-        if let Ty::Magic(bytes) = &field.ty {
-            out.push((at / 8, bytes.clone()));
-        } else if out.is_empty() {
-            // Nothing at offset 0, so nothing to sniff with.
-            return out;
-        }
-        match qubero_core::decode::fixed_bits(&field.ty) {
-            Some(bits) if (at + bits) % 8 == 0 => at += bits,
-            _ => break,
-        }
-    }
-    out
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {

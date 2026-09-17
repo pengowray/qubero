@@ -182,7 +182,7 @@ impl Evaluator {
             };
             let end = self.memo[p.as_slice()].cursor + size;
             if size == 0 {
-                return fail("repeated element has zero size");
+                return super::size::zero_size_element(r);
             }
             self.note_element(doc, path, &p, end, until, before)?;
             p.pop();

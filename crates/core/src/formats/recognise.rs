@@ -415,6 +415,24 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
     })
 }
 
+/// [`sniff`], and then, for a file the bytes alone cannot settle, the file's
+/// name. Two bundled Kaitai formats can open with the same magic, as ESRI's
+/// `.shp` and `.shx` do, and the bytes then fit both; the extension is what
+/// picks one. `name` is the file's name or path, and a name with no extension
+/// leaves it at what the bytes said.
+pub fn sniff_named(head: &[u8], len: u64, name: &str) -> Option<&'static str> {
+    sniff(head, len).or_else(|| crate::ksy::bundled::sniff_named(head, extension_of(name)))
+}
+
+/// The extension of a file name, without the dot; empty when there is none.
+fn extension_of(name: &str) -> &str {
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    match leaf.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => ext,
+        _ => "",
+    }
+}
+
 /// A SELF file: a SQLite database whose application id is the four letters
 /// `SELF`. Every SELF file is a valid SQLite database, so this is asked
 /// before the magic table sends it to the plain `sqlite` template.

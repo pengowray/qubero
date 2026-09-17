@@ -5585,3 +5585,31 @@ fn a_union_is_as_long_as_the_file_makes_its_longest_field() {
     assert_eq!(ev.node(&d, &[1]).unwrap().size_bits, 3 * 8);
     assert_eq!(ev.node(&d, &[2]).unwrap().value, Value::UInt(7));
 }
+#[test]
+fn text_expected_where_the_field_is_not_text_is_an_error_not_a_panic() {
+    use crate::template::{Encoding, StrLen};
+    // An enum whose underlying type is text: the value arm for text is reached
+    // with a field whose type is the enum, so measuring the text finds none.
+    let t = Template::new(
+        "t",
+        T::structure(
+            "R",
+            vec![("kind", T::enumeration("Kind", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii), &[(0, "none")]))],
+        ),
+    );
+    let d = doc(b"ABCD");
+    let mut ev = Evaluator::new(t);
+    let msg = failure(ev.node(&d, &[0]).unwrap_err());
+    assert!(msg.contains("kind"), "{msg}");
+}
+
+#[test]
+fn a_run_of_zero_size_elements_is_an_error_not_a_panic() {
+    // A run to the end of elements that take no room at all would be counted
+    // by dividing the room by nought.
+    let t = Template::new("t", T::structure("R", vec![("items", T::repeat(T::bytes(E::lit(0)), Until::End))]));
+    let d = doc(&[1, 2, 3, 4]);
+    let mut ev = Evaluator::new(t);
+    let msg = failure(ev.node(&d, &[0]).unwrap_err());
+    assert!(msg.contains("items"), "{msg}");
+}
