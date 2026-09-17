@@ -516,8 +516,9 @@ mod tests {
 
     /// A WAVE file of 16-bit mono samples, built the way `formats::wav`'s own
     /// tests build one: a `fmt ` chunk saying how wide a sample is, and a
-    /// `data` chunk of that many of them. `[3, 2, 2]` is the run of samples.
-    const SAMPLES: &[usize] = &[3, 2, 2];
+    /// `data` chunk of that many of them. `[3, 2, 2, 0]` is the run of
+    /// samples, inside the `Samples` wrapper its table shape hangs on.
+    const SAMPLES: &[usize] = &[3, 2, 2, 0];
 
     fn wav_of(samples: &[i16]) -> Document<MemSource> {
         let mut fmt = Vec::new();
@@ -682,7 +683,7 @@ mod tests {
         let (d, mut e) = long_wav();
         e.node(&d, SAMPLES).unwrap();
         let before = e.memo.len();
-        e.node(&d, &[3, 2, 2, 36_000]).unwrap();
+        e.node(&d, &[3, 2, 2, 0, 36_000]).unwrap();
         let grew = e.memo.len() - before;
         assert!(grew < 8, "{grew} nodes placed to reach element 36,000 of a fixed-width run");
     }
