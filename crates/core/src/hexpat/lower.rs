@@ -2788,6 +2788,7 @@ fn named_field(name: &str, ty: Ty, aside: bool) -> Field {
 		elem_name_from: None,
 		aside,
 		checks: Vec::new(),
+		valid: None,
 		time: None,
 		elem_check: None,
 	}

@@ -671,6 +671,12 @@ pub struct Evaluator {
     /// node: without this the answer for a structure would be the answer for
     /// its first child, and so on down, which is a loop rather than a reading.
     lining: bool,
+    /// The field a constraint is being worked out about, which is what
+    /// [`Expr::This`](crate::template::Expr::This) means. Set only while
+    /// [`Evaluator::valid_of`] is running an expression, and put back to what
+    /// it was afterwards: a bound may name a field whose own reading asks
+    /// another question, and the `this` of the outer bound has to survive it.
+    this: Option<Vec<usize>>,
 }
 
 impl Evaluator {
@@ -686,6 +692,7 @@ impl Evaluator {
             open: Vec::new(),
             schemas: schema::Schemas::default(),
             lining: false,
+            this: None,
         }
     }
 

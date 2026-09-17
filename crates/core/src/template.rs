@@ -137,6 +137,19 @@ pub enum Expr {
     StartOf(Box<Expr>),
     /// This element's index in the nearest list it sits in. Zero outside one.
     Idx,
+    /// The value of the field the constraint sits on.
+    ///
+    /// Only inside a [`Valid`], which is worked out at the end of the
+    /// structure the field sits in, where the field's own name would reach it
+    /// but an element of a list has no name to be reached by and a converter
+    /// lowering `_` or `assert` has no name to write. Anywhere else there is
+    /// no field this could mean and it fails, the way [`Expr::Placer`] does
+    /// outside a gathered element.
+    ///
+    /// Read as the value the field holds rather than as a whole number, so a
+    /// bound on a float compares floats: the three readings of an expression
+    /// each take it the way they take [`Expr::Ref`].
+    This,
     /// How many bytes into its window this field starts.
     ///
     /// The window is the nearest [`Ty::Sized`] (or [`Ty::SizedBits`]) around
@@ -1812,6 +1825,18 @@ pub struct Field {
     /// They are alternatives, not a list of sums to take together: a field is
     /// one number, and it is compared against one algorithm's answer.
     pub checks: Vec<Check>,
+    /// What the value in this field has to be, when the format's own
+    /// description says. See [`Valid`].
+    ///
+    /// Declared on a list, it is the *elements* the constraint is about, not
+    /// the list, for the reason [`Field::time`] is: a run of a million float
+    /// samples has no `Field` per sample to hang it on, and "these samples are
+    /// real numbers" is a claim about each of them.
+    ///
+    /// Behind an [`Arc`] for the reason [`Field::doc`] is: a type is cloned
+    /// every time an element of a list is placed, and a set of six bounds
+    /// copied per element is a copy per element of something nobody changed.
+    pub valid: Option<Arc<Valid>>,
     /// The moment this field holds, when the number in it is a time rather than
     /// a number the format counts with. See [`Time`].
     ///
@@ -2127,6 +2152,59 @@ impl Time {
         self.unset.push(Unset::Float(value));
         self
     }
+}
+
+/// What a field's value has to be, when the format's own description says.
+///
+/// A checksum says a field agrees with other bytes; this says a field agrees
+/// with the specification, which is the far commoner claim and the one no
+/// template could make until now. A PNG colour type is one of six numbers, a
+/// Kaitai `valid:` is a range or a set, an ImHex `std::assert` is a condition,
+/// and a WAV float sample is a real number rather than a NaN. Every one of
+/// those was written down by whoever wrote the format down, and a reader
+/// looking at the value is the reader who wants to know.
+///
+/// Reading is not affected. The field is read as declared, the value is what
+/// the bytes say, and the verdict is a second fact about it, the way a magic
+/// number's `ok` is: a switch keyed on a value the format rules out still
+/// takes the case for the number that is there. See
+/// [`Evaluator::valid_of`](crate::eval::Evaluator::valid_of), which says
+/// whether it holds and in what words.
+///
+/// Every expression here is worked out where a [`Check`]'s expressions are: as
+/// though it stood at the end of the structure the field sits in, so a bound
+/// may name a field written after it. [`Expr::This`] is the field's own value.
+#[derive(Debug, Clone)]
+pub enum Valid {
+    /// Equal to this.
+    Eq(Expr),
+    /// At least this.
+    Min(Expr),
+    /// At most this.
+    Max(Expr),
+    /// Between these, inclusive.
+    Range { min: Expr, max: Expr },
+    /// One of these.
+    AnyOf(Vec<Expr>),
+    /// Named in the field's enum, which promotes a value the enum does not
+    /// list from something Qubero has no name for to something the format
+    /// rules out. Says nothing about a field that is not an enum.
+    InEnum,
+    /// This expression comes to something other than zero. [`Expr::Less`] and
+    /// [`Expr::Eq`] exist, so any comparison is writable, and [`Expr::This`]
+    /// is the field's own value.
+    ///
+    /// `msg` is what to say when it does not hold, for a source that wrote one
+    /// down: an ImHex `std::assert(cond, "message")` carries the sentence its
+    /// author meant a reader to see, and the expression rendered back is a
+    /// poor second. Nothing when the source had none, and then the expression
+    /// is what the reader is shown.
+    Expr { expr: Expr, msg: Option<Arc<str>> },
+    /// A float that is neither NaN nor an infinity. Says nothing about a field
+    /// that holds a whole number: a format declaring this over an integer is a
+    /// template bug, caught in a debug build and passed as valid in a release
+    /// one, since refusing to read would be a worse answer than not checking.
+    Finite,
 }
 
 /// A field is a sum over some other bytes, and this says which sum and which
@@ -3293,6 +3371,7 @@ impl Ty {
                     aside: false,
                     checks: Vec::new(),
                     elem_check: None,
+                    valid: None,
                     time: None,
                 })
                 .collect(),
@@ -3416,6 +3495,29 @@ impl Ty {
                 let mut s = (*s).clone();
                 if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
                     f.aside = true;
+                }
+                Ty::Struct(Arc::new(s))
+            }
+            other => other,
+        }
+    }
+
+    /// Say what the value in `field` has to be, in the words of the format's
+    /// own description. See [`Valid`].
+    ///
+    /// One per field: a second call replaces the first, because a field has
+    /// one answer to "what is allowed here" and a template saying two would
+    /// leave a reader with two verdicts about one number. Several bounds at
+    /// once are one [`Valid::Expr`] with the conditions joined.
+    ///
+    /// Silently does nothing to anything but a structure, and to a name no
+    /// field of it has, the way the builders around it do.
+    pub fn field_valid(self, field: &str, valid: Valid) -> Ty {
+        match self {
+            Ty::Struct(s) => {
+                let mut s = (*s).clone();
+                if let Some(f) = s.fields.iter_mut().find(|f| &*f.name == field) {
+                    f.valid = Some(Arc::new(valid));
                 }
                 Ty::Struct(Arc::new(s))
             }
