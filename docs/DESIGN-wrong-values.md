@@ -300,9 +300,9 @@ State first, then cause, matching `Not checked · why`.
 | Problem text, range | `Out of range: must be {min} to {max}` | also `at least {min}`, `at most {max}` |
 | Problem text, set | `Not allowed: must be one of {a}, {b}, {c}` | up to four listed, then `and {n} more` |
 | Problem text, equality | `Must be {value}` | |
-| Problem text, expression | `Fails the check {expr}` | expr in the template's own text; uncertain |
-| Problem text, enum, undefined | `Not a named value of {enum}` | replaces `{num} (unknown)`; uncertain, see below |
-| Problem text, enum, invalid (InEnum) | `Not allowed: not a named value of {enum}` | |
+| Problem text, expression | `Fails the check: {msg}` | ImHex's assert message when given, else the expression in the template's own text; the expression always on hover; uncertain |
+| Problem text, enum, undefined | `Undefined in {enum}` | replaces `{num} (unknown)`; agreed 2026-09-17 |
+| Problem text, enum, invalid (InEnum) | `Not allowed: undefined in {enum}` | |
 | Problem text, flags | `{n} unnamed bits set` | replaces `+{n} unnamed` in the value |
 | Problem text, float | `Not a number (quiet NaN)` / `Not a number (signalling NaN, payload 0x{p})` / `Infinity` / `Negative infinity` | |
 | Problem text, float, invalid (Finite) | `Not allowed: not a number` etc. | |
@@ -312,11 +312,15 @@ State first, then cause, matching `Not checked · why`.
 | Table header | `{column} ({n} invalid)` | |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 
-On `Not a named value of {enum}`: `{num} (unknown)` is ambiguous about who
-does not know. Alternatives considered: `No name for {num} in {enum}`
-(reads as a request), `Undefined in {enum}` (shortest, but "undefined" is
-also the tier word and would appear twice on the row). Sign-off wanted on
-this one and on the expression case.
+On `Undefined in {enum}`: `{num} (unknown)` was ambiguous about who does not
+know. `Not a named value of {enum}` and `No name for {num} in {enum}` were
+considered; the short form was chosen because naming the enum is the context
+that removes the ambiguity, and the word matching the tier is a feature: the
+count row says `2 undefined` and each of those rows says `Undefined in …`.
+`{enum}` is the enum type's own name, which is the field name for most
+built-in templates and the declared type name for ImHex and Kaitai ones.
+
+Sign-off still wanted on the expression case.
 
 ## Order of work
 
