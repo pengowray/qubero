@@ -2047,11 +2047,19 @@ fn join_name(prefix: &str, names: &[String]) -> String {
 
 /// What the structure is called in the type column: its own name, not the
 /// whole path, since the path is already the key it is filed under.
+/// The name a structure carries: the last segment of its IR path, keeping any
+/// argument list a monomorphised copy has, whole. A `.` inside the arguments
+/// (`item(items[_index - 1].wide)`) is a field access, not a path separator.
 fn struct_name(ir_name: &str, cls: &ClassSpec) -> String {
 	if ir_name.is_empty() {
 		return cls.meta.id.clone().unwrap_or_else(|| "ksy".to_string());
 	}
-	ir_name.rsplit('.').next().unwrap_or(ir_name).to_string()
+	let (path, args) = match ir_name.find('(') {
+		Some(open) => ir_name.split_at(open),
+		None => (ir_name, ""),
+	};
+	let last = path.rsplit('.').next().unwrap_or(path);
+	format!("{last}{args}")
 }
 
 fn class_doc(cls: &ClassSpec) -> Option<String> {
@@ -2613,6 +2621,7 @@ types:
 			"seq:\n  - id: n\n    type: u1\n  - id: items\n    type: 'item(_index != 0 ? items[_index - 1].wide : false)'\n    repeat: expr\n    repeat-expr: n\ntypes:\n  item:\n    params:\n      - id: prev_wide\n        type: bool\n    seq:\n      - id: tag\n        type: u1\n        if: not prev_wide\n    instances:\n      wide:\n        value: 'prev_wide ? false : tag == 2'\n",
 		);
 		let out = rendered(&text);
+		assert!(out.contains("type item(_index != 0 ? items[_index - 1].wide : false) (machinery prev_wide) {"), "{out}");
 		assert!(out.contains("prev_wide: computed index != 0 ? items[index - 1].wide : 0"), "{out}");
 		assert!(gaps(&text).is_empty(), "{:?}", gaps(&text));
 
