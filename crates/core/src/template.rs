@@ -3375,10 +3375,19 @@ impl Ty {
 
     /// Say what this structure is, in the words of the format's own
     /// description. See [`StructDef::doc`].
+    ///
+    /// Only a structure has a slot for prose of its own: a number or a run of
+    /// bytes carries its prose on the [`Field`] holding it, which is
+    /// [`Ty::field_doc`] on the structure around it. Calling this on anything
+    /// else used to drop the text without a word, and did so in dBase's
+    /// template for a week; now it says so in a debug build.
     pub fn doc(self, text: &str) -> Ty {
         match self {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { doc: Some(text.into()), ..(*s).clone() })),
-            other => other,
+            other => {
+                debug_assert!(false, "Ty::doc on a {other:?}: this text would be lost; put it on the field with field_doc: {text}");
+                other
+            }
         }
     }
 

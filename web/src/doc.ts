@@ -278,7 +278,7 @@ export type TemplateNode = {
   /** What the format's own description says this field is, where the template
    *  carries it: the field's own prose, or failing that the prose on the
    *  structure it is. Absent for a field nobody wrote prose for, which is most
-   *  of them. Nothing renders it yet. */
+   *  of them. The inspector shows it under the type line and the listing on hover. */
   readonly doc?: string;
   /** What a structure of a few fields reads as on one line, which is the same
    *  reading the annotation column puts beside the bytes: a length and the

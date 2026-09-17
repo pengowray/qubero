@@ -226,7 +226,11 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   row.append(at);
   // A row that opens says so. Without it the only way to find out which
   // rows have anything under them is to click every one of them.
-  row.append(treeCell(itemOpens(n) ? (item.open ? "▾" : "▸") : "", el("span", `rp-field ${fieldClass(n.kind)}`, n.name)));
+  const name = el("span", `rp-field ${fieldClass(n.kind)}`, n.name);
+  // The format's own words for the field, on hover: a column is too narrow
+  // for a sentence, and most fields have none.
+  if (n.doc !== undefined) name.title = n.doc;
+  row.append(treeCell(itemOpens(n) ? (item.open ? "▾" : "▸") : "", name));
   // A compressed run nothing could open says why where its count would be:
   // "0 fields" is true and tells the reader nothing they can act on.
   const said =

@@ -1741,6 +1741,13 @@ qubero-spinner svg {
 .insp-shape {
   margin: 4px 0 0;
 }
+/* The format's own description of the field, in prose under the type line. */
+.insp-doc {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 2px 0 0;
+  max-width: 60ch;
+}
 .insp-kids {
   margin-top: 2px;
 }
