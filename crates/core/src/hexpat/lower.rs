@@ -26,7 +26,7 @@ use crate::template::{
 };
 
 use super::ast::{
-	ArraySize, Attribute, BitEntry, BitSign, CasePattern, CaseValue, Decl, EnumEntry, Field as AField,
+	ArraySize, AssignTarget, Attribute, BitEntry, BitSign, CasePattern, CaseValue, Decl, EnumEntry, Field as AField,
 	FieldKind, MatchArm, Member, NamespaceDecl, Program, StatementKind, TemplateArg, TemplateParam,
 	TypeKind, TypeRef,
 };
@@ -83,6 +83,8 @@ pub fn lower(name: &str, program: &Program) -> Result<Converted, HexpatError> {
 		blocks: 0,
 		depth: 0,
 		resolving: HashSet::new(),
+		folded: HashSet::new(),
+		previous_conditional: false,
 	};
 
 	let pragmas = lower.read_pragmas(program)?;
@@ -99,8 +101,9 @@ pub fn lower(name: &str, program: &Program) -> Result<Converted, HexpatError> {
 /// What the `#pragma` lines said.
 struct Pragmas {
 	endian: Endian,
-	/// `#pragma magic [ 4D 5A ] @ 0x00`, as bytes and an address.
-	magic: Option<(Vec<u8>, u64)>,
+	/// `#pragma magic [ 4D 5A ] @ 0x00`, as bytes and an address. The address
+	/// may be negative, which counts back from the end of the file.
+	magic: Option<(Vec<u8>, i64)>,
 	description: Option<String>,
 }
 
@@ -228,6 +231,20 @@ struct Frame {
 	/// in the pattern's scope and sit one structure deeper in the IR, where a
 	/// later sibling's `Ref` does not reach them.
 	hidden: Vec<String>,
+	/// Names this level declares and the converter cannot read a value for,
+	/// with the reason. A pattern that names one of these is not naming
+	/// something that does not exist, which is what "not a field in scope"
+	/// would say; it is naming a value only the imperative half settles.
+	unreadable: HashMap<String, String>,
+	/// Whether anything has been placed at this level yet, and how to name
+	/// where the structure starts once something has. `addressof(this)` is the
+	/// enclosing structure's own start, which the IR has no expression for:
+	/// before the first field it is where the reading is, and after it it is
+	/// the start of the first field. A first field only some condition reads
+	/// leaves this `None`, since a name that may not be there cannot say where
+	/// the structure began.
+	started: bool,
+	start: Option<Expr>,
 	/// Template value parameters bound at this level.
 	params: HashMap<String, Expr>,
 	/// Template type parameters bound at this level, so that `sizeof(T)` in a
@@ -240,7 +257,16 @@ struct Frame {
 
 impl Frame {
 	fn new(block: bool) -> Frame {
-		Frame { names: Vec::new(), hidden: Vec::new(), params: HashMap::new(), bound: HashMap::new(), block }
+		Frame {
+			names: Vec::new(),
+			hidden: Vec::new(),
+			unreadable: HashMap::new(),
+			started: false,
+			start: None,
+			params: HashMap::new(),
+			bound: HashMap::new(),
+			block,
+		}
 	}
 }
 
@@ -264,6 +290,15 @@ struct Lower<'a> {
 	/// Enumerations being read, so that an entry naming its own enumeration
 	/// stops rather than reading it again from the top.
 	resolving: HashSet<String>,
+	/// Assignments already said as part of a local one `if` settles, by the
+	/// address of the statement, so the walk through the `if`'s own members
+	/// passes over them rather than reporting the same thing twice.
+	folded: HashSet<usize>,
+	/// Whether the last thing placed at the top level was placed inside a
+	/// block of a top-level `if`. A `@ $` after one of those means the end of
+	/// a field that is only there when the condition held, which is not one
+	/// address, so it is a gap rather than a guess at which.
+	previous_conditional: bool,
 }
 
 /// What happened to one field that could not be said.
@@ -350,8 +385,20 @@ impl<'a> Lower<'a> {
 			// bytes again where it declares them, so this reading is a second
 			// one and is not counted twice.
 			let magic = Ty::Magic(bytes.clone());
-			let ty = if *at == 0 { magic } else { Ty::at(Expr::lit(*at as i128), magic) };
-			if *at != 0 {
+			// A negative address counts back from the end of the file, which
+			// is what a VHD footer is: the last 512 bytes.
+			let ty = match at {
+				0 => magic,
+				at if *at > 0 => Ty::at(Expr::lit(i128::from(*at)), magic),
+				at => Ty::at(Expr::SpaceSize.add(Expr::lit(i128::from(*at))), magic),
+			};
+			if *at < 0 {
+				self.report.note(
+					"0:0",
+					format!("#pragma magic @ -{:#x}", -at),
+					"a magic measured back from the end of the file is read there, and nothing claims a dropped file by it: the file sniffer matches a signature at a fixed offset from the front",
+				);
+			} else if *at != 0 {
 				self.report.note(
 					"0:0",
 					format!("#pragma magic @ {at:#x}"),
@@ -383,6 +430,7 @@ impl<'a> Lower<'a> {
 		seen: &mut HashSet<String>,
 	) -> Result<(), HexpatError> {
 		for decl in decls {
+			self.mark_start(fields);
 			match decl {
 				Decl::Include { program: Some(inner), .. } => {
 					if seen.insert(inner.file.clone()) {
@@ -396,15 +444,127 @@ impl<'a> Lower<'a> {
 					self.placement(placement, fields, machinery, previous)?;
 				}
 				Decl::Call { path, args, pos } => self.top_call(path, args, *pos),
-				Decl::Statement(statement) => {
-					self.report.gap(
-						self.at(statement.pos),
-						first_line(&statement.text),
-						format!("{} at the top level, which the converter does not run", kind_name(statement.kind)),
-					);
-				}
+				Decl::Statement(statement) => self.top_statement(statement, fields, machinery, previous)?,
 				_ => {}
 			}
+		}
+		Ok(())
+	}
+
+	/// One imperative statement at the top level.
+	///
+	/// Two of them are not imperative at all once they are read: a call is the
+	/// same call it would be outside an `if`, and an `if` whose blocks place
+	/// fields is a condition over those placements, which is a `When`. The
+	/// rest are gaps, as they were.
+	fn top_statement(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+		previous: &mut Option<String>,
+	) -> Result<(), HexpatError> {
+		match statement.kind {
+			StatementKind::Call => {
+				if let Some(call) = &statement.call {
+					self.top_call(&call.0, &call.1, statement.pos);
+					return Ok(());
+				}
+			}
+			StatementKind::Local => {
+				if let Some(field) = &statement.decl {
+					self.placement(field, fields, machinery, previous)?;
+					return Ok(());
+				}
+			}
+			StatementKind::If => {
+				// Only worth taking apart when a block places something. An
+				// `if` of `std::print` calls, assignments and `return`s reads
+				// nothing, and one gap naming the `if` says more than one gap
+				// per statement inside it.
+				if let Some(branches) = &statement.branches {
+					let halves = [&branches.then, &branches.otherwise];
+					if halves.iter().any(|half| places_anything(half))
+						&& halves.iter().all(|half| every_statement_says_something(half))
+					{
+						return self.top_conditional(statement, fields, machinery, previous);
+					}
+				}
+			}
+			_ => {}
+		}
+		self.report.gap(
+			self.at(statement.pos),
+			first_line(&statement.text),
+			format!("{} at the top level, which the converter does not run", kind_name(statement.kind)),
+		);
+		Ok(())
+	}
+
+	/// A top-level `if`, as one `When` per block over an inline structure of
+	/// what the block places.
+	///
+	/// This is the same lowering an `if` inside a structure gets, and it works
+	/// at the top level for the same reason the placements around it do: every
+	/// top-level field reads at an address of its own, so a block that could
+	/// not be said moves nothing. A block that places nothing leaves no field
+	/// behind, which is what a block of `std::print` calls should leave.
+	fn top_conditional(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+		previous: &mut Option<String>,
+	) -> Result<(), HexpatError> {
+		let branches = statement.branches.as_ref().expect("the two halves");
+		let path = self.at(statement.pos);
+		let source = format!("if ({})", branches.cond);
+		let cond = match self.expr(&branches.cond) {
+			Ok(cond) => cond,
+			Err(gap) => {
+				self.report.gap(path, source, gap.reason);
+				return Ok(());
+			}
+		};
+		self.report.became(path, source, "one condition over the whole block, not one per field");
+		// What `@ $` means outside the `if` is the end of the last placement
+		// outside it, which the blocks' own placements must not move.
+		let before = previous.clone();
+		let mut placed_in_a_block = false;
+		for (half, negated) in [(&branches.then, false), (&branches.otherwise, true)] {
+			if half.is_empty() {
+				continue;
+			}
+			*previous = before.clone();
+			self.blocks += 1;
+			let name = format!("{}_{}", if negated { "else" } else { "if" }, self.blocks);
+			let mut inner: Vec<Field> = Vec::new();
+			let mut inner_machinery: Vec<Arc<str>> = Vec::new();
+			self.stack.push(Frame::new(true));
+			for member in half {
+				self.top_statement(member, &mut inner, &mut inner_machinery, previous)?;
+			}
+			let frame = self.stack.pop().expect("a frame");
+			if let Some(outer) = self.stack.last_mut() {
+				outer.hidden.extend(frame.names);
+				outer.hidden.extend(frame.hidden);
+			}
+			if inner.is_empty() {
+				continue;
+			}
+			let mut def = empty_struct(&name);
+			def.inline = true;
+			def.fields = inner;
+			def.machinery.extend(inner_machinery);
+			let ty = Ty::Struct(Arc::new(def));
+			let when = if negated { cond.clone().negate() } else { cond.clone() };
+			machinery.push(Arc::from(name.as_str()));
+			fields.push(named_field(&name, Ty::when(when, ty), false));
+			placed_in_a_block = true;
+		}
+		*previous = before;
+		if placed_in_a_block {
+			self.previous_conditional = true;
 		}
 		Ok(())
 	}
@@ -428,7 +588,13 @@ impl<'a> Lower<'a> {
 				// way a local inside a structure is.
 				let name = unique(&name, fields);
 				match &placement.init {
-					None => self.report.note(path, source, "a global variable, which reads nothing"),
+					None => {
+						self.report.note(path, source, "a global variable, which reads nothing");
+						self.cannot_read(
+							&name,
+							format!("{name} is a global the pattern fills in while it runs, and the converter runs nothing"),
+						);
+					}
 					Some(init) => match self.expr(init) {
 						Ok(value) => {
 							self.report.became(path, source, "a value worked out before anything is read");
@@ -436,13 +602,18 @@ impl<'a> Lower<'a> {
 							self.stack.last_mut().expect("a frame").names.push(name.clone());
 							fields.push(named_field(&name, Ty::computed(value), false));
 						}
-						Err(gap) => self.report.gap(path, source, gap.reason),
+						Err(gap) => {
+							let at = self.at(placement.pos);
+							self.report.gap(path, source, gap.reason);
+							self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
+						}
 					},
 				}
 				return Ok(());
 			}
 			FieldKind::In | FieldKind::Out => {
 				self.report.gap(path, source, "an in/out variable, which the host supplies rather than the file");
+				self.cannot_read(&name, format!("{name} is a variable the host supplies rather than the file"));
 				return Ok(());
 			}
 			FieldKind::Normal => {}
@@ -453,10 +624,12 @@ impl<'a> Lower<'a> {
 		};
 		// `@ $` means the end of the placement before it: nothing has been read
 		// at the top level except what the earlier placements placed.
+		let at = self.at(placement.pos);
 		let address = match self.top_address(address, previous.as_deref()) {
 			Ok(address) => address,
 			Err(gap) => {
 				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, at {at}, is placed at an address the converter could not work out"));
 				return Ok(());
 			}
 		};
@@ -468,15 +641,20 @@ impl<'a> Lower<'a> {
 					machinery.push(field.name.clone());
 				}
 				*previous = Some(field.name.to_string());
+				self.previous_conditional = false;
 				self.stack.last_mut().expect("a frame").names.push(name);
 				fields.push(field);
 			}
 			Err(gap) => {
 				self.report.gap(path, source, gap.reason);
+				if gap.fallback.is_none() {
+					self.cannot_read(&name, format!("{name}, at {at}, is a field the converter could not read"));
+				}
 				if let Some(ty) = gap.fallback {
 					let mut field = named_field(&name, Ty::at(address, ty), false);
 					field.doc = Some(Arc::from("the converter could not say what this is; see the report"));
 					*previous = Some(field.name.to_string());
+					self.previous_conditional = false;
 					self.stack.last_mut().expect("a frame").names.push(name);
 					fields.push(field);
 				}
@@ -490,6 +668,11 @@ impl<'a> Lower<'a> {
 	fn top_address(&mut self, address: &super::expr::Expr, previous: Option<&str>) -> R<Expr> {
 		if let ExprKind::Path(segments) = &address.kind {
 			if segments.len() == 1 && matches!(segments[0], PathSeg::Dollar) {
+				if self.previous_conditional {
+					return Err(Gap::new(
+						"`@ $` after a top-level `if` that placed a field, where the end of the placement before this one depends on the condition and is not one address",
+					));
+				}
 				return match previous {
 					Some(name) => Ok(Expr::start_of(Expr::field(name)).add(Expr::size_of(name))),
 					None => Ok(Expr::lit(0)),
@@ -733,7 +916,17 @@ impl<'a> Lower<'a> {
 		fields: &mut Vec<Field>,
 		machinery: &mut Vec<Arc<str>>,
 	) {
-		for member in members {
+		// A local the pattern declares and then sets in the two halves of one
+		// `if` is a value that depends on the condition and on nothing else,
+		// which the IR says with `Cond`. Working that out before the walk is
+		// what lets the declaration wait until after the `if`, where the value
+		// is settled, and lets the assignments themselves pass without a gap.
+		let folded = self.conditional_locals(members);
+		for (index, member) in members.iter().enumerate() {
+			if folded.decls.contains_key(&index) {
+				continue;
+			}
+			self.mark_start(fields);
 			// A member that should have read bytes and could not moves
 			// everything after it, so the structure ends there rather than
 			// carrying on at an offset nothing in the file agrees with.
@@ -761,7 +954,14 @@ impl<'a> Lower<'a> {
 					}
 				}
 				Member::If { cond, then, otherwise, pos } => {
-					self.conditional(cond, then, otherwise, *pos, ns, endian, types, fields, machinery)
+					let carried_on =
+						self.conditional(cond, then, otherwise, *pos, ns, endian, types, fields, machinery);
+					if let Some(waiting) = folded.at_if.get(&index) {
+						for decl in waiting {
+							self.folded_local(members, cond, *decl, fields, machinery);
+						}
+					}
+					carried_on
 				}
 				Member::Match { scrutinee, arms, pos } => {
 					self.match_member(scrutinee, arms, *pos, ns, endian, types, fields, machinery)
@@ -778,22 +978,7 @@ impl<'a> Lower<'a> {
 					self.top_call(path, args, *pos);
 					true
 				}
-				Member::Statement(statement) => {
-					self.report.gap(
-						self.at(statement.pos),
-						first_line(&statement.text),
-						format!("{}, which the converter does not run", kind_name(statement.kind)),
-					);
-					// An assignment or a loop reads nothing of its own, so what
-					// comes after it is still where the file says it is.
-					matches!(
-						statement.kind,
-						StatementKind::Assign
-							| StatementKind::Call | StatementKind::Return
-							| StatementKind::Break | StatementKind::Continue
-							| StatementKind::Local
-					)
-				}
+				Member::Statement(statement) => self.statement_member(statement, fields, machinery),
 			};
 			if !carried_on {
 				self.report.gap(
@@ -802,6 +987,153 @@ impl<'a> Lower<'a> {
 					"left unread: the member before it was not placed, so everything after it would be at an offset nothing in the file agrees with",
 				);
 				break;
+			}
+		}
+	}
+
+	/// One statement inside a structure. Two shapes of assignment to `$` are
+	/// exact and the rest are gaps.
+	///
+	/// `$ += e` moves the cursor forward by `e` bytes and nothing else, which
+	/// is what `padding[e]` says, so it lowers to the same bytes read and not
+	/// shown. `$ = e` and `$ -= e` put the cursor somewhere the structure
+	/// cannot follow: the reference sizes a structure as the distance from
+	/// where it started to where the cursor ended
+	/// (`ASTNodeStruct::createPatterns`), and an `At` in the IR advances
+	/// nothing, so wrapping the rest of the structure in one would read the
+	/// right bytes and report the wrong length. The structure ends there
+	/// instead.
+	fn statement_member(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+	) -> bool {
+		if self.folded.contains(&(statement as *const _ as usize)) {
+			return true;
+		}
+		let path = self.at(statement.pos);
+		let source = first_line(&statement.text);
+		if let Some(assign) = &statement.assign {
+			if assign.target == AssignTarget::Dollar {
+				if assign.op == Some(BinOp::Add) {
+					return match self.expr(&assign.value) {
+						Ok(value) => {
+							let name = unique("padding", fields);
+							self.report.became(path, source, "bytes skipped, read and not shown");
+							machinery.push(Arc::from(name.as_str()));
+							self.stack.last_mut().expect("a frame").names.push(name.clone());
+							fields.push(named_field(&name, Ty::bytes(value), false));
+							true
+						}
+						Err(gap) => {
+							self.report.gap(path, source, gap.reason);
+							false
+						}
+					};
+				}
+				self.report.gap(
+					path,
+					source,
+					"the cursor moved to an address of its own, and a structure in the IR reads straight through from where it started",
+				);
+				return false;
+			}
+		}
+		self.report.gap(path, source, format!("{}, which the converter does not run", kind_name(statement.kind)));
+		// An assignment to a name, or a loop, reads nothing of its own, so what
+		// comes after it is still where the file says it is.
+		matches!(
+			statement.kind,
+			StatementKind::Assign
+				| StatementKind::Call | StatementKind::Return
+				| StatementKind::Break | StatementKind::Continue
+				| StatementKind::Local
+		)
+	}
+
+	/// Which locals of this level are settled by exactly one `if`, and which
+	/// members the walk should therefore pass over.
+	///
+	/// The shape looked for is one declaration with a value, and then one `if`
+	/// among the later members whose two halves hold every assignment to that
+	/// name, at most one in each half and directly in it. Anything else --
+	/// an assignment in a loop, in a nested `if`, in two different `if`s --
+	/// stays what it was, a value that changes as the pattern runs.
+	fn conditional_locals(&mut self, members: &'a [Member]) -> Folded {
+		let mut out = Folded::default();
+		for (index, member) in members.iter().enumerate() {
+			let Member::Field(field) = member else { continue };
+			if field.kind != FieldKind::Local || field.init.is_none() || !field.init_list.is_empty() {
+				continue;
+			}
+			if field.names.len() != 1 {
+				continue;
+			}
+			let name = field.name();
+			let Some(fold) = fold_of(members, index, name) else { continue };
+			for (then_half, at) in fold.assignments() {
+				if let Some(statement) = branch_statement(&members[fold.at], then_half, at) {
+					self.folded.insert(statement as *const _ as usize);
+				}
+			}
+			// The declaration waits for its `if`, so a reference inside the
+			// `if` itself has nothing to name yet. Say that rather than let it
+			// fall through to "not a field in scope here".
+			let at = self.at(member_pos(&members[fold.at]));
+			self.cannot_read(
+				name,
+				format!("{name} is settled by the `if` at {at} and can be read after it, not inside it"),
+			);
+			out.at_if.entry(fold.at).or_default().push(index);
+			out.decls.insert(index, fold);
+		}
+		out
+	}
+
+	/// The `Cond` a folded local became, emitted where the `if` ends because
+	/// that is where the pattern has settled the value.
+	fn folded_local(
+		&mut self,
+		members: &'a [Member],
+		cond: &super::expr::Expr,
+		decl: usize,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+	) {
+		let Member::Field(field) = &members[decl] else { return };
+		let name = field.name().to_string();
+		let source = field_source(field);
+		let path = self.at(field.pos);
+		let Some(fold) = fold_of(members, decl, &name) else { return };
+		let lowered: R<Expr> = (|| {
+			let cond = self.expr(cond)?;
+			let start = self.expr(field.init.as_ref().expect("a value"))?;
+			let then = match fold.then {
+				Some(at) => self.expr(assigned_value(&members[fold.at], true, at).expect("an assignment"))?,
+				None => start.clone(),
+			};
+			let otherwise = match fold.otherwise {
+				Some(at) => self.expr(assigned_value(&members[fold.at], false, at).expect("an assignment"))?,
+				None => start,
+			};
+			Ok(Expr::cond(cond, then, otherwise))
+		})();
+		match lowered {
+			Ok(value) => {
+				self.report.became(
+					path,
+					source,
+					"a value the condition of the `if` after it settles, worked out and never read",
+				);
+				machinery.push(Arc::from(name.as_str()));
+				self.stack.last_mut().expect("a frame").names.push(name.clone());
+				fields.push(named_field(&name, Ty::computed(value), false));
+			}
+			Err(gap) => {
+				let at = self.at(field.pos);
+				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
 			}
 		}
 	}
@@ -823,6 +1155,9 @@ impl<'a> Lower<'a> {
 			// An in/out variable reads nothing of the file, so what follows it
 			// is still where the file says it is.
 			self.report.gap(path, source, "an in/out variable, which the host supplies rather than the file");
+			for name in &field.names {
+				self.cannot_read(name, format!("{name} is a variable the host supplies rather than the file"));
+			}
 			return true;
 		}
 		if field.kind == FieldKind::Local {
@@ -897,12 +1232,15 @@ impl<'a> Lower<'a> {
 		let source = field_source(field);
 		let path = self.at(field.pos);
 		let name = field.name().to_string();
+		let at = self.at(field.pos);
 		let Some(init) = &field.init else {
 			self.report.gap(path, source, "a local with no value, which only a later assignment fills in");
+			self.cannot_read(&name, format!("{name}, declared at {at}, is filled in by a later assignment the converter does not run"));
 			return;
 		};
 		if !field.init_list.is_empty() {
 			self.report.gap(path, source, "a local list, which the converter does not compute");
+			self.cannot_read(&name, format!("{name}, declared at {at}, is a list the converter does not compute"));
 			return;
 		}
 		if assigned_later(siblings, &name) {
@@ -911,6 +1249,7 @@ impl<'a> Lower<'a> {
 				source,
 				"a local the pattern assigns to again, which is a value that changes as the pattern runs",
 			);
+			self.cannot_read(&name, format!("{name}, declared at {at}, is a value the pattern changes as it runs"));
 			return;
 		}
 		match self.expr(init) {
@@ -920,7 +1259,10 @@ impl<'a> Lower<'a> {
 				self.stack.last_mut().expect("a frame").names.push(name.clone());
 				fields.push(named_field(&name, Ty::computed(value), false));
 			}
-			Err(gap) => self.report.gap(path, source, gap.reason),
+			Err(gap) => {
+				self.report.gap(path, source, gap.reason);
+				self.cannot_read(&name, format!("{name}, declared at {at}, has no value the converter could work out"));
+			}
 		}
 	}
 
@@ -1960,6 +2302,66 @@ impl<'a> Lower<'a> {
 		None
 	}
 
+	/// Note what the first field of this level turned out to be, which is what
+	/// `addressof(this)` names once anything has been read.
+	fn mark_start(&mut self, fields: &[Field]) {
+		let Some(frame) = self.stack.last_mut() else { return };
+		if frame.started {
+			return;
+		}
+		let Some(first) = fields.first() else { return };
+		frame.started = true;
+		frame.start = match first.ty {
+			// A field only a condition reads may not be there to be the start
+			// of, and a placed field's start is where it points rather than
+			// where it stands, so neither says where the structure began.
+			Ty::When { .. } | Ty::Switch { .. } | Ty::At { .. } => None,
+			_ => Some(Expr::start_of(Expr::field(&first.name))),
+		};
+	}
+
+	/// Where the structure being read began, which is what `addressof(this)`
+	/// asks for.
+	///
+	/// Only the start of the first field will do. `SpacePos` is where the
+	/// structure began when nothing has been read yet, but only if the
+	/// expression is worked out once: a `[while(..)]` condition is worked out
+	/// again before every element, and `$ == addressof(this)` written as
+	/// `SpacePos == SpacePos` is true every time, which reads the file wrongly
+	/// and says nothing. So a structure that has read nothing yet is a gap.
+	fn here_start(&self) -> R<Expr> {
+		for frame in self.stack.iter().rev() {
+			if frame.block {
+				continue;
+			}
+			if !frame.started {
+				return Err(Gap::new(
+					"addressof(this), where the structure has read nothing yet, so the IR has no field whose start says where it began",
+				));
+			}
+			return frame.start.clone().ok_or_else(|| {
+				Gap::new(
+					"addressof(this), where the first field of the structure is one only a condition reads, so nothing in the IR names where the structure began",
+				)
+			});
+		}
+		Err(Gap::new("addressof(this), which names a structure rather than a field"))
+	}
+
+	/// Why a name the pattern declares holds no value the converter can read.
+	fn unreadable(&self, name: &str) -> Option<String> {
+		self.stack.iter().rev().find_map(|frame| frame.unreadable.get(name).cloned())
+	}
+
+	/// Remember that `name` is declared here and holds no value the converter
+	/// can read, so that a later use says why rather than saying the name is
+	/// not there at all.
+	fn cannot_read(&mut self, name: &str, why: impl Into<String>) {
+		if let Some(frame) = self.stack.last_mut() {
+			frame.unreadable.insert(name.to_string(), why.into());
+		}
+	}
+
 	/// Whether a name is one declared inside an `if` block or a `match` arm,
 	/// which the pattern can still see and an IR expression cannot reach.
 	fn is_hidden(&self, name: &str) -> bool {
@@ -2106,7 +2508,14 @@ impl<'a> Lower<'a> {
 		if rest.is_empty() {
 			return Err(Gap::new("a path naming a structure rather than a value"));
 		}
+		// `$[e]` is the one byte the file holds at the address `e`, which is a
+		// read rather than a position: the reference indexes the file with it.
 		if matches!(rest[0], PathSeg::Dollar) {
+			if climbs == 0 && rest.len() == 2 {
+				if let PathSeg::Index(address) = &rest[1] {
+					return self.byte_at(address);
+				}
+			}
 			return Err(Gap::new("`$` reached through a path, which is not a position the IR names"));
 		}
 		if matches!(rest[0], PathSeg::Null) {
@@ -2122,6 +2531,9 @@ impl<'a> Lower<'a> {
 				return Err(Gap::new(format!(
 					"{first} is declared inside an `if` block, and a field after the block cannot name it in the IR"
 				)));
+			}
+			if let Some(reason) = self.unreadable(first) {
+				return Err(Gap::new(reason));
 			}
 			return Err(Gap::new(format!("{first} is not a field in scope here")));
 		}
@@ -2218,6 +2630,16 @@ impl<'a> Lower<'a> {
 		}
 	}
 
+	/// `$[e]`, the one byte the file holds at the address `e`.
+	fn byte_at(&mut self, address: &super::expr::Expr) -> R<Expr> {
+		let endian = self.endian;
+		if let Some(skip) = self.relative_to_dollar(address)? {
+			return Ok(Expr::peek_at(Expr::lit(i128::from(skip) * 8), 8, endian));
+		}
+		let at = self.expr(address)?;
+		Ok(Expr::PeekIn { at: Box::new(at.mul(Expr::lit(8))), bits: 8, endian })
+	}
+
 	/// `std::mem::read_unsigned(address, size)`. A bare `$` or `$ + k` is a
 	/// peek a fixed distance from here; everything else is an address.
 	fn peek(&mut self, path: &str, args: &[super::expr::Expr]) -> R<Expr> {
@@ -2285,8 +2707,13 @@ impl<'a> Lower<'a> {
 			(TypeOp::AddressOf, TypeOpArg::Value(value)) => match &value.kind {
 				// `addressof(this)` is the enclosing structure's own start,
 				// which is not a field and so not somewhere the IR can name.
+				ExprKind::Path(segments)
+					if !segments.is_empty() && segments.iter().all(|s| matches!(s, PathSeg::This)) =>
+				{
+					self.here_start()
+				}
 				ExprKind::Path(segments) if segments.iter().all(|s| matches!(s, PathSeg::This | PathSeg::Parent)) => {
-					Err(Gap::new("addressof(this), which names a structure rather than a field"))
+					Err(Gap::new("addressof(parent), which names a structure further out rather than a field"))
 				}
 				ExprKind::Path(_) => Ok(Expr::start_of(self.expr(value)?)),
 				_ => Err(Gap::new("addressof of something other than a field in scope")),
@@ -2497,7 +2924,7 @@ fn every_pragma(program: &Program) -> Vec<super::lexer::Pragma> {
 /// single `?` nibble for a byte it does not care about. A wildcard cannot be
 /// part of a fixed sequence, so the bytes before the first one are the magic
 /// and the rest is dropped; a magic that starts with one claims nothing.
-fn parse_magic(value: &str) -> Option<(Vec<u8>, u64)> {
+fn parse_magic(value: &str) -> Option<(Vec<u8>, i64)> {
 	let value = value.split("//").next().unwrap_or(value).trim().trim_end_matches(';').trim();
 	let at = value.rfind('@')?;
 	let (list, address) = value.split_at(at);
@@ -2517,12 +2944,18 @@ fn parse_magic(value: &str) -> Option<(Vec<u8>, u64)> {
 	if bytes.is_empty() {
 		return None;
 	}
+	// The address may be negative, and then it counts back from the end of the
+	// file: `vhd.hexpat` writes `@ -0x0200` for a footer 512 bytes from the end.
 	let address = address[1..].trim();
-	let address = match address.strip_prefix("0x").or_else(|| address.strip_prefix("0X")) {
-		Some(hex) => u64::from_str_radix(hex, 16).ok()?,
-		None => address.parse().ok()?,
+	let (negative, digits) = match address.strip_prefix('-') {
+		Some(rest) => (true, rest.trim()),
+		None => (false, address.strip_prefix('+').unwrap_or(address).trim()),
 	};
-	Some((bytes, address))
+	let magnitude = match digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+		Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+		None => digits.parse::<i64>().ok()?,
+	};
+	Some((bytes, if negative { -magnitude } else { magnitude }))
 }
 
 fn field_source(field: &AField) -> String {
@@ -2601,21 +3034,163 @@ fn is_machinery(field: &AField) -> bool {
 	field.attrs.iter().any(|a| a.path == "hidden")
 }
 
-/// Whether anything later in this structure assigns to `name`.
+/// Whether anything in these members assigns to `name`.
 fn assigned_later(members: &[Member], name: &str) -> bool {
-	members.iter().any(|member| match member {
-		Member::Statement(statement) => {
-			statement.kind == StatementKind::Assign && starts_with_name(&statement.text, name)
-		}
+	members.iter().any(|member| assigns_to(member, name))
+}
+
+/// Whether this member, or anything inside it, assigns to `name`.
+fn assigns_to(member: &Member, name: &str) -> bool {
+	match member {
+		Member::Statement(statement) => is_assignment_to(statement, name),
 		Member::If { then, otherwise, .. } => assigned_later(then, name) || assigned_later(otherwise, name),
 		Member::Match { arms, .. } => arms.iter().any(|arm| assigned_later(&arm.body, name)),
 		Member::Try { body, catch, .. } => assigned_later(body, name) || assigned_later(catch, name),
 		_ => false,
+	}
+}
+
+fn is_assignment_to(statement: &super::ast::Statement, name: &str) -> bool {
+	match &statement.assign {
+		Some(assign) => assign.target == AssignTarget::Name(name.to_string()),
+		None => false,
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Locals one `if` settles                                             */
+/* ------------------------------------------------------------------ */
+
+/// Which members of one level the walk passes over, and what it emits instead.
+#[derive(Default)]
+struct Folded {
+	/// Local declarations that wait for their `if`, by member index.
+	decls: HashMap<usize, Fold>,
+	/// Those declarations again, by the index of the `if` that settles each.
+	at_if: HashMap<usize, Vec<usize>>,
+}
+
+/// Whether any of these statements reads the file: a declaration with an
+/// address, or an `if` holding one.
+fn places_anything(statements: &[super::ast::Statement]) -> bool {
+	statements.iter().any(|statement| match statement.kind {
+		StatementKind::Local => statement.decl.as_ref().is_some_and(|field| field.placement.is_some()),
+		StatementKind::If => statement
+			.branches
+			.as_ref()
+			.is_some_and(|branches| places_anything(&branches.then) || places_anything(&branches.otherwise)),
+		_ => false,
 	})
 }
 
-fn starts_with_name(text: &str, name: &str) -> bool {
-	let text = text.trim_start();
-	text.starts_with(name)
-		&& text[name.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+/// Whether every one of these statements is something the converter has a
+/// reading for: a declaration, a call, or an `if` of the same.
+///
+/// A block with a `return`, an assignment or a loop in it is taken as a whole
+/// instead, and reported once. Walking into it would put a gap on every
+/// statement in place of the one gap on the `if`, which says less and counts
+/// more.
+fn every_statement_says_something(statements: &[super::ast::Statement]) -> bool {
+	statements.iter().all(|statement| match statement.kind {
+		StatementKind::Local => statement.decl.is_some(),
+		StatementKind::Call => statement.call.is_some(),
+		StatementKind::If => statement.branches.as_ref().is_some_and(|branches| {
+			every_statement_says_something(&branches.then) && every_statement_says_something(&branches.otherwise)
+		}),
+		_ => false,
+	})
+}
+
+/// The statement one half of a folded `if` holds.
+fn branch_statement(member: &Member, then_half: bool, at: usize) -> Option<&super::ast::Statement> {
+	let Member::If { then, otherwise, .. } = member else { return None };
+	let half = if then_half { then } else { otherwise };
+	match half.get(at) {
+		Some(Member::Statement(statement)) => Some(statement),
+		_ => None,
+	}
+}
+
+/// Where the two halves of the value of one folded local are written.
+#[derive(Clone)]
+struct Fold {
+	/// The index of the `if` that settles the value.
+	at: usize,
+	/// The assignment in the `then` half, as an index into its members.
+	then: Option<usize>,
+	/// The same for the `else` half.
+	otherwise: Option<usize>,
+}
+
+/// The `if` that settles `name`, if exactly one does and nothing else touches
+/// it.
+fn fold_of(members: &[Member], decl: usize, name: &str) -> Option<Fold> {
+	let mut found: Option<Fold> = None;
+	for (index, member) in members.iter().enumerate() {
+		if index == decl {
+			continue;
+		}
+		if !assigns_to(member, name) {
+			continue;
+		}
+		// Only an `if`, and only one of them, and only assignments written
+		// straight into one of its halves.
+		let Member::If { then, otherwise, .. } = member else { return None };
+		if found.is_some() || index < decl {
+			return None;
+		}
+		let this = branch_assignment(then, name)?;
+		let other = branch_assignment(otherwise, name)?;
+		if this.is_none() && other.is_none() {
+			return None;
+		}
+		found = Some(Fold { at: index, then: this, otherwise: other });
+	}
+	found
+}
+
+/// The one assignment to `name` written directly in a block, if the block has
+/// at most one and holds no other mention of it.
+fn branch_assignment(members: &[Member], name: &str) -> Option<Option<usize>> {
+	let mut at = None;
+	for (index, member) in members.iter().enumerate() {
+		if !assigns_to(member, name) {
+			continue;
+		}
+		let Member::Statement(statement) = member else { return None };
+		// A compound assignment reads the value it is changing, and the value
+		// before the `if` is the one the IR would have to read.
+		if statement.assign.as_ref().is_none_or(|assign| assign.op.is_some()) {
+			return None;
+		}
+		if at.is_some() {
+			return None;
+		}
+		at = Some(index);
+	}
+	Some(at)
+}
+
+/// The value one half of a folded `if` writes.
+fn assigned_value(member: &Member, then_half: bool, at: usize) -> Option<&super::expr::Expr> {
+	let Member::If { then, otherwise, .. } = member else { return None };
+	let half = if then_half { then } else { otherwise };
+	match half.get(at) {
+		Some(Member::Statement(statement)) => statement.assign.as_ref().map(|assign| &assign.value),
+		_ => None,
+	}
+}
+
+impl Fold {
+	/// Where in the `if`'s two halves this fold's assignments are written.
+	fn assignments(&self) -> Vec<(bool, usize)> {
+		let mut out = Vec::new();
+		if let Some(at) = self.then {
+			out.push((true, at));
+		}
+		if let Some(at) = self.otherwise {
+			out.push((false, at));
+		}
+		out
+	}
 }

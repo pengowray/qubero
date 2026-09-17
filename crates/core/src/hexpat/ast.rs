@@ -87,7 +87,7 @@ pub enum ArraySize {
 }
 
 /// A statement the converter does not model, kept whole so it can be reported.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Statement {
 	pub kind: StatementKind,
 	pub pos: Pos,
@@ -95,6 +95,50 @@ pub struct Statement {
 	pub span: (u32, u32),
 	/// The source text of that range.
 	pub text: String,
+	/// The parts of an assignment, for the few shapes the lowering can say
+	/// exactly: `$ += e` is bytes skipped, and a global assigned once at the
+	/// top level is a value worked out before anything is read. Everything
+	/// else is still only reported, but reading the pieces beats matching the
+	/// source text, which is what the lowering used to do.
+	pub assign: Option<Assign>,
+	/// The two halves of an `if` statement, kept so that a top-level `if`
+	/// whose blocks only place fields can become one `When` per block.
+	pub branches: Option<Box<Branches>>,
+	/// The call a `Call` statement makes, so a call written inside a
+	/// top-level `if` is read the same way as one written outside it.
+	pub call: Option<Box<(String, Vec<Expr>)>>,
+	/// The variable a `Local` statement declares. A top-level `if` may place a
+	/// field inside it, and a placement arrives here rather than as a
+	/// [`Decl::Placement`] because the block is parsed as statements.
+	pub decl: Option<Box<Field>>,
+}
+
+/// The parts of an `if` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Branches {
+	pub cond: Expr,
+	pub then: Vec<Statement>,
+	pub otherwise: Vec<Statement>,
+}
+
+/// The pieces of `x = e`, `$ += e`, `a.b = e`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assign {
+	pub target: AssignTarget,
+	/// `None` for `=`; the operator of a compound assignment otherwise.
+	pub op: Option<crate::hexpat::expr::BinOp>,
+	pub value: Expr,
+}
+
+/// What an assignment writes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssignTarget {
+	/// `$ = e`, which moves the cursor.
+	Dollar,
+	/// A bare name: a local, or a global the pattern fills in.
+	Name(String),
+	/// A path, an element, anything else on the left of the `=`.
+	Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

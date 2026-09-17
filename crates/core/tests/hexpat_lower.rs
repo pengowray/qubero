@@ -466,6 +466,307 @@ fn a_structure_ends_at_the_member_that_could_not_be_placed() {
 	assert!(!render(&out.template).contains("b:"), "{}", render(&out.template));
 }
 
+/// `#pragma magic [ .. ] @ -0x200` counts back from the end of the file, which
+/// is what a VHD footer is. The bytes are read where they are; nothing claims
+/// a dropped file by them, because the sniffer matches a signature at a fixed
+/// offset from the front and has no table of end-anchored ones.
+#[test]
+fn a_magic_measured_back_from_the_end_is_read_at_the_end() {
+	let out = convert("#pragma magic [ 63 6F 6E ] @ -0x0200\nu8 first @ 0x00;\n");
+	let mut bytes = vec![0x11u8; 0x200];
+	bytes.extend_from_slice(b"con");
+	bytes.extend(std::iter::repeat_n(0u8, 0x200 - 3));
+	assert_eq!(read(&out, &bytes, &["magic"]), "magic true");
+	assert!(
+		out.report.notes.iter().any(|n| n.message.contains("measured back from the end")),
+		"{:?}",
+		out.report.notes
+	);
+}
+
+/* ------------------------------------------------------------------ */
+/* `$` and addressof(this)                                             */
+/* ------------------------------------------------------------------ */
+
+/// `$[e]` is not a position: the reference indexes the file with it, so it is
+/// the one byte at the address `e`. `$[$]` is the byte about to be read, which
+/// is what the corpus writes a NUL-terminated run with.
+#[test]
+fn a_dollar_index_is_the_byte_at_that_address() {
+	let out = clean("struct S { char text[while($[$] != 0)]; u8 term; };\nS s @ 0x00;\n");
+	// A `[while(..)]` run is a repeat rather than one piece of text, so the
+	// two characters arrive as two elements and the NUL is the field after.
+	assert_eq!(read(&out, b"hi\0\x2a", &["s", "text"]), "2 children");
+	assert_eq!(read(&out, b"hi\0\x2a", &["s", "term"]), "0");
+}
+
+/// An address behind the reading is read where it is, not counted back from
+/// the end of the file, which is what a negative `PeekAt` skip would mean.
+#[test]
+fn a_dollar_index_behind_the_reading_reads_at_that_address() {
+	let out = clean("struct S { u8 first; u8 second; u8 again = $[$ - 2]; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[0x11, 0x22, 0x33], &["s", "again"]), "17");
+}
+
+/// `addressof(this)` is the enclosing structure's own start, which the IR says
+/// as the start of the structure's first field.
+#[test]
+fn addressof_this_is_the_start_of_the_structures_first_field() {
+	let out = clean("struct C { u8 size; u8 body[size - ($ - addressof(this))]; };\nC c @ 0x02;\n");
+	assert_eq!(read(&out, &[0, 0, 4, 1, 2, 3], &["c", "body"]), "3 children");
+}
+
+/// A zero-width value worked out before the first read is still the field the
+/// structure starts at, so it says where the structure began.
+#[test]
+fn addressof_this_reads_through_a_computed_first_field() {
+	let out = clean(
+		"struct C { u32 n = 4; u8 size; u8 body[size - ($ - addressof(this))]; };\nC c @ 0x02;\n",
+	);
+	assert_eq!(read(&out, &[0, 0, 4, 1, 2, 3], &["c", "body"]), "3 children");
+}
+
+/// A placed first field is where it points rather than where it stands, so it
+/// does not say where the structure began.
+#[test]
+fn addressof_this_after_a_placed_first_field_is_a_gap() {
+	let out = convert("struct C { u32 x @ 0x10; u8 body[addressof(this)]; };\nC c @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("addressof(this)"), "{}", gap_reasons(&out));
+}
+
+/// A local one `if` settles is readable after that `if` and not inside it, and
+/// the gap inside says so rather than that the name is missing.
+#[test]
+fn a_folded_local_says_it_is_readable_after_the_if_and_not_inside_it() {
+	let out = convert(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 1;\n\
+		 \tif (kind == 1) {\n\
+		 \t\tsize = 3;\n\
+		 \t} else {\n\
+		 \t\tu8 over[size];\n\
+		 \t\tsize = 2;\n\
+		 \t}\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert!(gap_reasons(&out).contains("can be read after it, not inside it"), "{}", gap_reasons(&out));
+}
+
+/// A structure that has read nothing yet has no field whose start says where
+/// it began, and `SpacePos` will not do: a `[while(..)]` condition is worked
+/// out again before every element, so `$ == addressof(this)` written as
+/// `SpacePos == SpacePos` would be true every time and read the file wrongly.
+#[test]
+fn addressof_this_before_anything_is_read_is_a_gap() {
+	let out = convert("struct C { u8 body[while($ == addressof(this))]; };\nC c @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("has read nothing yet"), "{}", gap_reasons(&out));
+}
+
+/* ------------------------------------------------------------------ */
+/* The top level                                                       */
+/* ------------------------------------------------------------------ */
+
+/// `const T x = e;` at the top level is a global, not a local of a function.
+/// The reference declares it in the global scope and the rest of the pattern
+/// names it, so it is a value worked out before anything is read, and a
+/// placement may use it as an address or a count.
+#[test]
+fn a_const_global_is_a_value_the_rest_of_the_pattern_can_name() {
+	let out = clean("const u32 ROWS = 3;\nstruct S { u8 cells[ROWS]; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[1, 2, 3, 4], &["s", "cells"]), "3 children");
+}
+
+/// The reference refuses `const` on a placed variable, and so does the parser.
+#[test]
+fn a_const_placement_is_refused_the_way_the_reference_refuses_it() {
+	let Err(error) = hexpat::convert("const u8 x @ 0x00;\n", &NoFiles) else { panic!("refused") };
+	assert!(error.message.contains("const"), "{}", error.message);
+}
+
+/// A top-level `if` whose blocks place fields is one `When` per block over an
+/// inline structure of what the block placed, the same shape an `if` inside a
+/// structure gets.
+#[test]
+fn a_top_level_if_that_places_fields_is_one_when_per_block() {
+	let out = clean(
+		"u8 kind @ 0x00;\n\
+		 if (kind == 1) {\n\
+		 \tu16 wide @ 0x01;\n\
+		 } else {\n\
+		 \tu8 narrow @ 0x01;\n\
+		 }\n",
+	);
+	assert_eq!(read(&out, &[1, 0x34, 0x12], &["if_1", "wide"]), "4660");
+	assert_eq!(read(&out, &[2, 0x34, 0x12], &["else_2", "narrow"]), "52");
+}
+
+/// `@ $` is the end of the placement before it, and after an `if` that placed
+/// a field there is no one such end: the field is only there when the
+/// condition held. A guess at which would read the file wrongly.
+#[test]
+fn a_dollar_address_after_a_top_level_if_that_placed_a_field_is_a_gap() {
+	let out = convert("u8 k @ 0x00;\nif (k == 1) {\n\tu8 a @ 0x01;\n}\nu8 b @ $;\n");
+	assert!(gap_reasons(&out).contains("depends on the condition"), "{}", gap_reasons(&out));
+	assert!(!render(&out.template).contains("b:"), "{}", render(&out.template));
+}
+
+/// An unconditional placement after the `if` settles it again, so the `@ $`
+/// after that one is the ordinary meaning.
+#[test]
+fn a_placement_after_the_if_settles_where_the_next_dollar_address_is() {
+	let out = clean("u8 k @ 0x00;\nif (k == 1) {\n\tu8 a @ 0x01;\n}\nu16 m @ 0x02;\nu8 b @ $;\n");
+	assert_eq!(read(&out, &[0, 0, 0, 0, 7], &["b"]), "7");
+}
+
+/// A block that places nothing is left as one gap naming the `if`. A gap on
+/// every statement inside it would say less and count more.
+#[test]
+fn a_top_level_if_that_places_nothing_is_one_gap_for_the_whole_if() {
+	let out = convert("u8 kind @ 0x00;\nif (kind == 1) {\n\tstd::print(\"one\");\n\tkind = 2;\n}\n");
+	assert_eq!(out.report.gaps.len(), 1, "{}", gap_reasons(&out));
+	assert!(gap_reasons(&out).contains("`if` statement outside a structure"), "{}", gap_reasons(&out));
+}
+
+/// A name the pattern declares and the converter cannot read a value for is
+/// not a name that is missing. Saying "not a field in scope" of a global the
+/// pattern fills in as it runs sends a reader looking for a typo, so the gap
+/// says which of the four it is instead.
+#[test]
+fn a_name_with_no_readable_value_says_why_rather_than_that_it_is_missing() {
+	let cases: &[(&str, &str)] = &[
+		// A global with no value, which only a later assignment fills in.
+		("u32 Offset;\nu8 body[4] @ Offset;\n", "a global the pattern fills in while it runs"),
+		// A variable the host supplies.
+		("u32 Size in;\nu8 body[Size] @ 0x00;\n", "the host supplies rather than the file"),
+		// A local of a structure whose own value could not be worked out.
+		(
+			"fn f() { return 1; };\nstruct S { u32 n = f(); u8 body[n]; };\nS s @ 0x00;\n",
+			"has no value the converter could work out",
+		),
+		// A local the pattern assigns to again.
+		(
+			"struct S { u8 tag; u32 n = 0; if (tag == 1) { n = 1; } if (tag == 2) { n = 2; } u8 body[n]; };\nS s @ 0x00;\n",
+			"is a value the pattern changes as it runs",
+		),
+		// A placement that could not be placed, which later placements name.
+		(
+			"fn f() { return 1; };\nstruct H { u8 a; };\nH head @ f();\nu8 body[4] @ head.a;\n",
+			"is placed at an address the converter could not work out",
+		),
+	];
+	for (text, want) in cases {
+		let reasons = gap_reasons(&convert(text));
+		assert!(reasons.contains(want), "{text}\nwanted {want}, got:\n{reasons}");
+		assert!(!reasons.contains("is not a field in scope here"), "{text}\n{reasons}");
+	}
+}
+
+/// A name nothing declares still says so: that is the one case where the
+/// reader should be looking for a typo.
+#[test]
+fn a_name_nothing_declares_is_still_reported_as_missing() {
+	let out = convert("struct S { u8 count; u8 body[num_point]; };\nS s @ 0x00;\n");
+	assert!(gap_reasons(&out).contains("num_point is not a field in scope here"), "{}", gap_reasons(&out));
+}
+
+/* ------------------------------------------------------------------ */
+/* Assignments                                                         */
+/* ------------------------------------------------------------------ */
+
+/// `$ += n` moves the cursor forward and reads nothing, which is what
+/// `padding[n]` says, so the two lower the same way and the field after it is
+/// where the pattern puts it.
+#[test]
+fn a_forward_cursor_move_is_the_bytes_it_skips() {
+	let out = clean("struct S { u8 first; $ += 2; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[1, 0xaa, 0xbb, 9], &["s", "first"]), "1");
+	assert_eq!(read(&out, &[1, 0xaa, 0xbb, 9], &["s", "last"]), "9");
+	let padded = clean("struct S { u8 first; padding[2]; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(render(&out.template), render(&padded.template));
+}
+
+/// The skipped length may be worked out from the fields before it, the same as
+/// any other `padding`.
+#[test]
+fn a_cursor_move_may_skip_a_length_the_file_states() {
+	let out = clean("struct S { u8 skip; $ += skip; u8 last; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[3, 0, 0, 0, 7], &["s", "last"]), "7");
+}
+
+/// `$ = e` and `$ -= e` put the cursor where the structure cannot follow. The
+/// reference sizes a structure as the distance from where it started to where
+/// the cursor ended, and an `At` in the IR advances nothing, so a structure
+/// wrapped in one would read the right bytes and report the wrong length. The
+/// structure ends at the move instead, and the report says both things.
+#[test]
+fn a_cursor_move_the_ir_cannot_follow_ends_the_structure() {
+	for text in [
+		"struct S { u8 first; $ = 0x10; u8 last; };\nS s @ 0x00;\n",
+		"struct S { u8 first; $ -= 1; u8 last; };\nS s @ 0x00;\n",
+	] {
+		let out = convert(text);
+		let reasons = gap_reasons(&out);
+		assert!(reasons.contains("the cursor moved to an address of its own"), "{text}\n{reasons}");
+		assert!(reasons.contains("the rest of the structure"), "{text}\n{reasons}");
+		assert!(!render(&out.template).contains("last"), "{text}\n{}", render(&out.template));
+	}
+}
+
+/// A local set in the two halves of one `if` and nowhere else is a value that
+/// depends on the condition and on nothing else, which `Cond` says exactly. It
+/// is emitted where the `if` ends, because that is where the pattern has
+/// settled it.
+#[test]
+fn a_local_two_halves_of_one_if_settle_is_a_choice_between_them() {
+	let out = clean(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 0;\n\
+		 \tif (kind == 1) {\n\
+		 \t\tsize = 4;\n\
+		 \t} else {\n\
+		 \t\tsize = 2;\n\
+		 \t}\n\
+		 \tu8 body[size];\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert_eq!(read(&out, &[1, 1, 2, 3, 4], &["s", "size"]), "4");
+	assert_eq!(read(&out, &[1, 1, 2, 3, 4], &["s", "body"]), "4 children");
+	assert_eq!(read(&out, &[2, 1, 2, 3, 4], &["s", "size"]), "2");
+	assert_eq!(read(&out, &[2, 1, 2, 3, 4], &["s", "body"]), "2 children");
+}
+
+/// Only the `then` half need write it: the other half leaves the value the
+/// declaration gave.
+#[test]
+fn a_local_only_one_half_settles_keeps_its_declared_value_in_the_other() {
+	let out = clean(
+		"struct S { u8 kind; u8 size = 1; if (kind == 1) { size = 3; } u8 body[size]; };\nS s @ 0x00;\n",
+	);
+	assert_eq!(read(&out, &[1, 9, 9, 9], &["s", "size"]), "3");
+	assert_eq!(read(&out, &[0, 9, 9, 9], &["s", "size"]), "1");
+}
+
+/// The fold is only taken when one `if` holds every assignment. A local two
+/// `if`s write to, or one a loop writes to, is still a value that changes as
+/// the pattern runs.
+#[test]
+fn a_local_more_than_one_if_writes_to_is_still_a_gap() {
+	let out = convert(
+		"struct S {\n\
+		 \tu8 kind;\n\
+		 \tu8 size = 0;\n\
+		 \tif (kind == 1) { size = 4; }\n\
+		 \tif (kind == 2) { size = 2; }\n\
+		 };\n\
+		 S s @ 0x00;\n",
+	);
+	assert!(gap_reasons(&out).contains("a local the pattern assigns to again"), "{}", gap_reasons(&out));
+}
+
 /// A name declared inside an `if` block is in the pattern's scope from there on
 /// and sits one structure deeper in the IR, where a later sibling's name does
 /// not reach it. Naming it anyway would read the wrong field, so it is a gap.

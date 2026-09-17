@@ -37,10 +37,10 @@ const IMPORT_ONLY = new Map([]);
  *  line it came from, so what matters is that the gaps are off the path
  *  through the file. */
 const WHY_WITH_GAPS = {
-  bink_container: "six bit fields cross a byte boundary packed from the low bit up; every frame offset is placed",
+  bink_container: "three bit fields cross a byte boundary packed from the low bit up, and one cursor move ends the audio track list; every frame offset is placed",
   gltf: "the JSON chunk is decoded by an ImHex plugin rather than by the pattern, so its bytes are left unread; the header and the chunk table are placed",
   mbr: "one `break` inside the partition loop; all four partition entries are placed",
-  vhd: "two assignments and a `break` in the disc geometry; the footer and the dynamic-disc header are placed",
+  vhd: "one cursor move to the footer and one `try`; the footer magic, read 512 bytes back from the end, and the dynamic-disc header are placed",
 };
 
 function files(dir, out = []) {
