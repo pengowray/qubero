@@ -60,6 +60,11 @@ export function byteDump(doc: Doc, at: number, len: number, name: string, scroll
   // Ten lines, or the field if it is shorter: a forty-byte string should not
   // sit in an area seven lines taller than itself.
   scroller.style.height = `${Math.min(VIEW_LINES, lines) * LINE}px`;
+  // The area is drawn to the width of a line, and a line is a fixed number of
+  // characters. Whether the scrollbar takes part of that width is the one
+  // thing the stylesheet cannot work out for itself, so it is said here, from
+  // the line count, rather than left to `auto` to discover a frame later.
+  if (lines > VIEW_LINES) scroller.style.overflowY = "scroll";
   scroller.append(canvas);
   host.append(scroller);
 

@@ -438,7 +438,7 @@ function drawStrip(c: DrawContext, item: Extract<Item, { kind: "bytes" }>): HTML
  *  The same caption and the same way out as a byte strip has, so one control
  *  closes either. */
 function dumpOf(c: DrawContext, item: Extract<Item, { kind: "bytes" }>, name: string, caption: string): HTMLElement {
-  const strip = el("div", "bstrip");
+  const strip = el("div", "bstrip bs-dump");
   const cap = el("div", "bs-cap");
   cap.append(el("span", "bs-cap-text", caption), mapFor(c, item));
   const close = el("button", "bs-close", REPORT.hideBytes);

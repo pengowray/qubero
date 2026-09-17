@@ -663,7 +663,10 @@ button.welcome-crystal {
 /* Meaning is a restrained text colour and hairline. It does not fill the byte
    cell, leaving fills available for selection and active-field state. */
 .hv-tint {
-  color: color-mix(in srgb, var(--field-color) 84%, var(--fg));
+  /* Named rather than written into `color`, because `.hv-zero` below needs
+     the same colour to take weight off. */
+  --tint: color-mix(in srgb, var(--field-color) 84%, var(--fg));
+  color: var(--tint);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--field-color) 48%, transparent);
 }
 .hv-field-start {
@@ -763,6 +766,39 @@ button.welcome-crystal {
 /* The column the cursor is not in still shows where it is, more quietly. */
 .hv-cur.hv-ins.hv-dim::before {
   background: var(--muted);
+}
+/* A zero byte is the file's own background: padding, a reserved field nobody
+   filled, the leading bytes of a small number in a wide slot. Runs of them are
+   most of what a hex view shows and rarely what a reader is hunting for, so
+   they are drawn at the weight of the address column — quiet, still legible,
+   and no longer competing with the bytes that carry something. The digits
+   still read `00`, so nothing here is said by colour alone. */
+.hv-zero {
+  color: var(--addr);
+}
+/* A zero inside a field keeps the field's hue and gives up its weight, so a
+   run of them still reads as part of that field rather than as a hole in it.
+   85% is the most weight that can come off before the faintest of the five
+   field colours drops under the address column's own contrast, which is the
+   quietest this view already asks anyone to read. */
+.hv-zero.hv-tint {
+  color: color-mix(in srgb, var(--tint) 85%, var(--bg));
+}
+/* Wherever the reader has actually put the byte in question — under the
+   cursor, inside their selection, in the field the inspector is reading — it
+   comes back to full strength. Every one of those marks is a wash over the
+   cell, and a dimmed digit on top of one falls under 4.5:1. Receding is for
+   what is worth ignoring, and none of these are. */
+.hv-zero.hv-cur,
+.hv-zero.hv-sel,
+.hv-zero.hv-sel-weak,
+.hv-zero.hv-hl {
+  color: var(--tint, var(--fg));
+}
+/* Except the far half of the cursor's own byte, which is written on the accent
+   and takes the page colour like any other nibble under the caret. */
+.hv-zero.hv-nib1 {
+  color: var(--bg);
 }
 .hv-end {
   outline: 1px dashed var(--muted);
@@ -3719,6 +3755,19 @@ button.insp-xrow-where:hover {
 }
 .bdump {
   --bd-line: 18px;
+  /* Sixteen bytes a line, which must match `PER_LINE` in `bytedump.ts`, and
+     every column a fixed number of characters wide. Three characters a byte
+     in the hex, less the space after the last one; one a byte in the text
+     reading. Fixing the hex column is what holds the text reading in place on
+     a final line with fewer than sixteen bytes on it. */
+  --bd-cols: 16;
+  --bd-at-w: 10ch;
+  --bd-hex-w: calc(var(--bd-cols) * 3ch - 1ch);
+  --bd-txt-w: calc(var(--bd-cols) * 1ch);
+  --bd-gap: 12px;
+  --bd-pad: 8px;
+  width: fit-content;
+  max-width: 100%;
   margin: 8px 0 2px;
   border-inline-start: 2px solid var(--line);
   padding-inline-start: 10px;
@@ -3735,6 +3784,13 @@ button.insp-xrow-where:hover {
   overscroll-behavior: contain;
   background: var(--panel);
   border-radius: 4px;
+  /* The canvas carries the width, so the area takes it and stops there
+     instead of running to the end of the row. `overflow-y` is set to `scroll`
+     from the file rather than left on `auto`, so the width a shrink-to-fit
+     box works out already has the scrollbar in it and the text reading is
+     never under it. */
+  width: fit-content;
+  max-width: 100%;
 }
 .bd-scroll:focus-visible {
   outline: 2px solid var(--accent);
@@ -3742,27 +3798,33 @@ button.insp-xrow-where:hover {
 }
 .bd-canvas {
   position: relative;
+  /* The lines are placed absolutely and so measure nothing: the width of the
+     dump is this sum, which is why every column of it is fixed. */
+  width: calc(var(--bd-at-w) + var(--bd-hex-w) + var(--bd-txt-w) + 2 * var(--bd-gap) + 2 * var(--bd-pad));
 }
 .bd-line {
   position: absolute;
   inset-inline: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--bd-gap);
   height: var(--bd-line);
-  padding-inline: 8px;
+  padding-inline: var(--bd-pad);
   white-space: pre;
 }
 .bd-at {
   flex: none;
-  width: 10ch;
+  width: var(--bd-at-w);
   color: var(--addr);
 }
 .bd-hex {
   flex: none;
+  width: var(--bd-hex-w);
   color: var(--fg);
 }
 .bd-txt {
+  flex: none;
+  width: var(--bd-txt-w);
   color: var(--muted);
 }
 
@@ -4056,6 +4118,15 @@ button.insp-xrow-where:hover {
   background: color-mix(in srgb, var(--fg) 4%, var(--bg));
   padding: 8px 12px;
   overflow-x: auto;
+}
+/* A strip that is nothing but a dump has a width of its own: sixteen bytes a
+   line and no more. The box is drawn to that rather than to the row, so the
+   caption and the way out sit beside the bytes instead of an arm's length
+   away across empty background. A strip with columns in it keeps the row's
+   width, since how far a field reaches across the stretch is the point of it. */
+.bstrip.bs-dump {
+  width: fit-content;
+  max-width: 100%;
 }
 .bs-cap {
   display: flex;
