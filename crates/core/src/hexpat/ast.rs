@@ -101,6 +101,24 @@ pub struct Statement {
 	/// else is still only reported, but reading the pieces beats matching the
 	/// source text, which is what the lowering used to do.
 	pub assign: Option<Assign>,
+	/// The two halves of an `if` statement, kept so that a top-level `if`
+	/// whose blocks only place fields can become one `When` per block.
+	pub branches: Option<Box<Branches>>,
+	/// The call a `Call` statement makes, so a call written inside a
+	/// top-level `if` is read the same way as one written outside it.
+	pub call: Option<Box<(String, Vec<Expr>)>>,
+	/// The variable a `Local` statement declares. A top-level `if` may place a
+	/// field inside it, and a placement arrives here rather than as a
+	/// [`Decl::Placement`] because the block is parsed as statements.
+	pub decl: Option<Box<Field>>,
+}
+
+/// The parts of an `if` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Branches {
+	pub cond: Expr,
+	pub then: Vec<Statement>,
+	pub otherwise: Vec<Statement>,
 }
 
 /// The pieces of `x = e`, `$ += e`, `a.b = e`.

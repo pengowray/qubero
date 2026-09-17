@@ -415,7 +415,7 @@ impl<'a, 'r> Parser<'a, 'r> {
 	fn statement(&mut self, kind: StatementKind, from: usize) -> Statement {
 		let pos = self.tokens.get(from).map_or(Pos::default(), |token| token.pos);
 		let (start, end, text) = self.span_text(from, self.at);
-		Statement { kind, pos, span: (start, end), text, assign: None }
+		Statement { kind, pos, span: (start, end), text, assign: None, branches: None, decl: None, call: None }
 	}
 
 	/* ---------------------------------------------------------------- */
@@ -1776,16 +1776,24 @@ impl<'a, 'r> Parser<'a, 'r> {
 	fn function_statement(&mut self, needs_semicolon: bool) -> Res<Statement> {
 		let from = self.at;
 		let mut needs_semicolon = needs_semicolon;
+		// The pieces of the statement the lowering can act on, where it can:
+		// what an assignment writes, the two halves of an `if`, the variable a
+		// declaration declares.
+		let mut assign = None;
+		let mut branches = None;
+		let mut decl = None;
+		let mut call = None;
 
 		let kind = if self.assignment_ahead(true, false) {
-			self.assignment()?;
+			assign = self.assignment()?.assign;
 			StatementKind::Assign
 		} else if self.is_kw(0, Keyword::Return) || self.is_kw(0, Keyword::Break) || self.is_kw(0, Keyword::Continue) {
 			self.control_flow()?.kind
 		} else if self.is_kw(0, Keyword::If) {
 			self.next();
 			needs_semicolon = false;
-			self.conditional_parts(Self::one_statement)?;
+			let (cond, then, otherwise) = self.conditional_parts(Self::one_statement)?;
+			branches = Some(Box::new(Branches { cond, then, otherwise }));
 			StatementKind::If
 		} else if self.is_kw(0, Keyword::Match) {
 			self.next();
@@ -1824,17 +1832,20 @@ impl<'a, 'r> Parser<'a, 'r> {
 			let is_call = self.is_sep(0, Sep::LeftParen);
 			self.at = save;
 			if is_call {
-				self.call_expr()?;
+				let made = self.call_expr()?;
+				if let ExprKind::Call { path, args } = made.kind {
+					call = Some(Box::new((path, args)));
+				}
 				StatementKind::Call
 			} else {
-				self.function_variable_decl(false)?;
+				decl = Some(Box::new(self.function_variable_decl(false)?));
 				StatementKind::Local
 			}
 		} else if self.is_kw(0, Keyword::BigEndian) || self.is_kw(0, Keyword::LittleEndian) || self.is_any_type(0) {
-			self.function_variable_decl(false)?;
+			decl = Some(Box::new(self.function_variable_decl(false)?));
 			StatementKind::Local
 		} else if self.kw(Keyword::Const) {
-			self.function_variable_decl(true)?;
+			decl = Some(Box::new(self.function_variable_decl(true)?));
 			StatementKind::Local
 		} else if matches!(self.tok(0), Tok::Keyword(_)) {
 			return Err(self.error_here(format!("Invalid {} found in function.", self.got())));
@@ -1845,10 +1856,15 @@ impl<'a, 'r> Parser<'a, 'r> {
 		if needs_semicolon {
 			self.semicolon()?;
 		}
-		Ok(self.statement(kind, from))
+		let mut statement = self.statement(kind, from);
+		statement.assign = assign;
+		statement.branches = branches;
+		statement.decl = decl;
+		statement.call = call;
+		Ok(statement)
 	}
 
-	fn function_variable_decl(&mut self, constant: bool) -> Res<()> {
+	fn function_variable_decl(&mut self, constant: bool) -> Res<Field> {
 		let pos = self.pos();
 		let ty = self.parse_type()?;
 		if !self.is_ident(0) {
@@ -1857,12 +1873,10 @@ impl<'a, 'r> Parser<'a, 'r> {
 		if self.is_sep(1, Sep::LeftBracket) && !self.is_sep(2, Sep::LeftBracket) {
 			let name = self.ident()?;
 			self.next();
-			self.array_variable(ty, name, constant, pos)?;
-			return Ok(());
+			return Ok(global_kind(self.array_variable(ty, name, constant, pos)?));
 		}
 		let name = self.ident()?;
-		self.plain_variable(ty, name, constant, pos)?;
-		Ok(())
+		Ok(global_kind(self.plain_variable(ty, name, constant, pos)?))
 	}
 
 	/* ---------------------------------------------------------------- */

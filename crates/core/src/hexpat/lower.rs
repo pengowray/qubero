@@ -401,15 +401,117 @@ impl<'a> Lower<'a> {
 					self.placement(placement, fields, machinery, previous)?;
 				}
 				Decl::Call { path, args, pos } => self.top_call(path, args, *pos),
-				Decl::Statement(statement) => {
-					self.report.gap(
-						self.at(statement.pos),
-						first_line(&statement.text),
-						format!("{} at the top level, which the converter does not run", kind_name(statement.kind)),
-					);
-				}
+				Decl::Statement(statement) => self.top_statement(statement, fields, machinery, previous)?,
 				_ => {}
 			}
+		}
+		Ok(())
+	}
+
+	/// One imperative statement at the top level.
+	///
+	/// Two of them are not imperative at all once they are read: a call is the
+	/// same call it would be outside an `if`, and an `if` whose blocks place
+	/// fields is a condition over those placements, which is a `When`. The
+	/// rest are gaps, as they were.
+	fn top_statement(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+		previous: &mut Option<String>,
+	) -> Result<(), HexpatError> {
+		match statement.kind {
+			StatementKind::Call => {
+				if let Some(call) = &statement.call {
+					self.top_call(&call.0, &call.1, statement.pos);
+					return Ok(());
+				}
+			}
+			StatementKind::Local => {
+				if let Some(field) = &statement.decl {
+					self.placement(field, fields, machinery, previous)?;
+					return Ok(());
+				}
+			}
+			StatementKind::If => {
+				// Only worth taking apart when a block places something. An
+				// `if` of `std::print` calls, assignments and `return`s reads
+				// nothing, and one gap naming the `if` says more than one gap
+				// per statement inside it.
+				if let Some(branches) = &statement.branches {
+					let halves = [&branches.then, &branches.otherwise];
+					if halves.iter().any(|half| places_anything(half))
+						&& halves.iter().all(|half| every_statement_says_something(half))
+					{
+						return self.top_conditional(statement, fields, machinery, previous);
+					}
+				}
+			}
+			_ => {}
+		}
+		self.report.gap(
+			self.at(statement.pos),
+			first_line(&statement.text),
+			format!("{} at the top level, which the converter does not run", kind_name(statement.kind)),
+		);
+		Ok(())
+	}
+
+	/// A top-level `if`, as one `When` per block over an inline structure of
+	/// what the block places.
+	///
+	/// This is the same lowering an `if` inside a structure gets, and it works
+	/// at the top level for the same reason the placements around it do: every
+	/// top-level field reads at an address of its own, so a block that could
+	/// not be said moves nothing. A block that places nothing leaves no field
+	/// behind, which is what a block of `std::print` calls should leave.
+	fn top_conditional(
+		&mut self,
+		statement: &'a super::ast::Statement,
+		fields: &mut Vec<Field>,
+		machinery: &mut Vec<Arc<str>>,
+		previous: &mut Option<String>,
+	) -> Result<(), HexpatError> {
+		let branches = statement.branches.as_ref().expect("the two halves");
+		let path = self.at(statement.pos);
+		let source = format!("if ({})", branches.cond);
+		let cond = match self.expr(&branches.cond) {
+			Ok(cond) => cond,
+			Err(gap) => {
+				self.report.gap(path, source, gap.reason);
+				return Ok(());
+			}
+		};
+		self.report.became(path, source, "one condition over the whole block, not one per field");
+		for (half, negated) in [(&branches.then, false), (&branches.otherwise, true)] {
+			if half.is_empty() {
+				continue;
+			}
+			self.blocks += 1;
+			let name = format!("{}_{}", if negated { "else" } else { "if" }, self.blocks);
+			let mut inner: Vec<Field> = Vec::new();
+			let mut inner_machinery: Vec<Arc<str>> = Vec::new();
+			self.stack.push(Frame::new(true));
+			for member in half {
+				self.top_statement(member, &mut inner, &mut inner_machinery, previous)?;
+			}
+			let frame = self.stack.pop().expect("a frame");
+			if let Some(outer) = self.stack.last_mut() {
+				outer.hidden.extend(frame.names);
+				outer.hidden.extend(frame.hidden);
+			}
+			if inner.is_empty() {
+				continue;
+			}
+			let mut def = empty_struct(&name);
+			def.inline = true;
+			def.fields = inner;
+			def.machinery.extend(inner_machinery);
+			let ty = Ty::Struct(Arc::new(def));
+			let when = if negated { cond.clone().negate() } else { cond.clone() };
+			machinery.push(Arc::from(name.as_str()));
+			fields.push(named_field(&name, Ty::when(when, ty), false));
 		}
 		Ok(())
 	}
@@ -2776,6 +2878,37 @@ struct Folded {
 	decls: HashMap<usize, Fold>,
 	/// Those declarations again, by the index of the `if` that settles each.
 	at_if: HashMap<usize, Vec<usize>>,
+}
+
+/// Whether any of these statements reads the file: a declaration with an
+/// address, or an `if` holding one.
+fn places_anything(statements: &[super::ast::Statement]) -> bool {
+	statements.iter().any(|statement| match statement.kind {
+		StatementKind::Local => statement.decl.as_ref().is_some_and(|field| field.placement.is_some()),
+		StatementKind::If => statement
+			.branches
+			.as_ref()
+			.is_some_and(|branches| places_anything(&branches.then) || places_anything(&branches.otherwise)),
+		_ => false,
+	})
+}
+
+/// Whether every one of these statements is something the converter has a
+/// reading for: a declaration, a call, or an `if` of the same.
+///
+/// A block with a `return`, an assignment or a loop in it is taken as a whole
+/// instead, and reported once. Walking into it would put a gap on every
+/// statement in place of the one gap on the `if`, which says less and counts
+/// more.
+fn every_statement_says_something(statements: &[super::ast::Statement]) -> bool {
+	statements.iter().all(|statement| match statement.kind {
+		StatementKind::Local => statement.decl.is_some(),
+		StatementKind::Call => statement.call.is_some(),
+		StatementKind::If => statement.branches.as_ref().is_some_and(|branches| {
+			every_statement_says_something(&branches.then) && every_statement_says_something(&branches.otherwise)
+		}),
+		_ => false,
+	})
 }
 
 /// The statement one half of a folded `if` holds.

@@ -467,6 +467,53 @@ fn a_structure_ends_at_the_member_that_could_not_be_placed() {
 }
 
 /* ------------------------------------------------------------------ */
+/* The top level                                                       */
+/* ------------------------------------------------------------------ */
+
+/// `const T x = e;` at the top level is a global, not a local of a function.
+/// The reference declares it in the global scope and the rest of the pattern
+/// names it, so it is a value worked out before anything is read, and a
+/// placement may use it as an address or a count.
+#[test]
+fn a_const_global_is_a_value_the_rest_of_the_pattern_can_name() {
+	let out = clean("const u32 ROWS = 3;\nstruct S { u8 cells[ROWS]; };\nS s @ 0x00;\n");
+	assert_eq!(read(&out, &[1, 2, 3, 4], &["s", "cells"]), "3 children");
+}
+
+/// The reference refuses `const` on a placed variable, and so does the parser.
+#[test]
+fn a_const_placement_is_refused_the_way_the_reference_refuses_it() {
+	let Err(error) = hexpat::convert("const u8 x @ 0x00;\n", &NoFiles) else { panic!("refused") };
+	assert!(error.message.contains("const"), "{}", error.message);
+}
+
+/// A top-level `if` whose blocks place fields is one `When` per block over an
+/// inline structure of what the block placed, the same shape an `if` inside a
+/// structure gets.
+#[test]
+fn a_top_level_if_that_places_fields_is_one_when_per_block() {
+	let out = clean(
+		"u8 kind @ 0x00;\n\
+		 if (kind == 1) {\n\
+		 \tu16 wide @ 0x01;\n\
+		 } else {\n\
+		 \tu8 narrow @ 0x01;\n\
+		 }\n",
+	);
+	assert_eq!(read(&out, &[1, 0x34, 0x12], &["if_1", "wide"]), "4660");
+	assert_eq!(read(&out, &[2, 0x34, 0x12], &["else_2", "narrow"]), "52");
+}
+
+/// A block that places nothing is left as one gap naming the `if`. A gap on
+/// every statement inside it would say less and count more.
+#[test]
+fn a_top_level_if_that_places_nothing_is_one_gap_for_the_whole_if() {
+	let out = convert("u8 kind @ 0x00;\nif (kind == 1) {\n\tstd::print(\"one\");\n\tkind = 2;\n}\n");
+	assert_eq!(out.report.gaps.len(), 1, "{}", gap_reasons(&out));
+	assert!(gap_reasons(&out).contains("`if` statement outside a structure"), "{}", gap_reasons(&out));
+}
+
+/* ------------------------------------------------------------------ */
 /* Assignments                                                         */
 /* ------------------------------------------------------------------ */
 
