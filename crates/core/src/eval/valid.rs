@@ -154,6 +154,16 @@ impl Evaluator {
         // least 2` is the kind of answer this file exists to prevent.
         match float_of(&value) {
             Some(f) => self.real_bound(doc, end, valid, f),
+            // A structure or a list, whose `as_int` is how many children it
+            // has. Comparing that with a bound meant for a value would answer
+            // `ok: false` about a count nobody wrote a bound about, which is
+            // the one answer this file exists to prevent. `constraint` already
+            // keeps a plain list out; this catches a list behind a condition
+            // or a window, and a structure a converter put the bound on.
+            None if matches!(value, Value::Composite { .. }) => {
+                debug_assert!(false, "a bound on {value:?}, which is a count of children rather than a value");
+                Ok(holds())
+            }
             None => match value.as_int() {
                 Some(v) => self.whole_bound(doc, end, valid, v),
                 // Text, a run of bytes too long to be a number, a field whose
@@ -489,6 +499,23 @@ mod tests {
         assert_eq!(ev.valid_of(&d, &[0, 1]).unwrap().unwrap().text, "Not allowed: not a number");
         // The list itself is not what the claim is about.
         assert_eq!(ev.valid_of(&d, &[0]).unwrap(), None);
+    }
+
+    /// A list behind a condition or a window is still a list, and a structure
+    /// is not a value either. Neither is compared with a bound: what
+    /// `as_int` answers for both is how many children they have, and a
+    /// verdict about that is a verdict about something nobody declared.
+    #[test]
+    fn a_count_of_children_is_never_what_a_bound_is_compared_with() {
+        let ty = T::structure("Root", vec![("run", T::when(E::lit(1), T::array(T::u8(), E::lit(2))))])
+            .field_valid("run", Valid::Min(E::lit(5)));
+        let d = Document::new(MemSource(vec![5, 6]));
+        let mut ev = Evaluator::new(Template::new("t", ty));
+        // The elements are what the claim is about, and both hold.
+        assert!(ev.valid_of(&d, &[0, 0]).unwrap().unwrap().ok);
+        assert!(ev.valid_of(&d, &[0, 1]).unwrap().unwrap().ok);
+        // The run itself holds two children, and two is not the value.
+        assert!(ev.valid_of(&d, &[0]).unwrap().is_none_or(|v| v.ok));
     }
 
     /// A value that cannot be read is no verdict at all, and passes the

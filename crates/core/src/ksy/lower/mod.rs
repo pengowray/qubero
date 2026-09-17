@@ -1190,6 +1190,25 @@ impl<'a> Lower<'a> {
 			return None;
 		}
 		let path = format!("{}/valid", attr.path);
+		// A bound that compares numbers needs a number to compare. Kaitai
+		// writes `valid` on runs of bytes, on text and on user types as well,
+		// where it compares whole values, and the IR has no expression for
+		// that: lowered anyway, a `valid: 7` on a twenty-byte field would rule
+		// out every file. `expr` and `in-enum` do not compare, so they pass.
+		let compares = !matches!(spec, ValidSpec::Expr(_) | ValidSpec::InEnum);
+		let numeric = matches!(
+			attr.ty,
+			TypeRef::Int { .. } | TypeRef::Float { .. } | TypeRef::Bits { .. }
+		);
+		if compares && !numeric {
+			self.report.note(
+				path,
+				source_of(attr),
+				"`valid` is not carried over: it compares a value that is not a number, which a template expression cannot say; the field is read the same and left unchecked"
+					.to_string(),
+			);
+			return None;
+		}
 		let lowered = match spec {
 			ValidSpec::Eq(e) => self.lower_expr(ctx, &path, e).map(Valid::Eq),
 			ValidSpec::Min(e) => self.lower_expr(ctx, &path, e).map(Valid::Min),
