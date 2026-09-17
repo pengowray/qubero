@@ -1,7 +1,7 @@
 //! What the web reads about a value its format rules out, or has no name for.
 //!
 //! The bytes are built here rather than taken from the sample collection: a
-//! file with a signature that does not match and a colour type nobody defined
+//! file with a signature that does not match and a colour type PNG rules out
 //! is exactly the file nobody keeps. The PNG template is applied by name for
 //! the same reason, since bytes with the wrong signature sniff as nothing.
 
@@ -75,17 +75,20 @@ fn a_signature_that_matches_carries_no_problem() {
 }
 
 #[test]
-fn a_colour_type_nobody_defined_is_undefined_and_names_its_enum() {
+fn a_colour_type_the_format_rules_out_is_invalid_and_lists_the_allowed_ones() {
+    // PNG declares which colour types exist, so a ninth is not a value
+    // Qubero has no name for: the format rules it out, and the constraint
+    // outranks the missing name.
     let mut ed = editor(png(b"\x89PNG\r\n\x1a\n", 9));
     let color = node(&mut ed, &[1, 0, 2, 3]);
-    assert_eq!(color["problem"]["tier"], "undefined", "{color}");
-    assert_eq!(color["problem"]["text"], "Undefined in ColorType", "{color}");
+    assert_eq!(color["problem"]["tier"], "invalid", "{color}");
+    assert_eq!(color["problem"]["text"], "Not allowed: must be one of 0, 2, 3, 4, and 1 more", "{color}");
     assert_eq!(color["value"], "9 (unknown)", "{color}");
     // The header the field sits in counts it, and so does the file.
     let ihdr = node(&mut ed, &[1, 0, 2]);
-    assert_eq!(ihdr["problems_within"], serde_json::json!([0, 1]), "{ihdr}");
+    assert_eq!(ihdr["problems_within"], serde_json::json!([1, 0]), "{ihdr}");
     let root = node(&mut ed, &[]);
-    assert_eq!(root["problems_within"], serde_json::json!([0, 1]), "{root}");
+    assert_eq!(root["problems_within"], serde_json::json!([1, 0]), "{root}");
 }
 
 #[test]

@@ -1082,10 +1082,23 @@ impl Evaluator {
         // have been found under this node so far. A float is classified from
         // its own bits rather than from the double it was read into: widening
         // an f32 quiets a signalling NaN.
-        let problem = match &value {
+        let mut problem = match &value {
             Value::Float(f) if !f.is_finite() => problem::of(&value, &r.ty, self.float_pattern(doc, &r)),
             v => problem::of(v, &r.ty, None),
         };
+        // A constraint the template declared outranks a name Qubero lacks: a
+        // colour type PNG never defined is undefined until the template says
+        // it must be one of five, and then it is invalid. A constraint that
+        // cannot be worked out (a bound over a real, a field of the wrong
+        // kind) is not checked rather than failed, which is the checksum rule.
+        // Pending is passed on as it is for every other reading.
+        if !matches!(problem, Some(Problem { tier: Tier::Invalid, .. })) {
+            match self.valid_of(doc, path) {
+                Ok(Some(v)) if !v.ok => problem = Some(Problem { tier: Tier::Invalid, text: v.text }),
+                Ok(_) | Err(EvalError::Failed(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
         if let Some(p) = &problem {
             self.problems.note(path, p.tier);
         }

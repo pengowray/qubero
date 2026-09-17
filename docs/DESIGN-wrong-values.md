@@ -115,13 +115,14 @@ pub enum Valid {
     InEnum,
     /// This expression is non-zero. `Expr::less_than` and `equals` exist,
     /// so any comparison is writable; `This` is the field's own value.
-    Expr(Expr),
+    /// `msg` is what an ImHex assert says when it fails, kept for the text.
+    Expr { expr: Expr, msg: Option<Arc<str>> },
     /// A float that is not NaN and not infinite.
     Finite,
 }
 ```
 
-`Field.valid: Option<Valid>`, set with `Ty::field_valid(name, Valid::..)` the
+`Field.valid: Option<Arc<Valid>>`, set with `Ty::field_valid(name, Valid::..)` the
 way `field_doc` and `field_table` are. It mirrors `ksy::spec::ValidSpec` case
 for case so the Kaitai converter lowers `valid:` instead of noting it, and the
 ImHex converter lowers a `std::assert(cond, msg)` whose condition names only
@@ -331,11 +332,19 @@ Sign-off still wanted on the expression case.
 
 1. Core: `Problem` on `NodeInfo`, built for magic, enum, flags, float. Drop
    the reason from the value text. `problems_within` in the child walk. Tests
-   on `template_text` snapshots and a `table_shape`-style wasm test.
+   on `template_text` snapshots and a `table_shape`-style wasm test. Done
+   2026-09-17.
 2. Web: read `problem` in listing, chips, inspector. The glyph and CSS.
-   Overview line. This alone closes the magic and enum cases.
+   Overview line. This alone closes the magic and enum cases. Done 2026-09-17.
 3. Toolbar: root problem into `identity.ts`; menu picks update the answer.
-4. `Field::valid`, `Expr::This`, WAV and one Kaitai format as the two
-   templates that pay for it; the converters lower `valid` and simple asserts.
+   Done 2026-09-17.
+4. `Field::valid`, `Expr::This`, PNG as the template that pays for it; the
+   converters lower `valid` and simple asserts. Done 2026-09-17, with these
+   left over: WAV's `Finite` on float samples waits for the table view's
+   `Samples` wrapper to land, since both wrap the same run and the field the
+   constraint hangs on is that wrapper's; `machinery::ty_refs` does not see a
+   bound that names another field, because it marks earlier siblings only
+   and a `Role::Bound` through origin.rs is the honest route; ImHex
+   `std::assert_warn` lowers like `std::assert` and loses its softer tier.
 5. Eager checksums under the cap, cached on the node.
 6. Table view cells and header counts, once the table tab exists.
