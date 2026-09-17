@@ -104,8 +104,32 @@ impl Evaluator {
     fn count_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], e: &Expr) -> R<Option<u64>> {
         match self.eval_expr(doc, path, e) {
             Ok(v) if v > 0 => Ok(u64::try_from(v).ok()),
+            // No count, which for a field written as a float is the whole
+            // number reading declining to round it rather than the field
+            // saying nought. Asked again as a real before it is given up on.
+            Ok(_) => self.real_count_at(doc, path, e),
+            Err(err) if err.interrupted() => Err(err),
+            Err(_) => self.real_count_at(doc, path, e),
+        }
+    }
+
+    /// The same number asked for again as a real, for the file that wrote it
+    /// as one.
+    ///
+    /// AIFF's sample rate is an 80-bit extended float, so it says 44100.0 and
+    /// the whole-number reading of a field will not have it: a field that is a
+    /// float either refuses outright or, reached as a sibling, answers with
+    /// the nought that means nothing was found. That is right everywhere else,
+    /// because a length or an offset that is not whole is a misread rather
+    /// than a number to truncate. Rows a second is a count either way, and a
+    /// rate the file states exactly is the one place where dropping the
+    /// fraction is what the reader meant.
+    fn real_count_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], e: &Expr) -> R<Option<u64>> {
+        let here = self.memo.get(path).map(|r| (r.offset, r.limit));
+        match self.eval_real_at(doc, path, e, here) {
+            Ok(v) if v.is_finite() && v >= 1.0 => Ok(u64::try_from(v.trunc() as i128).ok()),
             Ok(_) => Ok(None),
-            Err(e) if e.interrupted() => Err(e),
+            Err(err) if err.interrupted() => Err(err),
             Err(_) => Ok(None),
         }
     }

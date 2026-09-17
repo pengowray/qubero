@@ -6,7 +6,7 @@
 //! nothing else in common use writes. The IR reads one now, so the field says
 //! 44100 rather than sitting there as ten bytes nobody can spend.
 
-use crate::template::{Endian::*, Expr as E, Template, Time, Ty as T};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Time, Ty as T};
 
 use super::iff::{cc, chunk_text, iff};
 
@@ -43,7 +43,13 @@ fn comm() -> T {
             // 80-bit extended: a sign, fifteen bits of exponent and a
             // sixty-four bit significand with its leading one written out.
             ("sample_rate", T::F80(Big)),
-            ("compression", T::bytes(E::Remaining)),
+            // AIFC adds a four-character compression id and then a Pascal
+            // string naming it for a person. An AIFF chunk ends before both,
+            // so the id is as much of four bytes as the chunk has left, which
+            // there is none: a switch reading it gets nought, which is the
+            // same answer as no chunk at all and takes the same branch.
+            ("compression", T::text(StrLen::Fixed(E::Remaining.at_most(E::lit(4))), Encoding::Ascii)),
+            ("compression_name", T::bytes(E::Remaining)),
         ],
     )
 }
@@ -56,9 +62,82 @@ fn ssnd() -> T {
         vec![
             ("offset", T::u32(Big)),
             ("block_size", T::u32(Big)),
-            ("samples", T::bytes(E::Remaining)),
+            ("samples", sample_table()),
         ],
     )
+}
+
+/// The samples, read as what the `COMM` chunk earlier in the file said they
+/// are. `COMM` is a sibling chunk rather than a field of this one, and a
+/// `FVER`, a `NAME` or a `MARK` can sit between the two, so the width is asked
+/// of the nearest earlier chunk that declares one.
+///
+/// AIFF samples are two's-complement signed at every width, eight bits
+/// included, which is where this differs from WAV: a WAV's 8-bit samples are
+/// unsigned with 128 for silence.
+///
+/// AIFC keeps the same frame and names a compression in front of the samples.
+/// Two of the four in common use are not compression at all: `sowt` is the
+/// same PCM with its bytes the other way round, which is what a little-endian
+/// machine writes, and `fl32`/`fl64` are floats. A compression nobody here
+/// reads keeps its bytes as bytes.
+fn samples() -> T {
+    let raw = || T::bytes(E::Remaining);
+    let run = |width: i128, elem: T| T::array(elem, E::Remaining.div(E::lit(width)));
+    let by_width = |endian| {
+        T::switch(
+            E::sibling(&["body", "sample_size"]),
+            vec![
+                (8, run(1, T::Int { bits: 8, endian })),
+                (16, run(2, T::Int { bits: 16, endian })),
+                (24, run(3, T::Int { bits: 24, endian })),
+                (32, run(4, T::Int { bits: 32, endian })),
+            ],
+            raw(),
+        )
+    };
+    T::switch(
+        E::sibling(&["body", "compression"]),
+        vec![
+            // No compression field at all, which is what an AIFF has.
+            (0, by_width(Big)),
+            (cc("NONE"), by_width(Big)),
+            (cc("sowt"), by_width(Little)),
+            (cc("fl32"), run(4, T::F32(Big))),
+            (cc("FL32"), run(4, T::F32(Big))),
+            (cc("fl64"), run(8, T::F64(Big))),
+            (cc("FL64"), run(8, T::F64(Big))),
+        ],
+        raw(),
+    )
+}
+
+/// The samples, and what makes a table of them: the channels interleaved into
+/// rows, the rate those rows come at, and the `COMM` fields a reader wants to
+/// see above the table.
+///
+/// A structure of one field, for the reason `formats::wav` gives: the run is a
+/// switch with an array at the end of each branch, and a switch has no field
+/// for the shape to sit on.
+fn sample_table() -> T {
+    let shape = TableShape {
+        // Interleaved: one row is one sample of each channel, which AIFF
+        // calls a frame.
+        columns: Some(E::sibling(&["body", "channels"])),
+        names: vec!["left".into(), "right".into()],
+        units: vec!["".into(), "".into()],
+        column_word: Some("channel".into()),
+        row_word: Some("sample".into()),
+        // An 80-bit extended float, and 44100.0 of them a second is a rate.
+        rate: Some(E::sibling(&["body", "sample_rate"])),
+        facts: vec![
+            E::sibling(&["body", "channels"]),
+            E::sibling(&["body", "sample_size"]),
+            E::sibling(&["body", "sample_rate"]),
+            E::sibling(&["body", "compression"]),
+        ],
+    };
+    T::structure("Samples", vec![("samples", samples())]).field_table("samples", shape)
 }
 
 /// AIFC's version, written as a date: 0xA2805140 is 23 May 1990, and it is the
@@ -150,6 +229,106 @@ mod tests {
         assert_eq!(w.data, vec![0x40, 0x0e, 0xbb, 0x80, 0, 0, 0, 0, 0, 0]);
         assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().value, Value::Str("Sample".into()));
         assert_eq!(ev.node(&d, &[3, 2, 2, 2]).unwrap().size_bits, 16 * 8);
+    }
+
+    /// A FORM of a COMM and an SSND, with the COMM's AIFC tail and the sound
+    /// bytes given. The tail is empty for a plain AIFF.
+    fn sound(channels: u16, bits: u16, tail: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut comm = channels.to_be_bytes().to_vec();
+        comm.extend_from_slice(&((data.len() / 2) as u32).to_be_bytes());
+        comm.extend_from_slice(&bits.to_be_bytes());
+        comm.extend_from_slice(&[0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0]); // 44100
+        comm.extend_from_slice(tail);
+
+        let mut ssnd = vec![0u8; 8];
+        ssnd.extend_from_slice(data);
+
+        let mut chunks = chunk(b"COMM", &comm);
+        chunks.extend_from_slice(&chunk(b"SSND", &ssnd));
+        let mut v = b"FORM".to_vec();
+        v.extend_from_slice(&((4 + chunks.len()) as u32).to_be_bytes());
+        v.extend_from_slice(if tail.is_empty() { b"AIFF" } else { b"AIFC" });
+        v.extend_from_slice(&chunks);
+        v
+    }
+
+    /// Where the run of samples sits: the SSND is the second chunk, its body's
+    /// third field is the wrapper, and the run is the wrapper's only field.
+    const SAMPLES: [usize; 5] = [3, 1, 2, 2, 0];
+
+    #[test]
+    fn the_samples_read_as_a_table_of_a_sample_of_each_channel() {
+        let mut data = Vec::new();
+        for s in [1i16, -1, 2, -2, 3, -3, 4, -4] {
+            data.extend_from_slice(&s.to_be_bytes());
+        }
+        let d = Document::new(MemSource(sound(2, 16, &[], &data)));
+        let mut ev = Evaluator::new(aiff());
+
+        let node = ev.node(&d, &SAMPLES).unwrap();
+        assert!(node.table, "the samples should read as a table");
+        assert_eq!(node.type_name, "i16 be[]");
+        assert_eq!(node.child_count, 8);
+        assert_eq!(ev.node(&d, &[3, 1, 2, 2, 0, 1]).unwrap().value, Value::Int(-1));
+
+        let shape = ev.table_shape(&d, &SAMPLES).unwrap().expect("a shape");
+        assert_eq!(shape.columns, Some(2));
+        // The rate is the 80-bit extended float the COMM holds, and 44100.0
+        // of anything a second is a rate of 44100.
+        assert_eq!(shape.rate, Some(44100));
+        assert_eq!(shape.row_word.as_deref(), Some("sample"));
+        assert_eq!(shape.column_word.as_deref(), Some("channel"));
+        let labels: Vec<&str> = shape.facts.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, ["body.channels", "body.sample_size", "body.sample_rate", "body.compression"]);
+        for f in &shape.facts {
+            assert!(!f.path.is_empty(), "{} has nowhere to go", f.label);
+        }
+
+        // One sample of the run is not a table of its own.
+        assert!(!ev.node(&d, &[3, 1, 2, 2, 0, 0]).unwrap().table);
+        assert_eq!(ev.table_shape(&d, &[3, 1, 2, 2, 0, 0]).unwrap(), None);
+    }
+
+    #[test]
+    fn an_aifc_reads_its_samples_as_the_compression_says() {
+        // A Pascal string naming the compression follows the four-character
+        // id, padded to an even length, and it is empty in all of these.
+        let tail = |id: &[u8; 4]| {
+            let mut t = id.to_vec();
+            t.extend_from_slice(&[0, 0]);
+            t
+        };
+        for (id, bits, name, children) in [
+            (b"NONE", 16u16, "i16 be[]", 8),
+            (b"sowt", 16, "i16 le[]", 8),
+            (b"fl32", 32, "f32 be[]", 4),
+            (b"FL32", 32, "f32 be[]", 4),
+            (b"fl64", 64, "f64 be[]", 2),
+            (b"FL64", 64, "f64 be[]", 2),
+        ] {
+            let d = Document::new(MemSource(sound(1, bits, &tail(id), &[0u8; 16])));
+            let mut ev = Evaluator::new(aiff());
+            let what = String::from_utf8_lossy(id).to_string();
+            let node = ev.node(&d, &SAMPLES).unwrap();
+            assert_eq!(node.type_name, name, "{what}");
+            assert_eq!(node.child_count, children, "{what}");
+            assert_eq!(ev.table_shape(&d, &SAMPLES).unwrap().expect("a shape").columns, Some(1), "{what}");
+        }
+        // Real compression, which nothing here decodes: the bytes stay bytes.
+        let d = Document::new(MemSource(sound(1, 16, &tail(b"ima4"), &[0u8; 16])));
+        let mut ev = Evaluator::new(aiff());
+        assert_eq!(ev.node(&d, &SAMPLES).unwrap().type_name, "bytes[]");
+    }
+
+    #[test]
+    fn a_width_the_common_chunk_names_is_the_width_the_samples_are_read_at() {
+        for (bits, name, children) in [(8u16, "i8[]", 16), (24, "i24 be[]", 5), (32, "i32 be[]", 4)] {
+            let d = Document::new(MemSource(sound(1, bits, &[], &[0u8; 16])));
+            let mut ev = Evaluator::new(aiff());
+            let node = ev.node(&d, &SAMPLES).unwrap();
+            assert_eq!(node.type_name, name, "{bits} bits");
+            assert_eq!(node.child_count, children, "{bits} bits");
+        }
     }
 
     #[test]
