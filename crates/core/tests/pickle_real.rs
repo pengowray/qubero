@@ -765,7 +765,9 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
 
 /// Every node's children tile it: they start where it starts, they follow each
 /// other, and the last of them ends where it ends. Rows worked out from the
-/// match have no bytes and are not part of the tiling.
+/// match, rather than read from the file, are not part of the tiling. A
+/// field the file did write is part of it even when it reads no bytes, such as
+/// the numbers of an array whose shape is 0.
 fn covers(rows: &[Row], what: &str) {
     for (i, row) in rows.iter().enumerate() {
         let kids: Vec<&Row> = rows[i + 1..]
@@ -778,8 +780,8 @@ fn covers(rows: &[Row], what: &str) {
         }
         let mut want = row.at;
         for kid in kids {
-            if kid.len == 0 {
-                assert_eq!(kid.at, row.at, "{what}: {} is nowhere", kid.name);
+            if kid.ty.starts_with("computed") {
+                assert_eq!(kid.at, row.at, "{what}: {} is worked out from the match, so it belongs where {} starts", kid.name, row.name);
                 continue;
             }
             assert_eq!(kid.at, want, "{what}: {} in {} leaves {want:#x} over", kid.name, row.name);
