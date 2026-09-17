@@ -25,7 +25,7 @@ import type { RecordCell } from "./records.ts";
 import { bitSizeText, REPORT, TABLE } from "./strings.ts";
 import { fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
-/** Height of one row, which must match `--tv-row` in the stylesheet: the rows
+/** Height of one row, which must match `--tbl-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
  *  from under its own place. */
 const ROW = 22;
@@ -95,14 +95,14 @@ export class TableView {
     this.plan = plan;
     this.addresses = localStorage.getItem(ADDRESSES_KEY) === "1";
     this.el = el("div", { className: "tableview" });
-    this.head = el("div", { className: "tv-head" });
-    this.scroller = el("div", { className: "tv-scroll" });
+    this.head = el("div", { className: "tbl-head" });
+    this.scroller = el("div", { className: "tbl-scroll" });
     this.scroller.tabIndex = 0;
-    this.canvas = el("div", { className: "tv-canvas" });
+    this.canvas = el("div", { className: "tbl-canvas" });
     this.scroller.append(this.canvas);
-    this.copyButton = el("button", { type: "button", className: "tv-copy" });
+    this.copyButton = el("button", { type: "button", className: "tbl-copy" });
     this.copyButton.addEventListener("click", () => void this.copySelection());
-    this.notice = el("div", { className: "tv-notice", hidden: true });
+    this.notice = el("div", { className: "tbl-notice", hidden: true });
     this.el.append(this.bar(opts.title), this.head, this.scroller, this.notice);
     this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
@@ -126,13 +126,13 @@ export class TableView {
   // ----- the bar above the table -----
 
   private bar(title: string): HTMLElement {
-    const bar = el("header", { className: "tv-bar" });
-    bar.append(el("b", { className: "tv-title", textContent: title }));
-    bar.append(el("span", { className: "tv-count", textContent: TABLE.count(this.plan.count, this.plan.rowWord) }));
+    const bar = el("header", { className: "tbl-bar" });
+    bar.append(el("b", { className: "tbl-title", textContent: title }));
+    bar.append(el("span", { className: "tbl-count", textContent: TABLE.count(this.plan.count, this.plan.rowWord) }));
     for (const fact of this.plan.facts) {
       const button = el("button", {
         type: "button",
-        className: "tv-fact",
+        className: "tbl-fact",
         textContent: `${fact.label} ${factValue(fact.value)}`,
       });
       button.title = TABLE.factTitle(fact.label);
@@ -145,7 +145,7 @@ export class TableView {
       const said = rate.toLocaleString();
       bar.append(
         el("span", {
-          className: "tv-meaning",
+          className: "tbl-meaning",
           textContent:
             word === null
               ? TABLE.rowMeaningPlain(this.plan.rowWord, said)
@@ -153,7 +153,7 @@ export class TableView {
         }),
       );
     }
-    const box = el("input", { type: "checkbox", className: "tv-addr-box", checked: this.addresses });
+    const box = el("input", { type: "checkbox", className: "tbl-addr-box", checked: this.addresses });
     box.addEventListener("change", () => {
       this.addresses = box.checked;
       localStorage.setItem(ADDRESSES_KEY, box.checked ? "1" : "0");
@@ -161,7 +161,7 @@ export class TableView {
       this.fillHead();
       this.paintAgain();
     });
-    bar.append(el("label", { className: "tv-addr" }, box, TABLE.addresses));
+    bar.append(el("label", { className: "tbl-addr" }, box, TABLE.addresses));
     bar.append(this.copyButton);
     return bar;
   }
@@ -177,7 +177,7 @@ export class TableView {
     const time = this.plan.rate !== null && this.plan.rate > 0 ? ` ${timeWidth(this.plan.count, this.plan.rate)}ch` : "";
     const data = this.fits.map((fit) => `${fit.width}ch`).join(" ");
     const addresses = this.addresses ? " 12ch 9ch" : "";
-    this.el.style.setProperty("--tv-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
+    this.el.style.setProperty("--tbl-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
   }
 
   /** The heading of one data column, unit included. */
@@ -200,26 +200,26 @@ export class TableView {
       if (now === was) continue;
       this.fits[c] = now;
       if (now.width !== was.width) widened = true;
-      if (now.numeric !== was.numeric) this.heads[c]?.classList.toggle("tv-num", now.numeric === true);
+      if (now.numeric !== was.numeric) this.heads[c]?.classList.toggle("tbl-num", now.numeric === true);
     }
     if (widened) this.layColumns();
   }
 
   private fillHead(): void {
-    const cells: HTMLElement[] = [el("span", { className: "tv-th tv-index tv-num", textContent: TABLE.index })];
+    const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
     if (this.plan.rate !== null && this.plan.rate > 0) {
-      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.time }));
+      cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
     }
     this.heads = this.plan.columns.map((_, c) => {
       const text = this.headingOf(c);
-      const cell = el("span", { className: this.fits[c]?.numeric === true ? "tv-th tv-num" : "tv-th", textContent: text });
+      const cell = el("span", { className: this.fits[c]?.numeric === true ? "tbl-th tbl-num" : "tbl-th", textContent: text });
       cell.title = text;
       return cell;
     });
     cells.push(...this.heads);
     if (this.addresses) {
-      cells.push(el("span", { className: "tv-th", textContent: TABLE.storedAt }));
-      cells.push(el("span", { className: "tv-th tv-num", textContent: TABLE.size }));
+      cells.push(el("span", { className: "tbl-th", textContent: TABLE.storedAt }));
+      cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.size }));
     }
     this.head.replaceChildren(...cells);
   }
@@ -310,18 +310,18 @@ export class TableView {
   private drawRow(i: number, row: TableRow): HTMLElement {
     const range = this.range();
     const on = range !== null && i >= range.from && i < range.to;
-    const element = el("div", { className: on ? "tv-row is-on" : "tv-row" });
-    element.append(el("span", { className: "tv-cell tv-index tv-num", textContent: i.toLocaleString() }));
+    const element = el("div", { className: on ? "tbl-row is-on" : "tbl-row" });
+    element.append(el("span", { className: "tbl-cell tbl-index tbl-num", textContent: i.toLocaleString() }));
     const rate = this.plan.rate;
     if (rate !== null && rate > 0) {
-      element.append(el("span", { className: "tv-cell tv-time tv-num", textContent: timeText(i, rate) }));
+      element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
     }
     for (let c = 0; c < this.plan.columns.length; c++) {
       element.append(this.drawCell(row.cells[c], this.fits[c]?.numeric === true));
     }
     if (this.addresses) {
-      element.append(el("span", { className: "tv-cell tv-at", textContent: formatOffset(row.offsetBits) }));
-      element.append(el("span", { className: "tv-cell tv-size tv-num", textContent: bitSizeText(row.sizeBits) }));
+      element.append(el("span", { className: "tbl-cell tbl-at", textContent: formatOffset(row.offsetBits) }));
+      element.append(el("span", { className: "tbl-cell tbl-size tbl-num", textContent: bitSizeText(row.sizeBits) }));
     }
     return element;
   }
@@ -329,10 +329,10 @@ export class TableView {
   /** One cell. A cell naming another part of the file is a link to it, the
    *  same cross-reference a record table in the listing draws. */
   private drawCell(cell: RecordCell | undefined, numeric: boolean): HTMLElement {
-    if (cell === undefined) return el("span", { className: "tv-cell" });
+    if (cell === undefined) return el("span", { className: "tbl-cell" });
     const link = cell.link;
     if (link !== undefined) {
-      const button = el("button", { type: "button", className: "tv-cell rec-link", textContent: link.text });
+      const button = el("button", { type: "button", className: "tbl-cell rec-link", textContent: link.text });
       button.title = link.label;
       button.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -340,7 +340,7 @@ export class TableView {
       });
       return button;
     }
-    const element = el("span", { className: `tv-cell ${fieldClass(cell.kind)}${numeric ? " tv-num" : ""}`, textContent: cell.text });
+    const element = el("span", { className: `tbl-cell ${fieldClass(cell.kind)}${numeric ? " tbl-num" : ""}`, textContent: cell.text });
     element.title = cell.text;
     return element;
   }
@@ -348,9 +348,9 @@ export class TableView {
   /** A row whose bytes are not here yet. It keeps its place and its number, so
    *  the table does not jump when the answer arrives in it. */
   private drawWaiting(i: number): HTMLElement {
-    const element = el("div", { className: "tv-row tv-waiting" });
-    element.append(el("span", { className: "tv-cell tv-index", textContent: i.toLocaleString() }));
-    element.append(el("span", { className: "tv-cell", textContent: REPORT.paneWaiting }));
+    const element = el("div", { className: "tbl-row tbl-waiting" });
+    element.append(el("span", { className: "tbl-cell tbl-index", textContent: i.toLocaleString() }));
+    element.append(el("span", { className: "tbl-cell", textContent: REPORT.paneWaiting }));
     return element;
   }
 
@@ -409,7 +409,7 @@ export class TableView {
   private onClick(e: MouseEvent): void {
     const target = e.target;
     if (!(target instanceof Element)) return;
-    const at = target.closest<HTMLElement>(".tv-row")?.dataset["index"];
+    const at = target.closest<HTMLElement>(".tbl-row")?.dataset["index"];
     if (at === undefined) return;
     this.pick(Number(at), e.shiftKey);
   }
