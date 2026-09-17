@@ -19,7 +19,7 @@
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
 //! read by the same template that reads one at the front of an MP3.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, Template, Ty as T, Until, Valid};
 
 /// A four-character chunk id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -202,7 +202,20 @@ fn samples(endian: Endian) -> T {
             raw(),
         )
     };
-    let floats = || T::switch(bits(), vec![(32, run(4, T::F32(endian))), (64, run(8, T::F64(endian)))], raw());
+    // IEEE float samples are real numbers by the format's own definition, so a
+    // NaN or an infinity in one is not a value WAVE never got round to naming:
+    // it is a file no player will play, usually a mixdown that divided by
+    // silence. Saying so needs a field to hang the claim on, which a bare run
+    // of samples has not got, so each width's run is a field of its own inside
+    // a record. Only under format tag 3: the same `data` bytes read as PCM are
+    // whole numbers, and `finite` said of those would be a claim about nothing.
+    let floats = || {
+        let samples = |width: i128, elem: T| {
+            T::structure("FloatSamples", vec![("samples", run(width, elem))])
+                .field_valid("samples", Valid::Finite)
+        };
+        T::switch(bits(), vec![(32, samples(4, T::F32(endian))), (64, samples(8, T::F64(endian)))], raw())
+    };
     let by_format = |format: E| {
         T::switch(format, vec![(0x0001, by_width()), (0x0003, floats())], raw())
     };
@@ -945,8 +958,19 @@ mod tests {
         let body: Vec<u8> = [1.0f32, -0.5, 0.25].iter().flat_map(|v| v.to_le_bytes()).collect();
         let d = Document::new(MemSource(with_samples(32, 3, 1, &body)));
         let mut ev = Evaluator::new(wav());
-        assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().child_count, 3);
-        assert_eq!(ev.node(&d, &[3, 2, 2, 1]).unwrap().value, Value::Float(-0.5));
+        // Float samples sit in a record of their own, so that the claim that
+        // they are real numbers has a field to be declared on.
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::Float(-0.5));
+        assert!(ev.valid_of(&d, &[3, 2, 2, 0, 1]).unwrap().unwrap().ok);
+
+        // A sample that is not a number at all: the format says these are
+        // real, so the file is wrong rather than merely unnamed.
+        let broken: Vec<u8> = [1.0f32, f32::NAN].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let d = Document::new(MemSource(with_samples(32, 3, 1, &broken)));
+        let mut ev = Evaluator::new(wav());
+        let said = ev.valid_of(&d, &[3, 2, 2, 0, 1]).unwrap().unwrap();
+        assert_eq!((said.ok, said.text.as_str()), (false, "Not allowed: not a number"));
 
         // 8-bit PCM is unsigned, with 128 for silence.
         let d = Document::new(MemSource(with_samples(8, 1, 1, &[0, 128, 255])));

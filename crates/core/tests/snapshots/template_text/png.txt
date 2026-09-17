@@ -9,10 +9,10 @@ root PNG {
       'IHDR' => IHDR {
         width: u32be
         height: u32be
-        bit_depth: u8be
+        bit_depth: u8be  valid one of 1, 2, 4, 8, 16
         color_type: u8be enum ColorType {
           0 = greyscale, 2 = rgb, 3 = indexed, 4 = greyscale alpha, 6 = rgba
-        }
+        }  valid one of 0, 2, 3, 4, 6
         compression: u8be enum Compression {0 = deflate}
         filter: u8be enum FilterMethod {0 = adaptive}
         interlace: u8be enum Interlace {0 = none, 1 = adam7}

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::codec::Codec;
 use crate::template::{
-	Anchor, Encoding, Expr, Part, StrLen, StructDef, Template, Ty, Until,
+	Anchor, Encoding, Expr, Part, StrLen, StructDef, Template, Ty, Until, Valid,
 };
 
 use super::expr::{BinOp, BoolOp, CmpOp, Expr as KExpr, TypeId, UnaryOp};
@@ -72,6 +72,7 @@ pub fn convert(text: &str, imports: &dyn Imports) -> Result<Converted, KsyError>
 		pending: Vec::new(),
 		root_name: if root_named { root_name.clone() } else { String::new() },
 		root_wanted: false,
+		in_valid: false,
 	};
 	// The root is lowered once, below, as the template's root. Claiming its
 	// name up front is what keeps a reference to it from lowering it again.
@@ -211,6 +212,10 @@ struct Lower<'a> {
 	/// regardless; a copy of it in the type table earns its place only when
 	/// something refers to it.
 	root_wanted: bool,
+	/// True while a `valid: expr:` is being lowered, where a bare `_` is the
+	/// field's own value. Nowhere else does `_` on its own mean anything a
+	/// template expression can name.
+	in_valid: bool,
 }
 
 impl<'a> Lower<'a> {
@@ -390,6 +395,7 @@ impl<'a> Lower<'a> {
 		// offset after a `b3` would be wrong by five bits.
 		let mut loose_bits: u32 = 0;
 		let mut pads = 0;
+		let mut valids: Vec<(String, Valid)> = Vec::new();
 		for (slot, attr) in here.seq.iter().enumerate() {
 			self.emit_instances(ctx, here, &plan, slot, &mut names, &mut tys, &mut docs);
 			let name = attr.name();
@@ -428,6 +434,9 @@ impl<'a> Lower<'a> {
 					if let Some(doc) = attr_doc(attr) {
 						docs.push((name.clone(), doc));
 					}
+					if let Some(v) = self.validation(ctx, attr) {
+						valids.push((name.clone(), v));
+					}
 					names.push(name);
 					tys.push(ty);
 				}
@@ -456,6 +465,9 @@ impl<'a> Lower<'a> {
 		}
 		for (field, doc) in &docs {
 			ty = ty.field_doc(field, doc);
+		}
+		for (field, valid) in valids {
+			ty = ty.field_valid(&field, valid);
 		}
 		if let Some(doc) = class_doc(here) {
 			ty = ty.doc(&doc);
@@ -574,7 +586,6 @@ impl<'a> Lower<'a> {
 	// -- one field --------------------------------------------------------
 
 	fn lower_attr(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Result<Ty, Gap> {
-		self.note_validation(attr);
 		let base = match self.lower_attr_base(ctx, attr) {
 			Ok(ty) => ty,
 			Err(gap) => {
@@ -1159,23 +1170,83 @@ impl<'a> Lower<'a> {
 		self.resolve_type(ctx, name).map(|(_, cls)| cls)
 	}
 
-	fn note_validation(&mut self, attr: &AttrSpec) {
-		let Some(valid) = &attr.valid else { return };
+	/// A field's `valid:` as a constraint the IR carries, or nothing and a note
+	/// saying why it could not be one.
+	///
+	/// `ValidSpec` and [`Valid`] were written to mirror each other case for
+	/// case, so most of this is lowering the expressions inside. The two that
+	/// come back as nothing are not losses: a `contents:` field is already a
+	/// magic number, which is the same check said in the type, and
+	/// `valid: [bytes]` on a bytes field becomes one too.
+	fn validation(&mut self, ctx: &Ctx<'a>, attr: &AttrSpec) -> Option<Valid> {
+		let spec = attr.valid.as_ref()?;
 		if attr.contents.is_some() {
 			// Already a `Magic`, which is the check.
-			return;
+			return None;
 		}
-		if matches!(valid, ValidSpec::Eq(KExpr::List(items)) if byte_list(items).is_some())
+		if matches!(spec, ValidSpec::Eq(KExpr::List(items)) if byte_list(items).is_some())
 			&& matches!(attr.ty, TypeRef::Bytes { .. })
 		{
-			return;
+			return None;
 		}
-		self.report.note(
-			format!("{}/valid", attr.path),
-			source_of(attr),
-			"`valid` is not carried over: templates check checksums, not a field's value, so the field is read the same and left unchecked"
-				.to_string(),
-		);
+		let path = format!("{}/valid", attr.path);
+		let lowered = match spec {
+			ValidSpec::Eq(e) => self.lower_expr(ctx, &path, e).map(Valid::Eq),
+			ValidSpec::Min(e) => self.lower_expr(ctx, &path, e).map(Valid::Min),
+			ValidSpec::Max(e) => self.lower_expr(ctx, &path, e).map(Valid::Max),
+			ValidSpec::Range { min, max } => {
+				match (self.lower_expr(ctx, &path, min), self.lower_expr(ctx, &path, max)) {
+					(Ok(min), Ok(max)) => Ok(Valid::Range { min, max }),
+					(Err(why), _) | (_, Err(why)) => Err(why),
+				}
+			}
+			// All of them or none: a set missing one of its members would rule
+			// out a value the format allows, which is the shape of answer this
+			// must never give.
+			ValidSpec::AnyOf(items) => {
+				let mut out = Vec::with_capacity(items.len());
+				let mut stopped = None;
+				for e in items {
+					match self.lower_expr(ctx, &path, e) {
+						Ok(e) => out.push(e),
+						Err(why) => {
+							stopped = Some(why);
+							break;
+						}
+					}
+				}
+				match stopped {
+					Some(why) => Err(why),
+					None => Ok(Valid::AnyOf(out)),
+				}
+			}
+			// The enum is what the field is read as, and a field read as
+			// something else has no enum to be named in. `in-enum` there is
+			// the `.ksy` saying something it cannot mean.
+			ValidSpec::InEnum => match attr.enum_ref.is_some() {
+				true => Ok(Valid::InEnum),
+				false => Err("`in-enum` is on a field that is not read as an enum".to_string()),
+			},
+			// The one place a bare `_` is a value: the field's own. See
+			// `Lower::in_valid`.
+			ValidSpec::Expr(e) => {
+				self.in_valid = true;
+				let lowered = self.lower_expr(ctx, &path, e);
+				self.in_valid = false;
+				lowered.map(|expr| Valid::Expr { expr, msg: None })
+			}
+		};
+		match lowered {
+			Ok(v) => Some(v),
+			Err(why) => {
+				self.report.note(
+					path,
+					source_of(attr),
+					format!("`valid` is not carried over: {why}; the field is read the same and left unchecked"),
+				);
+				None
+			}
+		}
 	}
 
 	// -- instances --------------------------------------------------------
@@ -1213,6 +1284,18 @@ impl<'a> Lower<'a> {
 				Ok(ty)
 			}
 			InstanceSpec::Parse(p) => {
+				// A constraint on an instance stays a note. An instance is
+				// written into the structure as a field of its own, wherever
+				// the plan put it, and the name to hang one on is settled
+				// there rather than here.
+				if p.attr.valid.is_some() {
+					self.report.note(
+						format!("{}/valid", p.attr.path),
+						source_of(&p.attr),
+						"`valid` on an instance is not carried over; the field is read the same and left unchecked"
+							.to_string(),
+					);
+				}
 				let inner = self.lower_attr(ctx, &p.attr).map_err(|g| Gap::dropped(g.reason))?;
 				let Some(pos) = &p.pos else {
 					// No `pos`: the field is read where it stands, which for
@@ -2220,6 +2303,49 @@ types:
 		assert!(out.contains("a: u3be"), "{out}");
 		assert!(out.contains("padding: u5be"), "{out}");
 		assert!(out.contains("b: u8be"), "{out}");
+	}
+
+	/// `valid:` is carried over as the field's constraint, in each of the
+	/// shapes the `.ksy` grammar writes it, rather than noted and dropped. A
+	/// bare `_` in `valid: expr:` is the value being checked.
+	#[test]
+	fn a_valid_key_becomes_the_field_s_constraint() {
+		let out = convert_text(&format(
+			"seq:\n  \
+			 - id: a\n    type: u1\n    valid:\n      min: 1\n      max: 9\n  \
+			 - id: b\n    type: u1\n    valid: 7\n  \
+			 - id: c\n    type: u1\n    valid:\n      any-of: [0, 2, 3]\n  \
+			 - id: d\n    type: u1\n    valid:\n      expr: '_ % 2 == 0'\n",
+		));
+		let text = template_text::render(&out.template);
+		assert!(text.contains("valid min 1 max 9"), "{text}");
+		assert!(text.contains("valid 7"), "{text}");
+		assert!(text.contains("valid one of 0, 2, 3"), "{text}");
+		assert!(text.contains("valid this % 2 == 0"), "{text}");
+		// Nothing left to say about them: a constraint that was carried over
+		// is not also a note saying it was not.
+		assert!(!out.report.notes.iter().any(|n| n.path.ends_with("/valid")), "{:?}", out.report.notes);
+		assert!(out.report.gaps.is_empty(), "{:?}", out.report.gaps);
+	}
+
+	/// `valid: in-enum` needs an enum to be in, and a field read as a plain
+	/// number has none. A constraint the evaluator could not answer is worse
+	/// than none, so that one stays a note.
+	#[test]
+	fn in_enum_needs_the_field_to_be_an_enum() {
+		let out = convert_text(&format(
+			"seq:\n  \
+			 - id: a\n    type: u1\n    enum: kind\n    valid:\n      in-enum: true\n  \
+			 - id: b\n    type: u1\n    valid:\n      in-enum: true\n\
+			 enums:\n  kind:\n    0: none\n    1: some\n",
+		));
+		let text = template_text::render(&out.template);
+		assert_eq!(text.matches("valid in enum").count(), 1, "{text}");
+		assert!(
+			out.report.notes.iter().any(|n| n.message.contains("not read as an enum")),
+			"{:?}",
+			out.report.notes
+		);
 	}
 
 	#[test]
