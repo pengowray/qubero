@@ -74,10 +74,25 @@ impl Cursor<'_> {
         !self.allow.classes.is_empty() || self.calls().next().is_some()
     }
 
-    /// Every callable this form accepts a REDUCE of, whichever list it was
-    /// written in.
+    /// Every callable this form accepts a REDUCE of: the ones the protocol
+    /// adds, and then the ones this form's own library writes.
+    ///
+    /// Two groups are the protocol's rather than the form's. Below protocol 4
+    /// a set, a frozenset and an empty byte string are calls, which every form
+    /// reads because every form reads those values. Below protocol 2 an object
+    /// is made by `copy_reg._reconstructor`, which only a form that may name a
+    /// class has any use for: the class it is handed has to be one this form
+    /// names, so a form that names none refuses the call at its first argument.
     pub(super) fn calls(&self) -> impl Iterator<Item = super::forms::Reduce> + '_ {
-        self.allow.calls.iter().flat_map(|group| group.iter().copied())
+        let shared = match self.proto < 4 {
+            true => super::forms::BELOW_FOUR,
+            false => &[],
+        };
+        let making = match self.proto < 2 && !self.allow.classes.is_empty() {
+            true => super::forms::MAKE_OBJECT,
+            false => &[],
+        };
+        shared.iter().chain(making).chain(self.allow.calls).copied()
     }
 
     /// GLOBAL, which is how protocols 2 and 3 name a class or a callable: one

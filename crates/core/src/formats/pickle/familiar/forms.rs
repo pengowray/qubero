@@ -91,11 +91,12 @@ pub(super) struct Allow {
     /// that names no class at all, which is where the basic, NumPy and
     /// builtins forms stand.
     pub(super) classes: &'static [&'static str],
-    /// The callables this form accepts a REDUCE of, as the lists they were
-    /// written in: the ones every form below protocol 4 shares, and the ones
-    /// its library writes. Never anything else: see [`object`] for why a
-    /// module prefix cannot stand in for this list.
-    pub(super) calls: &'static [&'static [Reduce]],
+    /// The callables this form's own library writes, and that it accepts a
+    /// REDUCE of. The calls every form below protocol 4 shares are not here:
+    /// the protocol decides those and [`Cursor::calls`](super::cursor::Cursor)
+    /// puts them in front of these. Never anything else: see [`object`] for
+    /// why a module prefix cannot stand in for this list.
+    pub(super) calls: &'static [Reduce],
     /// Whether an array's values may be pickled objects rather than numbers,
     /// which is NumPy's `O8` dtype. A pandas index of column names is one, and
     /// nothing else in the corpus is.
@@ -133,8 +134,8 @@ pub(super) enum Via {
 /// The one callable a form accepts as the maker of another callable.
 pub(super) const PARTIAL: &str = "functools.partial";
 
-/// Nothing at all, for a form that enumerates no calls.
-const NO_CALLS: &[&[Reduce]] = &[];
+/// Nothing at all, for a form that enumerates no calls of its own.
+const NO_CALLS: &[Reduce] = &[];
 /// The calls scikit-learn writes. One: a decision tree's array of nodes lives
 /// in a `Tree`, which is constructed from how many features, classes and
 /// outputs it was fitted on and handed its arrays by the BUILD after it.
@@ -292,7 +293,7 @@ fn members(args: &[Value]) -> Option<()> {
 
 /// The calls every form reads below protocol 4, whatever else it reads: the
 /// two containers and the byte string that protocol has no opcode for.
-const BELOW_FOUR: &[Reduce] = &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL];
+pub(super) const BELOW_FOUR: &[Reduce] = &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL];
 
 /// How an object of a class is made below protocol 2, which had no NEWOBJ.
 ///
@@ -305,7 +306,7 @@ const BELOW_FOUR: &[Reduce] = &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_
 pub(super) const RECONSTRUCTOR: &str = "copy_reg._reconstructor";
 /// The base class it is handed, which a form may name and never calls.
 pub(super) const BASE_CLASS: &str = "__builtin__.object";
-const MAKE_OBJECT: &[Reduce] = &[Reduce {
+pub(super) const MAKE_OBJECT: &[Reduce] = &[Reduce {
     via: Via::Global,
     path: RECONSTRUCTOR,
     what: Shape::Object,
@@ -318,106 +319,100 @@ const MAKE_OBJECT: &[Reduce] = &[Reduce {
     },
 }];
 
-/// Every form, in the order a file is tried against them. The protocol byte
-/// tells the two halves apart at the second byte of the file, so a file only
-/// ever does the work of the six forms its protocol has.
-pub(super) fn forms() -> [(&'static str, Allow); 24] {
-    const NEW: &[u8] = &[4, 5];
-    const OLD: &[u8] = &[2, 3];
-    const ONE: &[u8] = &[1];
-    const NONE_AT_ALL: &[u8] = &[0];
-    let plain = Allow {
-        protocols: NEW,
+/// One family of forms, declared once and read at every protocol.
+///
+/// A family is what a file is *about*: plain data, arrays, one library, the
+/// standard library. The protocol it was written at decides the spellings, and
+/// every one of those is already protocol-dependent in the cursor, so a family
+/// says nothing about protocols here beyond the name each of its forms goes by.
+/// Adding one is this row and the calls it names, and nothing else.
+struct Declared {
+    /// What each of the family's forms is called, in the order of [`RANGES`].
+    ids: [&'static str; 4],
+    family: Family,
+    numpy: bool,
+    builtins: bool,
+    classes: &'static [&'static str],
+    calls: &'static [Reduce],
+    object_arrays: bool,
+}
+
+/// The protocol ranges a form is written for, in the order a file is tried
+/// against them. The protocol byte tells them apart at the second byte of a
+/// file, or at the first opcode of one with no opener, so a file only ever
+/// does the work of the forms its own protocol has.
+const RANGES: [&[u8]; 4] = [&[4, 5], &[2, 3], &[1], &[0]];
+
+/// Every family. The names are written out rather than made up from the
+/// family and the range, because a form identifier is what a reader compares
+/// against and each carries its own revision.
+const DECLARED: &[Declared] = &[
+    Declared {
+        ids: [BASIC, BASIC23, BASIC1, BASIC0],
         family: Family::Basic,
         numpy: false,
         builtins: false,
         classes: NO_CLASSES,
         calls: NO_CALLS,
         object_arrays: false,
-    };
-    let old = Allow { protocols: OLD, calls: &[BELOW_FOUR], ..plain };
-    let one = Allow { protocols: ONE, ..old };
-    let text = Allow { protocols: NONE_AT_ALL, ..old };
-    [
-        (BASIC, plain),
-        (NUMPY, Allow { family: Family::Numpy, numpy: true, ..plain }),
-        (BUILTINS, Allow { family: Family::Builtins, builtins: true, ..plain }),
-        (SKLEARN, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[SKLEARN_CALLS], ..plain }),
-        (SCIPY, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..plain }),
-        (
-            PANDAS,
-            Allow {
-                protocols: NEW,
-                family: Family::Library,
-                numpy: true,
-                builtins: true,
-                classes: &["pandas"],
-                calls: &[PANDAS_CALLS],
-                object_arrays: true,
-            },
-        ),
-        (BASIC23, old),
-        (NUMPY23, Allow { family: Family::Numpy, numpy: true, ..old }),
-        (BUILTINS23, Allow { family: Family::Builtins, builtins: true, ..old }),
-        (SKLEARN23, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, SKLEARN_CALLS], ..old }),
-        (SCIPY23, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..old }),
-        (
-            PANDAS23,
-            Allow {
-                protocols: OLD,
-                calls: &[BELOW_FOUR, PANDAS_CALLS],
-                family: Family::Library,
-                numpy: true,
-                builtins: true,
-                classes: &["pandas"],
-                object_arrays: true,
-            },
-        ),
-        (BASIC1, one),
-        (NUMPY1, Allow { family: Family::Numpy, numpy: true, ..one }),
-        (BUILTINS1, Allow { family: Family::Builtins, builtins: true, ..one }),
-        (
-            SKLEARN1,
-            Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, MAKE_OBJECT, SKLEARN_CALLS], ..one },
-        ),
-        (
-            SCIPY1,
-            Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], calls: &[BELOW_FOUR, MAKE_OBJECT], ..one },
-        ),
-        (
-            PANDAS1,
-            Allow {
-                protocols: ONE,
-                family: Family::Library,
-                numpy: true,
-                builtins: true,
-                classes: &["pandas"],
-                calls: &[BELOW_FOUR, MAKE_OBJECT, PANDAS_CALLS],
-                object_arrays: true,
-            },
-        ),
-        (BASIC0, text),
-        (NUMPY0, Allow { family: Family::Numpy, numpy: true, ..text }),
-        (BUILTINS0, Allow { family: Family::Builtins, builtins: true, ..text }),
-        (
-            SKLEARN0,
-            Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, MAKE_OBJECT, SKLEARN_CALLS], ..text },
-        ),
-        (
-            SCIPY0,
-            Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], calls: &[BELOW_FOUR, MAKE_OBJECT], ..text },
-        ),
-        (
-            PANDAS0,
-            Allow {
-                protocols: NONE_AT_ALL,
-                family: Family::Library,
-                numpy: true,
-                builtins: true,
-                classes: &["pandas"],
-                calls: &[BELOW_FOUR, MAKE_OBJECT, PANDAS_CALLS],
-                object_arrays: true,
-            },
-        ),
-    ]
+    },
+    Declared { ids: [NUMPY, NUMPY23, NUMPY1, NUMPY0], family: Family::Numpy, numpy: true, ..PLAIN },
+    Declared { ids: [BUILTINS, BUILTINS23, BUILTINS1, BUILTINS0], family: Family::Builtins, builtins: true, ..PLAIN },
+    Declared {
+        ids: [SKLEARN, SKLEARN23, SKLEARN1, SKLEARN0],
+        family: Family::Library,
+        numpy: true,
+        classes: &["sklearn"],
+        calls: SKLEARN_CALLS,
+        ..PLAIN
+    },
+    Declared {
+        ids: [SCIPY, SCIPY23, SCIPY1, SCIPY0],
+        family: Family::Library,
+        numpy: true,
+        classes: &["scipy.sparse"],
+        ..PLAIN
+    },
+    Declared {
+        ids: [PANDAS, PANDAS23, PANDAS1, PANDAS0],
+        family: Family::Library,
+        numpy: true,
+        builtins: true,
+        classes: &["pandas"],
+        calls: PANDAS_CALLS,
+        object_arrays: true,
+    },
+];
+
+/// What a family that says nothing else reads, so that a row names only what
+/// makes it different.
+const PLAIN: Declared = Declared {
+    ids: [BASIC, BASIC23, BASIC1, BASIC0],
+    family: Family::Basic,
+    numpy: false,
+    builtins: false,
+    classes: NO_CLASSES,
+    calls: NO_CALLS,
+    object_arrays: false,
+};
+
+/// Every form: each family at each protocol range.
+pub(super) fn forms() -> Vec<(&'static str, Allow)> {
+    DECLARED
+        .iter()
+        .flat_map(|d| {
+            RANGES.iter().enumerate().map(move |(at, protocols)| {
+                let allow = Allow {
+                    protocols,
+                    family: d.family,
+                    numpy: d.numpy,
+                    builtins: d.builtins,
+                    classes: d.classes,
+                    calls: d.calls,
+                    object_arrays: d.object_arrays,
+                };
+                (d.ids[at], allow)
+            })
+        })
+        .collect()
 }
