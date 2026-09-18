@@ -404,6 +404,18 @@ the call and the array has only the call beneath it.
 that every node's children tile it, so an instruction that stopped being
 named would fail rather than quietly become a gap.
 
+A matched list of records is a table, and the core says so rather than the
+interface working it out. `[{"id": 1, "name": "a"}, ...]` is how rows are
+pickled when nobody reached for pandas, and the keys are written in the file
+beside the values, so `Evaluator::pickle_table` hands back a `TableShape` whose
+`names` are every key any row has, in the order first met, and whose `cells`
+says where a cell is: the rows are the `dict` nodes under the list, a cell is
+the `entry` inside a row named by its column, and what it is worth is that
+entry's `value`. `TableShape::cells` is new, and it is the first thing in the
+table IR that describes a table whose rows are nodes rather than a run of
+values. `web/src/picklerecords.ts` walks that answer now instead of deciding
+for itself which node is a table and what its columns are called.
+
 A `BINGET` where a value belongs is two bytes that say nothing on their own, so
 a reference is a node of its own, typed `reference`, holding a `refers to` row
 and the `BINGET` beside it. The row is worked out rather than read in place:
@@ -428,7 +440,7 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, twenty files match today. The eleven `familiar-` files
+Of the sibling corpus, twenty-eight files match today. The eleven `familiar-` files
 and the four `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
@@ -492,6 +504,20 @@ that a form growing quietly is a failing test, and separately flips two bits of
 every instruction byte in every matched sample, truncates at every instruction
 boundary, and appends a value after the STOP.
 
+### What is not exposed yet, for a library object
+
+A `DataFrame` does not open as a table. Its column names are in its index and
+its values are in blocks, each of shape `(columns in that block, rows)`, so a
+cell of the frame is an element of an array somewhere else in the file. That
+is a second case for `TableShape::cells`, sketched in
+`HANDOVER-pickle-libraries.md`, and neither it nor the mapping from a block's
+placement back to column names is written. A `Series` and a sparse matrix are
+the same story: the arrays are there and named, and nothing lays them out.
+
+An object's node is typed `object` and says its class on a `class` row rather
+than in the type column, because the type column is an enumeration of shapes
+and a class path is data.
+
 ### What is not exposed yet
 
 An array's numbers read in storage order and are not folded into rows: a 4-by-6
@@ -519,13 +545,13 @@ Next steps, in order:
 1. Fold an array's numbers by its shape, and navigate from a value to the
    opcodes that built it. Editing a captured value is a separate question: the
    recognition is invalidated by the edit and has to be made again.
-2. Decide whether a class the file names may ever be a declared data field.
-   Every remaining protocol 4 and 5 sample is held back by a REDUCE or NEWOBJ
-   of a class no form names, so the next real widening is a reviewed list of
-   named classes with the exact state each is rebuilt from: `datetime`,
-   `Decimal`, `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`.
-   A namedtuple names a class defined by the file that wrote it, and no list
-   can hold that.
+2. Done for the libraries: a class the file names may be a declared data field
+   when its module is one a form lists, and "The safety line for a library
+   object" above is the whole of the rule. The standard library's classes are
+   still a non-match: `datetime`, `Decimal`, `Fraction`, `OrderedDict`,
+   `defaultdict`, `Counter` and `deque` each need the exact state they are
+   rebuilt from written down. A namedtuple names a class defined by the file
+   that wrote it, and no list can hold that.
 3. Done: a name may point at a container. The `refers to` row says what it is
    and where the file wrote it, `list at 0x0b`, so the reference stays the two
    bytes it is and the reader is sent to the bytes rather than shown a copy of
@@ -534,17 +560,17 @@ Next steps, in order:
 4. Add the protocol 2/3 alternatives (BINUNICODE, BINPUT, LONG_BINPUT, no
    framing) alongside a fixture a form can match whole. Keep work bounded
    across every alternative.
-5. Build pandas and scikit-learn forms from reviewed complete structures. Both
-   need an environment with the library installed to read what it writes, and
-   the module names move between releases the way NumPy's did, so each needs
-   its own matrix of versions before a form can be written down.
+5. Done, for the shapes the corpus holds: `sklearn-estimator-p4-p5-v1`,
+   `scipy-sparse-p4-p5-v1` and `pandas-frame-p4-p5-v1`. What is left is the
+   datetime index, pandas 1.3, and the `DataFrame` table; see
+   `HANDOVER-pickle-libraries.md`.
 6. Move recognition onto a chunk-aware source cursor for large tensors. Current
    evaluator size caps still apply. Do not relax completeness to obtain previews.
 
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include thirty-two FPF tests, nine of which
+Validation: the pickle unit tests include fifty FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a

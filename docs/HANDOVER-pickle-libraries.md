@@ -126,10 +126,44 @@ What is left, in the order it is worth doing:
    REDUCE of what another REDUCE made, which the form refuses on purpose. It
    would need a production of its own saying that this exact partial, over this
    exact callable, with these arguments, is a block. Two files in the corpus.
-3. **Step 4 below, the tree and the tables**, which has not been started: a
-   frame does not yet show its columns as a table.
-4. **Step 5 below, the record columns in the core.** `web/src/picklerecords.ts`
-   still works the list-of-dicts table out in TypeScript.
+3. **The `DataFrame` table**, which is the half of step 4 below that is not
+   done. An object shows its class and its attributes, and a sparse matrix
+   shows `data`, `indices`, `indptr` and `shape` without anything being
+   densified, but a frame does not open as a table.
+
+   The IR half of it is designed and not built. `TableShape::cells` now says
+   where a cell is for a table whose rows are nodes, with one case,
+   `Cells::Named`, which is the pickled list of records. A frame wants a
+   second:
+
+   ```rust
+   /// Each column is a run of values somewhere else in the file, and a row is
+   /// one element of each. A pandas frame, whose columns live in blocks.
+   Columns(Vec<ColumnRun>),
+
+   pub struct ColumnRun {
+       /// The run, as a path from the field the table hangs on.
+       pub at: Vec<usize>,
+       /// How many values in this column starts, and how far apart two of its
+       /// rows are.
+       pub first: u64,
+       pub stride: u64,
+   }
+   ```
+
+   A block is shape `(columns in that block, rows)`, so the frame's rows run
+   along the block's **second** axis and column `j` of a block in C order is
+   `first = j * rows`, `stride = 1`. Do not show it transposed. The column
+   names come from the first axis of the manager, which is an `Index` over an
+   array of objects; the `placement` slice of each block says which of those
+   names its columns are, so the table's columns are the frame's columns in
+   frame order. `web/src/tableplan.ts` routes a shape with `cells` set away
+   from the count-based layout already, and `web/src/picklerecords.ts` is where
+   the second case would be walked.
+4. **Step 5 below is done.** The list-of-records table is declared by the core:
+   `Evaluator::pickle_table` hands back the shape and
+   `Evaluator::pickle_columns` names the columns out of the file.
+   `web/src/picklerecords.ts` is a walk of that answer now.
 
 `cargo run -p qubero-core --example pickle_forms -- <file>` prints the form a
 file matched, or, for one no form matched, the offset the reading reached
