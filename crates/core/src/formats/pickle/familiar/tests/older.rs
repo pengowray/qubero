@@ -115,7 +115,7 @@ fn a_byte_string_below_protocol_3_is_a_call_to_codecs() {
     let bytes = made("latin1");
     let found = recognise(&bytes).unwrap();
     assert_eq!(found.form, "basic-p2-p3-v1");
-    let Kind::Object { what, items, .. } = &found.value.kind else { panic!("a call expected") };
+    let Kind::Made { what, items, .. } = &found.value.kind else { panic!("a call expected") };
     assert_eq!(*what, Shape::Bytes);
     assert_eq!(&items[0].kind, &Kind::Text { at: 25, len: 2 });
     // A character latin-1 never spelled is a text no pickler wrote there: the
@@ -217,7 +217,7 @@ fn the_builtins_form_reads_the_older_names() {
     for (bytes, what) in cases {
         let found = recognise(bytes).unwrap_or_else(|| panic!("{bytes:?} matched no form"));
         assert_eq!(found.form, "builtins-values-p2-p3-v1");
-        let Kind::Object { what: made, .. } = &found.value.kind else { panic!("a call expected") };
+        let Kind::Made { what: made, .. } = &found.value.kind else { panic!("a call expected") };
         assert_eq!(made, what);
     }
     // `range` kept the name Python 2 knew it by below protocol 3, so the two

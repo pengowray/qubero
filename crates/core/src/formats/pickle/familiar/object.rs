@@ -213,7 +213,7 @@ impl Cursor<'_> {
             // partial was made over was checked when the partial was made, and
             // it is checked again here, so neither half stands on its own.
             Kind::Made { callable: made, items, .. } => {
-                if path_of(made)? != PARTIAL {
+                if path_of(made.as_deref()?)? != PARTIAL {
                     return None;
                 }
                 (path_of(items.first()?)?, Via::Partial)
@@ -249,7 +249,7 @@ impl Cursor<'_> {
         if self.whitelisted(path.rsplit_once('.')?.0) {
             self.instances += 1;
         }
-        Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held, state: None })
+        Some(Kind::Made { what: call.what, names: call.names, callable: Some(Box::new(callable)), items: held, state: None })
     }
 
     /// `copy_reg._reconstructor(cls, object, None)`, which is `cls.__new__(cls)`

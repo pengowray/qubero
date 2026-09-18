@@ -321,10 +321,14 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                 kids.extend(held(state));
                 (notes, kids)
             }
-            // What one of a form's enumerated calls made, with the arguments
-            // the library writes it with.
+            // What a call made, with the arguments it was written with: named
+            // where Python names them and numbered where it does not. The
+            // `class` row is there for a call whose callable is a value of the
+            // file, and left out for a builtin a form matched inside a fixed
+            // run, which already says what it is.
             Kind::Made { names, callable, items, state, .. } => {
-                let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(callable))];
+                let mut kids: Vec<(Label, Part)> =
+                    callable.iter().map(|c| (Label::Field(CLASS_FIELD), Part::Value(c))).collect();
                 kids.extend(items.iter().enumerate().map(|(i, x)| match names.get(i) {
                     Some(name) => (Label::Field(name), Part::Value(x)),
                     None => (Label::Index(i), Part::Value(x)),
@@ -332,19 +336,6 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                 kids.extend(held(state));
                 (Vec::new(), kids)
             }
-            // A builtin written as a call. Its parts are named where Python
-            // names them and numbered where it does not.
-            Kind::Object { names, items, .. } => (
-                Vec::new(),
-                items
-                    .iter()
-                    .enumerate()
-                    .map(|(i, x)| match names.get(i) {
-                        Some(name) => (Label::Field(name), Part::Value(x)),
-                        None => (Label::Index(i), Part::Value(x)),
-                    })
-                    .collect(),
-            ),
             // An array whose values are objects. They were pickled after it and
             // handed to it as a list, so they are nodes of their own rather
             // than a run of bytes to read.
@@ -479,11 +470,10 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             Kind::FrozenSet(_) => Shape::FrozenSet,
             Kind::Ref(_) => Shape::Ref,
             Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
-            Kind::Object { what, .. } => *what,
+            Kind::Made { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,
             Kind::DType(_) => Shape::DType,
             Kind::Instance { .. } => Shape::Object,
-            Kind::Made { what, .. } => *what,
             _ => return None,
         },
         _ => return None,

@@ -64,7 +64,7 @@ impl Cursor<'_> {
                 }
                 self.exact(b"R")?;
                 self.memoize(Bound::Opaque)?;
-                Some(self.span(start, Kind::Object { what, names, items }))
+                Some(self.span(start, Kind::Made { what: what, names: names, callable: None, items: items, state: None }))
             })();
             if let Some(value) = made {
                 // The names the call was made with stay as the instructions

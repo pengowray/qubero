@@ -181,7 +181,7 @@ const PANDAS_CALLS: &[Reduce] = &[
             // each other, and that is a non-match until there is a file with
             // one in it.
             (holds_values(&args[0].kind)
-                && matches!(args[1].kind, Kind::Object { what: Shape::Slice, .. })
+                && matches!(args[1].kind, Kind::Made { what: Shape::Slice, .. })
                 && matches!(args[2].kind, Kind::Int { .. }))
             .then_some(())
         },
@@ -242,7 +242,7 @@ const PANDAS_CALLS: &[Reduce] = &[
         what: Shape::Block,
         names: &["values", "placement"],
         shape: |args| {
-            (holds_values(&args[0].kind) && matches!(args[1].kind, Kind::Object { what: Shape::Slice, .. })).then_some(())
+            (holds_values(&args[0].kind) && matches!(args[1].kind, Kind::Made { what: Shape::Slice, .. })).then_some(())
         },
     },
 ];

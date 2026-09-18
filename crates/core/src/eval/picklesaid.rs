@@ -95,8 +95,11 @@ impl Evaluator {
             Kind::Objects { dimensions, .. } => Some(format!("object array {}", across(dimensions))),
             Kind::Class { path, .. } => Some(path.clone()),
             Kind::Instance { class, .. } => path_of(class),
-            Kind::Made { callable, .. } => path_of(callable),
-            Kind::Object { what, .. } => Some(what.name().into()),
+            // A call that carries its callable reads as it; one that folded
+            // it away reads as the kind of thing it made.
+            Kind::Made { callable: Some(callable), .. } => path_of(callable),
+            Kind::Made { what, .. } => Some(what.name().into()),
+
             Kind::DType(Dtype::Record { .. }) => None,
             Kind::DType(dtype) => Some(super::pickleframe::dtype_word(dtype)),
         })

@@ -146,13 +146,6 @@ pub enum Kind {
         /// no way of writing directly.
         storage: Storage,
     },
-    /// One of the builtin types a pickle has to write as a call rather than
-    /// as a literal. `names` names its parts, in the order they were written.
-    Object {
-        what: Shape,
-        names: &'static [&'static str],
-        items: Vec<Value>,
-    },
     /// A class or a callable the file named by STACK_GLOBAL, from a module a
     /// form allows. `parts` is the module word and the name word when the file
     /// spelled them here, and nothing when it named the slot they are in.
@@ -178,13 +171,18 @@ pub enum Kind {
     /// A NumPy dtype standing on its own rather than describing an array,
     /// which is what pandas hands a datetime column beside its numbers.
     DType(Dtype),
-    /// What a REDUCE of one of a form's enumerated callables made. `names`
-    /// names the arguments, in the order the library writes them, and `state`
-    /// is what a BUILD after the call handed the result.
+    /// What a call made: one of a form's enumerated callables, or one of the
+    /// builtin types a pickle has to write as a call rather than as a literal.
+    ///
+    /// `names` names the arguments, in the order they are written. `callable`
+    /// is the thing that was called, for the calls whose callable is a value
+    /// of the file, and nothing for the ones a form matched inside a fixed run
+    /// and folded away: a `slice` says it is a slice without a row saying so
+    /// again. `state` is what a BUILD after the call handed the result.
     Made {
         what: Shape,
         names: &'static [&'static str],
-        callable: Box<Value>,
+        callable: Option<Box<Value>>,
         items: Vec<Value>,
         state: Option<Box<Value>>,
     },
@@ -615,7 +613,6 @@ fn holds_class(value: &Value) -> bool {
             | Kind::Tuple(items)
             | Kind::Set(items)
             | Kind::FrozenSet(items)
-            | Kind::Object { items, .. }
             | Kind::Objects { items, .. } => left.extend(items),
             Kind::Dict(entries) => left.extend(entries.iter().flat_map(|(k, v)| [k, v])),
             Kind::Instance { class, state } => {
@@ -623,7 +620,7 @@ fn holds_class(value: &Value) -> bool {
                 left.extend(state.as_deref());
             }
             Kind::Made { callable, items, state, .. } => {
-                left.push(callable);
+                left.extend(callable.as_deref());
                 left.extend(items);
                 left.extend(state.as_deref());
             }

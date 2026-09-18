@@ -83,7 +83,7 @@ fn class_path(value: &Captured) -> Option<&str> {
     match &value.kind {
         Kind::Class { path, .. } => Some(path),
         Kind::Instance { class, .. } => class_path(class),
-        Kind::Made { callable, .. } => class_path(callable),
+        Kind::Made { callable: Some(callable), .. } => class_path(callable),
         _ => None,
     }
 }
@@ -92,6 +92,13 @@ fn class_path(value: &Captured) -> Option<&str> {
 /// in front of it moves between releases and the name does not.
 pub(super) fn class_name(value: &Captured) -> Option<&str> {
     Some(class_path(value)?.rsplit_once('.')?.1)
+}
+
+/// The name of the callable a call was made by, for the calls that carry one.
+/// A builtin a pickle writes as a call folds its class away, so there is no
+/// name to read and nothing here matches it.
+fn made_by(callable: &Option<Box<Captured>>) -> Option<&str> {
+    class_name(callable.as_deref()?)
 }
 
 /// The frame or the series a matched pickle holds, as the parts of its
@@ -130,7 +137,7 @@ pub(super) fn frame_of(object: &Captured) -> Option<Frame<'_>> {
 fn managed(value: &Captured) -> Option<(&[Captured], Vec<Block<'_>>)> {
     match &value.kind {
         // The call: (blocks, axes).
-        Kind::Made { what: Shape::Object, callable, items, .. } if class_name(callable)? == "BlockManager" => {
+        Kind::Made { what: Shape::Object, callable, items, .. } if made_by(callable)? == "BlockManager" => {
             let [blocks, axes] = items.as_slice() else { return None };
             let (Kind::Tuple(blocks), Kind::List(axes)) = (&blocks.kind, &axes.kind) else { return None };
             let read: Option<Vec<Block>> = blocks.iter().map(called_block).collect();
@@ -194,7 +201,7 @@ fn stated_block<'a>(value: &'a Captured, arrays: &'a [Captured]) -> Option<Block
 /// The start and the step of a `slice`, which is how a block says which of the
 /// frame's columns it holds. A step of nought or less places nothing.
 fn slice_of(value: &Captured) -> Option<(i128, i128)> {
-    let Kind::Object { what: Shape::Slice, items, .. } = &value.kind else { return None };
+    let Kind::Made { what: Shape::Slice, items, .. } = &value.kind else { return None };
     let [start, _, step] = items.as_slice() else { return None };
     let start = match start.kind {
         Kind::Int { value, .. } => value,
@@ -281,7 +288,7 @@ pub(super) fn values_of<'a>(found: &'a Match, value: &'a Captured) -> Option<Val
         Kind::Objects { items, .. } => Some(Values::Texts(items)),
         // `__pyx_unpickle_NDArrayBacked(cls, checksum, None)` and a BUILD that
         // hands it the array it wraps. Which class it is says how to read it.
-        Kind::Made { callable, items, state: Some(state), .. } if class_name(callable)? == "__pyx_unpickle_NDArrayBacked" => {
+        Kind::Made { callable, items, state: Some(state), .. } if made_by(callable)? == "__pyx_unpickle_NDArrayBacked" => {
             let Kind::Tuple(held) = &state.kind else { return None };
             match class_name(items.first()?)? {
                 "StringArray" | "DatetimeArray" => held.iter().find_map(|v| values_of(found, v)),
@@ -330,7 +337,7 @@ fn categories<'a>(found: &'a Match, dtype: &'a Captured) -> Option<&'a [Captured
     }
     let Kind::Dict(entries) = &state.kind else { return None };
     let index = entries.iter().find_map(|(_, v)| match &v.kind {
-        Kind::Made { callable, .. } if class_name(callable) == Some("_new_Index") => Some(v),
+        Kind::Made { callable, .. } if made_by(callable) == Some("_new_Index") => Some(v),
         _ => None,
     })?;
     let Kind::Made { items, .. } = &index.kind else { return None };
@@ -347,14 +354,14 @@ fn categories<'a>(found: &'a Match, dtype: &'a Captured) -> Option<&'a [Captured
 /// `RangeIndex`.
 pub(super) fn is_range(index: &Captured) -> bool {
     let Kind::Made { callable, items, .. } = &index.kind else { return false };
-    class_name(callable) == Some("_new_Index") && items.first().and_then(class_name) == Some("RangeIndex")
+    made_by(callable) == Some("_new_Index") && items.first().and_then(class_name) == Some("RangeIndex")
 }
 
 /// The dictionary an index was rebuilt from, which holds either its values or
 /// the start, stop and step it is counted out from.
 pub(super) fn index_state(index: &Captured) -> Option<&Vec<(Captured, Captured)>> {
     let Kind::Made { callable, items, .. } = &index.kind else { return None };
-    if !matches!(class_name(callable)?, "_new_Index" | "_new_DatetimeIndex") {
+    if !matches!(made_by(callable)?, "_new_Index" | "_new_DatetimeIndex") {
         return None;
     }
     match &items.get(1)?.kind {

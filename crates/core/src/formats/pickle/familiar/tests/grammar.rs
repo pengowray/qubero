@@ -183,13 +183,13 @@ fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
     for (body, want) in &cases {
         let found = recognise(&one(body.clone())).unwrap_or_else(|| panic!("{want:?} was not matched"));
         assert_eq!(found.form, "builtins-values-p4-p5-v3", "{want:?}");
-        let Kind::Object { what, .. } = &found.value.kind else { panic!("{want:?} is not an object") };
+        let Kind::Made { what, .. } = &found.value.kind else { panic!("{want:?} is not an object") };
         assert_eq!(what, want);
     }
 
     // The values themselves, read from the bytes they were written in.
     let found = recognise(&one(call("complex", b"G\x3f\xf8\0\0\0\0\0\0G\xc0\x04\0\0\0\0\0\0", 2))).unwrap();
-    let Kind::Object { items, names, .. } = &found.value.kind else { panic!("object") };
+    let Kind::Made { items, names, .. } = &found.value.kind else { panic!("object") };
     assert_eq!(*names, HALVES);
     let halves: Vec<f64> = items
         .iter()

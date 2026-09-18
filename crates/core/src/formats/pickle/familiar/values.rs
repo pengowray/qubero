@@ -55,15 +55,15 @@ pub(super) fn hashable(value: &Value) -> bool {
         Kind::Array { dimensions, .. } => dimensions.is_empty(),
         // A byte string below protocol 3 is a call rather than a literal, and
         // Python hashes it the same as any other byte string.
-        Kind::Object { what: Shape::Bytes, .. } => true,
-        Kind::Object { what, items, .. } => {
+        Kind::Made { what: Shape::Bytes, .. } => true,
+        Kind::Made { what, items, .. } => {
             matches!(what, Shape::Slice | Shape::Range | Shape::Complex) && items.iter().all(hashable)
         }
         // A class hashes in Python and an object of one usually does, but no
         // file in the corpus writes either as a key, so neither is read as
         // one until something does.
         Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
-        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } | Kind::Objects { .. } | Kind::DType(_) => false,
+        Kind::Class { .. } | Kind::Instance { .. } | Kind::Objects { .. } | Kind::DType(_) => false,
     }
 }
 
@@ -153,7 +153,7 @@ impl Cursor<'_> {
         let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
         self.bytearray_memoize(Bound::Made { what: Shape::ByteArray, at: start, hashable: false })?;
         let held = Value { at, len, kind: Kind::Bytes { at, len } };
-        Some(self.span(start, Kind::Object { what: Shape::ByteArray, names: CONTENT, items: vec![held] }))
+        Some(self.span(start, Kind::Made { what: Shape::ByteArray, names: CONTENT, callable: None, items: vec![held], state: None }))
     }
 
     pub(super) fn binfloat(&mut self) -> Option<Value> {
