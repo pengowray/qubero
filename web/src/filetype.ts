@@ -307,7 +307,9 @@ const bgzfSentence = (holds: string): string | null => {
   return what === undefined ? null : `${what}${BGZF_WRAPPER}`;
 };
 
-const PYBASIC_PROGRAM = "PyBasic program \u00b7 saved as a Python pickle";
+/** PyBasic has no version numbers, so the dates of the two commits stand in
+ *  for them: SAVE pickled from aa9f3fa to the one before dfd5c0b. */
+const PYBASIC_PROGRAM = "PyBasic program \u00b7 Python pickle, its save format from Dec 2018 to Sep 2021";
 /** The module every token of a pickled PyBasic program is an instance from. */
 const PYBASIC_MODULE = "basictoken";
 /** How much of the file is searched for the module's name, which a pickle
