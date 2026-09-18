@@ -336,10 +336,12 @@ const TEMPLATE_FROM = { qubero: "(Qubero)", kaitai: "(Kaitai)", imhex: "(ImHex)"
  *  the link to the entry. */
 const SIGNATURE_WORD: Record<SigMatch["format"]["source"], string> = { wikidata: "Wikidata", file: "file rules" };
 const OTHERS_HEADING = "Other answers:";
-const DISAGREES = "disagrees with the answer above";
+/** After an answer that names another format than the one chosen. Each says
+ *  which answer it differs from: "the answer above" had four rows above it. */
+const DIFFERS_FROM_TEMPLATE = "differs from the template";
+const DIFFERS_FROM_RULE = "differs from the file(1) rule";
 const SIGNATURES_INTRO = "Signature matches:";
 const WIKIPEDIA_LINK = "Wikipedia";
-const SIGNATURES_CREDIT = (fetched: string): string => `Signature sources: ${fetched}.`;
 /** The toolbar, for a file only a signature could name. */
 const SIGNATURE_NAMED: Record<SigMatch["format"]["source"], (label: string) => string> = {
   wikidata: (label) => `${label} (signature listed on Wikidata)`,
@@ -587,9 +589,13 @@ export function fileType(): FileType {
     } else {
       rows.push(el("p", { className: "dlg-sentence", textContent: id.name }));
     }
-    // What the rules know about the format, whichever answer was chosen: a
-    // media type and extensions are facts about the file either way.
-    if (file !== null) {
+    // What the rules know about the format, when theirs is the chosen answer
+    // or agrees with it. A rule that names another format knows these about
+    // that format: `application/octet-stream` and rule file `xenix` under a
+    // pickle's name are not facts about the pickle. Its rule file is on its
+    // line among the other answers.
+    const fileAnswer = id.candidates.find((c) => c.source === "file");
+    if (file !== null && fileAnswer?.disagrees !== true) {
       if (file.mime !== "") rows.push(row("Media type", file.mime));
       if (file.ext.length > 0) rows.push(row("Extensions", file.ext.join(", ")));
       if (file.source !== "") rows.push(row("Rule file", file.source));
@@ -602,11 +608,19 @@ export function fileType(): FileType {
         : note.name.startsWith("hexpat:") ? TEMPLATE_FROM.imhex
         : TEMPLATE_FROM.qubero;
       const name = note.kind === "builtin" ? templateLabel(note.name) : (id.name ?? "");
-      rows.push(row(TEMPLATE_KEY, el("span", {}, name, " ", el("span", { className: "dlg-muted", textContent: from }))));
+      const value = el("span", {}, name, " ", el("span", { className: "dlg-muted", textContent: from }));
+      // The template's answer is this row, so it is not listed again below:
+      // a rule that outranked it and names another format is said here. A
+      // template over the wrong signature has the last line instead.
+      const own = id.candidates.find((c) => c.source === "template");
+      if (own?.disagrees === true && answers.template?.signatureMismatch !== true) {
+        value.append(" ", el("span", { className: "dlg-disagrees", textContent: DIFFERS_FROM_RULE }));
+      }
+      rows.push(row(TEMPLATE_KEY, value));
     }
     // Every other answer, with what it rests on. The signatures come last and
     // grouped, since most files match a crowd of them.
-    const others = id.candidates.slice(1).filter((c) => c.source !== "signature");
+    const others = id.candidates.slice(1).filter((c) => c.source !== "signature" && !(c.source === "template" && note !== null));
     const tools = answers.tools ?? [];
     if (others.length > 0) {
       rows.push(el("p", { className: "dlg-muted", textContent: OTHERS_HEADING }), el("ul", { className: "dlg-others" }, ...others.map(candidateRow)));
@@ -617,8 +631,9 @@ export function fileType(): FileType {
     if (tools.some((m) => m.source !== OWN_SOURCE)) rows.push(el("p", { className: "dlg-muted", textContent: MATCHED_AGAINST }));
     if (tools.some((m) => m.source === OWN_SOURCE)) rows.push(el("p", { className: "dlg-muted", textContent: READ_FROM_STUB }));
     if (sigs !== null && sigs.matches.length > 0) {
+      // No credit line under the table: every row names its source, and the
+      // version each was fetched at is on hover there.
       rows.push(el("p", { textContent: SIGNATURES_INTRO }), ...signatureRows(sigs.matches, sigs.extension));
-      rows.push(el("p", { className: "dlg-muted", textContent: SIGNATURES_CREDIT(sigs.fetched) }));
     }
     // Last, in red: the template reading the file is one its first bytes
     // contradict. Whatever named the file above, this is the one thing a
@@ -635,7 +650,7 @@ export function fileType(): FileType {
       parts.push(el("span", { className: "dlg-tool", textContent: m === undefined ? c.name : toolLine(m) }));
     } else parts.push(el("span", { textContent: c.name }));
     parts.push(el("span", { className: "dlg-muted", textContent: c.evidence }));
-    if (c.disagrees) parts.push(el("span", { className: "dlg-disagrees", textContent: DISAGREES }));
+    if (c.disagrees) parts.push(el("span", { className: "dlg-disagrees", textContent: c.source === "template" ? DIFFERS_FROM_RULE : DIFFERS_FROM_TEMPLATE }));
     return el("li", {}, ...parts);
   };
 
@@ -652,8 +667,11 @@ export function fileType(): FileType {
     const exts = [...(f.ext ?? []), ...(f.wpExt ?? [])];
     const ext = el("td", { className: "dlg-wiki-ext", textContent: exts.map((e) => `.${e}`).join(" ") });
     const links: (Node | string)[] = [];
-    if (f.source === "wikidata") links.push(el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: SIGNATURE_WORD.wikidata }));
-    else links.push(el("span", { className: "dlg-muted", textContent: SIGNATURE_WORD.file }));
+    const from = f.source === "wikidata"
+      ? el("a", { href: wikidataUrl(f.id), target: "_blank", rel: "noopener", textContent: SIGNATURE_WORD.wikidata })
+      : el("span", { className: "dlg-muted", textContent: SIGNATURE_WORD.file });
+    if (sigs !== null) from.title = sigs.fetched;
+    links.push(from);
     // An article about the format itself, or failing that about the format it
     // is a version or part of, named so the link says where it goes.
     const wp = f.wp !== undefined ? { title: f.wp, text: WIKIPEDIA_LINK } : f.parent !== undefined ? { title: f.parent.wp, text: `${WIKIPEDIA_LINK}: ${f.parent.label}` } : null;
@@ -663,13 +681,12 @@ export function fileType(): FileType {
     return tr;
   };
   /** A group's rows as a table. Every group is its own table, so a crowd can
-   *  fold; the column widths are fixed and shared, so the tables line up as
-   *  one. */
+   *  fold. Each column asks for the same width in every table and grows only
+   *  for a cell that needs more, so the tables line up unless one has to. */
   const table = (ms: readonly SigMatch[]): HTMLElement =>
     el(
       "table",
       { className: "dlg-sigs" },
-      el("colgroup", {}, ...["name", "bytes", "where", "ext", "links"].map((c) => el("col", { className: `dlg-sig-col-${c}` }))),
       el("tbody", {}, ...ms.map(signatureRow)),
     );
 

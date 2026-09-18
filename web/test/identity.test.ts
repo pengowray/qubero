@@ -53,6 +53,20 @@ test("a weak template yields to the rules", () => {
   assert.equal(id.source, "file");
 });
 
+test("a weak template does not yield to a rule that compared two bytes", () => {
+  // `80 05` opens every protocol 5 pickle and is the whole of the XENIX rule.
+  const xenix: Identification = { message: "XENIX 8086 relocatable or i286 small model", mime: "application/octet-stream", ext: [], strength: 50, source: "xenix" };
+  const id = decide({ template: template("pickle", "Python pickle file"), file: xenix });
+  assert.equal(id.name, "Python pickle file");
+  assert.equal(id.source, "template");
+  const listed = id.candidates[1];
+  assert.equal(listed?.source, "file");
+  assert.equal(listed?.evidence, "file(1) rule in xenix, strength 50");
+  assert.equal(listed?.disagrees, true);
+  // Four bytes is a magic number, and the template yields as it did.
+  assert.equal(decide({ template: template("pickle", "Python pickle file"), file: { ...xenix, strength: 70 } }).source, "file");
+});
+
 test("a rule that only half matched loses to the template, and the comma goes", () => {
   const id = decide({ template: template("godot", "Godot binary resource/scene"), file: rule("National Instruments,", []) });
   assert.equal(id.name, "Godot binary resource/scene");

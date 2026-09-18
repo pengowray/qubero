@@ -73,6 +73,16 @@ export type Identity = {
 export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
 
 /**
+ * The weakest rule a weak template yields to. A rule's strength is 20, plus
+ * 10 for every byte it compares, plus 10 for comparing them for equality: 70
+ * is four bytes, the length of most magic numbers. Under that the rule has
+ * less behind it than the template does. Two bytes, `80 05`, open every
+ * protocol 5 pickle, and they are also the whole of the rule for a XENIX
+ * object file: with no threshold, every such pickle was called XENIX.
+ */
+export const WEAK_TEMPLATE_YIELDS_AT = 70;
+
+/**
  * The extensions a template's format goes by, for the templates whose name
  * is not already the extension. Used to tell whether file(1)'s answer is
  * about the same format as the template's: the rules name a PE `PE32+
@@ -274,6 +284,11 @@ const bytesAt = (m: SigMatch): string => {
  *  it is. */
 const SIGNATURE_MISMATCH = (label: string): string => `Template ${label} was applied, but the signature does not match`;
 
+/** How a file(1) rule knows: which rule file it is in, since a rule that
+ *  lost has no other row to say so, and how much it compared. */
+const fileEvidence = (f: Identification): string =>
+  f.source === "" ? `file(1) rule, strength ${Math.round(f.strength)}` : `file(1) rule in ${f.source}, strength ${Math.round(f.strength)}`;
+
 /**
  * Decide the file's name from whatever has answered, and list every answer
  * with the chosen one first.
@@ -282,7 +297,7 @@ const SIGNATURE_MISMATCH = (label: string): string => `Template ${label} was app
  * unless the two agree about the format, in which case the rules' sentence
  * is the name because it says more: the template calls a PNG a PNG, the rule
  * says it is 1280 by 720. A weak template (see `WEAK_TEMPLATES`) yields to
- * the rules either way. With no template, the rules name the file; failing
+ * a rule that compared four bytes or more either way. With no template, the rules name the file; failing
  * them, the tool that built it; failing that, a signature the file's
  * extension vouches for or that is long enough to vouch for itself.
  */
@@ -311,7 +326,8 @@ export function decide(a: Answers): Identity {
   // template's answer is listed under it with what is wrong.
   const mismatch = t !== null && t.signatureMismatch === true;
   if (t !== null && !mismatch && t.sentence !== null) choose(t.sentence, "template");
-  if (f !== null && t !== null && !isHalfMatch(f) && (fileAgrees || WEAK_TEMPLATES.has(t.name))) choose(f.message, "file");
+  const outweighs = f !== null && t !== null && WEAK_TEMPLATES.has(t.name) && f.strength >= WEAK_TEMPLATE_YIELDS_AT;
+  if (f !== null && t !== null && !isHalfMatch(f) && (fileAgrees || outweighs)) choose(f.message, "file");
   if (t !== null && !mismatch && templateName !== null) choose(templateName, "template");
   if (f !== null) choose(trimmed(f), "file");
   const tool = tools[0];
@@ -335,7 +351,7 @@ export function decide(a: Answers): Identity {
     candidates.push({
       source: "file",
       name: trimmed(f),
-      evidence: isHalfMatch(f) ? "only the first line of a file(1) rule matched" : `file(1) rule, strength ${Math.round(f.strength)}`,
+      evidence: isHalfMatch(f) ? "only the first line of a file(1) rule matched" : fileEvidence(f),
       disagrees: t !== null && !fileAgrees && source !== "file",
     });
   }
