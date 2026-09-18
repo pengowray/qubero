@@ -4,7 +4,7 @@
 //! that the methods which read or write a slot are in one place.
 
 use super::cursor::Cursor;
-use super::MAX_MEMO;
+use super::{Pickler, MAX_MEMO};
 
 /// What a memo slot holds, as far as a form is prepared to say.
 ///
@@ -74,6 +74,21 @@ impl Cursor<'_> {
     pub(super) fn memoize(&mut self, bound: Bound) -> Option<usize> {
         self.exact(&[0x94])?;
         self.memo.bind(bound)
+    }
+
+    /// The memo mark after a BYTEARRAY8, which only one of the two picklers
+    /// always wrote.
+    ///
+    /// `_pickle` files a bytearray in the memo; `pickle.py` did not until
+    /// Python 3.10, so a BYTEARRAY8 with nothing behind it is that pickler's
+    /// spelling. Every slot after it is numbered one lower, which is why the
+    /// mark cannot simply be skipped.
+    pub(super) fn bytearray_memoize(&mut self, bound: Bound) -> Option<()> {
+        if self.peek() == Some(0x94) {
+            self.memoize(bound)?;
+            return Some(());
+        }
+        self.wrote(Pickler::Python)
     }
 
     /// BINGET or LONG_BINGET, and what the slot it names holds. A slot past

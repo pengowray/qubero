@@ -206,9 +206,15 @@ impl Cursor<'_> {
             _ => return None,
         };
         // A bytearray is not a byte string, and nothing ever names one of
-        // these again, so the slot it goes in stays opaque.
-        let held = if code == 0x96 { Bound::Opaque } else { Bound::Bytes { at, len } };
-        self.memoize(held)?;
+        // these again, so the slot it goes in stays opaque. Its memo mark is
+        // the one `pickle.py` did not write before Python 3.10, which is why
+        // that pickler's protocol 5 arrays are a byte shorter.
+        match code {
+            0x96 => self.bytearray_memoize(Bound::Opaque)?,
+            _ => {
+                self.memoize(Bound::Bytes { at, len })?;
+            }
+        }
         let dtype = self.dtype()?;
         let dimensions = self.dimensions()?;
         let fortran_order = self.storage_order()?;

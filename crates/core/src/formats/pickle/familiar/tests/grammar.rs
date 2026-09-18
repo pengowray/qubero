@@ -214,6 +214,65 @@ fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
     }
 }
 
+/// The two picklers CPython ships, and the tails that tell them apart.
+///
+/// `_pickle` writes a batch for whatever a container has left over after a
+/// full one, even when that is nothing; `pickle.py` writes APPEND or SETITEM
+/// for a single item and nothing at all for none. Both are what a real
+/// pickler writes, so both are read, and the file says which it was. A file
+/// showing one of them at one batch edge and the other at another was written
+/// by neither.
+#[test]
+fn a_file_shows_one_pickler_or_neither_and_never_both() {
+    // A thousand items, which is the batch CPython fills before it opens
+    // another, and then whatever the writer had left.
+    let full = |open: &[u8], item: &[u8], close: u8| {
+        let mut out = open.to_vec();
+        out.push(b'(');
+        out.extend((0..MAX_BATCH).flat_map(|_| item.iter().copied()));
+        out.push(close);
+        out
+    };
+    let list = |tail: &[u8]| framed(&cat(&[&full(b"]\x94", b"K\x01", b'e'), tail, b"."]));
+    let dict = |tail: &[u8]| framed(&cat(&[&full(b"}\x94", b"K\x01K\x02", b'u'), tail, b"."]));
+    let said = |bytes: &[u8]| recognise(bytes).map(|found| found.pickler);
+
+    // One item over a full batch, and a container whose length is exactly a
+    // multiple of a thousand.
+    assert_eq!(said(&list(b"(K\x01e")), Some(Pickler::C));
+    assert_eq!(said(&list(b"K\x01a")), Some(Pickler::Python));
+    assert_eq!(said(&dict(b"(K\x01K\x02u")), Some(Pickler::C));
+    assert_eq!(said(&dict(b"(u")), Some(Pickler::C));
+    assert_eq!(said(&dict(b"K\x01K\x02s")), Some(Pickler::Python));
+    assert_eq!(said(&dict(b"")), Some(Pickler::Python));
+    // A set has no shorthand in either pickler, so a batch of one after a
+    // full one says nothing about who wrote it.
+    assert_eq!(said(&framed(&cat(&[&full(b"\x8f\x94", b"K\x01", 0x90), b"(K\x01\x90."]))), Some(Pickler::Undetermined));
+    // And neither does a file with no batch edge in it at all.
+    assert_eq!(said(&framed(b"}\x94\x8c\x01a\x94K\x01s.")), Some(Pickler::Undetermined));
+
+    // Two containers in one file, spelled by two different picklers.
+    let mixed = framed(&cat(&[
+        b"]\x94(",
+        &full(b"]\x94", b"K\x01", b'e'),
+        b"(K\x01e",
+        &full(b"}\x94", b"K\x01K\x02", b'u'),
+        b"K\x01K\x02s",
+        b"e.",
+    ]));
+    assert!(recognise(&mixed).is_none(), "one file, two picklers");
+
+    // The memo mark after a BYTEARRAY8, which pickle.py did not write until
+    // Python 3.10. Every slot after it is numbered one lower.
+    let marked = proto5(b"]\x94(\x96\x02\0\0\0\0\0\0\0ab\x94\x8c\x01x\x94h\x02e.");
+    assert_eq!(said(&marked), Some(Pickler::Undetermined));
+    let unmarked = proto5(b"]\x94(\x96\x02\0\0\0\0\0\0\0ab\x8c\x01x\x94h\x01e.");
+    assert_eq!(said(&unmarked), Some(Pickler::Python));
+    // The same bytes with the slot numbering of the other spelling name a
+    // slot the file never wrote.
+    assert!(recognise(&proto5(b"]\x94(\x96\x02\0\0\0\0\0\0\0ab\x8c\x01x\x94h\x02e.")).is_none());
+}
+
 /// A form is the productions it allows, and a file is read under exactly
 /// one of them.
 #[test]

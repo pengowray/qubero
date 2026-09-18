@@ -3,7 +3,7 @@
 //! production reads bytes through this one, so it sits apart from all of them.
 
 use super::memo::Memo;
-use super::{Allow, BIG_PAYLOAD, Call, Kind, Said, Value};
+use super::{Allow, BIG_PAYLOAD, Call, Kind, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
 pub(super) struct Cursor<'a> {
@@ -20,6 +20,10 @@ pub(super) struct Cursor<'a> {
     /// mark a production consumes has to land here or the numbering drifts.
     pub(super) memo: Memo,
     pub(super) framing: Framing,
+    /// Which pickler the spellings seen so far belong to. The two are told
+    /// apart only at a batch edge and at the memo mark after a bytearray, so
+    /// this stays [`Pickler::Undetermined`] for most files.
+    pub(super) pickler: Pickler,
     pub(super) allow: Allow,
     pub(super) calls: Vec<Call>,
     pub(super) payloads: Vec<(usize, Payload)>,
@@ -57,6 +61,7 @@ pub(super) struct Save {
     pub(super) calls: usize,
     pub(super) payloads: usize,
     pub(super) framing: Framing,
+    pub(super) pickler: Pickler,
     pub(super) arrays: usize,
     pub(super) objects: usize,
 }
@@ -102,8 +107,24 @@ impl<'a> Cursor<'a> {
             calls: self.calls.len(),
             payloads: self.payloads.len(),
             framing: self.framing,
+            pickler: self.pickler,
             arrays: self.arrays,
             objects: self.objects,
+        }
+    }
+
+    /// What the spelling just read says about which pickler wrote the file.
+    ///
+    /// Both spellings are real, and a file is written by one pickler, so the
+    /// first one seen fixes the reading: a file that shows the C pickler at
+    /// one batch edge and `pickle.py` at another was written by neither.
+    pub(super) fn wrote(&mut self, which: Pickler) -> Option<()> {
+        match self.pickler {
+            Pickler::Undetermined => {
+                self.pickler = which;
+                Some(())
+            }
+            seen => (seen == which).then_some(()),
         }
     }
 
@@ -116,6 +137,7 @@ impl<'a> Cursor<'a> {
         self.calls.truncate(s.calls);
         self.payloads.truncate(s.payloads);
         self.framing = s.framing;
+        self.pickler = s.pickler;
         self.arrays = s.arrays;
         self.objects = s.objects;
     }

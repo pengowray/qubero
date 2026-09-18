@@ -187,6 +187,33 @@ pub struct Instr {
     pub name: &'static str,
 }
 
+/// Which of CPython's two picklers wrote the file, as far as its bytes say.
+///
+/// `_pickle` is the C one, which `pickle.dump` uses wherever it imports;
+/// `pickle.py` is the pure Python one beside it, and the only one PyPy has.
+/// They agree everywhere but the tail of a long container and the memo mark
+/// after a bytearray, so most files say nothing either way. A file that shows
+/// one of them at one batch edge and the other at another was written by
+/// neither, and is a non-match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pickler {
+    /// Nothing in the file tells the two apart, which is most files.
+    Undetermined,
+    C,
+    Python,
+}
+
+impl Pickler {
+    /// What the `pickler` row says.
+    pub fn name(self) -> &'static str {
+        match self {
+            Pickler::C => "_pickle (CPython's C pickler)",
+            Pickler::Python => "pickle.py (the pure Python pickler, the only one PyPy has)",
+            Pickler::Undetermined => "_pickle or pickle.py (they write this data identically)",
+        }
+    }
+}
+
 /// What a node of a recognised tree holds, for the nodes that hold others.
 /// A leaf is read as the type its bytes are and never carries one of these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +270,8 @@ impl Shape {
 #[derive(Debug)]
 pub struct Match {
     pub form: &'static str,
+    /// Which pickler the file's spellings show, where they show one.
+    pub pickler: Pickler,
     pub value: Value,
     /// Where the object starts, which is one past the protocol byte and past
     /// the frame header when there is one.
@@ -317,6 +346,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize) -> 
         says: Vec::new(),
         memo: Memo::new(),
         framing: Framing::Unframed,
+        pickler: Pickler::Undetermined,
         allow,
         calls: Vec::new(),
         payloads: Vec::new(),
@@ -381,6 +411,7 @@ impl<'a> Cursor<'a> {
         }
         Some(Match {
             form,
+            pickler: self.pickler,
             value,
             body,
             calls: std::mem::take(&mut self.calls),

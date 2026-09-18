@@ -5,7 +5,7 @@
 
 use super::cursor::{Cursor, Framing};
 use super::memo::Bound;
-use super::{Kind, Shape, Value, CONTENT, MAX_BATCH, MAX_DEPTH, MAX_VALUES, NO_OPCODE};
+use super::{Kind, Pickler, Shape, Value, CONTENT, MAX_BATCH, MAX_DEPTH, MAX_VALUES, NO_OPCODE};
 
 /// A MARK, and what it holds back: where the opcode itself is, so that a
 /// tuple or a frozenset made over it spans from there, and how tall the
@@ -225,12 +225,31 @@ impl Cursor<'_> {
         if stack.len() != 1 || !marks.is_empty() {
             return None;
         }
-        Some(stack.pop()?.value)
+        let whole = stack.pop()?;
+        self.shut(std::slice::from_ref(&whole))?;
+        Some(whole.value)
+    }
+
+    /// Every value here has been taken off the stack and is finished, so a
+    /// container among them says how its writer ended it.
+    ///
+    /// A dictionary's and a set's loop runs again whenever the batch it wrote
+    /// was full, so the C pickler always follows a full batch with another,
+    /// empty when there was nothing left. `pickle.py` stops instead, and a
+    /// container that ends on a full batch is that pickler's spelling.
+    fn shut(&mut self, items: &[Slot]) -> Option<()> {
+        for slot in items {
+            if slot.fill == Fill::Batched(MAX_BATCH) && !matches!(slot.value.kind, Kind::List(_)) {
+                self.wrote(Pickler::Python)?;
+            }
+        }
+        Some(())
     }
 
     /// One value made out of the things just taken off the stack, spanning
     /// from `at` to wherever the file has got to.
-    fn folded(&self, at: usize, items: Vec<Slot>, make: fn(Vec<Value>) -> Kind) -> Option<Slot> {
+    fn folded(&mut self, at: usize, items: Vec<Slot>, make: fn(Vec<Value>) -> Kind) -> Option<Slot> {
+        self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
         if deep > MAX_DEPTH {
             return None;
@@ -243,15 +262,27 @@ impl Cursor<'_> {
         })
     }
 
-    /// APPEND or SETITEM: the shorthand CPython writes for a list of one item
-    /// or a dictionary of one entry, and for nothing else. A container it has
-    /// written anything else into does not take one.
+    /// APPEND or SETITEM: the shorthand for a list of one item or a
+    /// dictionary of one entry, and for the one item `pickle.py` has left
+    /// over after a full batch.
+    ///
+    /// Both picklers write it for a container holding exactly one thing.
+    /// `pickle.py` also writes it for the last item of a container a batch
+    /// longer than a multiple of a thousand, where the C pickler writes a
+    /// batch of one instead. A container filled any other way does not take
+    /// one.
     fn one(&mut self, stack: &mut [Slot], items: Vec<Slot>) -> Option<()> {
+        self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
         let mut items = items.into_iter();
         let into = stack.last_mut()?;
-        if into.fill != Fill::Open || deep > MAX_DEPTH {
+        if deep > MAX_DEPTH {
             return None;
+        }
+        match into.fill {
+            Fill::Open => {}
+            Fill::Batched(MAX_BATCH) => self.wrote(Pickler::Python)?,
+            _ => return None,
         }
         match &mut into.value.kind {
             Kind::List(values) => values.push(items.next()?.value),
@@ -275,10 +306,17 @@ impl Cursor<'_> {
     /// CPython writes a thousand entries, closes the batch and opens another,
     /// so every batch but the last is exactly that long. A dictionary and a
     /// set are written by a loop that runs again whenever the batch it just
-    /// wrote was full, so a full batch of theirs is always followed by
-    /// another, empty if there was nothing left. A list's loop stops when it
-    /// runs out, so a full batch of a list may be its last.
+    /// wrote was full, so a full batch of theirs is followed by another; a
+    /// list's loop stops when it runs out, so a full batch of a list may be
+    /// its last.
+    ///
+    /// What the two picklers do with the tail is where they part. The C one
+    /// writes a batch for whatever is left over, even when that is nothing;
+    /// `pickle.py` writes APPEND or SETITEM for a single item left over, and
+    /// nothing at all for none. A set is the exception: neither has a
+    /// shorthand for it, so both write a batch of one.
     fn batch(&mut self, stack: &mut [Slot], items: Vec<Slot>, code: u8) -> Option<()> {
+        self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
         let into = stack.last_mut()?;
         if deep > MAX_DEPTH {
@@ -327,9 +365,11 @@ impl Cursor<'_> {
         if !fits {
             return None;
         }
-        // A full batch of a dictionary or a set is never the last one.
-        if entries == MAX_BATCH && code != b'e' && self.peek()? != b'(' {
-            return None;
+        // A batch after a full one is the tail, and says which pickler wrote
+        // it. An empty one, or one holding the single item a list or a
+        // dictionary had left over, is the C pickler's.
+        if matches!(into.fill, Fill::Batched(_)) && matches!((entries, code), (0, _) | (1, b'e' | b'u')) {
+            self.wrote(Pickler::C)?;
         }
         into.deep = into.deep.max(deep);
         into.value.len = self.at - into.value.at;
@@ -469,7 +509,7 @@ impl Cursor<'_> {
         let start = self.at;
         self.exact(&[0x96])?;
         let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
-        self.memoize(Bound::Opaque)?;
+        self.bytearray_memoize(Bound::Opaque)?;
         let held = Value { at, len, kind: Kind::Bytes { at, len } };
         Some(self.span(start, Kind::Object { what: Shape::ByteArray, names: CONTENT, items: vec![held] }))
     }

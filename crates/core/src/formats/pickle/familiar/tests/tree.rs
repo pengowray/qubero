@@ -35,6 +35,7 @@ fn the_familiar_template_places_the_decoded_values() {
             (1, "header", "header", 0, 11),
             (2, "message", "computed text", 0, 0),
             (2, "form", "computed text", 0, 0),
+            (2, "pickler", "computed text", 0, 0),
             (2, "proto", "bytes[]", 0, 1),
             (2, "protocol", "u8", 1, 1),
             (2, "frame", "bytes[]", 2, 9),
@@ -62,6 +63,9 @@ fn the_familiar_template_places_the_decoded_values() {
     );
     assert_eq!(named_row(&seen, "message").value, V::Str(MESSAGE.into()));
     assert_eq!(named_row(&seen, "form").value, V::Str("basic-p4-p5-v4".into()));
+    // Nothing in this file tells the two picklers apart, and the row says so
+    // rather than being left out.
+    assert_eq!(named_row(&seen, "pickler").value, V::Str(Pickler::Undetermined.name().into()));
     assert_eq!(named_row(&seen, "protocol").value, V::UInt(4));
     assert_eq!(named_row(&seen, "key").value, V::Str("a".into()));
     assert_eq!(named_row(&seen, "[0]").value, V::UInt(1));

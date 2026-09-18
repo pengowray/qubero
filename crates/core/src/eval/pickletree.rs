@@ -35,6 +35,10 @@ const DATA_FIELD: &str = "data";
 /// the protocol the writer used.
 const MESSAGE_FIELD: &str = "message";
 const FORM_FIELD: &str = "form";
+/// Which of CPython's two picklers wrote the file. Most files say nothing
+/// either way, and the row says that rather than going missing: a reader
+/// comparing two files wants to see the same rows in both.
+const PICKLER_FIELD: &str = "pickler";
 const PROTOCOL_FIELD: &str = "protocol";
 /// What an array says about itself, and then the numbers themselves. Not
 /// `data` again: the object the file holds is already called that, and one
@@ -174,6 +178,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             vec![
                 (Label::Field(MESSAGE_FIELD), Part::Note(familiar::MESSAGE.to_string())),
                 (Label::Field(FORM_FIELD), Part::Note(found.form.to_string())),
+                (Label::Field(PICKLER_FIELD), Part::Note(found.pickler.name().to_string())),
             ],
             vec![(Label::Field(PROTOCOL_FIELD), Part::Protocol)],
         ),

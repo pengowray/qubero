@@ -18,7 +18,7 @@ fn main() {
             }
         };
         match pickle::familiar::recognise(&bytes) {
-            Some(found) => println!("{path}: {}", found.form),
+            Some(found) => println!("{path}: {} [{}]", found.form, found.pickler.name()),
             None => println!("{path}: no form"),
         }
         if ops_only {
