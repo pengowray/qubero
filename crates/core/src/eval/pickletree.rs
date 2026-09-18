@@ -45,6 +45,14 @@ const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
 const KEY_FIELD: &str = "key";
 const VALUE_FIELD: &str = "value";
+/// What a BINGET says: the file wrote this string or these bytes earlier and
+/// named them here rather than writing them again. The row carries what is at
+/// the other end, since the reference itself is two bytes that say nothing.
+const REFERS_FIELD: &str = "refers to";
+/// How much of a named string or byte string the row above shows. A repeated
+/// dictionary key is a word or two; anything longer is cut here rather than
+/// filling a row that is meant to be read at a glance.
+const MOST_SHOWN: usize = 120;
 /// The storage orders, spelled the way NumPy spells them.
 const C_ORDER: &str = "C";
 const FORTRAN_ORDER: &str = "Fortran";
@@ -72,10 +80,17 @@ enum Part<'a> {
     Entry(&'a (Value, Value)),
     /// The numbers of a matched array, read as its dtype says.
     Data(&'a Value),
+    /// What a BINGET names, read where the file wrote it. The row has no
+    /// bytes of its own: the reference is two bytes and the thing it names is
+    /// somewhere else entirely.
+    Refers(&'a Value),
     /// A named operand inside a run of instructions.
     Text(&'a Said),
-    /// A run of instructions the form matched as one act.
-    Call(&'a Call),
+    /// A run of instructions the form matched as one act, and the array it
+    /// rebuilt. The numbers are one of the call's arguments in NumPy's
+    /// protocol 5 spelling and follow the call in its protocol 4 one, so the
+    /// call has to know which.
+    Call(&'a Call, &'a Value),
     /// The protocol number, which is the one byte of the envelope that says
     /// anything.
     Protocol,
@@ -112,8 +127,9 @@ fn span(found: &Match, part: &Part) -> (usize, usize) {
             Kind::Array { at, len, .. } => (*at, at + len),
             _ => (0, 0),
         },
+        Part::Refers(_) => (0, 0),
         Part::Text(s) => (s.at, s.at + s.len),
-        Part::Call(c) => (c.at, c.at + c.len),
+        Part::Call(c, _) => (c.at, c.at + c.len),
         Part::Protocol => (1, 2),
         Part::Op { at, len } => (*at, at + len),
     }
@@ -163,19 +179,29 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             Vec::new(),
             vec![(Label::Field(KEY_FIELD), Part::Value(&e.0)), (Label::Field(VALUE_FIELD), Part::Value(&e.1))],
         ),
-        Part::Call(c) => (
-            Vec::new(),
-            c.says.iter().map(|s| (Label::Field(s.name), Part::Text(s))).collect(),
-        ),
+        // The names the call was made with, and the numbers when they are one
+        // of its arguments rather than something handed over after it. Both
+        // are placed in file order, which is the order the call wrote them.
+        Part::Call(c, array) => {
+            let mut kids: Vec<(Label, Part)> = c.says.iter().map(|s| (Label::Field(s.name), Part::Text(s))).collect();
+            if inside(c, span(found, &Part::Data(array)).0) {
+                kids.push((Label::Field(NUMBERS_FIELD), Part::Data(array)));
+            }
+            kids.sort_by_key(|(_, part)| span(found, part).0);
+            (Vec::new(), kids)
+        }
         Part::Value(v) => match &v.kind {
             Kind::Dict(entries) => (
                 Vec::new(),
                 entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))).collect(),
             ),
-            Kind::List(items) | Kind::Tuple(items) => (
+            Kind::List(items) | Kind::Tuple(items) | Kind::Set(items) | Kind::FrozenSet(items) => (
                 Vec::new(),
                 items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))).collect(),
             ),
+            // A reference is the BINGET and a row saying what is at the other
+            // end of it, since the two bytes themselves say nothing.
+            Kind::Ref { .. } => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
             // A builtin written as a call. Its parts are named where Python
             // names them and numbered where it does not.
             Kind::Object { names, items, .. } => (
@@ -206,10 +232,14 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 let mut kids = Vec::new();
                 // The call that rebuilt this array, when it is this array's:
                 // a form matches one, and it sits inside the array's bytes.
-                if let Some(call) = found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len) {
-                    kids.push((Label::Field(call.name), Part::Call(call)));
+                let call = found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len);
+                if let Some(call) = call {
+                    kids.push((Label::Field(call.name), Part::Call(call, v)));
                 }
-                kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
+                // The numbers, unless the call was handed them and holds them.
+                if !call.is_some_and(|c| inside(c, span(found, &Part::Data(v)).0)) {
+                    kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
+                }
                 (notes, kids)
             }
             // A leaf, which holds nothing.
@@ -231,6 +261,29 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
     out
 }
 
+/// What a reference names, as the row saying so shows it: the text itself,
+/// or the bytes in hex when the slot holds a byte string. `whole` is how long
+/// the thing is, so that a long one says it was cut.
+fn shown(bytes: &[u8], text: bool, whole: usize) -> String {
+    let mut said = match text {
+        // The read may have stopped inside a character, so take what is whole.
+        true => match std::str::from_utf8(bytes) {
+            Ok(said) => said.to_string(),
+            Err(e) => String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned(),
+        },
+        false => bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "),
+    };
+    if bytes.len() < whole {
+        said.push_str("...");
+    }
+    said
+}
+
+/// Whether a byte of the file sits inside a matched run of instructions.
+fn inside(call: &Call, at: usize) -> bool {
+    (call.at..call.at + call.len).contains(&at)
+}
+
 /// Where `path`, counted from the pickle field, lands.
 fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<(Label, Part<'a>)> {
     let mut here = (Label::Field("file"), Part::Doc);
@@ -247,11 +300,14 @@ fn shape_of(part: &Part) -> Option<Shape> {
         Part::Doc => Shape::Doc,
         Part::Header => Shape::Header,
         Part::Entry(_) => Shape::Entry,
-        Part::Call(_) => Shape::Call,
+        Part::Call(..) => Shape::Call,
         Part::Value(v) => match &v.kind {
             Kind::Dict(_) => Shape::Dict,
             Kind::List(_) => Shape::List,
             Kind::Tuple(_) => Shape::Tuple,
+            Kind::Set(_) => Shape::Set,
+            Kind::FrozenSet(_) => Shape::FrozenSet,
+            Kind::Ref { .. } => Shape::Ref,
             Kind::Array { .. } => Shape::Array,
             Kind::Object { what, .. } => *what,
             _ => return None,
@@ -267,11 +323,14 @@ fn leaf(value: &Value) -> Option<(T, usize, usize)> {
     Some(match &value.kind {
         Kind::None => (T::enumeration("null", T::u8(), &[(0x4e, "None")]), value.at, 1),
         Kind::Bool(_) => (T::enumeration("bool", T::u8(), &[(0x88, "True"), (0x89, "False")]), value.at, 1),
+        // BININT1 is unsigned and BININT2 is too; BININT is signed, and so is
+        // LONG1, whose run of bytes is as long as the number needs.
         Kind::Int { at, len, .. } => {
             let ty = match len {
                 1 => T::u8(),
                 2 => T::u16(Little),
-                _ => T::i32(Little),
+                4 => T::i32(Little),
+                bytes => T::Int { bits: *bytes as u32 * 8, endian: Little },
             };
             (ty, *at, *len)
         }
@@ -361,8 +420,11 @@ impl Evaluator {
     pub(super) fn pickle_index<S: Source>(&mut self, doc: &Document<S>, path: &[usize], name: &str) -> R<Option<usize>> {
         let (root, found) = self.pickle_doc(doc, path)?;
         let Some((_, here)) = spot(&found, &path[root.len()..]) else { return fail("no such value") };
-        let r = self.memo[path].clone();
-        let base = self.memo[&root].offset;
+        // A key may be a reference to a string written anywhere else in the
+        // file, so a key is read through the pickle field rather than through
+        // the node it is a key of.
+        let r = self.memo[&root].clone();
+        let base = r.offset;
         for (i, (label, part)) in parts(&found, &here).into_iter().enumerate() {
             let said = match label {
                 Label::Field(f) => f == name,
@@ -388,10 +450,24 @@ impl Evaluator {
         Ok(None)
     }
 
-    /// The text of a key, read from the file. The recogniser checked it was
-    /// UTF-8 and kept where it is rather than a copy of it.
+    /// What a dictionary entry is called, which is its key when the key is
+    /// something a name can be.
+    ///
+    /// A string spelled out, a string the file named instead of spelling
+    /// again, and a whole number, which is the key a table of records keyed
+    /// by row number has. Anything else leaves the entry numbered by its
+    /// place, because a float, a byte string or a tuple written out as a name
+    /// would read as something the file says and is not.
+    ///
+    /// `r` is the pickle field itself: a named string sits wherever the file
+    /// first wrote it, which is outside the entry that names it.
     fn pickle_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, key: &Value) -> R<Option<String>> {
-        let Kind::Text { at, len } = key.kind else { return Ok(None) };
+        let (at, len) = match key.kind {
+            Kind::Text { at, len } => (at, len),
+            Kind::Ref { at, len, text: true } => (at, len),
+            Kind::Int { value, .. } => return Ok(Some(value.to_string())),
+            _ => return Ok(None),
+        };
         let bytes = self.read(doc, r, base + at as u64 * 8, len as u64 * 8)?;
         Ok(String::from_utf8(bytes).ok())
     }
@@ -410,14 +486,17 @@ impl Evaluator {
             return fail("no such value");
         };
         let pr = self.memo[parent].clone();
-        let base = self.memo[&root].offset;
+        // The whole pickle field, which is what a reference is read through:
+        // what it names sits wherever the file first wrote it.
+        let whole = self.memo[&root].clone();
+        let base = whole.offset;
         let name = match label {
             Label::Field(f) => Name::Field(f.into()),
             Label::Index(n) => Name::Index(n),
             Label::Key(n) => match &above {
                 Part::Value(v) => match &v.kind {
                     Kind::Dict(entries) => match entries.get(n).map(|e| &e.0) {
-                        Some(key) => match self.pickle_text(doc, &pr, base, key)? {
+                        Some(key) => match self.pickle_text(doc, &whole, base, key)? {
                             Some(text) => Name::Field(text.into()),
                             None => Name::Index(n),
                         },
@@ -441,6 +520,15 @@ impl Evaluator {
             // data wants them folded, and a reader following the program
             // wants them named.
             Part::Op { .. } => Ok(Some(self.pickle_place(&pr, name, T::bytes(E::lit((end - at) as i128)), base, at, end - at, true))),
+            // What a reference names, read where the file wrote it. The row
+            // is worked out rather than read in place: its bytes are not
+            // inside the reference, which is only the BINGET.
+            Part::Refers(v) => {
+                let Kind::Ref { at, len, text } = v.kind else { return fail("no such value") };
+                let read = len.min(MOST_SHOWN);
+                let bytes = self.read(doc, &whole, base + at as u64 * 8, read as u64 * 8)?;
+                self.pickle_note(path, &pr, name, shown(&bytes, text, len))
+            }
             Part::Text(said) => {
                 let ty = T::text(StrLen::Fixed(E::lit(said.len as i128)), Encoding::Utf8);
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))

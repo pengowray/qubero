@@ -1511,6 +1511,13 @@ mod tests {
         bytes
     }
 
+    /// The same at protocol 5, for the productions that exist only there.
+    fn proto5(body: &[u8]) -> Vec<u8> {
+        let mut bytes = framed(body);
+        bytes[1] = 5;
+        bytes
+    }
+
     #[test]
     fn captures_basic_values_without_a_machine() {
         let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
@@ -1955,12 +1962,20 @@ mod tests {
     /// Nothing a matched form consumed is left over. A form fixes its
     /// instructions, so a byte no field covers would be a byte the form
     /// matched and the template could not name.
+
     #[test]
     fn a_matched_file_has_no_unmapped_bytes() {
         for bytes in [
             framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es."),
             framed(b"]\x94(N\x88\x89M\x39\x30J\xff\xff\xff\xffG\x3f\xf0\x00\x00\x00\x00\x00\x00C\x02\xde\xad\x94e."),
             framed(b"}\x94."),
+            // The productions added since: tuples of each arity, a set, a
+            // frozenset, a long integer, and a key the file named rather
+            // than spelled a second time.
+            framed(b"]\x94(K\x01\x85\x94K\x01K\x02\x86\x94K\x01K\x02K\x03\x87\x94(K\x01K\x02K\x03K\x04t\x94)e."),
+            framed(b"]\x94(\x8f\x94(K\x01K\x02\x90(K\x03\x91\x94\x8a\x05\0\0\0\0\x01e."),
+            framed(b"}\x94(\x8c\x03key\x94K\x01h\x01K\x02u."),
+            proto5(b"}\x94(\x8c\x01a\x94\x96\x03\0\0\0\0\0\0\0abc\x94\x8c\x01b\x94h\x01u."),
             MATRIX.to_vec(),
             // An array of shape 0: its numbers are a field the file wrote and
             // a run of no bytes at once.
@@ -2051,6 +2066,53 @@ mod tests {
                 ("bytes[]".into(), 2, V::Bytes { len: 2, preview: vec![0xde, 0xad] }),
             ]
         );
+    }
+
+    /// A value the file named rather than wrote again: the BINGET is the
+    /// whole of it, so the row that says what it names is worked out from the
+    /// match and sits where the reference does. An entry a named string is
+    /// the key of is still called by that string.
+    #[test]
+    fn a_named_value_says_what_it_names() {
+        let seen = dump(&framed(b"}\x94(\x8c\x03key\x94K\x01h\x01K\x02u."));
+        let said: Vec<(usize, &str, &str, u64, u64, &V)> = seen
+            .iter()
+            .skip_while(|r| r.name != "data")
+            .map(|r| (r.depth, r.name.as_str(), r.ty.as_str(), r.at, r.len, &r.value))
+            .collect();
+        // The first entry spelled its key out; the second named it instead.
+        assert_eq!(
+            said[10..17],
+            [
+                (2, "key", "entry", 22, 4, &V::Composite { count: 3 }),
+                (3, "key", "reference", 22, 2, &V::Composite { count: 2 }),
+                (4, "refers to", "computed text", 22, 0, &V::Str("key".into())),
+                (4, "binget", "bytes[]", 22, 2, &V::Bytes { len: 2, preview: vec![0x68, 1] }),
+                (3, "binint1", "bytes[]", 24, 1, &V::Bytes { len: 1, preview: vec![b'K'] }),
+                (3, "value", "u8", 25, 1, &V::UInt(2)),
+                (2, "setitems", "bytes[]", 26, 1, &V::Bytes { len: 1, preview: vec![b'u'] }),
+            ]
+        );
+        tiles(&seen);
+    }
+
+    /// The values the widened grammar added, each read as what it is: a set
+    /// and a frozenset hold their members, a long integer is a signed run of
+    /// bytes as wide as it needs, and a protocol 5 bytearray holds the bytes
+    /// it was made from the way the protocol 4 call to the class does.
+    #[test]
+    fn the_widened_values_read_as_the_types_their_bytes_are() {
+        let seen = dump(&framed(b"]\x94(\x8f\x94(K\x01K\x02\x90(K\x03\x91\x94\x8a\x05\0\0\0\0\x01e."));
+        let kinds: Vec<(&str, &str)> = seen.iter().map(|r| (r.name.as_str(), r.ty.as_str())).collect();
+        assert!(kinds.contains(&("[0]", "set")), "{kinds:?}");
+        assert!(kinds.contains(&("[1]", "frozenset")), "{kinds:?}");
+        let long = seen.iter().rev().find(|r| r.name == "[2]").unwrap();
+        assert_eq!((long.ty.as_str(), long.len, &long.value), ("i40 le", 5, &V::Int(4_294_967_296)));
+
+        let seen = dump(&proto5(b"}\x94(\x8c\x01a\x94\x96\x03\0\0\0\0\0\0\0abc\x94\x8c\x01b\x94h\x01u."));
+        let held = named_row(&seen, "bytes");
+        assert_eq!((held.ty.as_str(), held.at, held.len), ("bytes[]", 27, 3));
+        assert_eq!(named_row(&seen, "value").ty, "bytearray");
     }
 
     /// A matched array says what it is before it says what it holds, and the
@@ -2155,14 +2217,16 @@ mod tests {
         ])
     }
 
-    /// The dtype construction and the BUILD that gives it its byte order, with
-    /// the class's module taken from the slot it was written in.
+    /// The dtype construction and the BUILD that gives it its byte order.
+    /// `module` is how the class's module is named, which is a reference to
+    /// the slot it was written in where an array wrote it first and the word
+    /// itself where nothing did.
     ///
     /// Counting from the slot its first word lands in: 1 is the `dtype` text,
     /// 2 the `numpy.dtype` class, 5 the finished dtype, and 6 the byte order.
-    fn dtype_state(numpy_slot: u8, kind: &str, order: u8) -> Vec<u8> {
+    fn dtype_state(module: &[u8], kind: &str, order: u8) -> Vec<u8> {
         cat(&[
-            &get(numpy_slot),
+            module,
             &word("dtype"),
             b"\x93\x94",
             &word(kind),
@@ -2181,11 +2245,79 @@ mod tests {
             &reconstruct(),
             b"(K\x01",
             shape,
-            &dtype_state(base + 3, kind, order),
+            &dtype_state(&get(base + 3), kind, order),
             b"\x89",
             &blob(data),
             b"t\x94b",
         ])
+    }
+
+    /// BYTEARRAY8 and the memo mark after it.
+    fn mutable(data: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x96];
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(data);
+        out.push(0x94);
+        out
+    }
+
+    /// `numpy.core.numeric._frombuffer(buffer, dtype, shape, order)`, which is
+    /// what NumPy writes at protocol 5. Nothing is written before it, so the
+    /// dtype class names its module with the word rather than out of a slot.
+    fn frombuffer(buffer: &[u8], kind: &str, order: u8, shape: &[u8], letter: &str) -> Vec<u8> {
+        cat(&[
+            &word("numpy.core.numeric"),
+            &word("_frombuffer"),
+            b"\x93\x94(",
+            buffer,
+            &dtype_state(&word("numpy"), kind, order),
+            shape,
+            &word(letter),
+            b"t\x94R\x94",
+        ])
+    }
+
+    /// NumPy's protocol 5 call, which hands the array's numbers over as a
+    /// buffer rather than writing them after the call that rebuilds it.
+    #[test]
+    fn an_array_at_protocol_5_is_rebuilt_around_its_buffer() {
+        let numbers: Vec<u8> = (0u8..12).flat_map(|n| [n, 0]).collect();
+        let whole = proto5(&cat(&[&frombuffer(&mutable(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]));
+        let found = recognise(&whole).unwrap();
+        assert_eq!(found.form, "numpy-numeric-array-p4-p5-v4");
+        let Kind::Array { dtype, dimensions, len, fortran_order, .. } = &found.value.kind else { panic!("array") };
+        assert_eq!((dtype.as_str(), dimensions.as_slice(), *len, *fortran_order), ("<i2", &[3, 4][..], 24, false));
+
+        // A read-only array hands over a byte string instead, and Fortran
+        // order is the other letter.
+        let readonly = proto5(&cat(&[&frombuffer(&blob(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "F"), b"."]));
+        let found = recognise(&readonly).unwrap();
+        let Kind::Array { fortran_order, .. } = &found.value.kind else { panic!("array") };
+        assert!(fortran_order);
+
+        // The numbers are one of the call's arguments, so the call holds them
+        // and the array has nothing beside it.
+        let seen = dump(&whole);
+        assert_eq!(named_row(&seen, "shape").value, V::Str("3 x 4".into()));
+        let call = named_row(&seen, "ndarray frombuffer call");
+        let held = named_row(&seen, "numbers");
+        assert_eq!((call.at, call.len), (11, whole.len() as u64 - 12));
+        assert!(held.at > call.at && held.at + held.len < call.at + call.len);
+        assert_eq!((held.ty.as_str(), held.len, &held.value), ("i16 le[]", 24, &V::Composite { count: 12 }));
+        assert_eq!(named_row(&seen, "order letter").value, V::Str("C".into()));
+        tiles(&seen);
+
+        // Protocol 4 never writes this call, whatever else is right about it.
+        assert!(recognise(&framed(&cat(&[&frombuffer(&blob(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]))).is_none());
+        // Nor does NumPy write a letter that is not C or F, or a buffer that
+        // does not come to the shape it declared.
+        for (buffer, shape, letter) in [
+            (&numbers[..], &b"K\x03K\x04\x86\x94"[..], "A"),
+            (&numbers[..2], b"K\x03K\x04\x86\x94", "C"),
+        ] {
+            let wrong = proto5(&cat(&[&frombuffer(&blob(buffer), "i2", b'<', shape, letter), b"."]));
+            assert!(recognise(&wrong).is_none(), "accepted {letter} and {} bytes", buffer.len());
+        }
     }
 
     /// Two arrays under one dictionary, the second naming what the first
@@ -2203,7 +2335,7 @@ mod tests {
             &word("a"),
             &reconstruct(),
             b"(K\x01K\x02\x85\x94",
-            &dtype_state(5, "i1", b'|'),
+            &dtype_state(&get(5), "i1", b'|'),
             b"\x89",
             &blob(&[1, 2]),
             b"t\x94b",
@@ -2251,9 +2383,9 @@ mod tests {
         assert!(recognise(&framed(&apart)).is_some());
         // And the whole dtype written out again, which is what a file with two
         // unlike arrays does. Its module name may be a reference or a word.
-        let again = two_arrays(&dtype_state(5, "i1", b'|'));
+        let again = two_arrays(&dtype_state(&get(5), "i1", b'|'));
         assert!(recognise(&framed(&again)).is_some());
-        let again = two_arrays(&dtype_state(9, "i1", b'|'));
+        let again = two_arrays(&dtype_state(&get(9), "i1", b'|'));
         assert!(recognise(&framed(&again)).is_none(), "slot 9 holds a byte string, not a module name");
     }
 
@@ -2275,7 +2407,7 @@ mod tests {
             &word("a"),
             &reconstruct(),
             b"(K\x01K\x02\x85\x94",
-            &dtype_state(5, "i1", b'|'),
+            &dtype_state(&get(5), "i1", b'|'),
             b"\x89",
             &blob(&[1, 2]),
             b"t\x94b",
@@ -2298,7 +2430,7 @@ mod tests {
             &word("a"),
             &reconstruct(),
             b"(K\x01K\x02\x85\x94",
-            &dtype_state(5, "i1", b'|'),
+            &dtype_state(&get(5), "i1", b'|'),
             b"\x89",
             &blob(&[1, 2]),
             b"t\x94b",
@@ -2320,7 +2452,7 @@ mod tests {
                 &word("a"),
                 &reconstruct(),
                 b"(K\x01K\x02\x85\x94",
-                &dtype_state(5, "i2", b'<'),
+                &dtype_state(&get(5), "i2", b'<'),
                 b"\x89",
                 &blob(&[1, 0, 2, 0]),
                 b"t\x94b",
