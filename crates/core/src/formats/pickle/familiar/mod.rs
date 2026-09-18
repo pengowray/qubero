@@ -13,6 +13,7 @@ use crate::template::{Deduce, Deduced, Deducer};
 
 mod basic;
 mod builtins;
+mod codecs;
 mod cursor;
 mod dtype;
 mod forms;
@@ -23,7 +24,7 @@ mod object;
 mod tests;
 
 use cursor::{Cursor, Framing};
-use forms::{forms, Allow, BASIC, BUILTINS, NUMPY};
+use forms::{forms, Allow, Family};
 use memo::Memo;
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
@@ -65,6 +66,14 @@ const BIG_PAYLOAD: usize = 1 << 16;
 /// A frame's contents shorter than this are written without a FRAME header,
 /// so a run of unframed bytes this short may end the file.
 const MIN_FRAME: usize = 4;
+/// The longest newline-terminated run a form reads as one. Protocols 2 and 3
+/// write a module path, a callable's name and an integer too wide for BININT
+/// that way, and none of those is anywhere near this long.
+const MAX_LINE: usize = 512;
+/// The encoding a pickler below protocol 3 hands a byte string to `_codecs`
+/// under, which is the one that maps every byte to the character of the same
+/// number.
+const LATIN1: &str = "latin1";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.
@@ -124,6 +133,9 @@ pub enum Kind {
         dtype: Dtype,
         dimensions: Vec<u64>,
         fortran_order: bool,
+        /// How the numbers at `at`/`len` are written, which protocol 2 leaves
+        /// no way of writing directly.
+        storage: Storage,
     },
     /// One of the builtin types a pickle has to write as a call rather than
     /// as a literal. `names` names its parts, in the order they were written.
@@ -167,6 +179,33 @@ pub enum Kind {
         items: Vec<Value>,
         state: Option<Box<Value>>,
     },
+}
+
+/// How a run of bytes a form captured is written in the file.
+///
+/// Protocol 3 gave a pickle an opcode for a byte string. Protocol 2 has none,
+/// so a pickler there hands the bytes to `_codecs.encode` as the text they
+/// spell in latin-1, and that text is written UTF-8: a byte under 0x80 is
+/// itself and every byte above it is two. So the run in the file is not the
+/// bytes it stands for, and what is read out of it has to say which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Storage {
+    /// The bytes themselves, which is every protocol from 3 up.
+    Raw,
+    /// The text they spell in latin-1, which is protocol 2.
+    Latin1,
+}
+
+impl Storage {
+    /// How many bytes this run stands for. A latin-1 run is one byte a
+    /// character, and a character is every byte of the run that is not the
+    /// continuation of the one before it.
+    pub fn decoded(self, bytes: &[u8]) -> usize {
+        match self {
+            Storage::Raw => bytes.len(),
+            Storage::Latin1 => bytes.iter().filter(|b| **b & 0xc0 != 0x80).count(),
+        }
+    }
 }
 
 /// What one value of an array is.
@@ -251,6 +290,9 @@ const HALVES: &[&str] = &["real", "imaginary"];
 /// A `bytearray` is written as the one byte string it was made from, named
 /// for what it holds the way an array's numbers are.
 const CONTENT: &[&str] = &["bytes"];
+/// A byte string below protocol 3 is written as the text it spells and the
+/// encoding that turns the one back into the other.
+const SPELLED: &[&str] = &["text", "encoding"];
 
 /// A named operand inside a run of fixed instructions: the module and class
 /// names a form matched exactly, and the letters that spell a dtype. The
@@ -346,6 +388,9 @@ pub enum Shape {
     Complex,
     FrozenSet,
     ByteArray,
+    /// A byte string protocol 2 had to write as text and a call, with the
+    /// text and the encoding it was handed inside it.
+    Bytes,
     /// A class or a callable the file named, with the module and the name it
     /// was spelled by inside it.
     Class,
@@ -375,6 +420,7 @@ impl Shape {
             Shape::Complex => "complex",
             Shape::FrozenSet => "frozenset",
             Shape::ByteArray => "bytearray",
+            Shape::Bytes => "bytes",
             Shape::Class => "class",
             Shape::Object => "object",
             Shape::Block => "block",
@@ -463,6 +509,9 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         proto: 0,
         says: Vec::new(),
         memo: Memo::new(),
+        memo_base: None,
+        skipped: 0,
+        dicts: Pickler::Undetermined,
         framing: Framing::Unframed,
         pickler: Pickler::Undetermined,
         allow,
@@ -499,10 +548,12 @@ impl<'a> Cursor<'a> {
     fn whole(&mut self, form: &'static str) -> Option<Match> {
         self.exact(&[0x80])?;
         self.proto = match self.byte()? {
-            proto @ (4 | 5) => proto,
+            proto if self.allow.protocols.contains(&proto) => proto,
             _ => return None,
         };
-        if self.peek() == Some(0x95) {
+        // Framing arrived with protocol 4. Below it a file is one run of
+        // instructions and a FRAME opcode is not one of them.
+        if self.proto >= 4 && self.peek() == Some(0x95) {
             self.frame_header()?;
         }
         let body = self.at;
@@ -521,13 +572,14 @@ impl<'a> Cursor<'a> {
             Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
         }
-        let needed = match (form, self.arrays, self.objects, self.instances) {
-            (BASIC, 0, 0, 0) => true,
-            (NUMPY, arrays, 0, 0) => arrays > 0,
-            (BUILTINS, 0, objects, 0) => objects > 0,
+        let plain = self.arrays == 0 && self.objects == 0 && self.instances == 0;
+        let needed = match self.allow.family {
+            Family::Basic => plain,
+            Family::Numpy => self.arrays > 0 && self.objects == 0 && self.instances == 0,
+            Family::Builtins => self.arrays == 0 && self.objects > 0 && self.instances == 0,
             // A library form is the one the file's classes came from, and it
             // has to have read at least one of them.
-            (_, _, _, instances) => instances > 0,
+            Family::Library => self.instances > 0,
         };
         if !needed {
             return None;

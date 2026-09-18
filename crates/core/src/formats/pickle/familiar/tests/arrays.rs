@@ -72,6 +72,7 @@ fn standalone_arrays_preserve_dimensions_dtype_and_storage_order() {
         dtype,
         dimensions,
         fortran_order,
+        ..
     } = &found.value.kind
     else {
         panic!("array")

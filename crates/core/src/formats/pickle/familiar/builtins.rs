@@ -22,13 +22,25 @@ impl Cursor<'_> {
             ("bytearray", Shape::ByteArray, CONTENT, 1),
             ("bytearray", Shape::ByteArray, CONTENT, 0),
         ];
+        // Python 2 knew the builtins under another module name, and `range`
+        // under another name as well: `fix_imports` writes those below
+        // protocol 3 and the Python 3 names from there up.
+        let old = self.proto < 3;
+        let module: &[&str] = match old {
+            true => &["__builtin__"],
+            false => &["builtins"],
+        };
         for (name, what, names, arity) in calls.iter().copied() {
             if what == Shape::ByteArray && self.proto > 4 {
                 continue;
             }
+            let name = match (old, what) {
+                (true, Shape::Range) => "xrange",
+                _ => name,
+            };
             self.restore(here);
             let made = (|| {
-                self.global(&["builtins"], name, "module", "class")?;
+                self.global(module, name, "module", "class")?;
                 let mut items = Vec::new();
                 for _ in 0..arity {
                     items.push(match what {

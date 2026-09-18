@@ -44,9 +44,54 @@ impl Cursor<'_> {
     /// any class may come from.
     pub(super) fn may_name(&self, path: &str) -> bool {
         match path.rsplit_once('.') {
-            Some((module, _)) => self.whitelisted(module) || self.allow.calls.iter().any(|call| call.path == path),
+            Some((module, _)) => {
+                self.module_fits(module) && (self.whitelisted(module) || self.allow.calls.iter().any(|call| call.path == path))
+            }
             None => false,
         }
+    }
+
+    /// Whether this module name belongs to this protocol.
+    ///
+    /// A pickler below protocol 3 writes the names Python 2 knew the builtins
+    /// by, which is what `fix_imports` is for: `__builtin__` there and
+    /// `builtins` from protocol 3 up. Each spelling belongs to one side, and a
+    /// file using the other side's is a file no pickler wrote.
+    pub(super) fn module_fits(&self, module: &str) -> bool {
+        match module {
+            "builtins" => self.proto >= 3,
+            "__builtin__" => self.proto < 3,
+            _ => true,
+        }
+    }
+
+    /// Whether this form reads a call at all, which is what says the opcodes
+    /// that name, make and fill an object may appear.
+    pub(super) fn reads_calls(&self) -> bool {
+        !self.allow.classes.is_empty() || !self.allow.calls.is_empty()
+    }
+
+    /// GLOBAL, which is how protocols 2 and 3 name a class or a callable: one
+    /// opcode and two newline-terminated lines, filed in one memo slot.
+    ///
+    /// The safety line is the same one STACK_GLOBAL is held to. The module has
+    /// to be one the form lists, or the whole path one of the callables it
+    /// enumerated, and nothing else is named at all. The two lines sit inside
+    /// the opcode rather than being values of their own, so the node carries
+    /// the dotted path and no parts.
+    pub(super) fn global_line(&mut self) -> Option<Value> {
+        let start = self.at;
+        self.exact(b"c")?;
+        let (module_at, module_len) = self.line()?;
+        let module = std::str::from_utf8(self.bytes.get(module_at..module_at + module_len)?).ok()?;
+        let (name_at, name_len) = self.line()?;
+        let name = std::str::from_utf8(self.bytes.get(name_at..name_at + name_len)?).ok()?;
+        let path = format!("{module}.{name}");
+        if !self.may_name(&path) {
+            return None;
+        }
+        self.memoize(Bound::Global(path.clone()))?;
+        Some(self.span(start, Kind::Class { path, parts: Vec::new() }))
     }
 
     /// The four opcodes a library object is built with, each folding the two
@@ -166,17 +211,47 @@ impl Cursor<'_> {
             }
             _ => return None,
         };
-        let call = self.allow.calls.iter().find(|call| call.path == path && call.via == via)?;
+        let call = *self.allow.calls.iter().find(|call| call.path == path && call.via == via)?;
         let Kind::Tuple(held) = args.kind else { return None };
         if held.len() != call.names.len() {
             return None;
         }
         (call.shape)(&held)?;
+        // A set and a frozenset are containers, not objects. Below protocol 4
+        // a pickler builds one by calling the class with the list of members,
+        // and what comes out is the container protocol 4 writes as a literal,
+        // so it is read as that and not as a call of something.
+        if matches!(call.what, Shape::Set | Shape::FrozenSet) {
+            return self.set_made(call.what, at, held);
+        }
         // What the call made, which a later part of the file may name: pandas
         // writes a block's values once and names them again in the dictionary
         // it versions its state with.
         self.memoize(Bound::Made { what: call.what, at, hashable: false })?;
-        self.instances += 1;
+        // Only a class from the package the form is for says the form read
+        // what it is for. The calls every form shares, such as the one that
+        // makes a set, say nothing about which form a file belongs to.
+        if self.whitelisted(path.rsplit_once('.')?.0) {
+            self.instances += 1;
+        }
         Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held, state: None })
+    }
+
+    /// `set(members)` or `frozenset(members)`, which is how both are written
+    /// below protocol 4. The members are written out for the call and never
+    /// named out of the memo: CPython hands the class a list of them and PyPy
+    /// a tuple. Everything in it has to be something Python could hash.
+    fn set_made(&mut self, what: Shape, at: usize, held: Vec<Value>) -> Option<Kind> {
+        let held = held.into_iter().next()?;
+        let (Kind::List(members) | Kind::Tuple(members)) = held.kind else { return None };
+        if !members.iter().all(super::basic::hashable) {
+            return None;
+        }
+        let frozen = what == Shape::FrozenSet;
+        self.memoize(Bound::Made { what, at, hashable: frozen })?;
+        Some(match frozen {
+            true => Kind::FrozenSet(members),
+            false => Kind::Set(members),
+        })
     }
 }

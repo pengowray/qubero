@@ -25,6 +25,16 @@ const MAX_COLUMNS: usize = 256;
 const UNITS: &[&str] = &["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"];
 
 impl Cursor<'_> {
+    /// Say what the slot the dtype's REDUCE filed holds, now that the BUILD
+    /// after it has said what the dtype is. There is no slot when the file
+    /// left the mark out, which only `cPickle` does and only for a value
+    /// nothing else names.
+    fn fill(&mut self, slot: Option<usize>, dtype: &Dtype) {
+        if let Some(slot) = slot {
+            self.memo.fill(slot, Bound::Dtype(dtype.clone()));
+        }
+    }
+
     /// The dtype of an array: the whole `numpy.dtype` construction and the
     /// BUILD that finishes it, or a reference to a slot already holding a
     /// completed one.
@@ -57,14 +67,7 @@ impl Cursor<'_> {
             self.restore(here);
         }
         self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
-        let (kind_at, kind_len) = {
-            self.gate()?;
-            self.exact(&[0x8c])?;
-            let len = self.byte()? as usize;
-            let at = self.at;
-            self.take(len)?;
-            (at, len)
-        };
+        let (kind_at, kind_len) = self.text_run()?;
         let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?;
         // `V` and a width is a record; everything else is one number a value,
         // and only the spellings the reader has a type for.
@@ -86,7 +89,7 @@ impl Cursor<'_> {
         self.exact(b"\x87")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
-        let slot = self.memoize(Bound::Opaque)?;
+        let slot = self.memoize_at(Bound::Opaque)?;
         // The state the BUILD sets: the version, the byte order, no subarray,
         // and then either nothing where a record's names, columns and width
         // would be, or all three of them. A dtype carrying metadata is version
@@ -102,7 +105,7 @@ impl Cursor<'_> {
             self.memoize(Bound::Opaque)?;
             self.exact(b"b")?;
             let dtype = Dtype::Datetime { spelling: format!("{order}{kind}[{unit}]"), unit };
-            self.memo.fill(slot, Bound::Dtype(dtype.clone()));
+            self.fill(slot, &dtype);
             return Some(dtype);
         }
         let dtype = match record {
@@ -122,7 +125,7 @@ impl Cursor<'_> {
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"b")?;
-        self.memo.fill(slot, Bound::Dtype(dtype.clone()));
+        self.fill(slot, &dtype);
         Some(dtype)
     }
 
@@ -143,10 +146,18 @@ impl Cursor<'_> {
         self.gate()?;
         self.exact(b"(")?;
         self.gate()?;
-        self.exact(b"C")?;
-        let len = self.byte()? as usize;
-        let at = self.at;
-        self.take(len)?;
+        // The unit is a byte string, so protocol 2 writes it as the call
+        // every byte string goes through there.
+        let (at, len) = match self.proto < 3 {
+            true => self.bytes_run()?,
+            false => {
+                self.exact(b"C")?;
+                let len = self.byte()? as usize;
+                let at = self.at;
+                self.take(len)?;
+                (at, len)
+            }
+        };
         let unit = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
         if !UNITS.contains(&unit) {
             return None;
@@ -207,11 +218,7 @@ impl Cursor<'_> {
             if names.len() == MAX_COLUMNS {
                 return None;
             }
-            self.gate()?;
-            self.exact(&[0x8c])?;
-            let len = self.byte()? as usize;
-            let at = self.at;
-            self.take(len)?;
+            let (at, len) = self.text_run()?;
             std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
             self.says("column", at, len);
             self.memoize(Bound::Text { at, len })?;
@@ -292,12 +299,10 @@ impl Cursor<'_> {
                 }
             }
         } else {
-            self.exact(&[0x8c, 1])?;
-            let at = self.at;
-            self.byte()?;
-            self.memoize(Bound::Text { at, len: 1 })?;
-            self.says("byte order", at, 1);
-            (at, 1)
+            let (at, len) = self.text_run()?;
+            self.memoize(Bound::Text { at, len })?;
+            self.says("byte order", at, len);
+            (at, len)
         };
         if len != 1 {
             return None;

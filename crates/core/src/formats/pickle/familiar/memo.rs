@@ -74,11 +74,79 @@ impl Memo {
 }
 
 impl Cursor<'_> {
-    /// MEMOIZE, which files the value just built in the next slot. Protocol 4
-    /// writes no index: the slot is the count of marks before it.
-    pub(super) fn memoize(&mut self, bound: Bound) -> Option<usize> {
-        self.exact(&[0x94])?;
-        self.memo.bind(bound)
+    /// The memo mark that files the value just built, in whichever spelling
+    /// the protocol has.
+    ///
+    /// Protocol 4 writes MEMOIZE and no index: the slot is the count of marks
+    /// before it. Protocols 2 and 3 write BINPUT or LONG_BINPUT with the index
+    /// in the file, and [`Cursor::put`] holds them to the number the slot
+    /// actually has.
+    pub(super) fn memoize(&mut self, bound: Bound) -> Option<()> {
+        self.memoize_at(bound).map(|_| ())
+    }
+
+    /// The same, and which slot the value went in, for the one production that
+    /// has to fill a slot in later. Nothing at all when the file left the mark
+    /// out, which only `cPickle` does.
+    pub(super) fn memoize_at(&mut self, bound: Bound) -> Option<Option<usize>> {
+        if self.proto >= 4 {
+            self.exact(&[0x94])?;
+            return self.memo.bind(bound).map(Some);
+        }
+        self.put(bound)
+    }
+
+    /// BINPUT or LONG_BINPUT, and the slot number in it.
+    ///
+    /// The number is not read from the file and believed: a slot is the count
+    /// of marks written before it, so the index has to be exactly that, offset
+    /// by the number the file started counting at. Every pickler starts at
+    /// nought but Python 2's `cPickle`, which starts at one; the first mark
+    /// fixes which, and anything else is a non-match.
+    ///
+    /// A value may have no mark at all. `cPickle` leaves it out for a value
+    /// nothing else in the program holds a reference to, which is why a fresh
+    /// dictionary key of its is spelled again rather than named. No other
+    /// pickler leaves one out, so this is read only while the numbering has
+    /// not yet shown itself to start at nought. A missing mark files no slot,
+    /// and the numbering carries on where it was.
+    fn put(&mut self, bound: Bound) -> Option<Option<usize>> {
+        let wide = match self.peek() {
+            Some(0x71) => false,
+            Some(0x72) => true,
+            _ => {
+                if self.memo_base == Some(0) {
+                    return None;
+                }
+                self.skipped += 1;
+                return Some(None);
+            }
+        };
+        self.byte()?;
+        let index = match wide {
+            false => usize::from(self.byte()?),
+            true => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
+        };
+
+        let base = match self.memo_base {
+            Some(base) => base,
+            None => {
+                let base = index.checked_sub(self.memo.len())?;
+                if base > 1 || (base == 0 && self.skipped > 0) {
+                    return None;
+                }
+                self.memo_base = Some(base);
+                if base == 1 {
+                    // Only `cPickle` numbers from one.
+                    self.wrote(Pickler::C)?;
+                }
+                base
+            }
+        };
+        if index != base + self.memo.len() {
+            return None;
+        }
+        self.memo.bind(bound).map(Some)
     }
 
     /// The memo mark after a BYTEARRAY8, which only one of the two picklers
@@ -98,12 +166,17 @@ impl Cursor<'_> {
 
     /// BINGET or LONG_BINGET, and what the slot it names holds. A slot past
     /// the end, or one the file has not written, is a non-match.
+    ///
+    /// The number in the file counts from wherever the file's own marks count
+    /// from, which is one for Python 2's `cPickle` and nought for every other
+    /// pickler.
     pub(super) fn reference(&mut self) -> Option<&Bound> {
         let slot = match self.byte()? {
             b'h' => self.byte()? as usize,
             b'j' => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
             _ => return None,
         };
+        let slot = slot.checked_sub(self.memo_base.unwrap_or(0))?;
         self.memo.get(slot)
     }
 
@@ -111,11 +184,20 @@ impl Cursor<'_> {
         matches!(self.peek(), Some(b'h') | Some(b'j'))
     }
 
-    /// SHORT_BINUNICODE with exactly this spelling, and the memo mark that
-    /// files it. Comes back as the bytes the word sits in.
+    /// A short text with exactly this spelling, and the memo mark that files
+    /// it. Comes back as the bytes the word sits in.
+    ///
+    /// Protocol 4 counts a text's length in one byte where protocols 2 and 3
+    /// write four, and each protocol has only its own spelling.
     pub(super) fn word(&mut self, text: &str) -> Option<(usize, usize)> {
         self.gate()?;
-        self.exact(&[0x8c, u8::try_from(text.len()).ok()?])?;
+        match self.proto >= 4 {
+            true => self.exact(&[0x8c, u8::try_from(text.len()).ok()?])?,
+            false => {
+                self.exact(&[0x58])?;
+                self.exact(&u32::try_from(text.len()).ok()?.to_le_bytes())?;
+            }
+        }
         let at = self.at;
         self.exact(text.as_bytes())?;
         self.memoize(Bound::Text { at, len: text.len() })?;
@@ -141,9 +223,10 @@ impl Cursor<'_> {
         Some(Some(self.word(text)?))
     }
 
-    /// A module and a callable, joined by STACK_GLOBAL, or a reference to the
-    /// slot the same pair was filed in earlier. `modules` is every spelling
-    /// the form accepts, each written out.
+    /// A module and a callable, joined by STACK_GLOBAL at protocol 4 or
+    /// written as GLOBAL's two lines below it, or a reference to the slot the
+    /// same pair was filed in earlier. `modules` is every spelling the form
+    /// accepts, each written out.
     pub(super) fn global(
         &mut self,
         modules: &[&str],
@@ -164,6 +247,9 @@ impl Cursor<'_> {
             }
             self.restore(here);
         }
+        if self.proto < 4 {
+            return self.global_lines(modules, name, module_says, name_says);
+        }
         let here = self.save();
         let module = modules.iter().find_map(|m| {
             self.restore(here);
@@ -180,5 +266,36 @@ impl Cursor<'_> {
         let full = format!("{module}.{name}");
         self.memoize(Bound::Global(full.clone()))?;
         Some(full)
+    }
+
+    /// GLOBAL, which is how protocols 2 and 3 name a callable: one opcode and
+    /// two newline-terminated lines, filed in one slot rather than three.
+    fn global_lines(
+        &mut self,
+        modules: &[&str],
+        name: &str,
+        module_says: &'static str,
+        name_says: &'static str,
+    ) -> Option<String> {
+        let (module, name_at, name_len) = self.global_words(modules, name)?;
+        self.says(module_says, module.1, module.2);
+        self.says(name_says, name_at, name_len);
+        let full = format!("{}.{name}", module.0);
+        self.memoize(Bound::Global(full.clone()))?;
+        Some(full)
+    }
+
+    /// The two lines of a GLOBAL, matched against the spellings a form
+    /// accepts. Comes back as the module it matched and where each line sits.
+    pub(super) fn global_words(&mut self, modules: &[&str], name: &str) -> Option<((String, usize, usize), usize, usize)> {
+        self.exact(b"c")?;
+        let (module_at, module_len) = self.line()?;
+        let held = self.bytes.get(module_at..module_at + module_len)?;
+        let module = modules.iter().find(|m| m.as_bytes() == held)?.to_string();
+        let (name_at, name_len) = self.line()?;
+        if self.bytes.get(name_at..name_at + name_len)? != name.as_bytes() {
+            return None;
+        }
+        Some(((module, module_at, module_len), name_at, name_len))
     }
 }

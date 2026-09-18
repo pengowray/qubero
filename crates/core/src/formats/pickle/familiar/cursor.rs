@@ -4,7 +4,7 @@
 
 use super::memo::Memo;
 use super::forms::Allow;
-use super::{BIG_PAYLOAD, Call, Kind, Pickler, Said, Value};
+use super::{BIG_PAYLOAD, Call, Kind, MAX_LINE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
 pub(super) struct Cursor<'a> {
@@ -20,6 +20,19 @@ pub(super) struct Cursor<'a> {
     /// them. A slot number is the count of memo marks before it, so every
     /// mark a production consumes has to land here or the numbering drifts.
     pub(super) memo: Memo,
+    /// The number the file gave its first memo slot, which is nought for
+    /// every pickler but Python 2's `cPickle` and one for that. Nothing at
+    /// protocol 4 writes a slot number at all, so this stays `None` there.
+    pub(super) memo_base: Option<usize>,
+    /// How many values the file filed no slot for. `cPickle` leaves the mark
+    /// out for a value nothing else holds a reference to, and it is the only
+    /// pickler that leaves one out at all.
+    pub(super) skipped: usize,
+    /// Which way the dictionaries of a file `cPickle` wrote end, which its two
+    /// implementations do not agree on. Only read when [`Cursor::memo_base`]
+    /// is one; every other pickler's dictionaries and lists agree and are held
+    /// to [`Cursor::pickler`].
+    pub(super) dicts: Pickler,
     pub(super) framing: Framing,
     /// Which pickler the spellings seen so far belong to. The two are told
     /// apart only at a batch edge and at the memo mark after a bytearray, so
@@ -67,6 +80,9 @@ pub(super) enum Framing {
 pub(super) struct Save {
     pub(super) at: usize,
     pub(super) memo: usize,
+    pub(super) memo_base: Option<usize>,
+    pub(super) skipped: usize,
+    pub(super) dicts: Pickler,
     pub(super) says: usize,
     pub(super) calls: usize,
     pub(super) payloads: usize,
@@ -97,6 +113,20 @@ impl<'a> Cursor<'a> {
         (self.take(expected.len())? == expected).then_some(())
     }
 
+    /// A newline-terminated run, which is how protocols 2 and 3 write a module
+    /// name, a callable's name and an integer too wide for `BININT`. Comes
+    /// back as the bytes before the newline.
+    ///
+    /// A line is bounded: nothing a form reads as one is longer than a module
+    /// path or a number's digits, and an unterminated run would otherwise walk
+    /// the whole file.
+    pub(super) fn line(&mut self) -> Option<(usize, usize)> {
+        let at = self.at;
+        let end = self.bytes.get(at..at + MAX_LINE.min(self.bytes.len() - at.min(self.bytes.len())))?.iter().position(|b| *b == b'\n')?;
+        self.take(end + 1)?;
+        Some((at, end))
+    }
+
     /// A run of fixed bytes in which each piece is an object of its own.
     ///
     /// CPython's framer ends a frame at the start of every `save`, and a
@@ -117,6 +147,9 @@ impl<'a> Cursor<'a> {
         Save {
             at: self.at,
             memo: self.memo.len(),
+            memo_base: self.memo_base,
+            skipped: self.skipped,
+            dicts: self.dicts,
             says: self.says.len(),
             calls: self.calls.len(),
             payloads: self.payloads.len(),
@@ -148,6 +181,9 @@ impl<'a> Cursor<'a> {
     pub(super) fn restore(&mut self, s: Save) {
         self.at = s.at;
         self.memo.truncate(s.memo);
+        self.memo_base = s.memo_base;
+        self.skipped = s.skipped;
+        self.dicts = s.dicts;
         self.says.truncate(s.says);
         self.calls.truncate(s.calls);
         self.payloads.truncate(s.payloads);
@@ -241,6 +277,27 @@ impl<'a> Cursor<'a> {
             return None;
         };
         usize::try_from(n).ok()
+    }
+
+    /// A counted run of text in the spelling the protocol has, with no memo
+    /// mark after it: what a fixed run reads where it knows what the text has
+    /// to say. Protocol 4 counts the length in one byte, protocols 2 and 3 in
+    /// four.
+    pub(super) fn text_run(&mut self) -> Option<(usize, usize)> {
+        self.gate()?;
+        let len = match self.proto >= 4 {
+            true => {
+                self.exact(&[0x8c])?;
+                usize::from(self.byte()?)
+            }
+            false => {
+                self.exact(&[0x58])?;
+                u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize
+            }
+        };
+        let at = self.at;
+        self.take(len)?;
+        Some((at, len))
     }
 
     /// A value and the bytes it was written in, which is everything the

@@ -4,7 +4,7 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Dtype, Kind, Names, Shape, Value, MAX_BATCH, MAX_DIMENSIONS, NO_OPCODE};
+use super::{Dtype, Kind, Names, Shape, Storage, Value, MAX_BATCH, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
 
 /// How many values a shape holds, which is what a list of objects has to come
@@ -62,12 +62,30 @@ impl Cursor<'_> {
     }
 
     /// The bytes an array's numbers sit in, checked against its shape.
+    ///
+    /// Protocol 2 has no opcode for a byte string, so the numbers arrive there
+    /// as the latin-1 text they spell, handed to `_codecs.encode`. The run in
+    /// the file is then that text rather than the numbers, and what comes back
+    /// says which it is. The memo mark the run is filed under is written by
+    /// the caller either way: it is the byte string's slot at protocol 3 and
+    /// the REDUCE's at protocol 2, and both hold the same byte string.
     fn numbers(&mut self, dtype: &Dtype, dimensions: &[u64]) -> Option<(usize, usize, Payload)> {
         self.gate()?;
+        if self.proto < 3 {
+            let (at, len) = self.bytes_run()?;
+            let payload = self.fits(dtype, dimensions, self.decoded(at, len)?)?;
+            return Some((at, len, payload));
+        }
         let code = self.byte()?;
-        let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
+        let (at, len) = self.counted(code, b'C', b'B', if self.proto >= 4 { 0x8e } else { NO_OPCODE })?;
         let payload = self.fits(dtype, dimensions, len)?;
         Some((at, len, payload))
+    }
+
+    /// How many bytes a run in the file stands for, which is the run itself
+    /// above protocol 2 and its latin-1 reading below.
+    fn decoded(&self, at: usize, len: usize) -> Option<usize> {
+        Some(self.storage().decoded(self.bytes.get(at..at + len)?))
     }
 
     /// Whether this many bytes is what the dtype and the shape come to.
@@ -167,10 +185,10 @@ impl Cursor<'_> {
         // handed to the array afterwards, so the call covers it.
         self.finish_call("ndarray frombuffer call", start, self.at);
         self.arrays += 1;
-        self.payloads.push((at, payload));
+        self.reads(at, payload);
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions, fortran_order },
+            Kind::Array { at, len, dtype, dimensions, fortran_order, storage: self.storage() },
         ))
     }
 
@@ -202,11 +220,32 @@ impl Cursor<'_> {
         self.exact(b"\x85")?;
         self.memoize(Bound::Opaque)?;
         self.gate()?;
-        if self.at_reference() {
+        // Protocol 2 writes the placeholder byte string the way it writes
+        // every other one, as a call to `_codecs.encode`, and the call itself
+        // names its callable and its encoding out of the memo once the file
+        // has written them once. So the call is tried first there, and a
+        // reference stands for the whole byte string only when it is not one.
+        let spelled = self.proto < 3 && {
+            let here = self.save();
+            match self.bytes_run() {
+                Some((at, 1)) if self.bytes.get(at) == Some(&b'b') => {
+                    self.memoize(Bound::Bytes { at, len: 1 })?;
+                    true
+                }
+                _ => {
+                    self.restore(here);
+                    false
+                }
+            }
+        };
+        if spelled {
+        } else if self.at_reference() {
             match self.reference().cloned() {
                 Some(Bound::Bytes { at, len: 1 }) if self.bytes.get(at) == Some(&b'b') => {}
                 _ => return None,
             }
+        } else if self.proto < 3 {
+            return None;
         } else {
             self.exact(b"C\x01b")?;
             let at = self.at - 1;
@@ -248,11 +287,23 @@ impl Cursor<'_> {
         self.memoize(Bound::Opaque)?;
         self.exact(b"b")?;
         self.arrays += 1;
-        self.payloads.push((at, payload));
+        self.reads(at, payload);
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions, fortran_order },
+            Kind::Array { at, len, dtype, dimensions, fortran_order, storage: self.storage() },
         ))
+    }
+
+    /// Tell the opcode listing that this run of bytes is an array's numbers,
+    /// which it shows as the values they are.
+    ///
+    /// Only where the run really is those bytes. A protocol 2 array's numbers
+    /// are a text run that spells them in latin-1, and reading that run as
+    /// numbers would be reading the spelling rather than the numbers.
+    fn reads(&mut self, at: usize, payload: Payload) {
+        if self.storage() == Storage::Raw {
+            self.payloads.push((at, payload));
+        }
     }
 
     /// The list of values an array of objects is handed, which is an ordinary
@@ -337,10 +388,10 @@ impl Cursor<'_> {
         // A scalar is one number, and Python hashes it.
         self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: true })?;
         self.arrays += 1;
-        self.payloads.push((at, payload));
+        self.reads(at, payload);
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false },
+            Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false, storage: self.storage() },
         ))
     }
 }

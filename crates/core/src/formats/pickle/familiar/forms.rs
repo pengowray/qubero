@@ -22,11 +22,41 @@ pub(super) const SKLEARN: &str = "sklearn-estimator-p4-p5-v1";
 pub(super) const SCIPY: &str = "scipy-sparse-p4-p5-v1";
 pub(super) const PANDAS: &str = "pandas-frame-p4-p5-v1";
 
+/// The same six families at protocols 2 and 3, which is what Python wrote by
+/// default from 3.0 to 3.7 and what Python 2 wrote whenever it was asked for
+/// the highest protocol it had.
+///
+/// Separate identifiers rather than a wider protocol range on the six above,
+/// because the instructions are not the same ones: a memo mark is BINPUT with
+/// an index rather than MEMOIZE, a callable is GLOBAL's two lines rather than
+/// STACK_GLOBAL, a set and a byte string are calls rather than literals, and
+/// there is no framing. A reader comparing form identifiers is comparing
+/// grammars, so the two are named apart.
+pub(super) const BASIC23: &str = "basic-p2-p3-v1";
+pub(super) const NUMPY23: &str = "numpy-array-p2-p3-v1";
+pub(super) const BUILTINS23: &str = "builtins-values-p2-p3-v1";
+pub(super) const SKLEARN23: &str = "sklearn-estimator-p2-p3-v1";
+pub(super) const SCIPY23: &str = "scipy-sparse-p2-p3-v1";
+pub(super) const PANDAS23: &str = "pandas-frame-p2-p3-v1";
+
+/// Which family a form belongs to, which is what says the file used the
+/// productions the form is for rather than only the ones every form has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Family {
+    Basic,
+    Numpy,
+    Builtins,
+    Library,
+}
+
 /// Which value productions a form allows beyond the basic ones. A form that
 /// allows a production also requires the file to use it, so a file holding
 /// nothing but basic values is read under the basic form and not another.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Allow {
+    /// The protocol bytes this form reads, and no others.
+    pub(super) protocols: &'static [u8],
+    pub(super) family: Family,
     pub(super) numpy: bool,
     pub(super) builtins: bool,
     /// The module prefixes this form may name a class from. Empty for a form
@@ -208,18 +238,101 @@ fn string_dtype(args: &[Value]) -> Option<()> {
         .then_some(())
 }
 
-/// Every form, in the order a file is tried against them.
-pub(super) fn forms() -> [(&'static str, Allow); 6] {
-    let plain = Allow { numpy: false, builtins: false, classes: NO_CLASSES, calls: NO_CALLS, object_arrays: false };
+/// The two containers and the one byte string that protocols 2 and 3 have no
+/// opcode for and write as a call instead.
+///
+/// A set and a frozenset are built from a list, so they are folded off the
+/// stack like any other call rather than read as a fixed run. An empty byte
+/// string is `bytes()` called with nothing, which is the one spelling protocol
+/// 2 has for it; a byte string with anything in it goes through `_codecs` and
+/// is a fixed run, in `codecs.rs`. `fix_imports` is what moves the module
+/// between `builtins` and `__builtin__`, and the protocol decides which.
+const SET_CALL: Reduce = Reduce { via: Via::Global, path: "builtins.set", what: Shape::Set, names: &["members"], shape: members };
+const OLD_SET_CALL: Reduce = Reduce { path: "__builtin__.set", ..SET_CALL };
+const FROZEN_CALL: Reduce =
+    Reduce { via: Via::Global, path: "builtins.frozenset", what: Shape::FrozenSet, names: &["members"], shape: members };
+const OLD_FROZEN_CALL: Reduce = Reduce { path: "__builtin__.frozenset", ..FROZEN_CALL };
+
+/// `set(members)` and `frozenset(members)`: the members, written out for the
+/// call and never named out of the memo, since the container holding them is
+/// made for the call. CPython hands over a list and PyPy a tuple.
+fn members(args: &[Value]) -> Option<()> {
+    matches!(args[0].kind, Kind::List(_) | Kind::Tuple(_)).then_some(())
+}
+
+/// The calls of a form that reads protocols 2 and 3: the three above, and
+/// whatever the library the form is for writes.
+macro_rules! below_four {
+    ($($extra:expr),* $(,)?) => {
+        &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL $(, $extra)*]
+    };
+}
+
+const BASIC_CALLS_23: &[Reduce] = below_four!();
+const SKLEARN_CALLS_23: &[Reduce] = below_four!(SKLEARN_CALLS[0]);
+const PANDAS_CALLS_23: &[Reduce] = below_four!(
+    PANDAS_CALLS[0],
+    PANDAS_CALLS[1],
+    PANDAS_CALLS[2],
+    PANDAS_CALLS[3],
+    PANDAS_CALLS[4],
+    PANDAS_CALLS[5],
+    PANDAS_CALLS[6],
+    PANDAS_CALLS[7],
+    PANDAS_CALLS[8],
+    PANDAS_CALLS[9],
+);
+
+/// Every form, in the order a file is tried against them. The protocol byte
+/// tells the two halves apart at the second byte of the file, so a file only
+/// ever does the work of the six forms its protocol has.
+pub(super) fn forms() -> [(&'static str, Allow); 12] {
+    const NEW: &[u8] = &[4, 5];
+    const OLD: &[u8] = &[2, 3];
+    let plain = Allow {
+        protocols: NEW,
+        family: Family::Basic,
+        numpy: false,
+        builtins: false,
+        classes: NO_CLASSES,
+        calls: NO_CALLS,
+        object_arrays: false,
+    };
+    let old = Allow { protocols: OLD, calls: BASIC_CALLS_23, ..plain };
     [
         (BASIC, plain),
-        (NUMPY, Allow { numpy: true, ..plain }),
-        (BUILTINS, Allow { builtins: true, ..plain }),
-        (SKLEARN, Allow { numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS, ..plain }),
-        (SCIPY, Allow { numpy: true, classes: &["scipy.sparse"], ..plain }),
+        (NUMPY, Allow { family: Family::Numpy, numpy: true, ..plain }),
+        (BUILTINS, Allow { family: Family::Builtins, builtins: true, ..plain }),
+        (SKLEARN, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS, ..plain }),
+        (SCIPY, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..plain }),
         (
             PANDAS,
-            Allow { numpy: true, builtins: true, classes: &["pandas"], calls: PANDAS_CALLS, object_arrays: true },
+            Allow {
+                protocols: NEW,
+                family: Family::Library,
+                numpy: true,
+                builtins: true,
+                classes: &["pandas"],
+                calls: PANDAS_CALLS,
+                object_arrays: true,
+            },
+        ),
+        (BASIC23, old),
+        (NUMPY23, Allow { family: Family::Numpy, numpy: true, ..old }),
+        (BUILTINS23, Allow { family: Family::Builtins, builtins: true, ..old }),
+        (SKLEARN23, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS_23, ..old }),
+        (SCIPY23, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..old }),
+        (
+            PANDAS23,
+            Allow {
+                protocols: OLD,
+                calls: PANDAS_CALLS_23,
+                family: Family::Library,
+                numpy: true,
+                builtins: true,
+                classes: &["pandas"],
+                object_arrays: true,
+            },
         ),
     ]
 }

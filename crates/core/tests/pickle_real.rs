@@ -633,10 +633,10 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto1-everything.pickle", None),
         ("proto2-everything.pickle", None),
         ("proto2-extension-registry.pickle", None),
-        ("proto2-memo-over-256.pickle", None),
+        ("proto2-memo-over-256.pickle", Some("basic-p2-p3-v1")),
         ("proto2-torch-state-dict.pickle", None),
         ("proto3-everything.pickle", None),
-        ("proto3-numpy-1-module-names.pickle", None),
+        ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v1")),
         ("proto4-collections.pickle", None),
         ("proto4-datetime.pickle", None),
         ("proto4-everything.pickle", None),
@@ -679,22 +679,26 @@ fn the_forms_match_these_samples_and_no_others() {
     }
 }
 
-/// What each object in the matrix comes to at protocol 4 and 5, per library
-/// family and per object where one object of a family reads and another does
-/// not yet.
+/// What each object in the matrix comes to, per library family and per object
+/// where one object of a family reads and another does not yet, at protocol 4
+/// and 5 and then at protocol 2 and 3.
 ///
 /// A file's family is the word in front of the first dash of its name, and its
 /// object is everything in front of the first dot. The row is the object where
 /// there is one and the family otherwise, so the day a form reaches one more
 /// object its `None` here becomes that form's ID and nothing else changes.
-const FAMILIES: &[(&str, Option<&str>)] = &[
-    ("basic", Some("basic-p4-p5-v5")),
+///
+/// The two columns are two grammars over the same data: below protocol 4 a
+/// memo mark carries its index, a callable is two lines, and a set and a byte
+/// string are calls rather than literals.
+const FAMILIES: &[(&str, Option<&str>, Option<&str>)] = &[
+    ("basic", Some("basic-p4-p5-v5"), Some("basic-p2-p3-v1")),
     // An array and a scalar, which are two productions of one form.
-    ("numpy", Some("numpy-array-p4-p5-v6")),
-    ("dataframe", Some("pandas-frame-p4-p5-v1")),
-    ("series", Some("pandas-frame-p4-p5-v1")),
-    ("sklearn", Some("sklearn-estimator-p4-p5-v1")),
-    ("scipy", Some("scipy-sparse-p4-p5-v1")),
+    ("numpy", Some("numpy-array-p4-p5-v6"), Some("numpy-array-p2-p3-v1")),
+    ("dataframe", Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1")),
+    ("series", Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1")),
+    ("sklearn", Some("sklearn-estimator-p4-p5-v1"), Some("sklearn-estimator-p2-p3-v1")),
+    ("scipy", Some("scipy-sparse-p4-p5-v1"), Some("scipy-sparse-p2-p3-v1")),
 ];
 
 /// The row of [`FAMILIES`] a file falls under: its object where that is named,
@@ -702,10 +706,10 @@ const FAMILIES: &[(&str, Option<&str>)] = &[
 fn family_of(name: &str) -> usize {
     let object = name.split('.').next().unwrap_or("");
     let family = name.split('-').next().unwrap_or("");
-    let row = FAMILIES.iter().position(|(f, _)| *f == object);
-    match row.or_else(|| FAMILIES.iter().position(|(f, _)| *f == family)) {
+    let row = FAMILIES.iter().position(|(f, ..)| *f == object);
+    match row.or_else(|| FAMILIES.iter().position(|(f, ..)| *f == family)) {
         Some(i) => i,
-        None => panic!("{name}: no row called {object:?} or {family:?} in FAMILIES; add it with the form it matches, or None"),
+        None => panic!("{name}: no row called {object:?} or {family:?} in FAMILIES; add it with the forms it matches, or None"),
     }
 }
 
@@ -730,47 +734,54 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     let mut environments: Vec<PathBuf> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     environments.sort();
     assert!(environments.len() >= 12, "only {} environments under {}", environments.len(), root.display());
-    // How many files of each family matched, and how many there were, so that
-    // the run says what it covered rather than only that it passed.
-    let mut tally: Vec<(usize, usize)> = vec![(0, 0); FAMILIES.len()];
+    // How many files of each family matched at each of the two protocol
+    // ranges, and how many there were, so that the run says what it covered
+    // rather than only that it passed.
+    let mut tally: Vec<[(usize, usize); 2]> = vec![[(0, 0); 2]; FAMILIES.len()];
     let mut wrong = Vec::new();
     for dir in &environments {
         let env = dir.file_name().unwrap().to_string_lossy().into_owned();
         for path in pickles(dir) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let i = family_of(&name);
-            // Protocol 4 and 5 only, from either pickler: a `.pypickle` file
-            // was written by `pickle.py` alone, and both spellings are
-            // familiar. Everything older is spelled with opcodes no form
-            // takes yet.
-            let modern = name.contains(".p4.") || name.contains(".p5.");
-            let expected = match modern {
-                true => FAMILIES[i].1,
-                false => None,
+            // Which of the two grammars the file is written in, from either
+            // pickler: a `.pypickle` file was written by `pickle.py` alone, a
+            // `.cpickle` one by Python 2's `cPickle`, and every spelling of
+            // theirs is familiar. Protocols 0 and 1 are still nobody's.
+            let column = match true {
+                _ if name.contains(".p4.") || name.contains(".p5.") => Some(0),
+                _ if name.contains(".p2.") || name.contains(".p3.") => Some(1),
+                _ => None,
+            };
+            let expected = match column {
+                Some(0) => FAMILIES[i].1,
+                Some(1) => FAMILIES[i].2,
+                _ => None,
             };
             let bytes = std::fs::read(&path).unwrap();
             let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
-            if modern {
-                tally[i].1 += 1;
-                tally[i].0 += usize::from(form.is_some());
+            if let Some(column) = column {
+                tally[i][column].1 += 1;
+                tally[i][column].0 += usize::from(form.is_some());
             }
             if form != expected {
-                let hint = match (expected, FAMILIES[i].1) {
-                    (None, None) => format!("; if a form for {} has landed, its row in FAMILIES is the edit", FAMILIES[i].0),
+                let hint = match expected {
+                    None => format!("; if a form for {} has landed, its row in FAMILIES is the edit", FAMILIES[i].0),
                     _ => String::new(),
                 };
                 wrong.push(format!("{env}/{name}: {form:?}, not {expected:?}{hint}"));
             }
         }
     }
-    for ((family, form), (matched, total)) in FAMILIES.iter().zip(&tally) {
-        eprintln!("{family}: {matched} of {total} at protocol 4 and 5 read as {form:?}");
+    for ((family, new, old), counts) in FAMILIES.iter().zip(&tally) {
+        eprintln!("{family}: {} of {} at protocol 4 and 5 read as {new:?}", counts[0].0, counts[0].1);
+        eprintln!("{family}: {} of {} at protocol 2 and 3 read as {old:?}", counts[1].0, counts[1].1);
     }
     assert!(wrong.is_empty(), "{} files:\n  {}", wrong.len(), wrong.join("\n  "));
     // Fewer than were written, since the same bytes from two environments are
     // kept once, and enough to know the folder was not empty.
-    let matched: usize = tally.iter().map(|(n, _)| n).sum();
-    assert!(matched >= 70, "only {matched} files matched a form");
+    let matched: usize = tally.iter().flatten().map(|(n, _)| n).sum();
+    assert!(matched >= 280, "only {matched} files matched a form");
 }
 
 /// Which of CPython's two picklers each batch edge in the matrix shows.
