@@ -326,7 +326,8 @@ The template chooser lists an applied pattern as an extra template
   `patterns/*.hexpat` and never descends into subdirectories. Treat 309/310 as
   the ceiling until upstream fixes the spelling.
 * Corpus: `cargo run --example hexpat_gaps` over `~/github/ImHex-Patterns/patterns`
-  (gated by `IMHEX_PATTERNS=<path>`) prints, per pattern, clean / gaps
+  (found there on its own; `IMHEX_PATTERNS=<path>` for a checkout elsewhere)
+  prints, per pattern, clean / gaps
   with counts, and the totals go in this file's status section. Then for
   each of the 202 pairs in `tests/patterns/test_data`, evaluate the
   converted template over the sample and report whether it reads to the

@@ -9,17 +9,22 @@
 //   PLAYWRIGHT_MODULE="file:///C:/Users/pengo/AppData/Roaming/npm/node_modules/playwright/index.mjs" \
 //   TEST_URL="http://localhost:17281" node test/ksy.browser.mjs
 //
-// KAITAI_FORMATS points at the Kaitai format library and OUT_DIR at where the
-// screenshots go. The sample collection is found beside the checkout, or
-// wherever QUBERO_SAMPLES names.
+// OUT_DIR is where the screenshots go. The Kaitai format library and the
+// sample collection are both found beside this checkout, under ~/github or
+// wherever KAITAI_FORMATS and QUBERO_SAMPLES name.
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { samplesDir } from "./samples.mjs";
+import { checkoutDir, samplesDir } from "./samples.mjs";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const formats = process.env.KAITAI_FORMATS || "D:/github/kaitai_struct/formats";
+const kaitai = checkoutDir("kaitai_struct");
+const formats = process.env.KAITAI_FORMATS || (kaitai === null ? null : join(kaitai, "formats"));
+if (formats === null) {
+  console.log("skipped: no kaitai_struct checkout beside this one or under ~/github. Point KAITAI_FORMATS at its formats folder.");
+  process.exit(0);
+}
 const samples = samplesDir();
 if (samples === null) {
   console.log("skipped: no sample collection. Put `qubero-samples` beside this checkout, or point QUBERO_SAMPLES at it.");

@@ -1,6 +1,7 @@
-//! Finds the sample collection. It is not the collection: the files live in
-//! their own repository, `qubero-samples`, because they are large and none of
-//! them are ours.
+//! Finds the test material that lives outside this repository: the sample
+//! collection, and the format libraries the oracle tests read against. It is
+//! not any of them. They have their own repositories, because they are large
+//! and none of them are ours.
 //!
 //! Every test that reads a real file asks here where it is, so that they all
 //! look in the same places and all say the same thing when there is nothing to
@@ -84,6 +85,25 @@ pub fn missing_dir(name: &str) -> String {
     }
 }
 
+/// Another checkout to read against: `kaitai_struct` for the `.ksy` corpus,
+/// `ImHex-Patterns` for the `.hexpat` one. `None` where it is not on this
+/// machine.
+///
+/// Unlike the collection these are ordinary clones of other people's
+/// repositories, kept wherever the machine keeps such things, so the places to
+/// look are: beside this checkout or an ancestor of it, then `~/github`, then
+/// `D:/github`, which is where the Windows machine keeps them. Each test that
+/// reads one still takes its own variable first, for a checkout somewhere
+/// else.
+pub fn checkout(name: &str) -> Option<PathBuf> {
+    let mut out: Vec<PathBuf> = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join(name)).collect();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        out.push(Path::new(&home).join("github").join(name));
+    }
+    out.push(Path::new("D:/github").join(name));
+    out.into_iter().find(|p| p.is_dir()).map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+}
+
 /// Everywhere to look, in order, whether or not it is there.
 fn candidates() -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
@@ -111,5 +131,11 @@ mod tests {
         }
         assert_eq!(super::root().is_some(), !roots.is_empty());
         assert!(super::missing().starts_with("skipped: "));
+        // A name nothing is called answers None rather than a directory that
+        // happens to be an ancestor of this crate.
+        assert_eq!(super::checkout("not-a-checkout-of-anything"), None);
+        for found in [super::checkout("kaitai_struct"), super::checkout("ImHex-Patterns")].into_iter().flatten() {
+            assert!(found.is_dir());
+        }
     }
 }

@@ -19,9 +19,10 @@
 //! Neither number is asserted anywhere. A list curated until it is green says
 //! nothing about how far the converter gets.
 //!
-//! Usage: `cargo run -p qubero-core --example hexpat_gaps -- <dir>`, or set
-//! `IMHEX_PATTERNS` to the checkout. `<dir>` is the repository root, the one
-//! holding `patterns/`, `includes/` and `tests/`.
+//! Usage: `cargo run -p qubero-core --example hexpat_gaps -- <dir>`, where
+//! `<dir>` is the ImHex-Patterns repository root, the one holding `patterns/`,
+//! `includes/` and `tests/`. A checkout beside this one or under `~/github` is
+//! found without the argument; `IMHEX_PATTERNS` names one kept elsewhere.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -75,8 +76,9 @@ fn run() {
 		.nth(1)
 		.or_else(|| std::env::var("IMHEX_PATTERNS").ok())
 		.map(PathBuf::from)
+		.or_else(|| qubero_samples::checkout("ImHex-Patterns"))
 		.unwrap_or_else(|| {
-			eprintln!("usage: hexpat_gaps <ImHex-Patterns dir>   (or set IMHEX_PATTERNS)");
+			eprintln!("usage: hexpat_gaps <ImHex-Patterns dir>   (none beside this checkout or under ~/github, and IMHEX_PATTERNS is unset)");
 			std::process::exit(2);
 		});
 

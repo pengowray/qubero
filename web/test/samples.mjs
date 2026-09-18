@@ -43,3 +43,26 @@ export function sampleFile(...parts) {
   const path = join(root, ...parts);
   return existsSync(path) ? path : null;
 }
+
+/** Another checkout to read against, `kaitai_struct` or `ImHex-Patterns`:
+ *  beside this checkout or an ancestor of it, then `~/github`, then
+ *  `D:/github`, where the Windows machine keeps them. null where there is
+ *  none. */
+export function checkoutDir(name) {
+  const places = [];
+  let at = dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    places.push(join(at, name));
+    const up = dirname(at);
+    if (up === at) {
+      break;
+    }
+    at = up;
+  }
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (home) {
+    places.push(join(home, "github", name));
+  }
+  places.push(join("D:/github", name));
+  return places.find((p) => existsSync(p)) ?? null;
+}

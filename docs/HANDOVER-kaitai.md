@@ -212,7 +212,7 @@ construct (monomorphising covers the corpus).
 `D:\github\kaitai_struct\tests\formats\*.ksy` (339), `tests\src\*.bin` (60,
 present) and `tests\spec\ks\*.kst` (320). A `.kst` names the ksy id, the
 input file and a list of `{actual: <ks expr>, expected: <ks expr>}` asserts.
-`crates/core/tests/ksy_oracle.rs` (skipped when `KAITAI_STRUCT` is unset)
+`crates/core/tests/ksy_oracle.rs` (skipped where there is no checkout)
 converts every ksy, evaluates on the named bin, and checks each assert whose
 `actual` is a plain field path and whose `expected` is a literal. Everything
 else is a skip, counted. The report the test prints is the pass rate as it
@@ -271,10 +271,10 @@ the written expression.
 ## Phases and agents
 
 Opus for implementation, Fable for design and strings. Every worktree agent
-starts with `git merge main`, sets `KAITAI_STRUCT=D:/github/kaitai_struct`, and
-is merged only on cargo's own exit code from a debug `cargo test`. The sample
-collection needs no variable: `qubero_samples` finds it from a worktree as well
-as from the checkout.
+starts with `git merge main` and is merged only on cargo's own exit code from a
+debug `cargo test`. Neither the sample collection nor the Kaitai checkout needs
+a variable: `qubero_samples` finds both, from a worktree as well as from the
+checkout, and `KAITAI_STRUCT` is for a checkout kept somewhere unusual.
 
 Wave 1 (parallel, separate worktrees):
 * A. IR additions (above) with eval, relate, encode where relevant, tests.
@@ -305,7 +305,7 @@ main path (see `crates/core/formats-ksy/README.md` for each decision;
 `node tools/ksy_bundle.mjs` regenerates it).
 
 Numbers, uncurated, from `cargo test -p qubero-core --test ksy_oracle -- --nocapture`
-with `KAITAI_STRUCT` set:
+with the Kaitai checkout to hand:
 
 | corpus | clean | with gaps | refused |
 |---|---|---|---|

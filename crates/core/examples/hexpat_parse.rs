@@ -5,9 +5,10 @@
 //! when it reads all of them, and not before. Every failure prints one line,
 //! `file:line:col: message`, so a run diffs against the last one.
 //!
-//! Usage: `cargo run -p qubero-core --example hexpat_parse -- <dir>`, or set
-//! `IMHEX_PATTERNS` to the checkout instead. `<dir>` is the repository root,
-//! the one holding `patterns/` and `includes/`.
+//! Usage: `cargo run -p qubero-core --example hexpat_parse -- <dir>`, where
+//! `<dir>` is the ImHex-Patterns repository root, the one holding `patterns/`
+//! and `includes/`. A checkout beside this one or under `~/github` is found
+//! without the argument; `IMHEX_PATTERNS` names one kept elsewhere.
 //!
 //! `__IMHEX__` is defined, because that is the host the corpus is written for
 //! and it is what decides which branch of an `#ifdef` a pattern means.
@@ -52,8 +53,9 @@ fn main() {
         .nth(1)
         .or_else(|| std::env::var("IMHEX_PATTERNS").ok())
         .map(PathBuf::from)
+        .or_else(|| qubero_samples::checkout("ImHex-Patterns"))
         .unwrap_or_else(|| {
-            eprintln!("usage: hexpat_parse <ImHex-Patterns dir>   (or set IMHEX_PATTERNS)");
+            eprintln!("usage: hexpat_parse <ImHex-Patterns dir>   (none beside this checkout or under ~/github, and IMHEX_PATTERNS is unset)");
             std::process::exit(2);
         });
 

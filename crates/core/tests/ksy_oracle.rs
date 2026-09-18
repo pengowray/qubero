@@ -1,11 +1,14 @@
 //! The `.ksy` converter against the Kaitai corpus and its own test oracle.
 //!
-//! Point `KAITAI_STRUCT` at a recursive checkout of
-//! <https://github.com/kaitai-io/kaitai_struct> and run:
+//! A recursive checkout of <https://github.com/kaitai-io/kaitai_struct> (the
+//! recursive one, so that `formats/` and `tests/` are populated) beside this
+//! one or under `~/github` is found on its own:
 //!
 //! ```text
-//! KAITAI_STRUCT=D:/github/kaitai_struct cargo test -p qubero-core --test ksy_oracle -- --nocapture
+//! cargo test -p qubero-core --test ksy_oracle -- --nocapture
 //! ```
+//!
+//! `KAITAI_STRUCT` points at one kept somewhere else.
 //!
 //! Two things happen. Every `.ksy` under `tests/formats/` is converted and then
 //! *run*: `tests/spec/ks/*.kst` names an input file and a list of asserts, and
@@ -181,13 +184,12 @@ fn a_format_with_no_imports_needs_no_resolver() {
 // ---------------------------------------------------------------------------
 
 fn corpus() -> Option<PathBuf> {
-	match std::env::var("KAITAI_STRUCT") {
-		Ok(path) if !path.is_empty() => Some(PathBuf::from(path)),
-		_ => {
-			println!("skipped: set KAITAI_STRUCT to a kaitai_struct checkout");
-			None
-		}
+	let named = std::env::var("KAITAI_STRUCT").ok().filter(|p| !p.is_empty()).map(PathBuf::from);
+	let found = named.or_else(|| qubero_samples::checkout("kaitai_struct"));
+	if found.is_none() {
+		println!("skipped: no kaitai_struct checkout beside this one or under ~/github. Point KAITAI_STRUCT at one.");
 	}
+	found
 }
 
 /// Every `.ksy` under these directories, keyed by the name a `meta/imports`

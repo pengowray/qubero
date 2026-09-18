@@ -1,12 +1,14 @@
 //! The `.ksy` reader against the Kaitai corpus.
 //!
-//! Point `KAITAI_STRUCT` at a checkout of <https://github.com/kaitai-io/kaitai_struct>
-//! (the recursive one, so that `formats/` and `tests/` are populated) and this
-//! reads every format in it:
+//! A checkout of <https://github.com/kaitai-io/kaitai_struct> (the recursive
+//! one, so that `formats/` and `tests/` are populated) beside this one or under
+//! `~/github` is found on its own, and this reads every format in it:
 //!
 //! ```text
-//! KAITAI_STRUCT=D:/github/kaitai_struct cargo test -p qubero-core --test ksy_parse -- --nocapture
+//! cargo test -p qubero-core --test ksy_parse -- --nocapture
 //! ```
+//!
+//! `KAITAI_STRUCT` points at one kept somewhere else.
 //!
 //! Three things are checked. Every format under `formats/` and every one under
 //! `tests/formats/` has to parse, because this is the strict tier and those are
@@ -17,7 +19,7 @@
 //! failing later than parsing: type resolution and expression typing are
 //! separate passes in the compiler too, and this reader does not do them.
 //!
-//! Without the variable the whole thing is skipped with a printed notice.
+//! With no checkout at all the whole thing is skipped with a printed notice.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -237,16 +239,15 @@ fn every_format_in_the_corpus_parses() {
 
 /// The checkout to read, or nothing and a notice.
 fn corpus() -> Option<PathBuf> {
-	match std::env::var("KAITAI_STRUCT") {
-		Ok(path) if !path.is_empty() => Some(PathBuf::from(path)),
-		_ => {
-			println!(
-				"skipped: set KAITAI_STRUCT to a kaitai_struct checkout to read its 185 formats \
-				 and 339 test formats"
-			);
-			None
-		}
+	let named = std::env::var("KAITAI_STRUCT").ok().filter(|p| !p.is_empty()).map(PathBuf::from);
+	let found = named.or_else(|| qubero_samples::checkout("kaitai_struct"));
+	if found.is_none() {
+		println!(
+			"skipped: no kaitai_struct checkout beside this one or under ~/github, so its 185 formats \
+			 and 339 test formats went unread. Point KAITAI_STRUCT at one."
+		);
 	}
+	found
 }
 
 /// Every `.ksy` under `dir`, sorted, skipping the compiler's own build output.
