@@ -557,7 +557,15 @@ fn walk(
 fn every_version_2_btree_is_walked_by_pointers_that_land() {
     use qubero_core::formats::hdf5_tree::{Job, Kind, Records, Tree, NO_PARENT};
 
+    // The collection's HDF5 files as well as whatever is in `web/public`, so
+    // the run reaches the files written for this: the assertion at the end
+    // names one of them. Unlike the version 1 sweep this does not need the
+    // collection, and runs on `web/public` alone where there is none.
+    let samples = sample_dir();
     let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
+    if let Some(d) = &samples {
+        dirs.push(d.join("hdf5"));
+    }
     if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
         dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
     }
@@ -566,6 +574,9 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
         collect(dir, 3, &mut found);
     }
     found.sort();
+    // `sample_dir` answers with a `QUBERO_SAMPLES` root where one is set, and
+    // that root holds the `hdf5` directory pushed above it.
+    found.dedup();
     let (mut walked, mut behind_a_block) = (0usize, 0usize);
     for path in &found {
         let Ok(file) = File::open(path) else { continue };
@@ -739,7 +750,7 @@ fn every_version_2_btree_is_walked_by_pointers_that_land() {
         eprintln!("skipped: no version 2 B-tree in {dirs:?}. Put an HDF5 file written with libver=latest there.");
     }
     eprintln!("--- version 2 trees walked: {walked}, {behind_a_block} of them behind a user block");
-    if sample_dir().is_some_and(|d| d.join("hdf5").join("btree-v2-userblock.h5").exists()) {
+    if samples.as_ref().is_some_and(|d| d.join("hdf5").join("btree-v2-userblock.h5").exists()) {
         assert!(behind_a_block > 0, "the collection has a version 2 tree behind a user block and the sweep did not reach it");
     }
 }
