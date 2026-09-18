@@ -206,6 +206,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   thumbsdb: ["db"],
   unityassets: ["assets"],
   unitybundle: ["unity3d", "bundle"],
+  exp: ["exp"],
   pak: ["pak"],
   macbinary: ["bin"],
   binhex: ["hqx"],
@@ -237,6 +238,15 @@ export const templateExtensions = (template: string): string[] => {
   return /^[a-z0-9]+$/.test(template) && !listed.includes(template) && listed.length === 0 ? [template] : [...listed];
 };
 
+/**
+ * What a file(1) sentence calls a template's format, where that is a word the
+ * label does not have. An OMF module opens with a THEADR record, `80` and a
+ * length, and the rules call one whose length is five a XENIX object: XENIX
+ * used the same Intel object format, and the rule is those two bytes. The
+ * template read the records, so the two are one answer and not a disagreement.
+ */
+const ALSO_CALLED: Record<string, readonly string[]> = { omf: ["xenix"] };
+
 /** Words in a file(1) sentence that say nothing about which format it is. */
 const STOP_WORDS = new Set(["data", "file", "archive", "image", "executable", "format", "document", "text", "binary", "compressed", "audio", "video", "the", "for", "with", "and", "or", "of", "a", "an", "v", "version"]);
 
@@ -260,7 +270,7 @@ export function agrees(file: Identification, template: string, label: string): b
   const mime = file.mime.toLowerCase();
   if (mime !== "" && [...exts].some((e) => e.length >= 3 && mime.includes(e))) return true;
   const said = words(file.message);
-  const ours = new Set([...words(label), ...[...exts].filter((e) => e.length >= 3)]);
+  const ours = new Set([...words(label), ...[...exts].filter((e) => e.length >= 3), ...(ALSO_CALLED[template] ?? [])]);
   return [...ours].some((w) => said.has(w));
 }
 

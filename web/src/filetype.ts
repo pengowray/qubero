@@ -181,6 +181,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   vpk: "Valve VPK",
   mca: "Minecraft Anvil region",
   tap: "ZX Spectrum TAP",
+  exp: "Melco embroidery design",
   bencode: "Bencoded data (torrent)",
   pickle: "Python pickle",
   picklefpf: "Python pickle (familiar form)",
@@ -234,7 +235,7 @@ const NOUNS: ReadonlySet<string> = new Set([
   "archive", "image", "audio", "video", "database", "executable", "container", "module", "stream", "model", "tag", "mesh",
   "index", "region", "package", "object", "firmware", "cartridge", "program", "resource", "frame", "map", "shortcut", "blob",
   "block", "table", "record", "log", "list", "sheet", "cabinet", "journal", "rom", "metadata", "packets", "profile", "wad",
-  "pak", "vpk", "tap", "midi", "json", "cbor", "pdf", "hdf5", "hdf4", "fits", "elf", "mach-o", "symbols)", "db",
+  "design", "pak", "vpk", "tap", "midi", "json", "cbor", "pdf", "hdf5", "hdf4", "fits", "elf", "mach-o", "symbols)", "db",
 ]);
 
 /**
@@ -254,6 +255,9 @@ export const templateSentence = (doc: Doc, name: string): string | null => {
       return themeSentence(doc);
     case "bgzf":
       return bgzfSentence(doc.bgzfContents());
+    case "pickle":
+    case "picklefpf":
+      return pyBasicSentence(doc);
     default:
       return null;
   }
@@ -301,6 +305,28 @@ const BGZF_WRAPPER = " \u00b7 compressed with BGZF";
 const bgzfSentence = (holds: string): string | null => {
   const what = BGZF_HOLDS[holds];
   return what === undefined ? null : `${what}${BGZF_WRAPPER}`;
+};
+
+const PYBASIC_PROGRAM = "PyBasic program \u00b7 saved as a Python pickle";
+/** The module every token of a pickled PyBasic program is an instance from. */
+const PYBASIC_MODULE = "basictoken";
+/** How much of the file is searched for the module's name, which a pickle
+ *  spells out the first time it makes a token: the first line of the program. */
+const PYBASIC_SEARCH = 4096;
+
+/**
+ * A `.bas` that is a pickle is a program an older PyBasic saved, when SAVE
+ * pickled the interpreter's table of lines (it did in August 2020, issue 7 of
+ * richpl/PyBasic); the current one writes the listing as text.
+ * The extension alone is not believed, since `.bas` is every BASIC there has
+ * been: the pickle has to name PyBasic's token module as well.
+ */
+const pyBasicSentence = (doc: Doc): string | null => {
+  if (!/\.bas$/i.test(doc.name)) return null;
+  const { bytes } = doc.read(0, Math.min(PYBASIC_SEARCH, doc.lengthBytes));
+  let text = "";
+  for (const b of bytes) text += String.fromCharCode(b);
+  return text.includes(PYBASIC_MODULE) ? PYBASIC_PROGRAM : null;
 };
 
 /** `Claude Code theme "Ember", based on dark, 10 colours changed`. */

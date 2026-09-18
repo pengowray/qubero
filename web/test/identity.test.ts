@@ -44,6 +44,8 @@ test("agreement comes from extensions, media type, or a naming word", () => {
   assert.ok(agrees(rule("Hierarchical Data Format (version 5) data", ["h5", "hdf5"], "application/x-hdf"), "hdf5", "HDF5"));
   assert.ok(agrees(rule("NetCDF Data Format data", [], ""), "netcdf", "NetCDF classic"));
   assert.ok(!agrees(rule("PARity archive data", [], "application/octet-stream"), "parquet", "Parquet file"));
+  // The rules call an OMF module with a five-byte first record a XENIX object.
+  assert.ok(agrees(rule("XENIX 8086 relocatable or i286 small model", [], "application/octet-stream", 50), "omf", "OMF object"));
   // "data" and "archive" are in every other sentence and name nothing.
   assert.ok(!agrees(rule("Par archive data", [], ""), "tar", "tar archive"));
 });
