@@ -1,0 +1,114 @@
+# Familiar Pickle Forms for pandas, scikit-learn and scipy
+
+What has to be true of a form for the library pickles, worked out on
+2026-09-18 from the same objects pickled under ten environments. Read
+`DESIGN-familiar-pickle-forms.md` first: this is the next pass after the basic
+and numpy forms, and it keeps their rule. A form is the exact instructions
+CPython writes for a value, read as a fixed structure, and nothing is run.
+
+## The corpus
+
+`tools/make_pickle_matrix.py` in the sample collection pickles one list of
+objects under whatever interpreter runs it, at every protocol that interpreter
+has, into a folder named for what it found, with a `versions.json` beside the
+files. `tools/run_pickle_matrix.sh` runs it in a throwaway podman container per
+environment. A venv at `~/.venvs/qubero-samples` covers the newest libraries.
+
+| Environment | Default protocol | Libraries |
+| --- | --- | --- |
+| Python 2.7 (`pickle` and `cPickle`) | 0 | none |
+| Python 3.4 | 3 | none |
+| Python 3.6 | 3 | numpy 1.19, pandas 1.1, scikit-learn 0.24, scipy 1.5 |
+| Python 3.7 | 3 | numpy 1.21, pandas 1.3, scikit-learn 1.0, scipy 1.7 |
+| Python 3.8 | 4 | numpy 1.24, pandas 1.5, scikit-learn 1.3, scipy 1.10 |
+| Python 3.10 | 4 | numpy 1.26, pandas 2.2, scikit-learn 1.5, scipy 1.13 |
+| Python 3.12 (system) | 4 | numpy 1.26 |
+| Python 3.12 (venv) | 4 | numpy 2.5, pandas 3.0, scikit-learn 1.9, scipy 1.18 |
+| Python 3.13 | 4 | numpy 2.2, pandas 2.3, scikit-learn 1.7, scipy 1.16 |
+| Python 3.14 | 5 | numpy 2.5, pandas 3.0, scikit-learn 1.9, scipy 1.18 |
+
+Python 3.14 changed `pickle.DEFAULT_PROTOCOL` from 4 to 5, so from there on a
+file written with no protocol given is protocol 5.
+
+967 files, 450 distinct byte strings, 6.3 MB.
+
+## What varies, and what does not
+
+**Basic data does not vary.** At protocol 5 every environment wrote the same
+bytes for every basic object. At protocols 3 and 4 there are two byte strings,
+Python 3.4 and everything from 3.6 on, and the instructions are the same in
+both: the dict keys come out in a different order, because a dict was
+unordered before 3.6. One grammar covers all of it. After the stack rewrite of
+the recogniser (7e4bf18), all 75 basic files at protocol 4 and 5 match
+`basic-p4-p5-v4`.
+
+**numpy varies in one word.** Two byte strings per object and protocol: numpy
+1.x spells the module `numpy.core.multiarray`, numpy 2.x spells it
+`numpy._core.multiarray`. All 98 numpy files at protocol 4 and 5 match
+`numpy-numeric-array-p4-p5-v4`.
+
+**scikit-learn varies in its data, not in its instructions.** An estimator is
+`STACK_GLOBAL` of its class, `EMPTY_TUPLE`, `NEWOBJ`, then a dict of its
+attributes and `BUILD`. Between releases the list of attribute names changes
+(1.7 has a `tol` that 1.5 has not), `_sklearn_version` holds the release, and
+the arrays inside follow numpy's spelling. So the form cannot pin an attribute
+list per release. It fixes the instruction shape and reads the attribute names
+as data: an object of a class under `sklearn.`, whose state is a dict of text
+keys to values the other forms already read (basic values, numpy arrays, numpy
+scalars, nested objects of the same kind). A decision tree also holds a
+`sklearn.tree._tree.Tree` built by `REDUCE` with a structured array of nodes,
+which is its own production.
+
+**pandas varies in its instructions, by generation.** A `DataFrame` is a
+`BlockManager` in every release, and what the manager's state is made of has
+changed twice:
+
+| pandas | How a block is written |
+| --- | --- |
+| 1.1 | the arrays directly in the manager's state, each a `numpy` `_reconstruct` |
+| 1.3 | `functools.partial` over `new_block`, per block |
+| 1.5, 2.2, 2.3, 3.0 | `pandas._libs.internals._unpickle_block(values, slice, ndim)`, per block |
+
+Inside the last generation the values are an ordinary numpy array up to 2.x. In
+3.0 a numeric block at protocol 5 is `numpy._core.numeric._frombuffer` over a
+`BYTEARRAY8`, and a text column is a `StringArray` rebuilt through
+`__pyx_unpickle_NDArrayBacked` around an object array of `SHORT_BINUNICODE`.
+The axes are `_new_Index` calls: `Index` over an object array of names,
+`RangeIndex` as a dict of start, stop and step, `DatetimeIndex` for dates.
+
+So pandas wants one form per generation, newest first, each reusing the numpy
+productions, and the 1.5 to 3.0 generation is the one worth writing first: it
+is every file written since late 2022.
+
+**scipy** sparse matrices are an object of a class under `scipy.sparse.` whose
+state is a dict holding three numpy arrays and a shape tuple, so the
+scikit-learn production with another module prefix reads them. The class moved
+(`scipy.sparse.csr` to `scipy.sparse._csr`), which is data to that production.
+
+## Order of work
+
+1. A generic *plain object* production: a class named by `STACK_GLOBAL` from a
+   listed module prefix, `NEWOBJ` with an empty tuple, a state dict, `BUILD`.
+   The prefixes are the whitelist; the instruction shape is fixed. This reads
+   scikit-learn estimators and scipy sparse matrices at once.
+2. `numpy` scalars (`numpy.core.multiarray.scalar`), which estimators hold.
+3. The pandas `_unpickle_block` generation: `DataFrame`, `Series`, the three
+   index kinds, then `Categorical` and `StringArray`.
+4. The field tree for each: a `DataFrame` wants its columns named and its
+   blocks offered as tables (`Evaluator::pickle_table` is where a matched
+   array's shape already becomes a table).
+5. Protocol 2 and 3 for the basic and numpy forms (`BINPUT` for `MEMOIZE`,
+   `GLOBAL` for `STACK_GLOBAL`, no frames), since that is every file written
+   by Python 3.0 to 3.7 and by Python 2.
+
+## Not decided
+
+- Whether the corpus is committed whole. 450 distinct files is half again the
+  size of the collection's index. Committing the distinct byte strings once,
+  with a manifest saying which environments wrote each, keeps every spelling
+  and drops the repeats.
+- joblib files, which is how scikit-learn's own documentation says to save a
+  model. A `.joblib` is a pickle with the array bytes written between the
+  instructions, so it is not a pickle any of this reads.
+- torch. `torch.save` writes a ZIP holding a protocol 2 pickle with persistent
+  ids for the tensor storage, and the storages as other entries of the ZIP.
