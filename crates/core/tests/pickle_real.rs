@@ -709,39 +709,6 @@ fn family_of(name: &str) -> usize {
     }
 }
 
-/// The pandas release an environment folder names, as major and minor.
-///
-/// pandas changed how it writes a frame twice, and the folder name is where
-/// the release is written down. A file is kept under the oldest environment
-/// that wrote those bytes, so the folder is also the oldest release that
-/// spells it this way.
-fn pandas_of(env: &str) -> Option<(u32, u32)> {
-    let rest = env.split('-').find_map(|part| part.strip_prefix("pandas"))?;
-    let (major, minor) = rest.split_once('.')?;
-    Some((major.parse().ok()?, minor.parse().ok()?))
-}
-
-/// What a pandas file is read as, which depends on the release that wrote it.
-///
-/// A frame has been a block manager in every release, and how the blocks get
-/// into it has changed twice. 1.1 hands the manager its axes, its blocks and
-/// the dictionary it versions them with as one tuple; 1.5 and up call
-/// `pandas._libs.internals._unpickle_block` once a block. The form reads both.
-/// 1.3 writes `functools.partial` over `new_block` instead, which is a REDUCE
-/// of what another REDUCE made, and no form reads that. A `Series` is the same
-/// shape in every release from 1.1, because its manager kept the older
-/// spelling, so only the frames divide.
-fn expected_pandas(env: &str, object: &str, row: Option<&'static str>) -> Option<&'static str> {
-    let generation = pandas_of(env)?;
-    // 1.3 is the only release in the corpus that writes the partial, so it is
-    // the one named. A release between the two that turns out to write it too
-    // fails here, which is where someone should look.
-    match object.starts_with("dataframe") && generation == (1, 3) {
-        true => None,
-        false => row,
-    }
-}
-
 /// The same objects as twelve environments wrote them, from Python 2.7 to
 /// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, at every
 /// protocol each has and from both of CPython's picklers: `pickle-matrix/` in
@@ -778,10 +745,7 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
             // takes yet.
             let modern = name.contains(".p4.") || name.contains(".p5.");
             let expected = match modern {
-                true => match name.starts_with("dataframe") || name.starts_with("series") {
-                    true => expected_pandas(&env, &name, FAMILIES[i].1),
-                    false => FAMILIES[i].1,
-                },
+                true => FAMILIES[i].1,
                 false => None,
             };
             let bytes = std::fs::read(&path).unwrap();

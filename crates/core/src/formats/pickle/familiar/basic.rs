@@ -535,9 +535,7 @@ impl Cursor<'_> {
             // modules this form may name a class from: a slot holding one of
             // the globals a NumPy call names inside its own fixed run is not a
             // class this form has anything to say about.
-            Bound::Global(path) if path.rsplit_once('.').is_some_and(|(module, _)| self.whitelisted(module)) => {
-                Kind::Class { path, parts: Vec::new() }
-            }
+            Bound::Global(path) if self.may_name(&path) => Kind::Class { path, parts: Vec::new() },
             _ => return None,
         };
         Some(self.span(start, kind))

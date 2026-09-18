@@ -48,11 +48,30 @@ pub(super) struct Allow {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Reduce {
     pub(super) path: &'static str,
+    /// How the callable reached the REDUCE, which is as the global itself for
+    /// every call but one.
+    pub(super) via: Via,
     /// What the result of the call is, in the tree.
     pub(super) what: Shape,
     pub(super) names: &'static [&'static str],
     pub(super) shape: fn(&[Value]) -> Option<()>,
 }
+
+/// How a REDUCE named its callable.
+///
+/// Almost always the global itself. The one exception is pandas 1.3, which
+/// writes a block as a `functools.partial` over `new_block` and then calls
+/// that: a REDUCE whose callable is what another REDUCE made. Nothing else may
+/// be called that way, and the partial's own call is enumerated like any other,
+/// so what may happen is still a list rather than a rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Via {
+    Global,
+    Partial,
+}
+
+/// The one callable a form accepts as the maker of another callable.
+pub(super) const PARTIAL: &str = "functools.partial";
 
 /// Nothing at all, for a form that enumerates no calls.
 const NO_CALLS: &[Reduce] = &[];
@@ -60,6 +79,7 @@ const NO_CALLS: &[Reduce] = &[];
 /// in a `Tree`, which is constructed from how many features, classes and
 /// outputs it was fitted on and handed its arrays by the BUILD after it.
 const SKLEARN_CALLS: &[Reduce] = &[Reduce {
+    via: Via::Global,
     path: "sklearn.tree._tree.Tree",
     what: Shape::Object,
     names: &["n_features", "n_classes", "n_outputs"],
@@ -84,12 +104,14 @@ const NO_CLASSES: &[&str] = &[];
 /// column in pandas 3.0 is written as a call as well.
 const PANDAS_CALLS: &[Reduce] = &[
     Reduce {
+        via: Via::Global,
         path: "pandas.core.internals.managers.BlockManager",
         what: Shape::Object,
         names: &["blocks", "axes"],
         shape: |args| (matches!(args[0].kind, Kind::Tuple(_)) && matches!(args[1].kind, Kind::List(_))).then_some(()),
     },
     Reduce {
+        via: Via::Global,
         path: "pandas._libs.internals._unpickle_block",
         what: Shape::Block,
         names: &["values", "placement", "ndim"],
@@ -105,6 +127,7 @@ const PANDAS_CALLS: &[Reduce] = &[
         },
     },
     Reduce {
+        via: Via::Global,
         path: "pandas.core.indexes.base._new_Index",
         what: Shape::Object,
         names: &["type", "state"],
@@ -113,6 +136,7 @@ const PANDAS_CALLS: &[Reduce] = &[
     // An index of dates is rebuilt by a call of its own, with the same two
     // arguments.
     Reduce {
+        via: Via::Global,
         path: "pandas.core.indexes.datetimes._new_DatetimeIndex",
         what: Shape::Object,
         names: &["type", "state"],
@@ -121,12 +145,14 @@ const PANDAS_CALLS: &[Reduce] = &[
     // How far apart the dates of a regular index are, which pandas writes as
     // a call of the offset class with a count and whether it was normalised.
     Reduce {
+        via: Via::Global,
         path: "pandas._libs.tslibs.offsets.Day",
         what: Shape::Object,
         names: &["n", "normalize"],
         shape: |args| (matches!(args[0].kind, Kind::Int { .. }) && matches!(args[1].kind, Kind::Bool(_))).then_some(()),
     },
     Reduce {
+        via: Via::Global,
         path: "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked",
         what: Shape::Object,
         names: &["type", "checksum", "state"],
@@ -138,9 +164,31 @@ const PANDAS_CALLS: &[Reduce] = &[
     // pandas 3.0 writes the dtype of a text column as a call of its storage
     // and the value it uses for a missing entry. Both spellings of the module
     // are named, as numpy's two are.
-    Reduce { path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
-    Reduce { path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+    Reduce { via: Via::Global, path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+    Reduce { via: Via::Global, path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+    // pandas 1.3 writes a block as a `functools.partial` over `new_block` and
+    // then calls the partial. Both halves are here: the partial may be made
+    // only over this one global, and only what the partial made may be called.
+    Reduce {
+        via: Via::Global,
+        path: PARTIAL,
+        what: Shape::Object,
+        names: &["func"],
+        shape: |args| matches!(&args[0].kind, Kind::Class { path, .. } if path == NEW_BLOCK).then_some(()),
+    },
+    Reduce {
+        via: Via::Partial,
+        path: NEW_BLOCK,
+        what: Shape::Block,
+        names: &["values", "placement"],
+        shape: |args| {
+            (holds_values(&args[0].kind) && matches!(args[1].kind, Kind::Object { what: Shape::Slice, .. })).then_some(())
+        },
+    },
 ];
+
+/// The one global pandas makes a partial over.
+const NEW_BLOCK: &str = "pandas.core.internals.blocks.new_block";
 
 /// What a block's values may be: numbers, pickled objects, or an array of one
 /// of those wrapped in a class of pandas' own.

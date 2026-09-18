@@ -168,7 +168,12 @@ fn managed(value: &Captured) -> Option<(&[Captured], Vec<Block<'_>>)> {
 /// One block as `_unpickle_block(values, placement, ndim)` wrote it.
 fn called_block(value: &Captured) -> Option<Block<'_>> {
     let Kind::Made { what: Shape::Block, items, .. } = &value.kind else { return None };
-    let [values, placement, _] = items.as_slice() else { return None };
+    // `_unpickle_block` is handed the number of axes as well; the partial
+    // pandas 1.3 writes already carries it and is handed two.
+    let (values, placement) = match items.as_slice() {
+        [values, placement] | [values, placement, _] => (values, placement),
+        _ => return None,
+    };
     Some(Block { values, placement: slice_of(placement)? })
 }
 

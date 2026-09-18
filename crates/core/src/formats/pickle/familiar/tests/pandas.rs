@@ -226,3 +226,47 @@ fn a_datetime_dtype_carries_the_unit_it_counts_in() {
     assert!(recognise(&framed(&frame(&dtype(b"K\x03", "ns", b"N")))).is_none());
     assert!(recognise(&framed(&frame(&dtype(b"K\x04", "zz", b"N")))).is_none());
 }
+
+/// pandas 1.3 writes a block as a `functools.partial` over `new_block` and
+/// then calls the partial, which is a REDUCE of what another REDUCE made.
+///
+/// That is the one call whose callable is a call, and it is a list of two
+/// rather than a rule: the partial may be made over one global and only what
+/// the partial made may be called. A partial over anything else is a
+/// non-match, which is what keeps this from being a way in.
+#[test]
+fn a_block_may_be_a_partial_over_new_block_and_nothing_else_may() {
+    let partial = |over: &str| {
+        cat(&[
+            &class("functools", "partial"),
+            &class("pandas.core.internals.blocks", over),
+            b"\x85\x94R\x94",
+            // The state a partial writes: the callable, no arguments, the
+            // keywords it was made with, and no dictionary of its own.
+            b"(",
+            &get(5),
+            b")}\x94",
+            &word("ndim"),
+            b"K\x02sNt\x94b",
+        ])
+    };
+    let slice = cat(&[&class("builtins", "slice"), b"K\0K\x01K\x01\x87\x94R\x94"]);
+    let block = |over: &str| cat(&[&partial(over), &object_array(&["a", "b"]), &slice, b"\x86\x94R\x94"]);
+    let manager = |over: &str| {
+        cat(&[&class("pandas.core.internals.managers", "BlockManager"), &block(over), b"\x85\x94]\x94\x86\x94R\x94"])
+    };
+    assert!(recognise(&framed(&frame(&manager("new_block")))).is_some());
+    // A partial over any other global, including one that looks like a block
+    // maker and one that is not pandas' at all.
+    for over in ["make_block", "new_block_2d", "Block"] {
+        assert!(recognise(&framed(&frame(&manager(over)))).is_none(), "{over}");
+    }
+    let elsewhere = cat(&[
+        &class("functools", "partial"),
+        &class("os", "system"),
+        b"\x85\x94R\x94(",
+        &get(5),
+        b")}\x94Nt\x94b",
+    ]);
+    assert!(recognise(&framed(&frame(&elsewhere))).is_none());
+}

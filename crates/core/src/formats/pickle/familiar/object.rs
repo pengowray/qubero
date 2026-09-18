@@ -14,8 +14,17 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
+use super::forms::{Via, PARTIAL};
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
+
+/// The dotted path of a class, or nothing for anything that is not one.
+fn path_of(value: &Value) -> Option<&str> {
+    match &value.kind {
+        Kind::Class { path, .. } => Some(path),
+        _ => None,
+    }
+}
 
 impl Cursor<'_> {
     /// Whether a module is one the form in hand may name a class from.
@@ -27,6 +36,17 @@ impl Cursor<'_> {
         self.allow.classes.iter().any(|package| {
             module.strip_prefix(package).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
         })
+    }
+
+    /// Whether this form may name this global at all: a class from a module
+    /// under one of its prefixes, or one of the callables it lists, which is
+    /// how `functools.partial` is named without `functools` being a package
+    /// any class may come from.
+    pub(super) fn may_name(&self, path: &str) -> bool {
+        match path.rsplit_once('.') {
+            Some((module, _)) => self.whitelisted(module) || self.allow.calls.iter().any(|call| call.path == path),
+            None => false,
+        }
     }
 
     /// The four opcodes a library object is built with, each folding the two
@@ -56,7 +76,7 @@ impl Cursor<'_> {
         let module_text = self.text_of(&module)?.to_string();
         let name_text = self.text_of(&name)?.to_string();
         let path = format!("{module_text}.{name_text}");
-        if !self.whitelisted(&module_text) && !self.allow.calls.iter().any(|call| call.path == path) {
+        if !self.may_name(&path) {
             return None;
         }
         self.memoize(Bound::Global(path.clone()))?;
@@ -132,8 +152,21 @@ impl Cursor<'_> {
     /// the argument shape is checked against what the library writes.
     fn reduced(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [callable, args] = <[Value; 2]>::try_from(items).ok()?;
-        let Kind::Class { ref path, .. } = callable.kind else { return None };
-        let call = self.allow.calls.iter().find(|call| call.path == *path)?;
+        let (path, via) = match &callable.kind {
+            Kind::Class { path, .. } => (path.as_str(), Via::Global),
+            // The one callable that is itself a call: a `functools.partial`
+            // over the one global a form lists it with. Which global the
+            // partial was made over was checked when the partial was made, and
+            // it is checked again here, so neither half stands on its own.
+            Kind::Made { callable: made, items, .. } => {
+                if path_of(made)? != PARTIAL {
+                    return None;
+                }
+                (path_of(items.first()?)?, Via::Partial)
+            }
+            _ => return None,
+        };
+        let call = self.allow.calls.iter().find(|call| call.path == path && call.via == via)?;
         let Kind::Tuple(held) = args.kind else { return None };
         if held.len() != call.names.len() {
             return None;
