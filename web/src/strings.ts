@@ -1925,19 +1925,16 @@ export const PROBLEMS = {
    * of them, which is where a reader starts from. */
   showFirst: "Show first",
   /** A table column whose cells hold wrong values, at the end of its heading.
-   * The dot separates the count from the column's name and its unit, which
-   * already spends the parentheses: `left (dB) \u00b7 2 invalid`.
+   * The same words a listing row's count uses, and deliberately: a reader who
+   * has learnt `\u00b7 2 invalid` on a row should not have to learn a second
+   * form for a column. The dot keeps it off the unit, which already spends the
+   * parentheses: `left (dB) \u00b7 2 invalid`.
    *
-   * `soFar` while rows are still unread. A table is read a screenful at a
-   * time, and twenty-six million samples are never all read, so a bare count
-   * would be a claim about the whole column that the view cannot make. */
-  column: (invalid: number, undefined_: number, soFar: boolean): string => {
-    const parts: string[] = [];
-    if (invalid > 0) parts.push(`${invalid.toLocaleString()} invalid`);
-    if (undefined_ > 0) parts.push(`${undefined_.toLocaleString()} undefined`);
-    if (parts.length === 0) return "";
-    return `\u00b7 ${parts.join(", ")}${soFar ? " so far" : ""}`;
-  },
+   * `soFar` while rows are still unread, which for a run of samples is always:
+   * a table is read a screenful at a time, and a bare count would be a claim
+   * about the whole column that the view cannot make. */
+  column: (invalid: number, undefined_: number, soFar: boolean): string =>
+    PROBLEMS.within(invalid, undefined_, soFar),
   /** The glyph itself, one shape for both tiers so a reader learns one: the
    * colour repeats the tier and the words carry it. A screen reader gets the
    * words, not this, so it is hidden from one. */
