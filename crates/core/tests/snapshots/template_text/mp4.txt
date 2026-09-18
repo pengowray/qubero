@@ -361,7 +361,7 @@ type Box (named by type, contents body) {
         version: u8be
         flags: bytes[3]
         entry_count: u32be
-        entries: MetadataKey {
+        entries: MetadataKey (named by name) {
           size: u32be
           namespace: text[4] utf8
           name: text[size - 8] utf8
@@ -883,7 +883,7 @@ type Box (named by type, contents body) {
           version: u8be
           flags: bytes[3]
           entry_count: u32be
-          entries: MetadataKey {
+          entries: MetadataKey (named by name) {
             size: u32be
             namespace: text[4] utf8
             name: text[size - 8] utf8
@@ -1404,7 +1404,7 @@ type Box (named by type, contents body) {
         version: u8be
         flags: bytes[3]
         entry_count: u32be
-        entries: MetadataKey {
+        entries: MetadataKey (named by name) {
           size: u32be
           namespace: text[4] utf8
           name: text[size - 8] utf8

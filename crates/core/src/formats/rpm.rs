@@ -118,7 +118,7 @@ fn entry(tag_enum: &str, tags: &'static [(i128, &'static str)]) -> T {
             ("offset", T::u32(Big)),
             ("count", T::u32(Big)),
         ],
-    )
+    ).named_by("tag")
     .counted_as("entry")
 }
 

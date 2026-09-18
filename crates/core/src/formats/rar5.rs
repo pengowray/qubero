@@ -344,7 +344,7 @@ fn file_fields() -> T {
             // UTF-8, and the one field of the header a reader is looking for.
             ("name", T::text(StrLen::Fixed(E::field("name_length")), Encoding::Utf8)),
         ],
-    )
+    ).named_by("name")
     .counted_as("file")
     // Seconds from 1970, and only there at all when the flag says so. RAR 5
     // can also write this as a FILETIME in an extra-area record, which nothing

@@ -267,7 +267,7 @@ fn command(e: Endian) -> T {
             // whatever the linker rounded the command's length to.
             ("name", T::text(StrLen::Padded { size: E::field("size").sub(E::lit(24)), pad: 0 }, Encoding::Utf8)),
         ],
-    )
+    ).named_by("name")
     // Seconds from 1970, when the library was built. Most linkers write 1 or 2
     // rather than a real time, and a reader shown the second after the epoch
     // has been told the truth about what is in the field.
@@ -278,7 +278,7 @@ fn command(e: Endian) -> T {
             ("name_offset", T::u32(e)),
             ("name", T::text(StrLen::Padded { size: E::field("size").sub(E::lit(12)), pad: 0 }, Encoding::Utf8)),
         ],
-    );
+    ).named_by("name");
     let cases: Vec<(i128, T)> = vec![
         (0x1, segment(32, e)),
         (0x19, segment(64, e)),

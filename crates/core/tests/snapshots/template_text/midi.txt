@@ -117,7 +117,7 @@ type Chunk (named by id, contents body) {
           length: vlq
           data: sized(length) bytes[remaining]
         }
-        255 => Meta {
+        255 => Meta (named by type) {
           type: u8be enum MetaType {
             0x00 = sequence number, 0x01 = text, 0x02 = copyright, 0x03 = track name,
             0x04 = instrument name, 0x05 = lyric, 0x06 = marker, 0x07 = cue point,

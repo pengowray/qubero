@@ -2,7 +2,7 @@ template zip
 
 root ZIP {
   records: repeat(until element.signature is 50 4B 05 06) ZipRecord
-      (named by signature, contents body, unit record) {
+      (named by body.name | signature, contents body, unit record) {
     signature: u32le enum Signature {
       0x04034b50 = local file, 0x08074b50 = data descriptor,
       0x02014b50 = central directory file, 0x06054b50 = end of central directory,

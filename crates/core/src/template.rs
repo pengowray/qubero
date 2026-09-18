@@ -3196,6 +3196,11 @@ pub struct StructDef {
     /// contents are read, which is how a name a format wraps in a length is
     /// still the name. A path that reaches nothing, or reads as nothing,
     /// leaves the structure with the name it had.
+    ///
+    /// Several paths with `|` between them are tried in that order, and the
+    /// first that reads as something is the name. A ZIP record is
+    /// `body.name | signature`: the file name where the record holds a file,
+    /// and what the signature says the record is where it does not.
     pub named_by: Option<String>,
     /// Which field is merely this structure's contents. Its name says nothing
     /// the structure has not already said, so the linear views leave it out of
@@ -3789,6 +3794,24 @@ impl Ty {
     pub fn inline_structure(name: &str, fields: Vec<(&str, Ty)>) -> Ty {
         match Ty::structure(name, fields) {
             Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { inline: true, ..(*s).clone() })),
+            other => other,
+        }
+    }
+    /// Say what names this structure, after the fact: a path, or several
+    /// with `|` between them. See [`StructDef::named_by`]. For a structure
+    /// built by a helper that has no say in its naming, which is most of the
+    /// records a format's list holds.
+    pub fn named_by(self, path: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { named_by: Some(path.to_string()), ..(*s).clone() })),
+            other => other,
+        }
+    }
+    /// Say which field is merely this structure's contents, after the fact.
+    /// See [`StructDef::contents`].
+    pub fn contents(self, field: &str) -> Ty {
+        match self {
+            Ty::Struct(s) => Ty::Struct(Arc::new(StructDef { contents: Some(field.to_string()), ..(*s).clone() })),
             other => other,
         }
     }

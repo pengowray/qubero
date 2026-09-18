@@ -264,7 +264,7 @@ fn meta() -> T {
             ("length", T::vlq()),
             ("value", T::sized(E::field("length"), T::switch(E::field("type"), cases, T::bytes(E::Remaining)))),
         ],
-    )
+    ).named_by("type")
 }
 
 /// A track that opens with a data byte has no status to run from, which no

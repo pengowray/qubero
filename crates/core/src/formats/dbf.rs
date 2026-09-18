@@ -109,7 +109,7 @@ fn field() -> T {
             ("decimals", T::u8()),
             ("rest", T::bytes(E::lit(14))),
         ],
-    )
+    ).named_by("name")
     .field_doc("address", "Where dBase III kept the column in memory; nothing in the file.")
     .counted_as("field")
 }

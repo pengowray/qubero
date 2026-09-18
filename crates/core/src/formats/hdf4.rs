@@ -714,7 +714,7 @@ fn index_entry() -> T {
             ("length", u32be()),
             ("key", T::computed(E::field("tag").mul(E::lit(65536)).add(E::field("ref")))),
         ],
-    )
+    ).named_by("tag")
     .machinery(&["key"])
 }
 

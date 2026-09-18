@@ -77,9 +77,12 @@ fn reservation() -> T {
 }
 
 fn token() -> T {
+    // Named by the node or property the token opens, since a device tree is
+    // read by those names: `[7] compatible`. The root node's name is empty and
+    // `end node` has none, and those read as the token they are.
     T::structure_named(
         "FdtToken",
-        "token",
+        "body.name | token",
         "body",
         vec![
             ("token", T::enumeration("FdtTokenKind", T::u32(Big), TOKENS)),
@@ -105,7 +108,7 @@ fn begin_node() -> T {
             ("name", T::cstr()),
             ("padding", T::bytes(E::size_of("name").pad_to(4))),
         ],
-    )
+    ).named_by("name")
 }
 
 /// A property: how long its value is, where its name is written, and then the
@@ -126,7 +129,7 @@ fn property() -> T {
             ("value", T::bytes(E::field("len"))),
             ("padding", T::bytes(E::field("len").pad_to(4))),
         ],
-    )
+    ).named_by("name")
     .field_aside("name")
 }
 

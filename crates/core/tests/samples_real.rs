@@ -18,6 +18,17 @@ use qubero_core::eval::Evaluator;
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
+/// Files that do not read yet, by their path under the collection with `/`
+/// between the parts. Each is reported and does not fail the test. One that
+/// starts reading does fail it, and so does one that is no longer in the
+/// collection, so this list cannot go stale.
+const KNOWN_FAILURES: &[&str] = &[
+    // A Lotus 1-2-3 release 3 worksheet. No template matches it, because
+    // nothing has been written for any Lotus worksheet yet. It stays in the
+    // collection as the sample to write one against.
+    "wk3/sheetjs-lotus-wk3.wk3",
+];
+
 #[test]
 fn every_sample_still_reads() {
     let Some(root) = samples() else {
@@ -27,41 +38,90 @@ fn every_sample_still_reads() {
     let mut files = Vec::new();
     collect(&root, &mut files);
     assert!(!files.is_empty(), "no files under {}", root.display());
+    // `read_dir` hands entries back in whatever order the filesystem keeps
+    // them, which differs between machines. Sorted, the same run is the same
+    // run everywhere.
+    files.sort();
     let (mut read_count, mut refused_count) = (0, 0);
+    let (mut failures, mut known) = (Vec::new(), Vec::new());
+    let mut known_seen = vec![false; KNOWN_FAILURES.len()];
     for path in files {
         // A file under a folder of this name is kept because Qubero refuses
         // it: nested deeper than anything can read, or ending in the middle
         // of itself. One of those that reads is the failure worth catching.
         let meant_to_fail = path.components().any(|c| c.as_os_str() == "does-not-read");
-        let bytes = std::fs::read(&path).unwrap();
-        let head = &bytes[..bytes.len().min(0x9000)];
-        // A `.COM` file has no header to say what it is, so the extension is
-        // what says it. Everything else the file itself announces, and the
-        // name only breaks a tie the bytes cannot, as between `.shp` and `.shx`.
-        let name = match path.extension().is_some_and(|e| e.eq_ignore_ascii_case("com")) {
-            true => "com",
-            false => match formats::sniff_named(head, bytes.len() as u64, &path.to_string_lossy()) {
-                Some(name) => name,
-                None if meant_to_fail => panic!("no template matches {}, so nothing tested it", path.display()),
-                None => panic!("nothing reads {}", path.display()),
-            },
-        };
-        let template = formats::template(name).unwrap_or_else(|| panic!("no template {name}"));
-        let doc = Document::new(MemSource(bytes));
-        let mut ev = Evaluator::new(template);
-        eprintln!("--- {} as {name}", path.display());
-        let out = read(&mut ev, &doc, &[], 0);
-        if meant_to_fail {
-            assert!(out.is_err(), "{} as {name} reads, but files in does-not-read should not read", path.display());
-            refused_count += 1;
-            continue;
+        let shown = relative(&root, &path);
+        let known_at = KNOWN_FAILURES.iter().position(|k| *k == shown);
+        if let Some(i) = known_at {
+            known_seen[i] = true;
         }
-        if let Err(why) = out {
-            panic!("{why}");
+        let (name, out) = attempt(&path);
+        let name = name.unwrap_or("no template");
+        // Every failure is kept and the test goes on, so one file that does
+        // not read cannot hide the files after it.
+        match (out, meant_to_fail, known_at.is_some()) {
+            (Err(why), true, _) if name == "no template" => failures.push(format!("{shown} ({name}): {why}, so nothing tested it")),
+            (Err(_), true, _) => refused_count += 1,
+            (Ok(()), true, _) => failures.push(format!("{shown} ({name}): reads, but files in does-not-read should not read")),
+            (Err(why), false, true) => known.push(format!("{shown} ({name}): {why}")),
+            (Ok(()), false, true) => failures.push(format!("{shown} ({name}): reads now, so take it off KNOWN_FAILURES")),
+            (Err(why), false, false) => failures.push(format!("{shown} ({name}): {why}")),
+            (Ok(()), false, false) => read_count += 1,
         }
-        read_count += 1;
+    }
+    for (k, seen) in KNOWN_FAILURES.iter().zip(known_seen) {
+        if !seen {
+            failures.push(format!("{k} (no template): listed in KNOWN_FAILURES but not in the collection"));
+        }
     }
     eprintln!("{read_count} samples read, {refused_count} refused as they should be");
+    if !known.is_empty() {
+        eprintln!("{} known not to read:\n  {}", known.len(), known.join("\n  "));
+    }
+    assert!(failures.is_empty(), "{} samples failed:\n  {}", failures.len(), failures.join("\n  "));
+}
+
+/// Pick a template for one file and read it. The template's name comes back
+/// beside the result, or `None` when nothing matched. A panic inside a
+/// template is caught and said like any other failure, so it cannot end the
+/// walk either.
+fn attempt(path: &Path) -> (Option<&'static str>, Result<(), String>) {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return (None, Err(format!("cannot be opened: {e}"))),
+    };
+    let head = &bytes[..bytes.len().min(0x9000)];
+    // A `.COM` file has no header to say what it is, so the extension is
+    // what says it. Everything else the file itself announces, and the
+    // name only breaks a tie the bytes cannot, as between `.shp` and `.shx`.
+    let name = match path.extension().is_some_and(|e| e.eq_ignore_ascii_case("com")) {
+        true => "com",
+        false => match formats::sniff_named(head, bytes.len() as u64, &path.to_string_lossy()) {
+            Some(name) => name,
+            None => return (None, Err("no template matches".to_string())),
+        },
+    };
+    let Some(template) = formats::template(name) else {
+        return (Some(name), Err(format!("sniffed as {name}, but there is no template of that name")));
+    };
+    eprintln!("--- {} as {name}", path.display());
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(template);
+        read(&mut ev, &doc, &[], 0)
+    }));
+    let out = out.unwrap_or_else(|panic| {
+        let said = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied());
+        Err(format!("panicked: {}", said.unwrap_or("with no message")))
+    });
+    (Some(name), out)
+}
+
+/// A file's path under the collection, with `/` between the parts on every
+/// platform, which is how `KNOWN_FAILURES` spells them.
+fn relative(root: &Path, path: &Path) -> String {
+    let under = path.strip_prefix(root).unwrap_or(path);
+    under.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
 /// Resolve a node and enough of what is under it to prove the file reads. A

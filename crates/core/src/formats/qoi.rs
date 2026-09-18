@@ -86,7 +86,7 @@ fn tagged() -> T {
                 T::switch(E::field("tag"), vec![(0, index()), (1, diff()), (2, luma())], run()),
             ),
         ],
-    )
+    ).named_by("tag")
     .counted_as("chunk")
 }
 

@@ -3,6 +3,14 @@
 Notes from Pengo, kept here so they are not lost between sessions. Newest
 section first. A ticked item is done; the rest are open.
 
+## 2026-09-18
+
+Refactoring, for when no other agent is editing `crates/core/src/formats/`:
+
+- [ ] Move the 268 callers of `T::structure_named(name, by, contents, fields)` to `T::structure(name, fields).named_by(by).contents(contents)`. Two positional strings, either of which may be empty, do not say which is which at the call site; the builders do, and `named_by` now takes a path and `|` alternatives, which reads badly as a bare second argument. Mechanical, but it touches 100+ files, so it conflicts with anything else in flight. Then drop `structure_named`.
+- [ ] Naming candidates: `cargo run -p qubero-core --example naming_survey` lists 161 structures that hold a `name`/`id`/`tag`/`type` field and do not say it names them. 61 are a root's signature (skip); most of the rest sit under a parent that already carries the name. Worth a pass per format when that format is next open.
+- [ ] RTF `\'e9` rows read `[5] 233`. A reader expects `e9` or the character; needs a say-it-in-hex reading for a `hex_digits` field used as a name.
+
 ## 2026-09-17
 
 Text (done this day):
