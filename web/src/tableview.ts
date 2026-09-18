@@ -24,6 +24,17 @@
 // wide for the tab, made the page itself scroll sideways through nothing.
 // Inside, one scroll position moves both, and the sheet holding them is as
 // wide as the columns and no wider.
+//
+// A table can be drawn turned: a column for each record and a row for each
+// field, which is how two channels of five hundred values want to be read.
+// What the table MEANS does not turn with it. The plan still answers in
+// records, and everything here that is written out as text is made by
+// `tabletext.ts` from the table the right way up and then read the other way.
+// What does turn is everything the reader sees and touches: the rows that
+// scroll, the rows a click selects, the headings, and the facts about each
+// record (its number, its name, its time, where it is stored), which are
+// columns beside the values one way up and lines of heading above them the
+// other.
 
 import { formatOffset } from "./doc.ts";
 import type { Doc } from "./doc.ts";
@@ -32,7 +43,8 @@ import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { bitSizeText, PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
-import { FIT_MAX, fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { canTurn, FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, startsTurned, timeText, timeWidth, TURN_MAX, turnsByDefault, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { headerCells, leadKinds, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
 
 /** Height of one row, which must match `--tbl-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
@@ -54,6 +66,12 @@ const NOTICE_MS = 5000;
  *  table: it is a way of reading, and a reader who wants the bytes wants them
  *  for the next file too. */
 const ADDRESSES_KEY = "qubero.table.addresses";
+/** Whether the reader wants the tables that arrive turned to arrive turned.
+ *  Kept for those tables only; see `startsTurned`. */
+const TURNED_KEY = "qubero.table.turned";
+/** How wide a column of addresses and one of sizes are, in characters. */
+const AT_WIDTH = 12;
+const SIZE_WIDTH = 9;
 
 /** One data column as it is drawn: how wide it is and which side its values
  *  sit, its header cell, and how many wrong values its cells hold over the
@@ -105,7 +123,20 @@ export class TableView {
    *  again. */
   private readonly columns: Column[];
   private addresses = false;
-  /** The selected rows: the one the selection started on, and the one it was
+  /** Whether the table is drawn turned, a record to a column. */
+  private turned = false;
+  /** Turned, whether the headings and the widths have been worked out from
+   *  the records. They need every record, so they wait for the last of them
+   *  and are done once. */
+  private turnedLaid = false;
+  /** Turned, the record whose column the reader last clicked in: a row is
+   *  one field of every record, and this is the one whose bytes a pick goes
+   *  to. */
+  private pickedRecord = 0;
+  /** How wide the column of row names is, in a table whose rows have them. */
+  private nameFit: ColumnFit = fitOf(TABLE.rowName);
+  private readonly meaning: HTMLElement;
+  /** The selected rows, as they are drawn: records, or fields when turned. the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
    *  either way round. Null when nothing is selected. */
   private anchor: number | null = null;
@@ -129,6 +160,8 @@ export class TableView {
     this.doc = doc;
     this.plan = plan;
     this.addresses = storedText(ADDRESSES_KEY) === "1";
+    this.turned = startsTurned(plan, storedText(TURNED_KEY));
+    this.meaning = el("span", { className: "tbl-meaning" });
     this.el = el("div", { className: "tableview" });
     this.head = el("div", { className: "tbl-head" });
     this.scroller = el("div", { className: "tbl-scroll" });
@@ -143,12 +176,12 @@ export class TableView {
     this.notice = el("div", { className: "tbl-notice", hidden: true });
     this.el.append(this.bar(opts.title), this.scroller, this.notice);
     this.refreshCopy();
-    this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
     this.columns = plan.columns.map((_, c) => ({
       fit: fitOf(this.headingOf(c)),
       head: el("span", { className: "tbl-th" }),
       problems: [0, 0],
     }));
+    this.sizeCanvas();
     this.layColumns();
     this.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
@@ -181,31 +214,85 @@ export class TableView {
       button.addEventListener("click", () => this.onFactPick(fact.path));
       bar.append(button);
     }
-    const rate = this.plan.rate;
-    if (rate !== null && rate > 0) {
-      const word = this.plan.columnWord;
-      const said = rate.toLocaleString();
-      bar.append(
-        el("span", {
-          className: "tbl-meaning",
-          textContent:
-            word === null
-              ? TABLE.rowMeaningPlain(this.plan.rowWord, said)
-              : TABLE.rowMeaning(this.plan.rowWord, word, said),
-        }),
-      );
-    }
+    if (this.rate !== null) bar.append(this.meaning);
+    this.sayMeaning();
+    const turn = el("input", { type: "checkbox", checked: this.turned, disabled: !canTurn(this.plan.count) });
+    turn.addEventListener("change", () => this.turn(turn.checked));
+    const turnLabel = el("label", { className: "tbl-check" }, turn, TABLE.turn(this.plan.rowWord));
+    turnLabel.title = turn.disabled ? TABLE.turnTooMany(this.plan.rowWord, TURN_MAX) : TABLE.turnTitle(this.plan.rowWord);
+    turnLabel.classList.toggle("is-off", turn.disabled);
     const box = el("input", { type: "checkbox", className: "tbl-addr-box", checked: this.addresses });
     box.addEventListener("change", () => {
       this.addresses = box.checked;
       rememberChoice(ADDRESSES_KEY, box.checked ? "1" : "0");
-      this.layColumns();
-      this.fillHead();
-      this.paintAgain();
+      this.layAgain();
     });
-    bar.append(el("label", { className: "tbl-addr" }, box, TABLE.addresses));
-    bar.append(this.copyButton);
+    // The controls sit together at the far end, away from the facts.
+    bar.append(el("div", { className: "tbl-controls" }, turnLabel, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton));
     return bar;
+  }
+
+  /** Rows a second, or null for a table whose rows are not spaced in time. */
+  private get rate(): number | null {
+    const rate = this.plan.rate;
+    return rate !== null && rate > 0 ? rate : null;
+  }
+
+  /** The columns that are about a record rather than in it. */
+  private get lead(): Lead {
+    return { named: this.plan.rowNames, rate: this.rate, addresses: this.addresses };
+  }
+
+  /** The sentence saying what one row is, which is one column when the table
+   *  is turned. */
+  private sayMeaning(): void {
+    const rate = this.rate;
+    if (rate === null) return;
+    const word = this.plan.columnWord;
+    const said = rate.toLocaleString();
+    const rows = this.plan.rowWord;
+    if (this.turned) this.meaning.textContent = word === null ? TABLE.columnMeaningPlain(rows, said) : TABLE.columnMeaning(rows, word, said);
+    else this.meaning.textContent = word === null ? TABLE.rowMeaningPlain(rows, said) : TABLE.rowMeaning(rows, word, said);
+  }
+
+  /**
+   * Draw the table the other way round.
+   *
+   * The selection goes, because it was of rows and the rows are different
+   * things now: three selected records do not become three selected fields.
+   * So does the scroll position, for the same reason. The choice is kept only
+   * for a table that would have arrived turned; see `startsTurned`.
+   */
+  private turn(on: boolean): void {
+    this.turned = on;
+    if (turnsByDefault(this.plan)) rememberChoice(TURNED_KEY, on ? "1" : "0");
+    this.anchor = null;
+    this.focus = null;
+    this.pickedRecord = 0;
+    this.scroller.scrollTop = 0;
+    this.scroller.scrollLeft = 0;
+    this.sayMeaning();
+    this.refreshCopy();
+    this.sizeCanvas();
+    this.layAgain();
+  }
+
+  /** How many rows are drawn: the records, or turned, the fields. */
+  private get shownRows(): number {
+    return this.turned ? this.columns.length : this.plan.count;
+  }
+
+  private sizeCanvas(): void {
+    this.canvas.style.height = `${Math.min(MAX_CANVAS, this.shownRows * ROW)}px`;
+  }
+
+  /** The columns, the headings and the rows, all again: which columns there
+   *  are has changed. */
+  private layAgain(): void {
+    this.turnedLaid = false;
+    this.layColumns();
+    this.fillHead();
+    this.paintAgain();
   }
 
   // ----- the columns -----
@@ -216,10 +303,37 @@ export class TableView {
    *  table of one channel is a narrow table and not one number adrift in a
    *  tab-wide column. */
   private layColumns(): void {
-    const time = this.plan.rate !== null && this.plan.rate > 0 ? ` ${timeWidth(this.plan.count, this.plan.rate)}ch` : "";
-    const data = this.columns.map((column) => `${column.fit.width}ch`).join(" ");
-    const addresses = this.addresses ? " 12ch 9ch" : "";
-    this.el.style.setProperty("--tbl-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
+    const widths = this.turned ? this.turnedWidths() : this.widths();
+    this.el.style.setProperty("--tbl-cols", widths.map((w) => `${w}ch`).join(" "));
+  }
+
+  /** The tracks of the table the right way up, in `headerCells`' order. */
+  private widths(): number[] {
+    const out = [indexWidth(this.plan.count)];
+    if (this.plan.rowNames) out.push(this.nameFit.width);
+    if (this.rate !== null) out.push(timeWidth(this.plan.count, this.rate));
+    out.push(...this.columns.map((column) => column.fit.width));
+    if (this.addresses) out.push(AT_WIDTH, SIZE_WIDTH);
+    return out;
+  }
+
+  /** The tracks of the table turned: the labels, then a column a record, each
+   *  as wide as the widest thing in it, heading lines included. Before the
+   *  records are all read a column is as wide as its number. */
+  private turnedWidths(): number[] {
+    const clamp = (n: number): number => Math.min(FIT_MAX, Math.max(FIT_MIN, n));
+    const labels = [...headerCells([], this.lead).map((text) => text.length), ...this.columns.map((_, c) => this.headTextOf(c).length)];
+    const out = [clamp(Math.max(...labels))];
+    for (let i = 0; i < this.plan.count; i++) {
+      const row = this.have.get(i);
+      if (row === undefined) {
+        out.push(clamp(i.toLocaleString().length));
+        continue;
+      }
+      const heads = recordCells(i, row, 0, this.lead).map((text) => text.length);
+      out.push(clamp(Math.max(...heads, ...row.cells.map((cell) => cell.text.length))));
+    }
+    return out;
   }
 
   /** The heading of one data column, unit included. */
@@ -287,6 +401,10 @@ export class TableView {
    *  then not at all. */
   private fitRow(row: TableRow): void {
     let widened = false;
+    if (row.name !== undefined && row.name.length > this.nameFit.width) {
+      this.nameFit = { width: Math.min(FIT_MAX, row.name.length), numeric: false };
+      widened = true;
+    }
     for (const [c, column] of this.columns.entries()) {
       const was = column.fit;
       const now = fitCell(was, row.cells[c]);
@@ -303,17 +421,63 @@ export class TableView {
    *  elements every time, so what a column has learnt about itself (its width,
    *  its side, its count) survives the addresses being turned on. */
   private fillHead(): void {
-    const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
-    if (this.plan.rate !== null && this.plan.rate > 0) {
-      cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
-    }
     this.writeHeads();
+    if (this.turned) return this.fillTurnedHead();
+    const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
+    if (this.plan.rowNames) cells.push(el("span", { className: "tbl-th", textContent: TABLE.rowName }));
+    if (this.rate !== null) cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
     cells.push(...this.columns.map((column) => column.head));
     if (this.addresses) {
       cells.push(el("span", { className: "tbl-th", textContent: TABLE.storedAt }));
       cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.size }));
     }
-    this.head.replaceChildren(...cells);
+    this.head.replaceChildren(el("div", { className: "tbl-headline" }, ...cells));
+  }
+
+  /**
+   * The headings of a turned table: a line for each thing that is said about
+   * a record, with a cell for every record. What is a column beside the values
+   * the right way up (the number, the name, the time, the address) is a line
+   * above them here, written by the same code that writes a copy of them.
+   *
+   * Until the records have all been read only their numbers are known, so
+   * that is the one line there is.
+   */
+  private fillTurnedHead(): void {
+    const records = this.allRecords();
+    const lead = this.lead;
+    const lines =
+      records === null
+        ? [[TABLE.index, ...Array.from({ length: this.plan.count }, (_, i) => String(i))]]
+        : turnedLines([], records, lead, { from: 0, to: 0 });
+    const kinds = leadKinds(lead);
+    // A column of numbers has its headings over the digits.
+    const numeric = this.columns.every((column) => column.fit.numeric === true);
+    const out = lines.map((line, at) => {
+      const kind = kinds[at] ?? "index";
+      const tint = kind === "index" || kind === "at" ? " tbl-at" : kind === "size" ? " tbl-size" : "";
+      const cells = line.map((text, c) => {
+        if (c === 0) return el("span", { className: "tbl-th tbl-label", textContent: text });
+        const said = kind === "index" ? Number(text).toLocaleString() : text;
+        const cell = el("span", { className: `tbl-th${tint}${numeric ? " tbl-num" : ""}`, textContent: said });
+        cell.title = said;
+        return cell;
+      });
+      return el("div", { className: "tbl-headline" }, ...cells);
+    });
+    this.head.replaceChildren(...out);
+  }
+
+  /** Every record, or null while any of them is still being read. Only asked
+   *  of a table short enough to turn. */
+  private allRecords(): TableRow[] | null {
+    const out: TableRow[] = [];
+    for (let i = 0; i < this.plan.count; i++) {
+      const row = this.rowAt(i);
+      if (row === null) return null;
+      out.push(row);
+    }
+    return out;
   }
 
   // ----- drawing -----
@@ -328,6 +492,7 @@ export class TableView {
       // arrived, so the answers go rather than being drawn again. The counts
       // are answers about those rows and go with them.
       this.have.clear();
+      this.turnedLaid = false;
       for (const column of this.columns) column.problems = [0, 0];
       this.writeHeads();
       this.plan.forget();
@@ -356,7 +521,7 @@ export class TableView {
   /** True once the rows are taller than a canvas is allowed to be, which is
    *  where the scroll bar stops standing for pixels. */
   private get capped(): boolean {
-    return this.plan.count * ROW > MAX_CANVAS;
+    return this.shownRows * ROW > MAX_CANVAS;
   }
 
   /** The first row the scroll position is asking for. Under the cap that is
@@ -366,13 +531,23 @@ export class TableView {
     if (!this.capped) return Math.floor(this.scroller.scrollTop / ROW);
     const travel = this.travel();
     const ratio = travel <= 0 ? 0 : this.scroller.scrollTop / travel;
-    return Math.round(ratio * Math.max(0, this.plan.count - this.onScreen()));
+    return Math.round(ratio * Math.max(0, this.shownRows - this.onScreen()));
   }
 
   private paint(): void {
+    // A turned row is one field of every record, so nothing of it can be
+    // drawn until they are all here; and once they are, the headings and the
+    // widths that were waiting on them are worked out, before the rows are
+    // measured against a header that is about to grow.
+    const records = this.turned ? this.allRecords() : null;
+    if (records !== null && !this.turnedLaid) {
+      this.turnedLaid = true;
+      this.layColumns();
+      this.fillHead();
+    }
     const firstVisible = this.firstVisible();
     const first = Math.max(0, firstVisible - OVERSCAN);
-    const last = Math.min(this.plan.count, firstVisible + this.onScreen() + OVERSCAN);
+    const last = Math.min(this.shownRows, firstVisible + this.onScreen() + OVERSCAN);
     // Under the cap a row sits at its own place on the canvas. Past it the
     // canvas is shorter than the rows would need, so the window is drawn where
     // the reader is looking: at the top of the viewport, wherever that is.
@@ -382,8 +557,7 @@ export class TableView {
     this.drawn = { from: first, to: last, base, addresses: this.addresses };
     const out: HTMLElement[] = [];
     for (let i = first; i < last; i++) {
-      const row = this.rowAt(i);
-      const element = row === null ? this.drawWaiting(i) : this.drawRow(i, row);
+      const element = this.turned ? this.drawTurned(i, records) : this.drawRecord(i);
       element.style.top = `${base + (i - first) * ROW}px`;
       element.dataset["index"] = String(i);
       out.push(element);
@@ -411,15 +585,45 @@ export class TableView {
     return { from: Math.min(this.anchor, this.focus), to: Math.max(this.anchor, this.focus) + 1 };
   }
 
-  private drawRow(i: number, row: TableRow): HTMLElement {
+  private isOn(i: number): boolean {
     const range = this.range();
-    const on = range !== null && i >= range.from && i < range.to;
-    const element = el("div", { className: on ? "tbl-row is-on" : "tbl-row" });
-    element.append(el("span", { className: "tbl-cell tbl-index tbl-num", textContent: i.toLocaleString() }));
-    const rate = this.plan.rate;
-    if (rate !== null && rate > 0) {
-      element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
+    return range !== null && i >= range.from && i < range.to;
+  }
+
+  private drawRecord(i: number): HTMLElement {
+    const row = this.rowAt(i);
+    return row === null ? this.drawWaiting(i.toLocaleString(), "tbl-index") : this.drawRow(i, row);
+  }
+
+  /** Row `j` of a turned table: the field's heading, then its value in every
+   *  record. Each cell says which record it is in, which is what a click needs
+   *  to know to find the bytes. */
+  private drawTurned(j: number, records: readonly TableRow[] | null): HTMLElement {
+    const label = this.headTextOf(j);
+    if (records === null) return this.drawWaiting(label, "tbl-label");
+    const element = el("div", { className: this.isOn(j) ? "tbl-row is-on" : "tbl-row" });
+    const heading = el("span", { className: "tbl-cell tbl-label", textContent: label });
+    heading.title = label;
+    element.append(heading);
+    const numeric = this.columns[j]?.fit.numeric === true;
+    for (const [i, row] of records.entries()) {
+      const cell = this.drawCell(row.cells[j], numeric);
+      cell.dataset["record"] = String(i);
+      element.append(cell);
     }
+    return element;
+  }
+
+  private drawRow(i: number, row: TableRow): HTMLElement {
+    const element = el("div", { className: this.isOn(i) ? "tbl-row is-on" : "tbl-row" });
+    element.append(el("span", { className: "tbl-cell tbl-index tbl-num", textContent: i.toLocaleString() }));
+    if (this.plan.rowNames) {
+      const name = el("span", { className: "tbl-cell tbl-name", textContent: row.name ?? "" });
+      name.title = row.name ?? "";
+      element.append(name);
+    }
+    const rate = this.rate;
+    if (rate !== null) element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
     for (let c = 0; c < this.plan.columns.length; c++) {
       element.append(this.drawCell(row.cells[c], this.columns[c]?.fit.numeric === true));
     }
@@ -457,11 +661,12 @@ export class TableView {
     return element;
   }
 
-  /** A row whose bytes are not here yet. It keeps its place and its number, so
-   *  the table does not jump when the answer arrives in it. */
-  private drawWaiting(i: number): HTMLElement {
+  /** A row whose bytes are not here yet. It keeps its place and its number
+   *  (turned, its heading), so the table does not jump when the answer
+   *  arrives in it. */
+  private drawWaiting(label: string, labelClass: string): HTMLElement {
     const element = el("div", { className: "tbl-row tbl-waiting" });
-    element.append(el("span", { className: "tbl-cell tbl-index", textContent: i.toLocaleString() }));
+    element.append(el("span", { className: `tbl-cell ${labelClass}`, textContent: label }));
     element.append(el("span", { className: "tbl-cell", textContent: REPORT.paneWaiting }));
     return element;
   }
@@ -476,13 +681,40 @@ export class TableView {
    */
   setBit(bit: number): void {
     if (this.picking) return;
-    const at = this.plan.rowFor(bit);
+    const record = this.plan.rowFor(bit);
+    if (record === null) return;
+    const at = this.turned ? this.fieldAt(record, bit) : record;
     if (at === null) return;
     this.anchor = at;
     this.focus = at;
     this.scrollToRow(at);
     this.refreshCopy();
     this.paintAgain();
+    if (this.turned) {
+      this.pickedRecord = record;
+      this.showRecord(record);
+    }
+  }
+
+  /** Which field of a record a bit falls in: turned, that is the row. Null
+   *  where the plan cannot say where its cells are. */
+  private fieldAt(record: number, bit: number): number | null {
+    const spans = this.rowAt(record)?.spans;
+    if (spans === undefined) return null;
+    const at = spans.findIndex((span) => bit >= span.offsetBits && bit < span.offsetBits + span.sizeBits);
+    return at < 0 ? null : at;
+  }
+
+  /** Turned, scroll across until a record's column is in view, clear of the
+   *  labels stuck over the near edge. */
+  private showRecord(record: number): void {
+    const cell = this.canvas.querySelector<HTMLElement>(`.tbl-row [data-record="${record}"]`);
+    const label = this.canvas.querySelector<HTMLElement>(".tbl-row .tbl-label");
+    if (cell === null || label === null) return;
+    const near = cell.offsetLeft - label.offsetWidth;
+    const far = cell.offsetLeft + cell.offsetWidth - this.scroller.clientWidth;
+    if (near < this.scroller.scrollLeft) this.scroller.scrollLeft = near;
+    else if (far > this.scroller.scrollLeft) this.scroller.scrollLeft = far;
   }
 
   clearSelection(): void {
@@ -498,7 +730,7 @@ export class TableView {
     const range = this.range();
     const n = range === null ? 0 : range.to - range.from;
     this.copyButton.disabled = n === 0;
-    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n, this.plan.rowWord);
+    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n, this.turned ? TABLE.rowFallback : this.plan.rowWord);
     this.copyButton.title = n === 0 ? TABLE.copyTitleNone : TABLE.copyTitle;
   }
 
@@ -512,7 +744,7 @@ export class TableView {
       return;
     }
     const travel = this.travel();
-    const rows = Math.max(1, this.plan.count - onScreen);
+    const rows = Math.max(1, this.shownRows - onScreen);
     this.scroller.scrollTop = Math.max(0, Math.min(travel, (want / rows) * travel));
   }
 
@@ -523,6 +755,8 @@ export class TableView {
     if (!(target instanceof Element)) return;
     const at = target.closest<HTMLElement>(".tbl-row")?.dataset["index"];
     if (at === undefined) return;
+    const record = target.closest<HTMLElement>("[data-record]")?.dataset["record"];
+    if (record !== undefined) this.pickedRecord = Number(record);
     this.pick(Number(at), e.shiftKey);
   }
 
@@ -545,7 +779,7 @@ export class TableView {
     if (mod && e.key.toLowerCase() === "a") {
       e.preventDefault();
       this.anchor = 0;
-      this.pick(this.plan.count - 1, true);
+      this.pick(this.shownRows - 1, true);
       return;
     }
     const page = Math.max(1, this.onScreen() - 1);
@@ -554,7 +788,7 @@ export class TableView {
     const from = this.focus ?? this.firstVisible();
     if (move !== undefined) {
       e.preventDefault();
-      this.pick(Math.max(0, Math.min(this.plan.count - 1, from + move)), e.shiftKey);
+      this.pick(Math.max(0, Math.min(this.shownRows - 1, from + move)), e.shiftKey);
       return;
     }
     if (e.key === "Home") {
@@ -562,7 +796,7 @@ export class TableView {
       this.pick(0, e.shiftKey);
     } else if (e.key === "End") {
       e.preventDefault();
-      this.pick(this.plan.count - 1, e.shiftKey);
+      this.pick(this.shownRows - 1, e.shiftKey);
     }
   }
 
@@ -580,6 +814,7 @@ export class TableView {
     this.paintAgain();
     const range = this.range();
     if (range === null) return;
+    if (this.turned) return this.pickTurned(range);
     const first = this.rowAt(range.from);
     if (first === null) return;
     // The last row of a long selection may not be read yet; then the mark
@@ -590,40 +825,62 @@ export class TableView {
     this.picking = false;
   }
 
+  /**
+   * Send the file tab to a selection in a turned table. The rows are fields,
+   * and a field is stored once in every record, so the bytes are the ones in
+   * the record whose column was clicked: the fields selected, first to last,
+   * which in one record are a single run. A plan that cannot say where its
+   * cells are sends the whole record, which is near and is never wrong.
+   */
+  private pickTurned(range: { from: number; to: number }): void {
+    const row = this.rowAt(this.pickedRecord);
+    if (row === null) return;
+    const first = row.spans?.[range.from];
+    const last = row.spans?.[range.to - 1];
+    this.picking = true;
+    if (first === undefined || last === undefined) this.onPick({ path: row.path, startBit: row.offsetBits, endBit: row.offsetBits + row.sizeBits });
+    else {
+      const startBit = Math.min(first.offsetBits, last.offsetBits);
+      const endBit = Math.max(first.offsetBits + first.sizeBits, last.offsetBits + last.sizeBits);
+      this.onPick({ path: range.to - range.from === 1 ? first.path : row.path, startBit, endBit });
+    }
+    this.picking = false;
+  }
+
   // ----- copying -----
 
   /**
    * Put the selected rows on the clipboard as tab-separated text, with a
    * heading line: what a spreadsheet or a script takes as it is. The columns
-   * are the ones on screen, address columns included when they are shown, so
-   * what is copied is what the reader is looking at.
+   * are the ones on screen, address columns included when they are shown, and
+   * a turned table is copied turned, so what is copied is what the reader is
+   * looking at.
    */
   private async copySelection(): Promise<void> {
     const range = this.range();
     if (range === null) return;
     const n = range.to - range.from;
     if (n > COPY_LIMIT_ROWS) return this.say(TABLE.copyTooBig(n, COPY_LIMIT_ROWS));
-    const rate = this.plan.rate !== null && this.plan.rate > 0 ? this.plan.rate : null;
-    const head: string[] = [TABLE.index];
-    if (rate !== null) head.push(TABLE.time);
-    for (let c = 0; c < this.plan.columns.length; c++) head.push(this.headingOf(c));
-    if (this.addresses) head.push(TABLE.storedAt, TABLE.size);
-    const lines = [head.join("\t")];
-    for (let i = range.from; i < range.to; i++) {
-      const row = this.rowAt(i);
-      if (row === null) return this.say(TABLE.copyPending);
-      const cells = [String(i)];
-      if (rate !== null) cells.push(timeText(i, rate));
-      for (let c = 0; c < this.plan.columns.length; c++) cells.push(row.cells[c]?.text ?? "");
-      if (this.addresses) cells.push(formatOffset(row.offsetBits), bitSizeText(row.sizeBits));
-      lines.push(cells.join("\t"));
+    const headings = this.columns.map((_, c) => this.headingOf(c));
+    let lines: string[][];
+    if (this.turned) {
+      const records = this.allRecords();
+      if (records === null) return this.say(TABLE.copyPending);
+      lines = turnedLines(headings, records, this.lead, range);
+    } else {
+      lines = [headerCells(headings, this.lead)];
+      for (let i = range.from; i < range.to; i++) {
+        const row = this.rowAt(i);
+        if (row === null) return this.say(TABLE.copyPending);
+        lines.push(recordCells(i, row, headings.length, this.lead));
+      }
     }
     try {
-      await navigator.clipboard.writeText(lines.join("\n"));
+      await navigator.clipboard.writeText(lines.map(tsvLine).join("\n"));
     } catch {
       return this.say(TABLE.copyFailed);
     }
-    this.say(TABLE.copied(n, this.plan.rowWord));
+    this.say(TABLE.copied(n, this.turned ? TABLE.rowFallback : this.plan.rowWord));
   }
 
   /** A message about something the reader just asked for, which goes away on

@@ -4005,14 +4005,24 @@ button.insp-xrow-where:hover {
 .tbl-fact:hover {
   color: var(--fg);
 }
-/* The two controls sit at the far end away from the facts. */
-.tbl-addr {
+/* The controls sit together at the far end, away from the facts. */
+.tbl-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-inline-start: auto;
+}
+.tbl-check {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-inline-start: auto;
   color: var(--muted);
   cursor: pointer;
+}
+.tbl-check.is-off {
+  opacity: 0.6;
+  cursor: default;
 }
 .tbl-copy {
   font: inherit;
@@ -4030,7 +4040,7 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   cursor: default;
 }
-.tbl-head,
+.tbl-headline,
 .tbl-row {
   display: grid;
   grid-template-columns: var(--tbl-cols);
@@ -4041,11 +4051,16 @@ button.insp-xrow-where:hover {
 /* The headings share the rows' monospace face: the tracks are sized in
    characters from the heading and the values, and a heading in a wider face
    would be the one thing the arithmetic did not cover. */
+/* One line of headings for a table the right way up. A turned table has a
+   line for each thing said about a record: its number, its name, its time,
+   where it is stored. */
+.tbl-headline {
+  height: var(--tbl-row);
+}
 .tbl-head {
   position: sticky;
   top: 0;
   z-index: 2;
-  height: var(--tbl-row);
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
@@ -4105,8 +4120,15 @@ button.insp-xrow-where:hover {
 }
 /* The row's number stays at the near edge going across, so a value twenty
    columns in can still be read against the row it belongs to. It covers what
-   scrolls under it, which means wearing the row's own background. */
-.tbl-index {
+   scrolls under it, which means wearing the row's own background. A turned
+   table's rows are called by their headings instead, which stay the same
+   way. */
+.tbl-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+.tbl-index,
+.tbl-label {
   position: sticky;
   inset-inline-start: 0;
   z-index: 1;
@@ -4119,13 +4141,16 @@ button.insp-xrow-where:hover {
   border-inline-end: 1px solid var(--line);
   background: var(--bg);
 }
-.tbl-head .tbl-index {
+.tbl-head .tbl-index,
+.tbl-head .tbl-label {
   background: var(--panel);
 }
-.tbl-row:hover .tbl-index {
+.tbl-row:hover .tbl-index,
+.tbl-row:hover .tbl-label {
   background: color-mix(in srgb, var(--fg) 5%, var(--bg));
 }
-.tbl-row.is-on .tbl-index {
+.tbl-row.is-on .tbl-index,
+.tbl-row.is-on .tbl-label {
   background: var(--accent-soft);
 }
 .tbl-size {

@@ -659,6 +659,9 @@ export const TABLE = {
   /** The row's number. A bare `#` because the column beside it already says
    *  what the rows are. */
   index: "#",
+  /** What the format calls the row, for a table whose rows have names: a
+   *  TDMS channel's path. */
+  rowName: "name",
   /** When the rows are spaced in time, where they are in it. The unit is in
    *  the heading rather than in every cell. */
   time: "time (s)",
@@ -676,6 +679,30 @@ export const TABLE = {
    *  under it, or the bytes it read did. Said rather than left blank, since an
    *  empty tab reads as something broken. */
   gone: "These rows are no longer in the file",
+  /**
+   * The checkbox that draws the table the other way round: a column for each
+   * row, a row for each column. It names the rows by the format's word, as
+   * the button that opened the table did, so the reader can see which of the
+   * two things on screen is about to move: `Show samples as columns`.
+   *
+   * A checkbox and not a button, because which way round the table is drawn
+   * is a state the reader needs to be able to see. Some tables arrive turned,
+   * and a button reading `Swap rows and columns` looks the same either way.
+   */
+  turn: (rowWord: string): string => `Show ${plural(rowWord)} as columns`,
+  turnTitle: (rowWord: string): string =>
+    `Swap rows and columns, so each ${rowWord} is a column. Only changes how the table is shown.`,
+  /** Why the checkbox cannot be ticked, on a table too long to turn. */
+  turnTooMany: (rowWord: string, limit: number): string =>
+    `Too many ${plural(rowWord)} to show as columns. The limit is ${limit.toLocaleString()}.`,
+  /** The sentence saying what a row is, for a table drawn turned, where it is
+   *  a column that is one. */
+  columnMeaning: (rowWord: string, columnWord: string, rate: string): string =>
+    `Each column is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
+  columnMeaningPlain: (rowWord: string, rate: string): string => `Each column is one ${rowWord}, 1/${rate} s apart.`,
+  /** What a copy counts in a turned table, where the rows on screen are not
+   *  the format's rows and its word for them would be the wrong word. */
+  rowFallback: "row",
   /** The checkbox that adds them. "byte" rather than "file": inside an
    *  unpacked stream the addresses are of the stream, and what is true of both
    *  is that they are addresses of bytes. */
