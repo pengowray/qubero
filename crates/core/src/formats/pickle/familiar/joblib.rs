@@ -65,9 +65,9 @@ impl Cursor<'_> {
     /// Nothing is called and nothing is run; the object is folded away here
     /// and what comes out is the array it stood for.
     pub(super) fn joblib_array(&mut self) -> Option<Value> {
-        // NEWOBJ arrived at protocol 2 and SETITEMS at protocol 1, so below
-        // protocol 2 joblib would write a shape this has not been measured
-        // against. No file in the corpus is one.
+        // NEWOBJ arrived at protocol 2, so below it joblib would build the
+        // wrapper some other way, and what that is has not been measured. No
+        // file in the corpus is one, and the family has no name there.
         if self.proto < 2 {
             return None;
         }
