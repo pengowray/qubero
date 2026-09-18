@@ -48,7 +48,9 @@ fn one(root: &Path, path: &Path, out: &mut Vec<String>) {
     // Enough of the file for the tests that read a header the front of the
     // file only points at: an ISO keeps its first descriptor at 0x8000.
     let Ok(()) = file.read_exact(&mut head) else { return };
-    let name = qubero_core::formats::sniff(&head, len).unwrap_or("-");
+    // With the name, as the editor asks: a Melco design has no signature and
+    // is known by its `.exp`, and two Kaitai formats share a magic.
+    let name = qubero_core::formats::sniff_named(&head, len, &path.to_string_lossy()).unwrap_or("-");
     let rel = path.strip_prefix(root).unwrap_or(path).display().to_string().replace('\\', "/");
     out.push(format!("{rel}\t{len}\t{name}"));
 }
