@@ -1,11 +1,16 @@
 # torch.save and joblib.dump: pickles with the numbers kept outside
 
 Written 2026-09-19 from the bytes of files made with torch 2.14 and joblib 1.6
-(`tools/make_torch_joblib_samples.py` in the sample collection). Nothing here is
-built yet. Read `DESIGN-familiar-pickle-forms.md` first: both formats are a
-Familiar Pickle Form with one more thing to say, which is where the numbers are.
-The rule does not change. Nothing is run; every global and every call is named
-with its exact shape; anything else is the opcode listing.
+(`tools/make_torch_joblib_samples.py` in the sample collection). joblib is
+built, later the same day; torch is not. Read
+`DESIGN-familiar-pickle-forms.md` first: both formats are a Familiar Pickle
+Form with one more thing to say, which is where the numbers are. The rule does
+not change. Nothing is run; every global and every call is named with its exact
+shape; anything else is the opcode listing.
+
+**What landed for joblib, and what the note below had wrong**, is under
+"joblib.dump: what landed". Read it before the paragraphs above it: those were
+written from a first reading of the bytes and two of their guesses are wrong.
 
 The owner wants both supported. The goal is the data: a checkpoint's tensors and
 a joblib file's arrays open as tables, as a NumPy array in a plain pickle does.
@@ -145,15 +150,120 @@ space's template the joblib form rather than text.
 A scikit-learn model saved with joblib is the sklearn family with arrays held
 this way, so it should fall out of the two together.
 
+## joblib.dump: what landed, on 2026-09-19
+
+The code is `crates/core/src/formats/pickle/familiar/joblib.rs` for the
+production, one flag on `Allow` and two `Declared` rows in `forms.rs`,
+`pickle::is_joblib` and `pickle::joblib_pickle` in
+`crates/core/src/formats/pickle/mod.rs`, and one probe in `recognise.rs`. The
+unit tests are `familiar/tests/joblib.rs` over two fixtures, and the real files
+are three tests at the end of `crates/core/tests/pickle_real.rs`.
+
+| Form | What it reads | Matched |
+| --- | --- | --- |
+| `joblib-arrays-p4-p5-v1` | arrays, and plain data around them | 9 of the 9 protocol 4 files in `joblib/` |
+| `joblib-arrays-p2-p3-v1` | the same at the protocol the caller may ask for | `dict-of-arrays-protocol2.joblib` |
+| `joblib-sklearn-p4-p5-v1` | an estimator whose arrays are written this way | both scikit-learn models |
+| `joblib-sklearn-p2-p3-v1` | the same | no file in the collection yet |
+
+There is no name at protocol 1 or 0: joblib builds the wrapper with `NEWOBJ`,
+which arrived at protocol 2, so the two lower ranges of the `Declared` row are
+the empty string and `forms()` leaves them out.
+
+**The wrapper, exactly.** `STACK_GLOBAL joblib.numpy_pickle NumpyArrayWrapper`,
+`EMPTY_TUPLE`, `NEWOBJ`, `EMPTY_DICT`, `MARK`, then six entries in the order
+`__init__` sets them -- `subclass` (`numpy.ndarray` and nothing else yet),
+`shape`, `order`, `dtype` (the numpy dtype production), `allow_mmap` (a flag,
+either way round) and `numpy_array_alignment_bytes` -- then `SETITEMS` and
+`BUILD`. After the BUILD: one byte saying how much padding follows, that many
+`0xff`, and `product(shape) * itemsize` bytes of numbers. The value is the
+`Kind::Array` a plain pickled array is, at the offset the numbers really sit
+at, so the tree, `pickle_said` and the array table needed nothing added.
+
+**The padding count is not read and believed.** joblib works it out from where
+the byte itself sits: `alignment - ((offset_of_the_byte + 1) % alignment)`,
+which is never nought, since a run already on the alignment is pushed a whole
+alignment further. The form checks that, checks every padding byte is `0xff`,
+and holds the alignment to a power of two no larger than 128. A missing
+`numpy_array_alignment_bytes` key is a named variant: joblib 1.1 and older had
+no such attribute and wrote no padding byte either, so the run starts at the
+BUILD. The form reads that, and no file in the collection is one, so it is
+untested.
+
+**Three things the note above had wrong.**
+
+- **A compressor changes nothing.** The guess was `allow_mmap` false and no
+  padding inside one. It is not so in joblib 1.6: `self.buffered` is true only
+  for `BinaryZlibFile`, which is the old `.z` path, and `numpy_array_alignment_bytes`
+  is left out only when `file_handle.tell()` raises. Every compressed sample
+  unpacks to a stream that is **byte for byte** the uncompressed file, the
+  padding included, counted from the position in the unpacked stream.
+  `a_compressed_joblib_file_opens_as_the_joblib_file_it_holds` is that claim.
+  So there is one form and no compressed variant of it, and the only thing a
+  compressor changes is where the form is read.
+- **An object array is not "pickled in place" in any ordinary sense.** joblib
+  writes `pickle.dump(array, handle, protocol=5)` into the stream after the
+  BUILD: a whole pickle of its own, with its own PROTO, its own memo, its own
+  framing and its own STOP, and then the outer pickle's STOP after that. That
+  is a production nobody has written, and the one sample's values are a string,
+  a `None` and an integer, which the existing array-of-objects production does
+  not take either. `joblib/does-not-read/array-of-objects.joblib`.
+- **The decoded space needed no work at all.** `Evaluator::template_for`
+  already sniffs a stream whose declared template says only bytes, so the
+  moment the `joblib` probe existed every compressed file opened as the joblib
+  file it holds.
+
+**Recognition is where the walk stops.** `is_pickle` is untouched: a joblib
+file is not a pickle by its rule and never will be, since the opcodes run out
+before the end. The `joblib` probe asks for three things, each cheap: the
+protocol opener `80 02` to `80 05`, `joblib.numpy_pickle` named by a
+`SHORT_BINUNICODE`, `BINUNICODE`, `BINUNICODE8` or `GLOBAL` among the opcodes
+walked, and the walk ending with bytes still to come. That works on a head as
+well as on a whole file, so a joblib file of any size is recognised from its
+first 36 KB and `web/src/doc.ts` needed no new upgrade path. A file that is
+recognised and that no form reads keeps the name -- that is what puts the
+object-array sample in `does-not-read` rather than nowhere.
+
+The template is `joblib`, the same `T::pickle()` reading `picklefpf` uses, so
+that the File type dialog says `joblib file (familiar form)` rather than
+calling it a pickle it is not.
+
+**Raw LZMA is read now**, because the codec was already there:
+`Codec::Lzma1` and `Packing::Lzma1` exist for 7z, so `formats/lzma.rs` is a
+thirteen-byte header over them. Recognition holds the settings byte to the
+`5d` every writer of that format emits rather than to the 225 the field allows:
+a PlayStation texture opens `10 00 00 00` and passes every other test. A `.lzma`
+with other settings still opens by its extension or by naming the template.
+
+**What is left for joblib**, in the order it is worth doing:
+
+1. The nested pickle after an object array's wrapper, which is the one sample
+   in `does-not-read`. It wants a whole stream read with a memo, a framing and
+   a protocol of its own, and it wants the array-of-objects production widened
+   past text and `None`.
+2. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
+   named beside `ndarray`. No file in the corpus holds one.
+3. A frame or a sparse matrix dumped this way, which is one more `Declared` row
+   each, reusing that family's `classes` and `calls` the way the scikit-learn
+   row is reused here.
+4. Older joblib. The form is written for the layout 1.2 and later write, with
+   the missing-alignment-key variant named; 0.9 and earlier wrote `.npy` files
+   beside the pickle, which is a different format. Containers, the way the
+   pickle matrix was made.
+
 ## Samples, and when they go into the collection
 
-Made and held back in the session scratch folder, because ten of the twenty-one
-are read by nothing today and would fail `samples_real` for every session:
-`torch/` (state dict as ZIP and legacy, one tensor, every dtype, shared storage
-and views, a training checkpoint, protocol 4) and `joblib/` (arrays in C and
-Fortran order, big-endian, object array, a dict of arrays uncompressed and under
-each compressor, protocol 2, two scikit-learn models). Regenerate with the
-script; commit them with the change that reads them. The collection already has
+The `joblib/` samples are in the collection since 2026-09-19, eighteen of them,
+with `array-of-objects.joblib` under `does-not-read`. The generator gained a
+0-d array, an empty array, a list of three arrays and one small array that is
+also a fixture in this repository.
+
+`torch/` is still held back in the session scratch folder, because nothing
+reads one and every one of them would fail `samples_real` for every session:
+state dict as ZIP and legacy, one tensor, every dtype, shared storage and
+views, a training checkpoint, protocol 4. Regenerate with the script (it writes
+both folders into the collection root, so move `torch/` back out); commit them
+with the change that reads them. The collection already has
 `pickle/proto2-torch-state-dict.pickle`, a `data.pkl` on its own.
 
 Older writers matter as much here as they did for pickle: torch 1.x ZIPs, torch
@@ -163,9 +273,9 @@ before calling either form done.
 
 ## Order of work
 
-1. joblib uncompressed: the wrapper production and the run after it. Smallest,
-   and it reuses the array node whole.
-2. joblib compressed: the decoded space's template, and raw LZMA recognition.
+1. ~~joblib uncompressed: the wrapper production and the run after it.~~ Done.
+2. ~~joblib compressed: the decoded space's template, and raw LZMA
+   recognition.~~ Done, and the first of those needed no work.
 3. The torch family in the pickle (persistent id, `_rebuild_tensor_v2`), so
    `data.pkl` on its own reads with tensors that say where their numbers are.
 4. `torchzip`: recognition by names, the archive beside its contents, tensors

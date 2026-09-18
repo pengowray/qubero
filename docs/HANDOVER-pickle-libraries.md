@@ -179,6 +179,7 @@ design document.
 | File | What it holds | Lines |
 | --- | --- | --- |
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 317 |
+| `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, and the run after it | 190 |
 | `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 397 |
 | `familiar/forms.rs` | the families, declared once each and read at every protocol | 400 |
 | `familiar/basic.rs` | the stack a pickle is read against | 644 |
@@ -365,10 +366,34 @@ before it stopped, which is where the next production goes.
    Protocols 0 and 1 are not in scope; `DESIGN-familiar-pickle-forms.md` says
    what they would need under "What protocols 0 and 1 would need".
 
+## joblib: landed on 2026-09-19
+
+`joblib.dump` writes a pickle with each array's bytes in the stream after a
+small object describing them, so it is not a pickle the plain walk can read.
+Four forms now read one: `joblib-arrays-p4-p5-v1` and `joblib-arrays-p2-p3-v1`
+for arrays and the data around them, `joblib-sklearn-p4-p5-v1` and
+`joblib-sklearn-p2-p3-v1` for a model saved the way scikit-learn's own
+documentation says to save one. Every sample in `joblib/` reads but the object
+array, which is under `does-not-read`. The whole of it, including the two
+things the design note guessed wrong, is in `docs/DESIGN-pickle-containers.md`
+under "joblib.dump: what landed".
+
+**How the family was added**, which is the recipe above with two things more. A
+form may now allow the joblib production, which is one `bool` on `Allow` and on
+`Declared`, and a form that allows it requires the file to hold one. And a
+family may have no name at a protocol range: the `Declared` row's `ids` holds
+the empty string there and `forms()` leaves it out, which is what a family
+built with `NEWOBJ` needs. The scikit-learn row and the joblib-scikit-learn row
+share one `SKLEARN_CLASSES` and one `SKLEARN_CALLS` rather than either of them
+holding a copy.
+
 ## Not decided
 
-- joblib files, which is how scikit-learn's own documentation says to save a
-  model. A `.joblib` is a pickle with the array bytes written between the
-  instructions, so it is not a pickle any of this reads.
 - torch. `torch.save` writes a ZIP holding a protocol 2 pickle with persistent
-  ids for the tensor storage, and the storages as other entries of the ZIP.
+  ids for the tensor storage, and the storages as other entries of the ZIP. It
+  can reuse three things from the joblib work: the segmented instruction walk
+  in `familiar/mod.rs`, which is what lets a matched file hold bytes that are
+  not opcodes; the `Raw` run and the `padding` row that came with it; and the
+  shape of `pickle::is_joblib`, which recognises a file by where its opcodes
+  stop rather than by what is at its front. The legacy torch file is a run of
+  pickles and then binary, which is the same problem again.
