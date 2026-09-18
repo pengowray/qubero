@@ -26,6 +26,14 @@
 //! converter lowered a bound onto the wrong field would be far worse than not
 //! checking it.
 //!
+//! One field is allowed to be several kinds, and there the same thing is not a
+//! bug. A field whose type is a [`Ty::Switch`] holds whatever the branch the
+//! file took holds: WAV declares its samples finite, and the very same
+//! declaration sits over the 8, 16, 24 and 32-bit integer branches of that
+//! switch and over the bytes an unknown format tag leaves behind. The
+//! template means the branch it fits, so a branch the constraint cannot be
+//! about is no verdict rather than an assertion.
+//!
 //! Every expression is worked out where a [`Check`](crate::template::Check)'s
 //! expressions are: at the *end* of the structure the field sits in, so a
 //! bound may name a field written after it. See
@@ -66,12 +74,12 @@ impl Evaluator {
     /// listing draws. Checksums are the ones that do, and they are
     /// [`Evaluator::run_check`]'s business, not this one's.
     pub fn valid_of<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<ValidVerdict>> {
-        let Some((valid, end)) = self.constraint(doc, path)? else { return Ok(None) };
+        let Some((valid, end, branch)) = self.constraint(doc, path)? else { return Ok(None) };
         // The field a bound's `This` means, put back afterwards rather than
         // cleared: a bound may name a field whose own reading asks another
         // question, and an outer `this` has to survive it.
         let was = self.this.replace(path.to_vec());
-        let out = self.verdict(doc, path, &end, &valid);
+        let out = self.verdict(doc, path, &end, &valid, branch);
         self.this = was;
         out.map(Some)
     }
@@ -89,12 +97,16 @@ impl Evaluator {
         &mut self,
         doc: &Document<S>,
         path: &[usize],
-    ) -> R<Option<(Arc<Valid>, Vec<usize>)>> {
+    ) -> R<Option<(Arc<Valid>, Vec<usize>, bool)>> {
         let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
         self.resolve(doc, path)?;
-        let (valid, frame, fields) = match self.memo.get(parent).map(|r| r.ty.clone()) {
+        // `declared` is the type the template wrote, which is not always the
+        // type the file turned out to hold: see the third rule in this file's
+        // notes.
+        let (valid, frame, fields, declared) = match self.memo.get(parent).map(|r| r.ty.clone()) {
             Some(Ty::Struct(s)) => {
-                let Some(v) = s.fields.get(idx).and_then(|f| f.valid.clone()) else { return Ok(None) };
+                let Some(field) = s.fields.get(idx) else { return Ok(None) };
+                let Some(v) = field.valid.clone() else { return Ok(None) };
                 // A declaration on a list is about the elements, so the list
                 // itself has no verdict: `these samples are real numbers` says
                 // nothing about the run that holds them, and asking the run
@@ -103,7 +115,7 @@ impl Evaluator {
                 if matches!(self.memo[path].ty, Ty::Array { .. } | Ty::Repeat { .. }) {
                     return Ok(None);
                 }
-                (v, parent.to_vec(), s.fields.len())
+                (v, parent.to_vec(), s.fields.len(), field.ty.clone())
             }
             // The list is a field of the structure holding it, and the
             // constraint is declared there, so its expressions are worked out
@@ -115,8 +127,9 @@ impl Evaluator {
                 let Some(Ty::Struct(s)) = self.memo.get(grandparent).map(|r| r.ty.clone()) else {
                     return Ok(None);
                 };
-                let Some(v) = s.fields.get(list).and_then(|f| f.valid.clone()) else { return Ok(None) };
-                (v, grandparent.to_vec(), s.fields.len())
+                let Some(field) = s.fields.get(list) else { return Ok(None) };
+                let Some(v) = field.valid.clone() else { return Ok(None) };
+                (v, grandparent.to_vec(), s.fields.len(), field.ty.clone())
             }
             _ => return Ok(None),
         };
@@ -124,7 +137,7 @@ impl Evaluator {
         // reaches the whole structure and not only what was written before the
         // field. No node is ever resolved there; it is a place to ask
         // questions from.
-        Ok(Some((valid, [&frame[..], &[fields][..]].concat())))
+        Ok(Some((valid, [&frame[..], &[fields][..]].concat(), branching(&declared))))
     }
 
     fn verdict<S: Source>(
@@ -133,6 +146,10 @@ impl Evaluator {
         path: &[usize],
         end: &[usize],
         valid: &Valid,
+        // True when the field was written as a switch, so a value of the wrong
+        // kind is a branch the declaration was not meant for rather than a
+        // template bug. See the third rule in this file's notes.
+        branch: bool,
     ) -> R<ValidVerdict> {
         // `Expr` and `InEnum` are the two that do not compare the value with a
         // number, so they are answered before it is read as one.
@@ -144,8 +161,8 @@ impl Evaluator {
                     false => fails(format!("Fails the check: {}", said(expr, msg.as_deref()))),
                 });
             }
-            Valid::InEnum => return self.in_enum(doc, path),
-            Valid::Finite => return self.finite(doc, path),
+            Valid::InEnum => return self.in_enum(doc, path, branch),
+            Valid::Finite => return self.finite(doc, path, branch),
             _ => {}
         }
         let value = self.value_of(doc, path)?.value;
@@ -161,7 +178,7 @@ impl Evaluator {
             // keeps a plain list out; this catches a list behind a condition
             // or a window, and a structure a converter put the bound on.
             None if matches!(value, Value::Composite { .. }) => {
-                debug_assert!(false, "a bound on {value:?}, which is a count of children rather than a value");
+                debug_assert!(branch, "a bound on {value:?}, which is a count of children rather than a value");
                 Ok(holds())
             }
             None => match value.as_int() {
@@ -170,7 +187,7 @@ impl Evaluator {
                 // bytes have not arrived. Nothing here is a comparison, so
                 // there is nothing to compare.
                 None => {
-                    debug_assert!(false, "a bound on {value:?}, which is not a number");
+                    debug_assert!(branch, "a bound on {value:?}, which is not a number");
                     Ok(holds())
                 }
             },
@@ -249,10 +266,10 @@ impl Evaluator {
     /// none. What this adds is the tier. Without a constraint an unnamed value
     /// is something Qubero has no name for and is marked quietly; with one the
     /// format itself rules it out.
-    fn in_enum<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<ValidVerdict> {
+    fn in_enum<S: Source>(&mut self, doc: &Document<S>, path: &[usize], branch: bool) -> R<ValidVerdict> {
         let value = self.value_of(doc, path)?.value;
         let Value::Enum { name, .. } = &value else {
-            debug_assert!(false, "`valid in enum` on {value:?}, which is not an enum");
+            debug_assert!(branch, "`valid in enum` on {value:?}, which is not an enum");
             return Ok(holds());
         };
         if name.is_some() {
@@ -276,10 +293,10 @@ impl Evaluator {
     /// to find in a file: a NaN is usually a calculation that went wrong or a
     /// slot nobody filled in, and an infinity is usually a number that
     /// overflowed on its way in.
-    fn finite<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<ValidVerdict> {
+    fn finite<S: Source>(&mut self, doc: &Document<S>, path: &[usize], branch: bool) -> R<ValidVerdict> {
         let value = self.value_of(doc, path)?.value;
         let Some(f) = float_of(&value) else {
-            debug_assert!(false, "`valid finite` on {value:?}, which is not a float");
+            debug_assert!(branch, "`valid finite` on {value:?}, which is not a float");
             return Ok(holds());
         };
         Ok(match (f.is_nan(), f.is_infinite()) {
@@ -287,6 +304,17 @@ impl Evaluator {
             (_, true) => fails("Unknown or invalid: infinite".to_string()),
             _ => holds(),
         })
+    }
+}
+
+/// Whether the template let this field be several kinds of value, by writing
+/// it as a switch on something in the file. Looked through a sentinel, the way
+/// every other question about what a field really is looks through one.
+fn branching(ty: &Ty) -> bool {
+    match ty {
+        Ty::Switch { .. } | Ty::Match { .. } => true,
+        Ty::Nullable { inner, .. } => branching(inner),
+        _ => false,
     }
 }
 

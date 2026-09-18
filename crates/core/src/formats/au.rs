@@ -7,7 +7,7 @@
 //! be. The samples run to the end here either way, so nothing has to special
 //! case it.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Valid};
 
 /// The encodings, which is really a list of every way a telephone company has
 /// written a sample. 1 is mu-law, the one an `.au` almost always is.
@@ -106,7 +106,14 @@ fn sample_table() -> T {
         rate: Some(E::field("sample_rate")),
         facts: vec![E::field("encoding"), E::field("sample_rate"), E::field("channels")],
     };
-    T::structure("Samples", vec![("samples", samples())]).field_table("samples", shape)
+    // Float samples the format did not say may be anything: a NaN or an
+    // infinity in one is a sample nothing can play, so it is the format ruling
+    // the value out rather than Qubero having no name for it. Declared on the
+    // run, the constraint is about its elements; the other branches of the
+    // switch hold no float and it says nothing about them.
+    T::structure("Samples", vec![("samples", samples())])
+        .field_table("samples", shape)
+        .field_valid("samples", Valid::Finite)
 }
 
 #[cfg(test)]

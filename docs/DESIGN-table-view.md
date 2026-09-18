@@ -34,7 +34,12 @@ arithmetic holds for it too.
 
 A cell whose value is wrong (a NaN sample under a finite constraint, an
 undefined enum in a record) is marked the way DESIGN-wrong-values.md says:
-glyph and hover text on the cell, a count in the column header.
+glyph and hover text on the cell, a count in the column header. The count
+follows the heading after a dot rather than in brackets, because the unit is
+already in brackets: `left (dB) · 2 invalid`. It says `so far` until every
+row has been read, which for a run of samples is never. The heading may widen
+its column to hold the count, since the whole point of the count is that it can
+be read without scrolling the table.
 
 ## Where it comes from: IR first, heuristic second
 

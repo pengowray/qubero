@@ -19,7 +19,7 @@
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
 //! read by the same template that reads one at the front of an MP3.
 
-use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian, Endian::*, Expr as E, StrLen, TableShape, Template, Ty as T, Until, Valid};
 
 /// A four-character chunk id as the big-endian number a switch compares.
 fn cc(s: &str) -> i128 {
@@ -241,7 +241,14 @@ fn sample_table(endian: Endian) -> T {
             E::sibling(&["body", "bits_per_sample"]),
         ],
     };
-    T::structure("Samples", vec![("samples", samples(endian))]).field_table("samples", shape)
+    // Float samples the format did not say may be anything: a NaN or an
+    // infinity in one is a sample nothing can play, so it is the format ruling
+    // the value out rather than Qubero having no name for it. Declared on the
+    // run, the constraint is about its elements; the integer branches of the
+    // switch hold no float and it says nothing about them.
+    T::structure("Samples", vec![("samples", samples(endian))])
+        .field_table("samples", shape)
+        .field_valid("samples", Valid::Finite)
 }
 
 /// What is inside a chunk, by its id. `data` is left as bytes unless a format
@@ -984,6 +991,39 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::UInt(128));
     }
 
+    /// The format writes float samples as real numbers, so a NaN or an
+    /// infinity is a sample nothing can play rather than a value the format
+    /// left undefined: `Valid::Finite` is what promotes it to invalid.
+    ///
+    /// The same declaration sits over the integer branches of the same switch
+    /// and over the bytes an unknown format tag leaves behind, and says
+    /// nothing about either.
+    #[test]
+    fn a_float_sample_that_is_not_a_real_number_is_invalid() {
+        let body: Vec<u8> =
+            [1.0f32, f32::NAN, f32::INFINITY, 0.25].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let d = Document::new(MemSource(with_samples(32, 3, 1, &body)));
+        let mut ev = Evaluator::new(wav());
+        assert!(ev.valid_of(&d, &[3, 2, 2, 0, 0]).unwrap().unwrap().ok);
+        assert_eq!(
+            ev.valid_of(&d, &[3, 2, 2, 0, 1]).unwrap().unwrap().text,
+            "Unknown or invalid: not a number"
+        );
+        assert_eq!(
+            ev.valid_of(&d, &[3, 2, 2, 0, 2]).unwrap().unwrap().text,
+            "Unknown or invalid: infinite"
+        );
+        // The run itself holds no value the constraint is about.
+        assert_eq!(ev.valid_of(&d, &[3, 2, 2, 0]).unwrap(), None);
+
+        // 16-bit PCM under the same declaration: integers, which `Finite` has
+        // nothing to say about.
+        let ints: Vec<u8> = [0i16, -1, 32767].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let d = Document::new(MemSource(with_samples(16, 1, 1, &ints)));
+        let mut ev = Evaluator::new(wav());
+        assert!(ev.valid_of(&d, &[3, 2, 2, 0, 1]).unwrap().unwrap().ok);
+    }
+
     #[test]
     fn data_with_no_format_to_read_it_by_stays_bytes() {
         // No `fmt ` at all: nothing says what the bytes are, so they stay bytes
@@ -1076,7 +1116,11 @@ mod tests {
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, riff_end * 8);
         let spans = ev.spans(&d, riff_end * 8 - 16, riff_end * 8, 8).unwrap();
         let gap = spans.iter().find(|s| s.gap).expect("a gap after the last chunk");
-        assert!(matches!(&gap.value, Value::Str(why) if why.contains("past the end")), "{:?}", gap.value);
+        assert!(
+            matches!(&gap.value, Value::Str(why) if why.contains("beyond its parent")),
+            "{:?}",
+            gap.value
+        );
     }
 
     /// A file written as it was recorded never gets its size filled in, and

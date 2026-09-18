@@ -5,9 +5,9 @@ is shown, without the reader clicking anything. The mark says what is wrong in
 words next to the value, in red where the format itself rules the value out
 and quietly where Qubero merely has no name for it.
 
-Status: steps 1 to 4 of "Order of work" landed 2026-09-18 (ac0dda5). Eager
-checksums and the table view cells are still to do. Written 2026-09-17 from
-TODO.md's "Use red for incorrect items" line.
+Status: steps 1 to 4 of "Order of work" landed 2026-09-18 (ac0dda5), step 6 the
+same day. Eager checksums are still to do. Written 2026-09-17 from TODO.md's
+"Use red for incorrect items" line.
 
 ## What exists already
 
@@ -316,7 +316,7 @@ State first, then cause, matching `Not checked · why`.
 | Toolbar line | the name only, in `--warn` | the file type dialog ends with `Signature does not match.` in red; the same words on hover |
 | File type dialog, Template row | `{label} (Qubero)` / `(Kaitai)` / `(ImHex)` / `(file rules signature)` | bracket in `--muted`; the Source row is gone (2026-09-18) |
 | File type dialog, match table | name · bytes · `@0x{offset}` or `in the last {n} bytes` · `.ext` · `Wikidata` (link) or `file rules` · `Wikipedia` | one row per format, bytes in the open, never in a tooltip |
-| Table header | `{column} ({n} invalid)` | |
+| Table header | `{column} · {n} invalid` / `· {n} undefined` / `· {n} invalid, {m} undefined`, with ` so far` while rows are unread | a dot, not brackets: the heading already spends its brackets on the unit (`left (dB)`). Both tiers are counted, so a column of undefined values is not silent while every cell in it wears a glyph |
 | Inspector, checksum action | `Update to: {sum}` | exists in `ARCHIVE_SUMS` |
 
 On `Undefined in {enum}`: the value text keeps `{num} (unknown)`, which is
@@ -342,12 +342,19 @@ Sign-off still wanted on the expression case.
 3. Toolbar: root problem into `identity.ts`; menu picks update the answer.
    Done 2026-09-17.
 4. `Field::valid`, `Expr::This`, PNG as the template that pays for it; the
-   converters lower `valid` and simple asserts. Done 2026-09-17, with these
-   left over: WAV's `Finite` on float samples waits for the table view's
-   `Samples` wrapper to land, since both wrap the same run and the field the
-   constraint hangs on is that wrapper's; `machinery::ty_refs` does not see a
-   bound that names another field, because it marks earlier siblings only
-   and a `Role::Bound` through origin.rs is the honest route; ImHex
+   converters lower `valid` and simple asserts. Done 2026-09-17. WAV, AU and
+   AIFF declare their float samples finite as of 2026-09-18, on the
+   `Samples.samples` field the table shape already hangs on. That field is a
+   switch over every sample width the format has, so the same declaration sits
+   over the integer branches and over the bytes an unknown encoding leaves
+   behind: `eval/valid.rs` now carries whether the field was written as a
+   switch and treats a branch of the wrong kind as no verdict rather than a
+   template bug. Still left over: `machinery::ty_refs` does not see a bound
+   that names another field, because it marks earlier siblings only and a
+   `Role::Bound` through origin.rs is the honest route; ImHex
    `std::assert_warn` lowers like `std::assert` and loses its softer tier.
 5. Eager checksums under the cap, cached on the node.
-6. Table view cells and header counts, once the table tab exists.
+6. Table view cells and header counts, once the table tab exists. Done
+   2026-09-18. `RecordCell` carries the problem, so the listing's own record
+   tables (SQLite, GGUF) are marked by the same change. A count is over the
+   rows read so far and says so; it may widen its column.

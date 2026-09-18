@@ -6,7 +6,7 @@
 //! nothing else in common use writes. The IR reads one now, so the field says
 //! 44100 rather than sitting there as ten bytes nobody can spend.
 
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Time, Ty as T};
+use crate::template::{Encoding, Endian::*, Expr as E, StrLen, TableShape, Template, Time, Ty as T, Valid};
 
 use super::iff::{cc, chunk_text, iff};
 
@@ -137,7 +137,14 @@ fn sample_table() -> T {
             E::sibling(&["body", "compression"]),
         ],
     };
-    T::structure("Samples", vec![("samples", samples())]).field_table("samples", shape)
+    // Float samples the format did not say may be anything: a NaN or an
+    // infinity in one is a sample nothing can play, so it is the format ruling
+    // the value out rather than Qubero having no name for it. Declared on the
+    // run, the constraint is about its elements; the other branches of the
+    // switch hold no float and it says nothing about them.
+    T::structure("Samples", vec![("samples", samples())])
+        .field_table("samples", shape)
+        .field_valid("samples", Valid::Finite)
 }
 
 /// AIFC's version, written as a date: 0xA2805140 is 23 May 1990, and it is the
