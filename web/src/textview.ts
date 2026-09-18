@@ -31,8 +31,8 @@ import {
   CODEPAGE_B_KEY,
   CODEPAGES_A,
   CODEPAGES_B,
-  storedChoice,
 } from "./encodings.ts";
+import { storedChoice } from "./stored.ts";
 import type { Doc, TextLine, TextReading } from "./doc.ts";
 import { el } from "./dom.ts";
 import { RowHeights } from "./rowheights.ts";

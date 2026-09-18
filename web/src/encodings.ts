@@ -61,27 +61,3 @@ export const LITERAL_LANG_KEY = "qubero.literal.lang";
 export const CODEPAGE_A_DEFAULT = "Latin-1";
 export const CODEPAGE_B_DEFAULT = "CP437";
 export const LITERAL_LANG_DEFAULT = "C";
-
-/**
- * A choice kept between visits, checked against what is on offer now. A name
- * that is no longer one of them falls back rather than leaving a chooser
- * pointing at nothing.
- */
-export function storedChoice(key: string, offered: readonly string[], fallback: string): string {
-  let saved: string | null = null;
-  try {
-    saved = localStorage.getItem(key);
-  } catch {
-    saved = null;
-  }
-  return saved !== null && offered.includes(saved) ? saved : fallback;
-}
-
-/** Remember a choice, and carry on if the browser will not keep it. */
-export function rememberChoice(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // A browser that refuses storage still gets the choice for this visit.
-  }
-}

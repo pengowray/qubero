@@ -36,11 +36,10 @@ import {
   HEX_GLYPHS_ASCII,
   HEX_GLYPHS_DEFAULT,
   HEX_GLYPHS_KEY,
-  rememberChoice,
   SCREEN_GLYPHS,
-  storedChoice,
   UNICODE_ENCODINGS,
 } from "./encodings.ts";
+import { rememberChoice, storedChoice, storedNumber, storedText } from "./stored.ts";
 import { ASCII_GLYPHS } from "./hexcell.ts";
 import { gearIcon } from "./icons.ts";
 import { SettingsDialog, type ExtraTemplate } from "./settingsdialog.ts";
@@ -64,8 +63,8 @@ type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "ksy"
  *  needed once rather than every time. Read at startup, before any page is
  *  built, since the switch is built with the rest of the toolbar. */
 const graphUnlocked = ((): boolean => {
-  if (new URLSearchParams(location.search).has("graph")) localStorage.setItem("qubero.graph", "1");
-  return localStorage.getItem("qubero.graph") === "1";
+  if (new URLSearchParams(location.search).has("graph")) rememberChoice("qubero.graph", "1");
+  return storedText("qubero.graph") === "1";
 })();
 
 /**
@@ -81,14 +80,6 @@ tabs.onConfirmClose = (tab) => confirm(`Discard unsaved edits to ${tab.doc.name}
 
 function activeDoc(): Doc | null {
   return tabs.doc;
-}
-
-/** A number kept between visits, checked before it is believed. A stored value
- *  that is not a number any more falls back rather than leaving a control
- *  showing nothing. */
-function storedNumber(key: string, fallback: number): number {
-  const saved = Number(localStorage.getItem(key));
-  return Number.isFinite(saved) && saved > 0 ? saved : fallback;
 }
 
 /**
@@ -300,10 +291,10 @@ function panel(title: string, content: HTMLElement, onToggle: () => void): HTMLE
     toggle.setAttribute("aria-expanded", String(!collapsed));
     toggle.title = collapsed ? "Expand" : "Collapse";
   };
-  apply(localStorage.getItem(key) === "collapsed");
+  apply(storedText(key) === "collapsed");
   toggle.addEventListener("click", () => {
     const collapsed = !section.classList.contains("is-collapsed");
-    localStorage.setItem(key, collapsed ? "collapsed" : "open");
+    rememberChoice(key, collapsed ? "collapsed" : "open");
     apply(collapsed);
     onToggle();
   });
@@ -1107,7 +1098,7 @@ function buildDocument(tab: Tab): Page {
   let column: RightColumn = "text";
   const columnKey = (): string => (doc.template === null ? "qubero.column.plain" : "qubero.column.template");
   const syncColumn = (): void => {
-    const saved = localStorage.getItem(columnKey());
+    const saved = storedText(columnKey());
     // Anything else saved is from an older build, or from nowhere: fall back
     // to what a file of this kind starts with.
     column = isRightColumn(saved) ? saved : doc.template === null ? "text" : "both";
@@ -1177,7 +1168,7 @@ function buildDocument(tab: Tab): Page {
       column: () => column,
       setColumn: (c) => {
         column = c;
-        localStorage.setItem(columnKey(), c);
+        rememberChoice(columnKey(), c);
         view.setRightColumn(c);
       },
     },
@@ -1209,7 +1200,7 @@ function buildDocument(tab: Tab): Page {
     view.links.setEnabled(on);
     linksBtn.setAttribute("aria-pressed", String(on));
     linksBtn.classList.toggle("is-on", on);
-    localStorage.setItem("qubero.links", on ? "1" : "0");
+    rememberChoice("qubero.links", on ? "1" : "0");
     if (on) refreshLinks();
     else {
       linksNote.textContent = "";
@@ -1217,7 +1208,7 @@ function buildDocument(tab: Tab): Page {
     }
   };
   linksBtn.addEventListener("click", () => setLinks(linksBtn.getAttribute("aria-pressed") !== "true"));
-  if (localStorage.getItem("qubero.links") === "1") setLinks(true);
+  if (storedText("qubero.links") === "1") setLinks(true);
   // How many of the fields it would have drawn were nowhere on screen. Said
   // rather than left out: an arrow that is not there because the field is a
   // thousand rows away looks exactly like no dependency at all.
@@ -1291,7 +1282,7 @@ function buildDocument(tab: Tab): Page {
   minChars.addEventListener("change", () => {
     strings.setMinimum(Number(minChars.value));
     minChars.value = String(strings.minimum);
-    localStorage.setItem(MIN_CHARS_KEY, minChars.value);
+    rememberChoice(MIN_CHARS_KEY, minChars.value);
   });
   const minBox = el(
     "label",
@@ -1306,7 +1297,7 @@ function buildDocument(tab: Tab): Page {
   readingBox.setAttribute("role", "group");
   readingBox.setAttribute("aria-label", STRINGSVIEW.lookForGroup);
   readingBox.append(el("span", { className: "tb-lookfor-label", textContent: STRINGSVIEW.lookForLabel }));
-  const savedEncodings = localStorage.getItem(ENCODINGS_KEY);
+  const savedEncodings = storedText(ENCODINGS_KEY);
   const wanted = new Set(savedEncodings === null ? ENCODINGS : savedEncodings.split(",").filter((e) => e !== ""));
   const readingBoxes = ENCODINGS.map((name) => {
     const box = el("input", { type: "checkbox" });
@@ -1320,7 +1311,7 @@ function buildDocument(tab: Tab): Page {
     box.addEventListener("change", () => {
       const picked = ENCODINGS.filter((_, i) => readingBoxes[i]?.checked === true);
       strings.setReading(picked);
-      localStorage.setItem(ENCODINGS_KEY, picked.join(","));
+      rememberChoice(ENCODINGS_KEY, picked.join(","));
     });
     readingBox.append(label);
     return box;
@@ -1770,7 +1761,7 @@ function buildDocument(tab: Tab): Page {
     }
     // The converter is not a reading of the file, so it is not what a reader
     // meant to come back to next time.
-    if (!toolOn) localStorage.setItem("qubero.view", which);
+    if (!toolOn) rememberChoice("qubero.view", which);
     // A hidden view ignores the cursor, since scrolling something nobody is
     // looking at only loses their place in it. So when it comes back it has
     // wherever the cursor was left to catch up on.
@@ -2066,7 +2057,7 @@ function buildDocument(tab: Tab): Page {
     statusbar,
     kind.dialog,
   );
-  const startView = localStorage.getItem("qubero.view");
+  const startView = storedText("qubero.view");
   key((e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     const pressed = e.key.toLowerCase();

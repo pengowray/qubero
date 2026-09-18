@@ -35,6 +35,7 @@ import { plan as stripPlan, type Item, type Strip } from "./strips.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import { DIAGRAM, roleLabel } from "./strings.ts";
 import { folds, shownBeforeFold } from "./fold.ts";
+import { rememberChoice, storedText } from "./stored.ts";
 import {
   boxBadge,
   caseCountTitle,
@@ -459,12 +460,12 @@ export class DiagramView {
       opt.textContent = text;
       this.modeBtn.append(opt);
     }
-    const saved = localStorage.getItem(MODE_KEY);
+    const saved = storedText(MODE_KEY);
     this.mode = saved === "arrows" ? "arrows" : "strips";
     this.modeBtn.value = this.mode;
     this.modeBtn.addEventListener("change", () => {
       this.mode = this.modeBtn.value === "strips" ? "strips" : "arrows";
-      localStorage.setItem(MODE_KEY, this.mode);
+      rememberChoice(MODE_KEY, this.mode);
       void this.build().then(() => this.home());
     });
     // What the count is doing, in the toolbar rather than on a line of its own

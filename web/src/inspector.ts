@@ -40,9 +40,8 @@ import {
   LITERAL_LANG_KEY,
   LITERAL_LANG_NAMES,
   LITERAL_LANGS,
-  rememberChoice,
-  storedChoice,
 } from "./encodings.ts";
+import { rememberChoice, storedChoice } from "./stored.ts";
 
 const AUTO_CHECK_BYTES = 1024 * 1024;
 

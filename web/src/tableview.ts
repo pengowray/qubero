@@ -23,6 +23,7 @@ import { el } from "./dom.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { bitSizeText, PROBLEMS, REPORT, TABLE } from "./strings.ts";
+import { rememberChoice, storedText } from "./stored.ts";
 import { FIT_MAX, fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
 /** Height of one row, which must match `--tbl-row` in the stylesheet: the rows
@@ -119,7 +120,7 @@ export class TableView {
   constructor(doc: Doc, plan: TablePlan, opts: { readonly title: string }) {
     this.doc = doc;
     this.plan = plan;
-    this.addresses = localStorage.getItem(ADDRESSES_KEY) === "1";
+    this.addresses = storedText(ADDRESSES_KEY) === "1";
     this.el = el("div", { className: "tableview" });
     this.head = el("div", { className: "tbl-head" });
     this.scroller = el("div", { className: "tbl-scroll" });
@@ -186,7 +187,7 @@ export class TableView {
     const box = el("input", { type: "checkbox", className: "tbl-addr-box", checked: this.addresses });
     box.addEventListener("change", () => {
       this.addresses = box.checked;
-      localStorage.setItem(ADDRESSES_KEY, box.checked ? "1" : "0");
+      rememberChoice(ADDRESSES_KEY, box.checked ? "1" : "0");
       this.layColumns();
       this.fillHead();
       this.paintAgain();

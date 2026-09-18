@@ -18,7 +18,7 @@ import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flat
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { markStrip } from "./bytestrip.ts";
 import { cardKind, watchCard } from "./contentcard.ts";
-import { rememberChoice, storedChoice } from "./encodings.ts";
+import { rememberChoice, storedChoice } from "./stored.ts";
 import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";

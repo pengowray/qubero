@@ -20,6 +20,7 @@ import type { Doc, FieldPick } from "./doc.ts";
 import type { OutlineHeading } from "./outline.ts";
 import { formatBytes, formatOffset, percentText } from "./doc.ts";
 import { TREEMAP } from "./strings.ts";
+import { rememberChoice, storedText } from "./stored.ts";
 import { boxAt, drawTreemap, nodeAt, type TreeNode } from "./treemap.ts";
 import { bitsLine, bitsTree, boxTitle, bytesTree, classesTree, kindsTree, poolNoun, POOL_UNDER, structureTree, TREEMAP_MODES, type StructureAt, type TreemapMode, type TreemapTree } from "./treemapdata.ts";
 
@@ -169,10 +170,10 @@ export class TreemapPanel {
       this.key(e);
     });
 
-    const saved = localStorage.getItem(MODE_KEY);
+    const saved = storedText(MODE_KEY);
     if (saved !== null && (TREEMAP_MODES as readonly string[]).includes(saved)) this.mode = saved as TreemapMode;
     this.pick.value = this.mode;
-    this.setOpen(localStorage.getItem(OPEN_KEY) === "open", false);
+    this.setOpen(storedText(OPEN_KEY) === "open", false);
     this.setBig(false);
     doc.onChange(() => this.draw());
   }
@@ -227,7 +228,7 @@ export class TreemapPanel {
 
   private setOpen(open: boolean, remember = true): void {
     this.open = open;
-    if (remember) localStorage.setItem(OPEN_KEY, open ? "open" : "folded");
+    if (remember) rememberChoice(OPEN_KEY, open ? "open" : "folded");
     this.el.classList.toggle("is-folded", !open);
     this.chevron.textContent = open ? "▾" : "▸";
     this.fold.setAttribute("aria-expanded", String(open));
@@ -557,12 +558,9 @@ function percent(part: number, whole: number): number {
 
 const MODE_KEY = "qubero.treemap.mode";
 
+/** A browser that will not remember is a browser that opens on Structure. */
 function rememberMode(mode: TreemapMode): void {
-  try {
-    localStorage.setItem(MODE_KEY, mode);
-  } catch {
-    // A browser that will not remember is a browser that opens on Structure.
-  }
+  rememberChoice(MODE_KEY, mode);
 }
 
 function nodeOf(doc: Doc, path: readonly number[]): import("./doc.ts").TemplateNode | null {

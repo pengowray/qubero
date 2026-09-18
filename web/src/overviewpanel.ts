@@ -27,6 +27,7 @@ import { BTreePanel } from "./btreepanel.ts";
 import type { MapSegment } from "./filemap.ts";
 import type { OutlineHeading, Viewport } from "./outline.ts";
 import { hasLogicalOutline, logicalLength, logicalOutline } from "./logicaloutline.ts";
+import { rememberChoice, storedText } from "./stored.ts";
 import type { LogicalNode, LogicalOutline } from "./logicaloutline.ts";
 
 /** What a note offers to do about what it says: one button after the words.
@@ -339,10 +340,10 @@ export class OverviewPanel {
       toggle.setAttribute("aria-expanded", String(!collapsed));
       toggle.title = collapsed ? "Expand" : "Collapse";
     };
-    apply(localStorage.getItem(key) !== "open");
+    apply(storedText(key) !== "open");
     toggle.addEventListener("click", () => {
       const collapsed = !this.el.classList.contains("is-collapsed");
-      localStorage.setItem(key, collapsed ? "collapsed" : "open");
+      rememberChoice(key, collapsed ? "collapsed" : "open");
       apply(collapsed);
       this.pump();
       // Nothing could scroll while the body was hidden, so the mark may be
@@ -350,7 +351,7 @@ export class OverviewPanel {
       if (!collapsed) this.showPlace();
     });
 
-    const savedTab = localStorage.getItem("qubero.rail.tab");
+    const savedTab = storedText("qubero.rail.tab");
     this.tab = savedTab === "logical" || savedTab === "btrees" ? savedTab : "contents";
     this.syncTabs();
 
@@ -603,7 +604,7 @@ export class OverviewPanel {
     b.setAttribute("role", "tab");
     b.addEventListener("click", () => {
       this.tab = tab;
-      localStorage.setItem("qubero.rail.tab", tab);
+      rememberChoice("qubero.rail.tab", tab);
       this.syncTabs();
       if (tab === "contents") this.showPlace();
       else this.pump();
