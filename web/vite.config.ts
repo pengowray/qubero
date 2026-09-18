@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createReadStream, statSync } from "node:fs";
+import type { ReadStream } from "node:fs";
 import { join, normalize, resolve, sep } from "node:path";
 import { defineConfig } from "vite";
 import type { Plugin } from "vite";
@@ -38,17 +39,31 @@ function localFiles(): Plugin {
         }
         let size = 0;
         try {
-          size = statSync(path).size;
+          const stat = statSync(path);
+          // A directory stats fine and then fails on the first read, so it is
+          // turned away here with everything else that is not a file.
+          if (!stat.isFile()) {
+            next();
+            return;
+          }
+          size = stat.size;
         } catch {
           next();
           return;
         }
+        // A stream's `error` event with nobody listening takes the process down,
+        // and the dev server with it. Cutting the connection instead leaves the
+        // client with a short body, which it can tell from a whole one.
+        const send = (stream: ReadStream): void => {
+          stream.on("error", () => res.destroy());
+          stream.pipe(res);
+        };
         res.setHeader("content-type", "application/octet-stream");
         res.setHeader("accept-ranges", "bytes");
         const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
         if (range === null) {
           res.setHeader("content-length", String(size));
-          createReadStream(path).pipe(res);
+          send(createReadStream(path));
           return;
         }
         const start = range[1] === "" ? Math.max(0, size - Number(range[2])) : Number(range[1]);
@@ -56,7 +71,7 @@ function localFiles(): Plugin {
         res.statusCode = 206;
         res.setHeader("content-range", `bytes ${start}-${end}/${size}`);
         res.setHeader("content-length", String(end - start + 1));
-        createReadStream(path, { start, end }).pipe(res);
+        send(createReadStream(path, { start, end }));
       });
     },
   };
