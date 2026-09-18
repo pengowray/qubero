@@ -47,7 +47,7 @@ impl Tally {
 fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     let mut tally = Tally::default();
@@ -97,7 +97,7 @@ fn every_deflate_stream_in_the_collection_reads_the_same_as_miniz_oxide() {
 fn every_zstd_and_xz_sample_is_traced_as_deep_as_its_shape_allows() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     let (mut seen_zstd, mut seen_xz) = (0, 0);
@@ -151,7 +151,7 @@ fn every_zstd_and_xz_sample_is_traced_as_deep_as_its_shape_allows() {
 fn every_lz4_block_in_the_collection_reads_the_same_as_lz4_flex() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     let mut tally = Tally::default();
@@ -183,7 +183,7 @@ fn every_lz4_block_in_the_collection_reads_the_same_as_lz4_flex() {
 fn every_compressed_sample_opens_as_a_space() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     let mut opened = 0;
@@ -403,13 +403,7 @@ fn samples() -> Vec<PathBuf> {
 }
 
 fn dirs() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(named) = std::env::var("QUBERO_SAMPLES") {
-        out.extend(named.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    out.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    out.retain(|p| p.is_dir());
-    out
+    qubero_samples::roots()
 }
 
 fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {

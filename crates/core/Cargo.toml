@@ -5,6 +5,11 @@ version.workspace = true
 license.workspace = true
 
 [dev-dependencies]
+# Where the sample collection is, asked the same way by every test that reads a
+# real file. A path dependency rather than a copy in each test file, because the
+# lookup has to walk up out of a git worktree and forty copies of that is forty
+# chances to get it wrong.
+qubero-samples = { path = "../samples" }
 proptest = "1"
 # What the decoders in `codec` are checked against. Our own inflater and LZ4
 # reader exist for the trace, not for the bytes: the bytes have to be the same

@@ -28,13 +28,7 @@ use qubero_core::formats::bam_records::{Block, Tag};
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("bam").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("bam").join(name)).find(|p| p.exists())
 }
 
 /// The file, read with the template it sniffs as, which is checked.
@@ -68,7 +62,7 @@ macro_rules! skip_without {
         match $e {
             Some(v) => v,
             None => {
-                eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+                eprintln!("{}", qubero_samples::missing());
                 return;
             }
         }

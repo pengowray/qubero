@@ -21,7 +21,7 @@ use qubero_core::source::MemSource;
 #[test]
 fn every_sample_still_reads() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut files = Vec::new();
@@ -94,9 +94,7 @@ fn read(ev: &mut Evaluator, doc: &Document<MemSource>, path: &[usize], depth: us
 }
 
 fn samples() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");
-    named.into_iter().chain(std::iter::once(beside)).find(|p| p.is_dir())
+    qubero_samples::root()
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

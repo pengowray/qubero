@@ -24,13 +24,7 @@ fn sample() -> Option<PathBuf> {
 
 /// A file of the sample collection, wherever the collection is.
 fn named(file: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join(file)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join(file)).find(|p| p.exists())
 }
 
 /// Where a compressed image keeps its rows and its heap: after what the image
@@ -45,7 +39,7 @@ const HEAP: usize = 5;
 #[test]
 fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
     let Some(path) = named("fits/comp.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
@@ -101,7 +95,7 @@ fn a_real_tile_compressed_images_heap_reads_as_the_arrays_its_rows_point_at() {
 #[test]
 fn a_real_binary_tables_columns_are_typed_by_its_header() {
     let Some(path) = sample() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));
@@ -157,7 +151,7 @@ fn read(file: &str) -> Option<(Document<MemSource>, Evaluator)> {
 #[test]
 fn a_real_table_of_forty_columns_reads_every_one_of_them() {
     let Some((doc, mut ev)) = read("fits/wide.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let cells = ev.node(&doc, &[0, 1, 3, 1, 0, 0]).unwrap();
@@ -179,7 +173,7 @@ fn a_real_table_of_forty_columns_reads_every_one_of_them() {
 #[test]
 fn a_fractional_scale_scales_the_column_as_astropy_reads_it() {
     let Some((doc, mut ev)) = read("fits/scaled.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // `TFORM1 = I` with `TZERO1 = 32768` is the unsigned convention: astropy
@@ -224,7 +218,7 @@ fn a_fractional_scale_scales_the_column_as_astropy_reads_it() {
 #[test]
 fn a_real_long_string_reads_as_the_pieces_the_cards_hold() {
     let Some((doc, mut ev)) = read("fits/continue.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut piece = |card: usize| match &ev.node(&doc, &[0, 0, 0, card, 2, 1, 1, 0, 0]).unwrap().value {
@@ -318,7 +312,7 @@ fn every_tile_of_every_compressed_sample_matches_astropy() {
     let mut ran = 0;
     for (file, hdu, want, first_step, first_pixels) in samples {
         let Some((doc, mut ev)) = read(file) else {
-            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            eprintln!("{}", qubero_samples::missing());
             return;
         };
         let (hash, image, firsts) = every_tile(&doc, &mut ev, *hdu);
@@ -338,7 +332,7 @@ fn every_tile_of_every_compressed_sample_matches_astropy() {
 #[test]
 fn a_real_tile_reports_the_steps_its_bytes_took() {
     let Some((doc, mut ev)) = read("fits/rice.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let steps = |ev: &mut Evaluator, doc: &Document<MemSource>, hdu: usize, tile: usize| -> Vec<(String, String)> {
@@ -399,7 +393,7 @@ fn a_real_tile_reports_the_steps_its_bytes_took() {
 #[test]
 fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
     let Some((doc, mut ev)) = read("fits/dithered.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // Each row has two descriptors, COMPRESSED_DATA and GZIP_COMPRESSED_DATA,
@@ -432,7 +426,7 @@ fn the_inspector_explains_a_tile_from_its_bytes_and_from_its_row() {
 #[test]
 fn a_plio_or_hcompress_tile_reports_the_steps_its_bytes_took() {
     let Some((doc, mut ev)) = read("fits/plio.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let steps = |ev: &mut Evaluator, doc: &Document<MemSource>, hdu: usize, tile: usize| -> Vec<(String, String)> {
@@ -490,7 +484,7 @@ fn a_plio_or_hcompress_tile_reports_the_steps_its_bytes_took() {
 #[test]
 fn a_tile_outside_compressed_data_is_read_from_its_column_at_its_width() {
     let Some((doc, mut ev)) = read("fits/fallback.fits") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for (hdu, tile, column, read_note) in [

@@ -19,13 +19,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("netcdf").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("netcdf").join(name)).find(|p| p.exists())
 }
 
 #[test]
@@ -73,7 +67,7 @@ fn a_real_file_reads_as_rows_and_as_records() {
         assert!(found, "{} has no record variable", path.display());
     }
     if seen == 0 {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
     }
 }
 
@@ -116,7 +110,7 @@ fn one_record_variable_of_an_odd_width_runs_on_without_padding() {
         }
     }
     if seen == 0 {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
     }
 }
 
@@ -126,7 +120,7 @@ fn one_record_variable_of_an_odd_width_runs_on_without_padding() {
 #[test]
 fn several_record_variables_of_odd_widths_keep_their_padding() {
     let Some(path) = sample("padded-records-cdf1.nc") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let d = Document::new(MemSource(std::fs::read(&path).unwrap()));

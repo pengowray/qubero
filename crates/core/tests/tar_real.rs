@@ -19,13 +19,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("tar").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("tar").join(name)).find(|p| p.exists())
 }
 
 fn read(name: &str) -> Option<(Document<MemSource>, Evaluator)> {
@@ -47,7 +41,7 @@ fn field(ev: &mut Evaluator, d: &Document<MemSource>, path: &[usize], name: &str
 #[test]
 fn a_sparse_map_that_outgrows_its_header_is_read_as_extension_blocks() {
     let Some((d, mut ev)) = read("gnu-sparse-old-extended.tar") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // Two sparse files, a plain one, and ten blocks of zeros to fill out

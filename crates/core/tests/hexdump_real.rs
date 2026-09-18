@@ -27,7 +27,7 @@ const SCREEN: usize = 0x130;
 #[test]
 fn every_dump_reads_back_as_the_bytes_it_describes() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let want = std::fs::read(dir.join("source-bytes.bin")).expect("the file the dumps describe");
@@ -108,7 +108,7 @@ fn a_dump_written_out_again_is_the_same_text() {
 #[test]
 fn both_paths_read_a_dump_the_same_way() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut fast = 0;
@@ -148,7 +148,7 @@ fn both_paths_read_a_dump_the_same_way() {
 #[test]
 fn nothing_else_in_the_collection_is_a_dump() {
     let Some(dir) = folder().and_then(|d| d.parent().map(Path::to_path_buf)) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut wrong = Vec::new();
@@ -175,9 +175,7 @@ fn nothing_else_in_the_collection_is_a_dump() {
 }
 
 fn folder() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");
-    named.into_iter().chain(std::iter::once(beside)).map(|p| p.join("hexdump")).find(|p| p.is_dir())
+    qubero_samples::dir("hexdump")
 }
 
 /// Every file in the collection except the dumps themselves and the working

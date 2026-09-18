@@ -17,13 +17,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("grib").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("grib").join(name)).find(|p| p.exists())
 }
 
 fn read(name: &str) -> Option<(Document<MemSource>, Evaluator)> {
@@ -57,7 +51,7 @@ fn sections(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<(i128, Vec<usize
 #[test]
 fn a_real_message_reads_as_its_grid_and_its_values() {
     let Some((d, mut ev)) = read("regular_ll_sfc.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(ev.node(&d, &[]).unwrap().child_count, 1);
@@ -121,7 +115,7 @@ fn a_grid_this_reads_and_one_it_does_not_both_keep_their_extent() {
 #[test]
 fn a_real_edition_1_message_reads_as_its_five_sections() {
     let Some((d, mut ev)) = read("regular_ll_sfc.grib1") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let message = ev.node(&d, &[0, 1]).unwrap();
@@ -153,7 +147,7 @@ fn a_real_edition_1_message_reads_as_its_five_sections() {
 #[test]
 fn an_operational_forecast_reads_as_three_messages_on_one_grid() {
     let Some((d, mut ev)) = read("gfs-1p00-3messages.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(ev.node(&d, &[]).unwrap().child_count, 3);
@@ -210,7 +204,7 @@ fn an_operational_forecast_reads_as_three_messages_on_one_grid() {
 #[test]
 fn complex_packing_reads_as_groups_of_different_widths() {
     let Some((d, mut ev)) = read("regular_ll_complex.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "ComplexPacking");
@@ -306,7 +300,7 @@ fn packing_and_data(name: &str, message: usize) -> Option<(qubero_core::formats:
 fn the_values_a_complex_packed_message_stands_for_match_another_reader() {
     use qubero_core::formats::grib_values::complex;
     let Some((p, bytes)) = packing_and_data("regular_ll_complex.grib2", 0) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // Complex packing without differencing: a group reference and a scaling,
@@ -358,7 +352,7 @@ fn the_values_a_complex_packed_message_stands_for_match_another_reader() {
 fn a_cursor_on_a_packed_value_is_told_what_that_value_is_worth() {
     use qubero_core::eval::{Explain, GribPlace};
     let Some((d, mut ev)) = read("regular_ll_complex.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let near = |text: &str, b: f64| {
@@ -434,7 +428,7 @@ fn a_cursor_on_a_packed_value_is_told_what_that_value_is_worth() {
 #[test]
 fn a_png_packed_section_opens_as_a_png() {
     let Some((d, mut ev)) = read("regular_ll_png.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(ev.node(&d, &[0, 1, 4, 3, 2, 2]).unwrap().type_name, "PngPacking");
@@ -460,7 +454,7 @@ fn a_png_packed_section_opens_as_a_png() {
 #[test]
 fn a_jpeg2000_packed_section_opens_as_a_codestream_the_size_of_the_grid() {
     let Some((d, mut ev)) = read("regular_ll_jpeg.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let sections = sections(&d, &mut ev);
@@ -508,7 +502,7 @@ fn a_jpeg2000_packed_section_opens_as_a_codestream_the_size_of_the_grid() {
 #[test]
 fn a_file_of_several_messages_reads_as_all_of_them() {
     let Some((d, mut ev)) = read("two-messages.grib2") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let root = ev.node(&d, &[]).unwrap();
@@ -540,7 +534,7 @@ fn a_simply_packed_value_agrees_with_the_panel() {
     let mut checked = 0usize;
     for name in ["regular_ll_sfc.grib2", "two-messages.grib2", "lambert_bf.grib2", "gfs-1p00-3messages.grib2"] {
         let Some((d, mut ev)) = read(name) else {
-            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            eprintln!("{}", qubero_samples::missing());
             return;
         };
         let raw = std::fs::read(sample(name).unwrap()).unwrap();
@@ -615,7 +609,7 @@ fn a_real_field_packed_again_simply_is_worth_what_eccodes_read() {
     use qubero_core::eval::Value;
     use qubero_core::formats::grib_values::{complex, simple};
     let Some((p, bytes)) = packing_and_data("regular_ll_complex.grib2", 0) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let original = complex(&p, &bytes);

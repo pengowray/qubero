@@ -19,13 +19,7 @@ use qubero_core::formats::bufr_data::{self, Item, Reading, Role};
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("bufr").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("bufr").join(name)).find(|p| p.exists())
 }
 
 fn read(name: &str) -> Option<(Document<MemSource>, Evaluator)> {
@@ -83,7 +77,7 @@ fn shape(offset: u64, length: i128, edition: i128, subsets: i128, compressed: bo
 #[test]
 fn four_synop_bulletins_read_as_four_messages_in_their_envelopes() {
     let Some((d, mut ev)) = read("ISMD01_OKPR.bufr") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(
@@ -132,7 +126,7 @@ fn every_sample_tiles_its_messages_with_its_sections() {
         assert_eq!(&shapes(&d, &mut ev), shape, "{name}");
     }
     if !read_any {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
     }
 }
 

@@ -45,11 +45,7 @@ mod ms3 {
 }
 
 fn samples() -> Option<std::path::PathBuf> {
-    let root = match std::env::var_os("QUBERO_SAMPLES") {
-        Some(p) => std::path::PathBuf::from(p),
-        None => std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"),
-    };
-    root.join("seismic").is_dir().then_some(root)
+    qubero_samples::root().filter(|r| r.join("seismic").is_dir())
 }
 
 fn open(root: &std::path::Path, name: &str) -> (Document<MemSource>, Evaluator) {
@@ -106,7 +102,7 @@ fn collect(d: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], out: &mu
 #[test]
 fn a_steim_record_gives_the_same_differences_whichever_way_round_it_is_written() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for kind in ["Steim1", "Steim2"] {
@@ -137,7 +133,7 @@ fn a_steim_record_gives_the_same_differences_whichever_way_round_it_is_written()
 #[test]
 fn the_differences_a_record_uses_add_up_to_the_sample_it_ends_on() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for kind in ["Steim1", "Steim2"] {
@@ -161,7 +157,7 @@ fn the_differences_a_record_uses_add_up_to_the_sample_it_ends_on() {
 #[test]
 fn the_calibration_blockettes_read_from_their_own_fixtures() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // The last of the three is which field of that body is the input channel:
@@ -194,7 +190,7 @@ fn the_calibration_blockettes_read_from_their_own_fixtures() {
 #[test]
 fn a_gain_ranged_record_holds_as_many_words_as_it_says() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for file in ["CDSN_encoding.mseed", "DWWSSN_encoding.mseed", "GEOSCOPE16_4_encoding.mseed"] {
@@ -219,7 +215,7 @@ fn a_gain_ranged_record_holds_as_many_words_as_it_says() {
 #[test]
 fn a_miniseed_3_record_is_as_long_as_its_three_lengths_say() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, records, encoding, samples in the first record, extra header bytes
@@ -279,7 +275,7 @@ fn a_miniseed_3_record_is_as_long_as_its_three_lengths_say() {
 #[test]
 fn a_miniseed_3_steim_payload_is_big_endian_inside_a_little_endian_record() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (d, mut ev) = open_as(&root, "reference-testdata-steim2.mseed3", "mseed3");
@@ -355,7 +351,7 @@ fn facts(samples: &[f64]) -> Facts {
 #[test]
 fn every_record_decodes_to_the_samples_obspy_reads() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, record, count, first two, last, sum, weighted sum
@@ -422,7 +418,7 @@ fn every_record_decodes_to_the_samples_obspy_reads() {
 #[test]
 fn the_reader_takes_each_word_apart_as_the_template_does() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for (file, two, big) in [
@@ -474,7 +470,7 @@ fn commas(n: usize) -> String {
 #[test]
 fn a_record_cut_short_decodes_what_its_frames_hold_and_says_how_far_that_went() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut bytes = std::fs::read(root.join("seismic").join("steim2.mseed")).unwrap();
@@ -504,7 +500,7 @@ fn a_record_cut_short_decodes_what_its_frames_hold_and_says_how_far_that_went() 
 #[test]
 fn a_miniseed_3_record_decodes_to_the_series_its_2_4_twin_holds() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, the 2.4 twin's count, first two, last, sum, weighted sum
@@ -569,7 +565,7 @@ fn deepest(d: &Document<MemSource>, ev: &mut Evaluator, path: &[usize]) -> Vec<u
 fn the_samples_panel_answers_from_anywhere_in_a_records_data() {
     use qubero_core::eval::Explain;
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, template, where the data is, a field inside it, the encoding name,

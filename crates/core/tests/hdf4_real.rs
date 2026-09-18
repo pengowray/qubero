@@ -12,12 +12,7 @@ use std::path::PathBuf;
 use qubero_core::{document::Document, eval::{Evaluator, Value}, formats, source::MemSource};
 
 fn hdf4_samples() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("hdf4")).find(|p| p.is_dir())
+    qubero_samples::dir("hdf4")
 }
 
 fn samples() -> Vec<(String, Vec<u8>)> {
@@ -77,7 +72,7 @@ fn number(v: Value) -> f64 {
 fn every_node_of_every_sample_reads_and_stays_inside_the_file() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     for (name, bytes) in &files {
@@ -164,7 +159,7 @@ fn reached(ev: &mut Evaluator, doc: &Document<MemSource>, found: &BTreeMap<Strin
 fn every_reference_is_followed_whichever_block_holds_what_it_names() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     for (name, bytes) in &files {
@@ -201,7 +196,7 @@ fn every_reference_is_followed_whichever_block_holds_what_it_names() {
 fn the_data_behind_the_descriptors_is_opened() {
     let files = samples();
     if files.is_empty() {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     let mut checked = 0;
@@ -385,7 +380,7 @@ fn the_data_behind_the_descriptors_is_opened() {
 #[test]
 fn tdata_values_kept_in_linked_blocks_match_pyhdf() {
     let Some(bytes) = samples().into_iter().find(|(name, _)| name == "tdata.hdf").map(|(_, b)| b) else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let a: Vec<f64> = (0..5).flat_map(|r| (1..=6).map(move |i| (10 * r + i) as f64)).collect();
@@ -487,7 +482,7 @@ fn tdata_values_kept_in_linked_blocks_match_pyhdf() {
 #[test]
 fn tdata_values_opened_as_tabs_read_as_pyhdf_reads_them() {
     let Some(bytes) = samples().into_iter().find(|(name, _)| name == "tdata.hdf").map(|(_, b)| b) else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let doc = Document::new(MemSource(bytes));

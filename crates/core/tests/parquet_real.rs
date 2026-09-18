@@ -4,12 +4,7 @@ use std::path::PathBuf;
 use qubero_core::{document::Document, eval::Evaluator, formats, source::MemSource};
 
 fn parquet_samples() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("parquet")).find(|p| p.is_dir())
+    qubero_samples::dir("parquet")
 }
 
 /// The listing of a whole file, asked for the way the browser asks: in goes of
@@ -19,7 +14,7 @@ fn parquet_samples() -> Option<PathBuf> {
 #[test]
 fn a_whole_file_listing_settles_in_goes() {
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -51,7 +46,7 @@ fn a_whole_file_listing_settles_in_goes() {
 #[test]
 fn pages_and_indexes_are_separate_in_real_files() {
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -130,7 +125,7 @@ fn pages_and_indexes_are_separate_in_real_files() {
 #[test]
 fn page_payloads_open_with_the_codec_the_footer_names() {
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, the word every payload's node carries, and how many pages opened.
@@ -207,7 +202,7 @@ fn the_unread_codecs_are_not_in_the_switch() {
 #[test]
 fn dictionary_pages_read_as_their_values() {
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, which dictionary page counting from the front of the file, the
@@ -299,7 +294,7 @@ fn dictionary_values(ev: &mut Evaluator, doc: &Document<MemSource>, nth: usize) 
 #[test]
 fn a_v2_data_page_reads_its_levels_and_its_indices() {
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("datapage_v2.snappy.parquet");
@@ -355,7 +350,7 @@ fn a_v2_data_page_reads_its_levels_and_its_indices() {
 fn the_side_reader_reads_every_page() {
     use qubero_core::eval::Explain;
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, which page counting from the front, and the first values of it.
@@ -403,7 +398,7 @@ fn the_side_reader_reads_every_page() {
 fn no_page_of_any_sample_is_left_unexplained() {
     use qubero_core::eval::Explain;
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut read = 0;
@@ -469,7 +464,7 @@ fn every_page(ev: &mut Evaluator, doc: &Document<MemSource>) -> Vec<Vec<usize>> 
 fn the_schema_walk_finds_each_columns_levels() {
     use qubero_core::eval::Explain;
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // file, and for each column chunk in order: max definition level, max
@@ -558,7 +553,7 @@ fn column_of(ev: &mut Evaluator, doc: &Document<MemSource>, page: &[usize]) -> u
 fn a_column_chunk_names_its_footer_entry_in_parquets_own_terms() {
     use qubero_core::eval::Role;
     let Some(root) = parquet_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("alltypes_plain.parquet");

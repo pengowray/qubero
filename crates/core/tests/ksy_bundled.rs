@@ -262,13 +262,7 @@ const NO_SAMPLE: &[&str] = &[
 ];
 
 fn sample(folder: &str, name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join(folder).join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join(folder).join(name)).find(|p| p.exists())
 }
 
 #[test]
@@ -297,7 +291,7 @@ fn real_files_read_with_the_bundled_template() {
         read += 1;
     }
     if read == 0 {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     }
     assert_eq!(read, SAMPLES.len(), "some sample files are missing");
@@ -312,7 +306,7 @@ fn real_files_read_with_the_bundled_template() {
 #[test]
 fn a_real_wave_reads_as_riff_chunks() {
     let Some(path) = sample("wav", "pcm-s16le-stereo-44100.wav") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let doc = Document::new(MemSource(std::fs::read(&path).unwrap()));

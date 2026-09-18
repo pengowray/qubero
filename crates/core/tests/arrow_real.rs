@@ -5,12 +5,7 @@ use std::path::PathBuf;
 use qubero_core::{document::Document, eval::{Evaluator, Value}, formats, source::MemSource};
 
 fn arrow_samples() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("arrow")).find(|p| p.is_dir())
+    qubero_samples::dir("arrow")
 }
 
 /// The stack a node read first is given: 640 KiB in a release build, the room
@@ -104,7 +99,7 @@ const END: usize = 7;
 #[test]
 fn every_block_the_footer_lists_is_placed() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for layout in LAYOUTS {
@@ -177,7 +172,7 @@ fn check_buffers(name: &str, got: &[(String, String, u64, u64)], want: &[(&str, 
 #[test]
 fn every_buffer_is_named_from_the_schema() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&root, "columns-uncompressed.arrow");
@@ -290,7 +285,7 @@ fn every_buffer_is_named_from_the_schema() {
 #[test]
 fn a_stream_is_its_messages_one_after_another() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let bytes = std::fs::read(root.join("columns.arrows")).unwrap();
@@ -338,7 +333,7 @@ fn values(ev: &mut Evaluator, doc: &Document<MemSource>, at: &[usize]) -> Vec<Va
 #[test]
 fn buffers_read_as_their_columns() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for name in ["columns-uncompressed.arrow", "columns-legacy.arrow", "columns-zstd.arrow", "columns-lz4.arrow"] {
@@ -403,7 +398,7 @@ fn buffers_read_as_their_columns() {
 #[test]
 fn every_compressed_buffer_opens_to_the_uncompressed_files_buffer() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (plain_doc, mut plain) = open(&root, "columns-uncompressed.arrow");
@@ -487,7 +482,7 @@ fn walk(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], depth: u32,
 #[test]
 fn a_whole_file_listing_settles_in_goes() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -579,7 +574,7 @@ fn node_walk_of(ev: &mut Evaluator, doc: &Document<MemSource>, nodes: &[usize], 
 #[test]
 fn every_node_read_first_says_what_it_says_in_order() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let steps = ["batches", "0", "metadata", "root", "table", "header", "table", "nodes", "vector", "elements"];
@@ -619,7 +614,7 @@ fn every_node_read_first_says_what_it_says_in_order() {
 #[test]
 fn a_placed_message_names_its_record_in_the_schemas_terms() {
     let Some(root) = arrow_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&root, "columns-uncompressed.arrow");

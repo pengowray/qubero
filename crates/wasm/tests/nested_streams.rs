@@ -16,7 +16,7 @@ use serde_json::Value;
 /// The file, fed to an editor whole and read as `template`.
 fn editor(sample: &str, template: &str) -> Option<Editor> {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return None;
     };
     // A sample another session has not committed yet is missing from a clean
@@ -126,9 +126,7 @@ fn a_joined_stream_the_file_declares_still_marks_the_file() {
 }
 
 fn samples() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"));
-    named.into_iter().chain(std::iter::once(beside)).find(|p| p.is_dir())
+    qubero_samples::root()
 }
 
 /// The bytes a tab holds from `at`, as text.

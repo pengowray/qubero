@@ -38,7 +38,7 @@ const GOES: usize = 20_000;
 #[test]
 fn every_sample_adds_up() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut files = Vec::new();
@@ -130,14 +130,7 @@ fn check(bytes: Vec<u8>, template: Template) -> Result<String, String> {
 }
 
 fn samples() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("QUBERO_SAMPLES") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"));
-    beside.is_dir().then_some(beside)
+    qubero_samples::root()
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

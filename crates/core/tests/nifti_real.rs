@@ -21,13 +21,7 @@ use qubero_core::formats;
 use qubero_core::source::{MemSource, Source};
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("nifti").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("nifti").join(name)).find(|p| p.exists())
 }
 
 /// The file, the template `sniff` picks for it, and a reading by that
@@ -78,7 +72,7 @@ fn open_gzip(name: &str, check: impl FnOnce(&str, bool, &mut Evaluator, &Documen
 #[test]
 fn a_big_endian_volume_reads_as_nibabel_reads_it() {
     let Some((d, sniffed, mut ev)) = read("anatomical.nii") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(sniffed, "nifti");
@@ -107,7 +101,7 @@ fn a_big_endian_volume_reads_as_nibabel_reads_it() {
 #[test]
 fn functional_voxels_are_worth_what_scl_slope_says() {
     let Some((d, sniffed, mut ev)) = read("functional.nii") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(sniffed, "nifti");
@@ -188,7 +182,7 @@ fn a_gzipped_nifti_2_file_opens_as_nifti_inside_the_gzip() {
         }
     });
     if !opened {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
     }
 }
 
@@ -207,14 +201,14 @@ fn a_gzipped_nifti_1_file_opens_as_nifti_inside_the_gzip() {
         }
     });
     if !opened {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
     }
 }
 
 #[test]
 fn the_header_of_a_pair_has_no_voxels() {
     let Some((d, sniffed, mut ev)) = read("nifti1.hdr") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(sniffed, "nifti");
@@ -237,7 +231,7 @@ fn the_header_of_a_pair_has_no_voxels() {
 #[test]
 fn an_analyze_header_reads_as_analyze() {
     let Some((d, sniffed, mut ev)) = read("analyze.hdr") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     assert_eq!(sniffed, "analyze");

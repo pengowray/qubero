@@ -14,12 +14,7 @@ use std::path::PathBuf;
 use qubero_core::{document::Document, eval::Evaluator, eval::NodeInfo, eval::Value, formats, source::MemSource};
 
 fn collection() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("godot")).find(|p| p.is_dir())
+    qubero_samples::dir("godot")
 }
 
 fn reading(path: &PathBuf) -> (Document<MemSource>, Evaluator) {
@@ -47,7 +42,7 @@ const MAGIC_BYTES: u64 = 4;
 #[test]
 fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
     let Some(dir) = collection() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut read = 0;
@@ -81,7 +76,7 @@ fn a_compressed_resource_reads_the_same_fields_as_the_plain_one() {
 #[test]
 fn a_resource_written_across_blocks_opens_as_the_resource() {
     let Some(dir) = collection() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (plain_path, saved_path) = (dir.join("godot4-probe.res"), dir.join("godot4-probe-compressed.res"));
@@ -258,7 +253,7 @@ fn same(
 #[test]
 fn a_packed_byte_array_opens_as_a_document_of_its_own() {
     let Some(dir) = collection() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = dir.join("godot4-probe.res");

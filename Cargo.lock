@@ -709,6 +709,7 @@ dependencies = [
  "lzma-rust2",
  "miniz_oxide 0.9.1",
  "proptest",
+ "qubero-samples",
  "raki",
  "regex-automata",
  "rustc-hash",
@@ -733,11 +734,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qubero-samples"
+version = "0.1.0"
+
+[[package]]
 name = "qubero-wasm"
 version = "0.1.0"
 dependencies = [
  "js-sys",
  "qubero-core",
+ "qubero-samples",
  "serde",
  "serde_json",
  "wasm-bindgen",

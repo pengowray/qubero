@@ -133,13 +133,7 @@ fn find(name: &str) -> Option<PathBuf> {
 }
 
 fn dirs() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(named) = std::env::var("QUBERO_SAMPLES") {
-        out.extend(named.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    out.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    out.retain(|p| p.is_dir());
-    out
+    qubero_samples::roots()
 }
 
 fn collect(dir: &Path, depth: u32, name: &str, found: &mut Option<PathBuf>) {

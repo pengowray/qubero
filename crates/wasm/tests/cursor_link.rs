@@ -21,7 +21,7 @@ use serde_json::Value;
 /// as `template` when one is named.
 fn editor(sample: &str, template: Option<&str>) -> Option<Editor> {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return None;
     };
     // A sample another session has not committed yet is missing from a clean
@@ -289,7 +289,5 @@ fn joined_pdb_stream() {
 }
 
 fn samples() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"));
-    named.into_iter().chain(std::iter::once(beside)).find(|p| p.is_dir())
+    qubero_samples::root()
 }

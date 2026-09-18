@@ -19,13 +19,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("segy").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("segy").join(name)).find(|p| p.exists())
 }
 
 /// The file, opened with whatever template it sniffs as, which has to be
@@ -93,7 +87,7 @@ fn text(v: Value) -> String {
 fn a_real_file_reads_the_same_either_way_round() {
     for name in ["small.sgy", "small-lsb.sgy"] {
         let Some((d, mut ev)) = read(name) else {
-            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            eprintln!("{}", qubero_samples::missing());
             return;
         };
         let card = at(&mut ev, &d, &[], "textual_header");
@@ -124,7 +118,7 @@ fn a_real_file_reads_the_same_either_way_round() {
 #[test]
 fn a_real_ascii_header_and_its_scalars() {
     let Some((d, mut ev)) = read("delay-scalar.sgy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let cards = at(&mut ev, &d, &[], "textual_header");
@@ -146,7 +140,7 @@ fn a_real_ascii_header_and_its_scalars() {
 #[test]
 fn real_fixed_length_traces_follow_the_binary_header() {
     let Some((d, mut ev)) = read("Format5msb.sgy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let traces = at(&mut ev, &d, &[], "traces");
@@ -167,7 +161,7 @@ fn real_fixed_length_traces_follow_the_binary_header() {
 #[test]
 fn a_real_revision_2_file_carries_extension_1() {
     let Some((d, mut ev)) = read("rotated-small-rev2.sgy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let binary = at(&mut ev, &d, &[], "binary_header");
@@ -193,7 +187,7 @@ fn a_real_revision_2_file_carries_extension_1() {
 #[test]
 fn a_real_revision_2_1_file_names_its_extra_headers() {
     let Some((d, mut ev)) = read("trace-header-extensions.sgy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let extended = at(&mut ev, &d, &[], "extended_textual_headers");

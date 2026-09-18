@@ -7,6 +7,10 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[dev-dependencies]
+# Where the sample collection is; see the note in `crates/core/Cargo.toml`.
+qubero-samples = { path = "../samples" }
+
 [dependencies]
 qubero-core = { path = "../core" }
 wasm-bindgen = "0.2"

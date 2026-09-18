@@ -46,7 +46,7 @@ const CONTENTS: usize = 4;
 #[test]
 fn the_collection_is_recognised_as_the_three_formats_that_share_the_extension() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let expected = [
@@ -74,7 +74,7 @@ fn the_collection_is_recognised_as_the_three_formats_that_share_the_extension() 
 #[test]
 fn a_pdb_written_in_one_pass_reads_every_stream_where_it_lies() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&dir, "msvc-x64-shapes.pdb", "pdb");
@@ -123,7 +123,7 @@ fn a_pdb_written_in_one_pass_reads_every_stream_where_it_lies() {
 #[test]
 fn the_type_records_number_what_the_header_says_and_tile_its_space() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -162,7 +162,7 @@ fn the_type_records_number_what_the_header_says_and_tile_its_space() {
 #[test]
 fn a_scattered_stream_reads_as_its_body() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&dir, "msvc-x64-260-modules.pdb", "pdb");
@@ -213,7 +213,7 @@ fn a_scattered_stream_reads_as_its_body() {
 #[test]
 fn a_scattered_stream_opened_as_a_tab_reads_as_its_body() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&dir, "msvc-x64-260-modules.pdb", "pdb");
@@ -266,7 +266,7 @@ fn a_scattered_stream_opened_as_a_tab_reads_as_its_body() {
 #[test]
 fn the_executable_and_its_symbols_agree_on_which_build_they_are() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let symbols = read_sample(&dir, "msvc-x64-shapes.pdb");
@@ -295,7 +295,7 @@ fn the_executable_and_its_symbols_agree_on_which_build_they_are() {
 #[test]
 fn a_directory_over_two_blocks_reads_when_the_two_are_side_by_side() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, mut ev) = open(&dir, "autoupdater-net-1.5.8-net40.pdb", "pdb");
@@ -314,7 +314,7 @@ fn a_directory_over_two_blocks_reads_when_the_two_are_side_by_side() {
 #[test]
 fn a_portable_pdb_says_which_tables_it_has_and_how_many_rows() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for name in ["dotnet-portable-shapes.pdb", "awssdk-core-3.7.100.14-net45.pdb"] {
@@ -376,7 +376,5 @@ fn read_sample(dir: &Path, name: &str) -> Vec<u8> {
 }
 
 fn folder() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");
-    named.into_iter().chain(std::iter::once(beside)).map(|p| p.join("pdb")).find(|p| p.is_dir())
+    qubero_samples::dir("pdb")
 }

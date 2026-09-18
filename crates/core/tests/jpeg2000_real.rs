@@ -38,13 +38,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("jpeg2000").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("jpeg2000").join(name)).find(|p| p.exists())
 }
 
 /// A file read with the template the sniffer picks for it.
@@ -361,7 +355,7 @@ fn segment(r: &mut Reading, seg: &[usize], indent: &str, out: &mut Vec<String>) 
 /// line, so a failure names the first segment the two disagree on.
 fn agrees(name: &str, expected: &str) -> Option<Reading> {
     let Some(mut r) = Reading::open(name) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return None;
     };
     let got = describe(&mut r);

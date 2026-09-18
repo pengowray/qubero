@@ -1,7 +1,7 @@
 //! The `._` files a zip made on a Mac leaves beside its copies, which are
-//! too varied to keep in the repository: every one under the directories
-//! `QUBERO_SAMPLES` names (several, separated by `;`). Skips when there is
-//! none.
+//! too varied to keep in the repository: every one under the sample
+//! collection or under any other directory `QUBERO_SAMPLES` names, which
+//! `qubero_samples` answers with. Skips when there is none.
 //!
 //! What this checks is that the template reads what the archive tools
 //! wrote, not only what the writer on macOS writes: every field of every
@@ -17,17 +17,23 @@ use qubero_core::source::MemSource;
 
 #[test]
 fn reads_real_files_end_to_end() {
+    let roots = qubero_samples::roots();
     let mut found = Vec::new();
-    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
-        for dir in extra.split(';').filter(|s| !s.is_empty()) {
-            collect(&PathBuf::from(dir), 6, &mut found);
-        }
-    }
-    if found.is_empty() {
-        eprintln!("skipped: no ._* file in hand. Set QUBERO_SAMPLES to a directory holding one.");
-        return;
+    for dir in &roots {
+        collect(dir, 6, &mut found);
     }
     found.sort();
+    found.dedup();
+    if found.is_empty() {
+        // Nothing in the collection is named this way: these are files a Mac
+        // leaves behind, which whoever has some points the variable at.
+        if roots.is_empty() {
+            eprintln!("{}", qubero_samples::missing());
+        } else {
+            eprintln!("skipped: no `._` file under {roots:?}");
+        }
+        return;
+    }
     let mut checked = 0;
     for path in found {
         check(&path, &mut checked);

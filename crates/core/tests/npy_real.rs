@@ -18,13 +18,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("npy").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("npy").join(name)).find(|p| p.exists())
 }
 
 fn read(name: &str) -> Option<(Document<MemSource>, Evaluator)> {
@@ -36,7 +30,7 @@ fn read(name: &str) -> Option<(Document<MemSource>, Evaluator)> {
 #[test]
 fn a_real_grid_is_rows_of_its_last_dimension() {
     let Some((d, mut ev)) = read("grid-f64-v1.npy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // `'shape': (8, 12)` in C order: eight rows of twelve doubles.
@@ -51,7 +45,7 @@ fn a_real_grid_is_rows_of_its_last_dimension() {
 #[test]
 fn a_real_fortran_ordered_array_runs_the_other_way() {
     let Some((d, mut ev)) = read("columns-i2be-fortran.npy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // `'shape': (6, 10)` written column by column: ten runs of six.
@@ -65,7 +59,7 @@ fn a_real_fortran_ordered_array_runs_the_other_way() {
 #[test]
 fn a_real_structured_dtype_lists_the_fields_it_names() {
     let Some((d, mut ev)) = read("channels-structured-v2.npy") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // The record view covers the dtype's own bytes and takes none of its own.
@@ -99,7 +93,7 @@ fn a_real_structured_dtype_lists_the_fields_it_names() {
 #[test]
 fn a_real_npz_opens_each_member_as_an_npy() {
     let Some(path) = sample("two-arrays.npz") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let d = Document::new(MemSource(std::fs::read(&path).unwrap()));

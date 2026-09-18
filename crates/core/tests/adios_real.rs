@@ -29,13 +29,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join("adios").join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join("adios").join(name)).find(|p| p.exists())
 }
 
 /// A sample opened with the template its bytes are recognised as.
@@ -70,7 +64,7 @@ macro_rules! open_or_skip {
         match open($name) {
             Some(o) => o,
             None => {
-                eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+                eprintln!("{}", qubero_samples::missing());
                 return;
             }
         }
@@ -167,7 +161,7 @@ fn ids(s: usize) -> Vec<f64> {
 #[test]
 fn every_file_of_the_dataset_is_told_apart() {
     let Some(_) = sample("steps.bp4/md.idx") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let expect = [
@@ -616,7 +610,7 @@ fn a_bp5_metadata_file_alone_says_its_formats_are_in_mmd0() {
 #[test]
 fn a_bp5_zip_without_its_data_file_reads_the_blocks_without_values() {
     let Some(dir) = sample("steps.bp5") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let read = |n: &str| std::fs::read(dir.join(n)).unwrap();
@@ -655,7 +649,7 @@ macro_rules! files_or_skip {
         match bp5_files() {
             Some(files) => files,
             None => {
-                eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+                eprintln!("{}", qubero_samples::missing());
                 return;
             }
         }
@@ -822,7 +816,7 @@ fn a_bp5_directory_zipped_by_other_writers_reads_each_variable_as_adios2_does() 
 #[test]
 fn a_bp5_zip_whose_data_file_hides_the_rest_from_the_front_reads_every_value() {
     let Some(path) = sample("grid.bp5.info-zip.zip") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let bytes = std::fs::read(path).unwrap();

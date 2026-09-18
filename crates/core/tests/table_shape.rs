@@ -19,13 +19,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(kind: &str, name: &str) -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().map(|r| r.join(kind).join(name)).find(|p| p.exists())
+    qubero_samples::roots().into_iter().map(|r| r.join(kind).join(name)).find(|p| p.exists())
 }
 
 fn open(kind: &str, name: &str, template: &str) -> Option<(Document<MemSource>, Evaluator)> {
@@ -57,7 +51,7 @@ fn wav_samples(ev: &mut Evaluator, doc: &Document<MemSource>) -> Vec<usize> {
 #[test]
 fn a_stereo_wave_says_how_many_channels_a_row_is_and_how_fast_the_rows_come() {
     let Some((doc, mut ev)) = open("wav", "pcm-s16le-stereo-44100.wav", "wav") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let samples = wav_samples(&mut ev, &doc);
@@ -91,7 +85,7 @@ fn a_stereo_wave_says_how_many_channels_a_row_is_and_how_fast_the_rows_come() {
 #[test]
 fn a_dbase_files_records_are_a_table_of_one_record_a_row() {
     let Some((doc, mut ev)) = open("dbf", "libreoffice7-dbase.dbf", "dbf") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let records = ev.child_named(&doc, &[], "records").unwrap().expect("the records");
@@ -151,7 +145,7 @@ fn a_run_of_samples(shape: &TableShapeInfo, columns: u64, rate: u64) {
 #[test]
 fn a_stereo_au_says_how_many_channels_a_row_is_and_how_fast_the_rows_come() {
     let Some((doc, mut ev)) = open("au", "pcm-s16be-stereo-22050.au", "au") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let samples = au_samples(&mut ev, &doc);
@@ -168,7 +162,7 @@ fn an_au_of_floats_and_one_of_mu_law_read_as_what_their_encoding_says() {
         [("float32-mono-44100.au", "f32 be[]", 44100), ("mulaw-mono-8000.au", "MuLaw[]", 8000)]
     {
         let Some((doc, mut ev)) = open("au", name, "au") else {
-            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            eprintln!("{}", qubero_samples::missing());
             return;
         };
         let samples = au_samples(&mut ev, &doc);
@@ -180,7 +174,7 @@ fn an_au_of_floats_and_one_of_mu_law_read_as_what_their_encoding_says() {
 #[test]
 fn an_aiff_reads_the_rate_its_common_chunk_wrote_as_an_eighty_bit_float() {
     let Some((doc, mut ev)) = open("aiff", "pcm-s16be-mono-id3.aiff", "aiff") else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let samples = iff_samples(&mut ev, &doc, "SSND");
@@ -197,7 +191,7 @@ fn an_aifc_reads_its_samples_the_way_its_compression_id_says() {
         [("aifc-sowt-s16le-stereo.aifc", "i16 le[]", 2, 22050), ("aifc-fl32-mono.aifc", "f32 be[]", 1, 48000)]
     {
         let Some((doc, mut ev)) = open("aiff", name, "aiff") else {
-            eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+            eprintln!("{}", qubero_samples::missing());
             return;
         };
         let samples = iff_samples(&mut ev, &doc, "SSND");

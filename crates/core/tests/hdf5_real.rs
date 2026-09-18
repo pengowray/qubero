@@ -1,7 +1,7 @@
-//! A smoke test over real HDF5 files, which are too big to keep in the
-//! repository: any `*.h5` or `*.h5ad` in `web/public`, or under a directory
-//! `QUBERO_SAMPLES` names (several, separated by `;`). Skips when there is
-//! none.
+//! A smoke test over real HDF5 files, which are too big to keep in this
+//! repository: every `*.h5` or `*.h5ad` in the sample collection, which
+//! `qubero_samples` finds, and any dropped in `web/public` to try the editor
+//! against. Skips when there is none of either.
 //!
 //! The test is the walk. Every object in one of these files is reached by
 //! address, so opening every group and every message from the root is what
@@ -36,21 +36,28 @@ impl Source for FileSource {
     }
 }
 
+/// Everywhere an HDF5 file to read might be: the sample collection, swept
+/// whole rather than at its `hdf5` folder so that a file in another format's
+/// folder is read too, and `web/public`.
+fn dirs() -> Vec<PathBuf> {
+    let mut out = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
+    out.extend(qubero_samples::roots());
+    out
+}
+
 #[test]
 fn reads_real_files_end_to_end() {
-    let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
-    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
-        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
+    let dirs = dirs();
     let mut found = Vec::new();
     for dir in &dirs {
         collect(dir, 3, &mut found);
     }
+    found.sort();
+    found.dedup();
     if found.is_empty() {
-        eprintln!("skipped: no HDF5 file in {dirs:?}. Put one there, or set QUBERO_SAMPLES.");
+        eprintln!("skipped: no HDF5 file in {dirs:?}");
         return;
     }
-    found.sort();
     for path in found {
         check(&path);
     }
@@ -114,7 +121,7 @@ fn check(path: &Path) {
 #[test]
 fn a_user_block_changes_where_the_file_begins_and_nothing_else() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let named = |name: &str| -> Vec<String> {
@@ -145,7 +152,7 @@ fn a_user_block_changes_where_the_file_begins_and_nothing_else() {
 #[test]
 fn every_version_4_chunk_index_reaches_its_chunks() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = dir.join("hdf5").join("chunk-indexes-v4.h5");
@@ -235,7 +242,7 @@ fn gather(
 #[test]
 fn large_chunk_indexes_reach_every_chunk_where_the_library_puts_it() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = dir.join("hdf5").join("chunk-indexes-large.h5");
@@ -354,7 +361,7 @@ fn every_link_in_a_heap_grown_past_its_direct_rows_is_named() {
     use qubero_core::formats::hdf5_tree::Kind;
 
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = dir.join("hdf5").join("fractal-heap-deep.h5");
@@ -447,14 +454,10 @@ fn links(
     }
 }
 
-/// The sample collection, wherever it is. None when there is none.
+/// The sample collection, wherever it is, and only when it holds the folder
+/// this file reads. None when there is none.
 fn sample_dir() -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().find(|r| r.join("hdf5").is_dir())
+    qubero_samples::dir("hdf5").and_then(|d| d.parent().map(Path::to_path_buf))
 }
 
 /// Every node under `path`, in order, failing on the first that cannot be
@@ -557,25 +560,13 @@ fn walk(
 fn every_version_2_btree_is_walked_by_pointers_that_land() {
     use qubero_core::formats::hdf5_tree::{Job, Kind, Records, Tree, NO_PARENT};
 
-    // The collection's HDF5 files as well as whatever is in `web/public`, so
-    // the run reaches the files written for this: the assertion at the end
-    // names one of them. Unlike the version 1 sweep this does not need the
-    // collection, and runs on `web/public` alone where there is none.
     let samples = sample_dir();
-    let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
-    if let Some(d) = &samples {
-        dirs.push(d.join("hdf5"));
-    }
-    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
-        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
+    let dirs = dirs();
     let mut found = Vec::new();
     for dir in &dirs {
         collect(dir, 3, &mut found);
     }
     found.sort();
-    // `sample_dir` answers with a `QUBERO_SAMPLES` root where one is set, and
-    // that root holds the `hdf5` directory pushed above it.
     found.dedup();
     let (mut walked, mut behind_a_block) = (0usize, 0usize);
     for path in &found {
@@ -774,7 +765,7 @@ fn a_tree_behind_a_user_block_is_the_same_tree_further_on() {
     use qubero_core::formats::hdf5_tree::Tree;
 
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let open = |path: &Path| {
@@ -905,7 +896,7 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
     use qubero_core::formats::hdf5_tree::Job;
 
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = dir.join("hdf5").join("groups-and-datasets.h5");
@@ -934,13 +925,8 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
     // written to the default library bound indexes its chunks this way and no
     // other. What was checked is printed as well, because which files are to
     // hand depends on where this is run.
-    let mut dirs = vec![PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/public"))];
-    dirs.push(dir.join("hdf5"));
-    if let Ok(extra) = std::env::var("QUBERO_SAMPLES") {
-        dirs.extend(extra.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
     let mut found = Vec::new();
-    for dir in &dirs {
+    for dir in &dirs() {
         collect(dir, 3, &mut found);
     }
     found.sort();
@@ -975,8 +961,8 @@ fn a_version_1_node_s_stride_lands_on_its_own_entries() {
     }
     eprintln!("--- version 1 trees whose entries were placed by their stride: {groups} group, {chunks} chunk");
     assert!(groups > 0);
-    // Only where the collection is to hand: the run above this one has just
-    // the two files in `web/public`, and neither has a chunk tree.
+    // Only where the collection is to hand: without it the sweep has only
+    // whatever sits in `web/public`, which is usually nothing at all.
     if dir.join("hdf5").join("chunks-btree-v1.h5").exists() {
         assert!(chunks > 0, "the collection has a version 1 chunk tree and the sweep did not reach it");
     }
@@ -1157,7 +1143,7 @@ struct VlenString {
 #[test]
 fn a_column_of_variable_length_strings_reads_the_strings_themselves() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for name in ["vlen-strings.h5", "vlen-strings-userblock.h5"] {
@@ -1431,7 +1417,7 @@ fn objects(ev: &mut Evaluator, doc: &Document<FileSource>) -> Vec<(String, Vec<u
 #[test]
 fn a_compound_element_reads_as_its_members_by_name() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0usize;
@@ -1535,7 +1521,7 @@ fn a_compound_element_reads_as_its_members_by_name() {
 #[test]
 fn a_variable_length_sequence_reads_as_its_elements() {
     let Some(dir) = sample_dir() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let want: Vec<Vec<i64>> = [0i64, 1, 4, 9].iter().map(|&n| (0..n).map(|k| k * 7 - 3).collect()).collect();

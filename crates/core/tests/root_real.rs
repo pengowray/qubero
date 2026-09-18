@@ -265,13 +265,7 @@ fn anchor_inside(d: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], dept
 }
 
 fn dirs() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(named) = std::env::var("QUBERO_SAMPLES") {
-        out.extend(named.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    out.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    out.retain(|p| p.is_dir());
-    out
+    qubero_samples::roots()
 }
 
 fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
@@ -289,12 +283,7 @@ fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 }
 
 fn root_samples() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("root")).find(|p| p.is_dir())
+    qubero_samples::dir("root")
 }
 
 fn contents_of(folder: &PathBuf, name: &str) -> (Document<MemSource>, root_tree::Contents) {
@@ -311,7 +300,7 @@ fn contents_of(folder: &PathBuf, name: &str) -> (Document<MemSource>, root_tree:
 #[test]
 fn the_streamer_info_describes_the_classes_a_tree_is_made_of() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (_, contents) = contents_of(&root, "uproot-Zmumu-lz4.root");
@@ -350,7 +339,7 @@ fn the_streamer_info_describes_the_classes_a_tree_is_made_of() {
 #[test]
 fn the_zmumu_tree_reads_its_branches_baskets_and_values() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, contents) = contents_of(&root, "uproot-Zmumu-lz4.root");
@@ -423,7 +412,7 @@ fn the_zmumu_tree_reads_its_branches_baskets_and_values() {
 #[test]
 fn the_same_tree_reads_the_same_through_lz4_lzma_and_zstd() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     for (name, first_basket) in
@@ -455,7 +444,7 @@ fn the_same_tree_reads_the_same_through_lz4_lzma_and_zstd() {
 #[test]
 fn a_flat_tree_reads_single_values_and_fixed_arrays_and_refuses_the_rest() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, contents) = contents_of(&root, "uproot-small-flat-tree.root");
@@ -515,7 +504,7 @@ fn a_flat_tree_reads_single_values_and_fixed_arrays_and_refuses_the_rest() {
 #[test]
 fn a_branch_of_several_baskets_says_where_each_one_starts() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (doc, contents) = contents_of(&root, "uproot-sample-6.20.04-uncompressed.root");
@@ -559,7 +548,7 @@ fn a_branch_of_several_baskets_says_where_each_one_starts() {
 #[test]
 fn trees_in_directories_are_found_and_named_by_their_path() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (_, contents) = contents_of(&root, "uproot-nesteddirs.root");
@@ -577,7 +566,7 @@ fn trees_in_directories_are_found_and_named_by_their_path() {
 #[test]
 fn every_sample_reads() {
     let Some(root) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -663,7 +652,7 @@ fn enum_name(value: Value) -> String {
 #[test]
 fn rntuple_headers_list_the_fields_and_columns_uproot_reads() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let staff_fields = [
@@ -760,7 +749,7 @@ fn page_list_payload(d: &Document<MemSource>, ev: &mut Evaluator, anchor: &[usiz
 #[test]
 fn rntuple_pages_are_placed_where_uproot_finds_them() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // The file, its entries, the page list's length unpacked and its
@@ -850,7 +839,7 @@ fn named_bytes(d: &Document<MemSource>, ev: &mut Evaluator, skip: &dyn Fn(&str, 
 #[test]
 fn rntuple_pages_read_as_the_values_uproot_reads() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // Stored as they stand, header and all, so every column's type can be read
@@ -1063,7 +1052,7 @@ fn template_classes(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<root_tre
 #[test]
 fn the_streamer_info_record_reads_as_the_classes_the_side_reader_lists() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -1093,7 +1082,7 @@ fn the_streamer_info_record_reads_as_the_classes_the_side_reader_lists() {
 #[test]
 fn a_second_object_of_a_class_reads_its_name_from_where_the_first_spelled_it() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (d, mut ev) = rntuple_sample(&folder, "uproot-Zmumu-lz4.root");
@@ -1138,7 +1127,7 @@ fn template_baskets(d: &Document<MemSource>, ev: &mut Evaluator, key: &[usize]) 
 #[test]
 fn every_basket_the_side_reader_lists_is_placed_by_the_template() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut placed = 0;
@@ -1177,7 +1166,7 @@ fn every_basket_the_side_reader_lists_is_placed_by_the_template() {
 #[test]
 fn the_same_tree_places_the_same_baskets_through_lz4_lzma_and_zstd() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut shapes = Vec::new();
@@ -1224,7 +1213,7 @@ fn the_same_tree_places_the_same_baskets_through_lz4_lzma_and_zstd() {
 #[test]
 fn a_baskets_type_names_the_streamer_element_it_came_from() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (d, contents) = contents_of(&folder, "uproot-Zmumu-lz4.root");
@@ -1266,7 +1255,7 @@ fn a_baskets_type_names_the_streamer_element_it_came_from() {
 #[test]
 fn a_byte_of_a_basket_locates_to_the_basket() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (d, contents) = contents_of(&folder, "uproot-Zmumu-lz4.root");
@@ -1286,7 +1275,7 @@ fn a_byte_of_a_basket_locates_to_the_basket() {
 #[test]
 fn zmumu_names_nine_tenths_of_its_bytes() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut names: Vec<String> = std::fs::read_dir(&folder)
@@ -1331,7 +1320,7 @@ const VALUES_COMPARED: usize = 300;
 #[test]
 fn a_baskets_values_match_the_side_reader() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let (mut typed, mut left, mut tables) = (0, 0, 0);
@@ -1432,7 +1421,7 @@ fn settled_spans(d: &Document<MemSource>, ev: &mut Evaluator, name: &str) -> Vec
 #[test]
 fn a_whole_file_listing_settles_in_goes() {
     let Some(folder) = root_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;

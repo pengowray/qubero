@@ -24,12 +24,7 @@ use qubero_core::{
 };
 
 fn cdf_samples() -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(paths) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(paths.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.into_iter().map(|p| p.join("cdf")).find(|p| p.is_dir())
+    qubero_samples::dir("cdf")
 }
 
 /// One file, opened, with the paths a reader of it needs worked out.
@@ -280,7 +275,7 @@ fn strings(values: &[Value]) -> Vec<String> {
 #[test]
 fn the_psp_magnetometer_reads_the_numbers_cdflib_reads() {
     let Some(root) = cdf_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("psp_fld_l2_mag_rtn_1min_20200104_v02.cdf");
@@ -372,7 +367,7 @@ fn the_psp_magnetometer_reads_the_numbers_cdflib_reads() {
 #[test]
 fn the_fast_analyser_reads_through_two_layers_of_packing() {
     let Some(root) = cdf_samples() else {
-        eprintln!("skipped: set QUBERO_SAMPLES to the sample collection");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("fa_esa_l2_eeb_00000000_v01.cdf");

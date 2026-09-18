@@ -11,18 +11,12 @@ use qubero_wasm::Editor;
 use serde_json::Value;
 
 fn samples() -> Option<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(set) = std::env::var("QUBERO_SAMPLES") {
-        roots.extend(set.split(';').filter(|s| !s.is_empty()).map(PathBuf::from));
-    }
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"));
-    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../qubero-samples"));
-    roots.into_iter().find(|p| p.exists())
+    qubero_samples::root()
 }
 
 fn editor(sample: &str) -> Option<Editor> {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return None;
     };
     let Ok(bytes) = std::fs::read(root.join(sample)) else {

@@ -22,11 +22,7 @@ use qubero_core::formats;
 use qubero_core::source::MemSource;
 
 fn sample(name: &str) -> Option<Vec<u8>> {
-    let root = match std::env::var_os("QUBERO_SAMPLES") {
-        Some(p) => std::path::PathBuf::from(p),
-        None => std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples"),
-    };
-    std::fs::read(root.join("gwf").join(name)).ok()
+    std::fs::read(qubero_samples::dir("gwf")?.join(name)).ok()
 }
 
 const GWOSC: &str = "H-H1_GWOSC_4KHZ_R1-1126259447-32.gwf";
@@ -160,7 +156,7 @@ fn count(seen: &[String], name: &str) -> usize {
 #[test]
 fn every_structure_of_the_gwosc_frame_reads_as_the_class_its_dictionary_names() {
     let Some(bytes) = sample(GWOSC) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let seen = check_against_dictionary(GWOSC, bytes.clone());
@@ -202,7 +198,7 @@ fn every_structure_of_the_gwosc_frame_reads_as_the_class_its_dictionary_names() 
 #[test]
 fn the_gwosc_strain_opens_as_the_samples_its_hdf5_twin_holds() {
     let Some(bytes) = sample(GWOSC) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut f = Frames::open(bytes);
@@ -243,7 +239,7 @@ fn every_zero_suppressed_short_in_framels_version_6_file_is_half_the_float_writt
 
 fn zero_suppressed_shorts_are_half_the_floats_beside_them(name: &str) {
     let Some(bytes) = sample(name) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let file = bytes.clone();
@@ -299,7 +295,7 @@ fn zero_suppressed_shorts_are_half_the_floats_beside_them(name: &str) {
 #[test]
 fn every_structure_of_framels_test_file_reads_as_the_class_its_dictionary_names() {
     let Some(bytes) = sample(FRAMEL) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let seen = check_against_dictionary(FRAMEL, bytes);
@@ -444,7 +440,7 @@ fn framels_version_6_file_holds_what_its_example_program_wrote() {
 
 fn holds_what_the_example_program_wrote(name: &str) {
     let Some(bytes) = sample(name) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let six = bytes[5] == 6;
@@ -550,7 +546,7 @@ fn holds_what_the_example_program_wrote(name: &str) {
 #[test]
 fn every_structure_of_the_gwpy_frame_reads_as_the_class_its_dictionary_names() {
     let Some(bytes) = sample(HLV) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let seen = check_against_dictionary(HLV, bytes);
@@ -564,7 +560,7 @@ fn every_structure_of_the_gwpy_frame_reads_as_the_class_its_dictionary_names() {
 #[test]
 fn every_structure_of_framels_version_6_file_reads_as_the_class_its_dictionary_names() {
     let Some(bytes) = sample(FRAMEL_V6) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let seen = check_against_dictionary(FRAMEL_V6, bytes.clone());
@@ -607,7 +603,7 @@ fn every_structure_of_framels_version_6_file_reads_as_the_class_its_dictionary_n
 #[test]
 fn every_structure_of_the_version_6_calibration_frame_reads_as_the_class_its_dictionary_names() {
     let Some(bytes) = sample(CAL_FAC) else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let seen = check_against_dictionary(CAL_FAC, bytes.clone());

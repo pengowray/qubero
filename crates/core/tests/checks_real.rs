@@ -36,7 +36,7 @@ const DEEP: usize = 12;
 #[test]
 fn no_valid_sample_reports_a_mismatch() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut files = Vec::new();
@@ -98,7 +98,7 @@ fn no_valid_sample_reports_a_mismatch() {
 #[test]
 fn the_block_check_of_a_default_xz_is_taken_and_passes() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("compressed").join("hello.txt.xz");
@@ -153,7 +153,7 @@ fn the_block_check_of_a_default_xz_is_taken_and_passes() {
 #[test]
 fn every_member_of_a_split_gzip_checks_its_own_piece() {
     let Some(root) = samples() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let path = root.join("gzip").join("eight-members-split-tar.tgz");
@@ -286,14 +286,7 @@ impl Walk {
 }
 
 fn samples() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("QUBERO_SAMPLES") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    let beside = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../qubero-samples"));
-    beside.is_dir().then_some(beside)
+    qubero_samples::root()
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -26,7 +26,7 @@ use qubero_core::source::{ChunkStore, MemSource};
 #[test]
 fn every_pickle_is_opcodes_all_the_way_to_the_full_stop() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -119,7 +119,7 @@ fn the_protocol_a_file_was_written_at_is_the_one_it_says() {
 #[test]
 fn an_array_is_read_as_the_numbers_it_holds() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let mut checked = 0;
@@ -533,9 +533,7 @@ fn opcode(name: &str) -> &str {
 }
 
 fn folder() -> Option<PathBuf> {
-    let named = std::env::var_os("QUBERO_SAMPLES").map(PathBuf::from);
-    let beside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../qubero-samples");
-    named.into_iter().chain(std::iter::once(beside)).map(|p| p.join("pickle")).find(|p| p.is_dir())
+    qubero_samples::dir("pickle")
 }
 
 fn pickles(dir: &Path) -> Vec<PathBuf> {
@@ -561,7 +559,7 @@ fn pickles(dir: &Path) -> Vec<PathBuf> {
 #[test]
 fn the_forms_match_these_samples_and_no_others() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     // The whole corpus as it stands, with the form each file matches. Keep
@@ -651,7 +649,7 @@ fn the_forms_match_these_samples_and_no_others() {
 #[test]
 fn a_matched_sample_stops_matching_when_its_instructions_change() {
     let Some(dir) = folder() else {
-        eprintln!("skipped: no sample collection (set QUBERO_SAMPLES)");
+        eprintln!("{}", qubero_samples::missing());
         return;
     };
     let read = |bytes: &[u8]| {
