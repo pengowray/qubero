@@ -463,9 +463,9 @@ impl Evaluator {
     fn cell<S: Source>(&mut self, doc: &Document<S>, run: &[usize], i: u64, info: &NodeInfo) -> R<Cell> {
         let mut p = run.to_vec();
         p.push(i as usize);
-        let line = match self.memo[&p].ty.base() {
-            Ty::Struct(s) if !s.line.is_empty() => s.line.clone(),
-            _ => Vec::new(),
+        let (line, contents) = match self.memo[&p].ty.base() {
+            Ty::Struct(s) => (s.line.clone(), s.contents.clone()),
+            _ => (Vec::new(), None),
         };
         let text = if info.composite {
             let inline = matches!(self.memo[&p].ty.base(), Ty::Struct(s) if s.inline);
@@ -482,6 +482,18 @@ impl Evaluator {
                 let mut parts = Vec::new();
                 self.one_line(doc, &p, &mut parts)?;
                 parts.join(" ")
+            } else if let Some(cp) = match &contents {
+                Some(field) => self.child_named(doc, &p, field)?,
+                None => None,
+            } {
+                // A record that says one of its fields is what it holds reads
+                // as its name and that field: a pickle opcode and its operand
+                // are `SHORT_BINUNICODE float`. With the name alone, the text
+                // an instruction pushes was nowhere in the column.
+                let mut parts = Vec::new();
+                self.one_line(doc, &cp, &mut parts)?;
+                let held = parts.join(" ");
+                if held.is_empty() { String::new() } else { format!("{name} {held}") }
             } else {
                 String::new()
             };
@@ -831,6 +843,19 @@ mod tests {
         assert_eq!(cells[0].size_bits, 24, "a record is one cell, not one per field");
         assert_eq!(cells[0].kind, "composite");
         assert_eq!(cells[0].text, "[10]");
+    }
+
+    /// A record that names the field it holds reads as its name and that
+    /// field, so the text a pickle instruction pushes is beside the opcode.
+    #[test]
+    fn a_record_with_contents_reads_as_its_name_and_what_it_holds() {
+        // PROTO 4, then `float` pushed and filed, a one-byte integer, and STOP.
+        let d = doc(b"\x80\x04\x8c\x05float\x94K\x07.".to_vec());
+        let mut e = Evaluator::new(crate::formats::pickle::pickle());
+        let run = e.node(&d, &[]).unwrap();
+        let cells = e.run_cells(&d, &[], 0, run.size_bits, 100).unwrap();
+        let said: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(said, ["PROTO 4", "SHORT_BINUNICODE float", "MEMOIZE", "BININT1 7", "STOP"]);
     }
 
     /// A record the format says reads on one row reads that way in a cell too,

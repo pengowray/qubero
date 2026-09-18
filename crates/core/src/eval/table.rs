@@ -84,6 +84,7 @@ impl Evaluator {
         let Some((&last, parent)) = path.split_last() else { return false };
         matches!(self.memo.get(parent).map(|r| &r.ty),
             Some(Ty::Struct(s)) if s.fields.get(last).is_some_and(|f| f.table.is_some()))
+            || self.pickle_table(path).is_some()
     }
 
     /// The shape the template hung on the field at `path`, if any.
@@ -92,6 +93,8 @@ impl Evaluator {
         let Some((&last, parent)) = path.split_last() else { return Ok(None) };
         match self.memo.get(parent).map(|r| &r.ty) {
             Some(Ty::Struct(s)) => Ok(s.fields.get(last).and_then(|f| f.table.clone())),
+            // The numbers of a pickled array, whose shape the match holds.
+            Some(Ty::Pickle(_)) => Ok(self.pickle_table(path).map(Arc::new)),
             _ => Ok(None),
         }
     }

@@ -293,6 +293,35 @@ fn count_of(dimensions: &[u64]) -> u64 {
 }
 
 impl Evaluator {
+    /// The table the numbers of a matched array are, or nothing for any other
+    /// node. A pickled array is the same rows and columns a `.npy` file holds,
+    /// and the shape that says so is in the match rather than in a field of a
+    /// structure, which is where [`Evaluator::table_shape`] looks otherwise.
+    ///
+    /// Read from what the match left behind and never from the file: this is
+    /// asked of every node on its way to the screen, and a node under a
+    /// matched pickle was placed by that match, so it is already there.
+    ///
+    /// The run is written along the last dimension in C order and along the
+    /// first in Fortran order, which is what a row of it is either way. One
+    /// dimension is one value a row. No dimensions is one value and no table.
+    pub(super) fn pickle_table(&self, path: &[usize]) -> Option<crate::template::TableShape> {
+        let k = (0..=path.len()).rev().find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Pickle(Shape::Doc))))?;
+        let found = self.memo.pickle(&path[..k])?;
+        let (_, Part::Data(v)) = spot(found, &path[k..])? else { return None };
+        let Kind::Array { dimensions, fortran_order, .. } = &v.kind else { return None };
+        let inner = match (dimensions.len(), fortran_order) {
+            (0, _) => return None,
+            (1, _) => None,
+            (_, true) => dimensions.first().copied(),
+            (_, false) => dimensions.last().copied(),
+        };
+        Some(crate::template::TableShape {
+            columns: inner.filter(|n| *n > 0).map(|n| E::lit(n as i128)),
+            ..Default::default()
+        })
+    }
+
     /// The path of the pickle field `path` sits in, and what the recogniser
     /// made of it. `path` may be the field itself or any value inside it.
     fn pickle_doc<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<(Vec<usize>, Arc<Match>)> {

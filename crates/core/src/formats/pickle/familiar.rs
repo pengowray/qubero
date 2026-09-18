@@ -1670,6 +1670,25 @@ mod tests {
         assert_eq!((numbers.ty.as_str(), numbers.len, &numbers.value), ("f32 le[]", 96, &V::Composite { count: 24 }));
     }
 
+    /// The numbers of a matched array are a table of its rows, six to a row
+    /// for a 4 x 6 array, and nothing else in the file is.
+    #[test]
+    fn a_matched_array_is_a_table_of_its_rows() {
+        let (doc, mut ev) = read(MATRIX);
+        let mut tables = Vec::new();
+        let mut stack = vec![Vec::new()];
+        while let Some(path) = stack.pop() {
+            let info = ev.node(&doc, &path).unwrap();
+            if info.table {
+                tables.push((info.name.clone(), ev.table_shape(&doc, &path).unwrap().expect("a shape").columns));
+            }
+            if path.len() < 5 {
+                stack.extend((0..info.child_count.min(80) as usize).map(|i| [path.as_slice(), &[i]].concat()));
+            }
+        }
+        assert_eq!(tables, vec![("numbers".to_string(), Some(6))]);
+    }
+
     /// A pickle no form matches has nothing for this template to show, and
     /// says so rather than showing part of a reading.
     #[test]
