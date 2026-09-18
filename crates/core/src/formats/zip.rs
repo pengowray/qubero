@@ -94,9 +94,12 @@ pub(crate) fn records(data_read_elsewhere: bool) -> T {
 }
 
 fn record(data_read_elsewhere: bool) -> T {
+    // Named by the file the record holds, where it holds one, and otherwise
+    // by what its signature says it is: `[3] README.md` for the file, and
+    // `[9] end of central directory` for the record that ends the list.
     T::structure_named(
         "ZipRecord",
-        "signature",
+        "body.name | signature",
         "body",
         vec![
             (

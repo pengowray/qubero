@@ -70,7 +70,7 @@ pub fn wasm() -> Template {
             ("kind", T::enumeration("ExportKind", T::u8(), EXPORT_KIND)),
             ("index", T::leb_u()),
         ],
-    );
+    ).named_by("name");
     let export_section =
         T::structure("ExportSection", vec![("count", T::leb_u()), ("exports", T::array(export, E::field("count")))]);
     // What an import is depends on its kind: a function names a type, a table
@@ -99,7 +99,7 @@ pub fn wasm() -> Template {
                 ),
             ),
         ],
-    );
+    ).named_by("name");
     let import_section =
         T::structure("ImportSection", vec![("count", T::leb_u()), ("imports", T::array(import, E::field("count")))]);
     // A custom section is a name and then whatever that name implies. The
@@ -108,7 +108,7 @@ pub fn wasm() -> Template {
     let custom_section = T::structure(
         "CustomSection",
         vec![("name_len", T::leb_u()), ("name", T::utf8(E::field("name_len"))), ("payload", T::bytes(E::Remaining))],
-    );
+    ).named_by("name");
     let local = T::structure("Local", vec![("count", T::leb_u()), ("type", valtype())]);
     let func = T::structure(
         "Func",

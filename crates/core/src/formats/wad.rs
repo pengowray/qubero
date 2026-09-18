@@ -184,7 +184,7 @@ fn thing() -> T {
                 ),
             ),
         ],
-    )
+    ).named_by("type")
     .counted_as("thing")
 }
 

@@ -63,6 +63,7 @@ fn string(e: Endian) -> T {
         "FrString",
         vec![("len", T::u16(e)), ("text", T::utf8_padded(E::field("len"), 0))],
     )
+    .contents("text")
 }
 
 /// A reference to another structure in the same file, by class and instance.

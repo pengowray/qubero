@@ -368,12 +368,22 @@ impl Evaluator {
     /// `name` there. None when some step of the path is not there. See
     /// [`StructDef::named_by`].
     pub(super) fn naming_value_along<S: Source>(&mut self, doc: &Document<S>, path: &[usize], by: &str) -> Option<Value> {
-        let steps: Vec<String> = by.split('.').map(str::to_string).collect();
-        let mut child = path.to_vec();
-        if !self.descend(doc, &mut child, &steps).ok()? {
-            return None;
+        // The first path that reaches something and reads as something: a
+        // ZIP record is named by the file name inside its body, and the
+        // records that hold no file by what their signature says they are.
+        for alternative in by.split('|') {
+            let steps: Vec<String> = alternative.split('.').map(|s| s.trim().to_string()).collect();
+            let mut child = path.to_vec();
+            if !self.descend(doc, &mut child, &steps).ok()? {
+                continue;
+            }
+            if let Some(v) = self.name_read(doc, child) {
+                if !brief(&v).trim().is_empty() {
+                    return Some(v);
+                }
+            }
         }
-        self.name_read(doc, child)
+        None
     }
 
     /// What the node at `child` reads as when it is read for a name: its own

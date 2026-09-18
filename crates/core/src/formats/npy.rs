@@ -214,7 +214,7 @@ fn descr_field() -> T {
             // carries after it: `('a', '<f4', (2, 2))`.
             ("after", T::text(StrLen::Fixed(E::to_bytes(b")").add(E::lit(1)).at_most(E::Remaining)), Encoding::Ascii)),
         ],
-    )
+    ).named_by("name")
     .machinery(&["before", "quote", "between", "after"])
     .payload(&["name", "format"])
     .counted_as("field")

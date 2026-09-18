@@ -55,7 +55,7 @@ fn header() -> T {
             ("parameter_1", T::u16(Little)),
             ("parameter_2", T::u16(Little)),
         ],
-    )
+    ).named_by("name")
 }
 
 #[cfg(test)]

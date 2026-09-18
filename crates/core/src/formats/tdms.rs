@@ -418,7 +418,7 @@ fn strings(e: Endian, count: E, size: E) -> T {
 /// A length and that many bytes of UTF-8. Every name, path and text value in
 /// the file is written this way, with nothing to end it.
 fn string(e: Endian) -> T {
-    T::inline_structure("TdmsString", vec![("length", T::u32(e)), ("text", T::utf8(E::field("length")))])
+    T::inline_structure("TdmsString", vec![("length", T::u32(e)), ("text", T::utf8(E::field("length")))]).contents("text")
 }
 
 /// The metadata: how many objects the segment describes, and each of them.

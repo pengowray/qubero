@@ -73,7 +73,7 @@ fn entry() -> T {
             ("offset", T::u32(Big)),
             ("length", T::u32(Big)),
         ],
-    )
+    ).named_by("id")
     .counted_as("entry")
 }
 

@@ -66,8 +66,9 @@
 //!              | "everything before this field"
 //! named       := NAME | "earlier(" path ")" | path "[" expr "]"
 //!
-//! attr        := "named by" path                    which field names one of these,
-//!                                                   or a path down to it
+//! attr        := "named by" path {"|" path}         which field names one of these,
+//!                                                   or a path down to it; the first
+//!                                                   that reads wins
 //!              | "contents" NAME                    which field is merely the body
 //!              | "unit" NAME                        what one is called when counted
 //!              | "inline"                           one row, not one row per field

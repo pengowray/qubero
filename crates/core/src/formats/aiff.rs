@@ -177,7 +177,7 @@ fn markers() -> T {
             // when it is odd.
             ("pad", T::bytes(E::field("name_length").add(E::lit(1)).pad_to(2))),
         ],
-    )
+    ).named_by("name")
     .counted_as("marker");
     T::structure("Markers", vec![("count", T::u16(Big)), ("markers", T::array(marker, E::field("count")))])
 }

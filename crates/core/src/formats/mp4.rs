@@ -420,7 +420,7 @@ fn metadata_keys() -> T {
             ("namespace", T::utf8(E::lit(4))),
             ("name", T::utf8(E::field("size").sub(E::lit(8)))),
         ],
-    );
+    ).named_by("name");
     let mut fields = full_box();
     fields.extend(vec![("entry_count", u32be()), ("entries", T::array(entry, E::field("entry_count")))]);
     T::structure("MetadataKeys", fields)

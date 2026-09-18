@@ -375,7 +375,7 @@ fn program_header(bits: u32, e: Endian) -> T {
         fields.push(("flags", T::flags("SegmentFlags", T::u32(e), SEGMENT_FLAGS)));
     }
     fields.push(("align", addr(bits, e)));
-    T::structure("ProgramHeader", fields).counted_as("segment")
+    T::structure("ProgramHeader", fields).named_by("type").counted_as("segment")
 }
 
 fn section_header(bits: u32, e: Endian) -> T {

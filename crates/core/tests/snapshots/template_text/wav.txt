@@ -48,7 +48,7 @@ type Chunk (named by id, contents body) {
       sample_count: u32le
     }
     'guan' => repeat(until end) text until 0x0a or end utf8
-    'wamd' => repeat(until end) Item {
+    'wamd' => repeat(until end) Item (named by tag) {
       tag: u16le enum WamdTag {
         0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
         6 = position, 7 = temperature
@@ -122,7 +122,7 @@ type Chunk (named by id, contents body) {
       smpte_offset: u32le
       loop_count: u32le
       sampler_data: u32le
-      loops: Loop {
+      loops: Loop (named by type) {
         id: u32le
         type: u32le enum LoopType {0 = forward, 1 = alternating, 2 = backward}
         start: u32le
@@ -913,7 +913,7 @@ type ChunkBE = Chunk (named by id, contents body) {
       sample_count: u32be
     }
     'guan' => repeat(until end) text until 0x0a or end utf8
-    'wamd' => repeat(until end) Item {
+    'wamd' => repeat(until end) Item (named by tag) {
       tag: u16be enum WamdTag {
         0 = version, 1 = model, 2 = serial, 3 = firmware, 4 = prefix, 5 = timestamp,
         6 = position, 7 = temperature
@@ -987,7 +987,7 @@ type ChunkBE = Chunk (named by id, contents body) {
       smpte_offset: u32be
       loop_count: u32be
       sampler_data: u32be
-      loops: Loop {
+      loops: Loop (named by type) {
         id: u32be
         type: u32be enum LoopType {0 = forward, 1 = alternating, 2 = backward}
         start: u32be

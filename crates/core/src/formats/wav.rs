@@ -351,7 +351,7 @@ fn wamd_item(endian: Endian) -> T {
                 ),
             ),
         ],
-    )
+    ).named_by("tag")
 }
 
 fn cue(endian: Endian) -> T {
@@ -499,7 +499,7 @@ fn smpl(endian: Endian) -> T {
             // Zero means keep looping.
             ("play_count", T::u32(endian)),
         ],
-    );
+    ).named_by("type");
     T::structure(
         "Sampler",
         vec![
