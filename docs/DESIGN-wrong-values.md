@@ -5,8 +5,8 @@ is shown, without the reader clicking anything. The mark says what is wrong in
 words next to the value, in red where the format itself rules the value out
 and quietly where Qubero merely has no name for it.
 
-Status: steps 1 to 4 of "Order of work" landed 2026-09-18 (ac0dda5), step 6 the
-same day. Eager checksums are still to do. Written 2026-09-17 from TODO.md's
+Status: every step of "Order of work" has landed, steps 1 to 4 on 2026-09-18
+(ac0dda5) and steps 5 and 6 the same day. Written 2026-09-17 from TODO.md's
 "Use red for incorrect items" line.
 
 ## What exists already
@@ -353,7 +353,23 @@ Sign-off still wanted on the expression case.
    that names another field, because it marks earlier siblings only and a
    `Role::Bound` through origin.rs is the honest route; ImHex
    `std::assert_warn` lowers like `std::assert` and loses its softer tier.
-5. Eager checksums under the cap, cached on the node.
+5. Eager checksums under the cap, cached on the node. Done 2026-09-18.
+   `Evaluator::eager_check` in `eval/check.rs` takes a sum on the way past when
+   four things hold: it covers a run of the file rather than what a stream
+   unpacks to, the run is at most `EAGER_CHECK_BYTES` (64 KiB), the bytes are
+   already loaded, and nothing refused. Everything else is Not checked and
+   unmarked, so the inspector's own 1 MiB auto-run and its `Check the CRC-32`
+   button are unchanged. Two things worth knowing before touching it:
+
+   - `stored_value` asks for the check field's own node to read the stored sum,
+     and that node asks for the sum. A `summing` flag on the evaluator stops the
+     loop, the way `lining` already does for `NodeInfo::line`. Without it the
+     blanked-sum test overflows the stack.
+   - `Pending` is swallowed here and nowhere else in `check.rs`, because nobody
+     asked for this sum and a listing must not stall a row on it. That case is
+     not cached; a verdict and a settled "no eager check here" both are, in
+     `Evaluator::sums`, cleared beside `problems.forget()` at both invalidation
+     sites.
 6. Table view cells and header counts, once the table tab exists. Done
    2026-09-18. `RecordCell` carries the problem, so the listing's own record
    tables (SQLite, GGUF) are marked by the same change. A count is over the

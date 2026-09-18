@@ -726,6 +726,16 @@ pub struct Evaluator {
     /// Dropped whole whenever the memo is, since a value that is read again
     /// may not be the value it was.
     problems: problems::Tally,
+    /// True while a checksum is being taken without being asked. Reading the
+    /// stored sum to compare against asks for the field's own node, and that
+    /// node would ask for the sum again: the same loop `lining` exists to
+    /// stop. See [`Evaluator::eager_check`].
+    summing: bool,
+    /// The checksums already taken without being asked, by field: the verdict,
+    /// or nothing where there is no eager check to take. See
+    /// [`Evaluator::eager_check`]. Dropped with the memo, since a sum over
+    /// bytes that have changed is a verdict about bytes that are gone.
+    sums: rustc_hash::FxHashMap<Vec<usize>, Option<check::Verdict>>,
     /// The field a constraint is being worked out about, which is what
     /// [`Expr::This`](crate::template::Expr::This) means. Set only while
     /// [`Evaluator::valid_of`] is running an expression, and put back to what
@@ -788,6 +798,8 @@ impl Evaluator {
             schemas: schema::Schemas::default(),
             lining: false,
             problems: problems::Tally::default(),
+            summing: false,
+            sums: rustc_hash::FxHashMap::default(),
             this: None,
         }
     }
@@ -939,8 +951,12 @@ impl Evaluator {
         // of wrong ones starts over rather than keeping a verdict on bytes
         // that have changed. Coarse, like the memo's own invalidation: the
         // count is a count so far in any case, and it fills again as the views
-        // ask for their rows.
+        // ask for their rows. The sums taken go with it, and for a stronger
+        // reason: an overwrite anywhere inside a covered run changes the
+        // answer, and a checksum is written before the bytes it covers, so a
+        // verdict kept from before the edit would be about the file as it was.
         self.problems.forget();
+        self.sums.clear();
     }
 
     /// Drop every cached offset/size. Call after any document change that is
@@ -951,6 +967,7 @@ impl Evaluator {
         self.spaces.forget();
         self.open.clear();
         self.problems.forget();
+        self.sums.clear();
         self.journals.clear();
         self.forget_schemas();
         self.go.restart();
@@ -1103,6 +1120,23 @@ impl Evaluator {
         if !matches!(problem, Some(Problem { tier: Tier::Invalid, .. })) {
             match self.valid_of(doc, path) {
                 Ok(Some(v)) if !v.ok => problem = Some(Problem { tier: Tier::Invalid, text: v.text }),
+                Ok(_) | Err(EvalError::Failed(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        // A checksum over a short run of bytes that are already here is taken
+        // on the way past, so a file with a bad one says so where the field is
+        // rather than only in the inspector. The value column keeps the stored
+        // sum; what was computed instead is the reason. Everything larger, and
+        // everything over a stream, stays the inspector's to run.
+        if problem.is_none() && !self.summing {
+            self.summing = true;
+            let took = self.eager_check(doc, path);
+            self.summing = false;
+            match took {
+                Ok(Some(v)) if !v.ok => {
+                    problem = Some(Problem { tier: Tier::Invalid, text: format!("Mismatch: computed {}", v.computed) });
+                }
                 Ok(_) | Err(EvalError::Failed(_)) => {}
                 Err(e) => return Err(e),
             }
