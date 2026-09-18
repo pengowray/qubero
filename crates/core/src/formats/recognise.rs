@@ -428,8 +428,50 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
 /// `.shp` and `.shx` do, and the bytes then fit both; the extension is what
 /// picks one. `name` is the file's name or path, and a name with no extension
 /// leaves it at what the bytes said.
+///
+/// The name is asked first for the formats in [`BY_EXTENSION`], which have no
+/// signature at all, so the bytes alone would hand them to whichever format
+/// their first two happen to look like.
 pub fn sniff_named(head: &[u8], len: u64, name: &str) -> Option<&'static str> {
-    sniff(head, len).or_else(|| crate::ksy::bundled::sniff_named(head, extension_of(name)))
+    let ext = extension_of(name);
+    BY_EXTENSION
+        .iter()
+        .find(|(e, _, fits)| e.eq_ignore_ascii_case(ext) && fits(head, len))
+        .map(|(_, template, _)| *template)
+        .or_else(|| sniff(head, len))
+        .or_else(|| crate::ksy::bundled::sniff_named(head, ext))
+}
+
+/// Formats with nothing to recognise them by but their name: an extension, the
+/// template it means, and what the bytes must look like before the name is
+/// believed. The test is what keeps this from being a lookup of extensions: a
+/// `.exp` is also what a linker calls its export file, and that one is a COFF
+/// object which fails it.
+const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", is_melco_exp)];
+
+/// A Melco embroidery design, which is a stream of steps and nothing else: see
+/// `formats::exp`. Every step in the window has to be one the format has, so
+/// an escape is followed by a control it knows, and the file is a whole number
+/// of steps. A COFF object, a pickle (`80 05`, `80 03`) and text all fail on a
+/// byte in the first few dozen. An empty file is not a design.
+fn is_melco_exp(head: &[u8], len: u64) -> bool {
+    if len < 2 || len % 2 != 0 || is_coff(head, len) {
+        return false;
+    }
+    let whole = head.len() as u64 == len;
+    let mut at = 0;
+    while at < head.len() {
+        let step = if head[at] == super::exp::ESCAPE { 4 } else { 2 };
+        if at + step > head.len() {
+            // Cut by the window rather than by the file is no evidence.
+            return !whole;
+        }
+        if step == 4 && !super::exp::is_control(head[at + 1]) {
+            return false;
+        }
+        at += step;
+    }
+    true
 }
 
 /// The extension of a file name, without the dot; empty when there is none.
@@ -1963,6 +2005,23 @@ mod tests {
         let checksum = 0u8.wrapping_sub(omf.iter().fold(0u8, |sum, &b| sum.wrapping_add(b)));
         omf.push(checksum);
         assert_eq!(sniffed(&omf), Some("omf"));
+    }
+
+    /// A Melco design has no signature, so its name is what claims it, and
+    /// only when every step in it is one the format has.
+    #[test]
+    fn a_melco_design_is_recognised_by_its_name_and_its_steps() {
+        // Opens `80 04`, as a protocol 4 pickle does, and is not one.
+        let design = [0x80, 0x04, 0x10, 0xf0, 0x05, 0xfb, 0x80, 0x01, 0x00, 0x00, 0x05, 0x05];
+        assert_eq!(sniff_named(&design, design.len() as u64, "rose.EXP"), Some("exp"));
+        // The same bytes under another name are not claimed by this.
+        assert_ne!(sniff_named(&design, design.len() as u64, "rose.bin"), Some("exp"));
+        // A pickle called .exp is still a pickle: `80 05` is no control.
+        let pickle = b"\x80\x05K\x07.\x00";
+        assert_ne!(sniff_named(pickle, pickle.len() as u64, "odd.exp"), Some("exp"));
+        // A step cut off by the end of the file is not a design.
+        assert_ne!(sniff_named(&design[..8], 8, "cut.exp"), Some("exp"));
+        assert_ne!(sniff_named(&[0x80, 0x04, 0x00], 3, "cut.exp"), Some("exp"));
     }
 
     #[test]

@@ -174,6 +174,7 @@ pub(crate) mod sqlite;
 mod sevenzip;
 mod swf;
 mod tap;
+pub mod exp;
 mod tar;
 mod tdms;
 mod tga;
@@ -309,6 +310,7 @@ pub use sqlite_overflow::{payload as sqlite_payload, Payload as SqlitePayload};
 pub use sevenzip::sevenzip;
 pub use swf::swf;
 pub use tap::tap;
+pub use exp::exp;
 pub use tar::tar;
 pub use tdms::tdms;
 pub use tga::tga;
@@ -478,6 +480,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("vpk", |_| vpk()),
     ("mca", |_| mca()),
     ("tap", |_| tap()),
+    ("exp", |_| exp()),
     ("lha", |_| lha()),
     ("lnk", |_| lnk()),
     ("cbor", |_| cbor()),
