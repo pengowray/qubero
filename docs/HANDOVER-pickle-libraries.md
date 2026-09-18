@@ -95,6 +95,46 @@ state is a dict holding three numpy arrays and a shape tuple, so the
 scikit-learn production with another module prefix reads them. The class moved
 (`scipy.sparse.csr` to `scipy.sparse._csr`), which is data to that production.
 
+## What has landed, on 2026-09-18
+
+Steps 1 to 3 of the order below, as three forms over one grammar. The safety
+line and the enumerated calls are written out in
+`DESIGN-familiar-pickle-forms.md` under "The safety line for a library object";
+the code is `crates/core/src/formats/pickle/familiar/object.rs` for the class,
+object, BUILD and REDUCE productions, `dtype.rs` for the structured and object
+dtypes, and `numpy.rs` for the array around them.
+
+| Form | What it reads | Matched at protocol 4 and 5 |
+| --- | --- | --- |
+| `sklearn-estimator-p4-p5-v1` | estimators, pipelines, forests, decision trees | 33 of 33 matrix files, and both `pickle/proto4-sklearn-*` |
+| `scipy-sparse-p4-p5-v1` | the three sparse matrix classes | 8 of 8 matrix files, and all three `pickle/proto4-scipy-*` |
+| `pandas-frame-p4-p5-v1` | frames and series from 1.1 and from 1.5 to 3.0 | 36 of 49 matrix files, and `pickle/proto5-pandas-dataframe` and `-series` |
+
+`numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
+structured dtype now, so "numeric" was no longer true.
+
+What is left, in the order it is worth doing:
+
+1. **The datetime index**, which is eleven of the thirteen frames that do not
+   match and the last common pandas shape. It needs the `M8` dtype, whose BUILD
+   state is nine long rather than eight and ends with a tuple carrying the unit
+   (`(b'ns', 1, 1, 1)`) and a version of 4 rather than 3; and two calls,
+   `pandas.core.indexes.datetimes._new_DatetimeIndex` of a class and a
+   dictionary and `pandas._libs.tslibs.offsets.Day` of a number and a flag.
+   Check whether `npy::dtypes()` has an `M8` entry before promising the values.
+2. **pandas 1.3**, which writes `functools.partial` over `new_block`. That is a
+   REDUCE of what another REDUCE made, which the form refuses on purpose. It
+   would need a production of its own saying that this exact partial, over this
+   exact callable, with these arguments, is a block. Two files in the corpus.
+3. **Step 4 below, the tree and the tables**, which has not been started: a
+   frame does not yet show its columns as a table.
+4. **Step 5 below, the record columns in the core.** `web/src/picklerecords.ts`
+   still works the list-of-dicts table out in TypeScript.
+
+`cargo run -p qubero-core --example pickle_forms -- <file>` prints the form a
+file matched, or, for one no form matched, the offset the reading reached
+before it stopped, which is where the next production goes.
+
 ## Order of work
 
 1. A generic *plain object* production: a class named by `STACK_GLOBAL` from a

@@ -34,6 +34,7 @@ pub(super) struct Cursor<'a> {
     /// How many objects of a named class the file built, which is what says a
     /// library form read what it is for.
     pub(super) instances: usize,
+    pub(super) furthest: usize,
 }
 
 /// Where a frame boundary stands. CPython writes a pickle as a run of frames:
@@ -80,6 +81,9 @@ impl<'a> Cursor<'a> {
         let end = self.at.checked_add(len)?;
         let out = self.bytes.get(self.at..end)?;
         self.at = end;
+        if end > self.furthest {
+            self.furthest = end;
+        }
         Some(out)
     }
     pub(super) fn byte(&mut self) -> Option<u8> {

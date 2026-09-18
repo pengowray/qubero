@@ -656,9 +656,13 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto4-sklearn-random-forest.pickle", Some("sklearn-estimator-p4-p5-v1")),
         ("proto5-everything.pickle", None),
         ("proto5-out-of-band.pickle", None),
-        ("proto5-pandas-dataframe.pickle", None),
+        // A frame and a series, each a block manager over blocks of columns
+        // and the two axes.
+        ("proto5-pandas-dataframe.pickle", Some("pandas-frame-p4-p5-v1")),
+        ("proto5-pandas-series.pickle", Some("pandas-frame-p4-p5-v1")),
+        // Every index kind, including the datetime one, which is an `M8`
+        // dtype and two calls no form reads yet.
         ("proto5-pandas-index-types.pickle", None),
-        ("proto5-pandas-series.pickle", None),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -688,8 +692,11 @@ const FAMILIES: &[(&str, Option<&str>)] = &[
     ("basic", Some("basic-p4-p5-v5")),
     // An array and a scalar, which are two productions of one form.
     ("numpy", Some("numpy-array-p4-p5-v6")),
-    ("dataframe", None),
-    ("series", None),
+    ("dataframe", Some("pandas-frame-p4-p5-v1")),
+    // A datetime index is an `M8` dtype, whose state carries the unit it
+    // counts in, and two calls of its own. No form reads one yet.
+    ("dataframe-datetime-index", None),
+    ("series", Some("pandas-frame-p4-p5-v1")),
     ("sklearn", Some("sklearn-estimator-p4-p5-v1")),
     ("scipy", Some("scipy-sparse-p4-p5-v1")),
 ];
@@ -703,6 +710,39 @@ fn family_of(name: &str) -> usize {
     match row.or_else(|| FAMILIES.iter().position(|(f, _)| *f == family)) {
         Some(i) => i,
         None => panic!("{name}: no row called {object:?} or {family:?} in FAMILIES; add it with the form it matches, or None"),
+    }
+}
+
+/// The pandas release an environment folder names, as major and minor.
+///
+/// pandas changed how it writes a frame twice, and the folder name is where
+/// the release is written down. A file is kept under the oldest environment
+/// that wrote those bytes, so the folder is also the oldest release that
+/// spells it this way.
+fn pandas_of(env: &str) -> Option<(u32, u32)> {
+    let rest = env.split('-').find_map(|part| part.strip_prefix("pandas"))?;
+    let (major, minor) = rest.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+/// What a pandas file is read as, which depends on the release that wrote it.
+///
+/// A frame has been a block manager in every release, and how the blocks get
+/// into it has changed twice. 1.1 hands the manager its axes, its blocks and
+/// the dictionary it versions them with as one tuple; 1.5 and up call
+/// `pandas._libs.internals._unpickle_block` once a block. The form reads both.
+/// 1.3 writes `functools.partial` over `new_block` instead, which is a REDUCE
+/// of what another REDUCE made, and no form reads that. A `Series` is the same
+/// shape in every release from 1.1, because its manager kept the older
+/// spelling, so only the frames divide.
+fn expected_pandas(env: &str, object: &str, row: Option<&'static str>) -> Option<&'static str> {
+    let generation = pandas_of(env)?;
+    // 1.3 is the only release in the corpus that writes the partial, so it is
+    // the one named. A release between the two that turns out to write it too
+    // fails here, which is where someone should look.
+    match object.starts_with("dataframe") && generation == (1, 3) {
+        true => None,
+        false => row,
     }
 }
 
@@ -742,7 +782,10 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
             // takes yet.
             let modern = name.contains(".p4.") || name.contains(".p5.");
             let expected = match modern {
-                true => FAMILIES[i].1,
+                true => match name.starts_with("dataframe") || name.starts_with("series") {
+                    true => expected_pandas(&env, &name, FAMILIES[i].1),
+                    false => FAMILIES[i].1,
+                },
                 false => None,
             };
             let bytes = std::fs::read(&path).unwrap();

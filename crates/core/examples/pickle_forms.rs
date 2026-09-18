@@ -1,8 +1,9 @@
 //! Which Familiar Pickle Form each file matches, and its opcodes in order.
 //!
 //! `cargo run -p qubero-core --example pickle_forms -- <file>...` prints the
-//! form a file matched, or the listing the recogniser had to work from when it
-//! matched nothing. `--ops` prints the instruction sequence alone.
+//! form a file matched, or, for a file no form matched, how far the reading
+//! got before it stopped, which is where the next production has to go.
+//! `--ops` prints the instruction sequence alone.
 
 use qubero_core::formats::pickle;
 
@@ -19,7 +20,7 @@ fn main() {
         };
         match pickle::familiar::recognise(&bytes) {
             Some(found) => println!("{path}: {} [{}]", found.form, found.pickler.name()),
-            None => println!("{path}: no form"),
+            None => println!("{path}: no form, read as far as {:#x}", pickle::familiar::furthest(&bytes)),
         }
         if ops_only {
             for op in pickle::opcodes(&bytes) {

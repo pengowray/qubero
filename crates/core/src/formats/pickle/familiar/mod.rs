@@ -52,6 +52,8 @@ const MAX_BATCH: usize = 1000;
 /// counted run is read at. It stands where [`Cursor::counted`] wants a width
 /// that the opcode in hand does not have.
 const NO_OPCODE: u8 = 0;
+/// How NumPy spells the dtype whose values are pickled objects.
+const OBJECT_DTYPE: &str = "|O8";
 /// The most dimensions a shape may declare, which is NumPy's own limit.
 const MAX_DIMENSIONS: usize = 32;
 /// A payload this size or larger is written between frames rather than inside
@@ -72,6 +74,7 @@ const BUILTINS: &str = "builtins-values-p4-p5-v3";
 /// is read under the form for the library that wrote it and no other.
 const SKLEARN: &str = "sklearn-estimator-p4-p5-v1";
 const SCIPY: &str = "scipy-sparse-p4-p5-v1";
+const PANDAS: &str = "pandas-frame-p4-p5-v1";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.
@@ -153,6 +156,14 @@ pub enum Kind {
         class: Box<Value>,
         state: Option<Box<Value>>,
     },
+    /// An array whose values are objects rather than numbers, which is the
+    /// `O8` dtype. Its data is not a buffer: the values are pickled after the
+    /// array and handed to it as a list.
+    Objects {
+        dimensions: Vec<u64>,
+        fortran_order: bool,
+        items: Vec<Value>,
+    },
     /// What a REDUCE of one of a form's enumerated callables made. `names`
     /// names the arguments, in the order the library writes them, and `state`
     /// is what a BUILD after the call handed the result.
@@ -177,6 +188,9 @@ pub enum Dtype {
     /// scikit-learn writes its tree of nodes as. The columns are in the order
     /// NumPy names them, and `width` is the whole record, padding included.
     Record { columns: Vec<Column>, width: u64 },
+    /// One pickled object a value, which is NumPy's `O8`. There is nothing to
+    /// measure: the values are written after the array rather than in it.
+    Objects,
 }
 
 /// One column of a structured dtype: what NumPy calls it, what one of them
@@ -194,6 +208,7 @@ impl Dtype {
         match self {
             Dtype::Plain(spelling) => Some(crate::formats::pickle::shapes::dtype(spelling)?.1),
             Dtype::Record { width, .. } => Some(*width),
+            Dtype::Objects => None,
         }
     }
 
@@ -205,6 +220,7 @@ impl Dtype {
                 let named: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
                 format!("V{width} ({})", named.join(", "))
             }
+            Dtype::Objects => OBJECT_DTYPE.to_string(),
         }
     }
 }
@@ -335,6 +351,8 @@ pub enum Shape {
     Class,
     /// An object of a named class, with the attributes a BUILD gave it.
     Object,
+    /// One run of a pandas frame's columns, with where in the frame they sit.
+    Block,
 }
 
 impl Shape {
@@ -357,6 +375,7 @@ impl Shape {
             Shape::ByteArray => "bytearray",
             Shape::Class => "class",
             Shape::Object => "object",
+            Shape::Block => "block",
         }
     }
 }
@@ -423,6 +442,10 @@ struct Allow {
     /// The callables this form accepts a REDUCE of. Never anything else: see
     /// [`object`] for why a module prefix cannot stand in for this list.
     calls: &'static [Reduce],
+    /// Whether an array's values may be pickled objects rather than numbers,
+    /// which is NumPy's `O8` dtype. A pandas index of column names is one, and
+    /// nothing else in the corpus is.
+    object_arrays: bool,
 }
 
 /// One callable a form accepts a REDUCE of, and what the library writes as its
@@ -457,23 +480,112 @@ const SKLEARN_CALLS: &[Reduce] = &[Reduce {
 /// A form that names no class, which is every form below the library ones.
 const NO_CLASSES: &[&str] = &[];
 
+/// The calls pandas writes, which is the whole of what a REDUCE may do under
+/// the pandas form.
+///
+/// A frame is a `BlockManager` over blocks of columns and two axes; a block is
+/// an array, where it sits in the frame and how many axes it has; an axis is a
+/// class and the dictionary that finishes it; and an array of something other
+/// than numbers is an `NDArrayBacked` around one that is. The dtype of a text
+/// column in pandas 3.0 is written as a call as well.
+const PANDAS_CALLS: &[Reduce] = &[
+    Reduce {
+        path: "pandas.core.internals.managers.BlockManager",
+        what: Shape::Object,
+        names: &["blocks", "axes"],
+        shape: |args| (matches!(args[0].kind, Kind::Tuple(_)) && matches!(args[1].kind, Kind::List(_))).then_some(()),
+    },
+    Reduce {
+        path: "pandas._libs.internals._unpickle_block",
+        what: Shape::Block,
+        names: &["values", "placement", "ndim"],
+        shape: |args| {
+            // The placement is a slice of the frame's columns. pandas writes an
+            // array of positions instead when a block's columns are not next to
+            // each other, and that is a non-match until there is a file with
+            // one in it.
+            (holds_values(&args[0].kind)
+                && matches!(args[1].kind, Kind::Object { what: Shape::Slice, .. })
+                && matches!(args[2].kind, Kind::Int { .. }))
+            .then_some(())
+        },
+    },
+    Reduce {
+        path: "pandas.core.indexes.base._new_Index",
+        what: Shape::Object,
+        names: &["type", "state"],
+        shape: |args| (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Dict(_))).then_some(()),
+    },
+    Reduce {
+        path: "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked",
+        what: Shape::Object,
+        names: &["type", "checksum", "state"],
+        shape: |args| {
+            (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Int { .. }) && matches!(args[2].kind, Kind::None))
+                .then_some(())
+        },
+    },
+    // pandas 3.0 writes the dtype of a text column as a call of its storage
+    // and the value it uses for a missing entry. Both spellings of the module
+    // are named, as numpy's two are.
+    Reduce { path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+    Reduce { path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+];
+
+/// What a block's values may be: numbers, pickled objects, or an array of one
+/// of those wrapped in a class of pandas' own.
+fn holds_values(kind: &Kind) -> bool {
+    matches!(kind, Kind::Array { .. } | Kind::Objects { .. } | Kind::Made { .. } | Kind::Instance { .. })
+}
+
+/// `StringDtype(storage, na_value)`: a word and a float, which is a NaN.
+fn string_dtype(args: &[Value]) -> Option<()> {
+    (matches!(args[0].kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. })) && matches!(args[1].kind, Kind::Float { .. }))
+        .then_some(())
+}
+
 /// Initial envelope: protocol 4/5, unframed or framed the way CPython frames.
 /// Each form is tried in turn over the same bytes, under one shared budget.
 pub fn recognise(bytes: &[u8]) -> Option<Match> {
     let mut left = MAX_VALUES;
-    let plain = Allow { numpy: false, builtins: false, classes: NO_CLASSES, calls: NO_CALLS };
-    let forms = [
+    let mut reached = 0;
+    forms().into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left, &mut reached))
+}
+
+/// Every form, in the order a file is tried against them.
+fn forms() -> [(&'static str, Allow); 6] {
+    let plain = Allow { numpy: false, builtins: false, classes: NO_CLASSES, calls: NO_CALLS, object_arrays: false };
+    [
         (BASIC, plain),
         (NUMPY, Allow { numpy: true, ..plain }),
         (BUILTINS, Allow { builtins: true, ..plain }),
-        (SKLEARN, Allow { numpy: true, classes: &["sklearn."], calls: SKLEARN_CALLS, ..plain }),
-        (SCIPY, Allow { numpy: true, classes: &["scipy.sparse."], ..plain }),
-    ];
-    forms.into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left))
+        (SKLEARN, Allow { numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS, ..plain }),
+        (SCIPY, Allow { numpy: true, classes: &["scipy.sparse"], ..plain }),
+        (
+            PANDAS,
+            Allow { numpy: true, builtins: true, classes: &["pandas"], calls: PANDAS_CALLS, object_arrays: true },
+        ),
+    ]
 }
 
 /// One form's whole grammar over the whole file.
-fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize) -> Option<Match> {
+/// How far into the file the forms read before none of them could go on.
+///
+/// This is not part of matching, and it says nothing about the file: a
+/// non-match is a non-match. It is for whoever is writing the next production
+/// and wants the byte the reading stopped at instead of bisecting for it.
+/// `cargo run -p qubero-core --example pickle_forms` prints it beside a file
+/// no form matched.
+pub fn furthest(bytes: &[u8]) -> usize {
+    let mut left = MAX_VALUES;
+    let mut reached = 0;
+    for (form, allow) in forms() {
+        attempt(bytes, form, allow, &mut left, &mut reached);
+    }
+    reached
+}
+
+fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, reached: &mut usize) -> Option<Match> {
     let mut c = Cursor {
         bytes,
         at: 0,
@@ -489,9 +601,11 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize) -> 
         arrays: 0,
         objects: 0,
         instances: 0,
+        furthest: 0,
     };
     let found = c.whole(form);
     *left = c.left;
+    *reached = (*reached).max(c.furthest);
     found
 }
 

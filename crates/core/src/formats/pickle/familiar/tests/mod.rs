@@ -10,6 +10,7 @@ mod arrays;
 mod frames;
 mod grammar;
 mod objects;
+mod pandas;
 mod tree;
 
 /// A plain dtype's spelling, which is what an array test asserts about. A
@@ -17,7 +18,7 @@ mod tree;
 fn spelling(dtype: &Dtype) -> &str {
     match dtype {
         Dtype::Plain(said) => said.as_str(),
-        Dtype::Record { .. } => panic!("a plain dtype was expected, not {dtype:?}"),
+        _ => panic!("a plain dtype was expected, not {dtype:?}"),
     }
 }
 

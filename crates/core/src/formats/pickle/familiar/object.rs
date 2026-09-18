@@ -19,8 +19,14 @@ use super::{Kind, Shape, Value};
 
 impl Cursor<'_> {
     /// Whether a module is one the form in hand may name a class from.
+    ///
+    /// The package itself or anything under it, and nothing that merely starts
+    /// with the same letters: pandas 3.0 spells its frame's module `pandas`
+    /// where 2.x spelled it `pandas.core.frame`, and `sklearnish` is neither.
     pub(super) fn whitelisted(&self, module: &str) -> bool {
-        self.allow.classes.iter().any(|prefix| module.starts_with(prefix))
+        self.allow.classes.iter().any(|package| {
+            module.strip_prefix(package).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        })
     }
 
     /// The four opcodes a library object is built with, each folding the two
@@ -33,7 +39,7 @@ impl Cursor<'_> {
         match code {
             0x93 => self.class_named(items),
             0x81 => self.new_object(at, items),
-            b'R' => self.reduced(items),
+            b'R' => self.reduced(at, items),
             b'b' => self.built(items),
             _ => None,
         }
@@ -96,13 +102,18 @@ impl Cursor<'_> {
     /// BUILD: the state written in front of it, handed to the thing below it.
     ///
     /// The state is a dictionary of attribute names, which is what
-    /// `object.__setstate__` takes. The names are data; the shape is fixed.
+    /// `object.__setstate__` takes, or a tuple, which is what a class with a
+    /// `__setstate__` of its own is handed. The contents are data; the shape
+    /// is fixed.
     /// What is below may be an object NEWOBJ made or the result of one of the
     /// enumerated calls: scikit-learn's tree of nodes is a call, and the arrays
     /// in it arrive by BUILD like any other attributes.
     fn built(&mut self, items: Vec<Value>) -> Option<Kind> {
         let [into, state] = <[Value; 2]>::try_from(items).ok()?;
-        if !matches!(state.kind, Kind::Dict(_)) {
+        // A dictionary of attribute names, or the tuple a class that spells
+        // its own state out writes: pandas hands a block manager its axes, its
+        // blocks and the dictionary it versions them with as one tuple.
+        if !matches!(state.kind, Kind::Dict(_) | Kind::Tuple(_)) {
             return None;
         }
         let state = Some(Box::new(state));
@@ -119,7 +130,7 @@ impl Cursor<'_> {
     /// Never a REDUCE of whatever global happens to be under a whitelisted
     /// module. The list is short, each entry was read out of the corpus, and
     /// the argument shape is checked against what the library writes.
-    fn reduced(&mut self, items: Vec<Value>) -> Option<Kind> {
+    fn reduced(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [callable, args] = <[Value; 2]>::try_from(items).ok()?;
         let Kind::Class { ref path, .. } = callable.kind else { return None };
         let call = self.allow.calls.iter().find(|call| call.path == *path)?;
@@ -128,7 +139,10 @@ impl Cursor<'_> {
             return None;
         }
         (call.shape)(&held)?;
-        self.memoize(Bound::Opaque)?;
+        // What the call made, which a later part of the file may name: pandas
+        // writes a block's values once and names them again in the dictionary
+        // it versions its state with.
+        self.memoize(Bound::Made { what: call.what, at, hashable: false })?;
         self.instances += 1;
         Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held, state: None })
     }

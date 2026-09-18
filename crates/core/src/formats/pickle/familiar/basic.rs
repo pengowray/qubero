@@ -110,12 +110,12 @@ fn hashable(value: &Value) -> bool {
         // file in the corpus writes either as a key, so neither is read as
         // one until something does.
         Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
-        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } => false,
+        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } | Kind::Objects { .. } => false,
     }
 }
 
 impl Cursor<'_> {
-    fn text(&mut self) -> Option<Value> {
+    pub(super) fn text(&mut self) -> Option<Value> {
         self.gate()?;
         let start = self.at;
         let code = self.byte()?;

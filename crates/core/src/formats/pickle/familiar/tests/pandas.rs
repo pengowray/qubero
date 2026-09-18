@@ -1,0 +1,177 @@
+//! The pandas productions: the calls a frame is assembled from, the array of
+//! objects a column of names is, and the calls the form turns away.
+//!
+//! The fixtures here are the shapes read out of the corpus rather than whole
+//! frames, which `crates/core/tests/pickle_real.rs` covers file by file.
+
+use super::*;
+
+/// `STACK_GLOBAL` of a module and a name, and the memo mark after it.
+fn class(module: &str, name: &str) -> Vec<u8> {
+    cat(&[&word(module), &word(name), b"\x93\x94"])
+}
+
+/// A frame: the class, the object NEWOBJ makes, a state dictionary holding
+/// `_mgr`, and the BUILD that hands it over.
+fn frame(mgr: &[u8]) -> Vec<u8> {
+    cat(&[&class("pandas", "DataFrame"), b")\x81\x94}\x94", &word("_mgr"), mgr, b"sb."])
+}
+
+/// An array of objects, which is what a column of names is: the `O8` dtype and
+/// the list of values pickled after it.
+fn object_array(names: &[&str]) -> Vec<u8> {
+    let mut w = Writing::default();
+    w.word("numpy._core.multiarray");
+    w.word("_reconstruct");
+    w.raw(b"\x93");
+    w.mark();
+    w.word("numpy");
+    w.word("ndarray");
+    w.raw(b"\x93");
+    w.mark();
+    w.raw(b"K\0\x85");
+    w.mark();
+    w.raw(b"C\x01b");
+    w.mark();
+    w.raw(b"\x87");
+    w.mark();
+    w.raw(b"R");
+    w.mark();
+    w.raw(b"(K\x01");
+    w.count(names.len() as u64);
+    w.raw(b"\x85");
+    w.mark();
+    w.word("numpy");
+    w.word("dtype");
+    w.raw(b"\x93");
+    w.mark();
+    w.word("O8");
+    w.raw(b"\x89\x88\x87");
+    w.mark();
+    w.raw(b"R");
+    w.mark();
+    w.raw(b"(K\x03");
+    w.word("|");
+    w.raw(b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\x3ft");
+    w.mark();
+    w.raw(b"b\x89]");
+    w.mark();
+    match names {
+        [] => {}
+        [one] => {
+            w.word(one);
+            w.raw(b"a");
+        }
+        many => {
+            w.raw(b"(");
+            for name in many {
+                w.word(name);
+            }
+            w.raw(b"e");
+        }
+    }
+    w.raw(b"t");
+    w.mark();
+    w.raw(b"b");
+    w.out
+}
+
+/// `pandas.core.indexes.base._new_Index(Index, {"data": <array>, "name": None})`,
+/// which is how a frame writes the names of its columns.
+fn names_index(names: &[&str]) -> Vec<u8> {
+    cat(&[
+        &class("pandas.core.indexes.base", "_new_Index"),
+        &class("pandas", "Index"),
+        b"}\x94",
+        &word("data"),
+        &object_array(names),
+        b"s\x86\x94R\x94",
+    ])
+}
+
+#[test]
+fn a_column_of_names_is_an_array_of_objects() {
+    let bytes = framed(&cat(&[&object_array(&["id", "score"]), b"."]));
+    // On its own an array of objects belongs to no form: only the pandas form
+    // reads one, and the pandas form needs a class of its own as well.
+    assert!(recognise(&bytes).is_none());
+    let bytes = framed(&frame(&names_index(&["id", "score"])));
+    let found = recognise(&bytes).unwrap();
+    assert_eq!(found.form, "pandas-frame-p4-p5-v1");
+    let Kind::Instance { state: Some(state), .. } = &found.value.kind else { panic!("object expected") };
+    let Kind::Dict(entries) = &state.kind else { panic!("state expected") };
+    let Kind::Made { names, items, .. } = &entries[0].1.kind else { panic!("call expected") };
+    assert_eq!(*names, ["type", "state"]);
+    let Kind::Dict(index) = &items[1].kind else { panic!("index state expected") };
+    let Kind::Objects { dimensions, items, .. } = &index[0].1.kind else { panic!("object array expected") };
+    assert_eq!(dimensions, &[2]);
+    assert_eq!(items.len(), 2);
+    assert!(matches!(items[0].kind, Kind::Text { .. }));
+}
+
+/// The values have to come to the shape the array declares, and a shape that
+/// counts them wrong is a non-match rather than a short read.
+#[test]
+fn an_array_of_objects_holds_as_many_values_as_its_shape_says() {
+    let three = object_array(&["id", "score", "extra"]);
+    let miscounted = {
+        let mut bytes = three.clone();
+        // The one dimension of the shape, written as BININT1 3.
+        let at = bytes.windows(2).rposition(|w| w == b"K\x03").unwrap();
+        bytes[at + 1] = 2;
+        bytes
+    };
+    assert!(recognise(&framed(&frame(&names_index(&["id", "score", "extra"])))).is_some());
+    assert!(recognise(&framed(&frame(&cat(&[&class("pandas.core.indexes.base", "_new_Index"), &class("pandas", "Index"), b"}\x94", &word("data"), &miscounted, b"s\x86\x94R\x94"])))).is_none());
+    // A value of a kind the form has not written down, which here is a number
+    // where a name belongs.
+    let numbered = {
+        let one = object_array(&["id"]);
+        let at = one.windows(4).rposition(|w| w == b"\x8c\x02id").unwrap();
+        cat(&[&one[..at], b"K\x01\x94", &one[at + 5..]])
+    };
+    assert!(recognise(&framed(&cat(&[&numbered, b"."]))).is_none());
+}
+
+/// A REDUCE of a pandas global the form does not list, with arguments that
+/// look like a call the form does list. The module prefix names classes; it
+/// never says which of a library's callables may be called.
+#[test]
+fn a_reduce_of_an_unlisted_pandas_callable_is_a_non_match() {
+    for (module, name) in [
+        ("pandas.io.pickle", "read_pickle"),
+        ("pandas.core.internals.blocks", "new_block"),
+        ("pandas.core.indexes.base", "_new_index"),
+    ] {
+        let call = cat(&[&class(module, name), &word("/etc/passwd"), b"\x85\x94R\x94"]);
+        let bytes = framed(&frame(&call));
+        assert!(recognise(&bytes).is_none(), "{module}.{name}");
+    }
+}
+
+/// The arguments of a block are checked against what pandas writes. A block
+/// placed by an array of positions rather than a slice is a non-match until
+/// there is a file with one in it.
+#[test]
+fn a_block_is_values_a_slice_and_a_number() {
+    let slice = cat(&[&class("builtins", "slice"), b"K\0K\x01K\x01\x87\x94R\x94"]);
+    let good = cat(&[
+        &class("pandas._libs.internals", "_unpickle_block"),
+        &object_array(&["a", "b"]),
+        &slice,
+        b"K\x02\x87\x94R\x94",
+    ]);
+    let blocks = cat(&[&class("pandas.core.internals.managers", "BlockManager"), &good, b"\x85\x94]\x94\x86\x94R\x94"]);
+    assert!(recognise(&framed(&frame(&blocks))).is_some());
+    // The same block with the placement left out, which is two arguments where
+    // pandas writes three.
+    let short = cat(&[
+        &class("pandas._libs.internals", "_unpickle_block"),
+        &object_array(&["a", "b"]),
+        b"K\x02\x86\x94R\x94",
+    ]);
+    assert!(recognise(&framed(&frame(&short))).is_none());
+    // And with a number where the values belong.
+    let bare = cat(&[&class("pandas._libs.internals", "_unpickle_block"), b"K\x01", &slice, b"K\x02\x87\x94R\x94"]);
+    assert!(recognise(&framed(&frame(&bare))).is_none());
+}

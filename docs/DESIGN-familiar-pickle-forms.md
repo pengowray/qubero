@@ -42,7 +42,7 @@ and a `REDUCE` or `BUILD` outside the fixed runs the forms name is a non-match
 as before. Depth is bounded per value as the tree is built rather than by the
 recursion that is no longer there.
 
-Implemented forms. All three are the same grammar over the same envelope,
+Implemented forms. All six are the same grammar over the same envelope,
 differing in which value productions they allow; a file is read under the one
 form whose productions it uses, and a file mixing two of them matches neither.
 
@@ -105,7 +105,13 @@ form whose productions it uses, and a file mixing two of them matches neither.
   dimensions with the exact EMPTY_TUPLE/TUPLE1/TUPLE2/TUPLE3/marked TUPLE
   production for their arity. Storage uses SHORT_BINBYTES/BINBYTES/BINBYTES8
   and must match shape times item size; a scalar's storage is one value wide.
-  Object, structured, datetime and external-buffer dtypes/layouts fall back.
+  A structured dtype is read too: `V` and a width, with the column names as a
+  tuple, the columns as a dictionary of each name against its own dtype and
+  offset, and the width, alignment and flags after them. Every column has to
+  fit inside a record and they have to be written in the order they sit in. A
+  column's own dtype is a plain one, so the nesting is one level deep. Object,
+  datetime and external-buffer dtypes/layouts fall back; an `O8` array is read
+  only by the pandas form, which is the only place one turns up.
 - `builtins-values-p4-p5-v3`: the basic productions plus the four builtins a
   pickle writes as a call rather than as a literal, with at least one present.
   `builtins.slice` of three integers or Nones, `builtins.range` of three
@@ -117,17 +123,112 @@ form whose productions it uses, and a file mixing two of them matches neither.
   only below protocol 5, which gave the type an opcode. No other module,
   callable or argument type is accepted. `set` and `frozenset` moved to the
   basic form, where they belong: protocol 4 writes both as literals.
+- The library forms, one per library, described in "The safety line for a
+  library object" below: `sklearn-estimator-p4-p5-v1`,
+  `scipy-sparse-p4-p5-v1` and `pandas-frame-p4-p5-v1`.
 
-All three forms accept protocol 4/5. They require STOP followed immediately by
+All six forms accept protocol 4/5. They require STOP followed immediately by
 EOF. The matcher uses borrowed byte ranges, a 64-level bound on how deep a
 captured value may be and on how many marks may be open at once, a bound of a
 million memo slots and a million things on the stack, and a budget of a million
-opcodes shared across all three attempts, so an alternative that failed still
+opcodes shared across all six attempts, so an alternative that failed still
 cost what it cost. The budget was a hundred thousand up to the fourth slice and
 could be raised because the pass no longer backtracks over a container: work is
 now linear in the file, and the number is what a real file needs rather than
 what a hostile one might cost. No Python or new runtime dependency was
 introduced.
+
+### The safety line for a library object
+
+A pickle is never run, and a library form does not change that. What it adds is
+a way to name a class, and a class is the one thing every earlier form refused,
+so the line is written here and held in `familiar/object.rs`.
+
+- **A class is named only by `STACK_GLOBAL`**, at protocol 4 or 5, and only
+  when its module is the package the form lists or something under it:
+  `sklearn` for `sklearn-estimator-p4-p5-v1`, `scipy.sparse` for
+  `scipy-sparse-p4-p5-v1`, `pandas` for `pandas-frame-p4-p5-v1`. The package
+  itself counts, because pandas 3.0 spells a frame's module `pandas` where 2.x
+  spelled it `pandas.core.frame`; `sklearnish` does not. NumPy's classes are
+  not on any of these lists: they are named only inside the NumPy productions'
+  own fixed runs, by their exact spellings, so a NumPy global cannot arrive
+  anywhere else. A `BINGET` may name a class the file named earlier, under the
+  same rule.
+- **An object is made only by `EMPTY_TUPLE NEWOBJ`**, which is
+  `cls.__new__(cls)`. A `NEWOBJ` handed arguments is a class being told to
+  construct itself out of values, and what those mean belongs to the class.
+- **State arrives only by `BUILD`**, of a dictionary of attribute names or of
+  the tuple a class with a `__setstate__` of its own is handed. The attribute
+  names are data; the instruction shape is fixed. State values are what the
+  other productions already read: basic values, NumPy arrays and scalars,
+  nested objects of the same kind.
+- **`REDUCE` is accepted only of an enumerated callable**, by its whole dotted
+  path, with the exact argument shape that callable is written with. Never a
+  `REDUCE` of whatever global happens to sit under a whitelisted module: that
+  is how a pickle exploit is written, and a module whitelist can name callables
+  that do work when they are called. Deciding which of a library's thousand
+  functions are safe is not this reader's job, so it decides nothing and reads
+  a list instead.
+
+The list, as implemented:
+
+| Form | Callables a REDUCE may name |
+| --- | --- |
+| every form with NumPy | `numpy._core.multiarray._reconstruct`, `numpy.core.multiarray._reconstruct`, `numpy._core.multiarray.scalar`, `numpy.core.multiarray.scalar`, `numpy._core.numeric._frombuffer`, `numpy.core.numeric._frombuffer`, `numpy.dtype` |
+| `builtins-values-p4-p5-v3` | `builtins.slice`, `builtins.range`, `builtins.complex`, `builtins.bytearray` |
+| `sklearn-estimator-p4-p5-v1` | the NumPy ones, and `sklearn.tree._tree.Tree` of a number, an array and a number |
+| `scipy-sparse-p4-p5-v1` | the NumPy ones |
+| `pandas-frame-p4-p5-v1` | the NumPy ones, `builtins.slice`, `pandas.core.internals.managers.BlockManager` of a tuple of blocks and a list of axes, `pandas._libs.internals._unpickle_block` of values, a slice and a number, `pandas.core.indexes.base._new_Index` of a class and a dictionary, `pandas._libs.arrays.__pyx_unpickle_NDArrayBacked` of a class, a number and None, and `pandas.StringDtype` / `pandas.core.arrays.string_.StringDtype` of a word and a float |
+
+The NumPy and builtins calls are matched inside their own fixed runs rather
+than through this list, which is why a failed NumPy production cannot be read a
+second, looser way: the loop's `STACK_GLOBAL` will not bind a global the form
+has not listed, so the file ends as a non-match rather than as a different
+reading of the same bytes.
+
+Three forms and one grammar. Each is the plain object production over one
+package with that library's calls beside it, so a file is read under the form
+for the library that wrote it and no other, and a pandas call cannot appear in
+a scikit-learn file. The form IDs are per library because that is what a reader
+compares against.
+
+What the library forms read, and what they do not:
+
+- **scikit-learn.** An estimator is a class under `sklearn`, made with no
+  arguments, with a dictionary of attributes. The attribute names change
+  between releases, so the form fixes the instructions and reads the names as
+  data. A decision tree also holds a `sklearn.tree._tree.Tree`, built by
+  `REDUCE` from how many features, classes and outputs it was fitted on and
+  handed its arrays by the `BUILD` after it; its nodes are a structured array.
+  A pipeline and a random forest hold estimators inside estimators, and an
+  attribute may name an object the file made earlier, which is what a forest's
+  `estimator_` is.
+- **scipy.** A sparse matrix is the same production under `scipy.sparse`: a
+  dictionary holding `data`, `indices`, `indptr` and a shape tuple. The class
+  moved from `scipy.sparse.csr` to `scipy.sparse._csr`, which is data.
+- **pandas, 1.1 and 1.5 to 3.0.** A frame is a `BlockManager` and a series a
+  `SingleBlockManager`. 1.1 hands the manager its axes, its blocks and the
+  dictionary it versions them with as one tuple through `NEWOBJ` and `BUILD`;
+  1.5 and up call `_unpickle_block` once a block. A series keeps the older
+  spelling in every release, so only the frames divide. An axis is
+  `_new_Index` of a class and a dictionary: `Index` over an array of names,
+  `RangeIndex` as start, stop and step. A categorical and, in 3.0, a text
+  column are `__pyx_unpickle_NDArrayBacked` around an array, finished by a
+  `BUILD` of a tuple.
+- **pandas 1.3 is a non-match.** It writes a block as `functools.partial` over
+  `pandas.core.internals.blocks.new_block`, which is a `REDUCE` of what another
+  `REDUCE` made. The form refuses a call whose callable is the result of a
+  call, and that refusal is the rule rather than an omission.
+- **A datetime index is a non-match.** Its values are an `M8` dtype, whose
+  state is nine long rather than eight and carries the unit it counts in, and
+  it needs `pandas.core.indexes.datetimes._new_DatetimeIndex` and
+  `pandas._libs.tslibs.offsets.Day` as well. None of that is written yet.
+- **A block placed by an array is a non-match.** pandas writes an array of
+  column positions instead of a slice when a block's columns are not next to
+  each other, and no file in the corpus does.
+- **An array of objects holds text, `None` and names for text**, in a list of
+  up to a thousand a batch, and nothing else. An array of objects can hold
+  whatever was pickled into it, and only what a form has written down is read.
 
 ### What stays a non-match, and why
 
@@ -139,7 +240,9 @@ introduced.
   cannot be built postfix, so CPython writes the elements, throws them away
   and names the tuple the recursion already made. No form accepts either
   opcode, so that file is a non-match.
-- **A class the file names.** Unchanged, and the point of the contract.
+- **A class the file names**, unless its module is one a library form lists.
+  See "The safety line for a library object" above: the rule did not go, it
+  was written down.
 - **An integer past sixteen bytes**, and `LONG4`, which CPython writes only
   past 2^2040. Neither is a number the reader has a type for.
 - **A string that is not UTF-8**, which `surrogatepass` lets through.
@@ -369,7 +472,11 @@ one half or the other.
 | `proto2-memo-over-256.pickle` | protocol 2, and names pointing at lists |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
 | `proto3-numpy-1-module-names.pickle` | protocol 3, where a global is a line rather than a counted string |
-| `proto4-scipy-*`, `proto4-sklearn-*`, `proto5-pandas-*`, `proto2-torch-*` | library forms, which need reviewed complete structures of their own |
+| `proto4-scipy-coo-matrix`, `proto4-scipy-csc-matrix`, `proto4-scipy-csr-matrix` | `scipy-sparse-p4-p5-v1` |
+| `proto4-sklearn-pipeline`, `proto4-sklearn-random-forest` | `sklearn-estimator-p4-p5-v1` |
+| `proto5-pandas-dataframe`, `proto5-pandas-series` | `pandas-frame-p4-p5-v1` |
+| `proto5-pandas-index-types` | a datetime index, whose `M8` dtype no form reads |
+| `proto2-torch-state-dict` | protocol 2, and persistent ids for the tensor storage |
 
 The `everything` files and `proto4-collections` are held back by one thing
 between them: each rebuilds a class no form names, by REDUCE or by NEWOBJ. A
@@ -456,10 +563,10 @@ is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,
 3.10, 3.12, 3.13 and 3.14 and by PyPy 2.7 and 3.10, with NumPy 1.19 to 2.5
 beside them where the release had one, at every protocol each has and from
 both of CPython's picklers. All 78 basic and NumPy files written at protocol 4
-or 5 match: 44 of plain data and 34 of arrays and scalars. The 90 pandas,
-scikit-learn and scipy files at those protocols match nothing, and
-`the_forms_match_every_environment_s_plain_data_and_arrays` is written so that
-a form for one of those libraries is a one-line change to its `FAMILIES` row.
+or 5 match: 44 of plain data and 34 of arrays and scalars. Of the 90 library
+files at those protocols, 77 match: every scikit-learn and scipy file, every
+series, and every frame but the eleven with a datetime index and the two
+pandas 1.3 wrote.
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
 sample opens as the familiar form with its form ID, its pickler row and its
 decoded values, that the chooser offers both templates and switches between

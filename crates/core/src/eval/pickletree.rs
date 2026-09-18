@@ -240,11 +240,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // attributes are what the object is.
             Kind::Instance { class, state } => {
                 let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(class))];
-                if let Some(state) = state {
-                    if let Kind::Dict(entries) = &state.kind {
-                        kids.extend(entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))));
-                    }
-                }
+                kids.extend(held(state));
                 (Vec::new(), kids)
             }
             // What one of a form's enumerated calls made, with the arguments
@@ -255,9 +251,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                     Some(name) => (Label::Field(name), Part::Value(x)),
                     None => (Label::Index(i), Part::Value(x)),
                 }));
-                if let Some(Kind::Dict(entries)) = state.as_ref().map(|s| &s.kind) {
-                    kids.extend(entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))));
-                }
+                kids.extend(held(state));
                 (Vec::new(), kids)
             }
             // A builtin written as a call. Its parts are named where Python
@@ -273,24 +267,24 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                     })
                     .collect(),
             ),
+            // An array whose values are objects. They were pickled after it and
+            // handed to it as a list, so they are nodes of their own rather
+            // than a run of bytes to read.
+            Kind::Objects { dimensions, fortran_order, items } => {
+                let notes = says_array(&Dtype::Objects, dimensions, *fortran_order);
+                let mut kids = Vec::new();
+                if let Some(call) = call_of(found, v) {
+                    kids.push((Label::Field(call.name), Part::Call(call, v)));
+                }
+                kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))));
+                (notes, kids)
+            }
             Kind::Array { dtype, dimensions, fortran_order, .. } => {
-                let shape = match dimensions.is_empty() {
-                    true => NO_DIMENSIONS.to_string(),
-                    false => dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
-                };
-                let order = match fortran_order {
-                    true => FORTRAN_ORDER,
-                    false => C_ORDER,
-                };
-                let notes = vec![
-                    (Label::Field(DTYPE_FIELD), Part::Note(dtype.name())),
-                    (Label::Field(SHAPE_FIELD), Part::Note(shape)),
-                    (Label::Field(ORDER_FIELD), Part::Note(order.to_string())),
-                ];
+                let notes = says_array(dtype, dimensions, *fortran_order);
                 let mut kids = Vec::new();
                 // The call that rebuilt this array, when it is this array's:
                 // a form matches one, and it sits inside the array's bytes.
-                let call = found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len);
+                let call = call_of(found, v);
                 if let Some(call) = call {
                     kids.push((Label::Field(call.name), Part::Call(call, v)));
                 }
@@ -337,6 +331,40 @@ fn shown(bytes: &[u8], text: bool, whole: usize) -> String {
     said
 }
 
+/// What a BUILD handed an object or a call, placed directly under it: the
+/// entries of the dictionary of attributes, or the items of the tuple a class
+/// that spells its own state out is handed.
+fn held<'a>(state: &'a Option<Box<Value>>) -> Vec<(Label, Part<'a>)> {
+    match state.as_deref().map(|s| &s.kind) {
+        Some(Kind::Dict(entries)) => entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))).collect(),
+        Some(Kind::Tuple(items)) => items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// What an array says about itself before its values: how one of them is read,
+/// how many there are and which way round they run.
+fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool) -> Vec<(Label, Part<'a>)> {
+    let shape = match dimensions.is_empty() {
+        true => NO_DIMENSIONS.to_string(),
+        false => dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
+    };
+    let order = match fortran_order {
+        true => FORTRAN_ORDER,
+        false => C_ORDER,
+    };
+    vec![
+        (Label::Field(DTYPE_FIELD), Part::Note(dtype.name())),
+        (Label::Field(SHAPE_FIELD), Part::Note(shape)),
+        (Label::Field(ORDER_FIELD), Part::Note(order.to_string())),
+    ]
+}
+
+/// The run of instructions that rebuilt this array, which sits inside it.
+fn call_of<'a>(found: &'a Match, v: &Value) -> Option<&'a Call> {
+    found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len)
+}
+
 /// The entries a node's children are keyed by: a dictionary's own, and the
 /// state dictionary of an object, whose entries are the object's attributes and
 /// are placed directly under it.
@@ -381,7 +409,7 @@ fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Set(_) => Shape::Set,
             Kind::FrozenSet(_) => Shape::FrozenSet,
             Kind::Ref(_) => Shape::Ref,
-            Kind::Array { .. } => Shape::Array,
+            Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
             Kind::Object { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,
             Kind::Instance { .. } => Shape::Object,
@@ -441,6 +469,9 @@ fn numbers_ty(dtype: &Dtype, count: u64) -> Option<T> {
             let named: Vec<(&str, T)> = fields.iter().map(|(n, t)| (n.as_str(), t.clone())).collect();
             Some(T::array(T::structure(RECORD_NAME, named), E::lit(count as i128)))
         }
+        // An array of objects has no run of bytes to read: its values are
+        // nodes of their own, wherever the file pickled them.
+        Dtype::Objects => None,
     }
 }
 

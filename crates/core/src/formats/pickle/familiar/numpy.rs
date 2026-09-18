@@ -4,8 +4,17 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Dtype, Kind, Value, MAX_DIMENSIONS, NO_OPCODE};
+use super::{Dtype, Kind, Names, Shape, Value, MAX_BATCH, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
+
+/// How many values a shape holds, which is what a list of objects has to come
+/// to. Zero when any dimension is.
+fn count_of(dimensions: &[u64]) -> Option<u64> {
+    match dimensions.contains(&0) {
+        true => Some(0),
+        false => dimensions.iter().try_fold(1u64, |n, dim| n.checked_mul(*dim)),
+    }
+}
 
 impl Cursor<'_> {
     /// One dimension of a shape, which is written as a nonnegative integer in
@@ -68,6 +77,9 @@ impl Cursor<'_> {
         let shape = match dtype {
             Dtype::Plain(spelling) => crate::formats::pickle::shapes::dtype(spelling)?.0,
             Dtype::Record { .. } => 0,
+            // An array of objects never reaches here: its values are read
+            // rather than measured.
+            Dtype::Objects => return None,
         };
         let width = dtype.width()?;
         // Check every dimension even when another one is zero. Dimensions
@@ -136,7 +148,7 @@ impl Cursor<'_> {
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
-        self.memoize(Bound::Opaque)?;
+        self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: false })?;
         let payload = self.fits(&dtype, &dimensions, len)?;
         // The buffer is one of the call's arguments rather than something
         // handed to the array afterwards, so the call covers it.
@@ -190,7 +202,10 @@ impl Cursor<'_> {
         self.exact(b"\x87")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
-        self.memoize(Bound::Opaque)?;
+        // The array itself, which a later part of the file may name: a pandas
+        // block manager writes its values once and names them again in the
+        // dictionary it versions its state with.
+        self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: false })?;
         self.atoms(&[b"(", b"K\x01"])?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
@@ -201,6 +216,18 @@ impl Cursor<'_> {
             _ => return None,
         };
         let call_ends = self.at;
+        // An array of objects has no buffer. Its values are pickled after it,
+        // as the list the array is handed, and they are read as values rather
+        // than measured against a width.
+        if dtype == Dtype::Objects {
+            let items = self.object_values(count_of(&dimensions)?)?;
+            self.finish_call("ndarray reconstruct call", start, call_ends);
+            self.exact(b"t")?;
+            self.memoize(Bound::Opaque)?;
+            self.exact(b"b")?;
+            self.arrays += 1;
+            return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items }));
+        }
         let (at, len, payload) = self.numbers(&dtype, &dimensions)?;
         self.finish_call("ndarray reconstruct call", start, call_ends);
         self.memoize(Bound::Bytes { at, len })?;
@@ -213,6 +240,71 @@ impl Cursor<'_> {
             start,
             Kind::Array { at, len, dtype, dimensions, fortran_order },
         ))
+    }
+
+    /// The list of values an array of objects is handed, which is an ordinary
+    /// list written the way CPython writes one: nothing at all, one value and
+    /// APPEND, or a run of batches of a thousand.
+    ///
+    /// The values are text, the singletons, and names for text written earlier,
+    /// which is what a pandas index of column names holds. Anything else is a
+    /// non-match: an array of objects can hold whatever was pickled into it,
+    /// and only what a form has written down is read.
+    fn object_values(&mut self, count: u64) -> Option<Vec<Value>> {
+        self.gate()?;
+        self.exact(b"]")?;
+        let at = self.at - 1;
+        self.memoize(Bound::Made { what: Shape::List, at, hashable: false })?;
+        let mut items = Vec::new();
+        if count == 0 {
+            return Some(items);
+        }
+        if count == 1 {
+            items.push(self.object_value()?);
+            self.exact(b"a")?;
+            return Some(items);
+        }
+        while (items.len() as u64) < count {
+            let want = (count - items.len() as u64).min(MAX_BATCH as u64);
+            // A single value left over after a full batch is APPEND in
+            // `pickle.py` and a batch of one in the C pickler; both are read,
+            // and neither says which wrote the file, since the list inside an
+            // array is not written by the loop the tells were measured on.
+            if want == 1 && self.peek()? != b'(' {
+                items.push(self.object_value()?);
+                self.exact(b"a")?;
+                continue;
+            }
+            self.gate()?;
+            self.exact(b"(")?;
+            for _ in 0..want {
+                items.push(self.object_value()?);
+            }
+            self.exact(b"e")?;
+        }
+        Some(items)
+    }
+
+    /// One value inside an array of objects.
+    fn object_value(&mut self) -> Option<Value> {
+        self.gate()?;
+        match self.peek()? {
+            0x8c | 0x58 | 0x8d => self.text(),
+            b'h' | b'j' => {
+                let start = self.at;
+                let names = match self.reference()?.clone() {
+                    Bound::Text { at, len } => Names::Text { at, len },
+                    _ => return None,
+                };
+                Some(self.span(start, Kind::Ref(names)))
+            }
+            b'N' => {
+                let start = self.at;
+                self.byte()?;
+                Some(self.span(start, Kind::None))
+            }
+            _ => None,
+        }
     }
 
     /// `numpy._core.multiarray.scalar(dtype, bytes)`, which is how a single
@@ -229,7 +321,8 @@ impl Cursor<'_> {
         self.exact(b"\x86")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
-        self.memoize(Bound::Opaque)?;
+        // A scalar is one number, and Python hashes it.
+        self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: true })?;
         self.arrays += 1;
         self.payloads.push((at, payload));
         Some(self.span(

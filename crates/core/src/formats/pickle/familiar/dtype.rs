@@ -66,7 +66,10 @@ impl Cursor<'_> {
         // `V` and a width is a record; everything else is one number a value,
         // and only the spellings the reader has a type for.
         let record = records && kind.strip_prefix('V').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        if !record && !PLAIN.contains(&kind) {
+        // `O8` is one pickled object a value, which only a form that reads an
+        // array of them allows.
+        let objects = kind == "O8" && self.allow.object_arrays;
+        if !record && !objects && !PLAIN.contains(&kind) {
             return None;
         }
         let kind = kind.to_string();
@@ -88,8 +91,15 @@ impl Cursor<'_> {
         let dtype = match record {
             true => self.record_state(&kind)?,
             false => {
-                self.atoms(&[b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", b"K\0"])?;
-                Dtype::Plain(format!("{order}{kind}"))
+                // The flags NumPy builds the dtype with. A dtype of objects
+                // needs the interpreter for everything it does and says so;
+                // every plain one writes nothing.
+                let flags: &[u8] = if objects { b"K\x3f" } else { b"K\0" };
+                self.atoms(&[b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", flags])?;
+                match objects {
+                    true => Dtype::Objects,
+                    false => Dtype::Plain(format!("{order}{kind}")),
+                }
             }
         };
         self.exact(b"t")?;
@@ -196,7 +206,7 @@ impl Cursor<'_> {
             let name = std::str::from_utf8(self.bytes.get(*at..at + held)?).ok()?.to_string();
             let dtype = match self.column_dtype()? {
                 Dtype::Plain(spelling) => spelling,
-                Dtype::Record { .. } => return None,
+                _ => return None,
             };
             let Kind::Int { value, .. } = self.integer()?.kind else { return None };
             self.exact(&[0x86])?;
@@ -240,7 +250,7 @@ impl Cursor<'_> {
             return None;
         }
         let order = *self.bytes.get(at)?;
-        let orderless = matches!(kind, "b1" | "i1" | "u1") || kind.starts_with('V');
+        let orderless = matches!(kind, "b1" | "i1" | "u1" | "O8") || kind.starts_with('V');
         if (orderless && order != b'|') || (!orderless && !matches!(order, b'<' | b'>')) {
             return None;
         }
