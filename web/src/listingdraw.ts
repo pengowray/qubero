@@ -272,9 +272,11 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   const said =
     n.refused !== null
       ? (DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER)
-      : n.composite
-        ? countText(item.shownChildren ?? n.child_count, childWord(n))
-        : n.value;
+      : says(n)
+        ? n.value
+        : n.composite
+          ? countText(item.shownChildren ?? n.child_count, childWord(n))
+          : n.value;
   const value = el("span", "rp-value", said);
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the
   // square says what it is. Only where the template called the field a colour,
@@ -554,6 +556,14 @@ function unpackedButton(path: readonly number[], name: string, joined: boolean):
   b.title = UNPACKED.openTitle(name);
   b.dataset["unpacked"] = pathKey(path);
   return b;
+}
+
+/** Whether a structure's value is a word for itself rather than a count of
+ *  what is in it. The core gives a familiar pickle's entry the value it holds,
+ *  and its class row the dotted path, and either says more than `2 fields`.
+ *  Every other structure's value is its count, whose kind is `composite`. */
+function says(n: TemplateNode): boolean {
+  return n.composite && n.kind !== "composite" && n.value !== "";
 }
 
 /** Offer the table, where this node reads as one. The row word comes from the

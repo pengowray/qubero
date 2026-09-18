@@ -1245,3 +1245,22 @@ test("the listing's switch is the first item, and only when it is offered", () =
   // Nothing of its own to walk: the caller walks the whole tree.
   assert.equal(refold(src, emptyState, { listingSwitch: { key: "picklefpf", on: true } }, items, 0), null);
 });
+
+test("a row that says all that is in it arrives shut, and opens when asked", () => {
+  const src = source(build(PICKLE, [], 0));
+  const opts: FlatOptions = { hideMachinery: true, saysItself: (node, kids) => node.name === "entry" && kids.every((k) => !k.composite) };
+  // Without the option the entry arrives open, on its key and its value.
+  const open = flatten(src, emptyState, { hideMachinery: true }).items;
+  assert.equal(entryRow(open)?.open, true);
+  assert.ok(open.some((i) => i.kind === "row" && i.node.name === "value"));
+  // With it the entry is one row, and the fields it was opened on are gone.
+  const shutItems = flatten(src, emptyState, opts).items;
+  const row = entryRow(shutItems);
+  assert.equal(row?.open, false);
+  assert.ok(!shutItems.some((i) => i.kind === "row" && i.node.name === "value"));
+  // The reader's click still opens it: what arrives is a default, not a lock.
+  const asked: ListingState = { ...emptyState, open: new Set([pathKey(row?.path ?? [])]) };
+  assert.equal(entryRow(flatten(src, asked, opts).items)?.open, true);
+  // The dict is a structure whose row says nothing, and the caller said so.
+  assert.ok(shutItems.some((i) => i.kind === "row" && i.node.name === "entry"));
+});

@@ -11,7 +11,7 @@
 // because `spans` is windowed by bit range and cannot say how many rows a file
 // has; a flattened tree is a list with a length, and a list scrolls by index.
 
-import type { Doc } from "./doc.ts";
+import type { Doc, TemplateNode } from "./doc.ts";
 import type { FieldPick } from "./doc.ts";
 import { emptyState, flatten, hopPath, OPEN_BUDGET, PAGE, pathKey, refold } from "./flatten.ts";
 import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flatten.ts";
@@ -51,6 +51,20 @@ const HIDDEN_WALK_MS = 300;
  *  machinery (FITS, Arrow, PDB and the rest) means it as a note about what a
  *  field is for, and draws every one of them as it always has. */
 const HIDES_MACHINERY = "picklefpf";
+
+/** Whether a pickled dict's entry is all on its row: the row is named for the
+ *  key and reads as the value, so an entry whose value is one plain field has
+ *  nothing more to show. A value that is a list reads `list of 3`, which is
+ *  not the list, and a key that is a tuple is not in the name, so both of
+ *  those stay open. A key the file named by reference is still in the name. */
+function entrySaysItself(node: TemplateNode, kids: readonly TemplateNode[]): boolean {
+  if (node.type !== "entry" || node.kind === "composite" || node.value === "") return false;
+  const plain = (k: TemplateNode | undefined): boolean => k !== undefined && !k.composite;
+  const key = kids.find((k) => k.name === "key");
+  return plain(kids.find((k) => k.name === "value")) && (plain(key) || key?.type === "reference");
+}
+/** The same template, where the question is how its dicts are drawn. */
+const FAMILIAR_PICKLE = HIDES_MACHINERY;
 /** Where the reader's answer to that is kept. A way of reading rather than a
  *  place in one file, so it outlives the file it was set on. */
 const MACHINERY_KEY = "qubero.listing.machinery";
@@ -370,6 +384,12 @@ export class ListingReport {
     const offersSwitch = this.doc.template === HIDES_MACHINERY;
     return {
       isRecord: (node) => isRecordList(this.doc, node),
+      // A familiar pickle's dict is its entries, and an entry is a key and a
+      // value: a row that reads as the value, not a heading over two rows.
+      // The sizes alone call a model's attributes headings, since an array
+      // under one of them puts the middle entry past sixteen bytes.
+      saysItself: (node, kids) => this.doc.template === FAMILIAR_PICKLE && entrySaysItself(node, kids),
+      density: (_parent, kids) => (this.doc.template === FAMILIAR_PICKLE && kids.some((k) => k.type === "entry") ? "rows" : null),
       formatCard: (node) => jpegCardKind(this.doc, node),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,

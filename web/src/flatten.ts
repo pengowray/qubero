@@ -251,6 +251,10 @@ export type FlatOptions = {
    *  drawn should not mean changing what its template says the bytes are.
    *  Absent, or returning null, leaves it to `headingdensity`. */
   readonly density?: (parent: TemplateNode, kids: readonly TemplateNode[]) => Density | null;
+  /** Whether a structure's row already says everything that is in it, so that
+   *  it arrives shut: a pickled dict's entry whose row reads `True`. Asked
+   *  with the fields under it, and only once those are in hand. */
+  readonly saysItself?: (node: TemplateNode, kids: readonly TemplateNode[]) => boolean;
   readonly page?: number;
   readonly sectionListMax?: number;
   /** What the file opens with, before its first part: the picture an image
@@ -1156,7 +1160,7 @@ function child(w: Walk, declared: TemplateNode, depth: number, total: number, re
     heading(w, node.path, node, 1, 0, node.child_count, open ? w.kids(node.path, node.child_count) : null, node.name, open, via);
     return;
   }
-  const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total));
+  const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total) && !saidInFull(w, node));
   // The children are read before the row is pushed, so the row can say how
   // many of them it is about to draw rather than how many the structure has.
   // Only for a row that is open: reading a closed row's children to correct a
@@ -1200,6 +1204,14 @@ function shownChildren(w: Walk, node: TemplateNode, inner: Slice | null): number
   if (slice === null || slice.from !== 0 || slice.nodes.length !== node.child_count) return null;
   const shown = slice.nodes.filter((k) => !isHidden(w, k)).length;
   return shown === node.child_count ? null : shown;
+}
+
+/** Whether opening a row would show nothing its value does not. Children
+ *  that have not arrived are not waited for: the row opens as any other does. */
+function saidInFull(w: Walk, node: TemplateNode): boolean {
+  if (w.opts.saysItself === undefined || !node.composite) return false;
+  const inner = peek(w, node);
+  return inner !== null && w.opts.saysItself(node, inner.nodes);
 }
 
 /** A structure's children, when they are there already. Unlike `Walk.kids`
