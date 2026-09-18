@@ -17,6 +17,7 @@ environment. A venv at `~/.venvs/qubero-samples` covers the newest libraries.
 | Environment | Default protocol | Libraries |
 | --- | --- | --- |
 | Python 2.7 (`pickle` and `cPickle`) | 0 | none |
+| PyPy 2.7 (`pickle` and `cPickle`) | 0 | none |
 | Python 3.4 | 3 | none |
 | Python 3.6 | 3 | numpy 1.19, pandas 1.1, scikit-learn 0.24, scipy 1.5 |
 | Python 3.7 | 3 | numpy 1.21, pandas 1.3, scikit-learn 1.0, scipy 1.7 |
@@ -26,26 +27,35 @@ environment. A venv at `~/.venvs/qubero-samples` covers the newest libraries.
 | Python 3.12 (venv) | 4 | numpy 2.5, pandas 3.0, scikit-learn 1.9, scipy 1.18 |
 | Python 3.13 | 4 | numpy 2.2, pandas 2.3, scikit-learn 1.7, scipy 1.16 |
 | Python 3.14 | 5 | numpy 2.5, pandas 3.0, scikit-learn 1.9, scipy 1.18 |
+| PyPy 3.10 | 4 | none |
+
+On Python 3 each object is written twice, by `pickle.dump`, which is the C
+pickler, and by `pickle._Pickler`, which is `pickle.py` alone (`.pypickle` in
+the name). PyPy has only the second, and PyPy 3.10's files are byte for byte
+what CPython 3.10's `pickle.py` wrote, all ninety of them.
 
 Python 3.14 changed `pickle.DEFAULT_PROTOCOL` from 4 to 5, so from there on a
 file written with no protocol given is protocol 5.
 
-967 files, 450 distinct byte strings, 6.3 MB.
+The distinct byte strings are committed, each under the oldest environment
+that wrote it, with every environment's `versions.json` listing everything it
+wrote. A name in one of those lists with no file beside it is the same bytes
+as a file in an older folder, and `sources.tsv` says which.
 
 ## What varies, and what does not
 
-**Basic data does not vary.** At protocol 5 every environment wrote the same
-bytes for every basic object. At protocols 3 and 4 there are two byte strings,
-Python 3.4 and everything from 3.6 on, and the instructions are the same in
-both: the dict keys come out in a different order, because a dict was
-unordered before 3.6. One grammar covers all of it. After the stack rewrite of
-the recogniser (7e4bf18), all 75 basic files at protocol 4 and 5 match
-`basic-p4-p5-v5`.
+**Basic data varies in three places, all of them now read.** The dict keys of
+a protocol 3 or 4 file come out in a different order under Python 3.4, because
+a dict was unordered before 3.6; the two picklers spell the tail of a container
+longer than a batch differently, and the memo mark after a bytearray; and
+Python 3.4 to 3.6 left a payload over 64 KiB inside the frame it was filling
+where 3.7 writes it between frames. The instructions are otherwise the same
+everywhere. All 44 basic files at protocol 4 and 5 match `basic-p4-p5-v5`.
 
 **numpy varies in one word.** Two byte strings per object and protocol: numpy
 1.x spells the module `numpy.core.multiarray`, numpy 2.x spells it
-`numpy._core.multiarray`. All 98 numpy files at protocol 4 and 5 match
-`numpy-numeric-array-p4-p5-v5`.
+`numpy._core.multiarray`. All 34 numpy array and scalar files at protocol 4 and
+5 match `numpy-numeric-array-p4-p5-v5`.
 
 **scikit-learn varies in its data, not in its instructions.** An estimator is
 `STACK_GLOBAL` of its class, `EMPTY_TUPLE`, `NEWOBJ`, then a dict of its
@@ -103,10 +113,6 @@ scikit-learn production with another module prefix reads them. The class moved
 
 ## Not decided
 
-- Whether the corpus is committed whole. 450 distinct files is half again the
-  size of the collection's index. Committing the distinct byte strings once,
-  with a manifest saying which environments wrote each, keeps every spelling
-  and drops the repeats.
 - joblib files, which is how scikit-learn's own documentation says to save a
   model. A `.joblib` is a pickle with the array bytes written between the
   instructions, so it is not a pickle any of this reads.

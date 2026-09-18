@@ -72,9 +72,11 @@ try {
     const said = await page.locator("body").innerText();
     assert.match(said, /Template: Python pickle \(familiar form\)/, "the chooser did not pick the familiar form");
     // The decoded data, and the instructions the form fixed around it: the
-    // dictionary key, what the array is, the call that rebuilt it, and the
-    // names that call was made with.
-    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray"]) {
+    // dictionary key, what the array is, the call that rebuilt it, the names
+    // that call was made with, and which of CPython's two picklers the file
+    // shows, which for this one is neither in particular.
+    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray",
+                         "_pickle or pickle.py (they write this data identically)"]) {
       assert.ok(said.includes(shown), `the listing does not show ${shown}`);
     }
     await mkdir(out, { recursive: true });

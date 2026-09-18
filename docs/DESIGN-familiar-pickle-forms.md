@@ -437,29 +437,35 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include twenty-five FPF tests, seven of which
+Validation: the pickle unit tests include thirty-two FPF tests, nine of which
 read a fixture through the `picklefpf` template and check names, values and
-byte ranges, and ten of which build their own bytes to exercise one set of
-alternatives each: what a later array may name out of the memo, what a
-reference may not name, the NumPy scalar call, the protocol 5 `_frombuffer`
-call with a writable and a read-only buffer, an instruction moved, dropped,
-added or written in another width, the frame a large payload sits between, the
-builtins calls, and which form a file is read under. Eleven `pickle_real`
-integration tests pass against the sibling corpus, including the corpus match
-matrix, the per-file mutation sweep and a walk of the decoded array's 24
-numbers.
+byte ranges, and the rest of which build their own bytes to exercise one set
+of alternatives each: what a later array may name out of the memo, what a
+reference may not name, a reference to a container and to a container still
+being filled, the two picklers' batch tails and the refusal to read a file
+showing both, the memo mark after a bytearray, the NumPy scalar call, the
+protocol 5 `_frombuffer` call with a writable and a read-only buffer, an
+instruction moved, dropped, added or written in another width, the two ways a
+large payload is framed, the builtins calls, and which form a file is read
+under. Thirteen `pickle_real` integration tests pass against the sibling
+corpus, including the corpus match matrix, the per-file mutation sweep and a
+walk of the decoded array's 24 numbers.
 
-The forms were also run over a corpus of the same fixtures written by CPython
-2.7, 3.4, 3.6, 3.7, 3.8, 3.10, 3.12, 3.13 and 3.14, with NumPy 1.19, 1.21,
-1.24, 1.26, 2.2 and 2.5 beside them where the release had one. All 173 basic
-and NumPy files written at protocol 4 or 5 match, which is what says the
-widening is about the format rather than about this machine's Python. That
-corpus is not committed here.
+The forms are also run over `pickle-matrix/` in the sample collection, which
+is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,
+3.10, 3.12, 3.13 and 3.14 and by PyPy 2.7 and 3.10, with NumPy 1.19 to 2.5
+beside them where the release had one, at every protocol each has and from
+both of CPython's picklers. All 78 basic and NumPy files written at protocol 4
+or 5 match: 44 of plain data and 34 of arrays and scalars. The 90 pandas,
+scikit-learn and scipy files at those protocols match nothing, and
+`the_forms_match_every_environment_s_plain_data_and_arrays` is written so that
+a form for one of those libraries is a one-line change to its `FAMILIES` row.
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
-sample opens as the familiar form with its form ID and decoded values, that the
-chooser offers both templates and switches between them, that the STOP row of
-the listing names the form and the other template, and that an unfamiliar
-program still reads as a PVM listing with no FPF claim.
+sample opens as the familiar form with its form ID, its pickler row and its
+decoded values, that the chooser offers both templates and switches between
+them, that the STOP row of the listing names the form and the other template,
+and that an unfamiliar program still reads as a PVM listing with no FPF
+claim.
 
 ## Contract
 
