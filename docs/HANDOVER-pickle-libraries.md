@@ -97,73 +97,43 @@ scikit-learn production with another module prefix reads them. The class moved
 
 ## What has landed, on 2026-09-18
 
-Steps 1 to 3 of the order below, as three forms over one grammar. The safety
-line and the enumerated calls are written out in
-`DESIGN-familiar-pickle-forms.md` under "The safety line for a library object";
-the code is `crates/core/src/formats/pickle/familiar/object.rs` for the class,
-object, BUILD and REDUCE productions, `dtype.rs` for the structured and object
-dtypes, and `numpy.rs` for the array around them.
+Steps 1 to 5 of the order below. The safety line and the enumerated calls are
+written out in `DESIGN-familiar-pickle-forms.md` under "The safety line for a
+library object"; the code is `crates/core/src/formats/pickle/familiar/`
+(`forms.rs` for the registry, `object.rs` for the class, object, BUILD and
+REDUCE productions, `dtype.rs` for the structured, object and datetime dtypes)
+and `crates/core/src/eval/pickleframe.rs` for a frame read as a table.
 
 | Form | What it reads | Matched at protocol 4 and 5 |
 | --- | --- | --- |
 | `sklearn-estimator-p4-p5-v1` | estimators, pipelines, forests, decision trees | 33 of 33 matrix files, and both `pickle/proto4-sklearn-*` |
 | `scipy-sparse-p4-p5-v1` | the three sparse matrix classes | 8 of 8 matrix files, and all three `pickle/proto4-scipy-*` |
-| `pandas-frame-p4-p5-v1` | frames and series from 1.1 and from 1.5 to 3.0 | 36 of 49 matrix files, and `pickle/proto5-pandas-dataframe` and `-series` |
+| `pandas-frame-p4-p5-v1` | frames and series from pandas 1.1 to 3.0 | 49 of 49 matrix files, and all three `pickle/proto5-pandas-*` |
 
-`numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
+Every file in `pickle-matrix/` written at protocol 4 or 5 now matches: 168 of
+168. `numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
 structured dtype now, so "numeric" was no longer true.
+
+A frame opens as a table, and a frame, a series and a sparse matrix say what
+they hold before showing how. See "A library object as the thing it is" in the
+design document.
 
 What is left, in the order it is worth doing:
 
-1. **The datetime index**, which is eleven of the thirteen frames that do not
-   match and the last common pandas shape. It needs the `M8` dtype, whose BUILD
-   state is nine long rather than eight and ends with a tuple carrying the unit
-   (`(b'ns', 1, 1, 1)`) and a version of 4 rather than 3; and two calls,
-   `pandas.core.indexes.datetimes._new_DatetimeIndex` of a class and a
-   dictionary and `pandas._libs.tslibs.offsets.Day` of a number and a flag.
-   Check whether `npy::dtypes()` has an `M8` entry before promising the values.
-2. **pandas 1.3**, which writes `functools.partial` over `new_block`. That is a
-   REDUCE of what another REDUCE made, which the form refuses on purpose. It
-   would need a production of its own saying that this exact partial, over this
-   exact callable, with these arguments, is a block. Two files in the corpus.
-3. **The `DataFrame` table**, which is the half of step 4 below that is not
-   done. An object shows its class and its attributes, and a sparse matrix
-   shows `data`, `indices`, `indptr` and `shape` without anything being
-   densified, but a frame does not open as a table.
-
-   The IR half of it is designed and not built. `TableShape::cells` now says
-   where a cell is for a table whose rows are nodes, with one case,
-   `Cells::Named`, which is the pickled list of records. A frame wants a
-   second:
-
-   ```rust
-   /// Each column is a run of values somewhere else in the file, and a row is
-   /// one element of each. A pandas frame, whose columns live in blocks.
-   Columns(Vec<ColumnRun>),
-
-   pub struct ColumnRun {
-       /// The run, as a path from the field the table hangs on.
-       pub at: Vec<usize>,
-       /// How many values in this column starts, and how far apart two of its
-       /// rows are.
-       pub first: u64,
-       pub stride: u64,
-   }
-   ```
-
-   A block is shape `(columns in that block, rows)`, so the frame's rows run
-   along the block's **second** axis and column `j` of a block in C order is
-   `first = j * rows`, `stride = 1`. Do not show it transposed. The column
-   names come from the first axis of the manager, which is an `Index` over an
-   array of objects; the `placement` slice of each block says which of those
-   names its columns are, so the table's columns are the frame's columns in
-   frame order. `web/src/tableplan.ts` routes a shape with `cells` set away
-   from the count-based layout already, and `web/src/picklerecords.ts` is where
-   the second case would be walked.
-4. **Step 5 below is done.** The list-of-records table is declared by the core:
-   `Evaluator::pickle_table` hands back the shape and
-   `Evaluator::pickle_columns` names the columns out of the file.
-   `web/src/picklerecords.ts` is a walk of that answer now.
+1. **Protocols 2 and 3**, which is step 5 below and every file written by
+   Python 3.0 to 3.7 and by Python 2. `BINPUT` and `LONG_BINPUT` for `MEMOIZE`,
+   `GLOBAL` for `STACK_GLOBAL`, `BINUNICODE` for `SHORT_BINUNICODE`, and no
+   framing. `forms.rs` is where a form says what it allows, and `mod.rs` and
+   `cursor.rs` were left calm for this.
+2. **A sparse matrix as a table** of `row, column, value`, read out of the
+   `data`, `indices` and `indptr` it already names. Nothing densifies.
+3. **The standard library's classes**, which are what every remaining
+   `proto*-everything` sample is held back by: `datetime`, `Decimal`,
+   `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`. Each needs the
+   exact state it is rebuilt from written down, the way the library calls are.
+4. **A block placed by an array** rather than by a slice, which pandas writes
+   when a block's columns are not next to each other. No file in the corpus
+   does, so there is nothing to test it against.
 
 `cargo run -p qubero-core --example pickle_forms -- <file>` prints the form a
 file matched, or, for one no form matched, the offset the reading reached
@@ -183,7 +153,7 @@ before it stopped, which is where the next production goes.
    array's shape already becomes a table).
 5. Protocol 2 and 3 for the basic and numpy forms (`BINPUT` for `MEMOIZE`,
    `GLOBAL` for `STACK_GLOBAL`, no frames), since that is every file written
-   by Python 3.0 to 3.7 and by Python 2.
+   by Python 3.0 to 3.7 and by Python 2. Not started.
 
 ## Not decided
 

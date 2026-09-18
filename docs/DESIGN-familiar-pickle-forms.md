@@ -178,7 +178,20 @@ The list, as implemented:
 | `builtins-values-p4-p5-v3` | `builtins.slice`, `builtins.range`, `builtins.complex`, `builtins.bytearray` |
 | `sklearn-estimator-p4-p5-v1` | the NumPy ones, and `sklearn.tree._tree.Tree` of a number, an array and a number |
 | `scipy-sparse-p4-p5-v1` | the NumPy ones |
-| `pandas-frame-p4-p5-v1` | the NumPy ones, `builtins.slice`, `pandas.core.internals.managers.BlockManager` of a tuple of blocks and a list of axes, `pandas._libs.internals._unpickle_block` of values, a slice and a number, `pandas.core.indexes.base._new_Index` of a class and a dictionary, `pandas._libs.arrays.__pyx_unpickle_NDArrayBacked` of a class, a number and None, and `pandas.StringDtype` / `pandas.core.arrays.string_.StringDtype` of a word and a float |
+| `pandas-frame-p4-p5-v1` | the NumPy ones, `builtins.slice`, `pandas.core.internals.managers.BlockManager` of a tuple of blocks and a list of axes, `pandas._libs.internals._unpickle_block` of values, a slice and a number, `pandas.core.indexes.base._new_Index` and `pandas.core.indexes.datetimes._new_DatetimeIndex` of a class and a dictionary, `pandas._libs.arrays.__pyx_unpickle_NDArrayBacked` of a class, a number and None, `pandas.StringDtype` / `pandas.core.arrays.string_.StringDtype` of a word and a float, `pandas._libs.tslibs.offsets.Day` of a number and a flag, `functools.partial` of the one global below, and `pandas.core.internals.blocks.new_block` through that partial |
+
+**The one exception, written down beside the rule it is an exception to.**
+`REDUCE` names a global, and a global is what `STACK_GLOBAL` made. pandas 1.3
+writes a block the other way: `functools.partial` over
+`pandas.core.internals.blocks.new_block`, and then a `REDUCE` whose callable is
+what that `REDUCE` made. The form accepts that, and only that. The partial may
+be made over one global and no other, only what that partial made may be
+called, and both halves are checked at both ends. So what may happen is still a
+list of two entries rather than a rule about calls of calls, and since nothing
+is run it is as safe as any other enumerated run of bytes: it is a fixed
+sequence, matched exactly, that a reader recognises rather than executes. A
+`functools.partial` over anything else is a non-match, which the tests in
+`familiar/tests/pandas.rs` hold it to.
 
 The NumPy and builtins calls are matched inside their own fixed runs rather
 than through this list, which is why a failed NumPy production cannot be read a
@@ -206,7 +219,7 @@ What the library forms read, and what they do not:
 - **scipy.** A sparse matrix is the same production under `scipy.sparse`: a
   dictionary holding `data`, `indices`, `indptr` and a shape tuple. The class
   moved from `scipy.sparse.csr` to `scipy.sparse._csr`, which is data.
-- **pandas, 1.1 and 1.5 to 3.0.** A frame is a `BlockManager` and a series a
+- **pandas, every release in the corpus.** A frame is a `BlockManager` and a series a
   `SingleBlockManager`. 1.1 hands the manager its axes, its blocks and the
   dictionary it versions them with as one tuple through `NEWOBJ` and `BUILD`;
   1.5 and up call `_unpickle_block` once a block. A series keeps the older
@@ -215,14 +228,12 @@ What the library forms read, and what they do not:
   `RangeIndex` as start, stop and step. A categorical and, in 3.0, a text
   column are `__pyx_unpickle_NDArrayBacked` around an array, finished by a
   `BUILD` of a tuple.
-- **pandas 1.3 is a non-match.** It writes a block as `functools.partial` over
-  `pandas.core.internals.blocks.new_block`, which is a `REDUCE` of what another
-  `REDUCE` made. The form refuses a call whose callable is the result of a
-  call, and that refusal is the rule rather than an omission.
-- **A datetime index is a non-match.** Its values are an `M8` dtype, whose
-  state is nine long rather than eight and carries the unit it counts in, and
-  it needs `pandas.core.indexes.datetimes._new_DatetimeIndex` and
-  `pandas._libs.tslibs.offsets.Day` as well. None of that is written yet.
+- **An index of dates** is an `M8` dtype, whose state is nine long rather than
+  eight: it is version 4 rather than 3 and ends with the unit it counts in,
+  written as `('ns', 1, 1, 1)` beside an empty dictionary in NumPy 1.x and
+  beside `None` in 2.x. Both are read, and every unit NumPy has down to the
+  nanosecond. A count of three days, which is a numerator other than one, is a
+  non-match, and so is a unit finer than a nanosecond.
 - **A block placed by an array is a non-match.** pandas writes an array of
   column positions instead of a slice when a block's columns are not next to
   each other, and no file in the corpus does.
@@ -440,7 +451,7 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, twenty-eight files match today. The eleven `familiar-` files
+Of the sibling corpus, twenty-nine files match today. The eleven `familiar-` files
 and the four `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
@@ -486,8 +497,7 @@ one half or the other.
 | `proto3-numpy-1-module-names.pickle` | protocol 3, where a global is a line rather than a counted string |
 | `proto4-scipy-coo-matrix`, `proto4-scipy-csc-matrix`, `proto4-scipy-csr-matrix` | `scipy-sparse-p4-p5-v1` |
 | `proto4-sklearn-pipeline`, `proto4-sklearn-random-forest` | `sklearn-estimator-p4-p5-v1` |
-| `proto5-pandas-dataframe`, `proto5-pandas-series` | `pandas-frame-p4-p5-v1` |
-| `proto5-pandas-index-types` | a datetime index, whose `M8` dtype no form reads |
+| `proto5-pandas-dataframe`, `proto5-pandas-series`, `proto5-pandas-index-types` | `pandas-frame-p4-p5-v1` |
 | `proto2-torch-state-dict` | protocol 2, and persistent ids for the tensor storage |
 
 The `everything` files and `proto4-collections` are held back by one thing
@@ -504,19 +514,49 @@ that a form growing quietly is a failing test, and separately flips two bits of
 every instruction byte in every matched sample, truncates at every instruction
 boundary, and appends a value after the STOP.
 
+### A library object as the thing it is
+
+What a reader opens a pickled frame for is the data, and the data is not where
+the tree puts it. So a matched frame, series or sparse matrix opens with a few
+rows saying what it holds, before the structure that holds it, and a frame
+opens as a table.
+
+The summary rows are `columns`, `rows`, `index` and `dtypes` for a frame or a
+series, and `shape`, `stored values` and `format` for a sparse matrix. They are
+worked out from the match and the file and have no bytes of their own, the way
+the header's rows do. An estimator has none: its attributes already are its
+summary.
+
+The table is `Cells::Computed` in the table IR, and the core reads the cells.
+A frame's values are in blocks, each written the other way up from the frame,
+so the frame's rows run along a block's **second** axis and column `j` of a
+block is `j * rows` values in. Each block's `slice` says which of the frame's
+columns its rows are, and the column names come from the first axis of the
+manager, so the table's columns are the frame's columns in frame order and not
+transposed. The index is the first column, headed by the index's own name or by
+`index`; a counted index is counted out rather than read, since it is nowhere in
+the file. A series is the same table with one value column, headed by the
+series' name or by `value`. A categorical cell shows the category its code
+names, and a code of -1 is nothing at all; so is a NaN, a `None` and the value
+pandas writes where it has no date. A date shows as the date, ISO 8601 with no
+zone, worked out from the count and the unit its dtype carries, and the column's
+type says the unit: `date (datetime64[ns])`.
+
+`Evaluator::pickle_cells` reads a window of rows and hands back a value a cell,
+and the view asks for the rows it is drawing. Nothing about this is in the tree:
+a cell of a frame is not a node, and the rows of a frame are not a run of bytes,
+so a bit of the file is in no row rather than in the wrong one.
+
+An object's node is typed `object` and reads as its class path on the `class`
+row inside it rather than in the type column, because the type column is an
+enumeration of shapes and a class path is data. The class row carries the whole
+dotted path as its own value, so an object says what it is without being opened.
+
 ### What is not exposed yet, for a library object
 
-A `DataFrame` does not open as a table. Its column names are in its index and
-its values are in blocks, each of shape `(columns in that block, rows)`, so a
-cell of the frame is an element of an array somewhere else in the file. That
-is a second case for `TableShape::cells`, sketched in
-`HANDOVER-pickle-libraries.md`, and neither it nor the mapping from a block's
-placement back to column names is written. A `Series` and a sparse matrix are
-the same story: the arrays are there and named, and nothing lays them out.
-
-An object's node is typed `object` and says its class on a `class` row rather
-than in the type column, because the type column is an enumeration of shapes
-and a class path is data.
+A sparse matrix says what it holds and names its three arrays, and nothing lays
+those out as the matrix they describe. Densifying one is not the answer; a
+table of `row, column, value` would be.
 
 ### What is not exposed yet
 
@@ -570,7 +610,7 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include fifty FPF tests, eleven of which
+Validation: the pickle unit tests include fifty-two FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a
@@ -588,11 +628,9 @@ The forms are also run over `pickle-matrix/` in the sample collection, which
 is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,
 3.10, 3.12, 3.13 and 3.14 and by PyPy 2.7 and 3.10, with NumPy 1.19 to 2.5
 beside them where the release had one, at every protocol each has and from
-both of CPython's picklers. All 78 basic and NumPy files written at protocol 4
-or 5 match: 44 of plain data and 34 of arrays and scalars. Of the 90 library
-files at those protocols, 77 match: every scikit-learn and scipy file, every
-series, and every frame but the eleven with a datetime index and the two
-pandas 1.3 wrote.
+both of CPython's picklers. Every one of the 168 files written at protocol 4 or 5 matches: 44 of plain
+data, 34 of arrays and scalars, 33 scikit-learn, 8 scipy, and 49 pandas frames
+and series across every release in the corpus from 1.1 to 3.0.
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
 sample opens as the familiar form with its form ID, its pickler row and its
 decoded values, that the chooser offers both templates and switches between
