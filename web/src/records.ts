@@ -6,13 +6,11 @@
 // table". The format knows the columns' names; the per-format readers below
 // find them and lay the rows out under them.
 //
-// **Registry, not IR.** The handover asked for this to be settled once a
-// second and third format arrived. Three are here now — SQLite's b-tree pages,
-// SQLite's schema page and GGUF's metadata block — and the answer is still the
-// registry. (A fourth since: a pickled list of dicts, whose columns are its
-// keys. Those are written beside the values, so it is the declarative kind the
-// last paragraph below is waiting for a second of.) The reason is what the three have in common, which is nothing
-// declarative:
+// **Registry for the awkward cases, IR for the declared ones.** The handover
+// asked for this to be settled once a second and third format arrived. Three
+// were here then — SQLite's b-tree pages, SQLite's schema page and GGUF's
+// metadata block — and the answer was the registry, because what those three
+// have in common is nothing declarative:
 //
 //   - A SQLite table's column names are not in the page, in the template, or
 //     anywhere a declaration could point at. They are inside a `CREATE TABLE`
@@ -34,10 +32,16 @@
 // describes bytes. A record view describes what those bytes mean once several
 // parts of the file are read together, which is a view's job.
 //
-// The one thing that would change the answer is a format whose records really
-// are declared in its own template — column names written beside the fields,
-// no lookups. If two of those turn up, the declarative half belongs in the IR
-// and this file keeps the awkward cases.
+// The last paragraph of this comment used to say that the answer would change
+// for a format whose records really are declared — column names written in the
+// file beside the values, no lookups — once two of those turned up. Two have:
+// a pickled list of records, whose keys sit beside its values, and a pandas
+// frame, whose column names are in its index. So the declarative half moved to
+// the IR. `TableShape::cells` says where a cell is when a row is a node rather
+// than a run of values, `Evaluator::pickle_table` declares it and names the
+// columns, and `picklerecords.ts` is now a walk of that answer rather than a
+// reader that works the columns out for itself. This file keeps the awkward
+// cases, which are still awkward and still here.
 
 import type { Doc, Problem, TemplateNode } from "./doc.ts";
 import { sqlitePlan } from "./sqliterecords.ts";

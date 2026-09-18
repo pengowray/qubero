@@ -65,7 +65,7 @@ function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
 }
 
 function shape(o: Partial<TableShape> = {}): TableShape {
-  return { columns: null, names: [], units: [], column_word: null, row_word: null, rate: null, facts: [], ...o };
+  return { columns: null, names: [], units: [], column_word: null, row_word: null, rate: null, facts: [], cells: null, ...o };
 }
 
 test("elements are grouped into rows by the column count", () => {

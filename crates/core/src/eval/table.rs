@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use super::origin::{Role, Sink};
 use super::*;
-use crate::template::TableShape;
+use crate::template::{Cells, TableShape};
 
 /// A table shape with its expressions worked out in the file at hand.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +39,9 @@ pub struct TableShapeInfo {
     /// The fields that describe the table, with where they are and what they
     /// say, as the At-cursor panel shows any other origin.
     pub facts: Vec<Origin>,
+    /// Where a row's cells are, when a row is a node rather than a run of
+    /// values. None for every table a template declares.
+    pub cells: Option<Cells>,
 }
 
 impl Evaluator {
@@ -75,6 +78,7 @@ impl Evaluator {
             row_word: shape.row_word.as_ref().map(|w| w.to_string()),
             rate,
             facts: sink.out,
+            cells: shape.cells.clone(),
         }))
     }
 
@@ -93,8 +97,13 @@ impl Evaluator {
         let Some((&last, parent)) = path.split_last() else { return Ok(None) };
         match self.memo.get(parent).map(|r| &r.ty) {
             Some(Ty::Struct(s)) => Ok(s.fields.get(last).and_then(|f| f.table.clone())),
-            // The numbers of a pickled array, whose shape the match holds.
-            Some(Ty::Pickle(_)) => Ok(self.pickle_table(path).map(Arc::new)),
+            // The numbers of a pickled array, or the rows of a pickled list of
+            // records, whose columns are read out of the file here because the
+            // cheap question below cannot read anything.
+            Some(Ty::Pickle(_)) => match self.pickle_table(path) {
+                Some(shape) => Ok(Some(Arc::new(self.pickle_columns(doc, path, shape)?))),
+                None => Ok(None),
+            },
             _ => Ok(None),
         }
     }

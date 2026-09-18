@@ -240,6 +240,8 @@ fn sample_table(endian: Endian) -> T {
             E::sibling(&["body", "sample_rate"]),
             E::sibling(&["body", "bits_per_sample"]),
         ],
+        // A run of numbers, so a cell is where the count says.
+        cells: None,
     };
     // Float samples the format did not say may be anything: a NaN or an
     // infinity in one is a sample nothing can play, so it is the format ruling

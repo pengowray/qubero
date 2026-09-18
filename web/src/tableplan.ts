@@ -487,7 +487,10 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
 function shapeOf(doc: Doc, node: TemplateNode): TableShape | null {
   if (node.table !== true) return null;
   const reply = doc.tableShape(node.path);
-  return reply.status === "ok" ? reply.node : null;
+  const shape = reply.status === "ok" ? reply.node : null;
+  // A shape whose cells are named nodes is not a run of values, so it is not
+  // laid out from a count. One of the readers in `records.ts` walks it.
+  return shape !== null && shape.cells !== null ? null : shape;
 }
 
 /**

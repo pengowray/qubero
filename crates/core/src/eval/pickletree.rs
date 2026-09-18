@@ -26,7 +26,7 @@ use std::sync::Arc;
 use super::*;
 use crate::formats::pickle::familiar::{self, Call, Dtype, Kind, Match, Names, Said, Value};
 use crate::formats::pickle::shapes;
-use crate::template::{Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
+use crate::template::{Cells, Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
 /// What the file holds: what matched, and then the object it matched.
 const HEADER_FIELD: &str = "header";
@@ -79,6 +79,14 @@ const NO_DIMENSIONS: &str = "()";
 /// the record the run starts, so two runs of padding are told apart.
 const RECORD_NAME: &str = "record";
 const PADDING_FIELD: &str = "padding at";
+
+/// The fewest dictionaries that make a list of records. One dictionary is a
+/// record, not a list of them.
+const FEWEST_ROWS: usize = 2;
+/// What one dictionary of such a list is, which is what the table calls its
+/// rows. Not "field": a pickled list's children are instructions as well as
+/// dictionaries, and counting those as rows counts neither.
+const ROW_WORD: &str = "row";
 
 /// The largest file a form is run over. The recogniser reads the whole
 /// document at once, the same limit the deduced readings work under.
@@ -500,7 +508,28 @@ impl Evaluator {
     pub(super) fn pickle_table(&self, path: &[usize]) -> Option<crate::template::TableShape> {
         let k = (0..=path.len()).rev().find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Pickle(Shape::Doc))))?;
         let found = self.memo.pickle(&path[..k])?;
-        let (_, Part::Data(v)) = spot(found, &path[k..])? else { return None };
+        let here = spot(found, &path[k..])?;
+        // A list of dictionaries, which is how rows are pickled when nobody
+        // reached for pandas. Its columns are the keys, which are written in
+        // the file beside the values, so the shape says where a cell is rather
+        // than how many values make a row. The names are read in
+        // [`Evaluator::pickle_columns`], which can reach the bytes.
+        if let (_, Part::Value(v)) = &here {
+            if let Kind::List(items) = &v.kind {
+                if items.len() >= FEWEST_ROWS && items.iter().all(|x| matches!(x.kind, Kind::Dict(_))) {
+                    return Some(crate::template::TableShape {
+                        row_word: Some(ROW_WORD.into()),
+                        cells: Some(Cells::Named {
+                            row: Shape::Dict.name().into(),
+                            cell: Shape::Entry.name().into(),
+                            value: Some(VALUE_FIELD.into()),
+                        }),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let (_, Part::Data(v)) = here else { return None };
         let Kind::Array { dimensions, fortran_order, .. } = &v.kind else { return None };
         let inner = match (dimensions.len(), fortran_order) {
             (0, _) => return None,
@@ -515,6 +544,40 @@ impl Evaluator {
             row_word: inner.map(|_| "row".into()),
             ..Default::default()
         })
+    }
+
+    /// The columns of a pickled table, read where the file wrote them.
+    ///
+    /// Only for a shape that says its cells are named: a run of numbers has no
+    /// names to read. The columns are every key any row has, in the order they
+    /// are first met, so a row missing one has an empty cell under it rather
+    /// than the next key's value.
+    pub(super) fn pickle_columns<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        path: &[usize],
+        shape: crate::template::TableShape,
+    ) -> R<crate::template::TableShape> {
+        if !matches!(shape.cells, Some(Cells::Named { .. })) {
+            return Ok(shape);
+        }
+        let (root, found) = self.pickle_doc(doc, path)?;
+        let Some((_, Part::Value(v))) = spot(&found, &path[root.len()..]) else { return Ok(shape) };
+        let Kind::List(items) = &v.kind else { return Ok(shape) };
+        let r = self.memo[&root].clone();
+        let base = r.offset;
+        let mut names: Vec<Arc<str>> = Vec::new();
+        for row in items {
+            let Kind::Dict(entries) = &row.kind else { continue };
+            for (key, _) in entries {
+                if let Some(name) = self.pickle_text(doc, &r, base, key)? {
+                    if !names.iter().any(|seen| **seen == *name) {
+                        names.push(name.into());
+                    }
+                }
+            }
+        }
+        Ok(crate::template::TableShape { names, ..shape })
     }
 
     /// The path of the pickle field `path` sits in, and what the recogniser

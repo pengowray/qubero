@@ -279,3 +279,68 @@ fn an_unfamiliar_program_has_no_tree() {
     assert!(ev.node(&doc, &[0]).is_err());
     assert!(ev.node(&doc, &[1]).is_err());
 }
+
+/// A pickled list of records is a table, and the core says so: which node it
+/// is, what its columns are called, and where a cell sits inside a row.
+///
+/// The columns are every key any row has, in the order first met, so a row
+/// that leaves one out has an empty cell under it rather than the next key's
+/// value. This is what `web/src/picklerecords.ts` used to work out for itself.
+#[test]
+fn a_list_of_records_is_a_table_of_the_keys_its_rows_have() {
+    use crate::template::Cells;
+    // Two records, the second of which has a key the first has not.
+    let row = |body: &[u8]| cat(&[b"}\x94(", body, b"u"]);
+    let bytes = framed(&cat(&[
+        b"]\x94(",
+        &row(&cat(&[&word("id"), b"K\x01", &word("name"), &word("a")])),
+        // Slot 2 is the text `id` and slot 3 the text `name`, which the second
+        // record names rather than spelling again.
+        &row(&cat(&[&get(2), b"K\x02", &get(3), &word("b"), &word("extra"), b"\x88"])),
+        b"e.",
+    ]));
+    let (doc, mut ev) = read(&bytes);
+    let mut named = Vec::new();
+    let mut stack = vec![Vec::new()];
+    while let Some(path) = stack.pop() {
+        let info = ev.node(&doc, &path).unwrap();
+        if info.table {
+            let shape = ev.table_shape(&doc, &path).unwrap().expect("a shape");
+            named.push((info.name.clone(), shape));
+        }
+        if path.len() < 5 {
+            stack.extend((0..info.child_count as usize).map(|i| [path.as_slice(), &[i]].concat()));
+        }
+    }
+    assert_eq!(named.len(), 1, "{named:#?}");
+    let (name, shape) = &named[0];
+    assert_eq!(name, "data");
+    assert_eq!(shape.names, vec!["id".to_string(), "name".to_string(), "extra".to_string()]);
+    assert_eq!(shape.row_word.as_deref(), Some("row"));
+    // A run of values would say how many make a row; this says where one is.
+    assert_eq!(shape.columns, None);
+    assert_eq!(
+        shape.cells,
+        Some(Cells::Named { row: "dict".into(), cell: "entry".into(), value: Some("value".into()) })
+    );
+}
+
+/// One record is a record and not a list of them, and a list holding anything
+/// but records is not a table at all.
+#[test]
+fn a_list_that_is_not_records_is_not_a_table() {
+    let row = |body: &[u8]| cat(&[b"}\x94(", body, b"u"]);
+    let one = framed(&cat(&[b"]\x94", &row(&cat(&[&word("id"), b"K\x01", &word("name"), &word("a")])), b"a."]));
+    let mixed = framed(&cat(&[
+        b"]\x94(",
+        &row(&cat(&[&word("id"), b"K\x01", &word("name"), &word("a")])),
+        b"]\x94K\x01a",
+        b"e.",
+    ]));
+    for bytes in [one, mixed] {
+        let (doc, mut ev) = read(&bytes);
+        let info = ev.node(&doc, &[1]).unwrap();
+        assert_eq!(info.name, "data");
+        assert!(!info.table, "{info:#?}");
+    }
+}

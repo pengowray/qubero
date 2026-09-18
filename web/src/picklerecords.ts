@@ -1,93 +1,84 @@
-// A pickled list of dicts, shown as the table it is.
+// A pickled list of records, shown as the table the core says it is.
 //
 // `[{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]` is how rows are pickled
 // when nobody reached for pandas: one dict a row, the same keys in each. Read
 // field by field that is a list of dicts of entries of instructions, and the
-// question a reader has is what is in the table. The keys are the columns, and
-// they are written in the file beside the values, so nothing is looked up.
+// question a reader has is what is in the table.
+//
+// Which node is that table, and what its columns are called, is the core's
+// answer now rather than this file's. A Familiar Pickle Form knows where every
+// value went, so `Evaluator::pickle_table` declares the shape and names the
+// columns, and the shape's `cells` says where a cell is: rows are the `dict`
+// nodes under the list, a cell is the `entry` inside a row named by its
+// column, and what it is worth is that entry's `value`. This file walks that.
 //
 // Only under the familiar-form template, where a dict is a node with an entry
 // for each key. Under the opcode listing the same file is a program, and the
 // rows do not exist until something runs it.
 
-import type { Doc, TemplateNode } from "./doc.ts";
+import type { Doc, TableCells, TableShape, TemplateNode } from "./doc.ts";
 import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.ts";
 
-const TEMPLATE = "picklefpf";
-/** The type names the familiar-form tree gives its nodes. */
-const DICT = "dict";
-const ENTRY = "entry";
+/** A reference, whose two bytes say nothing on their own: what it names is the
+ *  row beside it, which is what the cell shows. */
 const REFERENCE = "reference";
-/** The field of an entry that is what the key maps to, and the field of a
- *  reference that says what it refers to. */
-const VALUE_FIELD = "value";
 const REFERS_TO_FIELD = "refers to";
-/** How many of a list's children are looked at to decide whether it is rows.
- *  The first few are its own instructions, and the question is asked of every
- *  heading the listing draws. */
-const LOOKED_AT = 12;
-/** What one dict of the list is, once the list is a table. */
-const ROW_WORD = "row";
-/** The fewest dicts that make a table. One dict is a record, not a list of them. */
-const FEWEST_ROWS = 2;
 
-/** A list whose values are all dicts: every child is a dict or an instruction
- *  of the list's own, which is a leaf. A list of lists or of numbers is not
- *  rows, and neither is a list with one dict among other things. */
-export function picklePlan(doc: Doc, node: TemplateNode): RecordPlan | null {
-  if (doc.template !== TEMPLATE) return null;
-  const first = doc.templateChildren(node.path, 0, Math.min(node.child_count, LOOKED_AT));
-  if (first.status !== "ok") return null;
-  const values = first.node.filter((c) => c.composite);
-  if (values.length < FEWEST_ROWS || !values.every((c) => c.type === DICT)) return null;
-  return { build: () => build(doc, node) };
+/** The shape the core hung on this node, when it is one whose cells are named
+ *  nodes. Everything else is a run of values and is not this file's. */
+function namedCells(doc: Doc, node: TemplateNode): { shape: TableShape; cells: TableCells } | null {
+  if (node.table !== true) return null;
+  const reply = doc.tableShape(node.path);
+  const shape = reply.status === "ok" ? reply.node : null;
+  if (shape === null || shape.cells === null) return null;
+  return { shape, cells: shape.cells };
 }
 
-function build(doc: Doc, node: TemplateNode): RecordTable | null {
+export function picklePlan(doc: Doc, node: TemplateNode): RecordPlan | null {
+  const said = namedCells(doc, node);
+  if (said === null) return null;
+  return { build: () => build(doc, node, said.shape, said.cells) };
+}
+
+function build(doc: Doc, node: TemplateNode, shape: TableShape, cells: TableCells): RecordTable | null {
+  const columns = shape.names.map((n) => n);
   const children = doc.templateChildren(node.path, 0, node.child_count);
-  if (children.status !== "ok") return { columns: [], rows: [], pending: true };
-  // A value that is not a dict, further down than the first few: the list is
-  // not rows after all, and half a table would hide the odd one out.
-  if (children.node.some((c) => c.composite && c.type !== DICT)) return null;
-  // The columns are every key any row has, in the order first met. Rows of a
-  // pickled table need not all have every key, and a row without one has an
-  // empty cell under it rather than the next key's value.
-  const columns: string[] = [];
+  if (children.status !== "ok") return { columns, rows: [], pending: true };
   const at = new Map<string, number>();
-  const read: { dict: TemplateNode; entries: TemplateNode[] }[] = [];
+  columns.forEach((name, i) => at.set(name, i));
   let pending = false;
-  for (const dict of children.node.filter((c) => c.composite)) {
-    const parts = doc.templateChildren(dict.path, 0, dict.child_count);
+  const rows: RecordRow[] = [];
+  for (const row of children.node) {
+    if (row.type !== cells.row) continue;
+    const parts = doc.templateChildren(row.path, 0, row.child_count);
     if (parts.status !== "ok") {
       pending = true;
       continue;
     }
-    const entries = parts.node.filter((p) => p.type === ENTRY);
-    for (const e of entries) {
-      if (!at.has(e.name)) {
-        at.set(e.name, columns.length);
-        columns.push(e.name);
-      }
+    // A key the core did not name has no column, and a row without a column's
+    // key has an empty cell under it rather than the next key's value.
+    const filled: RecordCell[] = columns.map(() => ABSENT);
+    for (const part of parts.node) {
+      if (part.type !== cells.cell) continue;
+      const column = at.get(part.name);
+      if (column !== undefined) filled[column] = entryCell(doc, part, cells.value);
     }
-    read.push({ dict, entries });
+    rows.push({ cells: filled, path: row.path, offsetBits: row.offset_bits, sizeBits: row.size_bits });
   }
-  const rows: RecordRow[] = read.map(({ dict, entries }) => {
-    const cells: RecordCell[] = columns.map(() => ABSENT);
-    for (const e of entries) cells[at.get(e.name) ?? 0] = entryCell(doc, e);
-    return { cells, path: dict.path, offsetBits: dict.offset_bits, sizeBits: dict.size_bits };
-  });
-  return { columns, rows, pending, rowWord: ROW_WORD };
+  const word = shape.row_word;
+  return word === null ? { columns, rows, pending } : { columns, rows, pending, rowWord: word };
 }
 
 /** A key this row does not have. */
 const ABSENT: RecordCell = { text: "", kind: "absent" };
 
-/** What an entry's key maps to: the value itself, what a reference refers to,
- *  or for a value that holds others, what kind of thing it is. */
-function entryCell(doc: Doc, entry: TemplateNode): RecordCell {
+/** What a cell is worth: the named field inside it, what a reference refers
+ *  to, or for a value that holds others, what kind of thing it is. */
+function entryCell(doc: Doc, entry: TemplateNode, field: string | null): RecordCell {
+  if (field === null) return leafCell(entry);
   const parts = doc.templateChildren(entry.path, 0, entry.child_count);
   if (parts.status !== "ok") return { text: "", kind: "unread" };
-  const value = parts.node.find((p) => p.name === VALUE_FIELD);
+  const value = parts.node.find((p) => p.name === field);
   if (value === undefined) return { text: "", kind: "unread" };
   if (!value.composite) return leafCell(value);
   if (value.type === REFERENCE) {

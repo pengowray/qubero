@@ -105,6 +105,8 @@ fn sample_table() -> T {
         row_word: Some("sample".into()),
         rate: Some(E::field("sample_rate")),
         facts: vec![E::field("encoding"), E::field("sample_rate"), E::field("channels")],
+        // A run of numbers, so a cell is where the count says.
+        cells: None,
     };
     // Float samples the format did not say may be anything: a NaN or an
     // infinity in one is a sample nothing can play, so it is the format ruling

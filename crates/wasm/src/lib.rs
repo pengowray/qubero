@@ -1055,6 +1055,25 @@ struct TableShapeDto {
     /// The fields that describe the table, to be shown above it with links to
     /// where they are stored.
     facts: Vec<TableFactDto>,
+    /// Where a row's cells are, for a table whose rows are nodes rather than a
+    /// run of values. Null for every table a template declares, where a row is
+    /// `columns` values and a reader works the rest out from the count.
+    cells: Option<CellsDto>,
+}
+
+/// A table whose cells are named nodes inside named rows: a pickled list of
+/// records, whose keys are written beside its values. See
+/// [`qubero_core::template::Cells`].
+#[derive(Serialize)]
+struct CellsDto {
+    /// The type a node under the field has to be to be a row.
+    row: String,
+    /// The type a node inside a row has to be to be a cell, named by its
+    /// column.
+    cell: String,
+    /// The field inside a cell holding what it is worth, for a cell that is a
+    /// name and a value. Null when the cell is the value.
+    value: Option<String>,
 }
 
 /// One field that describes a table: what it is called, where it is, and what
@@ -4186,6 +4205,13 @@ impl Editor {
                                 value: o.value,
                             })
                             .collect(),
+                        cells: t.cells.map(|c| match c {
+                            qubero_core::template::Cells::Named { row, cell, value } => CellsDto {
+                                row: row.to_string(),
+                                cell: cell.to_string(),
+                                value: value.map(|v| v.to_string()),
+                            },
+                        }),
                     })
                 }))
             }

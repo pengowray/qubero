@@ -345,6 +345,23 @@ export type TableShape = {
   /** Rows a second, when the rows are spaced in time. Gives the time column. */
   readonly rate: number | null;
   readonly facts: readonly TableFact[];
+  /** Where a row's cells are, for a table whose rows are nodes rather than a
+   *  run of values. Null for every table a template declares. */
+  readonly cells: TableCells | null;
+};
+
+/** A table whose cells are named nodes inside named rows: a pickled list of
+ *  records, whose keys are written in the file beside its values. The core
+ *  names the columns; this says where to find each one inside a row. */
+export type TableCells = {
+  /** The type a node under the field has to be to be a row. */
+  readonly row: string;
+  /** The type a node inside a row has to be to be a cell, named by its
+   *  column. */
+  readonly cell: string;
+  /** The field inside a cell holding what it is worth, or null when the cell
+   *  is the value. */
+  readonly value: string | null;
 };
 
 /** The bit range a successful `writeNode` replaced. */

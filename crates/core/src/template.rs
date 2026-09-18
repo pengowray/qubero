@@ -1929,6 +1929,42 @@ pub struct TableShape {
     /// Fields that describe the table, shown above it with links to where they
     /// are stored: sample rate, channels, bits per sample.
     pub facts: Vec<Expr>,
+    /// Where a row's cells are, when a row is not a run of values. None: the
+    /// rows are `columns` values each, which is every table declared by a
+    /// template.
+    pub cells: Option<Cells>,
+}
+
+/// How a table's cells are found, for a table whose rows are nodes rather than
+/// a run of values of one type.
+///
+/// A run of numbers needs nothing here: `columns` values make a row, and every
+/// cell is at an offset a reader can work out. A pickled list of records is
+/// different. Each row is a dictionary, each cell is an entry of it named by
+/// its key, the keys are written in the file beside the values, and a row need
+/// not have every key. Nothing about that can be said with a count, so a shape
+/// says it here instead.
+///
+/// This is the declarative half `web/src/records.ts` was waiting for a second
+/// example of. The first is the pickled list of records; the second is a
+/// pandas frame, whose column names are in its index and whose values are in
+/// blocks, and which wants the `Columns` case below rather than this one:
+/// column `c` is a run somewhere else in the file, `first` values in and
+/// `stride` apart. That case is designed and not built; see
+/// `docs/HANDOVER-pickle-libraries.md`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cells {
+    /// Each row is a node under the field, and each cell is a node inside that
+    /// row named by the column it belongs to. `row` and `cell` are the types
+    /// those nodes have, so that the instructions between them, which are
+    /// nodes too, are not read as rows or as cells. `value` is the field
+    /// inside a cell holding what it is worth, for a cell that is a name and a
+    /// value rather than a value.
+    Named {
+        row: Arc<str>,
+        cell: Arc<str>,
+        value: Option<Arc<str>>,
+    },
 }
 
 /// A field holds a moment in time, and this says how to read the number in it.
