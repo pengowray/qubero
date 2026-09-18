@@ -364,7 +364,14 @@ const PROBES: &[Probe] = &[
     // none of it, and a window that stops early cannot say which: the answer
     // for a file longer than `SNIFF_WINDOW` is `pickle`, and a caller holding
     // the rest of the file asks `pickle::is_familiar` about all of it.
-    Probe::Is("picklefpf", |h, len| h.len() as u64 == len && pickle::familiar::recognise(h).is_some()),
+    //
+    // And only a file the plain pickle probe below would take too. Protocols 0
+    // and 1 have no opener, and `N.` is the whole of what a pickler writes for
+    // `None`: a two-byte text file should not open as a pickle on the strength
+    // of a form having matched it, any more than `data.` should on the
+    // strength of the walk. `is_pickle` already holds that line (an opcode
+    // with an operand, where there is no opener), so the form answers to it.
+    Probe::Is("picklefpf", |h, len| h.len() as u64 == len && pickle::is_pickle(h, len) && pickle::familiar::recognise(h).is_some()),
     // A pickle, which is a program rather than a document: protocol 2 and up
     // open with two bytes and protocol 0 and 1 open with an opcode that could
     // be any byte, so what recognises one is running it to its full stop.
@@ -2069,6 +2076,22 @@ mod tests {
         assert!(!is_omf(&head));
         // A real one: THEADR, five bytes, a three-letter name, no checksum.
         assert!(is_omf(b"\x80\x05\x00\x03a.c\x00"));
+    }
+
+    /// A protocol 0 pickle is text, and the shortest ones are two letters.
+    /// `N.` is exactly what a pickler writes for `None`, so a form matches it,
+    /// and a two-byte text file is still not opened as a pickle: the familiar
+    /// form answers to the same line the plain pickle probe holds, an operand
+    /// somewhere where there is no opener.
+    #[test]
+    fn a_text_pickle_too_short_to_tell_from_a_word_is_not_claimed() {
+        for word in [&b"N."[..], b"].", b"}.", b"(l.", b"(t.", b"data.", b"Nadal."] {
+            assert_eq!(sniff(word, word.len() as u64), None, "{:?}", std::str::from_utf8(word));
+        }
+        // With an operand it is a pickle, and a familiar one.
+        for pickle in [&b"I5\n."[..], b"F1.5\n.", b"Vhello\np0\n.", b"(lp0\nI1\naI2\na."] {
+            assert_eq!(sniff(pickle, pickle.len() as u64), Some("picklefpf"), "{:?}", std::str::from_utf8(pickle));
+        }
     }
 
     /// A Melco design has no signature, so its name is what claims it, and
