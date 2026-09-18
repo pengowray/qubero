@@ -126,6 +126,12 @@ export type Item = Common &
         readonly node: TemplateNode;
         /** True while this row's children are listed below it. */
         readonly open: boolean;
+        /** How many children the listing actually draws, when that is fewer
+         *  than the structure has because some of them are hidden. Null for
+         *  every row that shows what the core counted, which is every row
+         *  while nothing is hidden and every row whose children are not all
+         *  in hand: counting what is drawn means having read it. */
+        readonly shownChildren: number | null;
         /** The sibling that reads this field for a length, a count, a type
          *  or a position, when there is one and it is drawn. The row says so:
          *  a field exists because something uses it, and that is the answer
@@ -198,6 +204,18 @@ export type Item = Common &
         readonly path: readonly number[];
       }
     | {
+        /** The one switch a template offers over how its own rows are drawn,
+         *  at the top of the listing. Not a part of the file, so like the
+         *  content card it covers no bytes, sits in no section, and is
+         *  neither in the outline nor on the file map. `switch` names which
+         *  one it is; the words for it are the drawing's business, the way
+         *  everything else in this file leaves the wording alone. */
+        readonly kind: "switch";
+        readonly switch: string;
+        readonly on: boolean;
+        readonly path: readonly number[];
+      }
+    | {
         /** A structure the format keeps in a shape that is not the shape it
          *  means: a JPEG quantisation table written along the diagonals, a
          *  Huffman table whose codes are written nowhere. Drawn as a card
@@ -238,6 +256,18 @@ export type FlatOptions = {
   /** What the file opens with, before its first part: the picture an image
    *  file is of. Null or absent for a file that is only its bytes. */
   readonly card?: CardKind | null;
+  /** Whether the rows the template itself calls machinery are left out. A
+   *  familiar pickle writes one opcode byte between every two values, and a
+   *  dict entry of a key and a value reads as five rows with them; this is
+   *  the reader having asked for the two. Only the template's own word
+   *  counts, not the reading `isMachinery` infers from `consumed_by`: that
+   *  one is a guess about what a field is for, and hiding rows on a guess
+   *  would hide the fields the reader came for. */
+  readonly hideMachinery?: boolean;
+  /** The switch to offer at the top of the listing, keyed by whatever the
+   *  drawing looks its words up under. Null or absent for a template with
+   *  nothing to switch. */
+  readonly listingSwitch?: { readonly key: string; readonly on: boolean } | null;
   /** How long the file is, in bits, when the root structure does not say.
    *  An HDF5 root is ninety-six bytes and reaches the rest of the file by
    *  address, so the root's own size is not the file's; the bytes past it
@@ -348,6 +378,16 @@ function isMachinery(node: TemplateNode, index: number, breaks: readonly number[
   if (isComputed(node)) return false;
   if (node.machinery !== null) return node.machinery;
   return node.consumed_by !== null && sameSection(breaks, index, node.consumed_by);
+}
+
+/** Whether this child is a row the reader has asked not to see. Only a leaf,
+ *  and only where the template itself said so: a structure called machinery
+ *  still holds fields, and dropping it would drop them with it. Its bytes are
+ *  still the parent's to account for — see `rows`, which advances the cursor
+ *  past a hidden child before it skips it, so nothing is drawn as a gap where
+ *  a row used to be. */
+function isHidden(w: Walk, node: TemplateNode): boolean {
+  return w.opts.hideMachinery === true && node.machinery === true && !node.composite;
 }
 
 class Walk {
@@ -466,6 +506,11 @@ export function flatten(src: TreeSource, state: ListingState, opts: FlatOptions 
   if (root.status === "error") return { items: [], pending: false, reachedBytes: 0 };
   if (root.status !== "ok") return { items: [], pending: true, reachedBytes: root.reachedBytes };
   w.fileBits = Math.max(root.node.size_bits, opts.fileBits ?? 0);
+  // Above the content card rather than below it: a card is four hundred pixels
+  // of picture, and a control under one is a control off the first screenful.
+  // Like the card, it is not a part of the file and takes no section number.
+  const sw = opts.listingSwitch ?? null;
+  if (sw !== null) w.push({ kind: "switch", key: `switch:${sw.key}`, section: -1, depth: 0, offsetBits: 0, sizeBits: 0, switch: sw.key, on: sw.on, path: [] });
   // The content comes before the structure. It is not a part of the file, so
   // it takes no section number: the first heading below it is still part 0.
   const card = opts.card ?? null;
@@ -1018,6 +1063,9 @@ function rows(
   for (const kid of order) {
     if (kid.offset_bits > cursor && kid.space === space) gap(w, path, cursor, kid.offset_bits, depth);
     cursor = Math.max(cursor, endBits(kid));
+    // A row the reader has hidden. The cursor has already passed its bytes, so
+    // they stay accounted for and no gap opens where the row was.
+    if (isHidden(w, kid)) continue;
     // A field that is only its parent's contents has no name worth a level of
     // structure: its children stand in its place, at its depth.
     if (!kid.contents || !kid.composite || kid.child_count === 0) {
@@ -1109,6 +1157,11 @@ function child(w: Walk, declared: TemplateNode, depth: number, total: number, re
     return;
   }
   const open = node.composite && node.child_count > 0 && w.isOpen(key, arrivesOpen(node, total));
+  // The children are read before the row is pushed, so the row can say how
+  // many of them it is about to draw rather than how many the structure has.
+  // Only for a row that is open: reading a closed row's children to correct a
+  // number would read the file for a number.
+  const inner = open ? w.kids(node.path, node.child_count) : null;
   w.push({
     kind: "row",
     key: `r:${key}`,
@@ -1119,18 +1172,48 @@ function child(w: Walk, declared: TemplateNode, depth: number, total: number, re
     path: node.path,
     node,
     open,
+    shownChildren: shownChildren(w, node, inner),
     reads,
     via,
   });
   const dump = !node.composite && arrivesDumped(node);
   w.strip(`r:${key}`, node.path, node.name, { start: node.offset_bits, end: endBits(node) }, depth, { arrivesShowing: dump, dump });
   if (!open) return;
-  const inner = w.kids(node.path, node.child_count);
   if (inner === null) {
     w.waiting(node.path, depth + 1, node);
     return;
   }
   drawn(w, node.path, node, inner, depth + 1);
+}
+
+/** How many of a structure's children the listing draws, when that is fewer
+ *  than it has. Null unless every child is in hand: a list drawn a page at a
+ *  time has only a page of them, and counting a page would be a smaller lie
+ *  than the one it replaced. */
+function shownChildren(w: Walk, node: TemplateNode, inner: Slice | null): number | null {
+  if (w.opts.hideMachinery !== true || !node.composite || node.child_count === 0) return null;
+  // The children the walk read, or, for a closed row, a look at them that the
+  // list does not wait on. A row that says "5 fields" and opens to show two is
+  // the row disagreeing with itself, which is the whole reason this number is
+  // worked out here rather than taken from `child_count`.
+  const slice = inner ?? peek(w, node);
+  if (slice === null || slice.from !== 0 || slice.nodes.length !== node.child_count) return null;
+  const shown = slice.nodes.filter((k) => !isHidden(w, k)).length;
+  return shown === node.child_count ? null : shown;
+}
+
+/** A structure's children, when they are there already. Unlike `Walk.kids`
+ *  this never marks the list as waiting and never records a pending item: a
+ *  count is not worth a second walk, so a structure whose bytes have not
+ *  arrived keeps the count the core gave.
+ *
+ *  Only a structure short enough to be drawn in one window is asked at all. A
+ *  quarter of a million elements are never all in hand, and reading them to
+ *  correct a number would be reading the file for a number. */
+function peek(w: Walk, node: TemplateNode): Slice | null {
+  if (node.child_count > w.page) return null;
+  const reply = w.src.children(node.path, 0, node.child_count);
+  return reply.status === "ok" ? { from: 0, nodes: reply.node } : null;
 }
 
 /** One end of a list that is only partly drawn. */

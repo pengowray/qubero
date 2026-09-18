@@ -2158,6 +2158,22 @@ export const REPORT = {
   imageShowFit: "Scale to fit",
 } as const;
 
+/**
+ * The one switch a template offers over its own rows, at the top of the
+ * listing. Keyed by template, because what the hidden rows are called is the
+ * format's business: a pickle hides opcode bytes, and the next format to hide
+ * something of its own says so in its own words rather than borrowing these.
+ *
+ * `label` is the checkbox; `title` is its hover, and names the opcodes so a
+ * reader who has never written a pickle knows what would appear.
+ */
+export const LISTING_SWITCH: Readonly<Record<string, { readonly label: string; readonly title: string }>> = {
+  picklefpf: {
+    label: "Show opcode rows",
+    title: "PROTO, MEMOIZE, MARK and the other opcode bytes written between the values",
+  },
+};
+
 // ---- the JPEG cards ----
 
 /** What a JPEG's tables read as once they are laid out the way they are used

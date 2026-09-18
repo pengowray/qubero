@@ -74,11 +74,24 @@ try {
     // The decoded data, and the instructions the form fixed around it: the
     // dictionary key, what the array is, the call that rebuilt it, and the
     // names that call was made with.
-    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray", "memoize"]) {
+    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray"]) {
       assert.ok(said.includes(shown), `the listing does not show ${shown}`);
     }
     await mkdir(out, { recursive: true });
     await shot(page, "pickle-familiar.png");
+
+    // The opcode bytes written between the values are not rows until the
+    // reader asks for them, and the switch at the top of the listing is the
+    // asking. The fields are read off the rows themselves: "memoize" is a word
+    // the inspector and the hex view can be saying at the same time.
+    const fields = () => page.locator(".rp-row .rp-field").allInnerTexts();
+    assert.equal((await fields()).includes("memoize"), false, "an opcode row is drawn before it was asked for");
+    const opcodes = page.getByRole("checkbox", { name: "Show opcode rows" });
+    await opcodes.check();
+    await page.waitForFunction(() => [...document.querySelectorAll(".rp-row .rp-field")].some(f => f.textContent === "memoize"), null, { timeout: 10000 });
+    await shot(page, "pickle-familiar-opcodes.png");
+    await opcodes.uncheck();
+    assert.equal((await fields()).includes("memoize"), false, "the opcode rows stayed after they were put away");
 
     // The numbers themselves, which the hex view shows against their bytes.
     await page.getByRole("button", { name: "Hex", exact: true }).click();

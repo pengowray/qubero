@@ -18,6 +18,7 @@ import type { FlatOptions, Item, ListingState, TreeSource, Window } from "./flat
 import { sectionColor, UNMAPPED_COLOR } from "./fieldstyle.ts";
 import { markStrip } from "./bytestrip.ts";
 import { cardKind, watchCard } from "./contentcard.ts";
+import { rememberChoice, storedChoice } from "./encodings.ts";
 import { markMap } from "./filemap.ts";
 import { checkGap } from "./gapcheck.ts";
 import { isRecordList } from "./records.ts";
@@ -32,7 +33,7 @@ import { GAP_LABEL, NO_TEMPLATE_HINT, NO_TEMPLATE_MATCH, REPORT } from "./string
 /** Row heights, which must match `--rp-*` in the stylesheet: the tops of every
  *  item are a running total of these, and a row that draws taller than it was
  *  measured at would slide out from under its own place. */
-const HEIGHT = { section: 54, part: 36, row: 22, strip: 96, card: 400, dumpFrame: 86 } as const;
+const HEIGHT = { section: 54, part: 36, row: 22, strip: 96, card: 400, dumpFrame: 86, switch: 30 } as const;
 /** A dump's line height and how many lines it shows, which must match
  *  `--bd-line` in the stylesheet and `VIEW_LINES` in `bytedump.ts`. */
 const DUMP_LINE = 18;
@@ -43,6 +44,16 @@ const OVERSCAN = 6;
 /** How long a hidden listing waits after the file's last change before
  *  walking the tree for the views that are showing. */
 const HIDDEN_WALK_MS = 300;
+
+/** The one template whose listing leaves out the rows it calls machinery. A
+ *  familiar pickle writes an opcode byte between every two values, so a dict
+ *  entry of a key and a value is five rows; every other template that marks
+ *  machinery (FITS, Arrow, PDB and the rest) means it as a note about what a
+ *  field is for, and draws every one of them as it always has. */
+const HIDES_MACHINERY = "picklefpf";
+/** Where the reader's answer to that is kept. A way of reading rather than a
+ *  place in one file, so it outlives the file it was set on. */
+const MACHINERY_KEY = "qubero.listing.machinery";
 
 /** The name column's width with nothing nested: the fold marker, the gap
  *  after it and the name. Must match `--rp-tree`'s fallback in the stylesheet. */
@@ -78,6 +89,7 @@ function heightOf(item: Item): number {
   if (item.kind === "bytes" && item.dump) return HEIGHT.dumpFrame + Math.min(DUMP_LINES, Math.ceil(item.sizeBits / 8 / 16)) * DUMP_LINE;
   if (item.kind === "bytes" || item.kind === "record" || item.kind === "formatcard") return HEIGHT.strip;
   if (item.kind === "card") return HEIGHT.card;
+  if (item.kind === "switch") return HEIGHT.switch;
   if (item.kind !== "heading") return HEIGHT.row;
   return item.level === 0 ? HEIGHT.section : HEIGHT.part;
 }
@@ -174,6 +186,9 @@ export class ListingReport {
    *  items, since the items are thrown away and built again on every scroll. */
   private cards = new Set<string>();
   private dumpTops = new Map<number, number>();
+  /** Whether the reader has asked to see the rows the template calls
+   *  machinery. Off until they do, and kept between visits. */
+  private showMachinery = storedChoice(MACHINERY_KEY, ["1", "0"], "0") === "1";
 
   onPick: (pick: FieldPick) => void = () => {};
   /** A long list was asked for on its own. The pane is the caller's, since
@@ -352,12 +367,32 @@ export class ListingReport {
   /** How the tree is flattened. Read afresh each time, since what the file
    *  opens with follows its template, and the template can change. */
   private flatOpts(): FlatOptions {
+    const offersSwitch = this.doc.template === HIDES_MACHINERY;
     return {
       isRecord: (node) => isRecordList(this.doc, node),
       formatCard: (node) => jpegCardKind(this.doc, node),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,
+      hideMachinery: offersSwitch && !this.showMachinery,
+      listingSwitch: offersSwitch ? { key: HIDES_MACHINERY, on: this.showMachinery } : null,
     };
+  }
+
+  /** Show the rows the template calls machinery, or leave them out again.
+   *  The whole list changes, so it is walked again; the reader's place is
+   *  kept by the same anchor a chunk landing uses, and what is selected does
+   *  not move, since hiding a row does not unselect the bytes under it. */
+  private toggleSwitch(key: string): void {
+    if (key !== HIDES_MACHINERY) return;
+    this.showMachinery = !this.showMachinery;
+    rememberChoice(MACHINERY_KEY, this.showMachinery ? "1" : "0");
+    // The keyboard goes with the control the reader just worked: `rebuild`
+    // takes every row out of the document, the focused checkbox with them,
+    // and Tab would otherwise start again from the top of the page.
+    const hadFocus = this.scroller.contains(document.activeElement);
+    this.cursor = `switch:${key}`;
+    this.rebuild();
+    if (hadFocus) this.scroller.focus();
   }
 
   /** Draw the content card again: it has something new to show and is not
@@ -666,6 +701,7 @@ export class ListingReport {
       toggleBytes: (key) => this.toggleBytes(key),
       toggleDump: (at) => this.toggleDump(at),
       toggleCard: (key) => this.toggleCard(key),
+      toggleSwitch: (key) => this.toggleSwitch(key),
       verdict: (item) => this.verdict(item),
       // The streams that have a row of their own in this listing. What a stream
       // holds also offers Open unpacked, for the templates that show only the
@@ -832,14 +868,21 @@ export class ListingReport {
       return;
     }
     // A click inside an open strip is for the strip, not for opening whatever
-    // the strip is sitting under. The content card answers its own clicks.
-    if (item.kind === "bytes" || item.kind === "card" || item.kind === "formatcard") return;
+    // the strip is sitting under. The content card answers its own clicks, and
+    // so does the switch: its checkbox fires `change` for a click on the box
+    // and for a click on its label both, so answering the click here as well
+    // would turn it over twice.
+    if (item.kind === "bytes" || item.kind === "card" || item.kind === "formatcard" || item.kind === "switch") return;
     this.cursor = item.key;
     this.activate(item);
   }
 
   /** What clicking an item does, which is also what Enter on it does. */
   private activate(item: Item): void {
+    if (item.kind === "switch") {
+      this.toggleSwitch(item.switch);
+      return;
+    }
     if (item.kind === "more") {
       const shown = new Map(this.state.shown);
       const win = item.side === "later" ? { from: item.from, to: item.to + PAGE } : { from: Math.max(0, item.from - PAGE), to: item.to };
@@ -963,6 +1006,10 @@ export class ListingReport {
 
   private onKey(e: KeyboardEvent): void {
     if (this.items.length === 0) return;
+    // A key pressed inside a control the listing drew is that control's: Space
+    // on the focused checkbox works it, and must not also be read as Space on
+    // whichever row the keyboard cursor happens to be sitting on.
+    if (e.target !== this.scroller) return;
     const at = this.cursorAt();
     const item = this.items[at];
     const page = Math.max(1, Math.floor(this.scroller.clientHeight / HEIGHT.row) - 1);
@@ -1052,7 +1099,14 @@ export class ListingReport {
     this.selected = { path, offsetBits: node.node.offset_bits, sizeBits: node.node.size_bits };
     const key = `r:${pathString(path)}`;
     let i = this.items.findIndex((item) => item.key === key);
-    if (i < 0) {
+    // A row the reader has hidden will not be on the list however much is
+    // opened, and the hex view sends one of these on every cursor move across
+    // a pickle's opcode bytes. Opening every step down to it would walk the
+    // whole tree for a row that is not going to appear; the nearest drawn row
+    // holding it is where the reader lands, which is what the rest of this
+    // does for a field a record table drew itself.
+    const hidden = i < 0 && this.hiddenHere(path);
+    if (i < 0 && !hidden) {
       // The field is inside something still closed: open every step down to it,
       // and move the window of every long list on the way so that the step
       // through it is one of the elements drawn.
@@ -1072,7 +1126,7 @@ export class ListingReport {
     // A part big enough for a heading has no row: a SQLite page reached from
     // a schema row's `rootpage` is a section of the file, and its heading is
     // where the reader is being sent.
-    if (i < 0) i = this.items.findIndex((item) => item.key === `h:${pathString(path)}`);
+    if (i < 0 && !hidden) i = this.items.findIndex((item) => item.key === `h:${pathString(path)}`);
     // The row may not be there at all: a table shows its rows itself, and a
     // list past its first page does not reach that far. Then the nearest thing
     // that holds it is what to go to, since that is what will be lit.
@@ -1086,6 +1140,15 @@ export class ListingReport {
     }
     this.scroller.scrollTop = Math.max(0, (this.tops[i] ?? 0) - this.scroller.clientHeight / 3);
     this.restyle();
+  }
+
+  /** Whether this listing is leaving this field out: a leaf the template calls
+   *  machinery, while the switch at the top is off. Asked of the node in hand
+   *  rather than of the items, since the point is that it is not among them. */
+  private hiddenHere(path: readonly number[]): boolean {
+    if (this.flatOpts().hideMachinery !== true) return false;
+    const reply = this.doc.templateNode(path);
+    return reply.status === "ok" && reply.node.machinery === true && !reply.node.composite;
   }
 
   /** Follow the cursor: select whatever field covers this bit. */

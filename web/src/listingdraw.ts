@@ -26,7 +26,7 @@ import type { RecordCell } from "./records.ts";
 import type { GapVerdict } from "./gapcheck.ts";
 import type { MapSegment } from "./filemap.ts";
 import { JOINED_WHOLE_CAP_BITS } from "./joinedpart.ts";
-import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
+import { bitSizeText, childWord, countText, DECODED_PLUS_TITLE, DECODED_REFUSED, DECODED_REFUSED_OTHER, GAP_LABEL, JOINED, LISTING_SWITCH, PROBLEMS, REPORT, UNPACKED, TABLE } from "./strings.ts";
 
 /** What is selected, as the bits it covers rather than as the row showing it. */
 export type Selected = { readonly path: readonly number[]; readonly offsetBits: number; readonly sizeBits: number };
@@ -52,6 +52,8 @@ export type DrawContext = {
    *  so nothing the reader opened can live in the element. */
   readonly cards: ReadonlySet<string>;
   readonly toggleCard: (key: string) => void;
+  /** Turn the listing's own switch over, by the key the switch item carries. */
+  readonly toggleSwitch: (key: string) => void;
   readonly toggleBytes: (key: string) => void;
   readonly toggleDump: (offsetBits: number) => void;
   /** What a run of unclaimed bytes turned out to hold. The answer is cached by
@@ -150,9 +152,31 @@ export function drawItem(c: DrawContext, item: Item, fileBits: number): HTMLElem
       return el("div", "rp-item rp-block rp-pending", REPORT.reading);
     case "card":
       return drawCard(c.doc, item, c.shown);
+    case "switch":
+      return drawSwitch(c, item);
     case "formatcard":
       return drawFormatCard(c, item);
   }
+}
+
+/** The one switch a template offers over its own rows, at the top of the
+ *  listing. A real checkbox in a label, so Tab reaches it and Space works it
+ *  the way it works every other checkbox; the listing's own keyboard answers
+ *  Enter on it as well, since arrowing onto a row and pressing Enter is what
+ *  every other item here does. */
+function drawSwitch(c: DrawContext, item: Extract<Item, { kind: "switch" }>): HTMLElement {
+  const host = el("div", "rp-item rp-switch");
+  const words = LISTING_SWITCH[item.switch];
+  if (words === undefined) return host;
+  const label = el("label", "rp-switch-label");
+  label.title = words.title;
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = item.on;
+  box.addEventListener("change", () => c.toggleSwitch(item.switch));
+  label.append(box, document.createTextNode(words.label));
+  host.append(label);
+  return host;
 }
 
 /** A structure the format keeps in a shape that is not the shape it means,
@@ -239,11 +263,17 @@ function drawRow(c: DrawContext, item: Extract<Item, { kind: "row" }>): HTMLElem
   row.append(treeCell(itemOpens(n) ? (item.open ? "▾" : "▸") : "", name));
   // A compressed run nothing could open says why where its count would be:
   // "0 fields" is true and tells the reader nothing they can act on.
+  //
+  // The count is of the rows below, not of the children the structure has: a
+  // dict entry whose opcode bytes are hidden shows two rows, and "5 fields"
+  // over two of them is the row disagreeing with itself. `shownChildren` is
+  // null whenever the two are the same, and whenever the walk had no grounds
+  // to say otherwise.
   const said =
     n.refused !== null
       ? (DECODED_REFUSED[n.refused] ?? DECODED_REFUSED_OTHER)
       : n.composite
-        ? countText(n.child_count, childWord(n))
+        ? countText(item.shownChildren ?? n.child_count, childWord(n))
         : n.value;
   const value = el("span", "rp-value", said);
   // A colour written as `ansi256(34)` or `#5769f7` says nothing to read; the

@@ -1091,3 +1091,157 @@ test("a root smaller than its file still accounts for the whole file", () => {
   const bare = flatten(source(root), emptyState).items;
   assert.equal(bare.some((i) => i.kind === "gap" && i.unmapped && i.offsetBits === 96 * 8), false);
 });
+
+// ---- the rows a template calls machinery, left out ----
+//
+// A familiar pickle writes one opcode byte between every two values, and the
+// template marks each of those rows `machinery`. Only that word counts here:
+// every other template that marks machinery (SQLite's page header above,
+// FITS, Arrow, PDB) means it as a note about what a field is for and is drawn
+// exactly as it always was.
+
+/** A pickled dictionary of one entry, as the familiar-form template declares
+ *  it: the protocol byte, the opcodes that build the dict, the key and the
+ *  value, and the opcode bytes written between them. The entries are small
+ *  enough that `headingdensity` calls the run rows, which is what a pickle's
+ *  opcodes are in the real thing too. */
+const PICKLE: Spec = {
+  name: "pickle",
+  bytes: 18,
+  kids: [
+    { name: "proto", bytes: 2, machinery: true },
+    {
+      name: "dict",
+      bytes: 15,
+      kids: [
+        { name: "empty_dict", bytes: 1, machinery: true },
+        { name: "memoize", bytes: 1, machinery: true },
+        { name: "mark", bytes: 1, machinery: true },
+        {
+          name: "entry",
+          bytes: 11,
+          kids: [
+            { name: "short_binunicode", bytes: 2, machinery: true },
+            { name: "key", bytes: 5 },
+            { name: "memoize", bytes: 1, machinery: true },
+            { name: "binint1", bytes: 1, machinery: true },
+            { name: "value", bytes: 1 },
+            { name: "memoize", bytes: 1, machinery: true },
+          ],
+        },
+        { name: "setitems", bytes: 1, machinery: true },
+      ],
+    },
+    { name: "stop", bytes: 1, machinery: true },
+  ],
+};
+
+/** The entry row of a flattened `PICKLE`. */
+function entryRow(items: readonly Item[]): Extract<Item, { kind: "row" }> | null {
+  const found = items.find((i) => i.kind === "row" && i.node.name === "entry");
+  return found?.kind === "row" ? found : null;
+}
+
+test("the opcode rows come out, and their bytes stay accounted for", () => {
+  const src = source(build(PICKLE, [], 0));
+  const shown = flatten(src, emptyState).items;
+  const hidden = flatten(src, emptyState, { hideMachinery: true }).items;
+  // Every row the template called machinery is gone, and the entry and the
+  // two values in it are what the reader is left with.
+  assert.equal(shown.filter((i) => i.kind === "row").length, 13);
+  assert.deepEqual(
+    hidden.flatMap((i) => (i.kind === "row" ? [i.node.name] : [])),
+    ["entry", "key", "value"],
+  );
+  // Nothing became a gap where a row used to be: the walk's cursor passes a
+  // hidden child's bytes before it skips it.
+  assert.equal(shown.some((i) => i.kind === "gap"), false);
+  assert.equal(hidden.some((i) => i.kind === "gap"), false);
+  // And the parts of the file are the parts they were, over the same bytes:
+  // hiding rows is not a claim about how the file divides.
+  const parts = (items: readonly Item[]) => items.flatMap((i) => (i.kind === "heading" && i.level === 0 ? [`${i.offsetBits}+${i.sizeBits}`] : []));
+  assert.deepEqual(parts(hidden), parts(shown));
+});
+
+test("a row whose opcodes are hidden counts the rows it draws", () => {
+  const src = source(build(PICKLE, [], 0));
+  // The entry's own six children, as the core counts them.
+  assert.equal(entryRow(flatten(src, emptyState).items)?.shownChildren, null);
+  assert.equal(entryRow(flatten(src, emptyState, { hideMachinery: true }).items)?.shownChildren, 2);
+  // A closed row says the same: a row that reads "5 fields" and opens to show
+  // two is the row disagreeing with itself.
+  const shut = { ...emptyState, closed: new Set([pathKey([1, 3])]) };
+  const closed = entryRow(flatten(src, shut, { hideMachinery: true }).items);
+  assert.equal(closed?.open, false);
+  assert.equal(closed?.shownChildren, 2);
+  // A structure whose children have not been read keeps the core's count: a
+  // number is not worth waiting on the file for.
+  const unread = entryRow(flatten(source(build(PICKLE, [], 0), new Set([pathKey([1, 3])])), shut, { hideMachinery: true }).items);
+  assert.equal(unread?.shownChildren, null);
+  // Nor is a list too long to be drawn in one window ever counted: the whole
+  // of it is never in hand, and a page of it would be a different wrong
+  // number. `count` makes the fixture claim more children than it writes.
+  const long = structuredClone(PICKLE);
+  const entry = long.kids?.[1]?.kids?.[3];
+  assert.equal(entry?.name, "entry");
+  if (entry !== undefined) entry.count = 1000;
+  assert.equal(entryRow(flatten(source(build(long, [], 0)), shut, { hideMachinery: true }).items)?.shownChildren, null);
+});
+
+test("nothing moves for a template that did not ask for its machinery hidden", () => {
+  for (const spec of [SQLITE, GGUF, ZIP_TAIL]) {
+    const plain = flatten(source(build(spec, [], 0)), emptyState).items;
+    const off = flatten(source(build(spec, [], 0)), emptyState, { hideMachinery: false }).items;
+    assert.deepEqual(shape(off), shape(plain));
+  }
+  // SQLite's page header is machinery too, and it is still every one of its
+  // rows: only the template that asked for it loses any.
+  const sqlite = flatten(source(build(SQLITE, [], 0)), emptyState).items;
+  assert.ok(sqlite.some((i) => i.kind === "row" && i.node.name === "page_type"));
+});
+
+test("a structure whose fields are all opcodes is an open row with nothing under it", () => {
+  const spec: Spec = {
+    name: "pickle",
+    bytes: 18,
+    kids: [
+      { name: "proto", bytes: 2, machinery: true },
+      {
+        name: "dict",
+        bytes: 15,
+        kids: [
+          { name: "empty_dict", bytes: 1, machinery: true },
+          { name: "frame", bytes: 14, kids: [{ name: "framing", bytes: 2, machinery: true }, { name: "length", bytes: 12, machinery: true }] },
+        ],
+      },
+      { name: "stop", bytes: 1, machinery: true },
+    ],
+  };
+  const items = flatten(source(build(spec, [], 0)), emptyState, { hideMachinery: true }).items;
+  const frame = items.find((i) => i.kind === "row" && i.node.name === "frame");
+  assert.equal(frame?.kind, "row");
+  assert.equal(frame?.kind === "row" ? frame.open : null, true);
+  assert.equal(frame?.kind === "row" ? frame.shownChildren : null, 0);
+  // Its fourteen bytes are still its own, so nothing under it is unmapped and
+  // nothing is drawn inside it.
+  assert.equal(items.some((i) => i.kind === "gap"), false);
+  assert.equal(items.filter((i) => i.depth > (frame?.depth ?? 0)).length, 0);
+});
+
+test("the listing's switch is the first item, and only when it is offered", () => {
+  const src = source(build(PICKLE, [], 0));
+  const plain = flatten(src, emptyState).items;
+  const { items } = flatten(src, emptyState, { listingSwitch: { key: "picklefpf", on: false } });
+  const first = items[0];
+  assert.equal(first?.kind, "switch");
+  assert.equal(first?.kind === "switch" ? first.switch : null, "picklefpf");
+  assert.equal(first?.kind === "switch" ? first.on : null, false);
+  // Not a part of the file: no section, no bytes, and nothing else moved.
+  assert.equal(first?.section, -1);
+  assert.equal(first?.sizeBits, 0);
+  assert.deepEqual(shape(items.slice(1)), shape(plain));
+  assert.equal(plain.some((i) => i.kind === "switch"), false);
+  assert.equal(flatten(src, emptyState, { listingSwitch: null }).items.some((i) => i.kind === "switch"), false);
+  // Nothing of its own to walk: the caller walks the whole tree.
+  assert.equal(refold(src, emptyState, { listingSwitch: { key: "picklefpf", on: true } }, items, 0), null);
+});

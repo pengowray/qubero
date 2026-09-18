@@ -4408,6 +4408,41 @@ table.rec tr.is-on td {
   color: var(--muted);
   font-family: var(--sans);
 }
+/* The one switch a template offers over its own rows, above the file's first
+   part. It is a control rather than a row of the file, so it is in the sans
+   face the headings use and set in the quiet colour: it is there to be found
+   when wanted, not to be the first thing read. Height must match
+   `HEIGHT.switch` in `listingreport.ts`, as every other item's does. */
+.rp-switch {
+  height: 30px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rp-switch-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.rp-switch-label input {
+  margin: 0;
+  cursor: pointer;
+}
+/* Where the keyboard is, round the control rather than round the full width
+   of the view: this item is a checkbox and three words, and the outline every
+   other item wears would be a rule across the whole listing above the first
+   heading, which reads as something wrong rather than as a place. */
+.rp-item.rp-switch.is-cursor {
+  outline: none;
+}
+.rp-switch.is-cursor .rp-switch-label {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+.rp-scroll:not(:focus) .rp-switch.is-cursor .rp-switch-label {
+  outline-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 /* ---- the format cards ---- */
 /* A JPEG's tables, drawn as the shapes they are used as rather than as their
