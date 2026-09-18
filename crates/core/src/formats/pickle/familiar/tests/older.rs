@@ -7,9 +7,13 @@
 
 use super::*;
 
-/// The opener of a file at a protocol below 4, which has no frame.
+/// The opener of a file at a protocol below 4, which has no frame. Protocol 1
+/// has no opener at all: the file starts at its first value.
 fn older(proto: u8, body: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![0x80, proto];
+    let mut bytes = match proto >= 2 {
+        true => vec![0x80, proto],
+        false => Vec::new(),
+    };
     bytes.extend_from_slice(body);
     bytes
 }
@@ -322,4 +326,69 @@ fn an_array_written_by_python_2_holds_its_numbers_as_they_are() {
     assert_eq!(dimensions.as_slice(), &[2]);
     assert!(found.decoded(*at).is_none());
     assert_eq!(&bytes[*at..*at + *len], numbers);
+}
+
+/// Protocol 1 is protocol 2 with four things missing: the opener, the two
+/// singleton opcodes, the counted tuples and the binary `long`.
+#[test]
+fn a_file_at_protocol_1_reads_without_an_opener() {
+    // `{"name": [1, True]}`, which at protocol 2 would open with PROTO, write
+    // NEWTRUE and close the list with APPENDS the same way.
+    let bytes = older(1, &cat(&[b"}", &at_slot(0), &wide("name"), &at_slot(1), b"]", &at_slot(2), b"(K\x01I01\nes."]));
+    let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
+    assert_eq!(found.form, "basic-p1-v1");
+    assert_eq!(found.proto, 1);
+    let Kind::Dict(entries) = &found.value.kind else { panic!("dict expected") };
+    let Kind::List(items) = &entries[0].1.kind else { panic!("list expected") };
+    assert_eq!(items[1].kind, Kind::Bool(true));
+    // `I1` and `I0` are the integers, not the singletons, and neither is a
+    // number BININT1 could have held.
+    assert!(recognise(&older(1, &cat(&[b"]", &at_slot(0), b"I1\na."]))).is_none());
+    // The opcodes protocol 2 brought are not protocol 1's.
+    assert!(recognise(&older(1, &cat(&[b"]", &at_slot(0), b"\x88a."]))).is_none());
+    assert!(recognise(&older(1, &cat(&[b"K\x01K\x02\x86", &at_slot(0), b"."]))).is_none());
+    assert!(recognise(&older(1, &cat(&[b"\x8a\x05\0\0\0\0\x01."]))).is_none());
+    // And a PROTO opener is not: protocol 1 has no such opcode.
+    assert!(recognise(&cat(&[b"\x80\x01}", &at_slot(0), b"."])).is_none());
+}
+
+/// A `long` at protocol 1 is a line of digits with the letter Python 2 spelled
+/// one with, and anything a four-byte BININT holds was written as one.
+#[test]
+fn a_long_at_protocol_1_is_a_line_of_digits() {
+    let line = |digits: &str| older(1, &cat(&[b"L", digits.as_bytes(), b"L\n."]));
+    let bytes = line("1208925819614629174706176");
+    let found = recognise(&bytes).unwrap();
+    assert_eq!(found.value.kind, Kind::Int { value: 1_208_925_819_614_629_174_706_176, at: 1, len: 25 });
+    for wrong in ["5", "-1", "0000000000005", "+2147483648", "1e30"] {
+        assert!(recognise(&line(wrong)).is_none(), "{wrong} was read as a long");
+    }
+    // The trailing `L` is part of the spelling.
+    assert!(recognise(&older(1, b"L2147483648\n.")).is_none());
+}
+
+/// Ordinary text is not a familiar form, whatever its bytes walk as.
+///
+/// Protocol 0 and 1 files have no opener, so a form reading them cannot lean
+/// on one. What it leans on instead is that a match covers the whole file and
+/// ends at a STOP with one value on the stack. `Nadal.` walks as four opcodes
+/// and a full stop and is a word; it is a non-match because `N` `a` `d` `a` is
+/// not a value a form built.
+#[test]
+fn ordinary_text_is_not_a_familiar_form() {
+    for text in [
+        &b"hello, world\n"[..],
+        b"# a magic file\n0\tstring\tGIF\tGIF image\n",
+        b"{\n  \"name\": \"qubero\"\n}\n",
+        b"data.",
+        b"steal.",
+        b"Nadal.",
+        b"",
+        // A line of digits that is not a number Python wrote, and a full stop
+        // after nothing at all.
+        b"I0001\n.",
+        b".",
+    ] {
+        assert!(recognise(text).is_none(), "{:?} read as a familiar form", &text[..text.len().min(20)]);
+    }
 }

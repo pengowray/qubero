@@ -458,6 +458,10 @@ impl Shape {
 #[derive(Debug)]
 pub struct Match {
     pub form: &'static str,
+    /// The protocol the file was written at. Read from the PROTO opcode from
+    /// protocol 2 up; below that a file has no such opcode and this is what
+    /// the form that matched reads, which is the opcodes it used.
+    pub proto: u8,
     /// Which pickler the file's spellings show, where they show one.
     pub pickler: Pickler,
     pub value: Value,
@@ -617,11 +621,20 @@ fn holds_class(value: &Value) -> bool {
 
 impl<'a> Cursor<'a> {
     fn whole(&mut self, form: &'static str) -> Option<Match> {
-        self.exact(&[0x80])?;
-        self.proto = match self.byte()? {
-            proto if self.allow.protocols.contains(&proto) => proto,
-            _ => return None,
-        };
+        // PROTO and the number arrived with protocol 2. Below it a file opens
+        // at its first value and says nothing about which protocol it is, so
+        // the form that reads it is what says: one using binary opcodes and no
+        // opener is protocol 1, and one using none of them is protocol 0.
+        match self.allow.protocols {
+            [first, ..] if *first < 2 => self.proto = *first,
+            _ => {
+                self.exact(&[0x80])?;
+                self.proto = match self.byte()? {
+                    proto if self.allow.protocols.contains(&proto) => proto,
+                    _ => return None,
+                };
+            }
+        }
         // Framing arrived with protocol 4. Below it a file is one run of
         // instructions and a FRAME opcode is not one of them.
         if self.proto >= 4 && self.peek() == Some(0x95) {
@@ -664,6 +677,7 @@ impl<'a> Cursor<'a> {
         }
         Some(Match {
             form,
+            proto: self.proto,
             pickler: self.pickler,
             value,
             body,

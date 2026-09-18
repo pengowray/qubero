@@ -691,14 +691,14 @@ fn the_forms_match_these_samples_and_no_others() {
 /// The two columns are two grammars over the same data: below protocol 4 a
 /// memo mark carries its index, a callable is two lines, and a set and a byte
 /// string are calls rather than literals.
-const FAMILIES: &[(&str, Option<&str>, Option<&str>)] = &[
-    ("basic", Some("basic-p4-p5-v5"), Some("basic-p2-p3-v1")),
+const FAMILIES: &[(&str, [Option<&str>; 3])] = &[
+    ("basic", [Some("basic-p4-p5-v5"), Some("basic-p2-p3-v1"), Some("basic-p1-v1")]),
     // An array and a scalar, which are two productions of one form.
-    ("numpy", Some("numpy-array-p4-p5-v6"), Some("numpy-array-p2-p3-v1")),
-    ("dataframe", Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1")),
-    ("series", Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1")),
-    ("sklearn", Some("sklearn-estimator-p4-p5-v1"), Some("sklearn-estimator-p2-p3-v1")),
-    ("scipy", Some("scipy-sparse-p4-p5-v1"), Some("scipy-sparse-p2-p3-v1")),
+    ("numpy", [Some("numpy-array-p4-p5-v6"), Some("numpy-array-p2-p3-v1"), Some("numpy-array-p1-v1")]),
+    ("dataframe", [Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1"), Some("pandas-frame-p1-v1")]),
+    ("series", [Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1"), Some("pandas-frame-p1-v1")]),
+    ("sklearn", [Some("sklearn-estimator-p4-p5-v1"), Some("sklearn-estimator-p2-p3-v1"), Some("sklearn-estimator-p1-v1")]),
+    ("scipy", [Some("scipy-sparse-p4-p5-v1"), Some("scipy-sparse-p2-p3-v1"), Some("scipy-sparse-p1-v1")]),
 ];
 
 /// The row of [`FAMILIES`] a file falls under: its object where that is named,
@@ -737,7 +737,7 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     // How many files of each family matched at each of the two protocol
     // ranges, and how many there were, so that the run says what it covered
     // rather than only that it passed.
-    let mut tally: Vec<[(usize, usize); 2]> = vec![[(0, 0); 2]; FAMILIES.len()];
+    let mut tally: Vec<[(usize, usize); 3]> = vec![[(0, 0); 3]; FAMILIES.len()];
     let mut wrong = Vec::new();
     for dir in &environments {
         let env = dir.file_name().unwrap().to_string_lossy().into_owned();
@@ -751,13 +751,10 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
             let column = match true {
                 _ if name.contains(".p4.") || name.contains(".p5.") => Some(0),
                 _ if name.contains(".p2.") || name.contains(".p3.") => Some(1),
+                _ if name.contains(".p1.") => Some(2),
                 _ => None,
             };
-            let expected = match column {
-                Some(0) => FAMILIES[i].1,
-                Some(1) => FAMILIES[i].2,
-                _ => None,
-            };
+            let expected = column.and_then(|c| FAMILIES[i].1[c]);
             let bytes = std::fs::read(&path).unwrap();
             let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
             if let Some(column) = column {
@@ -773,15 +770,16 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
             }
         }
     }
-    for ((family, new, old), counts) in FAMILIES.iter().zip(&tally) {
-        eprintln!("{family}: {} of {} at protocol 4 and 5 read as {new:?}", counts[0].0, counts[0].1);
-        eprintln!("{family}: {} of {} at protocol 2 and 3 read as {old:?}", counts[1].0, counts[1].1);
+    for ((family, forms), counts) in FAMILIES.iter().zip(&tally) {
+        for (at, said) in ["protocol 4 and 5", "protocol 2 and 3", "protocol 1"].iter().enumerate() {
+            eprintln!("{family}: {} of {} at {said} read as {:?}", counts[at].0, counts[at].1, forms[at]);
+        }
     }
     assert!(wrong.is_empty(), "{} files:\n  {}", wrong.len(), wrong.join("\n  "));
     // Fewer than were written, since the same bytes from two environments are
     // kept once, and enough to know the folder was not empty.
     let matched: usize = tally.iter().flatten().map(|(n, _)| n).sum();
-    assert!(matched >= 280, "only {matched} files matched a form");
+    assert!(matched >= 380, "only {matched} files matched a form");
 }
 
 /// Which of CPython's two picklers each batch edge in the matrix shows.
@@ -1187,7 +1185,7 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
             // Every protocol a form reads. A protocol 2 frame keeps its
             // numbers as the latin-1 text they spell, so the same table
             // arriving cell for cell is the whole claim being made here.
-            if ![".p2.", ".p3.", ".p4.", ".p5."].iter().any(|p| name.contains(p)) {
+            if ![".p1.", ".p2.", ".p3.", ".p4.", ".p5."].iter().any(|p| name.contains(p)) {
                 continue;
             }
             let Some((_, columns, units, want)) = cases.iter().find(|(stem, ..)| name.starts_with(&format!("{stem}."))) else {
@@ -1216,7 +1214,7 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
             checked += 1;
         }
     }
-    assert!(checked >= 24, "only {checked} frames read as tables");
+    assert!(checked >= 30, "only {checked} frames read as tables");
 }
 
 /// An array reads as the same numbers at every protocol a form takes.
@@ -1259,7 +1257,7 @@ fn an_array_reads_as_the_same_numbers_at_every_protocol() {
             checked += 1;
         }
     }
-    assert!(checked >= 20, "only {checked} arrays read as their numbers");
+    assert!(checked >= 28, "only {checked} arrays read as their numbers");
 }
 
 /// The numbers of the one array in a file, in storage order, read the way the

@@ -251,14 +251,22 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 (Label::Field(DATA_FIELD), Part::Value(&found.value)),
             ],
         ),
-        Part::Header => (
-            vec![
+        Part::Header => {
+            let mut notes = vec![
                 (Label::Field(MESSAGE_FIELD), Part::Note(familiar::MESSAGE.to_string())),
                 (Label::Field(FORM_FIELD), Part::Note(found.form.to_string())),
                 (Label::Field(PICKLER_FIELD), Part::Note(found.pickler.name().to_string())),
-            ],
-            vec![(Label::Field(PROTOCOL_FIELD), Part::Protocol)],
-        ),
+            ];
+            // PROTO and the number arrived with protocol 2. Below that the
+            // file says nothing, and the number is what the form that read it
+            // says, so the row is worked out rather than read.
+            let mut kids = Vec::new();
+            match found.proto >= 2 {
+                true => kids.push((Label::Field(PROTOCOL_FIELD), Part::Protocol)),
+                false => notes.push((Label::Field(PROTOCOL_FIELD), Part::Note(found.proto.to_string()))),
+            }
+            (notes, kids)
+        }
         Part::Entry(e) => (
             Vec::new(),
             vec![(Label::Field(KEY_FIELD), Part::Value(&e.0)), (Label::Field(VALUE_FIELD), Part::Value(&e.1))],

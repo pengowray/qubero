@@ -53,7 +53,7 @@ enum Fill {
 fn opens_object(code: u8) -> bool {
     matches!(
         code,
-        b'N' | 0x88 | 0x89 | b'K' | b'M' | b'J' | 0x8a | b'G' | 0x8c | 0x58 | 0x8d | b'C' | b'B' | 0x8e | 0x96 | b')' | b']' | b'}' | 0x8f | b'h' | b'j' | b'(' | b'c' | b'I' | b'U' | b'T'
+        b'N' | 0x88 | 0x89 | b'K' | b'M' | b'J' | 0x8a | b'G' | 0x8c | 0x58 | 0x8d | b'C' | b'B' | 0x8e | 0x96 | b')' | b']' | b'}' | 0x8f | b'h' | b'j' | b'(' | b'c' | b'I' | b'U' | b'T' | b'L'
     )
 }
 
@@ -211,7 +211,7 @@ impl Cursor<'_> {
                 // TUPLE1, TUPLE2 and TUPLE3, which take the one to three
                 // things above them. A tuple of four or more is written over
                 // a MARK instead, and an empty one has an opcode of its own.
-                0x85..=0x87 => {
+                0x85..=0x87 if self.proto >= 2 => {
                     let arity = (code - 0x84) as usize;
                     self.byte()?;
                     if stack.len() < floor + arity {
@@ -233,8 +233,9 @@ impl Cursor<'_> {
                     self.byte()?;
                     let mark = marks.pop()?;
                     let items = stack.split_off(mark.floor);
-                    if code == b't' && items.len() < 4 {
-                        // Three or fewer are written with TUPLE1 to TUPLE3.
+                    if code == b't' && items.len() < 4 && self.proto >= 2 {
+                        // Three or fewer are written with TUPLE1 to TUPLE3
+                        // from protocol 2, which is where those opcodes are.
                         return None;
                     }
                     let holds = items.iter().all(|slot| hashable(&slot.value));
@@ -522,7 +523,7 @@ impl Cursor<'_> {
             0x8c | 0x58 | 0x8d => return Some(Slot { value: self.text()?, deep: 1, fill: Fill::Shut }),
             b'U' | b'T' => return Some(Slot { value: self.py2_string()?, deep: 1, fill: Fill::Shut }),
             b'h' | b'j' => return Some(Slot { value: self.named()?, deep: 1, fill: Fill::Shut }),
-            b'K' | b'M' | b'J' | 0x8a | b'I' => return Some(Slot { value: self.integer()?, deep: 1, fill: Fill::Shut }),
+            b'K' | b'M' | b'J' | 0x8a | b'I' | b'L' => return Some(Slot { value: self.integer()?, deep: 1, fill: Fill::Shut }),
             b'G' => return Some(Slot { value: self.binfloat()?, deep: 1, fill: Fill::Shut }),
             b'C' | b'B' | 0x8e => return Some(Slot { value: self.byte_string()?, deep: 1, fill: Fill::Shut }),
             0x96 => return Some(Slot { value: self.bytearray()?, deep: 1, fill: Fill::Shut }),
@@ -536,7 +537,9 @@ impl Cursor<'_> {
                 self.byte()?;
                 (Kind::None, Fill::Shut)
             }
-            0x88 | 0x89 => {
+            // The two singletons got an opcode each at protocol 2; below it
+            // they are integer lines, which [`Cursor::integer`] reads.
+            0x88 | 0x89 if self.proto >= 2 => {
                 self.byte()?;
                 (Kind::Bool(code == 0x88), Fill::Shut)
             }
@@ -594,7 +597,7 @@ impl Cursor<'_> {
                 }
                 Kind::Int { value, at: start + 1, len: 4 }
             }
-            0x8a => {
+            0x8a if self.proto >= 2 => {
                 let len = usize::from(self.byte()?);
                 let at = self.at;
                 let value = two_complement(self.take(len)?)?;
@@ -613,6 +616,13 @@ impl Cursor<'_> {
             b'I' if self.proto <= 2 => {
                 let (at, len) = self.line()?;
                 let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+                // `I01` and `I00` are `True` and `False`, which had no opcode
+                // of their own below protocol 2. The integers one and nought
+                // are `I1` and `I0` where they are written as lines at all,
+                // so the leading zero is the whole of the difference.
+                if self.proto <= 1 && matches!(digits, "01" | "00") {
+                    return Some(self.span(start, Kind::Bool(digits == "01")));
+                }
                 let value = i128::from(digits.parse::<i64>().ok()?);
                 // CPython writes no leading zero, no plus and no space, so the
                 // digits have to be what the number is spelled as.
@@ -620,6 +630,18 @@ impl Cursor<'_> {
                     return None;
                 }
                 Kind::Int { value, at, len }
+            }
+            // A `long`, which protocol 2 writes as LONG1 and protocol 1 as a
+            // line of digits with the `L` Python 2 spelled one with. Python 3
+            // writes the same line, `L` and all.
+            b'L' if self.proto <= 1 => {
+                let (at, len) = self.line()?;
+                let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?.strip_suffix('L')?;
+                let value = digits.parse::<i128>().ok()?;
+                if digits != value.to_string() || i32::try_from(value).is_ok() {
+                    return None;
+                }
+                Kind::Int { value, at, len: len - 1 }
             }
             _ => return None,
         };

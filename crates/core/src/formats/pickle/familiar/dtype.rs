@@ -67,6 +67,7 @@ impl Cursor<'_> {
             self.restore(here);
         }
         self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
+        self.open_tuple()?;
         let (kind_at, kind_len) = self.text_run()?;
         let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?;
         // `V` and a width is a record; everything else is one number a value,
@@ -83,10 +84,11 @@ impl Cursor<'_> {
         let kind = kind.to_string();
         self.says("dtype", kind_at, kind_len);
         self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
-        // NEWFALSE NEWTRUE TUPLE3, the two flags every dtype is built with,
-        // and then the call that makes it.
-        self.atoms(&[b"\x89", b"\x88"])?;
-        self.exact(b"\x87")?;
+        // The two flags every dtype is built with, and then the call that
+        // makes it out of them and the letters.
+        self.flag(false)?;
+        self.flag(true)?;
+        self.close_tuple(3)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         let slot = self.memoize_at(Bound::Opaque)?;
@@ -136,6 +138,8 @@ impl Cursor<'_> {
     /// is a numerator this has no word for.
     fn datetime_unit(&mut self) -> Option<String> {
         self.gate()?;
+        self.open_tuple()?;
+        self.gate()?;
         match self.byte()? {
             b'}' => {
                 self.memoize(Bound::Opaque)?;
@@ -171,7 +175,7 @@ impl Cursor<'_> {
         self.atoms(&[b"K\x01", b"K\x01", b"K\x01"])?;
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
-        self.exact(b"\x86")?;
+        self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         Some(unit)
     }
@@ -213,6 +217,9 @@ impl Cursor<'_> {
     fn column_names(&mut self) -> Option<Vec<(usize, usize)>> {
         self.gate()?;
         let marked = self.peek()? == b'(';
+        if self.proto <= 1 && !marked {
+            return None;
+        }
         if marked {
             self.byte()?;
         }
@@ -232,6 +239,7 @@ impl Cursor<'_> {
         }
         let end = self.byte()?;
         let expected = match names.len() {
+            1..=MAX_COLUMNS if marked && self.proto <= 1 => b't',
             1..=3 if !marked => 0x84 + names.len() as u8,
             4..=MAX_COLUMNS if marked => b't',
             _ => return None,
@@ -267,12 +275,15 @@ impl Cursor<'_> {
                 _ => return None,
             };
             let name = std::str::from_utf8(self.bytes.get(*at..at + held)?).ok()?.to_string();
+            // The key is the column's name and the value is the pair of its
+            // dtype and where it sits, so the tuple opens after the name.
+            self.open_tuple()?;
             let dtype = match self.column_dtype()? {
                 Dtype::Plain(spelling) => spelling,
                 _ => return None,
             };
             let Kind::Int { value, .. } = self.integer()?.kind else { return None };
-            self.exact(&[0x86])?;
+            self.close_tuple(2)?;
             self.memoize(Bound::Opaque)?;
             columns.push(Column { name, dtype, at: u64::try_from(value).ok()? });
         }

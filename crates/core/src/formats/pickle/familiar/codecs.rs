@@ -70,13 +70,14 @@ impl Cursor<'_> {
     /// whatever the bytes are part of, so it is left to the caller.
     fn encode_call(&mut self) -> Option<(usize, usize)> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
+        self.open_tuple()?;
         let (at, len) = match self.text()?.kind {
             Kind::Text { at, len } => (at, len),
             _ => return None,
         };
         self.latin1(at, len)?;
         self.encoding_word()?;
-        self.exact(&[0x86])?;
+        self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         Some((at, len))
@@ -84,12 +85,13 @@ impl Cursor<'_> {
 
     fn encoded(&mut self, start: usize) -> Option<Value> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
+        self.open_tuple()?;
         let text = self.text()?;
         if let Kind::Text { at, len } = text.kind {
             self.latin1(at, len)?;
         }
         let encoding = self.encoding_word()?;
-        self.exact(&[0x86])?;
+        self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         // Python hashes a byte string, so a name for one may stand where a

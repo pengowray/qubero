@@ -14,7 +14,7 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
-use super::forms::{Via, PARTIAL};
+use super::forms::{Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
 
@@ -44,8 +44,11 @@ impl Cursor<'_> {
     /// any class may come from.
     pub(super) fn may_name(&self, path: &str) -> bool {
         match path.rsplit_once('.') {
+            // `object` is the base class every `_reconstructor` call is
+            // handed, and the one class a form may name and never call.
             Some((module, _)) => {
-                self.module_fits(module) && (self.whitelisted(module) || self.calls().any(|call| call.path == path))
+                self.module_fits(module)
+                    && (self.whitelisted(module) || path == BASE_CLASS || self.calls().any(|call| call.path == path))
             }
             None => false,
         }
@@ -230,6 +233,12 @@ impl Cursor<'_> {
         if matches!(call.what, Shape::Set | Shape::FrozenSet) {
             return self.set_made(call.what, at, held);
         }
+        // An object made the way protocol 1 makes one. What comes out is the
+        // same object NEWOBJ makes at protocol 2, so it is read as that and
+        // the BUILD after it fills it in the same way.
+        if path == RECONSTRUCTOR {
+            return self.reconstructed_object(at, held);
+        }
         // What the call made, which a later part of the file may name: pandas
         // writes a block's values once and names them again in the dictionary
         // it versions its state with.
@@ -241,6 +250,23 @@ impl Cursor<'_> {
             self.instances += 1;
         }
         Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held, state: None })
+    }
+
+    /// `copy_reg._reconstructor(cls, object, None)`, which is `cls.__new__(cls)`
+    /// written the long way round: protocol 1 had no NEWOBJ.
+    ///
+    /// The class has to be one this form may name, which is the same rule
+    /// NEWOBJ is held to, and the base and the argument were checked against
+    /// the call's own shape before this.
+    fn reconstructed_object(&mut self, at: usize, held: Vec<Value>) -> Option<Kind> {
+        let class = held.into_iter().next()?;
+        let Kind::Class { ref path, .. } = class.kind else { return None };
+        if !self.whitelisted(path.rsplit_once('.')?.0) {
+            return None;
+        }
+        self.memoize(Bound::Made { what: Shape::Object, at, hashable: false })?;
+        self.instances += 1;
+        Some(Kind::Instance { class: Box::new(class), state: None })
     }
 
     /// `set(members)` or `frozenset(members)`, which is how both are written

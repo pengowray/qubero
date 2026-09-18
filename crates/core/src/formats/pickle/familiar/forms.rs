@@ -39,6 +39,21 @@ pub(super) const SKLEARN23: &str = "sklearn-estimator-p2-p3-v1";
 pub(super) const SCIPY23: &str = "scipy-sparse-p2-p3-v1";
 pub(super) const PANDAS23: &str = "pandas-frame-p2-p3-v1";
 
+/// The same families at protocol 1, which is what Python 2 wrote when it was
+/// asked for a binary pickle before protocol 2 existed, and what
+/// `cPickle.dump(obj, f, 1)` wrote for years after.
+///
+/// Named apart again, and for the same reason: a file at protocol 1 has no
+/// PROTO opener, writes `True` and `False` as integer lines, has one tuple
+/// opcode rather than four, writes a `long` as a line of digits, and builds an
+/// object through `copy_reg._reconstructor` rather than NEWOBJ.
+pub(super) const BASIC1: &str = "basic-p1-v1";
+pub(super) const NUMPY1: &str = "numpy-array-p1-v1";
+pub(super) const BUILTINS1: &str = "builtins-values-p1-v1";
+pub(super) const SKLEARN1: &str = "sklearn-estimator-p1-v1";
+pub(super) const SCIPY1: &str = "scipy-sparse-p1-v1";
+pub(super) const PANDAS1: &str = "pandas-frame-p1-v1";
+
 /// Which family a form belongs to, which is what says the file used the
 /// productions the form is for rather than only the ones every form has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,12 +281,37 @@ fn members(args: &[Value]) -> Option<()> {
 /// two containers and the byte string that protocol has no opcode for.
 const BELOW_FOUR: &[Reduce] = &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL];
 
+/// How an object of a class is made below protocol 2, which had no NEWOBJ.
+///
+/// `copy_reg._reconstructor(cls, base, state)` is what `object.__reduce_ex__`
+/// returns there: the class, the class it inherits its layout from, and the
+/// argument that base is constructed with. Only `object` and `None`, which is
+/// `cls.__new__(cls)` written the long way round and is the one shape the
+/// NEWOBJ production already accepts. A different base class is a class being
+/// told to construct itself out of values, which is the class's business.
+pub(super) const RECONSTRUCTOR: &str = "copy_reg._reconstructor";
+/// The base class it is handed, which a form may name and never calls.
+pub(super) const BASE_CLASS: &str = "__builtin__.object";
+const MAKE_OBJECT: &[Reduce] = &[Reduce {
+    via: Via::Global,
+    path: RECONSTRUCTOR,
+    what: Shape::Object,
+    names: &["type", "base", "state"],
+    shape: |args| {
+        (matches!(&args[0].kind, Kind::Class { .. })
+            && matches!(&args[1].kind, Kind::Class { path, .. } if path == BASE_CLASS)
+            && matches!(args[2].kind, Kind::None))
+        .then_some(())
+    },
+}];
+
 /// Every form, in the order a file is tried against them. The protocol byte
 /// tells the two halves apart at the second byte of the file, so a file only
 /// ever does the work of the six forms its protocol has.
-pub(super) fn forms() -> [(&'static str, Allow); 12] {
+pub(super) fn forms() -> [(&'static str, Allow); 18] {
     const NEW: &[u8] = &[4, 5];
     const OLD: &[u8] = &[2, 3];
+    const ONE: &[u8] = &[1];
     let plain = Allow {
         protocols: NEW,
         family: Family::Basic,
@@ -282,6 +322,7 @@ pub(super) fn forms() -> [(&'static str, Allow); 12] {
         object_arrays: false,
     };
     let old = Allow { protocols: OLD, calls: &[BELOW_FOUR], ..plain };
+    let one = Allow { protocols: ONE, ..old };
     [
         (BASIC, plain),
         (NUMPY, Allow { family: Family::Numpy, numpy: true, ..plain }),
@@ -314,6 +355,29 @@ pub(super) fn forms() -> [(&'static str, Allow); 12] {
                 numpy: true,
                 builtins: true,
                 classes: &["pandas"],
+                object_arrays: true,
+            },
+        ),
+        (BASIC1, one),
+        (NUMPY1, Allow { family: Family::Numpy, numpy: true, ..one }),
+        (BUILTINS1, Allow { family: Family::Builtins, builtins: true, ..one }),
+        (
+            SKLEARN1,
+            Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, MAKE_OBJECT, SKLEARN_CALLS], ..one },
+        ),
+        (
+            SCIPY1,
+            Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], calls: &[BELOW_FOUR, MAKE_OBJECT], ..one },
+        ),
+        (
+            PANDAS1,
+            Allow {
+                protocols: ONE,
+                family: Family::Library,
+                numpy: true,
+                builtins: true,
+                classes: &["pandas"],
+                calls: &[BELOW_FOUR, MAKE_OBJECT, PANDAS_CALLS],
                 object_arrays: true,
             },
         ),

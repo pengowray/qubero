@@ -36,6 +36,9 @@ impl Cursor<'_> {
         let marked = self.peek()? == b'(';
         if marked {
             self.byte()?;
+        } else if self.proto <= 1 {
+            // Protocol 1 has one tuple opcode and it takes a MARK.
+            return None;
         }
         self.gate()?;
         let mut dims = Vec::new();
@@ -50,6 +53,7 @@ impl Cursor<'_> {
         }
         let end = self.byte()?;
         let expected = match dims.len() {
+            1..=MAX_DIMENSIONS if self.proto <= 1 => b't',
             1..=3 if !marked => 0x84 + dims.len() as u8,
             4..=MAX_DIMENSIONS if marked => b't',
             _ => return None,
@@ -217,11 +221,13 @@ impl Cursor<'_> {
     fn reconstructed(&mut self, start: usize) -> Option<Value> {
         const MODULES: &[&str] = &["numpy._core.multiarray", "numpy.core.multiarray"];
         self.global(MODULES, "_reconstruct", "module", "callable")?;
+        self.open_tuple()?;
         self.global(&["numpy"], "ndarray", "class module", "class")?;
         // The placeholder the reconstructor is given: shape (0,) and a dtype
         // letter, both replaced by the BUILD that follows.
+        self.open_tuple()?;
         self.atoms(&[b"K\0"])?;
-        self.exact(b"\x85")?;
+        self.close_tuple(1)?;
         self.memoize(Bound::Opaque)?;
         self.gate()?;
         // Protocol 2 writes the placeholder byte string the way it writes
@@ -255,7 +261,7 @@ impl Cursor<'_> {
             let at = self.at - 1;
             self.memoize(Bound::Bytes { at, len: 1 })?;
         }
-        self.exact(b"\x87")?;
+        self.close_tuple(3)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         // The array itself, which a later part of the file may name: a pandas
@@ -265,12 +271,7 @@ impl Cursor<'_> {
         self.atoms(&[b"(", b"K\x01"])?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
-        self.gate()?;
-        let fortran_order = match self.byte()? {
-            0x89 => false,
-            0x88 => true,
-            _ => return None,
-        };
+        let fortran_order = self.read_flag()?;
         let call_ends = self.at;
         // An array of objects has no buffer. Its values are pickled after it,
         // as the list the array is handed, and they are read as values rather
@@ -381,12 +382,13 @@ impl Cursor<'_> {
     fn scalar(&mut self, start: usize) -> Option<Value> {
         const MODULES: &[&str] = &["numpy._core.multiarray", "numpy.core.multiarray"];
         self.global(MODULES, "scalar", "module", "callable")?;
+        self.open_tuple()?;
         let dtype = self.dtype()?;
         let call_ends = self.at;
         let (at, len, payload, storage) = self.numbers(&dtype, &[1])?;
         self.finish_call("numpy scalar call", start, call_ends);
         self.memoize(Bound::Bytes { at, len })?;
-        self.exact(b"\x86")?;
+        self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         // A scalar is one number, and Python hashes it.

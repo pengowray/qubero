@@ -312,6 +312,56 @@ impl<'a> Cursor<'a> {
         Some((at, len))
     }
 
+    /// The MARK in front of a tuple of a known length, for a protocol that
+    /// has no opcode for one.
+    ///
+    /// Protocol 2 gave tuples of one, two and three elements an opcode each,
+    /// written after the elements. Protocol 1 has only MARK and TUPLE, so a
+    /// fixed run has to open the tuple before it writes what is in it.
+    pub(super) fn open_tuple(&mut self) -> Option<()> {
+        if self.proto >= 2 {
+            return Some(());
+        }
+        self.gate()?;
+        self.exact(b"(")
+    }
+
+    /// The opcode that closes a tuple of `n` elements, which is TUPLE1 to
+    /// TUPLE3 at protocol 2 and TUPLE at protocol 1.
+    pub(super) fn close_tuple(&mut self, n: usize) -> Option<()> {
+        match self.proto >= 2 {
+            true => self.exact(&[0x84 + u8::try_from(n).ok()?]),
+            false => self.exact(b"t"),
+        }
+    }
+
+    /// A boolean, in whichever spelling the protocol has.
+    ///
+    /// Protocol 2 gave `True` and `False` an opcode each. Protocol 1 writes
+    /// them as the integer lines `I01` and `I00`, which are a text opcode
+    /// inside a binary protocol and are not the integers 1 and 0: those are
+    /// written `I1` and `I0` where they are written as lines at all.
+    pub(super) fn read_flag(&mut self) -> Option<bool> {
+        self.gate()?;
+        match self.proto >= 2 {
+            true => match self.byte()? {
+                0x88 => Some(true),
+                0x89 => Some(false),
+                _ => None,
+            },
+            false => match self.take(4)? {
+                b"I01\n" => Some(true),
+                b"I00\n" => Some(false),
+                _ => None,
+            },
+        }
+    }
+
+    /// The same, where a form knows which of the two the file has to say.
+    pub(super) fn flag(&mut self, want: bool) -> Option<()> {
+        (self.read_flag()? == want).then_some(())
+    }
+
     /// A value and the bytes it was written in, which is everything the
     /// production consumed.
     pub(super) fn span(&self, start: usize, kind: Kind) -> Value {

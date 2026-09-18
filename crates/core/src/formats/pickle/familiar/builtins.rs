@@ -41,6 +41,9 @@ impl Cursor<'_> {
             self.restore(here);
             let made = (|| {
                 self.global(module, name, "module", "class")?;
+                if arity > 0 {
+                    self.open_tuple()?;
+                }
                 let mut items = Vec::new();
                 for _ in 0..arity {
                     items.push(match what {
@@ -56,7 +59,7 @@ impl Cursor<'_> {
                 if arity == 0 {
                     self.atoms(&[b")"])?;
                 } else {
-                    self.exact(&[0x84 + arity as u8])?;
+                    self.close_tuple(arity)?;
                     self.memoize(Bound::Opaque)?;
                 }
                 self.exact(b"R")?;
