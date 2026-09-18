@@ -142,6 +142,40 @@ part null; a pending read answers pending like every other call.
   and a run chip in the hex view on double-click, the same gesture that opens
   an unpacked stream.
 
+## Which way round (2026-09-19)
+
+A table means one thing: a row is a record, a column is a field. The plan
+answers in records, and every copy and export is made from that by
+`tabletext.ts`. Which way round the view DRAWS it is a separate state, `turned`,
+with a checkbox in the bar, `Show {rows} as columns`.
+
+- **Default.** `turnsByDefault`: the table can be turned (at most `TURN_MAX`,
+  1,000, records, since a turned row needs every record read), its columns are
+  only places in a list, and there are more than 20 of them and at least four
+  to every row. Two TDMS channels of 500 values arrive as two columns.
+- **Kept.** `qubero.table.turned`, written only when the reader flips a table
+  that `turnsByDefault` picks out, and read only for those. Flipping a table of
+  records lasts for that tab: it should not turn every dBase file from then on.
+- **What turns.** The rows that scroll and are selected are fields. The facts
+  about a record (number, name, time, address, size) are columns the right way
+  up and lines of sticky heading turned, written by the same `turnedLines` a
+  copy uses. A click goes to the clicked cell's own bytes (`TableRow.spans`),
+  or to the whole record where the plan has no spans.
+- **What does not.** Export writes a record to a row unless the reader picks
+  `One {row} per column, as shown`; JSON is always one object per record. Copy
+  is of the rows on screen and so follows the view.
+- **Headings.** Columns that are all `[n]` are headed `n` (`plainIndexes`);
+  one named column among them keeps the brackets on all. Rows the format names
+  (TDMS channel paths) get a `name` column.
+- **Header.** Inside the scroller, `position: sticky`, in a sheet that is
+  `max-content` wide, so it scrolls across with the rows; the row number (or,
+  turned, the field label) is sticky at the near edge.
+- **Not done: columns are not virtual.** Every column of every drawn row is an
+  element, about 30 microseconds each: 2 rows of 500 is nothing, 50 rows of 500
+  is most of a second a repaint, and 4,000 columns that tall would not scroll.
+  A table both wide and tall needs a column window like the row one; the
+  tracks are fixed `ch` widths, so the arithmetic is prefix sums.
+
 ## Strings
 
 | Where | String |
@@ -157,9 +191,17 @@ part null; a pending read answers pending like every other call.
 | Unnamed column | `{column word} {n}` |
 | Address columns (data lens) | `Stored at`, `Size` |
 | Address checkbox | `Show byte addresses` |
-| Copy button, nothing selected (disabled) | `Copy`; hover `Select rows to copy them as tab-separated text` |
-| Copy button, rows selected | `Copy {n} {rows}`; hover `Copy the selected rows as tab-separated text (Ctrl+C)` |
-| Copy notice | `Copied {n} {rows} as tab-separated text.` |
+| Row name column | `name` |
+| Turn checkbox | `Show {rows} as columns`; hover `Swap rows and columns, so each {row} is a column. Only changes how the table is shown.` |
+| Turn checkbox, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
+| Column meaning, turned | `Each column is one {row} of each {column word}, 1/{rate} s apart.` |
+| Copy button, nothing selected (disabled) | `Copy selected rows`; hover `Select rows to copy them as tab-separated text` |
+| Copy button, rows selected | `Copy selected row`, `Copy {n} selected rows`; hover `Copy the selected rows to the clipboard as tab-separated text, with their headings (Ctrl+C)` |
+| Copy notice | `Copied {n} rows as tab-separated text.` |
+| Export button | `Export...`; while saving `Stop export` |
+| Export form | `Export`: `Whole table`, `Selected rows only ({n})`; `Format`: `CSV`, `TSV`, `JSON`; `Layout` (turned only): `One {row} per row`, `One {row} per column, as shown`; `Save file` |
+| Export size | `Writes {n} rows of {m} columns, under one heading row.` / `..., as shown.` / `Writes {n} objects, one per {row}.` |
+| Export notices | `Exporting row {n} of {total}...`, `Exported {n} rows as {format}.`, `Export stopped.`, `Couldn't export: {message}` |
 | Copy refused, too many | `Selection too large to copy: {n} rows, limit 100,000.` |
 | Copy refused, still reading | `Rows are still loading. Try again in a moment.` |
 | Copy failed | `Couldn't copy to the clipboard.` |
