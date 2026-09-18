@@ -106,7 +106,11 @@ fn hashable(value: &Value) -> bool {
         Kind::Object { what, items, .. } => {
             matches!(what, Shape::Slice | Shape::Range | Shape::Complex) && items.iter().all(hashable)
         }
+        // A class hashes in Python and an object of one usually does, but no
+        // file in the corpus writes either as a key, so neither is read as
+        // one until something does.
         Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
+        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } => false,
     }
 }
 
@@ -219,6 +223,27 @@ impl Cursor<'_> {
                     }
                     let items = stack.split_off(mark.floor);
                     self.batch(&mut stack, items, code)?;
+                }
+                // STACK_GLOBAL, NEWOBJ, REDUCE and BUILD, which only a form
+                // that reads a library object allows. Each folds exactly the
+                // two things written in front of it, in the same order: the
+                // thing being named, called or filled first, and what it is
+                // named, called or filled with second.
+                0x93 | 0x81 | b'R' | b'b' if !self.allow.classes.is_empty() => {
+                    self.byte()?;
+                    if stack.len() < floor + 2 {
+                        return None;
+                    }
+                    let items = stack.split_off(stack.len() - 2);
+                    let at = items[0].value.at;
+                    self.shut(&items)?;
+                    let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
+                    if deep > MAX_DEPTH {
+                        return None;
+                    }
+                    let values = items.into_iter().map(|slot| slot.value).collect();
+                    let kind = self.library(code, values)?;
+                    stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill: Fill::Shut });
                 }
                 _ => {
                     if stack.len() >= MAX_VALUES {
@@ -501,13 +526,21 @@ impl Cursor<'_> {
     fn named(&mut self) -> Option<Value> {
         self.gate()?;
         let start = self.at;
-        let names = match self.reference()?.clone() {
-            Bound::Text { at, len } => Names::Text { at, len },
-            Bound::Bytes { at, len } => Names::Bytes { at, len },
-            Bound::Made { what, at, hashable } => Names::Made { what, at, hashable },
+        let kind = match self.reference()?.clone() {
+            Bound::Text { at, len } => Kind::Ref(Names::Text { at, len }),
+            Bound::Bytes { at, len } => Kind::Ref(Names::Bytes { at, len }),
+            Bound::Made { what, at, hashable } => Kind::Ref(Names::Made { what, at, hashable }),
+            // A class the file named earlier, which is how the second block of
+            // a frame names the callable the first one spelled out. Only the
+            // modules this form may name a class from: a slot holding one of
+            // the globals a NumPy call names inside its own fixed run is not a
+            // class this form has anything to say about.
+            Bound::Global(path) if path.rsplit_once('.').is_some_and(|(module, _)| self.whitelisted(module)) => {
+                Kind::Class { path, parts: Vec::new() }
+            }
             _ => return None,
         };
-        Some(self.span(start, Kind::Ref(names)))
+        Some(self.span(start, kind))
     }
 
     /// BYTEARRAY8, which protocol 5 writes for a bytearray where protocol 4

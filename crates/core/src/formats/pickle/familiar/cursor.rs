@@ -31,6 +31,9 @@ pub(super) struct Cursor<'a> {
     /// file belongs to the form that allows it.
     pub(super) arrays: usize,
     pub(super) objects: usize,
+    /// How many objects of a named class the file built, which is what says a
+    /// library form read what it is for.
+    pub(super) instances: usize,
 }
 
 /// Where a frame boundary stands. CPython writes a pickle as a run of frames:
@@ -69,6 +72,7 @@ pub(super) struct Save {
     pub(super) pickler: Pickler,
     pub(super) arrays: usize,
     pub(super) objects: usize,
+    pub(super) instances: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -115,6 +119,7 @@ impl<'a> Cursor<'a> {
             pickler: self.pickler,
             arrays: self.arrays,
             objects: self.objects,
+            instances: self.instances,
         }
     }
 
@@ -145,6 +150,7 @@ impl<'a> Cursor<'a> {
         self.pickler = s.pickler;
         self.arrays = s.arrays;
         self.objects = s.objects;
+        self.instances = s.instances;
     }
 
     /// FRAME and its eight-byte length, which must land inside the file.

@@ -16,6 +16,7 @@ mod builtins;
 mod cursor;
 mod memo;
 mod numpy;
+mod object;
 #[cfg(test)]
 mod tests;
 
@@ -65,6 +66,11 @@ const MIN_FRAME: usize = 4;
 const BASIC: &str = "basic-p4-p5-v5";
 const NUMPY: &str = "numpy-numeric-array-p4-p5-v5";
 const BUILTINS: &str = "builtins-values-p4-p5-v3";
+/// The library forms. Each is the plain object production over one module
+/// prefix, with the calls that library writes enumerated beside it, so a file
+/// is read under the form for the library that wrote it and no other.
+const SKLEARN: &str = "sklearn-estimator-p4-p5-v1";
+const SCIPY: &str = "scipy-sparse-p4-p5-v1";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.
@@ -130,6 +136,28 @@ pub enum Kind {
     Object {
         what: Shape,
         names: &'static [&'static str],
+        items: Vec<Value>,
+    },
+    /// A class or a callable the file named by STACK_GLOBAL, from a module a
+    /// form allows. `parts` is the module word and the name word when the file
+    /// spelled them here, and nothing when it named the slot they are in.
+    Class {
+        path: String,
+        parts: Vec<Value>,
+    },
+    /// An object made by `EMPTY_TUPLE NEWOBJ` and given its attributes by
+    /// `BUILD` of a dictionary. The state is missing only for an object the
+    /// file wrote no BUILD for, which is one that had no attributes to set.
+    Instance {
+        class: Box<Value>,
+        state: Option<Box<Value>>,
+    },
+    /// What a REDUCE of one of a form's enumerated callables made. `names`
+    /// names the arguments, in the order the library writes them.
+    Made {
+        what: Shape,
+        names: &'static [&'static str],
+        callable: Box<Value>,
         items: Vec<Value>,
     },
 }
@@ -255,6 +283,11 @@ pub enum Shape {
     Complex,
     FrozenSet,
     ByteArray,
+    /// A class or a callable the file named, with the module and the name it
+    /// was spelled by inside it.
+    Class,
+    /// An object of a named class, with the attributes a BUILD gave it.
+    Object,
 }
 
 impl Shape {
@@ -275,6 +308,8 @@ impl Shape {
             Shape::Complex => "complex",
             Shape::FrozenSet => "frozenset",
             Shape::ByteArray => "bytearray",
+            Shape::Class => "class",
+            Shape::Object => "object",
         }
     }
 }
@@ -334,16 +369,43 @@ impl Deducer for Program {
 struct Allow {
     numpy: bool,
     builtins: bool,
+    /// The module prefixes this form may name a class from. Empty for a form
+    /// that names no class at all, which is where the basic, NumPy and
+    /// builtins forms stand.
+    classes: &'static [&'static str],
+    /// The callables this form accepts a REDUCE of. Never anything else: see
+    /// [`object`] for why a module prefix cannot stand in for this list.
+    calls: &'static [Reduce],
 }
+
+/// One callable a form accepts a REDUCE of, and what the library writes as its
+/// arguments. `shape` is the check against those arguments; `names` says what
+/// each of them is called, and its length is the arity.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Reduce {
+    pub(super) path: &'static str,
+    /// What the result of the call is, in the tree.
+    pub(super) what: Shape,
+    pub(super) names: &'static [&'static str],
+    pub(super) shape: fn(&[Value]) -> Option<()>,
+}
+
+/// Nothing at all, for a form that enumerates no calls.
+const NO_CALLS: &[Reduce] = &[];
+/// A form that names no class, which is every form below the library ones.
+const NO_CLASSES: &[&str] = &[];
 
 /// Initial envelope: protocol 4/5, unframed or framed the way CPython frames.
 /// Each form is tried in turn over the same bytes, under one shared budget.
 pub fn recognise(bytes: &[u8]) -> Option<Match> {
     let mut left = MAX_VALUES;
+    let plain = Allow { numpy: false, builtins: false, classes: NO_CLASSES, calls: NO_CALLS };
     let forms = [
-        (BASIC, Allow { numpy: false, builtins: false }),
-        (NUMPY, Allow { numpy: true, builtins: false }),
-        (BUILTINS, Allow { numpy: false, builtins: true }),
+        (BASIC, plain),
+        (NUMPY, Allow { numpy: true, ..plain }),
+        (BUILTINS, Allow { builtins: true, ..plain }),
+        (SKLEARN, Allow { numpy: true, classes: &["sklearn."], ..plain }),
+        (SCIPY, Allow { numpy: true, classes: &["scipy.sparse."], ..plain }),
     ];
     forms.into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left))
 }
@@ -364,6 +426,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize) -> 
         payloads: Vec::new(),
         arrays: 0,
         objects: 0,
+        instances: 0,
     };
     let found = c.whole(form);
     *left = c.left;
@@ -412,11 +475,13 @@ impl<'a> Cursor<'a> {
             Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
         }
-        let needed = match (form, self.arrays, self.objects) {
-            (BASIC, 0, 0) => true,
-            (NUMPY, arrays, 0) => arrays > 0,
-            (BUILTINS, 0, objects) => objects > 0,
-            _ => false,
+        let needed = match (form, self.arrays, self.objects, self.instances) {
+            (BASIC, 0, 0, 0) => true,
+            (NUMPY, arrays, 0, 0) => arrays > 0,
+            (BUILTINS, 0, objects, 0) => objects > 0,
+            // A library form is the one the file's classes came from, and it
+            // has to have read at least one of them.
+            (_, _, _, instances) => instances > 0,
         };
         if !needed {
             return None;

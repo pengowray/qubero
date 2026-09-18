@@ -643,10 +643,15 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto4-newobj.pickle", None),
         ("proto4-numpy-object-array.pickle", None),
         ("proto4-persistent-id.pickle", None),
-        ("proto4-scipy-coo-matrix.pickle", None),
-        ("proto4-scipy-csc-matrix.pickle", None),
-        ("proto4-scipy-csr-matrix.pickle", None),
-        ("proto4-sklearn-pipeline.pickle", None),
+        // Three sparse matrices and a pipeline of two estimators: an object of
+        // a class named from a whitelisted module, made with no arguments and
+        // given a dictionary of attributes by BUILD.
+        ("proto4-scipy-coo-matrix.pickle", Some("scipy-sparse-p4-p5-v1")),
+        ("proto4-scipy-csc-matrix.pickle", Some("scipy-sparse-p4-p5-v1")),
+        ("proto4-scipy-csr-matrix.pickle", Some("scipy-sparse-p4-p5-v1")),
+        ("proto4-sklearn-pipeline.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // A random forest holds decision trees, each with a
+        // `sklearn.tree._tree.Tree` rebuilt by REDUCE.
         ("proto4-sklearn-random-forest.pickle", None),
         ("proto5-everything.pickle", None),
         ("proto5-out-of-band.pickle", None),
@@ -670,21 +675,38 @@ fn the_forms_match_these_samples_and_no_others() {
     }
 }
 
-/// What each family of objects in the matrix comes to at protocol 4 and 5.
+/// What each object in the matrix comes to at protocol 4 and 5, per library
+/// family and per object where one object of a family reads and another does
+/// not yet.
 ///
-/// A file's family is the word in front of the first dash of its name. The
-/// library families have no form yet, and each is one edit from having one:
-/// the day a `dataframe` form is written, its `None` here becomes that form's
-/// ID and nothing else in this file changes.
+/// A file's family is the word in front of the first dash of its name, and its
+/// object is everything in front of the first dot. The row is the object where
+/// there is one and the family otherwise, so the day a form reaches one more
+/// object its `None` here becomes that form's ID and nothing else changes.
 const FAMILIES: &[(&str, Option<&str>)] = &[
     ("basic", Some("basic-p4-p5-v5")),
     // An array and a scalar, which are two productions of one form.
     ("numpy", Some("numpy-numeric-array-p4-p5-v5")),
     ("dataframe", None),
     ("series", None),
-    ("sklearn", None),
-    ("scipy", None),
+    ("sklearn", Some("sklearn-estimator-p4-p5-v1")),
+    // A decision tree also holds a `sklearn.tree._tree.Tree`, rebuilt by
+    // REDUCE from a structured array of nodes, which is its own production.
+    ("sklearn-decision-tree", None),
+    ("scipy", Some("scipy-sparse-p4-p5-v1")),
 ];
+
+/// The row of [`FAMILIES`] a file falls under: its object where that is named,
+/// and its family otherwise.
+fn family_of(name: &str) -> usize {
+    let object = name.split('.').next().unwrap_or("");
+    let family = name.split('-').next().unwrap_or("");
+    let row = FAMILIES.iter().position(|(f, _)| *f == object);
+    match row.or_else(|| FAMILIES.iter().position(|(f, _)| *f == family)) {
+        Some(i) => i,
+        None => panic!("{name}: no row called {object:?} or {family:?} in FAMILIES; add it with the form it matches, or None"),
+    }
+}
 
 /// The same objects as twelve environments wrote them, from Python 2.7 to
 /// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, at every
@@ -715,10 +737,7 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
         let env = dir.file_name().unwrap().to_string_lossy().into_owned();
         for path in pickles(dir) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let family = name.split('-').next().unwrap_or("");
-            let Some(i) = FAMILIES.iter().position(|(f, _)| *f == family) else {
-                panic!("{env}/{name}: no family called {family:?} in FAMILIES; add it with the form it matches, or None");
-            };
+            let i = family_of(&name);
             // Protocol 4 and 5 only, from either pickler: a `.pypickle` file
             // was written by `pickle.py` alone, and both spellings are
             // familiar. Everything older is spelled with opcodes no form
@@ -736,7 +755,7 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
             }
             if form != expected {
                 let hint = match (expected, FAMILIES[i].1) {
-                    (None, None) => format!("; if a form for {family} has landed, its row in FAMILIES is the edit"),
+                    (None, None) => format!("; if a form for {} has landed, its row in FAMILIES is the edit", FAMILIES[i].0),
                     _ => String::new(),
                 };
                 wrong.push(format!("{env}/{name}: {form:?}, not {expected:?}{hint}"));

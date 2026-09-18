@@ -9,6 +9,7 @@ use crate::formats::pickle::shapes;
 mod arrays;
 mod frames;
 mod grammar;
+mod objects;
 mod tree;
 
 fn framed(body: &[u8]) -> Vec<u8> {

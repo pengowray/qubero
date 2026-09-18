@@ -49,6 +49,13 @@ const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
 const KEY_FIELD: &str = "key";
 const VALUE_FIELD: &str = "value";
+/// What a named class says: the whole dotted path it was named by, and the two
+/// words STACK_GLOBAL joined to make it. `class` is what an object and a call
+/// name the class or callable they were made by.
+const PATH_FIELD: &str = "path";
+const MODULE_FIELD: &str = "module";
+const NAME_FIELD: &str = "name";
+const CLASS_FIELD: &str = "class";
 /// What a BINGET says: the file wrote this value earlier and named it here
 /// rather than writing it again. The row carries what is at the other end,
 /// since the reference itself is two bytes that say nothing. A string or a
@@ -211,6 +218,40 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // A reference is the BINGET and a row saying what is at the other
             // end of it, since the two bytes themselves say nothing.
             Kind::Ref(_) => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
+            // A class the file named: the whole path worked out, and then the
+            // module and the name as the file spelled them. A class named out
+            // of the memo spelled neither here, so it has the path alone.
+            Kind::Class { path, parts } => (
+                vec![(Label::Field(PATH_FIELD), Part::Note(path.clone()))],
+                parts
+                    .iter()
+                    .zip([MODULE_FIELD, NAME_FIELD])
+                    .map(|(x, name)| (Label::Field(name), Part::Value(x)))
+                    .collect(),
+            ),
+            // An object of a named class. Its attributes are the entries of
+            // the dictionary the BUILD handed it, placed here rather than a
+            // level down: the dictionary is how the state travels and the
+            // attributes are what the object is.
+            Kind::Instance { class, state } => {
+                let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(class))];
+                if let Some(state) = state {
+                    if let Kind::Dict(entries) = &state.kind {
+                        kids.extend(entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))));
+                    }
+                }
+                (Vec::new(), kids)
+            }
+            // What one of a form's enumerated calls made, with the arguments
+            // the library writes it with.
+            Kind::Made { names, callable, items, .. } => {
+                let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(callable))];
+                kids.extend(items.iter().enumerate().map(|(i, x)| match names.get(i) {
+                    Some(name) => (Label::Field(name), Part::Value(x)),
+                    None => (Label::Index(i), Part::Value(x)),
+                }));
+                (Vec::new(), kids)
+            }
             // A builtin written as a call. Its parts are named where Python
             // names them and numbered where it does not.
             Kind::Object { names, items, .. } => (
@@ -288,6 +329,21 @@ fn shown(bytes: &[u8], text: bool, whole: usize) -> String {
     said
 }
 
+/// The entries a node's children are keyed by: a dictionary's own, and the
+/// state dictionary of an object, whose entries are the object's attributes and
+/// are placed directly under it.
+fn keyed<'a>(part: &Part<'a>) -> Option<&'a Vec<(Value, Value)>> {
+    let Part::Value(v) = part else { return None };
+    match &v.kind {
+        Kind::Dict(entries) => Some(entries),
+        Kind::Instance { state: Some(state), .. } => match &state.kind {
+            Kind::Dict(entries) => Some(entries),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Whether a byte of the file sits inside a matched run of instructions.
 fn inside(call: &Call, at: usize) -> bool {
     (call.at..call.at + call.len).contains(&at)
@@ -319,6 +375,9 @@ fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Ref(_) => Shape::Ref,
             Kind::Array { .. } => Shape::Array,
             Kind::Object { what, .. } => *what,
+            Kind::Class { .. } => Shape::Class,
+            Kind::Instance { .. } => Shape::Object,
+            Kind::Made { what, .. } => *what,
             _ => return None,
         },
         _ => return None,
@@ -438,18 +497,9 @@ impl Evaluator {
             let said = match label {
                 Label::Field(f) => f == name,
                 Label::Index(n) => name.parse::<usize>().ok() == Some(n),
-                Label::Key(n) => match (&here, &part) {
-                    (Part::Value(v), Part::Entry(_)) => match &v.kind {
-                        Kind::Dict(entries) => {
-                            let key = entries.get(n).map(|e| &e.0);
-                            match key {
-                                Some(key) => self.pickle_text(doc, &r, base, key)?.as_deref() == Some(name),
-                                None => false,
-                            }
-                        }
-                        _ => false,
-                    },
-                    _ => false,
+                Label::Key(n) => match keyed(&here).and_then(|entries| entries.get(n)) {
+                    Some((key, _)) => self.pickle_text(doc, &r, base, key)?.as_deref() == Some(name),
+                    None => false,
                 },
             };
             if said {
@@ -501,18 +551,12 @@ impl Evaluator {
         let name = match label {
             Label::Field(f) => Name::Field(f.into()),
             Label::Index(n) => Name::Index(n),
-            Label::Key(n) => match &above {
-                Part::Value(v) => match &v.kind {
-                    Kind::Dict(entries) => match entries.get(n).map(|e| &e.0) {
-                        Some(key) => match self.pickle_text(doc, &whole, base, key)? {
-                            Some(text) => Name::Field(text.into()),
-                            None => Name::Index(n),
-                        },
-                        None => Name::Index(n),
-                    },
-                    _ => Name::Index(n),
+            Label::Key(n) => match keyed(&above).and_then(|entries| entries.get(n)) {
+                Some((key, _)) => match self.pickle_text(doc, &whole, base, key)? {
+                    Some(text) => Name::Field(text.into()),
+                    None => Name::Index(n),
                 },
-                _ => Name::Index(n),
+                None => Name::Index(n),
             },
         };
         let (at, end) = span(&found, &part);
