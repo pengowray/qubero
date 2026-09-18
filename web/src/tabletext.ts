@@ -36,7 +36,7 @@ export function headerCells(headings: readonly string[], lead: Lead, fields?: Fi
   const out: string[] = [TABLE.index];
   if (lead.named) out.push(TABLE.rowName);
   if (lead.rate !== null) out.push(TABLE.time);
-  out.push(...(fields === undefined ? headings : headings.slice(fields.from, fields.to)));
+  for (const heading of fields === undefined ? headings : headings.slice(fields.from, fields.to)) out.push(heading);
   if (lead.addresses) out.push(TABLE.storedAt, TABLE.size);
   return out;
 }

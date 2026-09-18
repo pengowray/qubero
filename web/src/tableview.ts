@@ -340,7 +340,7 @@ export class TableView {
     const out = [indexWidth(this.plan.count)];
     if (this.plan.rowNames) out.push(this.nameFit.width);
     if (this.rate !== null) out.push(timeWidth(this.plan.count, this.rate));
-    out.push(...this.columns.map((column) => column.fit.width));
+    for (const column of this.columns) out.push(column.fit.width);
     if (this.addresses) out.push(this.atWidth, this.sizeWidth);
     return out;
   }
@@ -350,16 +350,23 @@ export class TableView {
    *  records are all read a column is as wide as its number. */
   private turnedWidths(): number[] {
     const clamp = (n: number): number => Math.min(FIT_MAX, Math.max(FIT_MIN, n));
-    const labels = [...headerCells([], this.lead).map((text) => text.length), ...this.columns.map((_, c) => this.headTextOf(c).length)];
-    const out = [clamp(Math.max(...labels))];
+    // Loops, not `Math.max(...lengths)`: a strip of samples has a field for
+    // every sample, and an argument for each of a hundred thousand of them is
+    // more than a call can take.
+    let labels = 0;
+    for (const text of headerCells([], this.lead)) labels = Math.max(labels, text.length);
+    for (let c = 0; c < this.columns.length; c++) labels = Math.max(labels, this.headTextOf(c).length);
+    const out = [clamp(labels)];
     for (let i = 0; i < this.plan.count; i++) {
       const row = this.have.get(i);
       if (row === undefined) {
         out.push(clamp(i.toLocaleString().length));
         continue;
       }
-      const heads = recordCells(i, row, 0, this.lead).map((text) => text.length);
-      out.push(clamp(Math.max(...heads, ...row.cells.map((cell) => cell.text.length))));
+      let widest = 0;
+      for (const text of recordCells(i, row, 0, this.lead)) widest = Math.max(widest, text.length);
+      for (const cell of row.cells) widest = Math.max(widest, cell.text.length);
+      out.push(clamp(widest));
     }
     return out;
   }
