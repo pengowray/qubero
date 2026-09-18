@@ -174,6 +174,34 @@ A frame opens as a table, and a frame, a series and a sparse matrix say what
 they hold before showing how. See "A library object as the thing it is" in the
 design document.
 
+## Where the code is, after the refactor of 2026-09-19
+
+| File | What it holds | Lines |
+| --- | --- | --- |
+| `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 317 |
+| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 397 |
+| `familiar/forms.rs` | the families, declared once each and read at every protocol | 400 |
+| `familiar/basic.rs` | the stack a pickle is read against | 589 |
+| `familiar/values.rs` | the leaf productions, and what Python can hash | 187 |
+| `familiar/lines.rs` | protocol 0: the lines, and the two escapings | 256 |
+| `familiar/codecs.rs` | a byte string below protocol 3 | 177 |
+| `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 434, 334 |
+| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 90, 304 |
+| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 491 |
+| `eval/pickletree.rs` | placing and naming those, and the table shapes | 445 |
+| `eval/picklesaid.rs` | what a value comes to in a few words | 105 |
+| `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 393, 596 |
+
+**Adding a family of forms is one file and one row.** Write the productions
+beside the ones they read like (`numpy.rs` is the model), add the callables it
+accepts a REDUCE of as a `const NAME_CALLS: &[Reduce]` in `forms.rs`, add the
+four form identifiers, and add one `Declared` row naming them. The protocol
+spellings are already the cursor's business: a family says nothing about
+protocols beyond the name each of its forms goes by, and `forms()` expands the
+row over the four ranges. The calls every form below protocol 4 shares, and the
+object maker below protocol 2, are added by `Cursor::calls` from the protocol
+rather than written into the row.
+
 What is left, in the order it is worth doing:
 
 1. **An array's decoded numbers as a space of their own**, replacing the copy
