@@ -11,11 +11,21 @@ pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack
 /// that a reader looking at the program knows where the data went. Spelled the
 /// same here as in `web/src/filetype.ts`.
 pub const FAMILIAR_LABEL: &str = "Python pickle (familiar form)";
-const MAX_VALUES: usize = 100_000;
+/// The work a whole recognition may cost, in opcodes, shared across every
+/// form tried; and the tallest the stack may grow, which is the same number
+/// because every opcode pushes at most one thing.
+///
+/// A million rather than the hundred thousand the earlier slices used. The
+/// pass is linear now: the only thing tried and rewound is a NumPy or
+/// builtins call at an object's first opcode, which fails on its first word
+/// when it is not one. So the budget can be what a real file needs, and a
+/// list of a few hundred thousand numbers is a real file. The cost of the
+/// number is memory: a captured tree is a value per opcode.
+const MAX_VALUES: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;
 /// The most memo slots a form will follow. A slot is bound when the file
 /// writes one, so this bounds the table rather than describing any file.
-const MAX_MEMO: usize = 100_000;
+const MAX_MEMO: usize = 1_000_000;
 /// The most entries one batch of a container carries. CPython writes a
 /// thousand at a time and starts another batch after that, so a container of
 /// any length is a run of batches and only the last of them is short.
@@ -1585,6 +1595,43 @@ mod tests {
         bytes.extend(std::iter::repeat_n(b'a', MAX_DEPTH + 1));
         bytes.push(b'.');
         assert!(recognise(&bytes).is_none());
+    }
+
+    /// The bounds a file cannot talk its way past. None of these is a shape
+    /// CPython writes; they are what a file made to cost something looks
+    /// like, and each is turned away by its own limit rather than by running
+    /// out of bytes.
+    #[test]
+    fn a_hostile_file_costs_what_the_bounds_allow() {
+        // Marks opened and never closed, which is what a nesting bomb is.
+        let mut marks = vec![0x80, 4];
+        marks.extend(std::iter::repeat_n(b'(', MAX_DEPTH + 1));
+        marks.push(b'.');
+        assert!(recognise(&marks).is_none());
+        // Values pushed and never folded, past both the budget and the stack.
+        let mut wide = vec![0x80, 4];
+        wide.extend(std::iter::repeat_n(b'N', MAX_VALUES + 1));
+        wide.push(b'.');
+        assert!(recognise(&wide).is_none());
+        // Memo marks with nothing in front of them to file.
+        let mut memo = vec![0x80, 4];
+        memo.extend(std::iter::repeat_n(0x94, 1000));
+        memo.push(b'.');
+        assert!(recognise(&memo).is_none());
+        // A list whose one batch is longer than CPython ever writes.
+        let mut batch = vec![0x80, 4, b']', 0x94, b'('];
+        batch.extend(std::iter::repeat_n(b'N', MAX_BATCH + 1));
+        batch.extend_from_slice(b"e.");
+        assert!(recognise(&batch).is_none());
+        // And the same length written the way CPython writes it, which is two
+        // batches and a match.
+        let mut batches = vec![0x80, 4, b']', 0x94, b'('];
+        batches.extend(std::iter::repeat_n(b'N', MAX_BATCH));
+        batches.push(b'e');
+        batches.extend_from_slice(b"(Ne.");
+        let found = recognise(&batches).unwrap();
+        let Kind::List(items) = &found.value.kind else { panic!("list") };
+        assert_eq!(items.len(), MAX_BATCH + 1);
     }
 
     const MATRIX: &[u8] = include_bytes!("../../../tests/fixtures/pickle/numpy-f32-matrix.pickle");
