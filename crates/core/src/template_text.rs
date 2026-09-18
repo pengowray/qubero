@@ -177,7 +177,7 @@
 //! bytes, to the next multiple of 4), `peek(u8be)` and
 //! `peek(u16le at expr bits)` and `peek(u32be at expr bits in space)` (read
 //! without consuming: here, a distance on from here, or an address in the
-//! file), `tomarker(FF unless 00)`, `find("endobj")` and
+//! file), `tomarker(FF unless 00)`, `find("endobj")`, `run(not 7B 7D 5C)` and
 //! `findlast("startxref")` (how far it is to
 //! there), `previous(f)` (the element before this one), `earlier(a.b)` and
 //! `earlier[key = tag].f` (the nearest earlier element that has one),
@@ -1370,6 +1370,7 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::PeekAt { .. }
         | Expr::ToMarker { .. }
         | Expr::Find { .. }
+        | Expr::Run { .. }
         | Expr::StreamLen(..)
         | Expr::Prev(..)
         | Expr::Sibling(..)
@@ -1489,6 +1490,10 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
         Expr::Find { needle, last } if probes => {
             let word = if *last { "findlast" } else { "find" };
             format!("{word}({})", bytes_lit(needle))
+        }
+        Expr::Run { chars, negate } if probes => {
+            let word = if *negate { "run not" } else { "run" };
+            format!("{word}({})", bytes_hex(chars))
         }
         Expr::StreamLen(codec) if probes => format!("streamlen({})", codec.as_str()),
         _ => return None,

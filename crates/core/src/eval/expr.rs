@@ -475,6 +475,7 @@ impl Evaluator {
             Expr::ToMarker { lead, unless } => return self.to_marker_at(doc, at, lead, unless, here),
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Find { needle, last } => return self.find_at(doc, at, needle, *last, here),
+            Expr::Run { chars, negate } => return self.char_run_at(doc, at, chars, *negate, here),
             Expr::StreamLen(codec) => return self.stream_len_at(doc, at, *codec, here),
             Expr::Sibling(field) => self.sibling_field(doc, at, &field.clone())?,
             // A field beside this one, and a path down into it.
@@ -909,6 +910,36 @@ impl Evaluator {
         })?;
         // A lead with nothing after it to tell it from an escape is not a
         // marker: nothing has said so, so the run measures to the end.
+        Ok(hit.unwrap_or(total) as i128)
+    }
+
+    /// How far the run of bytes at `here` goes. See [`Expr::Run`].
+    ///
+    /// Its own function beside [`Self::to_marker_at`], and for the same
+    /// reason: the buffers a walk needs would otherwise sit in the frame of
+    /// every expression read, and this function is recursive.
+    #[inline(never)]
+    fn char_run_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        chars: &[u8],
+        negate: bool,
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some((offset, limit)) = here else { return fail("nothing to measure") };
+        if limit < offset {
+            return fail("nothing to measure");
+        }
+        let total = (limit - offset) / 8;
+        // Where the run ends is where the first byte outside the class is, so
+        // the walk looks for that byte. Blocks need no overlap: the test is
+        // one byte wide and cannot straddle a seam.
+        let hit = scan_blocks(self, doc, self.space_at(at), offset, total, 0, Dir::Forward, |b| {
+            b.iter().position(|c| chars.contains(c) == negate)
+        })?;
+        // Nothing outside the class before the container ends: the run is the
+        // rest of it.
         Ok(hit.unwrap_or(total) as i128)
     }
 

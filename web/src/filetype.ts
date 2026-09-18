@@ -78,6 +78,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   xm: "FastTracker XM",
   zarrzip: "Zarr ZipStore",
   eps: "Encapsulated PostScript",
+  rtf: "Rich Text Format",
   elf: "ELF",
   com: "DOS .COM program",
   msdos: "MS-DOS program",

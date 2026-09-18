@@ -100,6 +100,9 @@ const MAGIC: &[(&[u8], &str)] = &[
     // four letters with LabVIEW and is a probe instead; this one does not.
     (godot::MAGIC_COMPRESSED, "godot"),
     (godot_pck::MAGIC, "godotpck"),
+    // A rich text file, which is one group whose first control word names the
+    // format. The brace alone would be every JSON file there is.
+    (rtf::MAGIC, "rtf"),
     (b"DIRC", "gitindex"),
     (b"\xfftOc", "gitpackidx"),
     (b"IWAD", "wad"),

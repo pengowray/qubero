@@ -160,6 +160,7 @@ mod qoi;
 mod rar4;
 mod rar5;
 mod rpm;
+mod rtf;
 mod sac;
 mod segy;
 mod png;
@@ -294,6 +295,7 @@ pub use qoi::qoi;
 pub use rar4::rar4;
 pub use rar5::rar5;
 pub use rpm::rpm;
+pub use rtf::rtf;
 pub use sac::sac;
 pub use segy::segy;
 pub use pico8::p8png;
@@ -521,6 +523,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("cmx", |_| cmx()),
     ("psd", |_| psd()),
     ("eps", |_| eps()),
+    ("rtf", |_| rtf()),
     ("utmp", |_| utmp()),
     ("unityassets", |_| unity_assets()),
     ("unitybundle", |_| unity_bundle()),

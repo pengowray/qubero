@@ -401,6 +401,22 @@ pub enum Expr {
     /// The distance stops before the needle, so the word belongs to whatever
     /// is declared next rather than to the run before it.
     Find { needle: Vec<u8>, last: bool },
+    /// How far the run of bytes starting here goes, in bytes: while each byte
+    /// is one of `chars`, or with `negate`, while each byte is not one of
+    /// them. Zero when the first byte already fails the test, and the whole
+    /// of the container when none of them does.
+    ///
+    /// `ToMarker` and `Find` measure to a thing that is written; this
+    /// measures a class of bytes, which is what every format that writes its
+    /// structure as text needs. An RTF control word is a run of letters and
+    /// ends at the first byte that is not one, and what that byte is the
+    /// format never says: a digit, a space, a backslash, a brace or the text
+    /// itself. Naming the terminator is naming a set of a hundred, and naming
+    /// the letters is naming twenty-six.
+    ///
+    /// The run stops before the byte that ends it, so that byte belongs to
+    /// whatever is declared next rather than to the run.
+    Run { chars: Vec<u8>, negate: bool },
     /// The bytes from here to where a stream packed with `codec` ends, as the
     /// decoder finds it: a deflate stream's last block says it is the last,
     /// and nothing short of decoding the stream says which block that is.
@@ -932,6 +948,16 @@ impl Expr {
     /// start code is `00 00 01`. See [`Expr::ToMarker`].
     pub fn to_marker_seq(lead: &[u8], unless: &[u8]) -> Expr {
         Expr::ToMarker { lead: lead.to_vec(), unless: unless.to_vec() }
+    }
+    /// How far the run of bytes from here that are all in `chars` goes. See
+    /// [`Expr::Run`].
+    pub fn run(chars: &[u8]) -> Expr {
+        Expr::Run { chars: chars.to_vec(), negate: false }
+    }
+    /// The same, for a run of bytes that are none of `chars`: what a text run
+    /// ending at the next byte the format has a meaning for measures as.
+    pub fn run_except(chars: &[u8]) -> Expr {
+        Expr::Run { chars: chars.to_vec(), negate: true }
     }
     /// The bytes from here to where a stream packed with `codec` ends, or
     /// zero when it will not decode. See [`Expr::StreamLen`].
