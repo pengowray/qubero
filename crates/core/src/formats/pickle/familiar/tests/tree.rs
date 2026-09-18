@@ -167,7 +167,8 @@ fn a_named_value_says_what_it_names() {
     assert_eq!(
         said[10..17],
         [
-            (2, "key", "entry", 22, 4, &V::Composite { count: 3 }),
+            // The entry reads as its value, 2, rather than counting its fields.
+            (2, "key", "entry", 22, 4, &V::Str("2".into())),
             (3, "key", "reference", 22, 2, &V::Composite { count: 2 }),
             (4, "refers to", "computed text", 22, 0, &V::Str("key".into())),
             (4, "binget", "bytes[]", 22, 2, &V::Bytes { len: 2, preview: vec![0x68, 1] }),
@@ -342,5 +343,20 @@ fn a_list_that_is_not_records_is_not_a_table() {
         let info = ev.node(&doc, &[1]).unwrap();
         assert_eq!(info.name, "data");
         assert!(!info.table, "{info:#?}");
+    }
+}
+
+/// An entry's row says what the entry holds, so a dict of settings reads down
+/// the page without a fold being opened: the value where it is one thing, and
+/// the kind and the count where it is several.
+#[test]
+fn an_entry_reads_as_the_value_it_holds() {
+    // pickle.dumps({'flag': True, 'n': 7, 'name': 'hi', 'pair': [1, 2], 'none': None, 'empty': {}, 'ratio': 0.5}, protocol=4)
+    let bytes = b"\x80\x04\x95\x51\x00\x00\x00\x00\x00\x00\x00\x7d\x94\x28\x8c\x04\x66\x6c\x61\x67\x94\x88\x8c\x01\x6e\x94\x4b\x07\x8c\x04\x6e\x61\x6d\x65\x94\x8c\x02\x68\x69\x94\x8c\x04\x70\x61\x69\x72\x94\x5d\x94\x28\x4b\x01\x4b\x02\x65\x8c\x04\x6e\x6f\x6e\x65\x94\x4e\x8c\x05\x65\x6d\x70\x74\x79\x94\x7d\x94\x8c\x05\x72\x61\x74\x69\x6f\x94\x47\x3f\xe0\x00\x00\x00\x00\x00\x00\x75\x2e";
+    let seen = dump(bytes);
+    for (name, says) in [("flag", "True"), ("n", "7"), ("name", "hi"), ("pair", "list of 2"), ("none", "None"), ("empty", "empty dict"), ("ratio", "0.5")] {
+        let row = named_row(&seen, name);
+        assert_eq!(row.ty, "entry", "{name}");
+        assert_eq!(row.value, V::Str(says.into()), "{name}");
     }
 }

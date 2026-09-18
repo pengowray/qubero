@@ -783,6 +783,10 @@ impl Evaluator {
                     Kind::Class { path, .. } => Some(path.clone()),
                     _ => None,
                 },
+                // An entry reads as what it holds. A fitted model is thirty
+                // attributes, and a row each saying `2 fields` makes a reader
+                // open all thirty to find the one that is `True`.
+                Part::Entry(e) => self.pickle_said(doc, &whole, base, &e.1)?,
                 _ => None,
             };
             self.pickle_node(path, &pr, name, shape, base, at, end - at, said);
@@ -842,6 +846,46 @@ impl Evaluator {
             },
             _ => fail("no such value"),
         }
+    }
+
+    /// One value in a few words, for the row of the entry that holds it: the
+    /// value itself when it is a single thing, and what kind of thing and how
+    /// much of it otherwise. Nothing for a value there is no short word for,
+    /// which leaves the row counting its fields as it did.
+    fn pickle_said<S: Source>(&self, doc: &Document<S>, whole: &Resolved, base: u64, v: &Value) -> R<Option<String>> {
+        let mut read = |at: usize, len: usize, text: bool| -> R<String> {
+            let most = len.min(if text { MOST_SHOWN_TEXT } else { MOST_SHOWN_BYTES });
+            Ok(shown(&self.read(doc, whole, base + at as u64 * 8, most as u64 * 8)?, text, len))
+        };
+        let many = |what: &str, n: usize| if n == 0 { format!("empty {what}") } else { format!("{what} of {n}") };
+        let across = |dimensions: &[u64]| dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x ");
+        let path_of = |v: &Value| match &v.kind {
+            Kind::Class { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        Ok(match &v.kind {
+            Kind::None => Some("None".into()),
+            Kind::Bool(b) => Some(if *b { "True" } else { "False" }.into()),
+            Kind::Int { value, .. } => Some(value.to_string()),
+            Kind::Float { value, .. } => Some(value.to_string()),
+            Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => Some(read(*at, *len, true)?),
+            Kind::Bytes { at, len } | Kind::Ref(Names::Bytes { at, len }) => Some(read(*at, *len, false)?),
+            Kind::Ref(Names::Made { what, at, .. }) => Some(format!("{} at {:#04x}", what.name(), base as usize / 8 + at)),
+            Kind::List(items) => Some(many("list", items.len())),
+            Kind::Tuple(items) => Some(many("tuple", items.len())),
+            Kind::Set(items) => Some(many("set", items.len())),
+            Kind::FrozenSet(items) => Some(many("frozenset", items.len())),
+            Kind::Dict(entries) => Some(many("dict", entries.len())),
+            Kind::Array { dtype: Dtype::Plain(spelling) | Dtype::Datetime { spelling, .. }, dimensions, .. } => Some(format!("{spelling} array {}", across(dimensions))),
+            Kind::Array { dimensions, .. } => Some(format!("record array {}", across(dimensions))),
+            Kind::Objects { dimensions, .. } => Some(format!("object array {}", across(dimensions))),
+            Kind::Class { path, .. } => Some(path.clone()),
+            Kind::Instance { class, .. } => path_of(class),
+            Kind::Made { callable, .. } => path_of(callable),
+            Kind::Object { what, .. } => Some(what.name().into()),
+            Kind::DType(Dtype::Plain(spelling) | Dtype::Datetime { spelling, .. }) => Some(spelling.clone()),
+            Kind::DType(_) => None,
+        })
     }
 
     /// A row that says something about the file rather than reading it: no
