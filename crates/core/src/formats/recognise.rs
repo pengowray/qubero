@@ -766,13 +766,18 @@ fn is_coff(head: &[u8], len: u64) -> bool {
 /// OMF modules begin with a named THEADR/LHEADR record. The length includes
 /// the checksum; the checksum is either zero (explicitly permitted) or makes
 /// the byte sum of the complete record zero modulo 256.
+///
+/// The record is the name and nothing else, so the name's length is the
+/// record's less its own byte and the checksum. Asking only that the name fit
+/// let a protocol 2 pickle of a long dict through: `80 02 7d` is a record of
+/// 32,002 bytes, and the byte where its checksum would be was a zero.
 fn is_omf(head: &[u8]) -> bool {
     if !matches!(head.first(), Some(0x80 | 0x82)) || head.len() < 5 {
         return false;
     }
     let len = usize::from(u16::from_le_bytes([head[1], head[2]]));
     let end = 3usize.saturating_add(len);
-    if len < 2 || end > head.len() || usize::from(head[3]) > len - 2 {
+    if len < 2 || end > head.len() || usize::from(head[3]) != len - 2 {
         return false;
     }
     head[end - 1] == 0 || head[..end].iter().fold(0u8, |sum, &b| sum.wrapping_add(b)) == 0
@@ -2005,6 +2010,18 @@ mod tests {
         let checksum = 0u8.wrapping_sub(omf.iter().fold(0u8, |sum, &b| sum.wrapping_add(b)));
         omf.push(checksum);
         assert_eq!(sniffed(&omf), Some("omf"));
+    }
+
+    /// `80 02 7d` opens a protocol 2 pickle of a dict, and reads as an OMF
+    /// record 32,002 bytes long. Its name is 113 bytes by the next byte, which
+    /// is not the record less two, so it is not a THEADR.
+    #[test]
+    fn a_pickle_that_opens_like_an_omf_record_is_not_one() {
+        let mut head = b"\x80\x02}q\x00(".to_vec();
+        head.resize(3 + 0x7d02, 0);
+        assert!(!is_omf(&head));
+        // A real one: THEADR, five bytes, a three-letter name, no checksum.
+        assert!(is_omf(b"\x80\x05\x00\x03a.c\x00"));
     }
 
     /// A Melco design has no signature, so its name is what claims it, and

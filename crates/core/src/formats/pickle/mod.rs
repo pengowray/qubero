@@ -392,15 +392,24 @@ fn frame() -> T {
 /// pickle of anything at all has an operand in it -- the empty list is
 /// `(lp0\n.`, which puts itself in the memo -- so the rule costs nothing and
 /// turns away a whole class of text file.
+/// How much of a walk a window with no opener has to show before it is
+/// believed: this many opcodes, of this many kinds. The smallest container
+/// CPython writes at protocol 0 already uses four kinds (`(`, `l` or `d`, `p`,
+/// and a value), so the second number asks for nothing a real file lacks.
+const UNOPENED_OPCODES: usize = 64;
+const UNOPENED_KINDS: usize = 4;
+
 pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {
     let opener = matches!(head, [0x80, 2..=5, ..]);
     match walk(head) {
         Walk::Stopped { end, operands } => end as u64 == len && (opener || operands > 0),
         // Cut off by the window rather than by the file. Only where the file
-        // really is longer than the window, and only behind an opener: a run
-        // of ordinary bytes that happens to read as opcodes for eight
-        // kilobytes is not evidence of anything.
-        Walk::Cut => opener && len > head.len() as u64,
+        // really is longer than the window, and behind an opener, or after a
+        // walk long and varied enough to be one: protocols 0 and 1 have no
+        // opener, and a list of 2,500 numbers written at either is longer
+        // than the window. A few opcodes are not evidence, and neither are
+        // many of one kind: every line of a word list under `p` is a PUT.
+        Walk::Cut { opcodes, kinds } => len > head.len() as u64 && (opener || (opcodes >= UNOPENED_OPCODES && kinds >= UNOPENED_KINDS)),
         Walk::No => false,
     }
 }
@@ -482,8 +491,9 @@ fn line_terminated(code: u8) -> bool {
 enum Walk {
     /// Reached `STOP`, one past the full stop, having read this many operands.
     Stopped { end: usize, operands: usize },
-    /// Ran out of bytes in the middle of an opcode or its operand.
-    Cut,
+    /// Ran out of bytes in the middle of an opcode or its operand, having
+    /// read this many opcodes, of this many different kinds.
+    Cut { opcodes: usize, kinds: usize },
     /// A byte that is not an opcode, or an operand that cannot be read.
     No,
 }
@@ -496,11 +506,14 @@ enum Walk {
 fn walk(bytes: &[u8]) -> Walk {
     let mut at = 0usize;
     let mut operands = 0usize;
+    let mut opcodes = 0usize;
+    let mut seen = [false; 256];
+    let cut = |opcodes: usize, seen: &[bool; 256]| Walk::Cut { opcodes, kinds: seen.iter().filter(|s| **s).count() };
     // A file of nothing is not a pickle, and neither is one that never stops.
     // The cap is the opcode count rather than the byte count, since the
     // shortest opcode is one byte and this is only asked of a window.
     for _ in 0..bytes.len().max(1) {
-        let Some(&code) = bytes.get(at) else { return Walk::Cut };
+        let Some(&code) = bytes.get(at) else { return cut(opcodes, &seen) };
         if OPCODE.iter().all(|(c, _)| *c != code as i128) {
             return Walk::No;
         }
@@ -510,17 +523,30 @@ fn walk(bytes: &[u8]) -> Walk {
         }
         let next = match operand_size(bytes, at, code) {
             Some(next) => next,
-            None => return if at >= bytes.len() { Walk::Cut } else { Walk::No },
+            // No operand to read is the bytes running out, in all cases but
+            // one. Saying so only when nothing at all was left called a file
+            // no pickle whenever the window ended inside an operand: two bytes
+            // of a BININT's four, or a line with its newline past the end.
+            None => return if refuses_length(bytes, at, code) { Walk::No } else { cut(opcodes, &seen) },
         };
         if next > at {
             operands += 1;
         }
         at = next;
         if at > bytes.len() {
-            return Walk::Cut;
+            return cut(opcodes, &seen);
         }
+        opcodes += 1;
+        seen[code as usize] = true;
     }
     Walk::No
+}
+
+/// Whether the operand is one [`operand_size`] will not read however many
+/// bytes there are: a four-byte length with its sign bit set, which is the
+/// only refusal there that is about the value and not about the window.
+fn refuses_length(bytes: &[u8], at: usize, code: u8) -> bool {
+    matches!(code, 0x42 | 0x54 | 0x58 | 0x8b) && bytes.get(at..at + 4).is_some_and(|raw| raw[3] & 0x80 != 0)
 }
 
 /// Where the opcode's operand ends, or nothing when the bytes run out or the
@@ -613,6 +639,30 @@ mod tests {
         // The same opcodes with the opener taken off: still a legal run, and
         // still not enough to call a file a pickle.
         assert!(!is_pickle(&head[11..], 1 << 20));
+    }
+
+    /// A window may end anywhere, and inside an operand is as likely as
+    /// between two opcodes: a 44 KB protocol 2 pickle of a long dict was read
+    /// by nothing, because the window stopped two bytes into a BININT.
+    #[test]
+    fn a_window_that_ends_inside_an_operand_is_still_cut() {
+        for head in [
+            &b"\x80\x02}q\x00(J\x01\x02"[..], // two of a BININT's four bytes
+            b"\x80\x02X\x05\x00",                // two of a BINUNICODE's four length bytes
+            b"\x80\x02X\x05\x00\x00\x00ab",      // the length, and two of its five bytes
+            b"\x80\x02cnumpy\nnda",              // a GLOBAL whose second line has no end yet
+        ] {
+            assert!(is_pickle(head, 1 << 20), "{head:?}");
+            assert!(!is_pickle(head, head.len() as u64), "{head:?} is the whole file, and has no STOP");
+        }
+        // With no opener, a window is believed only after a long and varied walk.
+        let numbers: Vec<u8> = b"(lp0\n".iter().copied().chain((0..200).flat_map(|i| format!("I{i}\na").into_bytes())).collect();
+        assert!(is_pickle(&numbers, 1 << 20), "a protocol 0 list, cut by the window");
+        assert!(!is_pickle(&numbers[..40], 1 << 20), "too short a walk to believe");
+        let words: Vec<u8> = (0..200).flat_map(|i| format!("pword{i}\n").into_bytes()).collect();
+        assert!(!is_pickle(&words, 1 << 20), "a word list under p is one opcode over and over");
+        // A length that could never be one is a refusal wherever the window ends.
+        assert!(!is_pickle(b"\x80\x02X\xff\xff\xff\xff", 1 << 20));
     }
 
     /// Text that is not a pickle at all, which is the case that matters:
