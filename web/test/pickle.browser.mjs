@@ -14,7 +14,7 @@ import { sampleFile } from "./samples.mjs";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const message = "Matched a Familiar Pickle Form";
-const form = "numpy-numeric-array-p4-p5-v3";
+const form = "numpy-numeric-array-p4-p5-v4";
 const stop = (id) =>
   `Matched a Familiar Pickle Form (${id}): bypassed Pickle stack machine decoding. Switch to the "Python pickle (familiar form)" template to see the data.`;
 const out = new URL("out/", import.meta.url);
@@ -106,10 +106,10 @@ try {
   {
     const { page, errors } = await open(browser, "familiar.pickle", [0x80, 4, 0x4e, 0x2e]);
     await page.getByRole("button", { name: "Listing", exact: true }).click();
-    await page.getByText("basic-p4-p5-v3", { exact: true }).first().waitFor({ state: "visible", timeout: 10000 });
+    await page.getByText("basic-p4-p5-v4", { exact: true }).first().waitFor({ state: "visible", timeout: 10000 });
     await choose(page, "pickle");
     await page.getByText("STOP", { exact: true }).first().waitFor({ timeout: 10000 });
-    await page.getByText(stop("basic-p4-p5-v3"), { exact: true }).first().waitFor({ state: "visible" });
+    await page.getByText(stop("basic-p4-p5-v4"), { exact: true }).first().waitFor({ state: "visible" });
     assert.deepEqual(errors, []);
     await page.close();
   }
