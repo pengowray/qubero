@@ -1184,7 +1184,10 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
     for dir in std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
         for path in pickles(&dir) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if !name.contains(".p4.") && !name.contains(".p5.") {
+            // Every protocol a form reads. A protocol 2 frame keeps its
+            // numbers as the latin-1 text they spell, so the same table
+            // arriving cell for cell is the whole claim being made here.
+            if ![".p2.", ".p3.", ".p4.", ".p5."].iter().any(|p| name.contains(p)) {
                 continue;
             }
             let Some((_, columns, units, want)) = cases.iter().find(|(stem, ..)| name.starts_with(&format!("{stem}."))) else {
@@ -1213,7 +1216,73 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
             checked += 1;
         }
     }
-    assert!(checked >= 12, "only {checked} frames read as tables");
+    assert!(checked >= 24, "only {checked} frames read as tables");
+}
+
+/// An array reads as the same numbers at every protocol a form takes.
+///
+/// Protocol 2 has no opcode for a byte string, so an array's numbers go out as
+/// the latin-1 text they spell and are nowhere in the file as numbers. They
+/// are decoded once when the form matches, and this is the claim that makes:
+/// the same values, in the same order, however the file spelled them.
+#[test]
+fn an_array_reads_as_the_same_numbers_at_every_protocol() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // What `tools/make_pickle_matrix.py` pickled, in storage order: a Fortran
+    // array's numbers go down its first axis, which is why its run is not the
+    // count in order.
+    let whole: Vec<String> = (0..24).map(|n| n.to_string()).collect();
+    let cases: &[(&str, Vec<String>)] = &[
+        ("numpy-1d-int64", (0..10).map(|n| n.to_string()).collect()),
+        ("numpy-2d-float32", whole.clone()),
+        ("numpy-big-endian", (0..6).map(|n| n.to_string()).collect()),
+        ("numpy-bool", vec!["1".into(), "0".into(), "1".into()]),
+        (
+            "numpy-2d-float64-fortran",
+            [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11].iter().map(|n| n.to_string()).collect(),
+        ),
+    ];
+    let mut checked = 0;
+    for dir in std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        for path in pickles(&dir) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let Some((_, want)) = cases.iter().find(|(stem, _)| name.starts_with(&format!("{stem}."))) else { continue };
+            let bytes = std::fs::read(&path).unwrap();
+            if formats::pickle::familiar::recognise(&bytes).is_none() {
+                continue;
+            }
+            let where_ = format!("{}/{name}", dir.file_name().unwrap().to_string_lossy());
+            assert_eq!(&array_numbers(&bytes, &where_), want, "{where_}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 20, "only {checked} arrays read as their numbers");
+}
+
+/// The numbers of the one array in a file, in storage order, read the way the
+/// interface reads them: as a table where the core says the cells are its to
+/// work out, and as the node's own values where they sit in the file.
+fn array_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
+    let doc = Document::new(MemSource(bytes.to_vec()));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let rows = familiar_rows(bytes.to_vec());
+    let row = rows.iter().find(|r| r.name == "numbers").unwrap_or_else(|| panic!("{where_}: no numbers row"));
+    let shape = ev.table_shape(&doc, &row.path).unwrap();
+    if let Some(qubero_core::template::Cells::Computed { rows: count }) = shape.as_ref().and_then(|s| s.cells.clone()) {
+        let read = ev.pickle_cells(&doc, &row.path, 0, count).unwrap();
+        return read.iter().flatten().map(cell_text).collect();
+    }
+    let node = ev.node(&doc, &row.path).unwrap();
+    (0..node.child_count as usize)
+        .map(|i| {
+            let mut at = row.path.clone();
+            at.push(i);
+            cell_text(&Some(ev.node(&doc, &at).unwrap().value))
+        })
+        .collect()
 }
 
 /// A cell as the interface shows it, which for a value the frame has not got

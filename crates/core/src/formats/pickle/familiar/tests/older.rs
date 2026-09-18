@@ -265,3 +265,61 @@ fn the_opcodes_no_pickler_writes_are_still_refused() {
         assert!(recognise(&older(2, body)).is_none(), "{body:?} was read");
     }
 }
+
+/// An array Python 2 wrote, whose numbers are a `str` and so are the bytes
+/// they are rather than the latin-1 text protocol 2 makes Python 3 write.
+///
+/// No file in the corpus is one: none of the Python 2 environments has NumPy.
+/// So this is a branch of the grammar with a body written to it and no sample
+/// behind it, the way the protocol 5 `_frombuffer` branch was before a file
+/// turned up: it says what the reader does with those bytes, not that a
+/// particular NumPy release writes them.
+#[test]
+fn an_array_written_by_python_2_holds_its_numbers_as_they_are() {
+    let numbers: &[u8] = b"\x01\0\0\0\0\0\0\0\x02\0\0\0\0\0\0\0";
+    let body = cat(&[
+        b"cnumpy.core.multiarray\n_reconstruct\n",
+        &at_slot(0),
+        b"cnumpy\nndarray\n",
+        &at_slot(1),
+        b"K\0\x85",
+        &at_slot(2),
+        b"U\x01b",
+        &at_slot(3),
+        b"\x87",
+        &at_slot(4),
+        b"R",
+        &at_slot(5),
+        b"(K\x01K\x02\x85",
+        &at_slot(6),
+        b"cnumpy\ndtype\n",
+        &at_slot(7),
+        b"U\x02i8",
+        &at_slot(8),
+        b"\x89\x88\x87",
+        &at_slot(9),
+        b"R",
+        &at_slot(10),
+        b"(K\x03U\x01<",
+        &at_slot(11),
+        b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t",
+        &at_slot(12),
+        b"b\x89U\x10",
+        numbers,
+        &at_slot(13),
+        b"t",
+        &at_slot(14),
+        b"b.",
+    ]);
+    let bytes = older(2, &body);
+    let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
+    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+    let Kind::Array { at, len, storage, dimensions, .. } = &found.value.kind else { panic!("array expected") };
+    // The run in the file is the numbers, so nothing was decoded beside the
+    // match and the opcode listing may read the run as the values it holds.
+    assert_eq!(*storage, Storage::Raw);
+    assert_eq!(*len, numbers.len());
+    assert_eq!(dimensions.as_slice(), &[2]);
+    assert!(found.decoded(*at).is_none());
+    assert_eq!(&bytes[*at..*at + *len], numbers);
+}

@@ -149,7 +149,10 @@ impl Cursor<'_> {
         // The unit is a byte string, so protocol 2 writes it as the call
         // every byte string goes through there.
         let (at, len) = match self.proto < 3 {
-            true => self.bytes_run()?,
+            true => {
+                let (at, len, _) = self.bytes_run()?;
+                (at, len)
+            }
             false => {
                 self.exact(b"C")?;
                 let len = self.byte()? as usize;

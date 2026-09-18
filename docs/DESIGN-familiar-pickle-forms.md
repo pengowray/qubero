@@ -304,12 +304,26 @@ instructions. What differs:
   0x95 below it is not an opcode.
 - **A NumPy array's numbers reach protocol 2 as latin-1 text**, through the
   same `_codecs.encode` call, and the length checked against the shape is the
-  decoded length. The `numbers` row of such an array is called `numbers as
-  latin-1 text` and reads as the text it is: nothing decodes it, because a row
-  showing numbers would be showing bytes the file does not hold. For the same
-  reason a protocol 2 array is not offered as a table of rows, the opcode
-  listing is not told to read the run as an array, and the cells of a
-  protocol 2 pandas frame are not read.
+  decoded length. The run is decoded once, as the form reads it, and kept
+  beside the match; every cell of the array and of a frame that holds it is
+  read from there. So a protocol 2 frame, series and array open as the same
+  table, cell for cell, as the same object at protocol 4.
+  - The array's `numbers` row is still the run in the file, which is text, and
+    the array carries a `written as` row saying `latin-1 text` so that a
+    reader opening it is not surprised by what is under it. The opcode listing
+    is not told to read the run as an array: it is a `BINUNICODE` and reading
+    it as numbers would be reading the spelling.
+  - The table over such an array has its cells read by the core, the way a
+    pandas frame's are, because there is no run under the node for a view to
+    walk. Its columns are places along an axis, numbered from nought, where
+    the table over an array whose numbers are in the file numbers them from
+    one: that difference is in the headers and not in the cells.
+  - An array Python 2 wrote is not this. Python 2 had a type for a run of
+    bytes, its `str`, so the numbers go out as `SHORT_BINSTRING` or
+    `BINSTRING` and are the bytes they are, with nothing decoded and the
+    ordinary table over them. No file in the corpus is one, since none of the
+    Python 2 environments has NumPy, so that is a branch with a test written
+    to it and no sample behind it.
 
 Everything else is the same production. scikit-learn, scipy and pandas write
 `GLOBAL`, `NEWOBJ` and `BUILD` below protocol 4 exactly as they write
@@ -769,7 +783,7 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include sixty-three FPF tests, eleven of which
+Validation: the pickle unit tests include sixty-five FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a
@@ -779,16 +793,17 @@ showing both, the memo mark after a bytearray, the NumPy scalar call, the
 protocol 5 `_frombuffer` call with a writable and a read-only buffer, an
 instruction moved, dropped, added or written in another width, the two ways a
 large payload is framed, the builtins calls, and which form a file is read
-under. Eleven of them are the protocol 2 and 3 grammars: the memo slot a mark
+under. Twelve of them are the protocol 2 and 3 grammars: the memo slot a mark
 may go in, the mark `cPickle` leaves out, the byte string written as a call and
 the encodings it refuses, the set built from a list or a tuple, the class that
-is never called, the `INT` line, a Python 2 `str`, the builtins under their
-Python 2 names, the spellings neither protocol range shares with the other, and
-the opcodes no pickler writes. Sixteen `pickle_real` integration tests pass
-against the sibling corpus, including the corpus match matrix, the per-file
-mutation sweep, a walk of the decoded array's 24 numbers, and a walk of
-twenty-one protocol 2 and 3 files of the matrix through the template with no
-byte left over.
+is never called, the `INT` line, a Python 2 `str`, an array Python 2 wrote, the
+builtins under their Python 2 names, the spellings neither protocol range
+shares with the other, and the opcodes no pickler writes. Seventeen
+`pickle_real` integration tests pass against the sibling corpus, including the
+corpus match matrix, the per-file mutation sweep, a walk of the decoded array's
+24 numbers, a walk of twenty-one protocol 2 and 3 files of the matrix through
+the template with no byte left over, and the same frame, series and array
+opening as the same table at every protocol from 2 to 5.
 
 The forms are also run over `pickle-matrix/` in the sample collection, which
 is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::pickleframe::*;
 use super::pickletree::{spot, Part, Says, MOST_SHOWN_TEXT as MOST_SHOWN};
 use super::*;
-use crate::formats::pickle::familiar::{Dtype, Kind, Value as Captured};
+use crate::formats::pickle::familiar::{Dtype, Kind, Match, Value as Captured};
 use crate::formats::pickle::shapes;
 use crate::template::{Cells, Endian, TableShape};
 
@@ -29,9 +29,9 @@ impl Evaluator {
         let Some(frame) = frame_of(object) else { return Ok(None) };
         let r = self.memo[&root].clone();
         let base = r.offset;
-        let Some(rows) = self.index_len(doc, &r, base, frame.index)? else { return Ok(None) };
+        let Some(rows) = self.index_len(doc, &r, base, &found, frame.index)? else { return Ok(None) };
         let wide = match frame.columns {
-            Some(axis) => match self.index_len(doc, &r, base, axis)? {
+            Some(axis) => match self.index_len(doc, &r, base, &found, axis)? {
                 Some(wide) => wide,
                 None => return Ok(None),
             },
@@ -40,17 +40,17 @@ impl Evaluator {
         // The index is the first column, so that a row can be read off against
         // the label the frame files it under.
         let mut names: Vec<Arc<str>> = vec![self.axis_name(doc, &r, base, frame.index)?.unwrap_or_else(|| INDEX_COLUMN.into()).into()];
-        let mut units: Vec<Arc<str>> = vec![self.axis_word(doc, &r, base, frame.index)?.into()];
+        let mut units: Vec<Arc<str>> = vec![self.axis_word(doc, &r, base, &found, frame.index)?.into()];
         for c in 0..wide {
-            let Some((block, j)) = frame.column(c) else { return Ok(None) };
-            let Some(held) = values_of(block.values) else { return Ok(None) };
+            let Some((block, j)) = frame.column(&found, c) else { return Ok(None) };
+            let Some(held) = values_of(&found, block.values) else { return Ok(None) };
             let Some((held_rows, _)) = held.rows_and_columns() else { return Ok(None) };
             if held_rows != rows {
                 return Ok(None);
             }
             let _ = j;
             names.push(match frame.columns {
-                Some(axis) => self.label_at(doc, &r, base, axis, c)?.unwrap_or_else(|| format!("column {c}")).into(),
+                Some(axis) => self.label_at(doc, &r, base, &found, axis, c)?.unwrap_or_else(|| format!("column {c}")).into(),
                 None => self.series_name(doc, &r, base, object)?.unwrap_or_else(|| VALUE_COLUMN.into()).into(),
             });
             units.push(word_of(&held).into());
@@ -68,20 +68,28 @@ impl Evaluator {
     /// where the frame has no value.
     pub fn pickle_cells<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<Option<Value>>>> {
         let (root, found) = self.pickle_doc(doc, path)?;
+        // An array whose numbers the file did not write as bytes. There is no
+        // run under the node for the view to walk, so the cells are read here
+        // out of what the form decoded, in the order the numbers are stored.
+        if let Some((_, Part::Data(array))) = spot(&found, &path[root.len()..]) {
+            let r = self.memo[&root].clone();
+            let base = r.offset;
+            return self.array_cells(doc, &r, base, &found, array, from, to);
+        }
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return fail("not a frame") };
         let Some(frame) = frame_of(object) else { return fail("not a frame") };
         let r = self.memo[&root].clone();
         let base = r.offset;
-        let Some(rows) = self.index_len(doc, &r, base, frame.index)? else { return fail("this frame does not say how many rows it has") };
+        let Some(rows) = self.index_len(doc, &r, base, &found, frame.index)? else { return fail("this frame does not say how many rows it has") };
         let wide = match frame.columns {
-            Some(axis) => self.index_len(doc, &r, base, axis)?.unwrap_or(0),
+            Some(axis) => self.index_len(doc, &r, base, &found, axis)?.unwrap_or(0),
             None => 1,
         };
         // Which block each column is in, worked out once rather than per cell.
         let placed: Vec<(u64, Values)> = (0..wide)
             .filter_map(|c| {
-                let (block, j) = frame.column(c)?;
-                Some((j, values_of(block.values)?))
+                let (block, j) = frame.column(&found, c)?;
+                Some((j, values_of(&found, block.values)?))
             })
             .collect();
         if placed.len() as u64 != wide {
@@ -89,7 +97,7 @@ impl Evaluator {
         }
         let mut out = Vec::new();
         for row in from..to.min(rows) {
-            let mut cells = vec![self.index_label(doc, &r, base, frame.index, row)?];
+            let mut cells = vec![self.index_label(doc, &r, base, &found, frame.index, row)?];
             for (j, held) in &placed {
                 cells.push(self.one_value(doc, &r, base, held, *j, row)?);
             }
@@ -98,8 +106,44 @@ impl Evaluator {
         Ok(out)
     }
 
+    /// The rows of a standalone array, read in storage order: as many values
+    /// to a row as the table's columns, which is what a table over the numbers
+    /// themselves shows at every other protocol.
+    #[allow(clippy::too_many_arguments)]
+    fn array_cells<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        r: &Resolved,
+        base: u64,
+        found: &Match,
+        array: &Captured,
+        from: u64,
+        to: u64,
+    ) -> R<Vec<Vec<Option<Value>>>> {
+        let Some(Values::Numbers(n)) = values_of(found, array) else { return fail("not an array of numbers") };
+        let count: u64 = n.dimensions.iter().product();
+        let columns = match (n.dimensions.len(), n.fortran_order) {
+            (0, _) => return fail("a single value is not a table"),
+            (1, _) => 1,
+            (_, true) => n.dimensions.first().copied().unwrap_or(1),
+            (_, false) => n.dimensions.last().copied().unwrap_or(1),
+        }
+        .max(1);
+        let rows = count / columns;
+        let mut out = Vec::new();
+        for row in from..to.min(rows) {
+            let mut cells = Vec::new();
+            for c in 0..columns {
+                let Some(elem) = row.checked_mul(columns).and_then(|at| at.checked_add(c)) else { break };
+                cells.push(self.number_at(doc, r, base, &n, elem)?);
+            }
+            out.push(cells);
+        }
+        Ok(out)
+    }
+
     /// How many labels an index has.
-    fn index_len<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, index: &Captured) -> R<Option<u64>> {
+    fn index_len<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, index: &Captured) -> R<Option<u64>> {
         let Some(state) = index_state(index) else { return Ok(None) };
         if is_range(index) {
             let (start, stop, step) = self.range_bounds(doc, r, base, state)?;
@@ -109,7 +153,7 @@ impl Evaluator {
             });
         }
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
-        let Some(held) = values_of(values) else { return Ok(None) };
+        let Some(held) = values_of(&found, values) else { return Ok(None) };
         Ok(held.rows_and_columns().map(|(rows, _)| rows))
     }
 
@@ -163,13 +207,13 @@ impl Evaluator {
     }
 
     /// What one label of an index is, for the first column's header.
-    fn axis_word<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, index: &Captured) -> R<String> {
+    fn axis_word<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, index: &Captured) -> R<String> {
         if is_range(index) {
             return Ok("int64".into());
         }
         let Some(state) = index_state(index) else { return Ok(String::new()) };
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(String::new()) };
-        Ok(values_of(values).map(|held| word_of(&held)).unwrap_or_default())
+        Ok(values_of(&found, values).map(|held| word_of(&held)).unwrap_or_default())
     }
 
     /// What a series calls its one column.
@@ -188,7 +232,7 @@ impl Evaluator {
     }
 
     /// The label the index files row `row` under.
-    fn index_label<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, index: &Captured, row: u64) -> R<Option<Value>> {
+    fn index_label<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, index: &Captured, row: u64) -> R<Option<Value>> {
         let Some(state) = index_state(index) else { return Ok(None) };
         if is_range(index) {
             let (start, _, step) = self.range_bounds(doc, r, base, state)?;
@@ -197,7 +241,7 @@ impl Evaluator {
             return Ok(at.map(Value::Int));
         }
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
-        let Some(held) = values_of(values) else { return Ok(None) };
+        let Some(held) = values_of(&found, values) else { return Ok(None) };
         self.one_value(doc, r, base, &held, 0, row)
     }
 
@@ -248,15 +292,20 @@ impl Evaluator {
             _ => return Ok(None),
         };
         let Some((ty, width)) = shapes::element(spelling) else { return Ok(None) };
-        let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
-        let offset = base + at * 8;
-        let size = width * 8;
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
-        let read = self.primitive_value(doc, &[], &one, &ty, size)?;
+        let read = match n.held {
+            Some(held) => self.held_value(r, held, elem, &ty, width)?,
+            None => {
+                let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
+                let offset = base + at * 8;
+                let size = width * 8;
+                let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+                Some(self.primitive_value(doc, &[], &one, &ty, size)?)
+            }
+        };
         // A NaN is how pandas writes a number it has not got.
         Ok(match read {
-            Value::Float(f) if f.is_nan() => None,
-            other => Some(other),
+            Some(Value::Float(f)) if f.is_nan() => None,
+            other => other,
         })
     }
 
@@ -264,20 +313,44 @@ impl Evaluator {
     fn date_count<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<i64>> {
         let Dtype::Datetime { spelling, .. } = n.dtype else { return Ok(None) };
         let Some((_, width)) = shapes::element(spelling) else { return Ok(None) };
-        let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
-        let offset = base + at * 8;
-        let size = width * 8;
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
         let endian = if spelling.starts_with('>') { Endian::Big } else { Endian::Little };
-        let read = self.primitive_value(doc, &[], &one, &Ty::Int { bits: 64, endian }, size)?;
+        let ty = Ty::Int { bits: 64, endian };
+        let read = match n.held {
+            Some(held) => self.held_value(r, held, elem, &ty, width)?,
+            None => {
+                let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
+                let offset = base + at * 8;
+                let size = width * 8;
+                let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+                Some(self.primitive_value(doc, &[], &one, &ty, size)?)
+            }
+        };
         Ok(match read {
-            Value::Int(count) => i64::try_from(count).ok(),
+            Some(Value::Int(count)) => i64::try_from(count).ok(),
             _ => None,
         })
     }
 
+    /// One value out of a run the file did not write as bytes.
+    ///
+    /// Protocol 2 writes an array's numbers as the latin-1 text they spell, so
+    /// they are nowhere in the file. The form decodes each such run once as it
+    /// reads it, and a value of one is read out of those bytes by the same
+    /// machinery every other field uses, over a document of the run rather
+    /// than of the file.
+    fn held_value(&mut self, r: &Resolved, held: &Arc<Vec<u8>>, elem: u64, ty: &Ty, width: u64) -> R<Option<Value>> {
+        let size = width * 8;
+        let Some(offset) = elem.checked_mul(size) else { return Ok(None) };
+        if offset.checked_add(size).is_none_or(|end| end > held.len() as u64 * 8) {
+            return Ok(None);
+        }
+        let run = Document::new(crate::source::ArcSource(held.clone()));
+        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), space: 0, ..r.clone() };
+        Ok(Some(self.primitive_value(&run, &[], &one, ty, size)?))
+    }
+
     /// The label at position `c` of the axis that names a frame's columns.
-    fn label_at<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, axis: &Captured, c: u64) -> R<Option<String>> {
+    fn label_at<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, axis: &Captured, c: u64) -> R<Option<String>> {
         if is_range(axis) {
             let Some(state) = index_state(axis) else { return Ok(None) };
             let (start, _, step) = self.range_bounds(doc, r, base, state)?;
@@ -286,7 +359,7 @@ impl Evaluator {
         }
         let Some(state) = index_state(axis) else { return Ok(None) };
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
-        let Some(held) = values_of(values) else { return Ok(None) };
+        let Some(held) = values_of(&found, values) else { return Ok(None) };
         Ok(match self.one_value(doc, r, base, &held, 0, c)? {
             Some(Value::Str(said)) => Some(said),
             Some(Value::Int(n)) => Some(n.to_string()),
@@ -323,6 +396,7 @@ impl Evaluator {
         doc: &Document<S>,
         root: &[usize],
         path: &[usize],
+        found: &Match,
         object: &Captured,
         says: Says,
     ) -> R<String> {
@@ -345,15 +419,15 @@ impl Evaluator {
                             .collect::<Vec<_>>()
                             .join(", "),
                     ),
-                    _ => self.index_summary(doc, &r, base, object)?,
+                    _ => self.index_summary(doc, &r, base, found, object)?,
                 })
             }
-            Says::Shape | Says::Stored | Says::Format => self.sparse_summary(doc, &r, base, object, says),
+            Says::Shape | Says::Stored | Says::Format => self.sparse_summary(doc, &r, base, found, object, says),
         }
     }
 
     /// What an index is and where its labels run from and to.
-    fn index_summary<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, object: &Captured) -> R<String> {
+    fn index_summary<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, object: &Captured) -> R<String> {
         let Some(frame) = frame_of(object) else { return Ok(String::new()) };
         let kind = index_kind(frame.index).unwrap_or("Index");
         if is_range(frame.index) {
@@ -363,14 +437,14 @@ impl Evaluator {
             let by = if step == 1 { String::new() } else { format!(" by {step}") };
             return Ok(format!("{kind} {start} to {stop}{by}"));
         }
-        let Some(rows) = self.index_len(doc, r, base, frame.index)? else { return Ok(kind.to_string()) };
+        let Some(rows) = self.index_len(doc, r, base, found, frame.index)? else { return Ok(kind.to_string()) };
         if rows == 0 {
             return Ok(format!("{kind} of no labels"));
         }
         // The first and the last label, which is what a reader wants of an
         // index of dates and is still true of one of names.
-        let first = self.index_label(doc, r, base, frame.index, 0)?;
-        let last = self.index_label(doc, r, base, frame.index, rows - 1)?;
+        let first = self.index_label(doc, r, base, found, frame.index, 0)?;
+        let last = self.index_label(doc, r, base, found, frame.index, rows - 1)?;
         Ok(match (label_text(&first), label_text(&last)) {
             (Some(first), Some(last)) if rows > 1 => format!("{kind} {first} to {last}"),
             (Some(first), _) => format!("{kind} {first}"),
@@ -385,6 +459,7 @@ impl Evaluator {
         doc: &Document<S>,
         r: &Resolved,
         base: u64,
+        found: &Match,
         object: &Captured,
         says: Says,
     ) -> R<String> {
@@ -418,7 +493,7 @@ impl Evaluator {
             if self.pickle_text(doc, r, base, key)?.as_deref() != Some("data") {
                 continue;
             }
-            let Some(held) = values_of(value) else { break };
+            let Some(held) = values_of(found, value) else { break };
             let Some((rows, _)) = held.rows_and_columns() else { break };
             return Ok(rows.to_string());
         }

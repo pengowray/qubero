@@ -14,7 +14,7 @@
 //! a value a Familiar Pickle Form already matched and placed, and this is the
 //! shape of them. [`picklecells`](super::picklecells) reads the values out.
 
-use crate::formats::pickle::familiar::{Dtype, Kind, Names, Shape, Storage, Value as Captured};
+use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Shape, Storage, Value as Captured};
 
 /// What the manager under a frame or a series is made of, however the release
 /// that wrote it spelled the manager.
@@ -54,6 +54,11 @@ pub(super) struct Numbers<'a> {
     pub(super) dtype: &'a Dtype,
     pub(super) dimensions: &'a [u64],
     pub(super) fortran_order: bool,
+    /// The numbers themselves, for a run the file did not write as bytes.
+    /// Protocol 2 writes them as the latin-1 text they spell, so they are
+    /// nowhere in the file and the match carries them, decoded once. Nothing
+    /// at protocol 3 and up, where `at` is where they are.
+    pub(super) held: Option<&'a std::sync::Arc<Vec<u8>>>,
 }
 
 /// The code a categorical writes where it has no value.
@@ -207,7 +212,7 @@ fn slice_of(value: &Captured) -> Option<(i128, i128)> {
 impl<'a> Frame<'a> {
     /// The column of the frame at `c`: which block holds it, and which of that
     /// block's rows it is.
-    pub(super) fn column(&self, c: u64) -> Option<(&Block<'a>, u64)> {
+    pub(super) fn column(&self, found: &'a Match, c: u64) -> Option<(&Block<'a>, u64)> {
         for block in &self.blocks {
             let (start, step) = block.placement;
             let inside = i128::from(c) - start;
@@ -215,7 +220,7 @@ impl<'a> Frame<'a> {
                 continue;
             }
             let j = u64::try_from(inside / step).ok()?;
-            let held = values_of(block.values)?;
+            let held = values_of(found, block.values)?;
             if j < held.rows_and_columns()?.1 {
                 return Some((block, j));
             }
@@ -262,13 +267,16 @@ impl Values<'_> {
 
 /// What a block's or an index's values are, read through whatever pandas
 /// wrapped them in.
-pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
+pub(super) fn values_of<'a>(found: &'a Match, value: &'a Captured) -> Option<Values<'a>> {
     match &value.kind {
-        // Only an array whose numbers are in the file as numbers. Protocol 2
-        // writes them as the text they spell in latin-1, and a cell read off
-        // that run would be read off the spelling.
-        Kind::Array { at, dtype, dimensions, fortran_order, storage: Storage::Raw, .. } => {
-            Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order }))
+        // An array whose numbers the file wrote as something else carries
+        // them beside the match, decoded once when it was read.
+        Kind::Array { at, dtype, dimensions, fortran_order, storage, .. } => {
+            let held = match storage {
+                Storage::Raw => None,
+                Storage::Latin1 => Some(found.decoded(*at)?),
+            };
+            Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order, held }))
         }
         Kind::Objects { items, .. } => Some(Values::Texts(items)),
         // `__pyx_unpickle_NDArrayBacked(cls, checksum, None)` and a BUILD that
@@ -276,14 +284,14 @@ pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
         Kind::Made { callable, items, state: Some(state), .. } if class_name(callable)? == "__pyx_unpickle_NDArrayBacked" => {
             let Kind::Tuple(held) = &state.kind else { return None };
             match class_name(items.first()?)? {
-                "StringArray" | "DatetimeArray" => held.iter().find_map(values_of),
+                "StringArray" | "DatetimeArray" => held.iter().find_map(|v| values_of(found, v)),
                 "Categorical" => {
-                    let codes = held.iter().find_map(|v| match values_of(v)? {
+                    let codes = held.iter().find_map(|v| match values_of(found, v)? {
                         Values::Numbers(n) => Some(n),
                         _ => None,
                     })?;
                     let names = held.iter().find_map(|v| match &v.kind {
-                        Kind::Instance { .. } => categories(v),
+                        Kind::Instance { .. } => categories(found, v),
                         _ => None,
                     })?;
                     Some(Values::Coded(codes, names))
@@ -295,11 +303,11 @@ pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
         // and its dtype among its attributes.
         Kind::Instance { class, state: Some(state) } if class_name(class)? == "Categorical" => {
             let Kind::Dict(entries) = &state.kind else { return None };
-            let codes = entries.iter().find_map(|(_, v)| match values_of(v)? {
+            let codes = entries.iter().find_map(|(_, v)| match values_of(found, v)? {
                 Values::Numbers(n) => Some(n),
                 _ => None,
             })?;
-            let names = entries.iter().find_map(|(_, v)| categories(v))?;
+            let names = entries.iter().find_map(|(_, v)| categories(found, v))?;
             Some(Values::Coded(codes, names))
         }
         // And an array of pandas' own is an ordinary object with the array it
@@ -307,7 +315,7 @@ pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
         // before 1.5.
         Kind::Instance { class, state: Some(state) } if class_name(class)?.ends_with("Array") => {
             let Kind::Dict(entries) = &state.kind else { return None };
-            entries.iter().find_map(|(_, v)| values_of(v))
+            entries.iter().find_map(|(_, v)| values_of(found, v))
         }
         _ => None,
     }
@@ -315,7 +323,7 @@ pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
 
 /// The categories a `CategoricalDtype` names, which are the values of the
 /// index it holds.
-fn categories(dtype: &Captured) -> Option<&[Captured]> {
+fn categories<'a>(found: &'a Match, dtype: &'a Captured) -> Option<&'a [Captured]> {
     let Kind::Instance { class, state: Some(state) } = &dtype.kind else { return None };
     if class_name(class)? != "CategoricalDtype" {
         return None;
@@ -329,7 +337,7 @@ fn categories(dtype: &Captured) -> Option<&[Captured]> {
     let Kind::Dict(state) = &items.get(1)?.kind else { return None };
     // The categories are text, spelled as a bare array of objects up to
     // pandas 2.x and wrapped in a `StringArray` in 3.0.
-    state.iter().find_map(|(_, v)| match values_of(v)? {
+    state.iter().find_map(|(_, v)| match values_of(found, v)? {
         Values::Texts(items) => Some(items),
         _ => None,
     })

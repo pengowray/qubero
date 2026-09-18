@@ -206,6 +206,22 @@ impl Storage {
             Storage::Latin1 => bytes.iter().filter(|b| **b & 0xc0 != 0x80).count(),
         }
     }
+
+    /// The bytes this run stands for, for a run that is not them. One pass,
+    /// one byte a character, and nothing for a run that already is the bytes.
+    ///
+    /// Every character is under 0x100, which the production checked when it
+    /// read the run, so each is one byte and the result is as long as
+    /// [`Storage::decoded`] said.
+    pub fn read(self, bytes: &[u8]) -> Option<Vec<u8>> {
+        match self {
+            Storage::Raw => None,
+            Storage::Latin1 => {
+                let text = std::str::from_utf8(bytes).ok()?;
+                text.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect()
+            }
+        }
+    }
 }
 
 /// What one value of an array is.
@@ -456,6 +472,19 @@ pub struct Match {
     pub ops: Vec<Instr>,
     stop: usize,
     payloads: Vec<(usize, Payload)>,
+    /// The bytes of every run the file did not write as bytes, by where the
+    /// run starts. Protocol 2 writes an array's numbers as the latin-1 text
+    /// they spell, so the numbers are nowhere in the file and are decoded once
+    /// here rather than per cell. Empty for every file at protocol 3 and up.
+    runs: Vec<(usize, Arc<Vec<u8>>)>,
+}
+
+impl Match {
+    /// The bytes a run stands for, for a run the file wrote as something else.
+    /// Nothing when the run in the file already is the bytes.
+    pub fn decoded(&self, at: usize) -> Option<&Arc<Vec<u8>>> {
+        self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held)
+    }
 }
 
 impl Deduced for Match {
@@ -521,6 +550,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         memo: Memo::new(),
         memo_base: None,
         skipped: 0,
+        runs: Vec::new(),
         dicts: Pickler::Undetermined,
         framing: Framing::Unframed,
         pickler: Pickler::Undetermined,
@@ -641,6 +671,7 @@ impl<'a> Cursor<'a> {
             ops: instructions(self.bytes),
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),
+            runs: std::mem::take(&mut self.runs),
         })
     }
 }

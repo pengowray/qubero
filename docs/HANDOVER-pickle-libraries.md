@@ -136,11 +136,24 @@ The libraries needed nothing new. scikit-learn, scipy and pandas write
 no file in the corpus. What the protocols do differ in is where the array
 values sit. Protocol 2 has no opcode for a byte string, so an array's numbers
 go out as the latin-1 text they spell, handed to `_codecs.encode`. The form
-reads that, checks the decoded length against the shape, and says so rather
-than pretending the run is the numbers: the row is `numbers as latin-1 text`,
-a protocol 2 array is not offered as a table, and the cells of a protocol 2
-pandas frame are not read. Decoding that run so that a protocol 2 frame opens
-as a table like every other one is the next thing worth doing for these forms.
+decodes that run once as it reads it and keeps the bytes beside the match, and
+every cell of the array and of any frame holding it is read from there, so a
+protocol 2 frame, series and array open as the same table, cell for cell, as
+the same object at protocol 4. `a_pickled_frame_opens_as_the_table_it_holds`
+and `an_array_reads_as_the_same_numbers_at_every_protocol` in
+`crates/core/tests/pickle_real.rs` are that claim.
+
+What that costs, and what would replace it: the decoded bytes are a copy, held
+for as long as the match is, so a protocol 2 file of arrays is read into memory
+twice. The honest shape for this is a space of its own, the way a compressed
+stream gets one (`eval/space.rs`, `Spaces::add`): the numbers would then be
+ordinary typed fields at ordinary offsets in that space, the hex view would
+show the decoded bytes, and nothing would need a computed-cell path. What
+stands in the way is that a space is entered through a `Ty::Decoded` node,
+which wants a `Codec` of its own and a trace, and every exhaustive `match` on
+`Codec` in the evaluator, the listing, the diagram and the graph would gain an
+arm. That is the next thing worth doing for these forms, and it is a day's work
+rather than an afternoon's.
 
 A frame opens as a table, and a frame, a series and a sparse matrix say what
 they hold before showing how. See "A library object as the thing it is" in the
@@ -148,9 +161,8 @@ design document.
 
 What is left, in the order it is worth doing:
 
-1. **A protocol 2 array as its numbers.** The numbers are in the file as
-   latin-1 text, so reading them means decoding that run rather than pointing
-   at it. Until then a protocol 2 frame shows its structure and not its cells.
+1. **A protocol 2 array's numbers as a space of their own**, replacing the
+   copy kept beside the match. See above.
 2. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
 3. **The standard library's classes**, which are what every remaining

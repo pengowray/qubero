@@ -4,7 +4,7 @@
 
 use super::memo::Memo;
 use super::forms::Allow;
-use super::{BIG_PAYLOAD, Call, Kind, MAX_LINE, Pickler, Said, Value};
+use super::{BIG_PAYLOAD, Call, Kind, MAX_LINE, NO_OPCODE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
 pub(super) struct Cursor<'a> {
@@ -41,6 +41,9 @@ pub(super) struct Cursor<'a> {
     pub(super) allow: Allow,
     pub(super) calls: Vec<Call>,
     pub(super) payloads: Vec<(usize, Payload)>,
+    /// The bytes of every run the file wrote as something other than bytes,
+    /// decoded once as the run is read. See [`Match::decoded`].
+    pub(super) runs: Vec<(usize, std::sync::Arc<Vec<u8>>)>,
     /// How many of each specific production fired, which is what says the
     /// file belongs to the form that allows it.
     pub(super) arrays: usize,
@@ -86,6 +89,7 @@ pub(super) struct Save {
     pub(super) says: usize,
     pub(super) calls: usize,
     pub(super) payloads: usize,
+    pub(super) runs: usize,
     pub(super) framing: Framing,
     pub(super) pickler: Pickler,
     pub(super) arrays: usize,
@@ -153,6 +157,7 @@ impl<'a> Cursor<'a> {
             says: self.says.len(),
             calls: self.calls.len(),
             payloads: self.payloads.len(),
+            runs: self.runs.len(),
             framing: self.framing,
             pickler: self.pickler,
             arrays: self.arrays,
@@ -187,6 +192,7 @@ impl<'a> Cursor<'a> {
         self.says.truncate(s.says);
         self.calls.truncate(s.calls);
         self.payloads.truncate(s.payloads);
+        self.runs.truncate(s.runs);
         self.framing = s.framing;
         self.pickler = s.pickler;
         self.arrays = s.arrays;
@@ -285,6 +291,12 @@ impl<'a> Cursor<'a> {
     /// four.
     pub(super) fn text_run(&mut self) -> Option<(usize, usize)> {
         self.gate()?;
+        // A word Python 2 wrote is a `str` rather than text, so at protocol 2
+        // the same word has two spellings and the writer decides which.
+        if self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
+            let code = self.byte()?;
+            return self.counted(code, b'U', b'T', NO_OPCODE);
+        }
         let len = match self.proto >= 4 {
             true => {
                 self.exact(&[0x8c])?;

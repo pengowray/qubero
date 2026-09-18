@@ -44,11 +44,16 @@ const PROTOCOL_FIELD: &str = "protocol";
 /// `data` again: the object the file holds is already called that, and one
 /// name for two things is one thing a reader has to work out.
 const NUMBERS_FIELD: &str = "numbers";
-/// What the `numbers` row is called when the numbers are not in the file as
-/// numbers. Protocol 2 has no opcode for a byte string, so an array's values
-/// are written as the text they spell in latin-1, and the row shows that text
-/// rather than claiming the run is the values.
-const SPELLED_NUMBERS_FIELD: &str = "numbers as latin-1 text";
+/// What an array says about how its numbers reached the file, for an array
+/// whose numbers are not in it as numbers. Protocol 2 has no opcode for a byte
+/// string, so the values go out as the text they spell in latin-1, and the
+/// `numbers` row is that text. The table over the array is the numbers
+/// themselves, decoded when the form matched.
+const WRITTEN_FIELD: &str = "written as";
+const LATIN1_TEXT: &str = "latin-1 text";
+/// What the one column of a table over a run of single values is called. The
+/// numbers have no names of their own, so the column is what one of them is.
+const ONE_COLUMN: &str = "value";
 const DTYPE_FIELD: &str = "dtype";
 const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
@@ -350,7 +355,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // handed to it as a list, so they are nodes of their own rather
             // than a run of bytes to read.
             Kind::Objects { dimensions, fortran_order, items } => {
-                let notes = says_array(&Dtype::Objects, dimensions, *fortran_order);
+                let notes = says_array(&Dtype::Objects, dimensions, *fortran_order, Storage::Raw);
                 let mut kids = Vec::new();
                 if let Some(call) = call_of(found, v) {
                     kids.push((Label::Field(call.name), Part::Call(call, v)));
@@ -358,8 +363,8 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))));
                 (notes, kids)
             }
-            Kind::Array { dtype, dimensions, fortran_order, .. } => {
-                let notes = says_array(dtype, dimensions, *fortran_order);
+            Kind::Array { dtype, dimensions, fortran_order, storage, .. } => {
+                let notes = says_array(dtype, dimensions, *fortran_order, *storage);
                 let mut kids = Vec::new();
                 // The call that rebuilt this array, when it is this array's:
                 // a form matches one, and it sits inside the array's bytes.
@@ -369,7 +374,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 }
                 // The numbers, unless the call was handed them and holds them.
                 if !call.is_some_and(|c| inside(c, span(found, &Part::Data(v)).0)) {
-                    kids.push((Label::Field(numbers_field(v)), Part::Data(v)));
+                    kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
                 }
                 (notes, kids)
             }
@@ -423,7 +428,7 @@ fn held<'a>(state: &'a Option<Box<Value>>) -> Vec<(Label, Part<'a>)> {
 
 /// What an array says about itself before its values: how one of them is read,
 /// how many there are and which way round they run.
-fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool) -> Vec<(Label, Part<'a>)> {
+fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool, storage: Storage) -> Vec<(Label, Part<'a>)> {
     let shape = match dimensions.is_empty() {
         true => NO_DIMENSIONS.to_string(),
         false => dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
@@ -432,11 +437,18 @@ fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool) -> Vec
         true => FORTRAN_ORDER,
         false => C_ORDER,
     };
-    vec![
+    let mut rows = vec![
         (Label::Field(DTYPE_FIELD), Part::Note(dtype.name())),
         (Label::Field(SHAPE_FIELD), Part::Note(shape)),
         (Label::Field(ORDER_FIELD), Part::Note(order.to_string())),
-    ]
+    ];
+    // Said only where it is worth saying: an array whose numbers are in the
+    // file as numbers has nothing to explain, and a row on every array would
+    // be a row every reader learns to skip.
+    if storage == Storage::Latin1 {
+        rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string())));
+    }
+    rows
 }
 
 /// The run of instructions that rebuilt this array, which sits inside it.
@@ -524,15 +536,6 @@ fn leaf(value: &Value) -> Option<(T, usize, usize)> {
         Kind::Bytes { at, len } => (T::bytes(E::lit(*len as i128)), *at, *len),
         _ => return None,
     })
-}
-
-/// What the row holding an array's values is called, which says whether the
-/// run is the values or the text they were written as.
-fn numbers_field(v: &Value) -> &'static str {
-    match v.kind {
-        Kind::Array { storage: Storage::Latin1, .. } => SPELLED_NUMBERS_FIELD,
-        _ => NUMBERS_FIELD,
-    }
 }
 
 /// The type a run of an array's values reads as: one element repeated by the
@@ -628,17 +631,29 @@ impl Evaluator {
         }
         let (_, Part::Data(v)) = here else { return None };
         let Kind::Array { dimensions, fortran_order, storage, .. } = &v.kind else { return None };
-        // A protocol 2 array's run is the latin-1 spelling of its numbers, and
-        // a table of rows across it would be a table of the spelling.
-        if *storage == Storage::Latin1 {
-            return None;
-        }
         let inner = match (dimensions.len(), fortran_order) {
             (0, _) => return None,
             (1, _) => None,
             (_, true) => dimensions.first().copied(),
             (_, false) => dimensions.last().copied(),
         };
+        // A protocol 2 array's numbers are nowhere in the file, so there is no
+        // run under the node for a table to walk and the core reads the cells
+        // instead, out of the run it decoded when the form matched.
+        if *storage == Storage::Latin1 {
+            let columns = inner.filter(|n| *n > 0).unwrap_or(1);
+            let count: u64 = dimensions.iter().product();
+            let names = match inner {
+                Some(_) => (0..columns).map(|i| i.to_string().into()).collect(),
+                None => vec![ONE_COLUMN.into()],
+            };
+            return Some(crate::template::TableShape {
+                names,
+                row_word: inner.map(|_| "row".into()),
+                cells: Some(Cells::Computed { rows: count / columns.max(1) }),
+                ..Default::default()
+            });
+        }
         Some(crate::template::TableShape {
             columns: inner.filter(|n| *n > 0).map(|n| E::lit(n as i128)),
             // Several numbers to a row is a row. One to a row is a value,
@@ -661,8 +676,14 @@ impl Evaluator {
         shape: crate::template::TableShape,
     ) -> R<Option<crate::template::TableShape>> {
         // A frame's columns, its row count and what one value of each column
-        // is are all read at once, because none of them is in the node.
+        // is are all read at once, because none of them is in the node. An
+        // array whose cells the core reads has said all of that already: its
+        // columns are places along an axis rather than names in the file.
         if matches!(shape.cells, Some(Cells::Computed { .. })) {
+            let (root, found) = self.pickle_doc(doc, path)?;
+            if matches!(spot(&found, &path[root.len()..]), Some((_, Part::Data(_)))) {
+                return Ok(Some(shape));
+            }
             return self.frame_shape(doc, path);
         }
         if !matches!(shape.cells, Some(Cells::Named { .. })) {
@@ -841,7 +862,7 @@ impl Evaluator {
             }
             // What a reader came for, before the structure that holds it.
             Part::Summary { of, says } => {
-                let said = self.pickle_summary(doc, &root, path, of, says)?;
+                let said = self.pickle_summary(doc, &root, path, &found, of, says)?;
                 self.pickle_note(path, &pr, name, said)
             }
             Part::Text(said) => {

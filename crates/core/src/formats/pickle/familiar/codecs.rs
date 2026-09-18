@@ -13,7 +13,7 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Kind, Names, Shape, Storage, Value, LATIN1, SPELLED};
+use super::{Kind, Names, Shape, Storage, Value, LATIN1, NO_OPCODE, SPELLED};
 
 impl Cursor<'_> {
     /// `_codecs.encode(text, 'latin1')`, or `bytes()` for an empty one.
@@ -43,7 +43,15 @@ impl Cursor<'_> {
     /// bytes that belongs to something else: a NumPy array's numbers reach
     /// protocol 2 this way, and the array files the slot the REDUCE writes.
     /// An array with nothing in it takes the empty spelling, so both are here.
-    pub(super) fn bytes_run(&mut self) -> Option<(usize, usize)> {
+    pub(super) fn bytes_run(&mut self) -> Option<(usize, usize, Storage)> {
+        // Python 2 had a type for a run of bytes, its `str`, so a pickler
+        // there writes one out and the bytes are the bytes. The detour through
+        // `_codecs` is Python 3 writing at a protocol with no type for them.
+        if self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
+            let code = self.byte()?;
+            let (at, len) = self.counted(code, b'U', b'T', NO_OPCODE)?;
+            return Some((at, len, Storage::Raw));
+        }
         let said = self.says.len();
         let here = self.save();
         let held = match self.encode_call() {
@@ -54,7 +62,7 @@ impl Cursor<'_> {
             }
         };
         self.says.truncate(said);
-        Some(held)
+        Some((held.0, held.1, Storage::Latin1))
     }
 
     /// `_codecs.encode` over a text and the word `latin1`, up to and including
@@ -140,12 +148,4 @@ impl Cursor<'_> {
         }
     }
 
-    /// How a run of bytes a form is about to read is written, which the
-    /// protocol decides.
-    pub(super) fn storage(&self) -> Storage {
-        match self.proto >= 3 {
-            true => Storage::Raw,
-            false => Storage::Latin1,
-        }
-    }
 }
