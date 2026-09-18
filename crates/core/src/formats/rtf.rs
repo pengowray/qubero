@@ -20,17 +20,16 @@
 //! The font table reads `fonttbl`, and a group that opens `\*` reads as that
 //! star, since the word after it is the second item.
 //!
-//! Two things this does not read, both of which are a control word deciding
-//! what the bytes after it mean rather than how many there are:
+//! `\binN` is the one control word with bytes of its own: N of them follow
+//! its space, raw, and a brace among them is not markup. They are the control
+//! word's operand, so they are read as a field of it, as long as the
+//! parameter beside them says.
 //!
-//! * `\binN` is followed by N raw bytes, N having been written as that control
-//!   word's parameter. A brace among them is read here as a group that is not
-//!   there. Reaching the number would mean a length read from a field inside
-//!   the item before this one, and `Prev` reaches the item and stops.
-//! * `\ansicpg1252` says what the bytes of the text mean, and may be written
-//!   anywhere before them. Text is read as Latin-1 instead, which agrees with
-//!   Windows-1252 everywhere but the 32 characters at 0x80, and `\uN` spells
-//!   a character out as a number that is read here as the parameter it is.
+//! One thing this does not read: `\ansicpg1252` says what the bytes of the
+//! text mean, and may be written anywhere before them. Text is read as
+//! Latin-1 instead, which agrees with Windows-1252 everywhere but the 32
+//! characters at 0x80, and `\uN` spells a character out as a number that is
+//! read here as the parameter it is.
 //!
 //! `\*\name`, which marks a destination a reader that does not know the name
 //! is meant to skip, needs nothing special: the `\*` is the control symbol it
@@ -126,8 +125,8 @@ fn control() -> T {
     T::switch(E::peek(8, Big), cases, symbol())
 }
 
-/// A name, a number where there is one, and the space that ends the name where
-/// there is one.
+/// A name, a number where there is one, the space that ends the name where
+/// there is one, and for `\bin` the bytes that number counts.
 ///
 /// All three are runs of a class of byte rather than fields of a length
 /// anything wrote: `\b`, `\b0`, `\b0 ` and `\fs24\b` all have to read, and
@@ -150,6 +149,18 @@ fn word() -> T {
             ),
             // One space, and only one: a run of them capped at a byte.
             ("delimiter", T::bytes(E::run(b" ").at_most(E::lit(1)))),
+            // `\bin` alone has bytes after it, as many as its parameter says,
+            // and they are anything at all: a brace in them opens nothing.
+            // No more than are left, so a file cut off inside them reads as
+            // far as it got, and a minus sign somebody wrote is no bytes.
+            (
+                "data",
+                T::matches(
+                    E::field("name"),
+                    vec![("bin", T::bytes(E::field("parameter").at_least(E::lit(0)).at_most(E::Remaining)))],
+                    T::bytes(E::lit(0)),
+                ),
+            ),
         ],
     )
 }
@@ -309,6 +320,40 @@ mod tests {
         // for a row to hold, so the length of that says nothing.
         assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().size_bits, 100_000 * 8);
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, v.len() as u64 * 8);
+    }
+
+    #[test]
+    fn the_bytes_after_bin_are_its_own_and_a_brace_in_them_opens_nothing() {
+        let (d, mut ev) = read(b"{\\bin5 a{}b}\\b}");
+        // The `\bin` and its five bytes, the `\b`, and the closing brace:
+        // the braces among the five did not open a group or close this one.
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(5));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 5 * 8);
+        assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().name, "[0] bin");
+        assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().name, "[1] b");
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, 15 * 8);
+    }
+
+    #[test]
+    fn bin_counts_no_more_than_it_says_and_no_more_than_there_is() {
+        // None at all: the `x` is text, as it would be after any other word.
+        let (d, mut ev) = read(b"{\\bin0 x}");
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().name, "[1] x");
+        // No parameter is no bytes, and so is a negative one.
+        let (d, mut ev) = read(b"{\\bin x}");
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 0);
+        let (d, mut ev) = read(b"{\\bin-3 x}");
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 0);
+        // A file that ends inside them reads what it wrote.
+        let (d, mut ev) = read(b"{\\bin9 ab");
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 2 * 8);
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, 9 * 8);
+        // And no other word has any, whatever its parameter.
+        let (d, mut ev) = read(b"{\\fs5 abcde}");
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 3]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().name, "[1] abcde");
     }
 
     #[test]
