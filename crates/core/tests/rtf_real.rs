@@ -57,11 +57,26 @@ fn a_real_word_file_is_one_group_covering_all_of_it() {
     );
     // `{\rtf1` is the first five bytes: the brace, and a control word of a
     // backslash, three letters and the version.
-    assert_eq!(ev.node(&d, &[1, 0, 1, 0]).unwrap().value, Value::Str("rtf".into()));
-    assert_eq!(ev.node(&d, &[1, 0, 1, 1]).unwrap().value, Value::Int(1));
+    assert_eq!(ev.node(&d, &[1, 0, 0, 1, 0]).unwrap().value, Value::Str("rtf".into()));
+    assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(1));
     // The character set, which is a control word with no parameter at all.
-    assert_eq!(ev.node(&d, &[1, 2, 1, 0]).unwrap().value, Value::Str("ansi".into()));
-    assert_eq!(ev.node(&d, &[1, 2, 1, 1]).unwrap().size_bits, 0);
+    assert_eq!(ev.node(&d, &[1, 0, 2, 1, 0]).unwrap().value, Value::Str("ansi".into()));
+    assert_eq!(ev.node(&d, &[1, 0, 2, 1, 1]).unwrap().size_bits, 0);
+    // Rows read as what they hold: the file by its first word, a control word
+    // by its word, and the font table by the word that opens it.
+    assert_eq!(root.name, "file rtf");
+    assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().name, "[0] rtf");
+    assert_eq!(ev.node(&d, &[1, 0, 2]).unwrap().name, "[2] ansi");
+    let items = ev.node(&d, &[1, 0]).unwrap().child_count as usize;
+    let fonttbl = (0..items).find(|i| ev.node(&d, &[1, 0, *i]).unwrap().name.ends_with(" fonttbl"));
+    assert!(fonttbl.is_some(), "no group reads as the font table");
+    // And a font in it, which is a group naming itself by its `\f` word,
+    // with the face name as text further along.
+    let f = fonttbl.unwrap();
+    assert_eq!(ev.node(&d, &[1, 0, f, 1, 0, 1]).unwrap().name, "[1] f");
+    let face = ev.node(&d, &[1, 0, f, 1, 0, 1, 1, 0]).unwrap().child_count as usize;
+    let times = (0..face).map(|i| ev.node(&d, &[1, 0, f, 1, 0, 1, 1, 0, i]).unwrap().name).find(|n| n.contains("Times New Roman"));
+    assert_eq!(times.as_deref(), Some("[6] Times New Roman;"), "{:?}", (0..face).map(|i| ev.node(&d, &[1, 0, f, 1, 0, 1, 1, 0, i]).unwrap().name).collect::<Vec<_>>());
 }
 
 #[test]

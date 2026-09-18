@@ -14,6 +14,12 @@
 //! group is an item in its own right, which is what lets a group's contents be
 //! a run of items ending at the one whose marker is that brace.
 //!
+//! An item's row is named by what it holds: a control word by its word, text
+//! by the text, and a group by its first item, which for every group the
+//! specification defines is the control word that says what the group is.
+//! The font table reads `fonttbl`, and a group that opens `\*` reads as that
+//! star, since the word after it is the second item.
+//!
 //! Two things this does not read, both of which are a control word deciding
 //! what the bytes after it mean rather than how many there are:
 //!
@@ -60,9 +66,10 @@ pub fn rtf() -> Template {
 }
 
 /// One thing in the file: a group, the brace that ends one, a control word or
-/// symbol, or a run of text.
+/// symbol, or a run of text. Named by its body, and the body by whatever names
+/// that: the word of a control word, the text of a text run.
 fn item() -> T {
-    T::structure_named("Item", "marker", "body", vec![("marker", marker()), ("body", body())])
+    T::structure_named("Item", "body", "body", vec![("marker", marker()), ("body", body())])
         .encoding_wrapper("body")
         .counted_as("item")
 }
@@ -81,19 +88,32 @@ fn body() -> T {
     T::switch(
         E::field("marker"),
         vec![
-            // A group's contents, up to and including the item that is the
-            // brace closing it. A file cut off before that brace stops at the
-            // end of what it wrote, the way every run here does.
-            (
-                b'{' as i128,
-                T::repeat(T::Named("Item".into()), Until::FieldBytes { field: "marker".into(), bytes: vec![b'}'] }),
-            ),
+            (b'{' as i128, group()),
             // The brace that closed a group says everything it has to say in
             // being that brace.
             (b'}' as i128, T::bytes(E::lit(0))),
             (b'\\' as i128, control()),
         ],
         text(),
+    )
+}
+
+/// A group's contents, up to and including the item that is the brace
+/// closing it. A file cut off before that brace stops at the end of what it
+/// wrote, the way every run here does.
+///
+/// Named by its first item. `{\\fonttbl ...}` is the font table and
+/// `{\\colortbl ...}` the colour table, and the word that says so is the
+/// first thing in the group in every case the specification lists.
+fn group() -> T {
+    T::structure_named(
+        "Group",
+        "items.0",
+        "items",
+        vec![(
+            "items",
+            T::repeat(T::Named("Item".into()), Until::FieldBytes { field: "marker".into(), bytes: vec![b'}'] }),
+        )],
     )
 }
 
@@ -191,40 +211,46 @@ mod tests {
             Value::Enum { raw: b'{' as i128, name: Some("group".into()), hex: false }
         );
         // The control word, the text, and the brace that ended the group.
-        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 3);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 3);
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, 10 * 8);
+        // Rows named by what they hold: the file by its first word, the word
+        // by its name, the text by itself.
+        assert_eq!(ev.node(&d, &[]).unwrap().name, "file rtf");
+        assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().name, "[0] rtf");
+        assert_eq!(ev.node(&d, &[1, 0, 1]).unwrap().name, "[1] hi");
+        assert_eq!(ev.node(&d, &[1, 0, 2]).unwrap().name, "[2]");
     }
 
     #[test]
     fn a_control_word_takes_its_number_and_the_space_after_it() {
         let (d, mut ev) = read(b"{\\rtf1 hi}");
-        let word = &[1, 0, 1];
-        assert_eq!(ev.node(&d, &[1, 0, 1, 0]).unwrap().value, Value::Str("rtf".into()));
-        assert_eq!(ev.node(&d, &[1, 0, 1, 1]).unwrap().value, Value::Int(1));
+        let word = &[1, 0, 0, 1];
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 0]).unwrap().value, Value::Str("rtf".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(1));
         // The space is the control word's, not the text's.
-        assert_eq!(ev.node(&d, &[1, 0, 1, 2]).unwrap().size_bits, 8);
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 2]).unwrap().size_bits, 8);
         assert_eq!(ev.node(&d, word).unwrap().size_bits, 5 * 8);
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().value, Value::Str("hi".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().value, Value::Str("hi".into()));
     }
 
     #[test]
     fn a_control_word_with_no_number_and_no_space_is_just_its_name() {
         let (d, mut ev) = read(b"{\\b\\i0x}");
-        assert_eq!(ev.node(&d, &[1, 0, 1, 0]).unwrap().value, Value::Str("b".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 0]).unwrap().value, Value::Str("b".into()));
         // No digits and no space: two fields of no bytes, so the word is the
         // backslash and the letter.
-        assert_eq!(ev.node(&d, &[1, 0, 1, 1]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[1, 0, 1, 2]).unwrap().size_bits, 0);
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().size_bits, 2 * 8);
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().value, Value::Str("i".into()));
-        assert_eq!(ev.node(&d, &[1, 1, 1, 1]).unwrap().value, Value::Int(0));
-        assert_eq!(ev.node(&d, &[1, 2, 1, 0]).unwrap().value, Value::Str("x".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 2]).unwrap().size_bits, 0);
+        assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().size_bits, 2 * 8);
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().value, Value::Str("i".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 1]).unwrap().value, Value::Int(0));
+        assert_eq!(ev.node(&d, &[1, 0, 2, 1, 0]).unwrap().value, Value::Str("x".into()));
     }
 
     #[test]
     fn a_negative_parameter_keeps_its_minus() {
         let (d, mut ev) = read(b"{\\li-360 }");
-        assert_eq!(ev.node(&d, &[1, 0, 1, 1]).unwrap().value, Value::Int(-360));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(-360));
     }
 
     #[test]
@@ -232,40 +258,40 @@ mod tests {
         // A literal brace, a literal backslash, and the star that marks a
         // destination. None of the three opens a group or ends one.
         let (d, mut ev) = read(b"{\\{\\\\\\*x}");
-        assert_eq!(ev.node(&d, &[1, 0, 1, 0]).unwrap().value, Value::Str("{".into()));
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().value, Value::Str("\\".into()));
-        assert_eq!(ev.node(&d, &[1, 2, 1, 0]).unwrap().value, Value::Str("*".into()));
-        assert_eq!(ev.node(&d, &[1, 3, 1, 0]).unwrap().value, Value::Str("x".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 0]).unwrap().value, Value::Str("{".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().value, Value::Str("\\".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 2, 1, 0]).unwrap().value, Value::Str("*".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 3, 1, 0]).unwrap().value, Value::Str("x".into()));
         // Four items and the closing brace.
-        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 5);
     }
 
     #[test]
     fn a_hex_escape_reads_as_the_byte_it_spells() {
         let (d, mut ev) = read(b"{\\'e9}");
-        assert_eq!(ev.node(&d, &[1, 0, 1, 1]).unwrap().value, Value::Int(0xe9));
-        assert_eq!(ev.node(&d, &[1, 0]).unwrap().size_bits, 4 * 8);
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 1]).unwrap().value, Value::Int(0xe9));
+        assert_eq!(ev.node(&d, &[1, 0, 0]).unwrap().size_bits, 4 * 8);
     }
 
     #[test]
     fn a_text_run_stops_before_the_next_brace_or_backslash() {
         let (d, mut ev) = read(b"{hello {x}\\b}");
-        assert_eq!(ev.node(&d, &[1, 0, 1, 0]).unwrap().value, Value::Str("hello ".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 0, 1, 0]).unwrap().value, Value::Str("hello ".into()));
         // The group after it, read as a group and not as more text.
         assert_eq!(
-            ev.node(&d, &[1, 1, 0]).unwrap().value,
+            ev.node(&d, &[1, 0, 1, 0]).unwrap().value,
             Value::Enum { raw: b'{' as i128, name: Some("group".into()), hex: false }
         );
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0, 1, 0]).unwrap().value, Value::Str("x".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0, 0, 1, 0]).unwrap().value, Value::Str("x".into()));
     }
 
     #[test]
     fn a_group_nested_in_a_group_ends_at_its_own_brace() {
         let (d, mut ev) = read(b"{{\\fonttbl{\\f0 Times;}}\\b hi}");
         // The font table, the bold control word, the text, and the brace.
-        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 4);
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().value, Value::Str("b".into()));
-        assert_eq!(ev.node(&d, &[1, 2, 1, 0]).unwrap().value, Value::Str("hi".into()));
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 4);
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().value, Value::Str("b".into()));
+        assert_eq!(ev.node(&d, &[1, 0, 2, 1, 0]).unwrap().value, Value::Str("hi".into()));
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, 29 * 8);
     }
 
@@ -281,7 +307,7 @@ mod tests {
         let (d, mut ev) = read(&v);
         // The size is the run, whole. What the field reads *as* is shortened
         // for a row to hold, so the length of that says nothing.
-        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().size_bits, 100_000 * 8);
+        assert_eq!(ev.node(&d, &[1, 0, 1, 1, 0]).unwrap().size_bits, 100_000 * 8);
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, v.len() as u64 * 8);
     }
 
@@ -289,7 +315,7 @@ mod tests {
     fn a_file_cut_off_before_its_closing_brace_reads_as_far_as_it_got() {
         let (d, mut ev) = read(b"{\\rtf1 hi");
         // Two items, and no brace to close them.
-        assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 2);
+        assert_eq!(ev.node(&d, &[1, 0]).unwrap().child_count, 2);
         assert_eq!(ev.node(&d, &[]).unwrap().size_bits, 9 * 8);
     }
 
