@@ -271,9 +271,10 @@ the written expression.
 ## Phases and agents
 
 Opus for implementation, Fable for design and strings. Every worktree agent
-starts with `git merge main`, sets `QUBERO_SAMPLES` and
-`KAITAI_STRUCT=D:/github/kaitai_struct`, and is merged only on cargo's own
-exit code from a debug `cargo test`.
+starts with `git merge main`, sets `KAITAI_STRUCT=D:/github/kaitai_struct`, and
+is merged only on cargo's own exit code from a debug `cargo test`. The sample
+collection needs no variable: `qubero_samples` finds it from a worktree as well
+as from the checkout.
 
 Wave 1 (parallel, separate worktrees):
 * A. IR additions (above) with eval, relate, encode where relevant, tests.
