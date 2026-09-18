@@ -303,3 +303,69 @@ fn a_form_is_the_productions_it_allows() {
     ]);
     assert!(recognise(&framed(&both)).is_none());
 }
+
+/// A LONG1 declares up to 255 bytes and sixteen is as far as the reader's
+/// integer type reaches, so past that the number is the digits it comes to,
+/// worked out once as the form reads the run.
+#[test]
+fn a_number_past_the_integer_type_is_its_digits() {
+    let long1 = |run: &[u8]| {
+        let mut body = vec![0x8a, run.len() as u8];
+        body.extend_from_slice(run);
+        body.push(b'.');
+        framed(&body)
+    };
+    let kind = |run: &[u8]| recognise(&long1(run)).unwrap_or_else(|| panic!("{run:02x?} was not read")).value.kind;
+    // The two ends of the reader's own integer type, each in the sixteen
+    // bytes CPython writes it in.
+    let mut most = vec![0xff; 15];
+    most.push(0x7f);
+    let mut least = vec![0x00; 15];
+    least.push(0x80);
+    assert_eq!(kind(&most), Kind::Int { value: i128::MAX, at: 13, len: 16 });
+    assert_eq!(kind(&least), Kind::Int { value: i128::MIN, at: 13, len: 16 });
+    // One past each of those takes a seventeenth byte, which carries the
+    // sign, and is read as its digits instead.
+    let mut above = least.clone();
+    above.push(0x00);
+    let mut below = most.clone();
+    below.push(0xff);
+    let digits = |run: &[u8]| match kind(run) {
+        Kind::Wide { digits, at, len, spelled } => {
+            assert_eq!((at, len, spelled), (13, run.len(), false));
+            digits
+        }
+        other => panic!("{run:02x?} was read as {other:?}"),
+    };
+    assert_eq!(digits(&above), "170141183460469231731687303715884105728");
+    assert_eq!(digits(&below), "-170141183460469231731687303715884105729");
+    // A `uuid.UUID` is 128 bits, so whenever its top bit is set it goes out
+    // as sixteen bytes and the nought that says it is not negative.
+    let mut uuid = vec![0xff; 16];
+    uuid.push(0x00);
+    assert_eq!(digits(&uuid), "340282366920938463463374607431768211455");
+    // Two to the two hundredth, both signs, in the twenty-six bytes CPython
+    // writes it in.
+    let mut huge = vec![0x00; 25];
+    huge.push(0x01);
+    let mut down = vec![0x00; 25];
+    down.push(0xff);
+    assert_eq!(digits(&huge), "1606938044258990275541962092341162602522202993782792835301376");
+    assert_eq!(digits(&down), "-1606938044258990275541962092341162602522202993782792835301376");
+    // The widest run the opcode can declare.
+    let mut widest = vec![0x00; 254];
+    widest.push(0x01);
+    assert!(matches!(kind(&widest), Kind::Wide { len: 255, .. }));
+    // CPython writes no byte a number does not need, at any width, and a
+    // LONG1 of nothing is the integer nought, which is a BININT1 here.
+    for wrong in [&[][..], &[0xff, 0xff][..], &[0x01, 0x00][..]] {
+        assert!(recognise(&long1(wrong)).is_none(), "{wrong:02x?} was read");
+    }
+    let mut padded = most.clone();
+    padded.push(0x00);
+    padded.push(0x00);
+    assert!(recognise(&long1(&padded)).is_none());
+    let mut sign_padded = huge.clone();
+    sign_padded.push(0x00);
+    assert!(recognise(&long1(&sign_padded)).is_none());
+}

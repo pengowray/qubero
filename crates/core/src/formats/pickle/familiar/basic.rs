@@ -4,7 +4,7 @@
 //! productions in a file beside this one.
 
 use super::cursor::{Cursor, Framing};
-use super::values::{hashable, shortest, two_complement};
+use super::values::{decimal, hashable, minimal, two_complement};
 use super::memo::Bound;
 use super::{Kind, Pickler, Shape, Value, MAX_BATCH, MAX_DEPTH, MAX_VALUES};
 
@@ -539,13 +539,20 @@ impl Cursor<'_> {
             0x8a if self.proto >= 2 => {
                 let len = usize::from(self.byte()?);
                 let at = self.at;
-                let value = two_complement(self.take(len)?)?;
-                // Anything a four-byte integer holds is written as one, and
+                let run = self.take(len)?;
                 // CPython writes no byte a number does not need.
-                if i32::try_from(value).is_ok() || shortest(value) != len {
+                if !minimal(run) {
                     return None;
                 }
-                Kind::Int { value, at, len }
+                match two_complement(run) {
+                    // Anything a four-byte integer holds is written as one.
+                    Some(value) if i32::try_from(value).is_ok() => return None,
+                    Some(value) => Kind::Int { value, at, len },
+                    // Past sixteen bytes there is no integer type to read the
+                    // run as, so the number is its digits and the run is a row
+                    // beneath them.
+                    None => Kind::Wide { at, len, digits: decimal(run)?, spelled: false },
+                }
             }
             // A text line inside a binary protocol, which is what Python 2
             // wrote for an `int` too wide for BININT. Its `int` was a machine
@@ -576,11 +583,18 @@ impl Cursor<'_> {
             b'L' if self.proto <= 1 => {
                 let (at, len) = self.line()?;
                 let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?.strip_suffix('L')?;
-                let value = digits.parse::<i128>().ok()?;
-                if digits != value.to_string() || i32::try_from(value).is_ok() {
+                // CPython writes no leading zero and no plus in front of one.
+                if !super::lines::is_whole(digits) {
                     return None;
                 }
-                Kind::Int { value, at, len: len - 1 }
+                match digits.parse::<i128>() {
+                    Ok(value) if i32::try_from(value).is_ok() => return None,
+                    Ok(value) => Kind::Int { value, at, len: len - 1 },
+                    // More digits than the reader's integer type holds, which
+                    // is the same number `LONG1` writes in seventeen bytes or
+                    // more at the protocols above this one.
+                    Err(_) => Kind::Wide { at, len: len - 1, digits: digits.to_string(), spelled: true },
+                }
             }
             _ => return None,
         };

@@ -9,9 +9,9 @@ use super::{Kind, Names, Shape, Value, CONTENT, NO_OPCODE};
 
 /// A run of little-endian two's-complement bytes, as the number it spells.
 ///
-/// LONG1 declares a length of up to 255, which reaches numbers no integer
-/// type here holds. Sixteen bytes is where that stops, so a longer one is a
-/// non-match rather than a number read wrong.
+/// Sixteen bytes is as far as the reader's integer type reaches. A LONG1 may
+/// declare up to 255, and what is past sixteen is read by [`decimal`] as the
+/// digits it comes to instead of being read wrong.
 pub(super) fn two_complement(bytes: &[u8]) -> Option<i128> {
     if bytes.is_empty() || bytes.len() > 16 {
         return None;
@@ -23,16 +23,75 @@ pub(super) fn two_complement(bytes: &[u8]) -> Option<i128> {
     Some(value)
 }
 
-/// How many two's-complement bytes a number needs, which is how many CPython
-/// writes: it takes one more byte than the magnitude's bits fill and drops it
-/// again when the sign bits in it are redundant.
-pub(super) fn shortest(value: i128) -> usize {
-    (1..16)
-        .find(|len| {
-            let bits = len * 8 - 1;
-            value >= -(1i128 << bits) && value < (1i128 << bits)
-        })
-        .unwrap_or(16)
+/// Whether a run of two's-complement bytes is as short as its number needs,
+/// which is what `save_long` writes: one more byte than the magnitude's bits
+/// fill, dropped again when the sign bits in it are redundant.
+///
+/// Read off the top two bytes rather than worked out from the value, so the
+/// same rule holds at every width. The run is little-endian, so the last byte
+/// is the one that carries the sign.
+pub(super) fn minimal(bytes: &[u8]) -> bool {
+    match bytes {
+        [] => false,
+        [_] => true,
+        [.., next, top] => !((*top == 0x00 && *next < 0x80) || (*top == 0xff && *next >= 0x80)),
+    }
+}
+
+/// The digits a run of little-endian two's-complement bytes comes to.
+///
+/// What a number too wide for the reader's integer type is worth. A `uuid.UUID`
+/// is 128 bits and goes out as seventeen bytes whenever its top bit is set,
+/// since the seventeenth is the nought that says the number is not negative,
+/// and `2 ** 200` is twenty-six. The digits are worked out once as the form
+/// reads the run and kept beside the match, the way a protocol 0 line's value
+/// is: there is no integer type of that width for a leaf to be read as.
+///
+/// The magnitude is built up in base a thousand million, which is the largest
+/// power of ten two of them multiply inside a `u64`.
+pub(super) fn decimal(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() || bytes.len() > 255 {
+        return None;
+    }
+    let negative = bytes[bytes.len() - 1] & 0x80 != 0;
+    // Most significant byte first, and negated where the number is, since a
+    // magnitude is what the conversion below can take.
+    let mut magnitude: Vec<u8> = bytes.iter().rev().copied().collect();
+    if negative {
+        let mut carry = 1u16;
+        for byte in magnitude.iter_mut().rev() {
+            let sum = u16::from(!*byte) + carry;
+            *byte = sum as u8;
+            carry = sum >> 8;
+        }
+    }
+    let mut limbs: Vec<u32> = Vec::new();
+    for byte in magnitude {
+        let mut carry = u64::from(byte);
+        for limb in limbs.iter_mut() {
+            let sum = u64::from(*limb) * 256 + carry;
+            *limb = (sum % 1_000_000_000) as u32;
+            carry = sum / 1_000_000_000;
+        }
+        while carry > 0 {
+            limbs.push((carry % 1_000_000_000) as u32);
+            carry /= 1_000_000_000;
+        }
+    }
+    let mut out = String::new();
+    if negative {
+        out.push('-');
+    }
+    match limbs.pop() {
+        None => out.push('0'),
+        Some(top) => {
+            out.push_str(&top.to_string());
+            while let Some(limb) = limbs.pop() {
+                out.push_str(&format!("{limb:09}"));
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Whether a value may be a dictionary key or a set member.
@@ -42,7 +101,7 @@ pub(super) fn shortest(value: i128) -> usize {
 /// of any other kind is not something CPython could have been asked to write.
 pub(super) fn hashable(value: &Value) -> bool {
     match &value.kind {
-        Kind::None | Kind::Bool(_) | Kind::Int { .. } | Kind::Float { .. } => true,
+        Kind::None | Kind::Bool(_) | Kind::Int { .. } | Kind::Wide { .. } | Kind::Float { .. } => true,
         Kind::Text { .. } | Kind::Bytes { .. } | Kind::Spelled { .. } => true,
         // A name stands for whatever the slot holds, which hashes or does
         // not for the same reasons the thing itself does.

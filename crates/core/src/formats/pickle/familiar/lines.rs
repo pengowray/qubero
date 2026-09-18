@@ -108,7 +108,7 @@ fn is_itself(line: &[u8]) -> bool {
 /// Digits, with no leading zero unless the number is nought, no plus in front
 /// of it and nothing else. `repr` of an integer writes exactly this, and so
 /// does the `%ld` Python 2's `cPickle` writes.
-fn is_whole(digits: &str) -> bool {
+pub(super) fn is_whole(digits: &str) -> bool {
     let body = digits.strip_prefix('-').unwrap_or(digits);
     !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit()) && (body.len() == 1 || !body.starts_with('0'))
 }
@@ -237,8 +237,15 @@ impl Cursor<'_> {
         if !is_whole(digits) {
             return None;
         }
-        let value = digits.parse::<i128>().ok()?;
-        Some(self.span(start, Kind::Int { value, at, len: len - usize::from(long) }))
+        let len = len - usize::from(long);
+        // More digits than the reader's integer type holds, which is what a
+        // 128-bit `uuid.UUID` and `2 ** 200` both are. The number is its digits
+        // and the line is a row beneath them.
+        let kind = match digits.parse::<i128>() {
+            Ok(value) => Kind::Int { value, at, len },
+            Err(_) => Kind::Wide { at, len, digits: digits.to_string(), spelled: true },
+        };
+        Some(self.span(start, kind))
     }
 
     /// A `FLOAT` line, which is the number as Python spells it.

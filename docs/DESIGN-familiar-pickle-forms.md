@@ -58,8 +58,14 @@ section says what its neighbour does differently.
     `BININT2` for 256 to 65,535, `BININT` for the rest of a signed four-byte
     integer, and `LONG1` past that. A small number written in a wide field is
     a non-match. A `LONG1` run is two's complement, little-endian, and exactly
-    as long as the number needs, which is what `save_long` writes; up to
-    sixteen bytes, since that is what the reader's integer type holds.
+    as long as the number needs, which is what `save_long` writes, up to the
+    255 bytes the opcode can declare. Sixteen bytes is as far as the reader's
+    integer type reaches; past that the number is a node whose value is the
+    decimal digits it comes to, worked out once as the form reads the run,
+    with the run itself as a row beneath it. That is what a `uuid.UUID` is
+    whenever its top bit is set, since a 128-bit number takes a seventeenth
+    byte to say it is not negative, and what `2 ** 200` is. Protocols 0 and 1
+    write the same number as a line of digits and it is read the same way.
   - UTF-8 strings and byte strings with 1, 4 and 8-byte lengths, each with the
     memo mark that follows it. A string CPython wrote with `surrogatepass`,
     and so is not UTF-8, is a non-match.
@@ -436,8 +442,8 @@ stack; what changes is that every value is an opcode and a line.
 - **A class the file names**, unless its module is one a library form lists.
   See "The safety line for a library object" above: the rule did not go, it
   was written down.
-- **An integer past sixteen bytes**, and `LONG4`, which CPython writes only
-  past 2^2040. Neither is a number the reader has a type for.
+- **`LONG4`**, which CPython writes only past 2^2040. A `LONG1` declares up to
+  255 bytes and every width of it is read; nothing goes wider.
 - **A string that is not UTF-8**, which `surrogatepass` lets through.
 - **A file spelled by both picklers at once.** Each spelling below is one a
   real pickler writes, and a file was written by one pickler, so a file
@@ -700,8 +706,8 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, thirty-one files match today. The eleven `familiar-` files
-and the four `unfamiliar-` ones were written for this: the first half is plain
+Of the sibling corpus, thirty-two files match today. The twelve `familiar-` files
+and the three `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
 one half or the other.
@@ -728,9 +734,9 @@ one half or the other.
 | `familiar-numpy-large-p5.pickle` | `numpy-array-p4-p5-v6`: numbers too large to frame, so the boundary lands inside the call |
 | `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
 | `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
+| `familiar-huge-integer.pickle` | `basic-p4-p5-v5`: two to the two hundredth, which needs twenty-six bytes |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
 | `unfamiliar-optimized.pickle` | `pickletools.optimize` took the memo marks out |
-| `unfamiliar-huge-integer.pickle` | two to the two hundredth, which needs twenty-six bytes |
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
 | `proto2-everything.pickle` | calls `datetime`, `Decimal`, `Fraction`, `ValueError` and `_codecs.encode` |
 | `proto3-everything.pickle` | the same classes |

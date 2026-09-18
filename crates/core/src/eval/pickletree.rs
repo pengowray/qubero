@@ -296,6 +296,7 @@ impl Evaluator {
         let (at, len) = match key.kind {
             Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => (at, len),
             Kind::Int { value, .. } => return Ok(Some(value.to_string())),
+            Kind::Wide { ref digits, .. } => return Ok(Some(digits.clone())),
             _ => return Ok(None),
         };
         let bytes = self.read(doc, r, base + at as u64 * 8, len as u64 * 8)?;
@@ -337,6 +338,9 @@ impl Evaluator {
             let said = match &part {
                 Part::Value(v) => match &v.kind {
                     Kind::Class { path, .. } => Some(path.clone()),
+                    // A number too wide to be read as one: the digits are what
+                    // it is, and the run beneath it is how it was written.
+                    Kind::Wide { digits, .. } => Some(digits.clone()),
                     _ => None,
                 },
                 // An entry reads as what it holds. A fitted model is thirty
@@ -390,6 +394,19 @@ impl Evaluator {
             // of the value, and the row above holds the value itself.
             Part::Line(_) => {
                 let ty = T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Unknown);
+                Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
+            }
+            // The run a number too wide for any integer type was written in.
+            // The two's-complement bytes read as bytes, since no type here is
+            // that wide; the digits a protocol 0 or 1 line spells read as the
+            // text they are, and the number itself is the row above.
+            Part::Wide(v) => {
+                let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. });
+                let len = E::lit((end - at) as i128);
+                let ty = match spelled {
+                    true => T::text(StrLen::Fixed(len), Encoding::Ascii),
+                    false => T::bytes(len),
+                };
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
             }
             // The one byte of the envelope with something in it. PROTO is the

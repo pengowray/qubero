@@ -34,6 +34,10 @@ pub(super) const WRITTEN_FIELD: &str = "written as";
 /// What a protocol 0 line's own run is called, under the value it spells. The
 /// row above says what the string is; this one is the bytes the file holds.
 pub(super) const LINE_FIELD: &str = "line";
+/// The run a whole number too wide to be read as one sits in, under the digits
+/// it comes to. `line` where the file spelled the digits, which is what
+/// protocols 0 and 1 write, and this where it wrote two's-complement bytes.
+pub(super) const BYTES_FIELD: &str = "bytes";
 pub(super) const LATIN1_TEXT: &str = "latin-1 text";
 /// The same at protocol 0, where that text is written as a line and escaped
 /// again to fit on one.
@@ -103,6 +107,10 @@ pub(super) enum Part<'a> {
     /// The run a protocol 0 line spells its value in, read as the text it is.
     /// The value is on the node above, which is what the line spells.
     Line(&'a Value),
+    /// The run a whole number too wide for any integer type sits in: the
+    /// two's-complement bytes, or the digits where the file spelled them. The
+    /// number itself is on the node above.
+    Wide(&'a Value),
     /// A run of instructions the form matched as one act, and the array it
     /// rebuilt. The numbers are one of the call's arguments in NumPy's
     /// protocol 5 spelling and follow the call in its protocol 4 one, so the
@@ -200,6 +208,10 @@ pub(super) fn span(found: &Match, part: &Part) -> (usize, usize) {
             Kind::Spelled { at, len, .. } => (at, at + len),
             _ => (0, 0),
         },
+        Part::Wide(v) => match v.kind {
+            Kind::Wide { at, len, .. } => (at, at + len),
+            _ => (0, 0),
+        },
         Part::Call(c, _) => (c.at, c.at + c.len),
         Part::Protocol => (1, 2),
         Part::Op { at, len } => (*at, at + len),
@@ -256,6 +268,14 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             (notes, kids)
         }
         Part::Value(v) if matches!(v.kind, Kind::Spelled { .. }) => (Vec::new(), vec![(Label::Field(LINE_FIELD), Part::Line(v))]),
+        // A number no integer type is wide enough to read, with the run it was
+        // written in beneath it: the digits where the file spelled them, and
+        // the two's-complement bytes otherwise.
+        Part::Value(v) if matches!(v.kind, Kind::Wide { .. }) => {
+            let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. });
+            let name = if spelled { LINE_FIELD } else { BYTES_FIELD };
+            (Vec::new(), vec![(Label::Field(name), Part::Wide(v))])
+        }
         Part::Entry(e) => (
             Vec::new(),
             vec![(Label::Field(KEY_FIELD), Part::Value(&e.0)), (Label::Field(VALUE_FIELD), Part::Value(&e.1))],
@@ -469,6 +489,7 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Set(_) => Shape::Set,
             Kind::FrozenSet(_) => Shape::FrozenSet,
             Kind::Ref(_) => Shape::Ref,
+            Kind::Wide { .. } => Shape::Integer,
             Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
             Kind::Made { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,

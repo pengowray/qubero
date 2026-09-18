@@ -31,6 +31,19 @@ pub enum Kind {
         at: usize,
         len: usize,
     },
+    /// A whole number too wide for the integer type above, which is a `LONG1`
+    /// of more than sixteen bytes or a line of more digits than one holds.
+    /// `digits` is what it comes to, worked out once as the form reads the run;
+    /// `at`/`len` are the run, and `spelled` says that run is those digits
+    /// rather than the two's-complement bytes, which is what protocols 0 and 1
+    /// write. Nothing here is read back out of the file: no integer type is
+    /// that wide, so the number is a node with its run under it.
+    Wide {
+        at: usize,
+        len: usize,
+        digits: String,
+        spelled: bool,
+    },
     Float {
         value: f64,
         at: usize,
@@ -335,6 +348,9 @@ pub enum Shape {
     /// the bytes before the object, which say nothing about the object.
     Header,
     Dict,
+    /// A whole number no integer type here is wide enough to read, shown as
+    /// the digits it comes to with its run beneath it.
+    Integer,
     /// One key and one value of a dictionary, kept as the pair it is written
     /// as: two keys spelled alike are two entries, not one.
     Entry,
@@ -374,6 +390,7 @@ impl Shape {
             Shape::Doc => "pickle",
             Shape::Header => "header",
             Shape::Dict => "dict",
+            Shape::Integer => "integer",
             Shape::Entry => "entry",
             Shape::List => "list",
             Shape::Tuple => "tuple",

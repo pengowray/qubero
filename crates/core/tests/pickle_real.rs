@@ -606,14 +606,16 @@ fn the_forms_match_these_samples_and_no_others() {
         // saying what it names and where the file wrote it.
         ("familiar-shared-list.pickle", Some("basic-p4-p5-v5")),
         ("familiar-recursive-list.pickle", Some("basic-p4-p5-v5")),
+        // Two to the two hundredth, which LONG1 writes in twenty-six bytes.
+        // No integer type here is that wide, so the number is the digits it
+        // comes to with the run beneath them.
+        ("familiar-huge-integer.pickle", Some("basic-p4-p5-v5")),
         // An instance of a class the file names.
         ("unfamiliar-class-instance.pickle", None),
         // A valid program CPython did not write: `pickletools.optimize` drops
         // the memo marks, which no pickler does.
         ("unfamiliar-optimized.pickle", None),
-        // An integer past sixteen bytes, and a string that is not UTF-8
-        // because it holds half a surrogate pair.
-        ("unfamiliar-huge-integer.pickle", None),
+        // A string that is not UTF-8, because it holds half a surrogate pair.
         ("unfamiliar-lone-surrogate.pickle", None),
         // The rest, none of which any form accepts yet. The library files
         // need forms of their own, built from reviewed complete structures.

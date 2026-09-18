@@ -370,6 +370,33 @@ fn a_long_at_protocol_1_is_a_line_of_digits() {
     assert!(recognise(&older(1, b"L2147483648\n.")).is_none());
 }
 
+/// A line of more digits than the reader's integer type holds is the digits
+/// themselves, which is the same number LONG1 writes in seventeen bytes or
+/// more at the protocols above these two.
+#[test]
+fn a_long_line_past_the_integer_type_is_its_digits() {
+    const HUGE: &str = "1606938044258990275541962092341162602522202993782792835301376";
+    const MOST: &str = "170141183460469231731687303715884105727";
+    // Protocol 1, where the file starts at its first value.
+    let line = |digits: &str| older(1, &cat(&[b"L", digits.as_bytes(), b"L\n."]));
+    let widest = recognise(&line(MOST)).unwrap().value.kind;
+    assert_eq!(widest, Kind::Int { value: i128::MAX, at: 1, len: MOST.len() });
+    for digits in [HUGE, &format!("-{HUGE}"), "170141183460469231731687303715884105728", "-170141183460469231731687303715884105729"] {
+        let found = recognise(&line(digits)).unwrap_or_else(|| panic!("{digits} was not read"));
+        assert_eq!(found.value.kind, Kind::Wide { at: 1, len: digits.len(), digits: digits.to_string(), spelled: true });
+    }
+    // Protocol 0, where the same line sits in a container only that protocol
+    // writes, so the file is read under that form and not protocol 1's.
+    let body = cat(&[b"(lp0\nL", HUGE.as_bytes(), b"L\na."]);
+    let found = recognise(&body).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&body)));
+    assert_eq!(found.form, "basic-p0-v1");
+    let Kind::List(items) = &found.value.kind else { panic!("list expected") };
+    assert_eq!(items[0].kind, Kind::Wide { at: 6, len: HUGE.len(), digits: HUGE.to_string(), spelled: true });
+    // The spelling rules are the ones every line is held to.
+    assert!(recognise(&line(&format!("0{HUGE}"))).is_none());
+    assert!(recognise(&line(&format!("+{HUGE}"))).is_none());
+}
+
 /// Ordinary text is not a familiar form, whatever its bytes walk as.
 ///
 /// Protocol 0 and 1 files have no opener, so a form reading them cannot lean

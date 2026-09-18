@@ -76,6 +76,9 @@ impl Evaluator {
             Kind::None => Some("None".into()),
             Kind::Bool(b) => Some(if *b { "True" } else { "False" }.into()),
             Kind::Int { value, .. } => Some(value.to_string()),
+            // Worked out when the form read the run, since no integer type
+            // here is wide enough to read it back.
+            Kind::Wide { digits, .. } => Some(digits.clone()),
             Kind::Float { value, .. } => Some(value.to_string()),
             Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => Some(read(*at, *len, true)?),
             // A line that spells a value rather than being it reads as what
