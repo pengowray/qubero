@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::formats::pickle::familiar::{self, Call, Dtype, Kind, Match, Names, Said, Storage, Value};
+use crate::formats::pickle::familiar::{self, Call, Dtype, Kind, Match, Names, Said, Value};
 use crate::formats::pickle::shapes;
 use crate::template::{Cells, Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
@@ -44,11 +44,6 @@ const PROTOCOL_FIELD: &str = "protocol";
 /// `data` again: the object the file holds is already called that, and one
 /// name for two things is one thing a reader has to work out.
 const NUMBERS_FIELD: &str = "numbers";
-/// What the `numbers` row is called when the numbers are not in the file as
-/// numbers. Protocol 2 has no opcode for a byte string, so an array's values
-/// are written as the text they spell in latin-1, and the row shows that text
-/// rather than claiming the run is the values.
-const SPELLED_NUMBERS_FIELD: &str = "numbers as latin-1 text";
 const DTYPE_FIELD: &str = "dtype";
 const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
@@ -369,7 +364,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                 }
                 // The numbers, unless the call was handed them and holds them.
                 if !call.is_some_and(|c| inside(c, span(found, &Part::Data(v)).0)) {
-                    kids.push((Label::Field(numbers_field(v)), Part::Data(v)));
+                    kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
                 }
                 (notes, kids)
             }
@@ -526,15 +521,6 @@ fn leaf(value: &Value) -> Option<(T, usize, usize)> {
     })
 }
 
-/// What the row holding an array's values is called, which says whether the
-/// run is the values or the text they were written as.
-fn numbers_field(v: &Value) -> &'static str {
-    match v.kind {
-        Kind::Array { storage: Storage::Latin1, .. } => SPELLED_NUMBERS_FIELD,
-        _ => NUMBERS_FIELD,
-    }
-}
-
 /// The type a run of an array's values reads as: one element repeated by the
 /// shape, where an element is one number or, for a structured dtype, a record
 /// of named columns with the padding NumPy left between them named too.
@@ -627,12 +613,7 @@ impl Evaluator {
             }
         }
         let (_, Part::Data(v)) = here else { return None };
-        let Kind::Array { dimensions, fortran_order, storage, .. } = &v.kind else { return None };
-        // A protocol 2 array's run is the latin-1 spelling of its numbers, and
-        // a table of rows across it would be a table of the spelling.
-        if *storage == Storage::Latin1 {
-            return None;
-        }
+        let Kind::Array { dimensions, fortran_order, .. } = &v.kind else { return None };
         let inner = match (dimensions.len(), fortran_order) {
             (0, _) => return None,
             (1, _) => None,
@@ -853,17 +834,9 @@ impl Evaluator {
             // listing's business rather than the object's.
             Part::Protocol => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, at, end - at, false))),
             Part::Data(v) => {
-                let Kind::Array { dtype, dimensions, storage, .. } = &v.kind else { return fail("no such value") };
-                // Below protocol 3 the run is the latin-1 spelling of the
-                // numbers rather than the numbers, so it reads as the text it
-                // is. Nothing here decodes it: a row that showed numbers
-                // would be showing bytes the file does not hold.
-                let ty = match storage {
-                    Storage::Latin1 => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Utf8),
-                    Storage::Raw => match numbers_ty(dtype, count_of(dimensions)) {
-                        Some(ty) => ty,
-                        None => return fail("this dtype has no type"),
-                    },
+                let Kind::Array { dtype, dimensions, .. } = &v.kind else { return fail("no such value") };
+                let Some(ty) = numbers_ty(dtype, count_of(dimensions)) else {
+                    return fail("this dtype has no type");
                 };
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
             }
