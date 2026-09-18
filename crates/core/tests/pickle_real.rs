@@ -573,6 +573,10 @@ fn the_forms_match_these_samples_and_no_others() {
         ("familiar-huge-integer.pickle", Some("basic-p4-p5-v5")),
         // An instance of a class the file names.
         ("unfamiliar-class-instance.pickle", None),
+        // Packed dates beside one of those, which the one instance is enough
+        // to hold back: the file stays with the opcode listing, and the
+        // listing's own reading of the packed runs is what it tests.
+        ("unfamiliar-dates-beside-a-class.pickle", None),
         // A valid program CPython did not write: `pickletools.optimize` drops
         // the memo marks, which no pickler does.
         ("unfamiliar-optimized.pickle", None),
