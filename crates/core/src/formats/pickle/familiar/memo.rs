@@ -1,7 +1,7 @@
 //! The memo table: the slots a pickle files values in, and what a form is
 //! prepared to say each one holds. It is a type of its own so that a
 //! production asks it for a slot by name instead of indexing a vector, and so
-//! that the productions that write a slot are in one place.
+//! that the methods which read or write a slot are in one place.
 
 use super::cursor::Cursor;
 use super::MAX_MEMO;
