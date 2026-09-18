@@ -436,23 +436,24 @@ pub fn is_familiar(whole: &[u8]) -> bool {
 /// `NumpyArrayWrapper` for every array, commits the frame, and writes the
 /// array's bytes straight out, so the opcodes run out immediately after the
 /// BUILD that finished that object and the byte there is the padding count.
-/// Three things together, and each is cheap: the protocol opener, the walk
-/// ending after a BUILD with bytes still to come, and the wrapper's module
-/// named somewhere in what was walked.
+/// Three things together, and each is cheap: the protocol opener, the wrapper's
+/// module named among the opcodes walked, and the walk running out with bytes
+/// still to come. No ordinary pickle does the last of those, since a pickle is
+/// written to be read by something that stops at the full stop and `is_pickle`
+/// holds every file to that.
 ///
-/// For a file the window holds whole, the form has to match as well, which is
-/// the line [`is_familiar`] answers to: nothing is claimed on the strength of
-/// a name written inside a file.
+/// An array of objects stops the walk differently. joblib cannot write those
+/// bytes raw, so it pickles the array into the stream as a whole pickle of its
+/// own, and the walk stops at *that* file's STOP rather than at a byte which
+/// is not an opcode. Both are the opcodes running out early, and both are
+/// this.
 pub(super) fn is_joblib(head: &[u8], len: u64) -> bool {
     if !matches!(head, [0x80, 2..=5, ..]) {
         return false;
     }
     let ops = opcodes(head);
-    let stopped_at_a_build = ops.last().is_some_and(|op| op.code == b'b' && (op.end as usize) < head.len());
-    if !stopped_at_a_build || !ops.iter().any(names_wrapper) {
-        return false;
-    }
-    head.len() as u64 != len || familiar::recognise(head).is_some()
+    let ran_out = ops.last().is_some_and(|op| (op.end as usize) < head.len() || (op.code != b'.' && head.len() as u64 != len));
+    ran_out && ops.iter().any(names_wrapper)
 }
 
 /// Whether this instruction names the module joblib puts its array wrapper

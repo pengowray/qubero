@@ -1464,6 +1464,8 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         ("dict-of-arrays-gzip.joblib", None, "gzip"),
         ("dict-of-arrays-bz2.joblib", None, "bzip2"),
         ("dict-of-arrays-xz.joblib", None, "xz"),
+        // Raw LZMA, which is the same coder with no container round it.
+        ("dict-of-arrays-lzma.joblib", None, "lzma"),
     ];
     let mut seen = Vec::new();
     for path in joblibs(&dir) {
@@ -1543,7 +1545,7 @@ fn a_compressed_joblib_file_opens_as_the_joblib_file_it_holds() {
         return;
     };
     let plain = std::fs::read(dir.join("dict-of-arrays.joblib")).unwrap();
-    for name in ["dict-of-arrays-zlib.joblib", "dict-of-arrays-gzip.joblib", "dict-of-arrays-bz2.joblib", "dict-of-arrays-xz.joblib", "dict-of-arrays-compress-true.joblib"] {
+    for name in ["dict-of-arrays-zlib.joblib", "dict-of-arrays-gzip.joblib", "dict-of-arrays-bz2.joblib", "dict-of-arrays-xz.joblib", "dict-of-arrays-lzma.joblib", "dict-of-arrays-compress-true.joblib"] {
         let bytes = std::fs::read(dir.join(name)).unwrap();
         let window = &bytes[..bytes.len().min(0x9000)];
         let template = formats::sniff(window, bytes.len() as u64).unwrap_or_else(|| panic!("{name}: not recognised"));
