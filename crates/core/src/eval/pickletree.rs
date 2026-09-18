@@ -49,10 +49,12 @@ const VALUE_FIELD: &str = "value";
 /// named them here rather than writing them again. The row carries what is at
 /// the other end, since the reference itself is two bytes that say nothing.
 const REFERS_FIELD: &str = "refers to";
-/// How much of a named string or byte string the row above shows. A repeated
-/// dictionary key is a word or two; anything longer is cut here rather than
-/// filling a row that is meant to be read at a glance.
-const MOST_SHOWN: usize = 120;
+/// How much of what a reference names the `refers to` row shows. A repeated
+/// dictionary key is a word or two; anything longer is cut rather than filling
+/// a row meant to be read at a glance. Fewer bytes than characters, because a
+/// byte string is shown in hex and takes three columns a byte.
+const MOST_SHOWN_TEXT: usize = 120;
+const MOST_SHOWN_BYTES: usize = 32;
 /// The storage orders, spelled the way NumPy spells them.
 const C_ORDER: &str = "C";
 const FORTRAN_ORDER: &str = "Fortran";
@@ -525,7 +527,7 @@ impl Evaluator {
             // inside the reference, which is only the BINGET.
             Part::Refers(v) => {
                 let Kind::Ref { at, len, text } = v.kind else { return fail("no such value") };
-                let read = len.min(MOST_SHOWN);
+                let read = len.min(if text { MOST_SHOWN_TEXT } else { MOST_SHOWN_BYTES });
                 let bytes = self.read(doc, &whole, base + at as u64 * 8, read as u64 * 8)?;
                 self.pickle_note(path, &pr, name, shown(&bytes, text, len))
             }
