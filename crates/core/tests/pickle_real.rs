@@ -565,18 +565,18 @@ fn the_forms_match_these_samples_and_no_others() {
     // The whole corpus as it stands, with the form each file matches. Keep
     // this in step with the collection: a file added to it belongs here.
     let want: &[(&str, Option<&str>)] = &[
-        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v3")),
-        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v3")),
+        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v4")),
+        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v4")),
         // A dictionary whose big value is written between two frames.
-        ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v3")),
-        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v3")),
+        ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v4")),
+        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v4")),
         // Several arrays in one dictionary, the later ones naming numpy's
         // globals, dtype class, byte order or whole dtype out of the memo.
-        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v3")),
-        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v3")),
-        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v3")),
-        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v3")),
-        ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v1")),
+        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v2")),
         // The rest, none of which any form accepts yet. Some are grammar the
         // forms have not reached (nonempty tuples, big integers, shared
         // container references, more than one batch); the library files need
