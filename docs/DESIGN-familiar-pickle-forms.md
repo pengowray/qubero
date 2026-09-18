@@ -112,10 +112,14 @@ form whose productions it uses, and a file mixing two of them matches neither.
 
 All three forms accept protocol 4/5. They require STOP followed immediately by
 EOF. The matcher uses borrowed byte ranges, a 64-level bound on how deep a
-captured value may be and on how many marks may be open at once, a bound of
-100,000 memo slots and a stack, and a budget of 100,000 opcodes shared across
-all three attempts, so an alternative that failed still cost what it cost. No
-Python or new runtime dependency was introduced.
+captured value may be and on how many marks may be open at once, a bound of a
+million memo slots and a million things on the stack, and a budget of a million
+opcodes shared across all three attempts, so an alternative that failed still
+cost what it cost. The budget was a hundred thousand up to the fourth slice and
+could be raised because the pass no longer backtracks over a container: work is
+now linear in the file, and the number is what a real file needs rather than
+what a hostile one might cost. No Python or new runtime dependency was
+introduced.
 
 ### What stays a non-match, and why
 
@@ -271,8 +275,8 @@ that grew without anyone saying so fails on one half or the other.
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
 | `proto2-everything.pickle` | calls `datetime`, `Decimal`, `Fraction`, `ValueError` and `_codecs.encode` |
 | `proto3-everything.pickle` | the same classes |
-| `proto4-everything.pickle` | the same classes |
-| `proto5-everything.pickle` | the same classes, plus EMPTY_SET/ADDITEMS and BYTEARRAY8 |
+| `proto4-everything.pickle` | stopped first at byte 93, a LONG1 of 26 bytes holding two to the two hundredth; then the same classes, and one list under two keys |
+| `proto5-everything.pickle` | the same, at the same byte |
 | `proto4-collections.pickle` | OrderedDict, defaultdict, Counter, deque, and NEWOBJ of a class the writing file defined |
 | `proto4-datetime.pickle` | packed `datetime` records |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
