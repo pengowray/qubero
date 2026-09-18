@@ -862,7 +862,7 @@ type Chunk (named by id, contents body) {
           }
           _ => bytes[remaining]
         }
-      }
+      }  valid finite
           table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
               column word channel, named [left, right], describes
               [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
@@ -1727,7 +1727,7 @@ type ChunkBE = Chunk (named by id, contents body) {
           }
           _ => bytes[remaining]
         }
-      }
+      }  valid finite
           table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
               column word channel, named [left, right], describes
               [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
