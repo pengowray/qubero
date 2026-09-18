@@ -4040,6 +4040,65 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   cursor: default;
 }
+/* The export form hangs under its button, over the table, and is put away by
+   a click anywhere else. */
+.tbl-export {
+  position: relative;
+}
+.tbl-export-form {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: min(28rem, 90vw);
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+}
+.tbl-export-form[hidden] {
+  display: none;
+}
+.tbl-export-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.tbl-export-group[hidden] {
+  display: none;
+}
+.tbl-export-group legend {
+  padding: 0;
+  margin-block-end: 2px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.tbl-export-choice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.tbl-export-choice.is-off,
+.tbl-export-choice:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+.tbl-export-size {
+  margin: 0;
+  color: var(--muted);
+}
+.tbl-export-save {
+  align-self: flex-end;
+}
 .tbl-headline,
 .tbl-row {
   display: grid;

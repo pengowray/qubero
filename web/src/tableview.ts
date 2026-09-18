@@ -43,6 +43,7 @@ import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { bitSizeText, PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
+import { TableExportPanel } from "./tableexportpanel.ts";
 import { canTurn, FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, startsTurned, timeText, timeWidth, TURN_MAX, turnsByDefault, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 import { headerCells, leadKinds, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
 
@@ -151,6 +152,7 @@ export class TableView {
   private anchor: number | null = null;
   private focus: number | null = null;
   private readonly copyButton: HTMLButtonElement;
+  private readonly exporter: TableExportPanel;
   private readonly notice: HTMLElement;
   private noticeTimer = 0;
   /** True while a pick this view made is being sent out, so the cursor move it
@@ -183,6 +185,22 @@ export class TableView {
     this.copyButton = el("button", { type: "button", className: "tbl-copy" });
     this.copyButton.addEventListener("click", () => void this.copySelection());
     this.notice = el("div", { className: "tbl-notice", hidden: true });
+    // A save reads the plan rather than the rows this view keeps: the view
+    // keeps every row it has drawn, and a save of a few million would leave
+    // them all here.
+    this.exporter = new TableExportPanel({
+      file: doc.name,
+      table: opts.title,
+      rowWord: plan.rowWord,
+      count: plan.count,
+      headings: () => this.columns.map((_, c) => this.headingOf(c)),
+      lead: () => this.lead,
+      turned: () => this.turned,
+      selected: () => this.range(),
+      row: (i) => plan.row(i),
+      release: () => plan.forget(),
+      say: (text) => this.say(text),
+    });
     this.el.append(this.bar(opts.title), this.scroller, this.notice);
     this.refreshCopy();
     this.columns = plan.columns.map((_, c) => ({
@@ -238,7 +256,7 @@ export class TableView {
       this.layAgain();
     });
     // The controls sit together at the far end, away from the facts.
-    bar.append(el("div", { className: "tbl-controls" }, turnLabel, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton));
+    bar.append(el("div", { className: "tbl-controls" }, turnLabel, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton, this.exporter.el));
     return bar;
   }
 
@@ -763,7 +781,7 @@ export class TableView {
     const range = this.range();
     const n = range === null ? 0 : range.to - range.from;
     this.copyButton.disabled = n === 0;
-    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n, this.turned ? TABLE.rowFallback : this.plan.rowWord);
+    this.copyButton.textContent = n === 0 ? TABLE.copy : TABLE.copyRows(n);
     this.copyButton.title = n === 0 ? TABLE.copyTitleNone : TABLE.copyTitle;
   }
 
@@ -913,7 +931,7 @@ export class TableView {
     } catch {
       return this.say(TABLE.copyFailed);
     }
-    this.say(TABLE.copied(n, this.turned ? TABLE.rowFallback : this.plan.rowWord));
+    this.say(TABLE.copied(n));
   }
 
   /** A message about something the reader just asked for, which goes away on

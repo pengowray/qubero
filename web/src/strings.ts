@@ -700,25 +700,62 @@ export const TABLE = {
   columnMeaning: (rowWord: string, columnWord: string, rate: string): string =>
     `Each column is one ${rowWord} of each ${columnWord}, 1/${rate} s apart.`,
   columnMeaningPlain: (rowWord: string, rate: string): string => `Each column is one ${rowWord}, 1/${rate} s apart.`,
-  /** What a copy counts in a turned table, where the rows on screen are not
-   *  the format's rows and its word for them would be the wrong word. */
-  rowFallback: "row",
   /** The checkbox that adds them. "byte" rather than "file": inside an
    *  unpacked stream the addresses are of the stream, and what is true of both
    *  is that they are addresses of bytes. */
   addresses: "Show byte addresses",
-  /** The copy button. It names how many rows it will copy, which is the one
-   *  thing the reader wants to know before pressing it; with nothing selected
-   *  it is disabled and says only what it is. */
-  copy: "Copy",
-  copyRows: (n: number, rowWord: string): string => `Copy ${countText(n, rowWord)}`,
-  copyTitle: "Copy the selected rows as tab-separated text (Ctrl+C)",
+  /**
+   * The copy button. It copies the rows that are selected, so that is what it
+   * says, with how many: `Copy 3 selected rows`. It said `Copy 1 item`, in
+   * the format's word for a row, which read as one item of something going to
+   * the clipboard and left out that the selection decides which. `rows` is
+   * what is highlighted on screen, whichever way round the table is drawn.
+   * With nothing selected it is disabled and still says what it would copy.
+   */
+  copy: "Copy selected rows",
+  copyRows: (n: number): string => (n === 1 ? "Copy selected row" : `Copy ${n.toLocaleString()} selected rows`),
+  copyTitle: "Copy the selected rows to the clipboard as tab-separated text, with their headings (Ctrl+C)",
   copyTitleNone: "Select rows to copy them as tab-separated text",
-  copied: (n: number, rowWord: string): string => `Copied ${countText(n, rowWord)} as tab-separated text.`,
+  copied: (n: number): string => `Copied ${countText(n, "row")} as tab-separated text.`,
   copyTooBig: (n: number, limit: number): string =>
     `Selection too large to copy: ${n.toLocaleString()} rows, limit ${limit.toLocaleString()}.`,
   copyPending: "Rows are still loading. Try again in a moment.",
   copyFailed: "Couldn't copy to the clipboard.",
+  /**
+   * Saving the table as a file. The button opens a short form rather than
+   * saving at once, because there are three things to say first and none of
+   * them has an answer that suits everybody: how much of the table, which
+   * format, and, for a table drawn turned, which way round.
+   */
+  exportOpen: "Export...",
+  exportOpenTitle: "Save the table, or the selected rows, as a CSV, TSV or JSON file",
+  exportStop: "Stop export",
+  exportWhat: "Export",
+  exportAll: "Whole table",
+  exportSelected: (n: number): string => `Selected ${n === 1 ? "row" : "rows"} only (${n.toLocaleString()})`,
+  exportSelectedNone: "Selected rows only (none selected)",
+  exportFormat: "Format",
+  /**
+   * Which way round the file is written, asked only of a table drawn turned:
+   * the right way up there is nothing to ask. The file is one record to a row
+   * unless the reader says otherwise, since that is the way a script or a
+   * spreadsheet import expects a table, and the way it stays however the
+   * table happens to be drawn.
+   */
+  exportLayout: "Layout",
+  exportByRow: (rowWord: string): string => `One ${rowWord} per row`,
+  exportAsShown: (rowWord: string): string => `One ${rowWord} per column, as shown`,
+  exportJsonLayout: (rowWord: string): string => `JSON is always written as one object per ${rowWord}`,
+  /** How big the file will be, said before the reader commits to it. */
+  exportSize: (rows: number, columns: number): string =>
+    `Writes ${countText(rows, "row")} of ${countText(columns, "column")}, under one heading row.`,
+  exportSizeShown: (rows: number, columns: number): string => `Writes ${countText(rows, "row")} of ${countText(columns, "column")}, as shown.`,
+  exportSizeJson: (rows: number, rowWord: string): string => `Writes ${countText(rows, "object")}, one per ${rowWord}.`,
+  exportSave: "Save file",
+  exportProgress: (done: number, total: number): string => `Exporting row ${done.toLocaleString()} of ${total.toLocaleString()}...`,
+  exported: (rows: number, format: string): string => `Exported ${countText(rows, "row")} as ${format}.`,
+  exportStopped: "Export stopped.",
+  exportFailed: (message: string): string => `Couldn't export: ${message}`,
 } as const;
 
 /**
