@@ -318,6 +318,9 @@ impl Evaluator {
         };
         Some(crate::template::TableShape {
             columns: inner.filter(|n| *n > 0).map(|n| E::lit(n as i128)),
+            // Several numbers to a row is a row. One to a row is a value,
+            // which is what the table calls it when it is told nothing.
+            row_word: inner.map(|_| "row".into()),
             ..Default::default()
         })
     }
