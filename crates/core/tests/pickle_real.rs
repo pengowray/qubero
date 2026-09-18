@@ -666,6 +666,49 @@ fn the_forms_match_these_samples_and_no_others() {
     }
 }
 
+/// The same objects as ten environments wrote them, from Python 2.7 to 3.14
+/// and numpy 1.19 to 2.5, at every protocol each has: `pickle-matrix/` in the
+/// collection, where a file is kept once under the oldest environment that
+/// wrote those bytes.
+///
+/// A rule rather than a list, since the rule is what the forms claim: plain
+/// data and numpy arrays match at protocol 4 and 5 whoever wrote them, and
+/// nothing else matches at all. Not the older protocols, which the forms do
+/// not take yet, and not pandas, scikit-learn or scipy, which have no form. A
+/// library file that starts matching is a form that grew without being asked.
+#[test]
+fn the_forms_match_every_environment_s_plain_data_and_arrays() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let mut environments: Vec<PathBuf> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    environments.sort();
+    assert!(environments.len() >= 10, "only {} environments under {}", environments.len(), root.display());
+    let (mut matched, mut wrong) = (0, Vec::new());
+    for dir in &environments {
+        for path in pickles(dir) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let modern = name.ends_with(".p4.pickle") || name.ends_with(".p5.pickle");
+            let expected = match name.split('-').next() {
+                Some("basic") if modern => Some("basic-p4-p5-v4"),
+                Some("numpy") if modern => Some("numpy-numeric-array-p4-p5-v4"),
+                _ => None,
+            };
+            let bytes = std::fs::read(&path).unwrap();
+            let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
+            match form == expected {
+                true => matched += usize::from(form.is_some()),
+                false => wrong.push(format!("{}/{name}: {form:?}, not {expected:?}", dir.file_name().unwrap().to_string_lossy())),
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} files:\n  {}", wrong.len(), wrong.join("\n  "));
+    // Fewer than were written, since the same bytes from two environments are
+    // kept once, and enough to know the folder was not empty.
+    assert!(matched >= 40, "only {matched} files matched a form");
+}
+
 /// A matched sample stops being that file when any instruction byte changes.
 ///
 /// A form fixes its instructions, so a byte of one that could be changed
