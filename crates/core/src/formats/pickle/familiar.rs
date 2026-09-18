@@ -562,6 +562,22 @@ impl<'a> Cursor<'a> {
         (self.take(expected.len())? == expected).then_some(())
     }
 
+    /// A run of fixed bytes in which each piece is an object of its own.
+    ///
+    /// CPython's framer ends a frame at the start of every `save`, and a
+    /// value inside a fixed run, such as the `(0,)` a NumPy array is
+    /// reconstructed with or the eight values a dtype's state holds, is a
+    /// `save` like any other. So a frame may end in front of any of these
+    /// pieces, and the boundary is taken before each one rather than only
+    /// before the run.
+    fn atoms(&mut self, pieces: &[&[u8]]) -> Option<()> {
+        for piece in pieces {
+            self.gate()?;
+            self.exact(piece)?;
+        }
+        Some(())
+    }
+
     fn save(&self) -> Save {
         Save {
             at: self.at,
@@ -683,6 +699,7 @@ impl<'a> Cursor<'a> {
     /// SHORT_BINUNICODE with exactly this spelling, and the memo mark that
     /// files it. Comes back as the bytes the word sits in.
     fn word(&mut self, text: &str) -> Option<(usize, usize)> {
+        self.gate()?;
         self.exact(&[0x8c, u8::try_from(text.len()).ok()?])?;
         let at = self.at;
         self.exact(text.as_bytes())?;
@@ -694,6 +711,7 @@ impl<'a> Cursor<'a> {
     /// A reference has no bytes of its own to read as text, so it comes back
     /// as nothing to name and the BINGET stays an instruction.
     fn word_or_reference(&mut self, text: &str) -> Option<Option<(usize, usize)>> {
+        self.gate()?;
         if self.at_reference() {
             let here = self.save();
             let held = self.reference().cloned();
@@ -721,6 +739,7 @@ impl<'a> Cursor<'a> {
         // A slot holding this exact module and callable stands for the pair.
         // Any other reference here is the module name on its own, which the
         // spelled-out production below reads.
+        self.gate()?;
         if self.at_reference() {
             let here = self.save();
             if let Some(Bound::Global(full)) = self.reference().cloned() {
@@ -1062,6 +1081,7 @@ impl<'a> Cursor<'a> {
     /// Each range belongs to exactly one of them, so a small number written
     /// in a wide field is a non-match.
     fn integer(&mut self) -> Option<Value> {
+        self.gate()?;
         let start = self.at;
         let kind = match self.byte()? {
             b'K' => Kind::Int { value: i128::from(self.byte()?), at: start + 1, len: 1 },
@@ -1103,6 +1123,7 @@ impl<'a> Cursor<'a> {
     /// one that holds itself, is a non-match rather than a value with no
     /// bytes of its own.
     fn named(&mut self) -> Option<Value> {
+        self.gate()?;
         let start = self.at;
         let kind = match self.reference()?.clone() {
             Bound::Text { at, len } => Kind::Ref { at, len, text: true },
@@ -1119,6 +1140,7 @@ impl<'a> Cursor<'a> {
         if self.proto < 5 {
             return None;
         }
+        self.gate()?;
         let start = self.at;
         self.exact(&[0x96])?;
         let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
@@ -1138,6 +1160,7 @@ impl<'a> Cursor<'a> {
     /// TUPLE1 to TUPLE3 for one to three, and MARK..TUPLE past that. Only the
     /// counted tuples carry a memo mark; CPython never files an empty one.
     fn dimensions(&mut self) -> Option<Vec<u64>> {
+        self.gate()?;
         if self.peek()? == b')' {
             self.byte()?;
             return Some(Vec::new());
@@ -1146,6 +1169,7 @@ impl<'a> Cursor<'a> {
         if marked {
             self.byte()?;
         }
+        self.gate()?;
         let mut dims = Vec::new();
         loop {
             if dims.len() == MAX_DIMENSIONS {
@@ -1179,6 +1203,7 @@ impl<'a> Cursor<'a> {
         // A slot holding a finished dtype stands for the whole construction.
         // Any other reference here is the module name of the `numpy.dtype`
         // class, which the construction itself reads.
+        self.gate()?;
         if self.at_reference() {
             let here = self.save();
             if let Some(Bound::Dtype(dtype)) = self.reference().cloned() {
@@ -1188,6 +1213,7 @@ impl<'a> Cursor<'a> {
         }
         self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
         let (kind_at, kind_len) = {
+            self.gate()?;
             self.exact(&[0x8c])?;
             let len = self.byte()? as usize;
             let at = self.at;
@@ -1207,15 +1233,17 @@ impl<'a> Cursor<'a> {
         self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
         // NEWFALSE NEWTRUE TUPLE3, the two flags every plain dtype is built
         // with, and then the call that makes it.
-        self.exact(b"\x89\x88\x87")?;
+        self.atoms(&[b"\x89", b"\x88"])?;
+        self.exact(b"\x87")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         let slot = self.memoize(Bound::Opaque)?;
         // The state the BUILD sets: version 3, the byte order, three Nones,
         // no field offsets, and an alignment of zero.
-        self.exact(b"(K\x03")?;
+        self.atoms(&[b"(", b"K\x03"])?;
         let order = self.byte_order(kind.as_str())?;
-        self.exact(b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t")?;
+        self.atoms(&[b"N", b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", b"K\0"])?;
+        self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"b")?;
         let dtype = format!("{order}{kind}");
@@ -1227,6 +1255,7 @@ impl<'a> Cursor<'a> {
     /// here or referred to where it was spelled. A single-byte dtype has no
     /// order and says so with `|`.
     fn byte_order(&mut self, kind: &str) -> Option<char> {
+        self.gate()?;
         let (at, len) = if self.at_reference() {
             let here = self.save();
             match self.reference().cloned() {
@@ -1257,6 +1286,7 @@ impl<'a> Cursor<'a> {
 
     /// The bytes an array's numbers sit in, checked against its shape.
     fn numbers(&mut self, dtype: &str, dimensions: &[u64]) -> Option<(usize, usize, Payload)> {
+        self.gate()?;
         let code = self.byte()?;
         let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
         let payload = self.fits(dtype, dimensions, len)?;
@@ -1308,7 +1338,8 @@ impl<'a> Cursor<'a> {
         }
         const MODULES: &[&str] = &["numpy._core.numeric", "numpy.core.numeric"];
         self.global(MODULES, "_frombuffer", "module", "callable")?;
-        self.exact(b"(")?;
+        self.atoms(&[b"("])?;
+        self.gate()?;
         let code = self.byte()?;
         let (at, len) = match code {
             0x96 => self.counted(code, NO_OPCODE, NO_OPCODE, 0x96)?,
@@ -1362,8 +1393,10 @@ impl<'a> Cursor<'a> {
         self.global(&["numpy"], "ndarray", "class module", "class")?;
         // The placeholder the reconstructor is given: shape (0,) and a dtype
         // letter, both replaced by the BUILD that follows.
-        self.exact(b"K\0\x85")?;
+        self.atoms(&[b"K\0"])?;
+        self.exact(b"\x85")?;
         self.memoize(Bound::Opaque)?;
+        self.gate()?;
         if self.at_reference() {
             match self.reference().cloned() {
                 Some(Bound::Bytes { at, len: 1 }) if self.bytes.get(at) == Some(&b'b') => {}
@@ -1378,9 +1411,10 @@ impl<'a> Cursor<'a> {
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         self.memoize(Bound::Opaque)?;
-        self.exact(b"(K\x01")?;
+        self.atoms(&[b"(", b"K\x01"])?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
+        self.gate()?;
         let fortran_order = match self.byte()? {
             0x89 => false,
             0x88 => true,
@@ -1465,7 +1499,7 @@ impl<'a> Cursor<'a> {
                     });
                 }
                 if arity == 0 {
-                    self.exact(b")")?;
+                    self.atoms(&[b")"])?;
                 } else {
                     self.exact(&[0x84 + arity as u8])?;
                     self.memoize(Bound::Opaque)?;
@@ -1487,6 +1521,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn int_or_none(&mut self) -> Option<Value> {
+        self.gate()?;
         if self.peek()? == b'N' {
             let start = self.at;
             self.byte()?;
@@ -1496,6 +1531,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn binfloat(&mut self) -> Option<Value> {
+        self.gate()?;
         let start = self.at;
         self.exact(b"G")?;
         let value = f64::from_be_bytes(self.take(8)?.try_into().ok()?);
@@ -1503,6 +1539,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn byte_string(&mut self) -> Option<Value> {
+        self.gate()?;
         let start = self.at;
         let code = self.byte()?;
         let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
@@ -2649,6 +2686,58 @@ mod tests {
         early_stop.extend_from_slice(&((body.len() - 1) as u64).to_le_bytes());
         early_stop.extend_from_slice(&body);
         assert!(recognise(&early_stop).is_none(), "a frame that ends before the STOP");
+    }
+
+    /// A file in two frames, split at `at` bytes into the body.
+    fn in_two_frames(body: &[u8], at: usize) -> Vec<u8> {
+        let mut out = vec![0x80, 4, 0x95];
+        out.extend_from_slice(&(at as u64).to_le_bytes());
+        out.extend_from_slice(&body[..at]);
+        out.push(0x95);
+        out.extend_from_slice(&((body.len() - at) as u64).to_le_bytes());
+        out.extend_from_slice(&body[at..]);
+        out
+    }
+
+    /// A frame ends in front of an object and nowhere else, and the fixed run
+    /// that rebuilds a NumPy array is full of objects.
+    ///
+    /// CPython's framer commits a frame at the start of every `save`, so in
+    /// any file over 64 KiB the boundary lands wherever the writer happened
+    /// to be: in front of the dtype, in front of one of the eight values its
+    /// state holds, in front of a dimension, in front of the numbers. A form
+    /// that only looked for a boundary between one value of the file and the
+    /// next read none of those files at all.
+    #[test]
+    fn a_frame_may_end_in_front_of_anything_a_call_was_given() {
+        let body = two_arrays(&get(17));
+        let whole = framed(&body);
+        assert!(recognise(&whole).is_some());
+        // Each of these is a place inside the run of instructions that
+        // rebuilds an array, named by the bytes it begins with.
+        for (what, opens) in [
+            ("the reconstructor's module", &b"\x8c\x16numpy"[..]),
+            ("the placeholder shape", b"K\0\x85\x94"),
+            ("the placeholder byte string", b"C\x01b\x94"),
+            ("the state tuple", b"(K\x01"),
+            ("the first dimension", b"K\x01K\x02\x85\x94"),
+            ("the dtype class's module", b"h\x05\x8c\x05dtype"),
+            ("the dtype's letters", b"\x8c\x02i1\x94"),
+            ("the flags the dtype is built with", b"\x89\x88\x87\x94R\x94"),
+            ("the byte order", b"\x8c\x01|\x94NNN"),
+            ("the first of the state's Nones", b"NNNJ"),
+            ("the alignment", b"K\0t\x94b\x89C\x02"),
+            ("the storage order flag", b"\x89C\x02\x01\x02\x94"),
+            ("the numbers", b"C\x02\x01\x02\x94"),
+            ("the second array's dtype", b"h\x11\x89"),
+        ] {
+            let at = body.windows(opens.len()).position(|w| w == opens).unwrap_or_else(|| panic!("no {what}"));
+            assert!(recognise(&in_two_frames(&body, at)).is_some(), "a frame ending before {what}");
+        }
+        // And nowhere else: a frame that ends in the middle of an object is
+        // not something the framer ever writes.
+        let at = body.windows(4).position(|w| w == b"\x8c\x02i1").unwrap() + 2;
+        assert!(recognise(&in_two_frames(&body, at)).is_none(), "a frame ending inside a word");
     }
 
     /// The builtins a pickle writes as a call: what each one accepts, and what

@@ -182,6 +182,23 @@ boundary, a large one inside a frame, a frame reaching past the end of the
 file, and a frame that ends anywhere else with no large payload behind it, are
 all non-matches.
 
+Where a boundary may fall is the part that is easy to get wrong, and the fifth
+slice got it wrong until it was measured. CPython commits a frame at the start
+of every `save`, and a value inside a fixed run is a `save` like any other. The
+run that rebuilds a NumPy array holds thirty of them: the module word, the
+callable word, the placeholder shape, the placeholder byte string, each
+dimension, the dtype's letters, the two flags it is built with, the byte order,
+each of the eight values of its state, the storage-order flag and the numbers.
+So a frame may end in front of any of those, and in any file over 64 KiB one
+does. The forms now take the boundary in front of each rather than only between
+one value of the file and the next, which is what
+`familiar-numpy-large-p5.pickle` and the `a_frame_may_end_in_front_of_anything`
+test are for. The opcodes that are not a `save` are REDUCE, BUILD,
+STACK_GLOBAL, MEMOIZE and the opcodes that fold: no frame ends in front of
+those. The one place the reading is looser than the writer is the MARK that
+opens a batch, which is written before the `save` that follows it rather than
+by one, and where a boundary is accepted although CPython never puts one.
+
 ### What is exposed now
 
 `recognise` hands back a capture tree in which every node carries the bytes its
@@ -242,8 +259,8 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, sixteen files match today, nine of which did before this
-slice. The seven `familiar-` files and the seven `unfamiliar-` ones were
+Of the sibling corpus, seventeen files match today, nine of which did before
+this slice. The eight `familiar-` files and the seven `unfamiliar-` ones were
 written for this: the first half is plain data written the ordinary way and the
 second half is pickles Python loads and a form must still refuse, so a form
 that grew without anyone saying so fails on one half or the other.
@@ -266,6 +283,7 @@ that grew without anyone saying so fails on one half or the other.
 | `proto4-numpy-dtypes.pickle` | `numpy-numeric-array-p4-p5-v4` |
 | `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v4`, including a scalar |
 | `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v4` |
+| `familiar-numpy-large-p5.pickle` | `numpy-numeric-array-p4-p5-v4`: numbers too large to frame, so the boundary lands inside the call |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
 | `unfamiliar-shared-list.pickle` | one list under two keys, named the second time |
 | `unfamiliar-recursive-list.pickle` | a list holding itself |

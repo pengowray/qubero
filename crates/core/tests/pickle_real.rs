@@ -592,6 +592,10 @@ fn the_forms_match_these_samples_and_no_others() {
         // Below protocol 5 a bytearray is a call to the class, which is the
         // other form.
         ("familiar-bytearray-p4.pickle", Some("builtins-values-p4-p5-v2")),
+        // An array whose numbers are too large to frame, so the frame
+        // boundary lands inside the run of instructions that rebuilds it
+        // rather than between two values of the file.
+        ("familiar-numpy-large-p5.pickle", Some("numpy-numeric-array-p4-p5-v4")),
         // An instance of a class the file names.
         ("unfamiliar-class-instance.pickle", None),
         // One list in two places, and one holding itself: both are a name
