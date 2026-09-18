@@ -16,6 +16,14 @@
 // and the scroll bar is read as a ratio instead: where it sits in its travel
 // is where the reader is in the rows, and the rows on screen are drawn against
 // the viewport rather than against the canvas.
+//
+// The column headings are inside the scroller, stuck to its top edge. They
+// used to sit above it as a sibling, which kept them in view going down and
+// left them behind going across: a table five hundred columns wide scrolled
+// its values out from under headings that never moved, and the headings, too
+// wide for the tab, made the page itself scroll sideways through nothing.
+// Inside, one scroll position moves both, and the sheet holding them is as
+// wide as the columns and no wider.
 
 import { formatOffset } from "./doc.ts";
 import type { Doc } from "./doc.ts";
@@ -126,11 +134,14 @@ export class TableView {
     this.scroller = el("div", { className: "tbl-scroll" });
     this.scroller.tabIndex = 0;
     this.canvas = el("div", { className: "tbl-canvas" });
-    this.scroller.append(this.canvas);
+    // The sheet is as wide as its columns. The header is what sizes it, being
+    // the one thing in it that is laid out in the ordinary flow: the rows are
+    // placed by arithmetic and take whatever width the sheet has.
+    this.scroller.append(el("div", { className: "tbl-sheet" }, this.head, this.canvas));
     this.copyButton = el("button", { type: "button", className: "tbl-copy" });
     this.copyButton.addEventListener("click", () => void this.copySelection());
     this.notice = el("div", { className: "tbl-notice", hidden: true });
-    this.el.append(this.bar(opts.title), this.head, this.scroller, this.notice);
+    this.el.append(this.bar(opts.title), this.scroller, this.notice);
     this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
     this.columns = plan.columns.map((_, c) => ({
@@ -329,9 +340,17 @@ export class TableView {
     this.paint();
   }
 
-  /** How many rows fit on screen, at least one so a short tab still draws. */
+  /** How many rows fit on screen, at least one so a short tab still draws.
+   *  The header is stuck over the top of the scroller, so what is left for the
+   *  rows is the scroller less the header. */
   private onScreen(): number {
-    return Math.max(1, Math.floor(this.scroller.clientHeight / ROW));
+    return Math.max(1, Math.floor((this.scroller.clientHeight - this.head.offsetHeight) / ROW));
+  }
+
+  /** How far the scroll bar can go. The header is in the scroller with the
+   *  canvas, so it is part of what is scrolled through. */
+  private travel(): number {
+    return this.head.offsetHeight + this.canvas.clientHeight - this.scroller.clientHeight;
   }
 
   /** True once the rows are taller than a canvas is allowed to be, which is
@@ -345,7 +364,7 @@ export class TableView {
    *  in the rows, which is the only mapping left once the pixels run out. */
   private firstVisible(): number {
     if (!this.capped) return Math.floor(this.scroller.scrollTop / ROW);
-    const travel = this.canvas.clientHeight - this.scroller.clientHeight;
+    const travel = this.travel();
     const ratio = travel <= 0 ? 0 : this.scroller.scrollTop / travel;
     return Math.round(ratio * Math.max(0, this.plan.count - this.onScreen()));
   }
@@ -492,7 +511,7 @@ export class TableView {
       this.scroller.scrollTop = want * ROW;
       return;
     }
-    const travel = this.canvas.clientHeight - this.scroller.clientHeight;
+    const travel = this.travel();
     const rows = Math.max(1, this.plan.count - onScreen);
     this.scroller.scrollTop = Math.max(0, Math.min(travel, (want / rows) * travel));
   }
