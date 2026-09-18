@@ -9,7 +9,9 @@
 // **Registry, not IR.** The handover asked for this to be settled once a
 // second and third format arrived. Three are here now — SQLite's b-tree pages,
 // SQLite's schema page and GGUF's metadata block — and the answer is still the
-// registry. The reason is what the three have in common, which is nothing
+// registry. (A fourth since: a pickled list of dicts, whose columns are its
+// keys. Those are written beside the values, so it is the declarative kind the
+// last paragraph below is waiting for a second of.) The reason is what the three have in common, which is nothing
 // declarative:
 //
 //   - A SQLite table's column names are not in the page, in the template, or
@@ -40,6 +42,7 @@
 import type { Doc, Problem, TemplateNode } from "./doc.ts";
 import { sqlitePlan } from "./sqliterecords.ts";
 import { ggufPlan } from "./ggufrecords.ts";
+import { picklePlan } from "./picklerecords.ts";
 
 /** Somewhere else in the same file that this cell names. Drawn as a link with
  *  a direction arrow, which is rule 7's cross-reference. */
@@ -77,6 +80,10 @@ export type RecordRow = {
 export type RecordTable = {
   readonly columns: readonly string[];
   readonly rows: readonly RecordRow[];
+  /** What one row is, where the reader knows better than the node's own word
+   *  for its children: a pickled list's children are instructions as well as
+   *  dicts, and "20 fields" over twenty rows counts neither. */
+  readonly rowWord?: string;
   /** True while some of it is still being read. */
   readonly pending: boolean;
 };
@@ -96,7 +103,7 @@ export type RecordPlan = {
 /** Every format that draws its records as records, in the order they are
  *  tried. A reader returns null for anything it does not recognise, which is
  *  almost everything, so the order is not significant. */
-const READERS: readonly ((doc: Doc, node: TemplateNode) => RecordPlan | null)[] = [sqlitePlan, ggufPlan];
+const READERS: readonly ((doc: Doc, node: TemplateNode) => RecordPlan | null)[] = [sqlitePlan, ggufPlan, picklePlan];
 
 function planFor(doc: Doc, node: TemplateNode): RecordPlan | null {
   if (!node.composite || node.child_count === 0) return null;

@@ -419,7 +419,7 @@ function recordsPlan(doc: Doc, node: TemplateNode): TablePlan | null {
       return at < 0 ? null : at;
     },
     count: built.rows.length,
-    rowWord: childWord(node),
+    rowWord: built.rowWord ?? childWord(node),
     columns: built.columns.map((name) => ({ name, unit: "" })),
     columnWord: null,
     facts: [],
