@@ -447,12 +447,19 @@ pub fn is_familiar(whole: &[u8]) -> bool {
 /// own, and the walk stops at *that* file's STOP rather than at a byte which
 /// is not an opcode. Both are the opcodes running out early, and both are
 /// this.
-pub(super) fn is_joblib(head: &[u8], len: u64) -> bool {
+pub(super) fn is_joblib(head: &[u8]) -> bool {
     if !matches!(head, [0x80, 2..=5, ..]) {
         return false;
     }
     let ops = opcodes(head);
-    let ran_out = ops.last().is_some_and(|op| (op.end as usize) < head.len() || (op.code != b'.' && head.len() as u64 != len));
+    // Inside the window and not at the end of it, which is what a walk that
+    // gave up looks like. A window the file simply outran says nothing: every
+    // long pickle's walk is cut by the end of the window, and a pickle that
+    // happens to hold this module name as a string would be claimed on that
+    // alone. Nothing is lost by asking for the stop itself: the wrapper's name
+    // and the bytes that end the walk are two hundred bytes apart, so a head
+    // that names one holds the other.
+    let ran_out = ops.last().is_some_and(|op| (op.end as usize) < head.len());
     ran_out && ops.iter().any(names_wrapper)
 }
 

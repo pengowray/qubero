@@ -218,11 +218,22 @@ file is not a pickle by its rule and never will be, since the opcodes run out
 before the end. The `joblib` probe asks for three things, each cheap: the
 protocol opener `80 02` to `80 05`, `joblib.numpy_pickle` named by a
 `SHORT_BINUNICODE`, `BINUNICODE`, `BINUNICODE8` or `GLOBAL` among the opcodes
-walked, and the walk ending with bytes still to come. That works on a head as
-well as on a whole file, so a joblib file of any size is recognised from its
-first 36 KB and `web/src/doc.ts` needed no new upgrade path. A file that is
-recognised and that no form reads keeps the name -- that is what puts the
-object-array sample in `does-not-read` rather than nowhere.
+walked, and the walk ending inside the window rather than at the end of it.
+That works on a head as well as on a whole file, so a joblib file of any size
+is recognised from its first 36 KB and `web/src/doc.ts` needed no new upgrade
+path. A file that is recognised and that no form reads keeps the name -- that
+is what puts the object-array sample in `does-not-read` rather than nowhere.
+
+The walk has to have given up *inside* the window, and not merely been cut off
+by the end of it: every long pickle's walk is cut off by the end of the window,
+so the weaker test would claim any long pickle holding the words
+`joblib.numpy_pickle` as a string. Nothing real is lost by asking for the stop
+itself, since the wrapper's name and the bytes that end the walk are two
+hundred bytes apart. The one file that falls through is a joblib file with more
+than 36 KB of plain data in front of its first array: that one is `Cut` to
+`is_pickle`, so it sniffs as `pickle`, `doc.ts` reads the whole of it and
+`is_familiar` says yes, and it opens as `picklefpf` under the pickle label. The
+data is all there; only the name is the wrong one.
 
 The template is `joblib`, the same `T::pickle()` reading `picklefpf` uses, so
 that the File type dialog says `joblib file (familiar form)` rather than
@@ -241,12 +252,18 @@ with other settings still opens by its extension or by naming the template.
    in `does-not-read`. It wants a whole stream read with a memo, a framing and
    a protocol of its own, and it wants the array-of-objects production widened
    past text and `None`.
-2. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
+2. **A bundle holding a standard library value.** The two joblib rows carry no
+   `STDLIB_CALLS`, so `joblib.dump({"trained_at": datetime.now(), "weights":
+   arr}, path)` matches no form, and that is an ordinary thing to save. One
+   more `Declared` row reusing `stdlib::STDLIB_CALLS` and its modules, or the
+   stdlib calls added to the arrays row, which is the same question the plain
+   families answer by having a row each.
+3. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
    named beside `ndarray`. No file in the corpus holds one.
-3. A frame or a sparse matrix dumped this way, which is one more `Declared` row
+4. A frame or a sparse matrix dumped this way, which is one more `Declared` row
    each, reusing that family's `classes` and `calls` the way the scikit-learn
    row is reused here.
-4. Older joblib. The form is written for the layout 1.2 and later write, with
+5. Older joblib. The form is written for the layout 1.2 and later write, with
    the missing-alignment-key variant named; 0.9 and earlier wrote `.npy` files
    beside the pickle, which is a different format. Containers, the way the
    pickle matrix was made.

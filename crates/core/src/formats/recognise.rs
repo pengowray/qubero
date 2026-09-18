@@ -360,7 +360,7 @@ const PROBES: &[Probe] = &[
     // before the two pickle probes because neither of them can say yes to one:
     // the opcodes stop where the first array's bytes begin. See
     // [`pickle::is_joblib`] for what the evidence is.
-    Probe::Is("joblib", pickle::is_joblib),
+    Probe::Is("joblib", |h, _| pickle::is_joblib(h)),
     // A pickle a Familiar Pickle Form matches whole, which is the strongest
     // evidence anything here has: a reviewed grammar consumed every byte of
     // the file, opcodes and operands, and knows what each one is. So it is
@@ -2133,6 +2133,14 @@ mod tests {
         // its STOP, so nothing was cut short by bytes that are not opcodes.
         let mentions = b"\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00\x8c\x13joblib.numpy_pickle\x94.";
         assert_ne!(sniff(mentions, mentions.len() as u64), Some("joblib"));
+        // Nor is a long one whose window simply ran out in the middle of it.
+        // Every long pickle's walk does that, so a head holding the words and
+        // nothing else would otherwise be claimed on the strength of them.
+        let mut long = b"\x80\x04".to_vec();
+        while long.len() < 40_000 {
+            long.extend_from_slice(b"\x8c\x13joblib.numpy_pickle\x94");
+        }
+        assert_ne!(sniff(&long, long.len() as u64 * 2), Some("joblib"));
     }
 
     /// A Melco design has no signature, so its name is what claims it, and
