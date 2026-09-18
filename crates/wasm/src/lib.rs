@@ -3641,6 +3641,18 @@ impl Editor {
         formats::sniff_named(head, file_len as u64, name).unwrap_or("").to_string()
     }
 
+    /// The longest file worth reading whole to ask `pickle_is_familiar` about.
+    pub fn pickle_familiar_limit(&self) -> f64 {
+        formats::pickle::FAMILIAR_MOST_BYTES as f64
+    }
+
+    /// Whether the whole of a pickle matches a Familiar Pickle Form. Asked
+    /// about a file `sniff_template` called `pickle` from a window shorter
+    /// than the file, which is every pickle holding an array of any size.
+    pub fn pickle_is_familiar(&self, whole: &[u8]) -> bool {
+        formats::pickle::is_familiar(whole)
+    }
+
     /// How many trailing bytes `sniff_template_ends` wants: enough for a ZIP's
     /// end record, its comment and a central directory of some thousands of
     /// entries.

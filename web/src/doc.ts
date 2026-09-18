@@ -2479,6 +2479,14 @@ export class Doc {
       await this.ensureRange(at, t);
       name = this.editor.sniff_template_ends(head, this.read(at, t).bytes, this.lengthBytes);
     }
+    // A pickle longer than the window. Whether it matches a familiar form is a
+    // question about every byte of it, which the window could not answer, and
+    // a pickle holding an array is nearly always longer than the window.
+    if (name === "pickle" && this.lengthBytes > n && this.lengthBytes <= this.editor.pickle_familiar_limit()) {
+      await this.ensureRange(0, this.lengthBytes);
+      const whole = this.read(0, this.lengthBytes);
+      if (whole.complete && this.editor.pickle_is_familiar(whole.bytes)) name = "picklefpf";
+    }
     // Only once the bytes have had their say: a file that announces what it is
     // is that, whatever it happens to be called.
     return name === "" ? templateByExtension(this.name) : name;
