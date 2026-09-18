@@ -1073,6 +1073,18 @@ primitive child works for RIFF and fails on PNG, where the length comes before
 the type. So a structure declares it. `named_by` is the field whose value names
 the structure, and `contents` is the field that is merely what it holds.
 
+`named_by` is a path when the name is further in: an RTF item is named by
+`body`, and what names the body is the body's own `named_by`, so a control
+word names the item by its word and a text run by its text. A group is named
+by `items.0`, its first item, which is the control word that says what the
+group is. Where the path lands on a structure with a `named_by` of its own,
+that is followed; where it lands on one that is only its `contents`, the
+contents are read; a path that reaches nothing leaves the row bare. The path
+goes down only, so the recursion is bounded the way the file is. Landed
+2026-09-18; before it `named_by` named one field and stopped, and a row whose
+name sat one structure further in had to be rescued with `contents`, which
+says something else.
+
 A node is then labelled `[9] code` rather than `[9]`: the index says which of
 thirteen, and the name says which one it is, and both are worth having when two
 of the thirteen are custom sections. `contents` drops a step from the trail the

@@ -335,9 +335,8 @@ impl Evaluator {
         }
         let Ty::Struct(s) = r.ty.base() else { return Ok(r.name.text()) };
         let Some(by) = s.named_by.clone() else { return Ok(r.name.text()) };
-        let Some(i) = s.fields.iter().position(|f| *f.name == *by) else { return Ok(r.name.text()) };
         // A field that cannot be read yet leaves the node with the name it had.
-        let Some(value) = self.naming_value(doc, path, i) else { return Ok(r.name.text()) };
+        let Some(value) = self.naming_value_along(doc, path, &by) else { return Ok(r.name.text()) };
         let text = brief(&value);
         let text = text.trim_end();
         Ok(if text.is_empty() { r.name.text() } else { format!("{} {text}", r.name.text()) })
@@ -361,11 +360,43 @@ impl Evaluator {
     pub(super) fn naming_value<S: Source>(&mut self, doc: &Document<S>, path: &[usize], field: usize) -> Option<Value> {
         let mut child = path.to_vec();
         child.push(field);
+        self.name_read(doc, child)
+    }
+
+    /// The same, for a name that is a path rather than a field: `body.name`
+    /// goes into `body`, through whatever it turned out to be, and reads
+    /// `name` there. None when some step of the path is not there. See
+    /// [`StructDef::named_by`].
+    pub(super) fn naming_value_along<S: Source>(&mut self, doc: &Document<S>, path: &[usize], by: &str) -> Option<Value> {
+        let steps: Vec<String> = by.split('.').map(str::to_string).collect();
+        let mut child = path.to_vec();
+        if !self.descend(doc, &mut child, &steps).ok()? {
+            return None;
+        }
+        self.name_read(doc, child)
+    }
+
+    /// What the node at `child` reads as when it is read for a name: its own
+    /// value where it has one, and where it is a structure, whatever the
+    /// structure says names it, and failing that its contents. A wrapper
+    /// named by a field of no bytes and holding its name in its contents,
+    /// which is what a bencode byte string is, reads as the contents.
+    fn name_read<S: Source>(&mut self, doc: &Document<S>, mut child: Vec<usize>) -> Option<Value> {
         let mut info = self.node(doc, &child).ok()?;
         while info.composite {
             let inner = self.memo[&child].ty.base().clone();
             match inner {
                 Ty::Struct(s) => {
+                    // A structure that says what names it is named by that,
+                    // when it reads and says something. The recursion is
+                    // bounded the way the file is: a path only goes down.
+                    if let Some(by) = s.named_by.clone() {
+                        if let Some(v) = self.naming_value_along(doc, &child, &by) {
+                            if !brief(&v).trim().is_empty() {
+                                return Some(v);
+                            }
+                        }
+                    }
                     let Some(c) = s.contents.clone() else { break };
                     let Some(j) = s.fields.iter().position(|f| *f.name == *c) else { break };
                     child.push(j);

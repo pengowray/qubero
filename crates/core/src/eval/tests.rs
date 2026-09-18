@@ -5680,3 +5680,43 @@ fn an_element_naming_its_own_list_is_refused_the_same_way_as_one_reading_itself(
         assert!(msg.contains("nested too deep"), "{msg}");
     }
 }
+
+/// A record whose name is inside a field of it, and a list named by its
+/// first element: what `named_by` says when it is a path.
+fn nested_names() -> Template {
+    let word = T::structure_named("Word", "name", "", vec![("tag", T::u8()), ("name", T::utf8(E::lit(3)))]);
+    let item = T::structure_named(
+        "Item",
+        "body",
+        "body",
+        vec![
+            ("kind", T::u8()),
+            // A word, or three bytes that say nothing about what they are.
+            (
+                "body",
+                T::switch(E::field("kind"), vec![(1, word)], T::structure("Blob", vec![("a", T::u8()), ("b", T::u16(Big))])),
+            ),
+        ],
+    );
+    let group = T::structure_named("Group", "items.0", "items", vec![("items", T::array(item, E::lit(2)))]);
+    Template::new("t", T::structure("Root", vec![("a", group.clone()), ("deep", T::structure_named("Deep", "body.name", "", vec![("body", group)]))]))
+}
+
+#[test]
+fn a_name_that_is_a_path_is_read_from_where_the_path_lands() {
+    // Two groups of two items: a word `abc`, then a blob that names nothing;
+    // then a word `xyz` and the same.
+    let bytes = [1, 0, b'a', b'b', b'c', 2, 9, 9, 9, 1, 0, b'x', b'y', b'z', 2, 9, 9, 9];
+    let d = doc(&bytes);
+    let mut ev = Evaluator::new(nested_names());
+    // An item named by its body, and the body by its own `named_by`: two
+    // steps of naming, the second one the structure's own.
+    assert_eq!(ev.node(&d, &[0, 0, 0]).unwrap().name, "[0] abc");
+    // A body with nothing that names it leaves the item with the bare index.
+    assert_eq!(ev.node(&d, &[0, 0, 1]).unwrap().name, "[1]");
+    // The group is named by its first item, through the list.
+    assert_eq!(ev.node(&d, &[0]).unwrap().name, "a abc");
+    // A path that reaches nothing keeps the declared name: `Deep` asks for
+    // `body.name`, and a group has no field called `name`.
+    assert_eq!(ev.node(&d, &[1]).unwrap().name, "deep");
+}

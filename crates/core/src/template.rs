@@ -3182,6 +3182,20 @@ pub struct StructDef {
     /// nothing generic can work out which sibling that is: guessing at the
     /// first primitive child works for RIFF and fails on PNG, where the length
     /// comes before the type.
+    ///
+    /// A path rather than a name when the name is further in: `body.name`
+    /// goes into the field called `body` and reads `name` there, through
+    /// whatever `body` turned out to be, and `items.0` is the first element
+    /// of a list. What names an RTF item is the word inside its control word,
+    /// and what names a group is its first item, and neither is a field of
+    /// the item itself.
+    ///
+    /// Where the path lands on a structure with a `named_by` of its own, that
+    /// is followed too, so `body` alone names an item by whatever names the
+    /// body. Where it lands on a structure that is only its `contents`, the
+    /// contents are read, which is how a name a format wraps in a length is
+    /// still the name. A path that reaches nothing, or reads as nothing,
+    /// leaves the structure with the name it had.
     pub named_by: Option<String>,
     /// Which field is merely this structure's contents. Its name says nothing
     /// the structure has not already said, so the linear views leave it out of
