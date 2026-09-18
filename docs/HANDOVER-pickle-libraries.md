@@ -202,6 +202,93 @@ row over the four ranges. The calls every form below protocol 4 shares, and the
 object maker below protocol 2, are added by `Cursor::calls` from the protocol
 rather than written into the row.
 
+## The standard library's classes: measured, not yet read
+
+Worked out on 2026-09-19 from a fresh matrix run that adds seventeen
+`stdlib-*` objects to every environment and four interpreters beside CPython
+and PyPy. Nothing below is implemented; this is what the next pass needs so it
+starts from the bytes rather than from a guess.
+
+**The shapes, verified at protocol 4 and present at every protocol.** Each is a
+`REDUCE` of one enumerated callable with a fixed argument shape, which is the
+machinery `forms.rs` already has.
+
+| Callable | Arguments | Notes |
+| --- | --- | --- |
+| `datetime.datetime` | one byte string of 10 | or a 2-tuple with a `tzinfo` when aware |
+| `datetime.date` | one byte string of 4 | |
+| `datetime.time` | one byte string of 6 | |
+| `datetime.timedelta` | three integers | days, seconds, microseconds |
+| `datetime.timezone` | one `timedelta`, or that and a name | `timezone.utc` is `timezone(timedelta(0))` |
+| `decimal.Decimal` | one text | |
+| `fractions.Fraction` | two integers, or one text | both spellings are in the corpus |
+| `collections.Counter` | one dictionary | an argument, not a filled result |
+| `pathlib.PurePosixPath`, `PureWindowsPath` | a marked tuple of texts | |
+| `builtins.complex`, `slice`, `range`, `frozenset`, `bytearray` | as the builtins form already reads them | |
+
+`uuid.UUID` needs no new production at all: it is `STACK_GLOBAL`,
+`EMPTY_TUPLE`, `NEWOBJ`, a state dictionary holding `int`, and `BUILD`, which
+is the object production that already exists. What it does need is a wider
+integer: a UUID is 128 bits, and `LONG1` is capped at sixteen bytes today, so
+the cap has to reach seventeen (a 128-bit unsigned number needs a leading zero
+byte in two's complement) and the reader's integer type has to hold it.
+
+**Three of them are filled after the call, which is the one new mechanism.**
+
+| Callable | Written as |
+| --- | --- |
+| `collections.OrderedDict` | `REDUCE` of `()`, then `SETITEMS` on the result |
+| `collections.defaultdict` | `REDUCE` of the factory class (or `()`), then `SETITEMS` |
+| `collections.deque` | `REDUCE` of `()` or `(( ), maxlen)`, then `APPENDS` |
+
+So a `Reduce` needs to say that its result is filled like a dictionary or like
+a list. The shape that fits what is already there: the call produces
+`Kind::Made` whose `state` is an empty `Kind::Dict` or `Kind::List`, the
+`Slot` it is pushed on takes `Fill::Open`, and `one`/`batch` in `basic.rs`
+gain an arm that fills through a `Made`'s state. `pickleparts::keyed` already
+places a `Made`'s state dictionary's entries directly under the node, so an
+`OrderedDict` would read as a dictionary does with no further work; the
+records table's `FEWEST_ROWS` rule would need to accept a filled `Made`
+alongside a `Dict` for `stdlib-records` to open as a table.
+
+**The module spellings to enumerate**, all of them in the corpus:
+`datetime` and `_datetime`; `collections` and `_collections`; `pathlib` and
+`pathlib._local` (Python 3.13 and later); `decimal`, `fractions`, `uuid`;
+`builtins` and `__builtin__`, including `long` and `xrange` for the Python 2
+spellings of `int` and `range`. A `defaultdict`'s factory in the corpus is
+`list` or `int`; keeping the accepted factories to a short list of builtins is
+what stops a class of the file's own being named there.
+
+**A stdlib family is added the way the recipe above says**: `STDLIB_CALLS` in
+`forms.rs`, four identifiers, one `Declared` row with
+`classes: &["datetime", "collections", "decimal", "fractions", "uuid", "pathlib", "builtins", "__builtin__"]`.
+Both builtin spellings are needed because `whitelisted` is a prefix test and
+`module_fits` only decides which of the two belongs to the protocol.
+
+## Four more interpreters, measured
+
+The same run covers Jython 2.7.4 (`cPickle` written in Java), IronPython 2.7.12
+and 3.4.2 (C#) and GraalPy 24 for Python 3.11 (`_pickle` written in Java). None
+of their files is in the collection yet, and none would match today.
+
+- **Jython's `cPickle` is a fourth memo rule.** It numbers from 1, as CPython's
+  does, but it marks every value including the one-character strings CPython's
+  leaves out, and it does not batch at a thousand: a list of 1,001 is one
+  `MARK .. APPENDS` and a dictionary of 1,000 has no empty batch behind it. So
+  the batch-edge tells say nothing about it and the form would have to allow a
+  batch longer than `MAX_BATCH` under that numbering.
+- **How much is new**: 63 of Jython's 180 basic and stdlib files are byte for
+  byte CPython 2.7's, 60 of IronPython 2.7's 176, 74 of IronPython 3.4's 160
+  against Python 3.4, and 284 of GraalPy's 383 against Python 3.10. The rest is
+  where the rules differ, and some of the Python 2-era part is dict ordering,
+  which is data rather than grammar.
+- **Two of them wrote files their own pickler could not**: IronPython 2.7's
+  `cPickle` raises `UnicodeEncodeError` on `basic-long-dict` and
+  `basic-many-frames` at protocols 1 and 2, and GraalPy's `pickle.py` raises
+  `AssertionError` on `stdlib-datetime-aware` at protocol 0. Those are in the
+  new `failed` map in `versions.json` rather than in the folder, so there is
+  nothing to match and nothing to refuse.
+
 What is left, in the order it is worth doing:
 
 1. **An array's decoded numbers as a space of their own**, replacing the copy
