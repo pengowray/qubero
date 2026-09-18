@@ -121,14 +121,23 @@ Every file in `pickle-matrix/` written at protocol 4 or 5 now matches: 168 of
 168. `numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
 structured dtype now, so "numeric" was no longer true.
 
-Each family has a second form at protocols 2 and 3, named for the protocols it
-reads: `basic-p2-p3-v1`, `numpy-array-p2-p3-v1`, `builtins-values-p2-p3-v1`,
+Each family has three forms now, named for the protocols each reads. At
+protocols 2 and 3: `basic-p2-p3-v1`, `numpy-array-p2-p3-v1`, `builtins-values-p2-p3-v1`,
 `sklearn-estimator-p2-p3-v1`, `scipy-sparse-p2-p3-v1` and
 `pandas-frame-p2-p3-v1`. All 218 files in `pickle-matrix/` written at protocol
 2 or 3 match, and so do `pickle/proto2-memo-over-256.pickle` and
 `pickle/proto3-numpy-1-module-names.pickle`, which the earlier slices read as
 non-matches. `DESIGN-familiar-pickle-forms.md` has the whole of what differs,
 under "Protocols 2 and 3".
+
+And at protocol 1: `basic-p1-v1`, `numpy-array-p1-v1`, `builtins-values-p1-v1`,
+`sklearn-estimator-p1-v1`, `scipy-sparse-p1-v1` and `pandas-frame-p1-v1`. All
+130 files in `pickle-matrix/` written at protocol 1 match. The libraries needed
+one production there: protocol 1 had no NEWOBJ, so an object is made by
+`copy_reg._reconstructor(cls, object, None)`, which is `cls.__new__(cls)`
+written the long way round. See "Protocol 1" in the design document for the
+other four differences, and "What protocol 0 would need" for the one below it,
+which is the escaping layer a text line needs and nothing else.
 
 The libraries needed nothing new. scikit-learn, scipy and pandas write
 `GLOBAL`, `NEWOBJ` and `BUILD` below protocol 4 exactly as they write
@@ -161,15 +170,20 @@ design document.
 
 What is left, in the order it is worth doing:
 
-1. **A protocol 2 array's numbers as a space of their own**, replacing the
+1. **Protocol 0**, which is every remaining file in the matrix: 148 of them,
+   and the default Python wrote with until 3.0. See "What protocol 0 would
+   need" in the design document; the short of it is that a text line is not
+   the text it spells, so a text leaf needs the treatment a protocol 2 array's
+   numbers already get.
+2. **A protocol 2 array's numbers as a space of their own**, replacing the
    copy kept beside the match. See above.
-2. **A sparse matrix as a table** of `row, column, value`, read out of the
+3. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
-3. **The standard library's classes**, which are what every remaining
+4. **The standard library's classes**, which are what every remaining
    `proto*-everything` sample is held back by: `datetime`, `Decimal`,
    `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`. Each needs the
    exact state it is rebuilt from written down, the way the library calls are.
-4. **A block placed by an array** rather than by a slice, which pandas writes
+5. **A block placed by an array** rather than by a slice, which pandas writes
    when a block's columns are not next to each other. No file in the corpus
    does, so there is nothing to test it against.
 

@@ -42,8 +42,8 @@ and a `REDUCE` or `BUILD` outside the fixed runs the forms name is a non-match
 as before. Depth is bounded per value as the tree is built rather than by the
 recursion that is no longer there.
 
-Implemented forms. There are twelve: six families, each with one form for
-protocols 4 and 5 and one for protocols 2 and 3. The six of a protocol range
+Implemented forms. There are eighteen: six families, each with one form for
+protocols 4 and 5, one for protocols 2 and 3, and one for protocol 1. The six of a protocol range
 are the same grammar over the same envelope, differing in which value
 productions they allow; a file is read under the one form whose productions it
 uses, and a file mixing two of them matches neither. The two ranges are named
@@ -331,25 +331,81 @@ Everything else is the same production. scikit-learn, scipy and pandas write
 new structure: `copyreg._reconstructor` does not appear in any file in the
 corpus.
 
-### What protocols 0 and 1 would need
+### Protocol 1
+
+Protocol 1 is what Python 2 wrote when it was asked for a binary pickle before
+protocol 2 existed, and what `cPickle.dump(obj, f, 1)` wrote for years after.
+There is a form for each family at it: `basic-p1-v1`, `numpy-array-p1-v1`,
+`builtins-values-p1-v1`, `sklearn-estimator-p1-v1`, `scipy-sparse-p1-v1` and
+`pandas-frame-p1-v1`.
+
+It is the protocol 2 grammar with five things different:
+
+- **There is no `PROTO` opener.** A file starts at its first value, so the
+  envelope has nothing in it and the header's `protocol` row is worked out
+  rather than read: the row says `1`, and what says so is the form that
+  matched, since the file carries no such byte. A file using binary opcodes
+  with no opener is protocol 1; one using none of them is protocol 0.
+- **`True` and `False` are the integer lines `I01` and `I00`**, which are text
+  opcodes inside a binary protocol and are not the integers one and nought:
+  those are `I1` and `I0` where they are written as lines at all, and the
+  leading zero is the whole of the difference. `NEWTRUE` and `NEWFALSE`
+  arrived with protocol 2 and are a non-match here.
+- **There is one tuple opcode.** `TUPLE1` to `TUPLE3` arrived with protocol 2,
+  so every tuple but the empty one is a `MARK` and a `TUPLE`, and a fixed run
+  that writes a tuple of a known length opens it before its elements rather
+  than closing it after them. `EMPTY_TUPLE` is protocol 1's already.
+- **A `long` is a line of digits** ending in the `L` Python 2 spelled one
+  with, which Python 3 writes too. `LONG1` is protocol 2's.
+- **An object is made by `copy_reg._reconstructor`**, which is
+  `cls.__new__(cls)` written the long way round: the class, the class it
+  inherits its layout from, and the argument that base is constructed with.
+  Only `object` and `None` are accepted, which is the one shape the NEWOBJ
+  production already takes; a different base is a class being told to
+  construct itself out of values, and what those mean belongs to the class.
+  `object` is the one class a form may name and never call.
+
+Everything else is the protocol 2 production, batching and all: `APPENDS` and
+`SETITEMS` are protocol 1's, and so are `BINPUT`, `BINGET`, `BINUNICODE`,
+`SHORT_BINSTRING` and the `_codecs.encode` call a byte string goes through.
+
+### What protocol 0 would need
 
 Not in scope, and this is what is in the way, so that the next pass starts
-from a list rather than from a file.
+from a list rather than from a file. It does not need a different reader from
+the byte cursor: protocol 0 is a run of opcodes and newline-terminated lines,
+and the stack the productions are read against is the same one. What it needs
+is one thing the value model has not got.
 
-- **Protocol 0 is text.** Every value is an opcode and a line: `I1\n`,
-  `S'text'\n` with Python's own string escaping, `F1.5\n`, `L5L\n`. None of
-  those productions exists here, and reading one means reading a Python
-  literal, which is a parser of its own.
-- **There is no `PROTO` opener**, so a file starts at its first value. The
-  envelope every form reads begins with `\x80` and a protocol byte, and that
-  is where a form decides which grammar to try.
-- **The memo mark is `PUT` and a line**, and a reference is `GET` and a line,
-  at protocol 0; protocol 1 has `BINPUT` and `BINGET` and is otherwise
-  protocol 2 without `PROTO`, `NEWTRUE`, `NEWFALSE`, `LONG1` or the counted
-  tuples. A protocol 1 form is therefore a small edit to the protocol 2 one
-  plus an envelope with no opener; a protocol 0 form is a different reader.
-- **Nothing here reads a text opcode at all** except the `GLOBAL` lines and
-  the `INT` line, and both are read as exact bytes rather than parsed.
+- **Every value is a line, and a text line is not the text.** `V` is a text
+  written `raw-unicode-escape` with the backslash, the newline, the carriage
+  return, the NUL and the DOS end-of-file replaced by `\uXXXX` first, which is
+  what `save_str` does at that protocol; `S` is a Python 2 `repr`, quotes and
+  backslash escapes and all. So a text leaf's bytes are its spelling rather
+  than its value whenever an escape is in it, which is the problem the
+  latin-1 storage of protocol 2 already has, one layer deeper and on every
+  text rather than on an array's numbers. The answer is the same shape: read
+  the run once as the form matches it and keep what it spells beside the
+  match, with the row saying which it is showing.
+- **Numbers are `repr` too.** `F` is a float's `repr`, which is seventeen
+  significant digits on any Python that matters and `inf`, `-inf`, `nan` and
+  `-0.0` at the edges; `L` is every integer Python 3 writes at that protocol,
+  small ones included, where protocol 1 writes a `long` that way and an `int`
+  as `BININT`. So the integer rule that a small number in a wide field is a
+  non-match does not carry over and has to be written again for protocol 0.
+- **The memo marks are `PUT` and `GET` lines**, which is a decimal slot
+  number rather than a byte. The numbering rule is the one protocols 2 and 3
+  already hold to, and Python 2's `cPickle` presumably numbers from one there
+  as well; no file has been checked for it yet.
+- **Containers are made over a `MARK`**: `(d` for a dictionary and `(l` for a
+  list, filled one entry at a time. There is no batching at protocol 0, which
+  the corpus confirms: 26,712 `APPEND` and 25,912 `SETITEM` against no
+  `APPENDS` or `SETITEMS` at all. So the tell that says which pickler wrote a
+  file is not there, and a protocol 0 file says nothing either way.
+- **Every fixed run needs its protocol 0 spelling.** A dtype's letters are a
+  `V` line, its two flags are `I00` and `I01`, its shape is `(L1L\nt`, and an
+  array's numbers reach the file as `_codecs.encode` of a `V` line, so the
+  latin-1 reading gains the escape layer under it.
 
 ### What stays a non-match, and why
 
@@ -371,8 +427,7 @@ from a list rather than from a file.
   real pickler writes, and a file was written by one pickler, so a file
   showing the C one at one batch edge and `pickle.py`'s at another was
   written by neither.
-- **Protocols 0 and 1**, which are the text protocols. See "What protocols 0
-  and 1 would need" below.
+- **Protocol 0**, the text protocol. See "What protocol 0 would need" below.
 - **A class the file named and did not call**, under a form that names no
   classes. Below protocol 4 a set and a byte string are calls, so the basic
   form names four classes, and it names them so that they can be called. A
@@ -666,7 +721,8 @@ one half or the other.
 | `proto4-datetime.pickle` | packed `datetime` records |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
 | `proto4-numpy-object-array.pickle` | an object dtype, whose data is pickled values |
-| `proto0-*`, `proto1-everything`, `handmade-*` | protocols and opcodes below 2, and the text protocols |
+| `proto1-everything.pickle` | protocol 1, and the same classes the other `everything` files call |
+| `proto0-*`, `handmade-*` | protocol 0, and the opcodes CPython reads and never writes |
 | `proto2-memo-over-256.pickle` | `basic-p2-p3-v1` |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
 | `proto3-numpy-1-module-names.pickle` | `numpy-array-p2-p3-v1` |
@@ -783,7 +839,7 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include sixty-five FPF tests, eleven of which
+Validation: the pickle unit tests include sixty-eight FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a
@@ -793,17 +849,19 @@ showing both, the memo mark after a bytearray, the NumPy scalar call, the
 protocol 5 `_frombuffer` call with a writable and a read-only buffer, an
 instruction moved, dropped, added or written in another width, the two ways a
 large payload is framed, the builtins calls, and which form a file is read
-under. Twelve of them are the protocol 2 and 3 grammars: the memo slot a mark
+under. Fifteen of them are the grammars below protocol 4: the memo slot a mark
 may go in, the mark `cPickle` leaves out, the byte string written as a call and
 the encodings it refuses, the set built from a list or a tuple, the class that
 is never called, the `INT` line, a Python 2 `str`, an array Python 2 wrote, the
 builtins under their Python 2 names, the spellings neither protocol range
-shares with the other, and the opcodes no pickler writes. Seventeen
-`pickle_real` integration tests pass against the sibling corpus, including the
-corpus match matrix, the per-file mutation sweep, a walk of the decoded array's
-24 numbers, a walk of twenty-one protocol 2 and 3 files of the matrix through
-the template with no byte left over, and the same frame, series and array
-opening as the same table at every protocol from 2 to 5.
+shares with the other, and the opcodes no pickler writes, a protocol 1 file read without an opener, the
+`long` protocol 1 writes as a line, and ordinary text files that are not a
+familiar form whatever their bytes walk as. Seventeen `pickle_real` integration
+tests pass against the sibling corpus, including the corpus match matrix, the
+per-file mutation sweep, a walk of the decoded array's 24 numbers, a walk of
+twenty-one protocol 2 and 3 files of the matrix through the template with no
+byte left over, and the same frame, series and array opening as the same table
+at every protocol from 1 to 5.
 
 The forms are also run over `pickle-matrix/` in the sample collection, which
 is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,
@@ -816,7 +874,11 @@ and 49 pandas frames and series across every release in the corpus from 1.1 to
 28 of arrays and scalars, 36 scikit-learn, 8 scipy, and 53 pandas frames and
 series. Of those 218, 166 were written by Python 3's C pickler, 4 by
 `pickle.py`, 15 by Python 2's `pickle`, 15 by its `cPickle`, and 18 by PyPy
-2.7's two.
+2.7's two. And so does every one of the 130 written at protocol 1: 67 of plain
+data, 14 of arrays and scalars, 18 scikit-learn, 4 scipy and 27 pandas frames
+and series, of which 82 are Python 3's C pickler, 23 Python 2's `pickle` and 25
+its `cPickle`. The 148 written at protocol 0 match nothing: there is no form
+for that protocol.
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
 sample opens as the familiar form with its form ID, its pickler row and its
 decoded values, that the chooser offers both templates and switches between
