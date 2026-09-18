@@ -106,6 +106,18 @@ fn collect(ty: &Ty, t: &Template, out: &mut Vec<std::sync::Arc<StructDef>>, visi
 /// when that is nothing a row can be labelled with. None when it lands on a
 /// value, or on a structure that names itself or is only its contents.
 fn lands_bare(s: &StructDef, by: &str, t: &Template) -> Option<String> {
+    // Alternatives are tried in order, so one that lands on a value is enough.
+    let mut why = None;
+    for alternative in by.split('|') {
+        match lands_bare_one(s, alternative.trim(), t) {
+            None => return None,
+            some => why = why.or(some),
+        }
+    }
+    why
+}
+
+fn lands_bare_one(s: &StructDef, by: &str, t: &Template) -> Option<String> {
     let mut steps = by.split('.');
     let first = steps.next()?;
     let f = s.fields.iter().find(|f| *f.name == *first)?;
@@ -114,6 +126,18 @@ fn lands_bare(s: &StructDef, by: &str, t: &Template) -> Option<String> {
         ty = match ty {
             Ty::Struct(s) => unwrap(&s.fields.iter().find(|f| *f.name == *step)?.ty.clone(), t),
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } => unwrap(&elem, t),
+            // Whichever case the file picks: the first that has the step is
+            // the one the path was written for.
+            Ty::Switch { cases, default, .. } => {
+                let found = cases.iter().map(|(_, c)| c).chain(std::iter::once(&*default)).find_map(|c| match unwrap(c, t) {
+                    Ty::Struct(s) => s.fields.iter().find(|f| *f.name == *step).map(|f| unwrap(&f.ty, t)),
+                    _ => None,
+                });
+                match found {
+                    Some(ty) => ty,
+                    None => return Some(format!("a switch with no `{step}` in any case")),
+                }
+            }
             _ => return Some(format!("a {} with no `{step}` in it", kind(&ty, t))),
         };
     }
