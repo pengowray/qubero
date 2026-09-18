@@ -127,3 +127,37 @@ test("a frame's rows are not a run of bytes, so no bit is in one", () => {
   assert.equal(plan?.rowFor(0), null);
   assert.equal(isTable(doc(4, []), FRAME), true);
 });
+
+/** The same document with a table that names no columns, which is what a
+ *  pickled array whose cells the core reads has: its columns are places along
+ *  an axis rather than names anything wrote down. */
+function unnamed(rows: number, wide: number): Doc {
+  return {
+    tableShape: () => ({
+      status: "ok",
+      node: { ...shape(rows), names: [], units: [], row_word: "row" },
+    }),
+    pickleCells: (_path: readonly number[], from: number, to: number) => {
+      const out: FrameCell[][] = [];
+      for (let i = from; i < to; i += 1) {
+        out.push(Array.from({ length: wide }, (_, c) => ({ text: String(i * wide + c), kind: "int" as const })));
+      }
+      return { status: "ok", node: out };
+    },
+  } as unknown as Doc;
+}
+
+test("a computed table that names no columns heads them the way every other table does", () => {
+  const plan = tablePlan(unnamed(4, 3), FRAME);
+  assert.notEqual(plan, null);
+  if (plan === null) return;
+  assert.equal(plan.columns.length, 3);
+  assert.deepEqual(
+    plan.columns.map((c) => c.name),
+    ["column 1", "column 2", "column 3"],
+  );
+  assert.deepEqual(plan.row(1)?.cells.map((c) => c.text), ["3", "4", "5"]);
+  // And a table with no rows still has a column rather than none at all.
+  const empty = tablePlan(unnamed(0, 3), FRAME);
+  assert.equal(empty?.columns.length, 1);
+});

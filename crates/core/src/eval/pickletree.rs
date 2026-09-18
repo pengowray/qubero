@@ -51,9 +51,6 @@ const NUMBERS_FIELD: &str = "numbers";
 /// themselves, decoded when the form matched.
 const WRITTEN_FIELD: &str = "written as";
 const LATIN1_TEXT: &str = "latin-1 text";
-/// What the one column of a table over a run of single values is called. The
-/// numbers have no names of their own, so the column is what one of them is.
-const ONE_COLUMN: &str = "value";
 const DTYPE_FIELD: &str = "dtype";
 const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
@@ -643,12 +640,9 @@ impl Evaluator {
         if *storage == Storage::Latin1 {
             let columns = inner.filter(|n| *n > 0).unwrap_or(1);
             let count: u64 = dimensions.iter().product();
-            let names = match inner {
-                Some(_) => (0..columns).map(|i| i.to_string().into()).collect(),
-                None => vec![ONE_COLUMN.into()],
-            };
+            // No names: an array's columns are places along an axis, and the
+            // table heads them the way it heads every other run of numbers.
             return Some(crate::template::TableShape {
-                names,
                 row_word: inner.map(|_| "row".into()),
                 cells: Some(Cells::Computed { rows: count / columns.max(1) }),
                 ..Default::default()

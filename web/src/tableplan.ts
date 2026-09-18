@@ -510,6 +510,16 @@ function cellShapeOf(doc: Doc, node: TemplateNode): TableShape | null {
  * reading a cell. A window of rows is read at a time and kept until the view
  * says to forget it.
  */
+/** How many columns a computed table that named none has: whatever one row
+ *  came back with, since the core works the cells out and the rows are all the
+ *  same width. One column for a table with no rows to ask about. */
+function columnsOf(doc: Doc, node: TemplateNode, rows: number): number {
+  if (rows === 0) return 1;
+  const reply = doc.pickleCells(node.path, 0, 1);
+  if (reply.status !== "ok") return 1;
+  return Math.max(1, reply.node[0]?.length ?? 1);
+}
+
 function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: number): TablePlan {
   let held: { from: number; cells: readonly (readonly FrameCell[])[] } | null = null;
   const read = (i: number): readonly FrameCell[] | null => {
@@ -525,7 +535,13 @@ function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: num
     path: node.path,
     count: rows,
     rowWord: shape.row_word ?? childWord(node),
-    columns: shape.names.map((name, i) => ({ name, unit: shape.units[i] ?? "" })),
+    // A frame names its columns; an array's are places along an axis and it
+    // names none, so those fall back the same way the ordinary table over a
+    // run of numbers does rather than leaving the table with no columns.
+    columns:
+      shape.names.length > 0
+        ? shape.names.map((name, i) => ({ name, unit: shape.units[i] ?? "" }))
+        : shapeColumns(shape, columnsOf(doc, node, rows)),
     columnWord: shape.column_word,
     facts: shape.facts,
     rate: shape.rate,

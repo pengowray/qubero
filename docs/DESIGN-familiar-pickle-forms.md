@@ -315,9 +315,9 @@ instructions. What differs:
     it as numbers would be reading the spelling.
   - The table over such an array has its cells read by the core, the way a
     pandas frame's are, because there is no run under the node for a view to
-    walk. Its columns are places along an axis, numbered from nought, where
-    the table over an array whose numbers are in the file numbers them from
-    one: that difference is in the headers and not in the cells.
+    walk. It names no columns, since an array's columns are places along an
+    axis rather than names anything wrote down, and the view heads them the
+    way it heads every other run of numbers.
   - An array Python 2 wrote is not this. Python 2 had a type for a run of
     bytes, its `str`, so the numbers go out as `SHORT_BINSTRING` or
     `BINSTRING` and are the bytes they are, with nothing decoded and the
