@@ -797,8 +797,12 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
         return;
     };
     const C: &str = "_pickle (CPython's C pickler)";
-    const PY: &str = "pickle.py (the pure Python pickler, the only one PyPy has)";
+    const PY: &str = "pickle.py (the pure Python pickler, the only one PyPy 3 has)";
     const EITHER: &str = "_pickle or pickle.py (they write this data identically)";
+    // Python 2's third pickler, which is a different program from Python 3's
+    // C one and is known by the slot it starts the memo at rather than by a
+    // batch edge. PyPy 2.7's copy of it numbers the same way.
+    const CPICKLE: &str = "cPickle (Python 2's C pickler, or PyPy 2.7's Python copy of it)";
     // A file is kept under the oldest environment that wrote those bytes, so
     // every one of these is Python 3.4's copy, and each is also what every
     // later CPython wrote. `basic-list-1001.p4.pypickle.pickle` is byte for
@@ -845,13 +849,20 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
         ("py2.7/basic-set-1001.p2.pickle", PY),
         ("py2.7/basic-list-1000.p2.pickle", EITHER),
         ("py2.7/basic-records.p2.pickle", EITHER),
-        ("py2.7/basic-list-1001.p2.cpickle.pickle", C),
-        ("py2.7/basic-dict-1000.p2.cpickle.pickle", C),
-        ("py2.7/basic-records.p2.cpickle.pickle", C),
+        ("py2.7/basic-list-1001.p2.cpickle.pickle", CPICKLE),
+        ("py2.7/basic-dict-1000.p2.cpickle.pickle", CPICKLE),
+        // A file with no batch edge at all still says `cPickle`, because the
+        // memo numbering says it.
+        ("py2.7/basic-records.p2.cpickle.pickle", CPICKLE),
         // PyPy's `cPickle` is a Python copy of CPython's: it numbers the memo
-        // the same way and ends a dictionary the way `pickle.py` does.
-        ("pypy2.7/basic-dict-1000.p2.cpickle.pickle", C),
-        ("pypy2.7/basic-records.p2.cpickle.pickle", C),
+        // the same way and ends a dictionary the way `pickle.py` does, so the
+        // row names the module and not which of the two wrote it.
+        ("pypy2.7/basic-dict-1000.p2.cpickle.pickle", CPICKLE),
+        ("pypy2.7/basic-records.p2.cpickle.pickle", CPICKLE),
+        // And PyPy 2.7's pure pickler, which numbers from nought like every
+        // other one and ends its containers the `pickle.py` way.
+        ("pypy2.7/basic-records.p2.pickle", EITHER),
+        ("pypy2.7/basic-long-dict.p2.pickle", EITHER),
     ];
     for (file, said) in want {
         let Ok(bytes) = std::fs::read(root.join(file)) else { panic!("{file} is not in the collection") };

@@ -82,7 +82,7 @@ fn a_memo_mark_to_the_wrong_slot_is_a_non_match() {
         &cat(&[b"}", &at_slot(1), &wide("name"), &at_slot(2), b"]", &at_slot(3), b"(K\x01K\x02es."]),
     );
     let found = recognise(&shifted).unwrap();
-    assert_eq!(found.pickler, Pickler::C);
+    assert_eq!(found.pickler, Pickler::CPickle);
 }
 
 /// Only `cPickle` leaves a memo mark out, and it numbers from one, so a file
@@ -95,7 +95,7 @@ fn a_memo_mark_left_out_is_only_cpickle_s() {
     // slot two rather than three, and that is `cPickle` to the letter.
     let cpickle = older(2, &cat(&[b"}", &at_slot(1), &wide("name"), b"]", &at_slot(2), b"(K\x01K\x02es."]));
     let found = recognise(&cpickle).unwrap();
-    assert_eq!(found.pickler, Pickler::C);
+    assert_eq!(found.pickler, Pickler::CPickle);
 }
 
 /// A byte string at protocol 2 is a call to `_codecs.encode` over the text the

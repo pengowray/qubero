@@ -137,8 +137,9 @@ impl Cursor<'_> {
                 }
                 self.memo_base = Some(base);
                 if base == 1 {
-                    // Only `cPickle` numbers from one.
-                    self.wrote(Pickler::C)?;
+                    // Only `cPickle` numbers from one, and it does so whether
+                    // or not a batch edge is in the file.
+                    self.wrote(Pickler::CPickle)?;
                 }
                 base
             }

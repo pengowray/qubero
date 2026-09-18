@@ -381,19 +381,25 @@ from a list rather than from a file.
 
 CPython ships two picklers. `_pickle` is the C one, which `pickle.dump` uses
 wherever it imports; `pickle.py` is the pure Python one beside it, reachable as
-`pickle._Pickler`, and the only one PyPy has. Both are ordinary, so a form
-reads either, and the match says which the file shows. The row is `pickler` in
-the header of the familiar-form template, beside `message` and `form`, and it
-says one of exactly three things:
+`pickle._Pickler`, and the only one PyPy 3 has. Python 2 had a third,
+`cPickle`, which is a different program from `_pickle`; PyPy 2.7 ships a
+Python copy of it under the same name. All of them are ordinary, so a form
+reads any of them, and the match says which the file shows. The row is
+`pickler` in the header of the familiar-form template, beside `message` and
+`form`, and it says one of exactly four things:
 
 - `_pickle (CPython's C pickler)`
-- `pickle.py (the pure Python pickler, the only one PyPy has)`
+- `pickle.py (the pure Python pickler, the only one PyPy 3 has)`
+- `cPickle (Python 2's C pickler, or PyPy 2.7's Python copy of it)`
 - `_pickle or pickle.py (they write this data identically)`
 
-The third is most files: the two agree everywhere but the tail of a container
-longer than a batch and the memo mark after a bytearray, and a file with
-neither says nothing either way. This is not in the form name, because the
-form is the same grammar either way.
+The last is most files: the two Python 3 picklers agree everywhere but the
+tail of a container longer than a batch and the memo mark after a bytearray,
+and a file with neither says nothing either way. The third is every file whose
+memo numbers from 1, batch edge or no batch edge, and it names the module
+rather than which of its two implementations wrote the file: they number the
+memo the same way. None of this is in the form name, because the form is the
+same grammar either way.
 
 The tells, measured across the whole `pickle-matrix` corpus at protocols 1 to
 5 and checked against `_batch_appends`, `_batch_setitems` and `save_set` in

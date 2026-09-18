@@ -335,17 +335,23 @@ pub struct Instr {
 /// Which of CPython's two picklers wrote the file, as far as its bytes say.
 ///
 /// `_pickle` is the C one, which `pickle.dump` uses wherever it imports;
-/// `pickle.py` is the pure Python one beside it, and the only one PyPy has.
+/// `pickle.py` is the pure Python one beside it, and the only one PyPy 3 has.
 /// They agree everywhere but the tail of a long container and the memo mark
 /// after a bytearray, so most files say nothing either way. A file that shows
 /// one of them at one batch edge and the other at another was written by
 /// neither, and is a non-match.
+///
+/// Python 2 had a third, `cPickle`, which is a different program from
+/// Python 3's `_pickle` and is known by the slot it starts numbering the memo
+/// at. PyPy 2.7 ships a Python copy of it under the same name, and the two
+/// agree on the numbering, so a file says `cPickle` and not which of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pickler {
-    /// Nothing in the file tells the two apart, which is most files.
+    /// Nothing in the file tells them apart, which is most files.
     Undetermined,
     C,
     Python,
+    CPickle,
 }
 
 impl Pickler {
@@ -353,7 +359,11 @@ impl Pickler {
     pub fn name(self) -> &'static str {
         match self {
             Pickler::C => "_pickle (CPython's C pickler)",
-            Pickler::Python => "pickle.py (the pure Python pickler, the only one PyPy has)",
+            // PyPy 3 has this pickler and no other. PyPy 2.7 is the one that
+            // does not fit: it ships a Python copy of `cPickle` beside this,
+            // and that copy is read as `cPickle`, which is what it is.
+            Pickler::Python => "pickle.py (the pure Python pickler, the only one PyPy 3 has)",
+            Pickler::CPickle => "cPickle (Python 2's C pickler, or PyPy 2.7's Python copy of it)",
             Pickler::Undetermined => "_pickle or pickle.py (they write this data identically)",
         }
     }
