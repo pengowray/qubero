@@ -242,7 +242,7 @@ impl Cursor<'_> {
                         return None;
                     }
                     let values = items.into_iter().map(|slot| slot.value).collect();
-                    let kind = self.library(code, values)?;
+                    let kind = self.library(code, at, values)?;
                     stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill: Fill::Shut });
                 }
                 _ => {

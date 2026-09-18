@@ -4,7 +4,7 @@
 //! that the methods which read or write a slot are in one place.
 
 use super::cursor::Cursor;
-use super::{Pickler, Shape, MAX_MEMO};
+use super::{Dtype, Pickler, Shape, MAX_MEMO};
 
 /// What a memo slot holds, as far as a form is prepared to say.
 ///
@@ -23,10 +23,10 @@ pub(super) enum Bound {
     Made { what: Shape, at: usize, hashable: bool },
     /// A module and a callable the form named exactly, spelled `module.name`.
     Global(String),
-    /// A completed NumPy dtype, as the `<f4` spelling it ends up with. The
-    /// slot is written at the REDUCE that makes the dtype and the byte order
-    /// arrives at the BUILD just after, so the binding is filled in there.
-    Dtype(String),
+    /// A completed NumPy dtype. The slot is written at the REDUCE that makes
+    /// the dtype and the rest of it arrives at the BUILD just after, so the
+    /// binding is filled in there.
+    Dtype(Dtype),
 }
 
 /// The table itself, which a form appends to and reads back and never edits,

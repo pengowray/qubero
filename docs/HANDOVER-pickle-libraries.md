@@ -55,7 +55,7 @@ everywhere. All 44 basic files at protocol 4 and 5 match `basic-p4-p5-v5`.
 **numpy varies in one word.** Two byte strings per object and protocol: numpy
 1.x spells the module `numpy.core.multiarray`, numpy 2.x spells it
 `numpy._core.multiarray`. All 34 numpy array and scalar files at protocol 4 and
-5 match `numpy-numeric-array-p4-p5-v5`.
+5 match `numpy-array-p4-p5-v6`.
 
 **scikit-learn varies in its data, not in its instructions.** An estimator is
 `STACK_GLOBAL` of its class, `EMPTY_TUPLE`, `NEWOBJ`, then a dict of its

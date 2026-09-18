@@ -14,7 +14,7 @@ import { sampleFile } from "./samples.mjs";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const message = "Matched a Familiar Pickle Form";
-const form = "numpy-numeric-array-p4-p5-v5";
+const form = "numpy-array-p4-p5-v6";
 const stop = (id) =>
   `Matched a Familiar Pickle Form (${id}): bypassed Pickle stack machine decoding. Switch to the "Python pickle (familiar form)" template to see the data.`;
 const out = new URL("out/", import.meta.url);

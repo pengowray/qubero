@@ -70,8 +70,14 @@ pub(crate) fn run(descr: &str, count: u64) -> Option<T> {
     Some(T::array(elem, E::lit(count as i128)))
 }
 
+/// One value of a dtype, and how wide it is. What [`run`] repeats, and what a
+/// structured dtype's columns are made of.
+pub(crate) fn element(descr: &str) -> Option<(T, u64)> {
+    npy::dtypes().into_iter().find(|(k, _, _)| k == descr).map(|(_, elem, width)| (elem, width as u64))
+}
+
 /// Where a dtype sits in the list, and how wide one value of it is.
-pub(super) fn dtype(descr: &str) -> Option<(usize, u64)> {
+pub(crate) fn dtype(descr: &str) -> Option<(usize, u64)> {
     static TABLE: OnceLock<Vec<(String, u64)>> = OnceLock::new();
     let table = TABLE.get_or_init(|| npy::dtypes().into_iter().map(|(k, _, w)| (k, w as u64)).collect());
     table.iter().position(|(k, _)| k == descr).map(|i| (i + PAST_NOTHING, table[i].1))

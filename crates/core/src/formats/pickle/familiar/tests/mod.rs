@@ -12,6 +12,15 @@ mod grammar;
 mod objects;
 mod tree;
 
+/// A plain dtype's spelling, which is what an array test asserts about. A
+/// structured one has columns instead and is asserted about by those.
+fn spelling(dtype: &Dtype) -> &str {
+    match dtype {
+        Dtype::Plain(said) => said.as_str(),
+        Dtype::Record { .. } => panic!("a plain dtype was expected, not {dtype:?}"),
+    }
+}
+
 fn framed(body: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x80, 4, 0x95];
     bytes.extend_from_slice(&(body.len() as u64).to_le_bytes());
@@ -227,6 +236,142 @@ fn one_array(base: u8, kind: &str, order: u8, shape: &[u8], data: &[u8]) -> Vec<
         &blob(data),
         b"t\x94b",
     ])
+}
+
+/// A file being written a production at a time, counting the memo slots as it
+/// goes.
+///
+/// A structured dtype names its columns twice, as a tuple of words and then as
+/// the keys of the dictionary that gives each a type and an offset, and the
+/// second time it names the slots the first one filed. Working those slot
+/// numbers out by hand is how a test stops saying what it means, so this
+/// counts them instead.
+#[derive(Default)]
+struct Writing {
+    out: Vec<u8>,
+    slots: usize,
+}
+
+impl Writing {
+    fn raw(&mut self, bytes: &[u8]) -> &mut Self {
+        self.out.extend_from_slice(bytes);
+        self
+    }
+    /// MEMOIZE, and the slot it files.
+    fn mark(&mut self) -> usize {
+        self.out.push(0x94);
+        self.slots += 1;
+        self.slots - 1
+    }
+    fn word(&mut self, text: &str) -> usize {
+        self.out.push(0x8c);
+        self.out.push(text.len() as u8);
+        self.out.extend_from_slice(text.as_bytes());
+        self.mark()
+    }
+    fn get(&mut self, slot: usize) -> &mut Self {
+        self.raw(&[b'h', slot as u8])
+    }
+    /// A nonnegative integer in the width CPython writes it in, up to the two
+    /// a test needs.
+    fn count(&mut self, n: u64) -> &mut Self {
+        match n {
+            0..=255 => self.raw(&[b'K', n as u8]),
+            _ => self.raw(&[b'M', n as u8, (n >> 8) as u8]),
+        }
+    }
+    /// The `numpy.dtype` construction for one number a value.
+    fn plain_dtype(&mut self, kind: &str, order: &str) -> &mut Self {
+        self.word("numpy");
+        self.word("dtype");
+        self.raw(b"\x93");
+        self.mark();
+        self.word(kind);
+        self.raw(b"\x89\x88\x87");
+        self.mark();
+        self.raw(b"R");
+        self.mark();
+        self.raw(b"(K\x03");
+        self.word(order);
+        self.raw(b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0t");
+        self.mark();
+        self.raw(b"b")
+    }
+    /// The same construction for a record of named columns: the names, the
+    /// dictionary of types and offsets, and the width, alignment and flags.
+    fn record_dtype(&mut self, width: u64, columns: &[(&str, &str, &str, u64)]) -> &mut Self {
+        self.word("numpy");
+        self.word("dtype");
+        self.raw(b"\x93");
+        self.mark();
+        self.word(&format!("V{width}"));
+        self.raw(b"\x89\x88\x87");
+        self.mark();
+        self.raw(b"R");
+        self.mark();
+        self.raw(b"(K\x03");
+        self.word("|");
+        // Three names or fewer are written with TUPLE1 to TUPLE3 and any more
+        // over a MARK, which is what CPython writes for a tuple of any size.
+        let marked = columns.len() > 3;
+        self.raw(if marked { b"N(" } else { b"N" });
+        let named: Vec<usize> = columns.iter().map(|(name, ..)| self.word(name)).collect();
+        match marked {
+            true => self.raw(b"t"),
+            false => self.raw(&[0x84 + columns.len() as u8]),
+        };
+        self.mark();
+        self.raw(b"}");
+        self.mark();
+        let batched = columns.len() > 1;
+        if batched {
+            self.raw(b"(");
+        }
+        for (slot, (_, kind, order, at)) in named.iter().zip(columns) {
+            self.get(*slot);
+            self.plain_dtype(kind, order);
+            self.count(*at);
+            self.raw(b"\x86");
+            self.mark();
+        }
+        self.raw(if batched { b"u" } else { b"s" });
+        self.count(width);
+        self.raw(b"K\x01K\x10t");
+        self.mark();
+        self.raw(b"b")
+    }
+    /// An array of records: the reconstructor, one dimension, the dtype, C
+    /// order and the bytes.
+    fn record_array(&mut self, rows: u64, width: u64, columns: &[(&str, &str, &str, u64)], data: &[u8]) -> &mut Self {
+        self.word("numpy._core.multiarray");
+        self.word("_reconstruct");
+        self.raw(b"\x93");
+        self.mark();
+        self.word("numpy");
+        self.word("ndarray");
+        self.raw(b"\x93");
+        self.mark();
+        self.raw(b"K\0\x85");
+        self.mark();
+        self.raw(b"C\x01b");
+        self.mark();
+        self.raw(b"\x87");
+        self.mark();
+        self.raw(b"R");
+        self.mark();
+        self.raw(b"(K\x01");
+        self.count(rows);
+        self.raw(b"\x85");
+        self.mark();
+        self.record_dtype(width, columns);
+        self.raw(b"\x89C");
+        self.raw(&[data.len() as u8]);
+        self.raw(data);
+        self.mark();
+        self.raw(b"t");
+        self.mark();
+        self.raw(b"b")
+    }
 }
 
 /// BYTEARRAY8 and the memo mark after it.

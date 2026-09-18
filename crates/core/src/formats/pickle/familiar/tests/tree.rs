@@ -112,7 +112,7 @@ fn a_matched_file_has_no_unmapped_bytes() {
 fn an_empty_array_reads_its_numbers_where_they_would_have_been() {
     let bytes = framed(&cat(&[b"}\x94", &word("a"), &one_array(2, "f8", b'<', b"K\0\x85\x94", &[]), b"s."]));
     let seen = dump(&bytes);
-    assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v5".into()));
+    assert_eq!(named_row(&seen, "form").value, V::Str("numpy-array-p4-p5-v6".into()));
     assert_eq!(named_row(&seen, "shape").value, V::Str("0".into()));
     let numbers = named_row(&seen, "numbers");
     assert_eq!((numbers.ty.as_str(), numbers.len, &numbers.value), ("f64 le[]", 0, &V::Composite { count: 0 }));
@@ -226,7 +226,7 @@ fn the_widened_values_read_as_the_types_their_bytes_are() {
 #[test]
 fn a_matched_array_carries_its_dtype_shape_and_order() {
     let seen = dump(MATRIX);
-    assert_eq!(named_row(&seen, "form").value, V::Str("numpy-numeric-array-p4-p5-v5".into()));
+    assert_eq!(named_row(&seen, "form").value, V::Str("numpy-array-p4-p5-v6".into()));
     assert_eq!(named_row(&seen, "value").ty, "array");
     assert_eq!(named_row(&seen, "dtype").value, V::Str("<f4".into()));
     assert_eq!(named_row(&seen, "shape").value, V::Str("4 x 6".into()));

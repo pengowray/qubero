@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn captures_numpy_payload_and_rejects_changed_structure() {
     let found = recognise(MATRIX).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
+    assert_eq!(found.form, "numpy-array-p4-p5-v6");
     let Kind::Dict(entries) = &found.value.kind else {
         panic!("dict expected")
     };
@@ -24,7 +24,7 @@ fn captures_numpy_payload_and_rejects_changed_structure() {
     };
     let at = *at;
     assert_eq!(dimensions, &[4, 6]);
-    assert_eq!(dtype, "<f4");
+    assert_eq!(spelling(dtype), "<f4");
     assert!(!fortran_order);
     assert_eq!(found.int(Deduce::PayloadCount, at as u64), Some(24));
     let floats: Vec<_> = MATRIX[at..at + 96]
@@ -77,7 +77,7 @@ fn standalone_arrays_preserve_dimensions_dtype_and_storage_order() {
         panic!("array")
     };
     assert_eq!(
-        (*len, dtype.as_str(), dimensions.as_slice(), *fortran_order),
+        (*len, spelling(dtype), dimensions.as_slice(), *fortran_order),
         (96, ">i4", &[2, 3, 4][..], true)
     );
     assert_eq!(found.int(Deduce::PayloadCount, *at as u64), Some(24));
@@ -187,9 +187,9 @@ fn an_array_at_protocol_5_is_rebuilt_around_its_buffer() {
     let numbers: Vec<u8> = (0u8..12).flat_map(|n| [n, 0]).collect();
     let whole = proto5(&cat(&[&frombuffer(&mutable(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]));
     let found = recognise(&whole).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
+    assert_eq!(found.form, "numpy-array-p4-p5-v6");
     let Kind::Array { dtype, dimensions, len, fortran_order, .. } = &found.value.kind else { panic!("array") };
-    assert_eq!((dtype.as_str(), dimensions.as_slice(), *len, *fortran_order), ("<i2", &[3, 4][..], 24, false));
+    assert_eq!((spelling(dtype), dimensions.as_slice(), *len, *fortran_order), ("<i2", &[3, 4][..], 24, false));
 
     // A read-only array hands over a byte string instead, and Fortran
     // order is the other letter.
@@ -230,12 +230,12 @@ fn a_later_array_may_name_what_an_earlier_one_wrote() {
     // The whole finished dtype, out of the slot its REDUCE filed it in.
     let shared = two_arrays(&get(17));
     let found = recognise(&framed(&shared)).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
+    assert_eq!(found.form, "numpy-array-p4-p5-v6");
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
     let dtypes: Vec<&str> = entries
         .iter()
         .map(|(_, v)| match &v.kind {
-            Kind::Array { dtype, .. } => dtype.as_str(),
+            Kind::Array { dtype, .. } => spelling(dtype),
             other => panic!("{other:?}"),
         })
         .collect();
@@ -338,7 +338,7 @@ fn a_numpy_scalar_is_one_number_of_its_dtype() {
     let found = recognise(&framed(&scalar(&[7, 0]))).unwrap();
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
     let Kind::Array { dtype, dimensions, len, .. } = &entries[1].1.kind else { panic!("array") };
-    assert_eq!((dtype.as_str(), dimensions.as_slice(), *len), ("<i2", &[][..], 2));
+    assert_eq!((spelling(dtype), dimensions.as_slice(), *len), ("<i2", &[][..], 2));
     assert_eq!(found.calls.len(), 2);
     assert_eq!(found.calls[1].name, "numpy scalar call");
     // One value of the dtype and no more: a scalar is not an array of one.

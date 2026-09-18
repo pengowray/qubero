@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::formats::pickle::familiar::{self, Call, Kind, Match, Names, Said, Value};
+use crate::formats::pickle::familiar::{self, Call, Dtype, Kind, Match, Names, Said, Value};
 use crate::formats::pickle::shapes;
 use crate::template::{Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
@@ -74,6 +74,11 @@ const FORTRAN_ORDER: &str = "Fortran";
 /// How a shape with no dimensions is written, which is NumPy's own spelling
 /// for the shape of a single value.
 const NO_DIMENSIONS: &str = "()";
+/// What a structured dtype's record is called, and what the bytes NumPy left
+/// between two of its columns are called. The number after it is how far into
+/// the record the run starts, so two runs of padding are told apart.
+const RECORD_NAME: &str = "record";
+const PADDING_FIELD: &str = "padding at";
 
 /// The largest file a form is run over. The recogniser reads the whole
 /// document at once, the same limit the deduced readings work under.
@@ -244,12 +249,15 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             }
             // What one of a form's enumerated calls made, with the arguments
             // the library writes it with.
-            Kind::Made { names, callable, items, .. } => {
+            Kind::Made { names, callable, items, state, .. } => {
                 let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(callable))];
                 kids.extend(items.iter().enumerate().map(|(i, x)| match names.get(i) {
                     Some(name) => (Label::Field(name), Part::Value(x)),
                     None => (Label::Index(i), Part::Value(x)),
                 }));
+                if let Some(Kind::Dict(entries)) = state.as_ref().map(|s| &s.kind) {
+                    kids.extend(entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))));
+                }
                 (Vec::new(), kids)
             }
             // A builtin written as a call. Its parts are named where Python
@@ -275,7 +283,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
                     false => C_ORDER,
                 };
                 let notes = vec![
-                    (Label::Field(DTYPE_FIELD), Part::Note(dtype.clone())),
+                    (Label::Field(DTYPE_FIELD), Part::Note(dtype.name())),
                     (Label::Field(SHAPE_FIELD), Part::Note(shape)),
                     (Label::Field(ORDER_FIELD), Part::Note(order.to_string())),
                 ];
@@ -336,7 +344,7 @@ fn keyed<'a>(part: &Part<'a>) -> Option<&'a Vec<(Value, Value)>> {
     let Part::Value(v) = part else { return None };
     match &v.kind {
         Kind::Dict(entries) => Some(entries),
-        Kind::Instance { state: Some(state), .. } => match &state.kind {
+        Kind::Instance { state: Some(state), .. } | Kind::Made { state: Some(state), .. } => match &state.kind {
             Kind::Dict(entries) => Some(entries),
             _ => None,
         },
@@ -408,6 +416,32 @@ fn leaf(value: &Value) -> Option<(T, usize, usize)> {
         Kind::Bytes { at, len } => (T::bytes(E::lit(*len as i128)), *at, *len),
         _ => return None,
     })
+}
+
+/// The type a run of an array's values reads as: one element repeated by the
+/// shape, where an element is one number or, for a structured dtype, a record
+/// of named columns with the padding NumPy left between them named too.
+fn numbers_ty(dtype: &Dtype, count: u64) -> Option<T> {
+    match dtype {
+        Dtype::Plain(spelling) => shapes::run(spelling, count),
+        Dtype::Record { columns, width } => {
+            let mut fields: Vec<(String, T)> = Vec::new();
+            let mut reached = 0u64;
+            for column in columns {
+                if column.at > reached {
+                    fields.push((format!("{PADDING_FIELD} {reached}"), T::bytes(E::lit((column.at - reached) as i128))));
+                }
+                let (elem, held) = shapes::element(&column.dtype)?;
+                fields.push((column.name.clone(), elem));
+                reached = column.at + held;
+            }
+            if *width > reached {
+                fields.push((format!("{PADDING_FIELD} {reached}"), T::bytes(E::lit((width - reached) as i128))));
+            }
+            let named: Vec<(&str, T)> = fields.iter().map(|(n, t)| (n.as_str(), t.clone())).collect();
+            Some(T::array(T::structure(RECORD_NAME, named), E::lit(count as i128)))
+        }
+    }
 }
 
 /// How many values a shape holds. Zero when any dimension is, which is what
@@ -493,7 +527,7 @@ impl Evaluator {
         // the node it is a key of.
         let r = self.memo[&root].clone();
         let base = r.offset;
-        for (i, (label, part)) in parts(&found, &here).into_iter().enumerate() {
+        for (i, (label, _)) in parts(&found, &here).into_iter().enumerate() {
             let said = match label {
                 Label::Field(f) => f == name,
                 Label::Index(n) => name.parse::<usize>().ok() == Some(n),
@@ -603,7 +637,7 @@ impl Evaluator {
             Part::Protocol => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, at, end - at, false))),
             Part::Data(v) => {
                 let Kind::Array { dtype, dimensions, .. } = &v.kind else { return fail("no such value") };
-                let Some(ty) = shapes::run(dtype, count_of(dimensions)) else {
+                let Some(ty) = numbers_ty(dtype, count_of(dimensions)) else {
                     return fail("this dtype has no type");
                 };
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))

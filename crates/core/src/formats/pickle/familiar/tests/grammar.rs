@@ -289,7 +289,7 @@ fn a_form_is_the_productions_it_allows() {
     ]);
     assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v3");
     let array = cat(&[b"}\x94", &word("a"), &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]), b"s."]);
-    assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-numeric-array-p4-p5-v5");
+    assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-array-p4-p5-v6");
     // A file holding both is read under neither: no form that allows both
     // has been reviewed.
     let both = cat(&[

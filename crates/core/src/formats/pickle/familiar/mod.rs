@@ -14,6 +14,7 @@ use crate::template::{Deduce, Deduced, Deducer};
 mod basic;
 mod builtins;
 mod cursor;
+mod dtype;
 mod memo;
 mod numpy;
 mod object;
@@ -64,7 +65,7 @@ const MIN_FRAME: usize = 4;
 /// The forms, each a named grammar over the same envelope. They differ in
 /// which value productions they allow, and every one of those is enumerated.
 const BASIC: &str = "basic-p4-p5-v5";
-const NUMPY: &str = "numpy-numeric-array-p4-p5-v5";
+const NUMPY: &str = "numpy-array-p4-p5-v6";
 const BUILTINS: &str = "builtins-values-p4-p5-v3";
 /// The library forms. Each is the plain object production over one module
 /// prefix, with the calls that library writes enumerated beside it, so a file
@@ -127,7 +128,7 @@ pub enum Kind {
     Array {
         at: usize,
         len: usize,
-        dtype: String,
+        dtype: Dtype,
         dimensions: Vec<u64>,
         fortran_order: bool,
     },
@@ -153,13 +154,59 @@ pub enum Kind {
         state: Option<Box<Value>>,
     },
     /// What a REDUCE of one of a form's enumerated callables made. `names`
-    /// names the arguments, in the order the library writes them.
+    /// names the arguments, in the order the library writes them, and `state`
+    /// is what a BUILD after the call handed the result.
     Made {
         what: Shape,
         names: &'static [&'static str],
         callable: Box<Value>,
         items: Vec<Value>,
+        state: Option<Box<Value>>,
     },
+}
+
+/// What one value of an array is.
+///
+/// NumPy describes both kinds the same way, as a `dtype` built by a call and
+/// finished by a BUILD, and the state of that BUILD says which this is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Dtype {
+    /// One number a value, spelled the way NumPy spells it: `<f4`.
+    Plain(String),
+    /// A record a value, which is what a structured array holds and what
+    /// scikit-learn writes its tree of nodes as. The columns are in the order
+    /// NumPy names them, and `width` is the whole record, padding included.
+    Record { columns: Vec<Column>, width: u64 },
+}
+
+/// One column of a structured dtype: what NumPy calls it, what one of them
+/// is, and how far into a record it sits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Column {
+    pub name: String,
+    pub dtype: String,
+    pub at: u64,
+}
+
+impl Dtype {
+    /// How wide one value is, which is what a shape is checked against.
+    pub fn width(&self) -> Option<u64> {
+        match self {
+            Dtype::Plain(spelling) => Some(crate::formats::pickle::shapes::dtype(spelling)?.1),
+            Dtype::Record { width, .. } => Some(*width),
+        }
+    }
+
+    /// The spelling the `dtype` row shows.
+    pub fn name(&self) -> String {
+        match self {
+            Dtype::Plain(spelling) => spelling.clone(),
+            Dtype::Record { width, columns } => {
+                let named: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+                format!("V{width} ({})", named.join(", "))
+            }
+        }
+    }
 }
 
 /// What a `BINGET` names, which is what the `refers to` row beside it says.
@@ -392,6 +439,21 @@ pub(super) struct Reduce {
 
 /// Nothing at all, for a form that enumerates no calls.
 const NO_CALLS: &[Reduce] = &[];
+/// The calls scikit-learn writes. One: a decision tree's array of nodes lives
+/// in a `Tree`, which is constructed from how many features, classes and
+/// outputs it was fitted on and handed its arrays by the BUILD after it.
+const SKLEARN_CALLS: &[Reduce] = &[Reduce {
+    path: "sklearn.tree._tree.Tree",
+    what: Shape::Object,
+    names: &["n_features", "n_classes", "n_outputs"],
+    shape: |args| {
+        matches!(
+            (&args[0].kind, &args[1].kind, &args[2].kind),
+            (Kind::Int { .. }, Kind::Array { .. }, Kind::Int { .. })
+        )
+        .then_some(())
+    },
+}];
 /// A form that names no class, which is every form below the library ones.
 const NO_CLASSES: &[&str] = &[];
 
@@ -404,7 +466,7 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
         (BASIC, plain),
         (NUMPY, Allow { numpy: true, ..plain }),
         (BUILTINS, Allow { builtins: true, ..plain }),
-        (SKLEARN, Allow { numpy: true, classes: &["sklearn."], ..plain }),
+        (SKLEARN, Allow { numpy: true, classes: &["sklearn."], calls: SKLEARN_CALLS, ..plain }),
         (SCIPY, Allow { numpy: true, classes: &["scipy.sparse."], ..plain }),
     ];
     forms.into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left))

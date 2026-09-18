@@ -196,3 +196,143 @@ fn the_template_places_an_object_s_attributes_beside_its_class() {
     assert_eq!(named_row(&seen, "name").value, V::Str("Thing".into()));
     assert_eq!(named_row(&seen, "form").value, V::Str("sklearn-estimator-p4-p5-v1".into()));
 }
+
+/// A structured dtype, which is what a record array's values are and what
+/// scikit-learn writes its tree of nodes with. The columns are named in the
+/// file, twice, and the second naming is the memo slots of the first.
+#[test]
+fn a_record_array_reads_the_columns_its_dtype_names() {
+    const COLUMNS: &[(&str, &str, &str, u64)] = &[("left", "i8", "<", 0), ("value", "f8", "<", 8)];
+    let mut w = Writing::default();
+    w.record_array(2, 16, COLUMNS, &[0; 32]);
+    let bytes = framed(&cat(&[&w.out, b"."]));
+    let found = recognise(&bytes).unwrap();
+    // A record array belongs to the NumPy form like any other array.
+    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    let Kind::Array { dtype, dimensions, .. } = &found.value.kind else { panic!("array expected") };
+    assert_eq!(dimensions, &[2]);
+    assert_eq!(
+        dtype,
+        &Dtype::Record {
+            width: 16,
+            columns: vec![
+                Column { name: "left".into(), dtype: "<i8".into(), at: 0 },
+                Column { name: "value".into(), dtype: "<f8".into(), at: 8 },
+            ],
+        }
+    );
+    assert_eq!(dtype.name(), "V16 (left, value)");
+}
+
+/// A record's columns have to fit inside it, in the order they are written,
+/// and the width in the letter code has to be the width in the state.
+#[test]
+fn a_record_whose_columns_do_not_fit_is_a_non_match() {
+    for (width, columns, rows) in [
+        // A column past the end of the record.
+        (16u64, &[("left", "i8", "<", 0u64), ("value", "f8", "<", 12)][..], 2u64),
+        // Two columns in the same bytes.
+        (16, &[("left", "i8", "<", 0), ("value", "f8", "<", 4)][..], 2),
+        // Columns out of the order they are named in.
+        (16, &[("left", "i8", "<", 8), ("value", "f8", "<", 0)][..], 2),
+    ] {
+        let mut w = Writing::default();
+        w.record_array(rows, width, columns, &vec![0; (rows * width) as usize]);
+        let bytes = framed(&cat(&[&w.out, b"."]));
+        assert!(recognise(&bytes).is_none(), "{width} {columns:?}");
+    }
+    // The width the letter code declares and the width the state declares
+    // have to agree, and the numbers have to come to the shape times the
+    // width.
+    let mut w = Writing::default();
+    w.record_array(2, 16, &[("left", "i8", "<", 0), ("value", "f8", "<", 8)], &[0; 24]);
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_none());
+}
+
+/// A decision tree's arrays live in a `sklearn.tree._tree.Tree`, which is the
+/// one callable the scikit-learn form accepts a REDUCE of. It is called with
+/// the three numbers the tree was fitted on and handed its arrays by the BUILD
+/// after it.
+#[test]
+fn a_tree_is_a_call_of_three_numbers_and_a_build() {
+    const COLUMNS: &[(&str, &str, &str, u64)] = &[("left", "i8", "<", 0), ("value", "f8", "<", 8)];
+    // An estimator holding a tree, which is where a real one is.
+    let mut w = Writing::default();
+    w.word("sklearn.dummy");
+    w.word("Thing");
+    w.raw(b"\x93");
+    w.mark();
+    w.raw(b")\x81");
+    w.mark();
+    w.raw(b"}");
+    w.mark();
+    w.word("tree_");
+    let inner = {
+        let mut t = Writing::default();
+        t.slots = w.slots;
+        t.word("sklearn.tree._tree");
+        t.word("Tree");
+        t.raw(b"\x93");
+        t.mark();
+        t.raw(b"K\x02");
+        t.record_array(1, 16, COLUMNS, &[0; 16]);
+        t.raw(b"K\x01\x87");
+        t.mark();
+        t.raw(b"R");
+        t.mark();
+        t.raw(b"}");
+        t.mark();
+        t.word("node_count");
+        t.raw(b"K\x01sb");
+        t.out
+    };
+    w.raw(&inner);
+    w.raw(b"sb");
+    let bytes = framed(&cat(&[&w.out, b"."]));
+    let found = recognise(&bytes).unwrap();
+    assert_eq!(found.form, "sklearn-estimator-p4-p5-v1");
+    let Kind::Instance { state: Some(state), .. } = &found.value.kind else { panic!("object expected") };
+    let Kind::Dict(entries) = &state.kind else { panic!("state expected") };
+    let Kind::Made { names, items, state: Some(tree_state), .. } = &entries[0].1.kind else { panic!("call expected") };
+    assert_eq!(*names, ["n_features", "n_classes", "n_outputs"]);
+    assert!(matches!(items[1].kind, Kind::Array { .. }));
+    assert!(matches!(tree_state.kind, Kind::Dict(_)));
+}
+
+/// The arguments are checked against what scikit-learn writes. A `Tree` of
+/// three plain numbers is not the call the form named, however familiar the
+/// name in front of it is.
+#[test]
+fn a_tree_called_with_the_wrong_arguments_is_a_non_match() {
+    let mut w = Writing::default();
+    w.word("sklearn.dummy");
+    w.word("Thing");
+    w.raw(b"\x93");
+    w.mark();
+    w.raw(b")\x81");
+    w.mark();
+    w.raw(b"}");
+    w.mark();
+    w.word("tree_");
+    w.word("sklearn.tree._tree");
+    w.word("Tree");
+    w.raw(b"\x93");
+    w.mark();
+    w.raw(b"K\x02K\x02K\x01\x87");
+    w.mark();
+    w.raw(b"R");
+    w.mark();
+    w.raw(b"sb");
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_none());
+    // And a call of the right shape to a name the form does not list.
+    let mut w = Writing::default();
+    w.word("sklearn.dummy");
+    w.word("Trees");
+    w.raw(b"\x93");
+    w.mark();
+    w.raw(b"K\x02K\x02K\x01\x87");
+    w.mark();
+    w.raw(b"R");
+    w.mark();
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_none());
+}

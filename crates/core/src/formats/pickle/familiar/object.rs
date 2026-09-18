@@ -15,7 +15,7 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Kind, Value};
+use super::{Kind, Shape, Value};
 
 impl Cursor<'_> {
     /// Whether a module is one the form in hand may name a class from.
@@ -29,10 +29,10 @@ impl Cursor<'_> {
     /// They are written the same way round: the thing being named or called
     /// first, what it is named or called with second. So the loop takes two
     /// off the stack for any of them and this says what the pair makes.
-    pub(super) fn library(&mut self, code: u8, items: Vec<Value>) -> Option<Kind> {
+    pub(super) fn library(&mut self, code: u8, at: usize, items: Vec<Value>) -> Option<Kind> {
         match code {
             0x93 => self.class_named(items),
-            0x81 => self.new_object(items),
+            0x81 => self.new_object(at, items),
             b'R' => self.reduced(items),
             b'b' => self.built(items),
             _ => None,
@@ -74,7 +74,7 @@ impl Cursor<'_> {
     /// Only an empty tuple. A NEWOBJ with arguments is a class being handed
     /// values to construct itself from, and what those mean is the class's
     /// business rather than the file's.
-    fn new_object(&mut self, items: Vec<Value>) -> Option<Kind> {
+    fn new_object(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [class, args] = <[Value; 2]>::try_from(items).ok()?;
         let Kind::Class { ref path, .. } = class.kind else { return None };
         let module = path.rsplit_once('.')?.0;
@@ -85,24 +85,32 @@ impl Cursor<'_> {
             Kind::Tuple(ref held) if held.is_empty() => {}
             _ => return None,
         }
-        self.memoize(Bound::Opaque)?;
+        // An object is filed when it is made, before the BUILD that fills it,
+        // so a later attribute may name it: a random forest's `estimator_` is
+        // the tree it was configured from, named where it was made.
+        self.memoize(Bound::Made { what: Shape::Object, at, hashable: false })?;
         self.instances += 1;
         Some(Kind::Instance { class: Box::new(class), state: None })
     }
 
-    /// BUILD: the state written in front of it, handed to the object below it.
+    /// BUILD: the state written in front of it, handed to the thing below it.
     ///
-    /// The state of an object made this way is a dictionary of attribute
-    /// names, which is what `object.__setstate__` takes. The names are data;
-    /// the shape is fixed.
+    /// The state is a dictionary of attribute names, which is what
+    /// `object.__setstate__` takes. The names are data; the shape is fixed.
+    /// What is below may be an object NEWOBJ made or the result of one of the
+    /// enumerated calls: scikit-learn's tree of nodes is a call, and the arrays
+    /// in it arrive by BUILD like any other attributes.
     fn built(&mut self, items: Vec<Value>) -> Option<Kind> {
         let [into, state] = <[Value; 2]>::try_from(items).ok()?;
-        let Kind::Instance { class, state: None } = into.kind else { return None };
-        match state.kind {
-            Kind::Dict(_) => {}
-            _ => return None,
+        if !matches!(state.kind, Kind::Dict(_)) {
+            return None;
         }
-        Some(Kind::Instance { class, state: Some(Box::new(state)) })
+        let state = Some(Box::new(state));
+        match into.kind {
+            Kind::Instance { class, state: None } => Some(Kind::Instance { class, state }),
+            Kind::Made { what, names, callable, items, state: None } => Some(Kind::Made { what, names, callable, items, state }),
+            _ => None,
+        }
     }
 
     /// REDUCE of one of the callables this form named, with the arguments that
@@ -122,6 +130,6 @@ impl Cursor<'_> {
         (call.shape)(&held)?;
         self.memoize(Bound::Opaque)?;
         self.instances += 1;
-        Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held })
+        Some(Kind::Made { what: call.what, names: call.names, callable: Box::new(callable), items: held, state: None })
     }
 }

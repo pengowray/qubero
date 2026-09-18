@@ -4,8 +4,8 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Kind, Value, MAX_DIMENSIONS, NO_OPCODE};
-use crate::formats::pickle::{known::Payload, shapes};
+use super::{Dtype, Kind, Value, MAX_DIMENSIONS, NO_OPCODE};
+use crate::formats::pickle::known::Payload;
 
 impl Cursor<'_> {
     /// One dimension of a shape, which is written as a nonnegative integer in
@@ -52,99 +52,8 @@ impl Cursor<'_> {
         Some(dims)
     }
 
-    /// The dtype of an array: the whole `numpy.dtype` construction and the
-    /// BUILD that gives it its byte order, or a reference to a slot already
-    /// holding a completed one.
-    ///
-    /// Comes back as the `<f4` spelling, which is the one thing that says how
-    /// to read the numbers.
-    fn dtype(&mut self) -> Option<String> {
-        // A slot holding a finished dtype stands for the whole construction.
-        // Any other reference here is the module name of the `numpy.dtype`
-        // class, which the construction itself reads.
-        self.gate()?;
-        if self.at_reference() {
-            let here = self.save();
-            if let Some(Bound::Dtype(dtype)) = self.reference().cloned() {
-                return Some(dtype);
-            }
-            self.restore(here);
-        }
-        self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
-        let (kind_at, kind_len) = {
-            self.gate()?;
-            self.exact(&[0x8c])?;
-            let len = self.byte()? as usize;
-            let at = self.at;
-            self.take(len)?;
-            (at, len)
-        };
-        let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?;
-        // Only these plain numeric dtype productions have this exact state.
-        if !matches!(
-            kind,
-            "b1" | "i1" | "i2" | "i4" | "i8" | "u1" | "u2" | "u4" | "u8" | "f2" | "f4" | "f8" | "c8" | "c16"
-        ) {
-            return None;
-        }
-        let kind = kind.to_string();
-        self.says("dtype", kind_at, kind_len);
-        self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
-        // NEWFALSE NEWTRUE TUPLE3, the two flags every plain dtype is built
-        // with, and then the call that makes it.
-        self.atoms(&[b"\x89", b"\x88"])?;
-        self.exact(b"\x87")?;
-        self.memoize(Bound::Opaque)?;
-        self.exact(b"R")?;
-        let slot = self.memoize(Bound::Opaque)?;
-        // The state the BUILD sets: version 3, the byte order, three Nones,
-        // no field offsets, and an alignment of zero.
-        self.atoms(&[b"(", b"K\x03"])?;
-        let order = self.byte_order(kind.as_str())?;
-        self.atoms(&[b"N", b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", b"K\0"])?;
-        self.exact(b"t")?;
-        self.memoize(Bound::Opaque)?;
-        self.exact(b"b")?;
-        let dtype = format!("{order}{kind}");
-        self.memo.fill(slot, Bound::Dtype(dtype.clone()));
-        Some(dtype)
-    }
-
-    /// The letter that says which way round a dtype's bytes go, spelled out
-    /// here or referred to where it was spelled. A single-byte dtype has no
-    /// order and says so with `|`.
-    fn byte_order(&mut self, kind: &str) -> Option<char> {
-        self.gate()?;
-        let (at, len) = if self.at_reference() {
-            let here = self.save();
-            match self.reference().cloned() {
-                Some(Bound::Text { at, len }) => (at, len),
-                _ => {
-                    self.restore(here);
-                    return None;
-                }
-            }
-        } else {
-            self.exact(&[0x8c, 1])?;
-            let at = self.at;
-            self.byte()?;
-            self.memoize(Bound::Text { at, len: 1 })?;
-            self.says("byte order", at, 1);
-            (at, 1)
-        };
-        if len != 1 {
-            return None;
-        }
-        let order = *self.bytes.get(at)?;
-        let one_byte = matches!(kind, "b1" | "i1" | "u1");
-        if (one_byte && order != b'|') || (!one_byte && !matches!(order, b'<' | b'>')) {
-            return None;
-        }
-        Some(char::from(order))
-    }
-
     /// The bytes an array's numbers sit in, checked against its shape.
-    fn numbers(&mut self, dtype: &str, dimensions: &[u64]) -> Option<(usize, usize, Payload)> {
+    fn numbers(&mut self, dtype: &Dtype, dimensions: &[u64]) -> Option<(usize, usize, Payload)> {
         self.gate()?;
         let code = self.byte()?;
         let (at, len) = self.counted(code, b'C', b'B', 0x8e)?;
@@ -153,8 +62,14 @@ impl Cursor<'_> {
     }
 
     /// Whether this many bytes is what the dtype and the shape come to.
-    fn fits(&self, dtype: &str, dimensions: &[u64], len: usize) -> Option<Payload> {
-        let (shape, width) = shapes::dtype(dtype)?;
+    fn fits(&self, dtype: &Dtype, dimensions: &[u64], len: usize) -> Option<Payload> {
+        // A record has no case in the payload table, so the opcode listing
+        // shows it as the bytes it is and the familiar form reads the columns.
+        let shape = match dtype {
+            Dtype::Plain(spelling) => crate::formats::pickle::shapes::dtype(spelling)?.0,
+            Dtype::Record { .. } => 0,
+        };
+        let width = dtype.width()?;
         // Check every dimension even when another one is zero. Dimensions
         // originate from nonnegative i32 values; the product is bounded too.
         let count = if dimensions.contains(&0) {

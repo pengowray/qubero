@@ -88,7 +88,7 @@ form whose productions it uses, and a file mixing two of them matches neither.
     name for one still being filled is ordinary rather than forward. A name
     may stand where a dictionary key belongs only when what it names hashes,
     which is decided where the thing was built.
-- `numpy-numeric-array-p4-p5-v5`: the basic productions plus an array or a
+- `numpy-array-p4-p5-v6`: the basic productions plus an array or a
   scalar, anywhere a value may stand, with at least one of them present.
   Matches exact `_reconstruct` and `scalar` sequences for
   `numpy._core.multiarray` and `numpy.core.multiarray`, and, at protocol 5
@@ -345,12 +345,12 @@ one half or the other.
 | `familiar-bytearray-p4.pickle` | `builtins-values-p4-p5-v3`: the same object as a call to the class |
 | `familiar-pure-python-batches.pickle` | `basic-p4-p5-v5`: the pickler in `pickle.py` ending a list of 1,001 its own way |
 | `proto4-builtins.pickle` | `builtins-values-p4-p5-v3` |
-| `proto4-numpy-array.pickle` | `numpy-numeric-array-p4-p5-v5` |
-| `proto4-numpy-byte-order.pickle` | `numpy-numeric-array-p4-p5-v5` |
-| `proto4-numpy-dtypes.pickle` | `numpy-numeric-array-p4-p5-v5` |
-| `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v5`, including a scalar |
-| `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v5` |
-| `familiar-numpy-large-p5.pickle` | `numpy-numeric-array-p4-p5-v5`: numbers too large to frame, so the boundary lands inside the call |
+| `proto4-numpy-array.pickle` | `numpy-array-p4-p5-v6` |
+| `proto4-numpy-byte-order.pickle` | `numpy-array-p4-p5-v6` |
+| `proto4-numpy-dtypes.pickle` | `numpy-array-p4-p5-v6` |
+| `proto4-numpy-shapes.pickle` | `numpy-array-p4-p5-v6`, including a scalar |
+| `proto4-numpy-shared-dtype.pickle` | `numpy-array-p4-p5-v6` |
+| `familiar-numpy-large-p5.pickle` | `numpy-array-p4-p5-v6`: numbers too large to frame, so the boundary lands inside the call |
 | `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
 | `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |

@@ -569,13 +569,13 @@ fn the_forms_match_these_samples_and_no_others() {
         ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v5")),
         // A dictionary whose big value is written between two frames.
         ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v5")),
-        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-numpy-array.pickle", Some("numpy-array-p4-p5-v6")),
         // Several arrays in one dictionary, the later ones naming numpy's
         // globals, dtype class, byte order or whole dtype out of the memo.
-        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v5")),
-        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v5")),
-        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v5")),
-        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-numpy-byte-order.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-dtypes.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-shapes.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-shared-dtype.pickle", Some("numpy-array-p4-p5-v6")),
         ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v3")),
         // The files written to say what a form takes and what it does not.
         // Every `familiar-` one is plain data written the ordinary way, and
@@ -600,7 +600,7 @@ fn the_forms_match_these_samples_and_no_others() {
         // An array whose numbers are too large to frame, so the frame
         // boundary lands inside the run of instructions that rebuilds it
         // rather than between two values of the file.
-        ("familiar-numpy-large-p5.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("familiar-numpy-large-p5.pickle", Some("numpy-array-p4-p5-v6")),
         // One list in two places, and one holding itself. Both are a name
         // pointing at a container, which the basic form reads as a reference
         // saying what it names and where the file wrote it.
@@ -651,8 +651,9 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto4-scipy-csr-matrix.pickle", Some("scipy-sparse-p4-p5-v1")),
         ("proto4-sklearn-pipeline.pickle", Some("sklearn-estimator-p4-p5-v1")),
         // A random forest holds decision trees, each with a
-        // `sklearn.tree._tree.Tree` rebuilt by REDUCE.
-        ("proto4-sklearn-random-forest.pickle", None),
+        // `sklearn.tree._tree.Tree` rebuilt by REDUCE from a structured array
+        // of nodes.
+        ("proto4-sklearn-random-forest.pickle", Some("sklearn-estimator-p4-p5-v1")),
         ("proto5-everything.pickle", None),
         ("proto5-out-of-band.pickle", None),
         ("proto5-pandas-dataframe.pickle", None),
@@ -686,13 +687,10 @@ fn the_forms_match_these_samples_and_no_others() {
 const FAMILIES: &[(&str, Option<&str>)] = &[
     ("basic", Some("basic-p4-p5-v5")),
     // An array and a scalar, which are two productions of one form.
-    ("numpy", Some("numpy-numeric-array-p4-p5-v5")),
+    ("numpy", Some("numpy-array-p4-p5-v6")),
     ("dataframe", None),
     ("series", None),
     ("sklearn", Some("sklearn-estimator-p4-p5-v1")),
-    // A decision tree also holds a `sklearn.tree._tree.Tree`, rebuilt by
-    // REDUCE from a structured array of nodes, which is its own production.
-    ("sklearn-decision-tree", None),
     ("scipy", Some("scipy-sparse-p4-p5-v1")),
 ];
 
