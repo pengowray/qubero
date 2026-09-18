@@ -181,15 +181,17 @@ design document.
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 317 |
 | `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 397 |
 | `familiar/forms.rs` | the families, declared once each and read at every protocol | 400 |
-| `familiar/basic.rs` | the stack a pickle is read against | 589 |
+| `familiar/basic.rs` | the stack a pickle is read against | 644 |
 | `familiar/values.rs` | the leaf productions, and what Python can hash | 187 |
 | `familiar/lines.rs` | protocol 0: the lines, and the two escapings | 256 |
 | `familiar/codecs.rs` | a byte string below protocol 3 | 177 |
 | `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 434, 334 |
-| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 90, 304 |
+| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 110, 358 |
+| `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 398 |
 | `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 491 |
 | `eval/pickletree.rs` | placing and naming those, and the table shapes | 445 |
-| `eval/picklesaid.rs` | what a value comes to in a few words | 105 |
+| `eval/picklesaid.rs` | what a value comes to in a few words | 116 |
+| `eval/picklestd.rs` | a date, an exact number, an id or a path as the text Python writes it in | 335 |
 | `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 393, 596 |
 
 **Adding a family of forms is one file and one row.** Write the productions
@@ -202,68 +204,105 @@ row over the four ranges. The calls every form below protocol 4 shares, and the
 object maker below protocol 2, are added by `Cursor::calls` from the protocol
 rather than written into the row.
 
-## The standard library's classes: measured, not yet read
+## The standard library's classes: landed on 2026-09-19
 
-Worked out on 2026-09-19 from a fresh matrix run that adds seventeen
-`stdlib-*` objects to every environment and four interpreters beside CPython
-and PyPy. Nothing below is implemented; this is what the next pass needs so it
-starts from the bytes rather than from a guess.
+Measured from a fresh matrix run that adds seventeen `stdlib-*` objects to
+every environment, and read the same day. The code is
+`crates/core/src/formats/pickle/familiar/stdlib.rs` for the calls and
+`crates/core/src/eval/picklestd.rs` for what each value reads as;
+`DESIGN-familiar-pickle-forms.md` has the whole of what the form takes, under
+`stdlib-values-p4-p5-v1` and its three neighbours.
 
-**The shapes, verified at protocol 4 and present at every protocol.** Each is a
-`REDUCE` of one enumerated callable with a fixed argument shape, which is the
-machinery `forms.rs` already has.
-
-| Callable | Arguments | Notes |
+| Form | What it reads | Matched in `pickle-matrix/` |
 | --- | --- | --- |
-| `datetime.datetime` | one byte string of 10 | or a 2-tuple with a `tzinfo` when aware |
-| `datetime.date` | one byte string of 4 | |
-| `datetime.time` | one byte string of 6 | |
-| `datetime.timedelta` | three integers | days, seconds, microseconds |
-| `datetime.timezone` | one `timedelta`, or that and a name | `timezone.utc` is `timezone(timedelta(0))` |
-| `decimal.Decimal` | one text | |
-| `fractions.Fraction` | two integers, or one text | both spellings are in the corpus |
-| `collections.Counter` | one dictionary | an argument, not a filled result |
-| `pathlib.PurePosixPath`, `PureWindowsPath` | a marked tuple of texts | |
-| `builtins.complex`, `slice`, `range`, `frozenset`, `bytearray` | as the builtins form already reads them | |
+| `stdlib-values-p4-p5-v1` | dates, spans, zones, exact numbers, ids, paths, counters, ordered and defaulting dictionaries, queues | 52 of 52 at protocol 4 and 5 |
+| `stdlib-values-p2-p3-v1` | the same | 91 of 91 |
+| `stdlib-values-p1-v1` | the same | 66 of 66 |
+| `stdlib-values-p0-v1` | the same | 78 of 78 |
 
-`uuid.UUID` needs no new production at all: it is `STACK_GLOBAL`,
-`EMPTY_TUPLE`, `NEWOBJ`, a state dictionary holding `int`, and `BUILD`, which
-is the object production that already exists. What it does need is a wider
-integer: a UUID is 128 bits, and `LONG1` is capped at sixteen bytes today, so
-the cap has to reach seventeen (a 128-bit unsigned number needs a leading zero
-byte in two's complement) and the reader's integer type has to hold it.
+Every file in `pickle-matrix/` matches a form: 992 of 992, at every protocol
+from 0 to 5 and from every pickler each environment has. The matrix was 664
+files before the `stdlib-*` objects were added to it.
 
-**Three of them are filled after the call, which is the one new mechanism.**
+**What the shapes turned out to be**, all verified against the bytes:
 
-| Callable | Written as |
+| Callable | Arguments |
 | --- | --- |
-| `collections.OrderedDict` | `REDUCE` of `()`, then `SETITEMS` on the result |
-| `collections.defaultdict` | `REDUCE` of the factory class (or `()`), then `SETITEMS` |
-| `collections.deque` | `REDUCE` of `()` or `(( ), maxlen)`, then `APPENDS` |
+| `datetime.datetime` | one byte string of 10, or that and a `tzinfo` when aware |
+| `datetime.date`, `datetime.time` | one byte string of 4 and of 6, the second also with a `tzinfo` |
+| `datetime.timedelta` | days, seconds, microseconds |
+| `datetime.timezone` | one `timedelta`, or that and a name |
+| `decimal.Decimal` | one text, which is what `str(Decimal)` writes |
+| `fractions.Fraction` | two integers, or one text `n/d` |
+| `collections.Counter` | one dictionary, read as the counter rather than as an argument |
+| `collections.OrderedDict`, `defaultdict`, `deque` | called empty and filled by the `SETITEMS` or `APPENDS` after them, or, in the older releases, handed everything they hold as one list |
+| `pathlib.PurePosixPath`, `PureWindowsPath` | however many words the path is made of |
+| `uuid.UUID` | no call: the plain object production with a 128-bit `int` in its state |
 
-So a `Reduce` needs to say that its result is filled like a dictionary or like
-a list. The shape that fits what is already there: the call produces
-`Kind::Made` whose `state` is an empty `Kind::Dict` or `Kind::List`, the
-`Slot` it is pushed on takes `Fill::Open`, and `one`/`batch` in `basic.rs`
-gain an arm that fills through a `Made`'s state. `pickleparts::keyed` already
-places a `Made`'s state dictionary's entries directly under the node, so an
-`OrderedDict` would read as a dictionary does with no further work; the
-records table's `FEWEST_ROWS` rule would need to accept a filled `Made`
-alongside a `Dict` for `stdlib-records` to open as a table.
+**Four things the measurement had not seen**, each found by running the forms
+over the whole matrix and each now read:
 
-**The module spellings to enumerate**, all of them in the corpus:
-`datetime` and `_datetime`; `collections` and `_collections`; `pathlib` and
-`pathlib._local` (Python 3.13 and later); `decimal`, `fractions`, `uuid`;
-`builtins` and `__builtin__`, including `long` and `xrange` for the Python 2
-spellings of `int` and `range`. A `defaultdict`'s factory in the corpus is
-`list` or `int`; keeping the accepted factories to a short list of builtins is
-what stops a class of the file's own being named there.
+- **`NEWOBJ_EX`.** Python 3.4 writes `EMPTY_TUPLE EMPTY_DICT NEWOBJ_EX` where
+  every release after it writes `EMPTY_TUPLE NEWOBJ`, so a `uuid.UUID` from
+  3.4 needed the third opcode. Arguments of either kind are refused for the
+  same reason `NEWOBJ`'s are.
+- **`__builtin__.long` and `__builtin__.unicode`.** `fix_imports` renames a
+  `defaultdict`'s factory on the way down to a protocol Python 2 could read:
+  `int` becomes `long` and `str` becomes `unicode`. Python 2 writing its own
+  `int` and `str` is the pair without the rename, and all four are on the list.
+- **Python 2's two-argument `bytearray`.** Python 2 had no type for a run of
+  bytes to hand the class, so it writes `bytearray(text, 'latin-1')` where
+  Python 3 writes `bytearray(bytes)`. That belongs to the builtins form rather
+  than to this one, and `stdlib-range-slice` from Python 2 is what found it.
+- **A packed run reaches the reader four ways.** Protocol 3 and up write a byte
+  string; protocol 2 hands the bytes to `_codecs.encode` as the latin-1 text
+  they spell; protocol 0 writes that text again as an escaped line; and Python
+  2's `str` is the bytes, which reads as text when they happen to be UTF-8.
+  `Cursor::packed_bytes` reads all four, and `Evaluator::packed` reads them
+  again on the way to the screen.
 
-**A stdlib family is added the way the recipe above says**: `STDLIB_CALLS` in
-`forms.rs`, four identifiers, one `Declared` row with
-`classes: &["datetime", "collections", "decimal", "fractions", "uuid", "pathlib", "builtins", "__builtin__"]`.
-Both builtin spellings are needed because `whitelisted` is a prefix test and
-`module_fits` only decides which of the two belongs to the protocol.
+**Two things that were not the standard library's** and were fixed on the way:
+
+- An integer past sixteen bytes had no reading at all, and a `uuid.UUID` is
+  128 bits: whenever its top bit is set it goes out as seventeen bytes, the
+  last of them the nought that says it is not negative. `LONG1` now reads at
+  every width the opcode can declare, up to 255 bytes, and a number past
+  sixteen is a node whose value is the digits it comes to with the run beneath
+  it. That made `unfamiliar-huge-integer` familiar, and it was renamed.
+- A protocol 0 line that spells its value rather than holding it had no type
+  and failed to place. It is a node now, typed `text` or `bytes`, with its
+  `line` row under it. No file in the collection had one until
+  `stdlib-records.p0` arrived.
+
+**How the family was added**, which is the recipe above with one thing more.
+`STDLIB_CALLS` and its validators went in `familiar/stdlib.rs`, four
+identifiers and one `Declared` row went in `forms.rs`, and the row's `classes`
+is
+`&["datetime", "_datetime", "collections", "_collections", "decimal", "fractions", "uuid", "pathlib"]`.
+`builtins` is deliberately not on that list: a module prefix says which classes
+may be named, and every class under `builtins` is too many to name. The eight a
+`defaultdict` may be handed as its factory are enumerated instead, by their
+whole dotted path in both of the spellings `fix_imports` writes, in a new
+`names` column on `Allow` that means "may name, never call".
+`__builtin__.object`, which used to be a special case in `may_name`, is what
+that column generalises.
+
+The one new mechanism is a call whose result the opcodes after it fill. A
+`Reduce` says so with `Args::FillsDict` or `Args::FillsList`, `reduced` gives
+the result an empty `Kind::Dict` or `Kind::List` as its `state`, and `one` and
+`batch` in `basic.rs` look through a `Made`'s state to find the container they
+are filling. `Args::Many` is a path, whose arguments are its parts however many
+there are, and `Args::Contents` is a `Counter`, whose one argument is the
+counter itself. A callable written more than one way has a row each, and
+`reduced` asks every row of that name rather than the first, which is what a
+naive and an aware `datetime` needed.
+
+**What is not read**, and what each `proto*-everything` sample now stops at:
+`ValueError`, spelled `exceptions.ValueError` below protocol 3 and
+`builtins.ValueError` from 3 up, which is an exception rebuilt by `REDUCE` from
+the message it was raised with. `proto4-collections` reads its `OrderedDict`,
+`defaultdict`, `Counter` and `deque` and stops at a namedtuple class the
+writing file defined, handed values by `NEWOBJ`.
 
 ## Four more interpreters, measured
 
@@ -296,10 +335,11 @@ What is left, in the order it is worth doing:
    are decoded twice over.
 2. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
-3. **The standard library's classes**, which are what every remaining
-   `proto*-everything` sample is held back by: `datetime`, `Decimal`,
-   `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`. Each needs the
-   exact state it is rebuilt from written down, the way the library calls are.
+3. **An exception rebuilt from its message**, which is what every remaining
+   `proto*-everything` sample is held back by, and a namedtuple, which is what
+   `proto4-collections` is held back by. The first needs the exact state
+   `ValueError` is rebuilt from written down; the second names a class the
+   writing file defined, and no list can hold that.
 4. **A block placed by an array** rather than by a slice, which pandas writes
    when a block's columns are not next to each other. No file in the corpus
    does, so there is nothing to test it against.

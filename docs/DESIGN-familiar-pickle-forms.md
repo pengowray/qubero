@@ -42,9 +42,9 @@ and a `REDUCE` or `BUILD` outside the fixed runs the forms name is a non-match
 as before. Depth is bounded per value as the tree is built rather than by the
 recursion that is no longer there.
 
-Implemented forms. There are twenty-four: six families, each with one form for
-protocols 4 and 5, one for protocols 2 and 3, one for protocol 1 and one for
-protocol 0. The six of a protocol range
+Implemented forms. There are twenty-eight: seven families, each with one form
+for protocols 4 and 5, one for protocols 2 and 3, one for protocol 1 and one
+for protocol 0. The seven of a protocol range
 are the same grammar over the same envelope, differing in which value
 productions they allow; a file is read under the one form whose productions it
 uses, and a file mixing two of them matches neither. The two ranges are named
@@ -135,6 +135,43 @@ section says what its neighbour does differently.
   only below protocol 5, which gave the type an opcode. No other module,
   callable or argument type is accepted. `set` and `frozenset` moved to the
   basic form, where they belong: protocol 4 writes both as literals.
+- `stdlib-values-p4-p5-v1`: the standard library's own classes, which is what
+  a pickle of ordinary program state is full of. Each is a `REDUCE` of one
+  enumerated callable with the exact argument shape that callable is written
+  with, and the list is in `familiar/stdlib.rs`:
+  - `datetime.datetime`, `date` and `time`, each called with the one run of
+    bytes `_getstate` packs it into, ten, four and six long, and a second
+    argument holding the zone when the value is aware. The fields in the run
+    are checked against what a calendar and a clock have: a year from 1 to
+    9999, a month from 1 to 12, a day from 1 to 31, an hour under 24, a minute
+    and a second under 60 and a microsecond under a million. From Python 3.6 a
+    datetime and a time carry which side of a repeated hour they fell on, and
+    `_getstate` writes that bit in the top of the month or the hour byte; it is
+    written only from protocol 4, so below that the high bit is a month or an
+    hour nothing has.
+  - `datetime.timedelta` of three whole numbers, and `datetime.timezone` of one
+    of those spans and, where the zone has one, its name.
+  - `decimal.Decimal` of the text its own `str` writes, which is digits with at
+    most one point and an exponent after them, or `NaN`, `sNaN` or `Infinity`
+    with a sign in front. `fractions.Fraction` of two whole numbers or of the
+    text `str` writes, which is `n/d` with a denominator that is never one and
+    never negative.
+  - `pathlib.PurePosixPath` and `PureWindowsPath`, under that module and under
+    `pathlib._local`, called with however many words the path is made of.
+  - `collections.Counter` of the mapping it holds, which is read as the
+    counter rather than as an argument beside it.
+  - `collections.OrderedDict`, `defaultdict` and `deque`, each created empty by
+    the call and filled by the `SETITEMS` or `APPENDS` after it, which is how
+    every other container in a pickle is built. A `defaultdict`'s factory is
+    one of a short list of builtin classes, in both of the spellings
+    `fix_imports` writes, or nothing at all; a class of the writing program's
+    own is a non-match. The older releases wrote all three another way, handing
+    the class everything it was to hold as one list, and both are read.
+  - `uuid.UUID`, which needs no call at all: it is the plain object production
+    with a 128-bit `int` in its state.
+  - The builtins the builtins form reads, since a file holding a date and a
+    complex number is one file. A file holding only builtins stays under
+    `builtins-values-p4-p5-v3`, which is the form for it.
 - The library forms, one per library, described in "The safety line for a
   library object" below: `sklearn-estimator-p4-p5-v1`,
   `scipy-sparse-p4-p5-v1` and `pandas-frame-p4-p5-v1`.
@@ -167,8 +204,16 @@ so the line is written here and held in `familiar/object.rs`.
   anywhere else. A `BINGET` may name a class the file named earlier, under the
   same rule.
 - **An object is made only by `EMPTY_TUPLE NEWOBJ`**, which is
-  `cls.__new__(cls)`. A `NEWOBJ` handed arguments is a class being told to
-  construct itself out of values, and what those mean belongs to the class.
+  `cls.__new__(cls)`, or by the `EMPTY_TUPLE EMPTY_DICT NEWOBJ_EX` Python 3.4
+  writes for the same thing. A `NEWOBJ` handed arguments, or a `NEWOBJ_EX`
+  handed arguments of either kind, is a class being told to construct itself
+  out of values, and what those mean belongs to the class.
+- **A global a form names and never calls is enumerated by its whole dotted
+  path**, which is the `names` column of a form's row. `builtins` is not a
+  package any class at all may be named from, so the eight classes a
+  `collections.defaultdict` may be handed as its factory are written out one by
+  one in both spellings, and `__builtin__.object` is there because every
+  `copy_reg._reconstructor` call is handed it.
 - **State arrives only by `BUILD`**, of a dictionary of attribute names or of
   the tuple a class with a `__setstate__` of its own is handed. The attribute
   names are data; the instruction shape is fixed. State values are what the
@@ -188,6 +233,7 @@ The list, as implemented:
 | --- | --- |
 | every form with NumPy | `numpy._core.multiarray._reconstruct`, `numpy.core.multiarray._reconstruct`, `numpy._core.multiarray.scalar`, `numpy.core.multiarray.scalar`, `numpy._core.numeric._frombuffer`, `numpy.core.numeric._frombuffer`, `numpy.dtype` |
 | `builtins-values-p4-p5-v3` | `builtins.slice`, `builtins.range`, `builtins.complex`, `builtins.bytearray` |
+| `stdlib-values-p4-p5-v1` | `datetime.datetime` / `date` / `time` / `timedelta` / `timezone`, `decimal.Decimal`, `fractions.Fraction`, `pathlib.PurePosixPath` / `PureWindowsPath` under `pathlib` and `pathlib._local`, `collections.Counter` / `OrderedDict` / `defaultdict` / `deque` |
 | `sklearn-estimator-p4-p5-v1` | the NumPy ones, and `sklearn.tree._tree.Tree` of a number, an array and a number |
 | `scipy-sparse-p4-p5-v1` | the NumPy ones |
 | `pandas-frame-p4-p5-v1` | the NumPy ones, `builtins.slice`, `pandas.core.internals.managers.BlockManager` of a tuple of blocks and a list of axes, `pandas._libs.internals._unpickle_block` of values, a slice and a number, `pandas.core.indexes.base._new_Index` and `pandas.core.indexes.datetimes._new_DatetimeIndex` of a class and a dictionary, `pandas._libs.arrays.__pyx_unpickle_NDArrayBacked` of a class, a number and None, `pandas.StringDtype` / `pandas.core.arrays.string_.StringDtype` of a word and a float, `pandas._libs.tslibs.offsets.Day` of a number and a flag, `functools.partial` of the one global below, and `pandas.core.internals.blocks.new_block` through that partial |
@@ -670,6 +716,32 @@ the call and the array has only the call beneath it.
 that every node's children tile it, so an instruction that stopped being
 named would fail rather than quietly become a gap.
 
+One of the standard library's values reads as the text Python writes it in,
+worked out from the run it was packed into rather than read where it sits, and
+`eval/picklestd.rs` is that reading. A datetime is ISO 8601 with a `T` in it,
+`2020-01-02T03:04:05.678901`, with the offset from UTC after it when the value
+is aware and its zone is one the file spelled out; a date is `2020-01-02` and a
+time `03:04:05.678901`. A `timedelta` reads as Python's own `str`,
+`1 day, 0:00:02.000003`; a `Decimal` and a `Fraction` as the text they were
+built from; a `uuid.UUID` as the hyphenated hexadecimal everything else writes
+an id in; and a path as its parts joined the way its own class joins them. The
+packed bytes stay where they are, as a `packed` row inside the value, and every
+argument keeps the name Python gives it.
+
+An `OrderedDict`, a `defaultdict` and a `Counter` show their entries exactly as
+a dictionary does, with the class on a `class` row inside them as an object's
+is, and each reads as what it holds and how much of it: `OrderedDict of 4`. A
+`deque` shows its items the same way. So a list of `OrderedDict`s is a records
+table like a list of dictionaries, which is what `stdlib-records` is.
+
+A whole number past sixteen bytes is a node whose value is the digits it comes
+to, with the run it was written in as a row beneath it: `bytes` for the
+two's-complement run `LONG1` writes, and `line` for the digits protocols 0 and
+1 spell. There is no integer type that wide, so the number is worked out once
+as the form reads the run and never read back out of the file. A protocol 0
+line that spells a string rather than holding it is the same shape, typed
+`text` or `bytes` with its `line` row under it.
+
 A matched list of records is a table, and the core says so rather than the
 interface working it out. `[{"id": 1, "name": "a"}, ...]` is how rows are
 pickled when nobody reached for pandas, and the keys are written in the file
@@ -706,7 +778,7 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, thirty-two files match today. The twelve `familiar-` files
+Of the sibling corpus, thirty-three files match today. The twelve `familiar-` files
 and the three `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
@@ -735,18 +807,18 @@ one half or the other.
 | `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
 | `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
 | `familiar-huge-integer.pickle` | `basic-p4-p5-v5`: two to the two hundredth, which needs twenty-six bytes |
+| `proto4-datetime.pickle` | `stdlib-values-p4-p5-v1`: packed dates, times and spans |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
 | `unfamiliar-optimized.pickle` | `pickletools.optimize` took the memo marks out |
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
-| `proto2-everything.pickle` | calls `datetime`, `Decimal`, `Fraction`, `ValueError` and `_codecs.encode` |
-| `proto3-everything.pickle` | the same classes |
-| `proto4-everything.pickle` | stopped first at byte 93, a LONG1 of 26 bytes holding two to the two hundredth; then the same classes, and one list under two keys |
-| `proto5-everything.pickle` | the same, at the same byte |
-| `proto4-collections.pickle` | OrderedDict, defaultdict, Counter, deque, and NEWOBJ of a class the writing file defined |
-| `proto4-datetime.pickle` | packed `datetime` records |
+| `proto2-everything.pickle` | calls `exceptions.ValueError`, which no form names |
+| `proto3-everything.pickle` | the same, spelled `builtins.ValueError` |
+| `proto4-everything.pickle` | the same |
+| `proto5-everything.pickle` | the same |
+| `proto4-collections.pickle` | NEWOBJ of a namedtuple class the writing file defined; its OrderedDict, defaultdict, Counter and deque are read |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
 | `proto4-numpy-object-array.pickle` | an object dtype, whose data is pickled values |
-| `proto0-everything.pickle`, `proto1-everything.pickle` | the same classes the other `everything` files call |
+| `proto0-everything.pickle`, `proto1-everything.pickle` | the same call the other `everything` files make |
 | `proto0-persistent-id.pickle`, `handmade-*` | persistent ids, and the opcodes CPython reads and never writes |
 | `proto2-memo-over-256.pickle` | `basic-p2-p3-v1` |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
@@ -756,13 +828,14 @@ one half or the other.
 | `proto5-pandas-dataframe`, `proto5-pandas-series`, `proto5-pandas-index-types` | `pandas-frame-p4-p5-v1` |
 | `proto2-torch-state-dict` | protocol 2, and persistent ids for the tensor storage |
 
-The `everything` files and `proto4-collections` are held back by one thing
-between them: each rebuilds a class no form names, by REDUCE or by NEWOBJ. A
-form that took those would be accepting any class at all, which is the one
-thing the contract rules out. Widening to protocols 2 and 3 did not reach them
-and was never going to: `proto2-everything` calls `datetime`, `Decimal`,
-`Fraction` and `ValueError`, and each of those needs the exact state it is
-rebuilt from written down, the way the library calls are.
+The `everything` files and `proto4-collections` are still held back by one
+thing between them, and it is a smaller thing than it was. Every `everything`
+file now reads as far as its `ValueError`, which is an exception rebuilt by
+`REDUCE` from the message it was raised with; `proto4-collections` reads its
+`OrderedDict`, `defaultdict`, `Counter` and `deque` and stops at a namedtuple
+class the writing file defined, handed values by `NEWOBJ`. A form that took
+either would be accepting a class it had not written down, which is the one
+thing the contract rules out.
 
 `crates/core/tests/pickle_real.rs` writes the whole matrix out file by file so
 that a form growing quietly is a failing test, and separately flips two bits of
@@ -840,13 +913,15 @@ Next steps, in order:
 1. Fold an array's numbers by its shape, and navigate from a value to the
    opcodes that built it. Editing a captured value is a separate question: the
    recognition is invalidated by the edit and has to be made again.
-2. Done for the libraries: a class the file names may be a declared data field
-   when its module is one a form lists, and "The safety line for a library
-   object" above is the whole of the rule. The standard library's classes are
-   still a non-match: `datetime`, `Decimal`, `Fraction`, `OrderedDict`,
-   `defaultdict`, `Counter` and `deque` each need the exact state they are
-   rebuilt from written down. A namedtuple names a class defined by the file
-   that wrote it, and no list can hold that.
+2. Done, for the libraries and for the standard library: a class the file names
+   may be a declared data field when its module is one a form lists, and "The
+   safety line for a library object" above is the whole of the rule.
+   `datetime`, `Decimal`, `Fraction`, `OrderedDict`, `defaultdict`, `Counter`,
+   `deque`, `UUID` and the path classes each have the exact state they are
+   rebuilt from written down, in `familiar/stdlib.rs`. What is left is an
+   exception rebuilt from its message, which every `proto*-everything` sample
+   now stops at, and a namedtuple, which names a class defined by the file that
+   wrote it and which no list can hold.
 3. Done: a name may point at a container. The `refers to` row says what it is
    and where the file wrote it, `list at 0x0b`, so the reference stays the two
    bytes it is and the reader is sent to the bytes rather than shown a copy of
@@ -864,7 +939,7 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include seventy-one FPF tests, eleven of which
+Validation: the pickle unit tests include eighty FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a
@@ -883,8 +958,17 @@ shares with the other, and the opcodes no pickler writes, a protocol 1 file read
 `long` protocol 1 writes as a line, a protocol 0 file read out of its lines, a
 line with an escape in it read as the thing it spells, the lines no pickler
 wrote, and ordinary text files that are not a familiar form whatever their
-bytes walk as. Seventeen `pickle_real` integration
-tests pass against the sibling corpus, including the corpus match matrix, the
+bytes walk as. Nine are the standard library's classes: a packed date, time and
+datetime and the runs that are none of them, the fold bit and the protocols
+that do not write it, the texts `Decimal` and `Fraction` are built from and the
+ones Python would not have written, the three containers filled after the call
+and the ways they may not be filled, the factories a `defaultdict` may be
+handed and the ones it may not, a `Counter`'s mapping and a path's parts, an id
+holding a number too wide for the reader's integer type and the `NEWOBJ_EX`
+Python 3.4 writes, and the calls of names no form enumerated. Eighteen
+`pickle_real` integration
+tests pass against the sibling corpus, including the corpus match matrix, a
+list of `OrderedDict`s opening as a table cell for cell at every protocol, the
 per-file mutation sweep, a walk of the decoded array's 24 numbers, a walk of
 twenty-one protocol 2 and 3 files of the matrix through the template with no
 byte left over, and the same frame, series and array opening as the same table
@@ -894,21 +978,20 @@ The forms are also run over `pickle-matrix/` in the sample collection, which
 is now committed: the same objects written by CPython 2.7, 3.4, 3.6, 3.7, 3.8,
 3.10, 3.12, 3.13 and 3.14 and by PyPy 2.7 and 3.10, with NumPy 1.19 to 2.5
 beside them where the release had one, at every protocol each has and from
-every pickler each has. Every one of the 168 files written at protocol 4 or 5
-matches: 44 of plain data, 34 of arrays and scalars, 33 scikit-learn, 8 scipy,
-and 49 pandas frames and series across every release in the corpus from 1.1 to
-3.0. So does every one of the 218 written at protocol 2 or 3: 93 of plain data,
-28 of arrays and scalars, 36 scikit-learn, 8 scipy, and 53 pandas frames and
-series. Of those 218, 166 were written by Python 3's C pickler, 4 by
-`pickle.py`, 15 by Python 2's `pickle`, 15 by its `cPickle`, and 18 by PyPy
-2.7's two. And so does every one of the 130 written at protocol 1: 67 of plain
-data, 14 of arrays and scalars, 18 scikit-learn, 4 scipy and 27 pandas frames
-and series, of which 82 are Python 3's C pickler, 23 Python 2's `pickle` and 25
-its `cPickle`. And so does every one of the 148 written at protocol 0: 77 of
-plain data, 21 of arrays and scalars, 18 scikit-learn, 5 scipy and 27 pandas
-frames and series, of which 100 are Python 3's C pickler, 2 its `pickle.py`,
-15 Python 2's `pickle`, 15 its `cPickle` and 16 PyPy 2.7's two. Every file in
-the matrix now matches: 664 of 664, at every protocol from 0 to 5.
+every pickler each has. Every one of the 992 files matches, at every protocol
+from 0 to 5. The matrix grew from 664 on 2026-09-19, when seventeen
+`stdlib-*` objects were added to every environment: dates and aware dates,
+ordered and defaulting dictionaries, counters, queues, exact numbers,
+fractions, ids, paths, complex numbers, ranges and slices, and a list of
+records with a date, a decimal and a counter in each.
+
+Per family and protocol range: 44, 93, 67 and 77 of plain data; 34, 28, 14 and
+21 of arrays and scalars; 33, 36, 18 and 18 scikit-learn; 8, 8, 4 and 5 scipy;
+49, 53, 27 and 27 pandas frames and series; 52, 91, 66 and 78 of the standard
+library's classes; and 6, 13, 10 and 12 whose values are builtins alone, which
+stay under the builtins form because a file has to use a form's own
+productions to be read under it.
+
 The browser test is `web/test/pickle.browser.mjs`: it checks that a matched
 sample opens as the familiar form with its form ID, its pickler row and its
 decoded values, that the chooser offers both templates and switches between
