@@ -63,9 +63,11 @@ pub(super) struct Allow {
     /// that names no class at all, which is where the basic, NumPy and
     /// builtins forms stand.
     pub(super) classes: &'static [&'static str],
-    /// The callables this form accepts a REDUCE of. Never anything else: see
-    /// [`object`] for why a module prefix cannot stand in for this list.
-    pub(super) calls: &'static [Reduce],
+    /// The callables this form accepts a REDUCE of, as the lists they were
+    /// written in: the ones every form below protocol 4 shares, and the ones
+    /// its library writes. Never anything else: see [`object`] for why a
+    /// module prefix cannot stand in for this list.
+    pub(super) calls: &'static [&'static [Reduce]],
     /// Whether an array's values may be pickled objects rather than numbers,
     /// which is NumPy's `O8` dtype. A pandas index of column names is one, and
     /// nothing else in the corpus is.
@@ -104,7 +106,7 @@ pub(super) enum Via {
 pub(super) const PARTIAL: &str = "functools.partial";
 
 /// Nothing at all, for a form that enumerates no calls.
-const NO_CALLS: &[Reduce] = &[];
+const NO_CALLS: &[&[Reduce]] = &[];
 /// The calls scikit-learn writes. One: a decision tree's array of nodes lives
 /// in a `Tree`, which is constructed from how many features, classes and
 /// outputs it was fitted on and handed its arrays by the BUILD after it.
@@ -260,28 +262,9 @@ fn members(args: &[Value]) -> Option<()> {
     matches!(args[0].kind, Kind::List(_) | Kind::Tuple(_)).then_some(())
 }
 
-/// The calls of a form that reads protocols 2 and 3: the three above, and
-/// whatever the library the form is for writes.
-macro_rules! below_four {
-    ($($extra:expr),* $(,)?) => {
-        &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL $(, $extra)*]
-    };
-}
-
-const BASIC_CALLS_23: &[Reduce] = below_four!();
-const SKLEARN_CALLS_23: &[Reduce] = below_four!(SKLEARN_CALLS[0]);
-const PANDAS_CALLS_23: &[Reduce] = below_four!(
-    PANDAS_CALLS[0],
-    PANDAS_CALLS[1],
-    PANDAS_CALLS[2],
-    PANDAS_CALLS[3],
-    PANDAS_CALLS[4],
-    PANDAS_CALLS[5],
-    PANDAS_CALLS[6],
-    PANDAS_CALLS[7],
-    PANDAS_CALLS[8],
-    PANDAS_CALLS[9],
-);
+/// The calls every form reads below protocol 4, whatever else it reads: the
+/// two containers and the byte string that protocol has no opcode for.
+const BELOW_FOUR: &[Reduce] = &[SET_CALL, OLD_SET_CALL, FROZEN_CALL, OLD_FROZEN_CALL];
 
 /// Every form, in the order a file is tried against them. The protocol byte
 /// tells the two halves apart at the second byte of the file, so a file only
@@ -298,12 +281,12 @@ pub(super) fn forms() -> [(&'static str, Allow); 12] {
         calls: NO_CALLS,
         object_arrays: false,
     };
-    let old = Allow { protocols: OLD, calls: BASIC_CALLS_23, ..plain };
+    let old = Allow { protocols: OLD, calls: &[BELOW_FOUR], ..plain };
     [
         (BASIC, plain),
         (NUMPY, Allow { family: Family::Numpy, numpy: true, ..plain }),
         (BUILTINS, Allow { family: Family::Builtins, builtins: true, ..plain }),
-        (SKLEARN, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS, ..plain }),
+        (SKLEARN, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[SKLEARN_CALLS], ..plain }),
         (SCIPY, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..plain }),
         (
             PANDAS,
@@ -313,20 +296,20 @@ pub(super) fn forms() -> [(&'static str, Allow); 12] {
                 numpy: true,
                 builtins: true,
                 classes: &["pandas"],
-                calls: PANDAS_CALLS,
+                calls: &[PANDAS_CALLS],
                 object_arrays: true,
             },
         ),
         (BASIC23, old),
         (NUMPY23, Allow { family: Family::Numpy, numpy: true, ..old }),
         (BUILTINS23, Allow { family: Family::Builtins, builtins: true, ..old }),
-        (SKLEARN23, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS_23, ..old }),
+        (SKLEARN23, Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, SKLEARN_CALLS], ..old }),
         (SCIPY23, Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], ..old }),
         (
             PANDAS23,
             Allow {
                 protocols: OLD,
-                calls: PANDAS_CALLS_23,
+                calls: &[BELOW_FOUR, PANDAS_CALLS],
                 family: Family::Library,
                 numpy: true,
                 builtins: true,

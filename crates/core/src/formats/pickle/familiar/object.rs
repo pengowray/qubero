@@ -45,7 +45,7 @@ impl Cursor<'_> {
     pub(super) fn may_name(&self, path: &str) -> bool {
         match path.rsplit_once('.') {
             Some((module, _)) => {
-                self.module_fits(module) && (self.whitelisted(module) || self.allow.calls.iter().any(|call| call.path == path))
+                self.module_fits(module) && (self.whitelisted(module) || self.calls().any(|call| call.path == path))
             }
             None => false,
         }
@@ -68,7 +68,13 @@ impl Cursor<'_> {
     /// Whether this form reads a call at all, which is what says the opcodes
     /// that name, make and fill an object may appear.
     pub(super) fn reads_calls(&self) -> bool {
-        !self.allow.classes.is_empty() || !self.allow.calls.is_empty()
+        !self.allow.classes.is_empty() || self.calls().next().is_some()
+    }
+
+    /// Every callable this form accepts a REDUCE of, whichever list it was
+    /// written in.
+    pub(super) fn calls(&self) -> impl Iterator<Item = super::forms::Reduce> + '_ {
+        self.allow.calls.iter().flat_map(|group| group.iter().copied())
     }
 
     /// GLOBAL, which is how protocols 2 and 3 name a class or a callable: one
@@ -211,7 +217,7 @@ impl Cursor<'_> {
             }
             _ => return None,
         };
-        let call = *self.allow.calls.iter().find(|call| call.path == path && call.via == via)?;
+        let call = self.calls().find(|call| call.path == path && call.via == via)?;
         let Kind::Tuple(held) = args.kind else { return None };
         if held.len() != call.names.len() {
             return None;
