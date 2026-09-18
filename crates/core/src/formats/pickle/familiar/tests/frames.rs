@@ -28,7 +28,7 @@ fn a_payload_too_large_to_frame_sits_between_frames() {
     };
     let whole = build(&carrying(BIG_PAYLOAD));
     let found = recognise(&whole).unwrap();
-    assert_eq!(found.form, "basic-p4-p5-v4");
+    assert_eq!(found.form, "basic-p4-p5-v5");
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
     assert_eq!(entries.len(), 3);
     assert!(matches!(entries[1].1.kind, Kind::Bytes { len, .. } if len == BIG_PAYLOAD));

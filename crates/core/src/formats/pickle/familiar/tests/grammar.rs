@@ -8,7 +8,7 @@ use super::*;
 fn captures_basic_values_without_a_machine() {
     let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
     let found = recognise(&bytes).unwrap();
-    assert_eq!(found.form, "basic-p4-p5-v4");
+    assert_eq!(found.form, "basic-p4-p5-v5");
     // Every node spans the bytes its production consumed, and a leaf says
     // where inside that its value proper sits.
     assert_eq!((found.value.at, found.value.len), (11, 15));
@@ -32,7 +32,7 @@ fn captures_basic_values_without_a_machine() {
     );
     assert_eq!(
         found.text(Deduce::Builds, bytes.len() as u64).as_deref(),
-        Some(stop_message("basic-p4-p5-v4").as_str())
+        Some(stop_message("basic-p4-p5-v5").as_str())
     );
     assert!(recognise(b"\x80\x05N.").is_some());
 }
@@ -180,7 +180,7 @@ fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
     ];
     for (body, want) in &cases {
         let found = recognise(&one(body.clone())).unwrap_or_else(|| panic!("{want:?} was not matched"));
-        assert_eq!(found.form, "builtins-values-p4-p5-v2", "{want:?}");
+        assert_eq!(found.form, "builtins-values-p4-p5-v3", "{want:?}");
         let Kind::Object { what, .. } = &found.value.kind else { panic!("{want:?} is not an object") };
         assert_eq!(what, want);
     }
@@ -277,7 +277,7 @@ fn a_file_shows_one_pickler_or_neither_and_never_both() {
 /// one of them.
 #[test]
 fn a_form_is_the_productions_it_allows() {
-    assert_eq!(recognise(&framed(b"}\x94.")).unwrap().form, "basic-p4-p5-v4");
+    assert_eq!(recognise(&framed(b"}\x94.")).unwrap().form, "basic-p4-p5-v5");
     let slice = cat(&[
         b"}\x94",
         &word("s"),
@@ -285,9 +285,9 @@ fn a_form_is_the_productions_it_allows() {
         &word("slice"),
         b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94s.",
     ]);
-    assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v2");
+    assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v3");
     let array = cat(&[b"}\x94", &word("a"), &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]), b"s."]);
-    assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-numeric-array-p4-p5-v4");
+    assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-numeric-array-p4-p5-v5");
     // A file holding both is read under neither: no form that allows both
     // has been reviewed.
     let both = cat(&[

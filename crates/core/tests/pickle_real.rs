@@ -565,48 +565,51 @@ fn the_forms_match_these_samples_and_no_others() {
     // The whole corpus as it stands, with the form each file matches. Keep
     // this in step with the collection: a file added to it belongs here.
     let want: &[(&str, Option<&str>)] = &[
-        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v4")),
-        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v4")),
+        ("awa2-pose-antelope.pickle", Some("basic-p4-p5-v5")),
+        ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v5")),
         // A dictionary whose big value is written between two frames.
-        ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v4")),
-        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v5")),
+        ("proto4-numpy-array.pickle", Some("numpy-numeric-array-p4-p5-v5")),
         // Several arrays in one dictionary, the later ones naming numpy's
         // globals, dtype class, byte order or whole dtype out of the memo.
-        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v4")),
-        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v4")),
-        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v4")),
-        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v4")),
-        ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v2")),
+        ("proto4-numpy-byte-order.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-numpy-dtypes.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v3")),
         // The files written to say what a form takes and what it does not.
         // Every `familiar-` one is plain data written the ordinary way, and
         // every `unfamiliar-` one is a pickle Python loads and a form must
         // still refuse. The two halves are the test: a form that grew far
         // enough to read the second half would be reading a class, a value
         // with no bytes of its own, or a program CPython did not write.
-        ("familiar-records.pickle", Some("basic-p4-p5-v4")),
-        ("familiar-long-containers.pickle", Some("basic-p4-p5-v4")),
-        ("familiar-mixed-keys.pickle", Some("basic-p4-p5-v4")),
-        ("familiar-tuples-and-sets.pickle", Some("basic-p4-p5-v4")),
-        ("familiar-big-integers.pickle", Some("basic-p4-p5-v4")),
-        ("familiar-bytearray-p5.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-records.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-long-containers.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-mixed-keys.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-tuples-and-sets.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-big-integers.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-bytearray-p5.pickle", Some("basic-p4-p5-v5")),
         // Below protocol 5 a bytearray is a call to the class, which is the
         // other form.
-        ("familiar-bytearray-p4.pickle", Some("builtins-values-p4-p5-v2")),
+        ("familiar-bytearray-p4.pickle", Some("builtins-values-p4-p5-v3")),
+        // The same list of 1,001 the C pickler wrote in `familiar-long-
+        // containers`, written by the one in `pickle.py`, which ends it with
+        // APPEND where the C one writes a batch of one. Both spellings are
+        // what a real pickler writes, so a form reads either.
+        ("familiar-pure-python-batches.pickle", Some("basic-p4-p5-v5")),
         // An array whose numbers are too large to frame, so the frame
         // boundary lands inside the run of instructions that rebuilds it
         // rather than between two values of the file.
-        ("familiar-numpy-large-p5.pickle", Some("numpy-numeric-array-p4-p5-v4")),
+        ("familiar-numpy-large-p5.pickle", Some("numpy-numeric-array-p4-p5-v5")),
         // An instance of a class the file names.
         ("unfamiliar-class-instance.pickle", None),
         // One list in two places, and one holding itself: both are a name
         // pointing at a container, which no form binds.
         ("unfamiliar-shared-list.pickle", None),
         ("unfamiliar-recursive-list.pickle", None),
-        // Valid programs CPython did not write: `pickletools.optimize` drops
-        // the memo marks, and the pickler in `pickle.py` ends a list of 1,001
-        // with APPEND where the one in `_pickle.c` writes a batch of one.
+        // A valid program CPython did not write: `pickletools.optimize` drops
+        // the memo marks, which no pickler does.
         ("unfamiliar-optimized.pickle", None),
-        ("unfamiliar-pure-python-batches.pickle", None),
         // An integer past sixteen bytes, and a string that is not UTF-8
         // because it holds half a surrogate pair.
         ("unfamiliar-huge-integer.pickle", None),
@@ -689,10 +692,12 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     for dir in &environments {
         for path in pickles(dir) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let modern = name.ends_with(".p4.pickle") || name.ends_with(".p5.pickle");
+            // Protocol 4 or 5, from either pickler: a `.pypickle` file was
+            // written by `pickle.py` alone, and both spellings are familiar.
+            let modern = [".p4", ".p5"].iter().any(|p| name.contains(p));
             let expected = match name.split('-').next() {
-                Some("basic") if modern => Some("basic-p4-p5-v4"),
-                Some("numpy") if modern => Some("numpy-numeric-array-p4-p5-v4"),
+                Some("basic") if modern => Some("basic-p4-p5-v5"),
+                Some("numpy") if modern => Some("numpy-numeric-array-p4-p5-v5"),
                 _ => None,
             };
             let bytes = std::fs::read(&path).unwrap();

@@ -62,9 +62,9 @@ const MIN_FRAME: usize = 4;
 
 /// The forms, each a named grammar over the same envelope. They differ in
 /// which value productions they allow, and every one of those is enumerated.
-const BASIC: &str = "basic-p4-p5-v4";
-const NUMPY: &str = "numpy-numeric-array-p4-p5-v4";
-const BUILTINS: &str = "builtins-values-p4-p5-v2";
+const BASIC: &str = "basic-p4-p5-v5";
+const NUMPY: &str = "numpy-numeric-array-p4-p5-v5";
+const BUILTINS: &str = "builtins-values-p4-p5-v3";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.

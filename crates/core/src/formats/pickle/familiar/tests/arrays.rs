@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn captures_numpy_payload_and_rejects_changed_structure() {
     let found = recognise(MATRIX).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v4");
+    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
     let Kind::Dict(entries) = &found.value.kind else {
         panic!("dict expected")
     };
@@ -187,7 +187,7 @@ fn an_array_at_protocol_5_is_rebuilt_around_its_buffer() {
     let numbers: Vec<u8> = (0u8..12).flat_map(|n| [n, 0]).collect();
     let whole = proto5(&cat(&[&frombuffer(&mutable(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]));
     let found = recognise(&whole).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v4");
+    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
     let Kind::Array { dtype, dimensions, len, fortran_order, .. } = &found.value.kind else { panic!("array") };
     assert_eq!((dtype.as_str(), dimensions.as_slice(), *len, *fortran_order), ("<i2", &[3, 4][..], 24, false));
 
@@ -230,7 +230,7 @@ fn a_later_array_may_name_what_an_earlier_one_wrote() {
     // The whole finished dtype, out of the slot its REDUCE filed it in.
     let shared = two_arrays(&get(17));
     let found = recognise(&framed(&shared)).unwrap();
-    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v4");
+    assert_eq!(found.form, "numpy-numeric-array-p4-p5-v5");
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
     let dtypes: Vec<&str> = entries
         .iter()

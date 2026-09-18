@@ -46,7 +46,7 @@ Implemented forms. All three are the same grammar over the same envelope,
 differing in which value productions they allow; a file is read under the one
 form whose productions it uses, and a file mixing two of them matches neither.
 
-- `basic-p4-p5-v4`, the values a pickle writes as literals:
+- `basic-p4-p5-v5`, the values a pickle writes as literals:
   - `NONE`, `NEWTRUE`, `NEWFALSE`, `BINFLOAT`.
   - Integers in the width CPython picks by range: `BININT1` for 0 to 255,
     `BININT2` for 256 to 65,535, `BININT` for the rest of a signed four-byte
@@ -57,8 +57,9 @@ form whose productions it uses, and a file mixing two of them matches neither.
   - UTF-8 strings and byte strings with 1, 4 and 8-byte lengths, each with the
     memo mark that follows it. A string CPython wrote with `surrogatepass`,
     and so is not UTF-8, is a non-match.
-  - `BYTEARRAY8` at protocol 5, with its memo mark. Below protocol 5 a
-    bytearray is a call and belongs to the builtins form.
+  - `BYTEARRAY8` at protocol 5, with the memo mark the C pickler files it
+    under, or without it, which is what `pickle.py` wrote before Python 3.10.
+    Below protocol 5 a bytearray is a call and belongs to the builtins form.
   - Tuples: `EMPTY_TUPLE`, which is the one container CPython does not
     memoise; `TUPLE1` to `TUPLE3` for one to three elements; and `MARK`
     .. `TUPLE` for four or more, each with its memo mark.
@@ -68,10 +69,11 @@ form whose productions it uses, and a file mixing two of them matches neither.
     `SETITEM`; everything longer is a run of batches of up to a thousand.
     Every batch but the last holds exactly a thousand. A dictionary's and a
     set's loop runs again whenever the batch it wrote was full, so a full
-    batch of theirs is always followed by another, empty when there was
-    nothing left; a list's loop stops when it runs out, so a full batch of a
-    list may be its last. `FROZENSET` over a `MARK` is here too, and is never
-    batched, which is what `save_frozenset` does.
+    batch of theirs is followed by another; a list's loop stops when it runs
+    out, so a full batch of a list may be its last. What the two picklers do
+    with the tail after a full batch differs, and both are read: see
+    "Which pickler wrote it" below. `FROZENSET` over a `MARK` is here too,
+    and is never batched, which is what `save_frozenset` does.
   - Dictionary keys and set members must be values Python can hash: numbers,
     strings, byte strings, tuples of hashable things, frozensets, the three
     singletons, and a NumPy scalar. A key of any other kind is not something
@@ -80,7 +82,7 @@ form whose productions it uses, and a file mixing two of them matches neither.
     byte string the file wrote earlier. This is how a list of records is
     written: every dictionary after the first names its keys instead of
     spelling them again.
-- `numpy-numeric-array-p4-p5-v4`: the basic productions plus an array or a
+- `numpy-numeric-array-p4-p5-v5`: the basic productions plus an array or a
   scalar, anywhere a value may stand, with at least one of them present.
   Matches exact `_reconstruct` and `scalar` sequences for
   `numpy._core.multiarray` and `numpy.core.multiarray`, and, at protocol 5
@@ -98,7 +100,7 @@ form whose productions it uses, and a file mixing two of them matches neither.
   production for their arity. Storage uses SHORT_BINBYTES/BINBYTES/BINBYTES8
   and must match shape times item size; a scalar's storage is one value wide.
   Object, structured, datetime and external-buffer dtypes/layouts fall back.
-- `builtins-values-p4-p5-v2`: the basic productions plus the four builtins a
+- `builtins-values-p4-p5-v3`: the basic productions plus the four builtins a
   pickle writes as a call rather than as a literal, with at least one present.
   `builtins.slice` of three integers or Nones, `builtins.range` of three
   integers, `builtins.complex` of two BINFLOATs, and `builtins.bytearray` of
@@ -139,15 +141,58 @@ introduced.
 - **An integer past sixteen bytes**, and `LONG4`, which CPython writes only
   past 2^2040. Neither is a number the reader has a type for.
 - **A string that is not UTF-8**, which `surrogatepass` lets through.
-- **What the pickler in `pickle.py` writes and the one in `_pickle.c` does
-  not.** The two agree everywhere the samples reach except the tail of a long
-  container: the Python one ends a list of 1,001 with `APPEND` and writes no
-  empty trailing batch for a dictionary of exactly 1,000, where the C one
-  writes a batch of one and an empty batch. The forms follow the C one, which
-  is what `pickle.dumps` uses wherever `_pickle` imports. PyPy ships only the
-  Python one, so that spelling is real and unreviewed rather than impossible.
+- **A file spelled by both picklers at once.** Each spelling below is one a
+  real pickler writes, and a file was written by one pickler, so a file
+  showing the C one at one batch edge and `pickle.py`'s at another was
+  written by neither.
 - **Protocols 0 to 3.** Unchanged, and still with no sample a form could match
   whole.
+
+### Which pickler wrote it
+
+CPython ships two picklers. `_pickle` is the C one, which `pickle.dump` uses
+wherever it imports; `pickle.py` is the pure Python one beside it, reachable as
+`pickle._Pickler`, and the only one PyPy has. Both are ordinary, so a form
+reads either, and the match says which the file shows. The row is `pickler` in
+the header of the familiar-form template, beside `message` and `form`, and it
+says one of exactly three things:
+
+- `_pickle (CPython's C pickler)`
+- `pickle.py (the pure Python pickler, the only one PyPy has)`
+- `_pickle or pickle.py (they write this data identically)`
+
+The third is most files: the two agree everywhere but the tail of a container
+longer than a batch and the memo mark after a bytearray, and a file with
+neither says nothing either way. This is not in the form name, because the
+form is the same grammar either way.
+
+The tells, measured across the whole `pickle-matrix` corpus at protocols 1 to
+5 and checked against `_batch_appends`, `_batch_setitems` and `save_set` in
+`pickle.py` and `batch_list_exact`, `batch_dict_exact` and `save_set` in
+`Modules/_pickle.c`:
+
+| After a full batch of a thousand | `_pickle` | `pickle.py` |
+| --- | --- | --- |
+| a list with one item left | `MARK x APPENDS` | `x APPEND` |
+| a dictionary with one entry left | `MARK k v SETITEMS` | `k v SETITEM` |
+| a set with one member left | `MARK x ADDITEMS` | the same |
+| a list with nothing left | nothing | nothing |
+| a dictionary or set with nothing left | `MARK SETITEMS` / `MARK ADDITEMS` | nothing |
+
+A list's loop asks whether it has reached the end, so both picklers stop after
+a full batch that finished the list; a dictionary's and a set's loop runs again
+whenever the batch it wrote was full, and the C one therefore writes the empty
+batch that `pickle.py` skips. Neither has a shorthand for a set of one, so a
+set says nothing about its writer.
+
+The other tell is the memo mark after `BYTEARRAY8`. The C pickler has always
+filed a bytearray in the memo; `pickle.py` did not until Python 3.10, which is
+the whole of the difference between `numpy-1d-int64.p5.pickle` and its
+`.pypickle` twin under Python 3.8. So a `BYTEARRAY8` with no mark behind it is
+`pickle.py`'s, and specifically `pickle.py` of Python 3.8 or 3.9; the form
+records it as `pickle.py` rather than naming a release, since the same bytes
+cannot say more than that. Every slot after such a bytearray is numbered one
+lower, so the mark is read rather than skipped.
 
 ### The memo, and what a reference may name
 
@@ -217,7 +262,8 @@ Two templates now read a pickle, and the file decides which is offered:
   form and the other template as well as saying the contract's sentence.
 - `picklefpf`, "Python pickle (familiar form)", which shows the object. Its
   root holds a `header` over the protocol envelope, carrying the contract's
-  message, the form ID and the protocol byte, and then `data`. A dictionary
+  message, the form ID, which pickler the file shows and the protocol byte,
+  and then `data`. A dictionary
   holds entries, an entry holds its key and its value, an array says its dtype,
   shape and storage order before its numbers. A file no form matches fails to
   resolve, so the chooser falls back to `pickle`.
@@ -259,36 +305,36 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, seventeen files match today, nine of which did before
-this slice. The eight `familiar-` files and the seven `unfamiliar-` ones were
-written for this: the first half is plain data written the ordinary way and the
-second half is pickles Python loads and a form must still refuse, so a form
-that grew without anyone saying so fails on one half or the other.
+Of the sibling corpus, eighteen files match today. The nine `familiar-` files
+and the six `unfamiliar-` ones were written for this: the first half is plain
+data written the ordinary way and the second half is pickles Python loads and a
+form must still refuse, so a form that grew without anyone saying so fails on
+one half or the other.
 
 | File | Form, or why not |
 | --- | --- |
-| `awa2-pose-antelope.pickle` | `basic-p4-p5-v4` |
-| `awa2-pose-elephant.pickle` | `basic-p4-p5-v4` |
-| `proto4-unframed-payload.pickle` | `basic-p4-p5-v4`, over two frames and a payload between them |
-| `familiar-records.pickle` | `basic-p4-p5-v4`: twenty records whose keys are named out of the memo |
-| `familiar-long-containers.pickle` | `basic-p4-p5-v4`: a list of 1,001 and a dictionary of exactly 1,000 |
-| `familiar-mixed-keys.pickle` | `basic-p4-p5-v4`: keys that are not strings |
-| `familiar-tuples-and-sets.pickle` | `basic-p4-p5-v4`: every tuple arity, a set and a frozenset |
-| `familiar-big-integers.pickle` | `basic-p4-p5-v4`: BININT and LONG1 on both sides of the boundary |
-| `familiar-bytearray-p5.pickle` | `basic-p4-p5-v4`: BYTEARRAY8 |
-| `familiar-bytearray-p4.pickle` | `builtins-values-p4-p5-v2`: the same object as a call to the class |
-| `proto4-builtins.pickle` | `builtins-values-p4-p5-v2` |
-| `proto4-numpy-array.pickle` | `numpy-numeric-array-p4-p5-v4` |
-| `proto4-numpy-byte-order.pickle` | `numpy-numeric-array-p4-p5-v4` |
-| `proto4-numpy-dtypes.pickle` | `numpy-numeric-array-p4-p5-v4` |
-| `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v4`, including a scalar |
-| `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v4` |
-| `familiar-numpy-large-p5.pickle` | `numpy-numeric-array-p4-p5-v4`: numbers too large to frame, so the boundary lands inside the call |
+| `awa2-pose-antelope.pickle` | `basic-p4-p5-v5` |
+| `awa2-pose-elephant.pickle` | `basic-p4-p5-v5` |
+| `proto4-unframed-payload.pickle` | `basic-p4-p5-v5`, over two frames and a payload between them |
+| `familiar-records.pickle` | `basic-p4-p5-v5`: twenty records whose keys are named out of the memo |
+| `familiar-long-containers.pickle` | `basic-p4-p5-v5`: a list of 1,001 and a dictionary of exactly 1,000 |
+| `familiar-mixed-keys.pickle` | `basic-p4-p5-v5`: keys that are not strings |
+| `familiar-tuples-and-sets.pickle` | `basic-p4-p5-v5`: every tuple arity, a set and a frozenset |
+| `familiar-big-integers.pickle` | `basic-p4-p5-v5`: BININT and LONG1 on both sides of the boundary |
+| `familiar-bytearray-p5.pickle` | `basic-p4-p5-v5`: BYTEARRAY8 |
+| `familiar-bytearray-p4.pickle` | `builtins-values-p4-p5-v3`: the same object as a call to the class |
+| `familiar-pure-python-batches.pickle` | `basic-p4-p5-v5`: the pickler in `pickle.py` ending a list of 1,001 its own way |
+| `proto4-builtins.pickle` | `builtins-values-p4-p5-v3` |
+| `proto4-numpy-array.pickle` | `numpy-numeric-array-p4-p5-v5` |
+| `proto4-numpy-byte-order.pickle` | `numpy-numeric-array-p4-p5-v5` |
+| `proto4-numpy-dtypes.pickle` | `numpy-numeric-array-p4-p5-v5` |
+| `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v5`, including a scalar |
+| `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v5` |
+| `familiar-numpy-large-p5.pickle` | `numpy-numeric-array-p4-p5-v5`: numbers too large to frame, so the boundary lands inside the call |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
 | `unfamiliar-shared-list.pickle` | one list under two keys, named the second time |
 | `unfamiliar-recursive-list.pickle` | a list holding itself |
 | `unfamiliar-optimized.pickle` | `pickletools.optimize` took the memo marks out |
-| `unfamiliar-pure-python-batches.pickle` | written by the pickler in `pickle.py`, whose last batch is spelled differently |
 | `unfamiliar-huge-integer.pickle` | two to the two hundredth, which needs twenty-six bytes |
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
 | `proto2-everything.pickle` | calls `datetime`, `Decimal`, `Fraction`, `ValueError` and `_codecs.encode` |

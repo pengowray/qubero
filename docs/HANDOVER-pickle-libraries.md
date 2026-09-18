@@ -40,12 +40,12 @@ Python 3.4 and everything from 3.6 on, and the instructions are the same in
 both: the dict keys come out in a different order, because a dict was
 unordered before 3.6. One grammar covers all of it. After the stack rewrite of
 the recogniser (7e4bf18), all 75 basic files at protocol 4 and 5 match
-`basic-p4-p5-v4`.
+`basic-p4-p5-v5`.
 
 **numpy varies in one word.** Two byte strings per object and protocol: numpy
 1.x spells the module `numpy.core.multiarray`, numpy 2.x spells it
 `numpy._core.multiarray`. All 98 numpy files at protocol 4 and 5 match
-`numpy-numeric-array-p4-p5-v4`.
+`numpy-numeric-array-p4-p5-v5`.
 
 **scikit-learn varies in its data, not in its instructions.** An estimator is
 `STACK_GLOBAL` of its class, `EMPTY_TUPLE`, `NEWOBJ`, then a dict of its
