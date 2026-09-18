@@ -167,7 +167,6 @@ fn the_template_places_an_object_s_attributes_beside_its_class() {
             (2, "frame", "bytes[]"),
             (1, "data", "object"),
             (2, "class", "class"),
-            (3, "path", "computed text"),
             (3, "short_binunicode", "bytes[]"),
             (3, "module", "utf8[]"),
             (3, "memoize", "bytes[]"),
@@ -191,7 +190,9 @@ fn the_template_places_an_object_s_attributes_beside_its_class() {
             (1, "stop", "bytes[]"),
         ]
     );
-    assert_eq!(named_row(&seen, "path").value, V::Str("sklearn.dummy.Thing".into()));
+    // The whole dotted path is the class row's own value, so an object says
+    // what it is without being opened.
+    assert_eq!(named_row(&seen, "class").value, V::Str("sklearn.dummy.Thing".into()));
     assert_eq!(named_row(&seen, "module").value, V::Str("sklearn.dummy".into()));
     assert_eq!(named_row(&seen, "name").value, V::Str("Thing".into()));
     assert_eq!(named_row(&seen, "form").value, V::Str("sklearn-estimator-p4-p5-v1".into()));

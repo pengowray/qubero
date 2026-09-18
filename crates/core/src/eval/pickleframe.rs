@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use super::pickletree::{spot, Part};
+use super::pickletree::{spot, Part, Says, MOST_SHOWN_TEXT as MOST_SHOWN};
 use super::*;
 use crate::formats::pickle::familiar::{Dtype, Kind, Names, Shape, Value as Captured};
 use crate::formats::pickle::shapes;
@@ -634,5 +634,151 @@ fn word_of(held: &Values) -> String {
         Values::Numbers(n) => dtype_word(n.dtype),
         Values::Texts(_) => "str".into(),
         Values::Coded(..) => "category".into(),
+    }
+}
+
+/// Whether an object is one of scipy's sparse matrices, which keep their
+/// values, their positions and their shape as attributes.
+pub(super) fn is_sparse(object: &Captured) -> bool {
+    let Kind::Instance { class, state: Some(_) } = &object.kind else { return false };
+    class_name(class).is_some_and(|name| name.ends_with("_matrix") || name.ends_with("_array"))
+}
+
+impl Evaluator {
+    /// What one summary row of a library object says.
+    ///
+    /// Worked out here rather than where the rows are listed, because every
+    /// one of these reads the file: a column's name is text somewhere else in
+    /// it, and a counted index is not in it at all.
+    pub(super) fn pickle_summary<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        path: &[usize],
+        object: &Captured,
+        says: Says,
+    ) -> R<String> {
+        let r = self.memo[root].clone();
+        let base = r.offset;
+        // The row belongs to the object, which is the node above this one.
+        let of = &path[..path.len() - 1];
+        match says {
+            Says::Columns | Says::Rows | Says::Index | Says::Dtypes => {
+                let Some(shape) = self.frame_shape(doc, of)? else { return Ok(String::new()) };
+                let Some(Cells::Computed { rows }) = shape.cells else { return Ok(String::new()) };
+                Ok(match says {
+                    Says::Rows => rows.to_string(),
+                    Says::Columns => cut(&shape.names[1..].join(", ")),
+                    Says::Dtypes => cut(
+                        &shape.names[1..]
+                            .iter()
+                            .zip(&shape.units[1..])
+                            .map(|(name, word)| format!("{name} {word}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    _ => self.index_summary(doc, &r, base, object)?,
+                })
+            }
+            Says::Shape | Says::Stored | Says::Format => self.sparse_summary(doc, &r, base, object, says),
+        }
+    }
+
+    /// What an index is and where its labels run from and to.
+    fn index_summary<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, object: &Captured) -> R<String> {
+        let Some(frame) = frame_of(object) else { return Ok(String::new()) };
+        let kind = index_kind(frame.index).unwrap_or("Index");
+        if is_range(frame.index) {
+            let Some(state) = index_state(frame.index) else { return Ok(kind.to_string()) };
+            let (start, stop, step) = self.range_bounds(doc, r, base, state)?;
+            let (Some(start), Some(stop), Some(step)) = (start, stop, step) else { return Ok(kind.to_string()) };
+            let by = if step == 1 { String::new() } else { format!(" by {step}") };
+            return Ok(format!("{kind} {start} to {stop}{by}"));
+        }
+        let Some(rows) = self.index_len(doc, r, base, frame.index)? else { return Ok(kind.to_string()) };
+        if rows == 0 {
+            return Ok(format!("{kind} of no labels"));
+        }
+        // The first and the last label, which is what a reader wants of an
+        // index of dates and is still true of one of names.
+        let first = self.index_label(doc, r, base, frame.index, 0)?;
+        let last = self.index_label(doc, r, base, frame.index, rows - 1)?;
+        Ok(match (label_text(&first), label_text(&last)) {
+            (Some(first), Some(last)) if rows > 1 => format!("{kind} {first} to {last}"),
+            (Some(first), _) => format!("{kind} {first}"),
+            _ => format!("{kind} of {rows} labels"),
+        })
+    }
+
+    /// What a sparse matrix holds: how big it is, how many values it stores,
+    /// and which of scipy's layouts it is.
+    fn sparse_summary<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        r: &Resolved,
+        base: u64,
+        object: &Captured,
+        says: Says,
+    ) -> R<String> {
+        let Kind::Instance { class, state: Some(state) } = &object.kind else { return Ok(String::new()) };
+        if says == Says::Format {
+            // `csr_matrix` is the CSR layout, and the class's name is where
+            // the file says which layout it is.
+            let name = class_name(class).unwrap_or_default();
+            return Ok(name.rsplit_once('_').map(|(kind, _)| kind.to_string()).unwrap_or_default());
+        }
+        let Kind::Dict(entries) = &state.kind else { return Ok(String::new()) };
+        if says == Says::Shape {
+            // The one attribute that is a tuple of whole numbers.
+            let shape = entries.iter().find_map(|(_, v)| match &v.kind {
+                Kind::Tuple(items) if !items.is_empty() && items.iter().all(|x| matches!(x.kind, Kind::Int { .. })) => Some(items),
+                _ => None,
+            });
+            let Some(shape) = shape else { return Ok(String::new()) };
+            let said: Vec<String> = shape
+                .iter()
+                .map(|x| match x.kind {
+                    Kind::Int { value, .. } => value.to_string(),
+                    _ => String::new(),
+                })
+                .collect();
+            return Ok(said.join(" x "));
+        }
+        // How many values are stored, which is the length of the run the
+        // matrix calls `data`.
+        for (key, value) in entries {
+            if self.pickle_text(doc, r, base, key)?.as_deref() != Some("data") {
+                continue;
+            }
+            let Some(held) = values_of(value) else { break };
+            let Some((rows, _)) = held.rows_and_columns() else { break };
+            return Ok(rows.to_string());
+        }
+        Ok(String::new())
+    }
+}
+
+/// Which kind of index this is, by the class `_new_Index` was handed.
+fn index_kind(index: &Captured) -> Option<&str> {
+    let Kind::Made { items, .. } = &index.kind else { return None };
+    class_name(items.first()?)
+}
+
+/// A label as a summary shows it.
+fn label_text(label: &Option<Value>) -> Option<String> {
+    match label {
+        Some(Value::Str(said)) => Some(said.clone()),
+        Some(Value::Int(n)) => Some(n.to_string()),
+        Some(Value::UInt(n)) => Some(n.to_string()),
+        Some(Value::Float(f)) => Some(f.to_string()),
+        _ => None,
+    }
+}
+
+/// A summary row read at a glance, cut where it stops being one.
+fn cut(said: &str) -> String {
+    match said.char_indices().nth(MOST_SHOWN) {
+        Some((at, _)) => format!("{}...", &said[..at]),
+        None => said.to_string(),
     }
 }

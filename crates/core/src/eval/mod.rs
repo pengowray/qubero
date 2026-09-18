@@ -1223,10 +1223,17 @@ impl Evaluator {
                 (Value::Composite { count: n }, n, true)
             }
             // Every node of a recognised pickle that kept this type holds
-            // others: the leaves were given the types their bytes are.
+            // others: the leaves were given the types their bytes are. A node
+            // with a word for itself says it instead of counting: the class
+            // row reads as the whole dotted path, so a reader sees what an
+            // object is without opening it.
             Ty::Pickle(..) => {
                 let n = self.child_count(doc, path)?;
-                (Value::Composite { count: n }, n, true)
+                let value = match &r.computed {
+                    Some(Computed::Text(said)) => Value::Str(said.to_string()),
+                    _ => Value::Composite { count: n },
+                };
+                (value, n, true)
             }
             // A stream holds one thing when it opens and nothing when it does
             // not, so asking about the node opens it. That is a read of the

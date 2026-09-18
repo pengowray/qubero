@@ -1144,3 +1144,61 @@ fn cell_text(cell: &Option<Value>) -> String {
         Some(other) => format!("{other:?}"),
     }
 }
+
+/// A matched frame, series or sparse matrix opens with what a reader came for,
+/// before the structure that holds it.
+#[test]
+fn a_library_object_says_what_it_holds_before_how() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let want: &[(&str, &[(&str, &str)])] = &[
+        (
+            "dataframe-mixed",
+            &[
+                ("columns", "id, score, name"),
+                ("rows", "4"),
+                ("index", "RangeIndex 0 to 4"),
+                ("dtypes", "id int64, score float64, name str"),
+            ],
+        ),
+        (
+            "series-categorical",
+            &[("columns", "value"), ("rows", "4"), ("index", "RangeIndex 0 to 4"), ("dtypes", "value category")],
+        ),
+        ("scipy-csr-matrix", &[("shape", "4 x 4"), ("stored values", "4"), ("format", "csr")]),
+    ];
+    let mut checked = 0;
+    for dir in std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        for path in pickles(&dir) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.contains(".p4.") && !name.contains(".p5.") {
+                continue;
+            }
+            let Some((_, rows)) = want.iter().find(|(stem, _)| name.starts_with(&format!("{stem}."))) else { continue };
+            let bytes = std::fs::read(&path).unwrap();
+            if formats::pickle::familiar::recognise(&bytes).is_none() {
+                continue;
+            }
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let where_ = format!("{}/{name}", dir.file_name().unwrap().to_string_lossy());
+            let said: Vec<(String, String)> = (0..rows.len())
+                .map(|i| {
+                    let n = ev.node(&doc, &[1, i]).unwrap();
+                    let value = match &n.value {
+                        Value::Str(s) => s.clone(),
+                        other => format!("{other:?}"),
+                    };
+                    (n.name.clone(), value)
+                })
+                .collect();
+            let want: Vec<(String, String)> =
+                rows.iter().map(|(n, v)| ((*n).to_string(), (*v).to_string())).collect();
+            assert_eq!(said, want, "{where_}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 12, "only {checked} objects said what they hold");
+}

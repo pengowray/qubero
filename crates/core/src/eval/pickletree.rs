@@ -49,10 +49,8 @@ const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
 const KEY_FIELD: &str = "key";
 const VALUE_FIELD: &str = "value";
-/// What a named class says: the whole dotted path it was named by, and the two
-/// words STACK_GLOBAL joined to make it. `class` is what an object and a call
-/// name the class or callable they were made by.
-const PATH_FIELD: &str = "path";
+/// The two words STACK_GLOBAL joined to make a class's path. `class` is what
+/// an object and a call name the class or callable they were made by.
 const MODULE_FIELD: &str = "module";
 const NAME_FIELD: &str = "name";
 const CLASS_FIELD: &str = "class";
@@ -66,7 +64,7 @@ const REFERS_FIELD: &str = "refers to";
 /// dictionary key is a word or two; anything longer is cut rather than filling
 /// a row meant to be read at a glance. Fewer bytes than characters, because a
 /// byte string is shown in hex and takes three columns a byte.
-const MOST_SHOWN_TEXT: usize = 120;
+pub(super) const MOST_SHOWN_TEXT: usize = 120;
 const MOST_SHOWN_BYTES: usize = 32;
 /// The storage orders, spelled the way NumPy spells them.
 const C_ORDER: &str = "C";
@@ -125,6 +123,55 @@ pub(super) enum Part<'a> {
     /// One instruction the form fixed, or what is left of one once the value
     /// inside it has been taken out.
     Op { at: usize, len: usize },
+    /// One thing worth knowing about a library object before its structure:
+    /// what a frame's columns are, how many rows it has. Worked out from the
+    /// match and the file, so it has no bytes of its own.
+    Summary { of: &'a Value, says: Says },
+}
+
+/// What a summary row of a library object says.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Says {
+    /// A frame's column names, a series' one.
+    Columns,
+    /// How many rows it has.
+    Rows,
+    /// What its row labels are, and where they run from and to.
+    Index,
+    /// What one value of each column is.
+    Dtypes,
+    /// A sparse matrix's shape, how many values it stores, and which of the
+    /// sparse layouts it is.
+    Shape,
+    Stored,
+    Format,
+}
+
+impl Says {
+    /// What the row is called.
+    fn name(self) -> &'static str {
+        match self {
+            Says::Columns => "columns",
+            Says::Rows => "rows",
+            Says::Index => "index",
+            Says::Dtypes => "dtypes",
+            Says::Shape => "shape",
+            Says::Stored => "stored values",
+            Says::Format => "format",
+        }
+    }
+}
+
+/// The summary rows a library object opens with, or nothing for an object
+/// whose attributes already are its summary, which is every estimator.
+fn summary(v: &Value) -> &'static [Says] {
+    if super::pickleframe::frame_of(v).is_some() {
+        return &[Says::Columns, Says::Rows, Says::Index, Says::Dtypes];
+    }
+    if super::pickleframe::is_sparse(v) {
+        return &[Says::Shape, Says::Stored, Says::Format];
+    }
+    &[]
 }
 
 /// What a node is called by the node above it.
@@ -156,6 +203,7 @@ fn span(found: &Match, part: &Part) -> (usize, usize) {
             _ => (0, 0),
         },
         Part::Refers(_) => (0, 0),
+        Part::Summary { .. } => (0, 0),
         Part::Text(s) => (s.at, s.at + s.len),
         Part::Call(c, _) => (c.at, c.at + c.len),
         Part::Protocol => (1, 2),
@@ -231,11 +279,14 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // A reference is the BINGET and a row saying what is at the other
             // end of it, since the two bytes themselves say nothing.
             Kind::Ref(_) => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
-            // A class the file named: the whole path worked out, and then the
-            // module and the name as the file spelled them. A class named out
-            // of the memo spelled neither here, so it has the path alone.
-            Kind::Class { path, parts } => (
-                vec![(Label::Field(PATH_FIELD), Part::Note(path.clone()))],
+            // A class the file named. The whole dotted path is the node's own
+            // value rather than a row under it, so that an object says what it
+            // is on one line: these trees are deep, and a row that has to be
+            // opened to say `pandas.core.frame.DataFrame` is a row a reader
+            // reads twice. The module and the name are the words the file
+            // spelled; a class named out of the memo spelled neither.
+            Kind::Class { parts, .. } => (
+                Vec::new(),
                 parts
                     .iter()
                     .zip([MODULE_FIELD, NAME_FIELD])
@@ -247,9 +298,13 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // level down: the dictionary is how the state travels and the
             // attributes are what the object is.
             Kind::Instance { class, state } => {
+                let notes = summary(v)
+                    .iter()
+                    .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says: *says }))
+                    .collect();
                 let mut kids = vec![(Label::Field(CLASS_FIELD), Part::Value(class))];
                 kids.extend(held(state));
-                (Vec::new(), kids)
+                (notes, kids)
             }
             // What one of a form's enumerated calls made, with the arguments
             // the library writes it with.
@@ -709,7 +764,14 @@ impl Evaluator {
         let (at, end) = span(&found, &part);
         // A node that holds others is placed here and read no further.
         if let Some(shape) = shape_of(&part) {
-            self.pickle_node(path, &pr, name, shape, base, at, end - at);
+            let said = match &part {
+                Part::Value(v) => match &v.kind {
+                    Kind::Class { path, .. } => Some(path.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            self.pickle_node(path, &pr, name, shape, base, at, end - at, said);
             return Ok(None);
         }
         match part {
@@ -738,6 +800,11 @@ impl Evaluator {
                         shown(&bytes, text, len)
                     }
                 };
+                self.pickle_note(path, &pr, name, said)
+            }
+            // What a reader came for, before the structure that holds it.
+            Part::Summary { of, says } => {
+                let said = self.pickle_summary(doc, &root, path, of, says)?;
                 self.pickle_note(path, &pr, name, said)
             }
             Part::Text(said) => {
@@ -788,7 +855,7 @@ impl Evaluator {
     }
 
     /// A node that holds others, covering the bytes its production consumed.
-    fn pickle_node(&mut self, path: &[usize], pr: &Resolved, name: Name, shape: Shape, base: u64, at: usize, len: usize) {
+    fn pickle_node(&mut self, path: &[usize], pr: &Resolved, name: Name, shape: Shape, base: u64, at: usize, len: usize, said: Option<String>) {
         let offset = base + at as u64 * 8;
         let size = len as u64 * 8;
         let r = Resolved {
@@ -802,7 +869,7 @@ impl Evaluator {
             origin: false,
             size: Some(size),
             payload: None,
-            computed: None,
+            computed: said.map(|said| Computed::Text(said.as_str().into())),
             space: pr.space,
             machinery: false,
         };
