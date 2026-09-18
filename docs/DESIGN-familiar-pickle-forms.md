@@ -356,7 +356,14 @@ Next steps, in order:
 3. Decide how a name pointing at a container should be shown, and then bind
    containers. The grammar is the easy half; what a reader should see where
    the second copy of a shared list would be is the open question, and until
-   it has an answer `unfamiliar-shared-list.pickle` stays a non-match.
+   it has an answer `unfamiliar-shared-list.pickle` stays a non-match. This is
+   the widening worth doing next: four hundred random JSON-like payloads at
+   protocol 4 and 5 were run through the forms and three of them matched
+   nothing, all three because two tuples spelled alike in one source file are
+   one object. The likeliest answer is that a `refers to` row for a container
+   says what it is and where the file wrote it, the way it already says what a
+   named string holds, so that the reference stays two bytes and the reader is
+   sent to the bytes rather than shown a copy of them.
 4. Add the protocol 2/3 alternatives (BINUNICODE, BINPUT, LONG_BINPUT, no
    framing) alongside a fixture a form can match whole. Keep work bounded
    across every alternative.
