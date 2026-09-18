@@ -169,7 +169,8 @@ section says what its neighbour does differently.
     one of a short list of builtin classes, in both of the spellings
     `fix_imports` writes, or nothing at all; a class of the writing program's
     own is a non-match. The older releases wrote all three another way, handing
-    the class everything it was to hold as one list, and both are read.
+    the class everything it was to hold as one `iterable` argument, and both
+    are read.
   - `uuid.UUID`, which needs no call at all: it is the plain object production
     with a 128-bit `int` in its state.
   - The builtins the builtins form reads, since a file holding a date and a

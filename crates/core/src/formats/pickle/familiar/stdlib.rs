@@ -75,10 +75,12 @@ const LITERAL: &[&str] = &["value"];
 const RATIO: &[&str] = &["numerator", "denominator"];
 /// The words a path is made of, however many there are.
 const PARTS: &[&str] = &["parts"];
-/// What the older releases hand a container class, which is everything it is
-/// to hold rather than an empty container to fill.
-const ITEMS: &[&str] = &["items"];
-const CAPPED: &[&str] = &["items", "maxlen"];
+/// What a container class is called with, which is Python's own name for the
+/// parameter: everything the container is to hold, or, at protocol 4 and 5,
+/// the empty tuple standing where those would have been. Not `items`, which is
+/// what the rows beneath a filled `deque` are.
+const ITERABLE: &[&str] = &["iterable"];
+const CAPPED: &[&str] = &["iterable", "maxlen"];
 /// What a `defaultdict` is called with, which is the class it makes a missing
 /// value with, or nothing at all.
 const FACTORY: &[&str] = &["factory"];
@@ -153,12 +155,12 @@ pub(super) const STDLIB_CALLS: &[Reduce] = &[
     // with. `Counter` is above and never changed.
     Reduce {
         path: "collections.OrderedDict",
-        names: ITEMS,
+        names: ITERABLE,
         what: Shape::OrderedDict,
         shape: |_c, args| pairs(&args[0]),
         ..PLAIN
     },
-    Reduce { path: "collections.deque", names: ITEMS, what: Shape::Deque, shape: |_c, args| holds(&args[0]), ..PLAIN },
+    Reduce { path: "collections.deque", names: ITERABLE, what: Shape::Deque, shape: |_c, args| holds(&args[0]), ..PLAIN },
     Reduce {
         path: "collections.deque",
         names: CAPPED,

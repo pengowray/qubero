@@ -141,7 +141,7 @@ fn an_ordered_dict_a_defaulting_one_and_a_queue_are_filled_after_the_call() {
     let queue = only(&cat(&[&call("collections", "deque", b")K\x05", 2), b"(K\x01K\x02e"]));
     let found = recognise(&queue).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&queue)));
     let Kind::Made { what, names, state: Some(state), .. } = &found.value.kind else { panic!("a call expected") };
-    assert_eq!((*what, *names), (Shape::Deque, &["items", "maxlen"][..]));
+    assert_eq!((*what, *names), (Shape::Deque, &["iterable", "maxlen"][..]));
     assert!(matches!(&state.kind, Kind::List(items) if items.len() == 2));
     // The empty tuple in front of the cap is where the items would have been,
     // and a deque handed anything there is a file no pickler wrote.
