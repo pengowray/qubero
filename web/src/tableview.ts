@@ -46,6 +46,20 @@ const NOTICE_MS = 5000;
  *  for the next file too. */
 const ADDRESSES_KEY = "qubero.table.addresses";
 
+/** One data column as it is drawn: how wide it is and which side its values
+ *  sit, its header cell, and how many wrong values its cells hold over the
+ *  rows read so far, invalid then undefined.
+ *
+ *  One record rather than three arrays indexed alike, because the three
+ *  answers change together: a count that grows rewrites a heading, and a
+ *  heading that no longer fits widens the column. Apart, that was three
+ *  lookups a step, each to be checked for a column that was not there. */
+type Column = {
+  fit: ColumnFit;
+  readonly head: HTMLElement;
+  problems: [invalid: number, undefined: number];
+};
+
 /** What picking a row hands on: the row's field, and the bits it covers. */
 export type TablePick = {
   readonly path: readonly number[];
@@ -76,15 +90,11 @@ export class TableView {
   /** The rows already read, by index. Cleared whenever the file changes, since
    *  that is when what one of them says can stop being true. */
   private readonly have = new Map<number, TableRow>();
-  /** How wide each data column is drawn and which side its values sit, one
-   *  per column, grown by the rows as they are read. */
-  private fits: ColumnFit[] = [];
-  /** The header cell of each data column, so a column found to be numeric can
-   *  be turned to face its values without the header being built again. */
-  private heads: HTMLElement[] = [];
-  /** Wrong values seen in each column, invalid then undefined, over the rows
-   *  read so far. Thrown away with the rows whenever the file changes. */
-  private counts: [number, number][] = [];
+  /** The data columns, in the order they are drawn. Built once and kept: the
+   *  header cells are the same elements from then on, so a column found to be
+   *  numeric is turned to face its values without the header being built
+   *  again. */
+  private readonly columns: Column[];
   private addresses = false;
   /** The selected rows: the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
@@ -122,8 +132,11 @@ export class TableView {
     this.el.append(this.bar(opts.title), this.head, this.scroller, this.notice);
     this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
-    this.fits = plan.columns.map((_, c) => fitOf(this.headingOf(c)));
-    this.counts = plan.columns.map(() => [0, 0]);
+    this.columns = plan.columns.map((_, c) => ({
+      fit: fitOf(this.headingOf(c)),
+      head: el("span", { className: "tbl-th" }),
+      problems: [0, 0],
+    }));
     this.layColumns();
     this.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
@@ -192,7 +205,7 @@ export class TableView {
    *  tab-wide column. */
   private layColumns(): void {
     const time = this.plan.rate !== null && this.plan.rate > 0 ? ` ${timeWidth(this.plan.count, this.plan.rate)}ch` : "";
-    const data = this.fits.map((fit) => `${fit.width}ch`).join(" ");
+    const data = this.columns.map((column) => `${column.fit.width}ch`).join(" ");
     const addresses = this.addresses ? " 12ch 9ch" : "";
     this.el.style.setProperty("--tbl-cols", `${indexWidth(this.plan.count)}ch${time} ${data}${addresses}`);
   }
@@ -209,9 +222,9 @@ export class TableView {
    *  one marked cell at a time and no way to tell whether it is the only one,
    *  so the count is what says how much there is to look for. */
   private headTextOf(c: number): string {
-    const count = this.counts[c];
-    if (count === undefined) return this.headingOf(c);
-    const more = PROBLEMS.column(count[0], count[1], this.have.size < this.plan.count);
+    const column = this.columns[c];
+    if (column === undefined) return this.headingOf(c);
+    const more = PROBLEMS.column(column.problems[0], column.problems[1], this.have.size < this.plan.count);
     return more === "" ? this.headingOf(c) : `${this.headingOf(c)} ${more}`;
   }
 
@@ -223,12 +236,10 @@ export class TableView {
     // Every heading is rewritten once the last row arrives, because that is
     // when `so far` comes off all of them at once.
     const settled = this.have.size >= this.plan.count;
-    for (let c = 0; c < this.counts.length; c++) {
-      const count = this.counts[c];
-      if (count === undefined) continue;
+    for (const [c, column] of this.columns.entries()) {
       const problem = row.cells[c]?.problem;
       if (problem === undefined && !settled) continue;
-      if (problem !== undefined) count[problem.tier === "invalid" ? 0 : 1]++;
+      if (problem !== undefined) column.problems[problem.tier === "invalid" ? 0 : 1]++;
       widened = this.writeHead(c) || widened;
     }
     if (widened) this.layColumns();
@@ -239,23 +250,22 @@ export class TableView {
    *  rows behind it have gone would be saying something nothing holds up. */
   private writeHeads(): void {
     let widened = false;
-    for (let c = 0; c < this.heads.length; c++) widened = this.writeHead(c) || widened;
+    for (let c = 0; c < this.columns.length; c++) widened = this.writeHead(c) || widened;
     if (widened) this.layColumns();
   }
 
   /** One heading, drawn again with what it says now. True when the column had
    *  to grow to hold it. */
   private writeHead(c: number): boolean {
-    const head = this.heads[c];
-    const fit = this.fits[c];
-    if (head === undefined || fit === undefined) return false;
+    const column = this.columns[c];
+    if (column === undefined) return false;
     const text = this.headTextOf(c);
-    if (head.textContent === text) return false;
-    head.textContent = text;
-    head.title = text;
-    const width = Math.min(FIT_MAX, Math.max(fit.width, text.length));
-    if (width === fit.width) return false;
-    this.fits[c] = { width, numeric: fit.numeric };
+    if (column.head.textContent === text) return false;
+    column.head.textContent = text;
+    column.head.title = text;
+    const width = Math.min(FIT_MAX, Math.max(column.fit.width, text.length));
+    if (width === column.fit.width) return false;
+    column.fit = { width, numeric: column.fit.numeric };
     return true;
   }
 
@@ -265,30 +275,28 @@ export class TableView {
    *  then not at all. */
   private fitRow(row: TableRow): void {
     let widened = false;
-    for (let c = 0; c < this.fits.length; c++) {
-      const was = this.fits[c];
-      if (was === undefined) continue;
+    for (const [c, column] of this.columns.entries()) {
+      const was = column.fit;
       const now = fitCell(was, row.cells[c]);
       if (now === was) continue;
-      this.fits[c] = now;
+      column.fit = now;
       if (now.width !== was.width) widened = true;
-      if (now.numeric !== was.numeric) this.heads[c]?.classList.toggle("tbl-num", now.numeric === true);
+      if (now.numeric !== was.numeric) column.head.classList.toggle("tbl-num", now.numeric === true);
     }
     if (widened) this.layColumns();
   }
 
+  /** The header row, assembled from the column headings and whichever of the
+   *  index, time and address cells this table shows. The headings are the same
+   *  elements every time, so what a column has learnt about itself (its width,
+   *  its side, its count) survives the addresses being turned on. */
   private fillHead(): void {
     const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
     if (this.plan.rate !== null && this.plan.rate > 0) {
       cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
     }
-    this.heads = this.plan.columns.map((_, c) => {
-      const text = this.headTextOf(c);
-      const cell = el("span", { className: this.fits[c]?.numeric === true ? "tbl-th tbl-num" : "tbl-th", textContent: text });
-      cell.title = text;
-      return cell;
-    });
-    cells.push(...this.heads);
+    this.writeHeads();
+    cells.push(...this.columns.map((column) => column.head));
     if (this.addresses) {
       cells.push(el("span", { className: "tbl-th", textContent: TABLE.storedAt }));
       cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.size }));
@@ -308,7 +316,7 @@ export class TableView {
       // arrived, so the answers go rather than being drawn again. The counts
       // are answers about those rows and go with them.
       this.have.clear();
-      this.counts = this.plan.columns.map(() => [0, 0]);
+      for (const column of this.columns) column.problems = [0, 0];
       this.writeHeads();
       this.plan.forget();
       this.paintAgain();
@@ -393,7 +401,7 @@ export class TableView {
       element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
     }
     for (let c = 0; c < this.plan.columns.length; c++) {
-      element.append(this.drawCell(row.cells[c], this.fits[c]?.numeric === true));
+      element.append(this.drawCell(row.cells[c], this.columns[c]?.fit.numeric === true));
     }
     if (this.addresses) {
       element.append(el("span", { className: "tbl-cell tbl-at", textContent: formatOffset(row.offsetBits) }));
