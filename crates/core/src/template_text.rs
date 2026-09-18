@@ -1492,8 +1492,7 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
             format!("{word}({})", bytes_lit(needle))
         }
         Expr::Run { chars, negate } if probes => {
-            let word = if *negate { "run not" } else { "run" };
-            format!("{word}({})", bytes_hex(chars))
+            format!("run({}{})", if *negate { "not " } else { "" }, bytes_hex(chars))
         }
         Expr::StreamLen(codec) if probes => format!("streamlen({})", codec.as_str()),
         _ => return None,

@@ -270,6 +270,22 @@ mod tests {
     }
 
     #[test]
+    fn a_run_longer_than_the_walk_reads_in_one_go_is_still_one_run() {
+        // The walk that measures a run reads the file a block at a time, and
+        // a run of 100,000 bytes crosses two dozen of those seams. A picture
+        // pasted into a document is written as hex digits and is exactly this
+        // long, so it is the case a real file runs into rather than a corner.
+        let mut v = b"{\\pict ".to_vec();
+        v.extend(std::iter::repeat(b'a').take(100_000));
+        v.push(b'}');
+        let (d, mut ev) = read(&v);
+        // The size is the run, whole. What the field reads *as* is shortened
+        // for a row to hold, so the length of that says nothing.
+        assert_eq!(ev.node(&d, &[1, 1, 1, 0]).unwrap().size_bits, 100_000 * 8);
+        assert_eq!(ev.node(&d, &[]).unwrap().size_bits, v.len() as u64 * 8);
+    }
+
+    #[test]
     fn a_file_cut_off_before_its_closing_brace_reads_as_far_as_it_got() {
         let (d, mut ev) = read(b"{\\rtf1 hi");
         // Two items, and no brace to close them.
