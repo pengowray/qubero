@@ -670,16 +670,34 @@ fn the_forms_match_these_samples_and_no_others() {
     }
 }
 
-/// The same objects as ten environments wrote them, from Python 2.7 to 3.14
-/// and numpy 1.19 to 2.5, at every protocol each has: `pickle-matrix/` in the
-/// collection, where a file is kept once under the oldest environment that
-/// wrote those bytes.
+/// What each family of objects in the matrix comes to at protocol 4 and 5.
+///
+/// A file's family is the word in front of the first dash of its name. The
+/// library families have no form yet, and each is one edit from having one:
+/// the day a `dataframe` form is written, its `None` here becomes that form's
+/// ID and nothing else in this file changes.
+const FAMILIES: &[(&str, Option<&str>)] = &[
+    ("basic", Some("basic-p4-p5-v5")),
+    // An array and a scalar, which are two productions of one form.
+    ("numpy", Some("numpy-numeric-array-p4-p5-v5")),
+    ("dataframe", None),
+    ("series", None),
+    ("sklearn", None),
+    ("scipy", None),
+];
+
+/// The same objects as twelve environments wrote them, from Python 2.7 to
+/// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, at every
+/// protocol each has and from both of CPython's picklers: `pickle-matrix/` in
+/// the collection, where a file is kept once under the oldest environment
+/// that wrote those bytes.
 ///
 /// A rule rather than a list, since the rule is what the forms claim: plain
-/// data and numpy arrays match at protocol 4 and 5 whoever wrote them, and
-/// nothing else matches at all. Not the older protocols, which the forms do
-/// not take yet, and not pandas, scikit-learn or scipy, which have no form. A
-/// library file that starts matching is a form that grew without being asked.
+/// data and numpy arrays and scalars match at protocol 4 and 5 whoever wrote
+/// them, and nothing else matches at all. Not the older protocols, which the
+/// forms do not take yet, and not pandas, scikit-learn or scipy, which have no
+/// form. A library file that starts matching is a form that grew without being
+/// asked.
 #[test]
 fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     let Some(root) = qubero_samples::dir("pickle-matrix") else {
@@ -688,31 +706,104 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     };
     let mut environments: Vec<PathBuf> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     environments.sort();
-    assert!(environments.len() >= 10, "only {} environments under {}", environments.len(), root.display());
-    let (mut matched, mut wrong) = (0, Vec::new());
+    assert!(environments.len() >= 12, "only {} environments under {}", environments.len(), root.display());
+    // How many files of each family matched, and how many there were, so that
+    // the run says what it covered rather than only that it passed.
+    let mut tally: Vec<(usize, usize)> = vec![(0, 0); FAMILIES.len()];
+    let mut wrong = Vec::new();
     for dir in &environments {
+        let env = dir.file_name().unwrap().to_string_lossy().into_owned();
         for path in pickles(dir) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            // Protocol 4 or 5, from either pickler: a `.pypickle` file was
-            // written by `pickle.py` alone, and both spellings are familiar.
-            let modern = [".p4", ".p5"].iter().any(|p| name.contains(p));
-            let expected = match name.split('-').next() {
-                Some("basic") if modern => Some("basic-p4-p5-v5"),
-                Some("numpy") if modern => Some("numpy-numeric-array-p4-p5-v5"),
-                _ => None,
+            let family = name.split('-').next().unwrap_or("");
+            let Some(i) = FAMILIES.iter().position(|(f, _)| *f == family) else {
+                panic!("{env}/{name}: no family called {family:?} in FAMILIES; add it with the form it matches, or None");
+            };
+            // Protocol 4 and 5 only, from either pickler: a `.pypickle` file
+            // was written by `pickle.py` alone, and both spellings are
+            // familiar. Everything older is spelled with opcodes no form
+            // takes yet.
+            let modern = name.contains(".p4.") || name.contains(".p5.");
+            let expected = match modern {
+                true => FAMILIES[i].1,
+                false => None,
             };
             let bytes = std::fs::read(&path).unwrap();
             let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
-            match form == expected {
-                true => matched += usize::from(form.is_some()),
-                false => wrong.push(format!("{}/{name}: {form:?}, not {expected:?}", dir.file_name().unwrap().to_string_lossy())),
+            if modern {
+                tally[i].1 += 1;
+                tally[i].0 += usize::from(form.is_some());
+            }
+            if form != expected {
+                let hint = match (expected, FAMILIES[i].1) {
+                    (None, None) => format!("; if a form for {family} has landed, its row in FAMILIES is the edit"),
+                    _ => String::new(),
+                };
+                wrong.push(format!("{env}/{name}: {form:?}, not {expected:?}{hint}"));
             }
         }
+    }
+    for ((family, form), (matched, total)) in FAMILIES.iter().zip(&tally) {
+        eprintln!("{family}: {matched} of {total} at protocol 4 and 5 read as {form:?}");
     }
     assert!(wrong.is_empty(), "{} files:\n  {}", wrong.len(), wrong.join("\n  "));
     // Fewer than were written, since the same bytes from two environments are
     // kept once, and enough to know the folder was not empty.
-    assert!(matched >= 40, "only {matched} files matched a form");
+    let matched: usize = tally.iter().map(|(n, _)| n).sum();
+    assert!(matched >= 70, "only {matched} files matched a form");
+}
+
+/// Which of CPython's two picklers each batch edge in the matrix shows.
+///
+/// The two agree everywhere but the tail of a container longer than a batch,
+/// so these are the files that say anything at all, and most files say the
+/// third thing. The strings are what the `pickler` row of the familiar-form
+/// template shows, so they are written out here rather than named.
+#[test]
+fn the_batch_edges_say_which_pickler_wrote_them() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    const C: &str = "_pickle (CPython's C pickler)";
+    const PY: &str = "pickle.py (the pure Python pickler, the only one PyPy has)";
+    const EITHER: &str = "_pickle or pickle.py (they write this data identically)";
+    // A file is kept under the oldest environment that wrote those bytes, so
+    // every one of these is Python 3.4's copy, and each is also what every
+    // later CPython wrote. `basic-list-1001.p4.pypickle.pickle` is byte for
+    // byte what PyPy 3.10 wrote as well, which is the PyPy claim: PyPy has
+    // only the pure Python pickler, and this is that pickler's spelling.
+    let want: &[(&str, &str)] = &[
+        // One item over a full batch: a batch of one from the C pickler, and
+        // an APPEND or a SETITEM from the other.
+        ("py3.4/basic-list-1001.p4.pickle", C),
+        ("py3.4/basic-list-1001.p4.pypickle.pickle", PY),
+        ("py3.4/basic-dict-1001.p4.pickle", C),
+        ("py3.4/basic-dict-1001.p4.pypickle.pickle", PY),
+        // Exactly a full batch and nothing left: the C pickler writes the
+        // empty batch that says so, and pickle.py writes nothing.
+        ("py3.4/basic-dict-1000.p4.pickle", C),
+        ("py3.4/basic-dict-1000.p4.pypickle.pickle", PY),
+        // A set of 1,001, where neither pickler has a shorthand, and a list
+        // of exactly 1,000, which both end the same way.
+        ("py3.4/basic-set-1001.p4.pickle", EITHER),
+        ("py3.4/basic-list-1000.p4.pickle", EITHER),
+        // And a file with no batch edge in it at all, which is most files.
+        ("py3.4/basic-records.p4.pickle", EITHER),
+    ];
+    for (file, said) in want {
+        let Ok(bytes) = std::fs::read(root.join(file)) else { panic!("{file} is not in the collection") };
+        let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{file} matched no form"));
+        assert_eq!(found.pickler.name(), *said, "{file}");
+    }
+    // PyPy 3.10 wrote its own copy of the first of those and the collection
+    // keeps one, so the claim about PyPy is a claim about a file in another
+    // folder. Its versions.json is what says PyPy wrote it.
+    let listed = std::fs::read_to_string(root.join("pypy3.10/versions.json")).unwrap_or_default();
+    assert!(
+        listed.contains("\"basic-list-1001.p4.pickle\""),
+        "pypy3.10 no longer claims basic-list-1001.p4.pickle, so py3.4's .pypickle copy is not PyPy's any more"
+    );
 }
 
 /// A matched sample stops being that file when any instruction byte changes.
