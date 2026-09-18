@@ -217,17 +217,30 @@ byte order arrives. There is no memo interpreter and no fixed slot numbers.
 
 Frames are read as CPython's framer writes them, rather than as one frame
 spanning the body. A file may be unframed, or a run of frames; a frame may end
-only between two objects, and the next begins there. A payload of 64 KiB or
-more is written between frames: the frame being filled is committed so that it
-ends exactly at that opcode byte, the opcode and its bytes sit outside any
-frame, and a new frame begins immediately after them. The last frame ends where
-the STOP does. The one exception is a large payload with fewer than four bytes
-left to write after it, which CPython writes with no FRAME header in front
-because that is its minimum frame size; two large payloads fewer than four
-bytes apart are the same case and are not matched. A small payload at a frame
-boundary, a large one inside a frame, a frame reaching past the end of the
-file, and a frame that ends anywhere else with no large payload behind it, are
-all non-matches.
+only between two objects, and the next begins there. The last frame ends where
+the STOP does.
+
+A payload of 64 KiB or more has two spellings, both read:
+
+- From Python 3.7 it is written between frames. The frame being filled is
+  committed so that it ends exactly at that opcode byte, the opcode and its
+  bytes sit outside any frame, and a new frame begins immediately after them.
+  The one exception is a large payload with fewer than four bytes left to
+  write after it, which is written with no FRAME header in front because that
+  is the framer's minimum size; two large payloads fewer than four bytes apart
+  are the same case and are not matched.
+- Python 3.4 to 3.6 had no path for writing bytes outside a frame, so the
+  payload went into the frame being filled. That frame is then over its target
+  and is committed at the next `save`, so it holds the payload and ends at the
+  object after it, with the next frame beginning there. `basic-large-bytes` at
+  protocol 4 from Python 3.4 and 3.6 is this, and it is what the fifth slice
+  read as a non-match.
+
+A small payload at a frame boundary, a frame reaching past the end of the
+file, a frame that holds a large payload and then runs on past the next
+object, and a frame that ends anywhere else with no large payload behind it,
+are all non-matches. Which spelling a file uses says which Python wrote it and
+not which pickler: the two picklers of one release agree.
 
 Where a boundary may fall is the part that is easy to get wrong, and the fifth
 slice got it wrong until it was measured. CPython commits a frame at the start

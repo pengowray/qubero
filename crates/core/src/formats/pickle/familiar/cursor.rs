@@ -42,6 +42,11 @@ pub(super) enum Framing {
     Unframed,
     /// Inside a frame ending at this offset.
     Inside(usize),
+    /// Inside a frame that holds a payload too large to frame, ending at this
+    /// offset. Python 3.4 to 3.6 wrote such a payload into the frame it was
+    /// filling and committed that frame at the next object, so the frame ends
+    /// at the next object boundary and nowhere else.
+    Full(usize),
     /// A frame has ended here and the next has not begun. The next thing is a
     /// FRAME header, or the payload too large to frame that ended it.
     Between(usize),
@@ -157,13 +162,24 @@ impl<'a> Cursor<'a> {
     /// The boundary between two objects, where a frame may end and the next
     /// one begin. Every object production starts here.
     pub(super) fn gate(&mut self) -> Option<()> {
-        if let Framing::Inside(end) = self.framing {
-            if self.at > end {
-                return None;
+        match self.framing {
+            Framing::Inside(end) => {
+                if self.at > end {
+                    return None;
+                }
+                if self.at == end {
+                    self.framing = Framing::Between(end);
+                }
             }
-            if self.at == end {
+            // A frame holding an oversized payload is committed at the next
+            // object, which is here, so the frame ends exactly here.
+            Framing::Full(end) => {
+                if self.at != end {
+                    return None;
+                }
                 self.framing = Framing::Between(end);
             }
+            _ => {}
         }
         if matches!(self.framing, Framing::Between(_) | Framing::Tail(_)) && self.peek() == Some(0x95) {
             self.frame_header()?;
@@ -173,15 +189,19 @@ impl<'a> Cursor<'a> {
 
     /// A counted run of bytes, and the framing a large one demands.
     ///
-    /// The opcode byte has already been read and sits at `self.at - 1`. A
-    /// payload of [`BIG_PAYLOAD`] bytes or more begins exactly where a frame
-    /// ended and a new frame begins after it; a smaller one is inside a frame.
+    /// The opcode byte has already been read and sits at `self.at - 1`.
+    ///
+    /// From Python 3.7 a payload of [`BIG_PAYLOAD`] bytes or more begins
+    /// exactly where a frame ended and a new frame begins after it. Python
+    /// 3.4 to 3.6 had no such path and wrote the payload into the frame it
+    /// was filling, which is then committed at the next object; both are
+    /// read, and the second is what [`Framing::Full`] holds the file to. A
+    /// payload smaller than that is never written between frames.
     pub(super) fn counted(&mut self, code: u8, short: u8, wide: u8, widest: u8) -> Option<(usize, usize)> {
         let opcode_at = self.at - 1;
-        let framed = !matches!(self.framing, Framing::Unframed);
         let between = matches!(self.framing, Framing::Between(from) if from == opcode_at);
         let len = self.length(code, short, wide, widest)?;
-        if framed && (len >= BIG_PAYLOAD) != between {
+        if between && len < BIG_PAYLOAD {
             return None;
         }
         let at = self.at;
@@ -191,6 +211,10 @@ impl<'a> Cursor<'a> {
             // between frames, unless what is left is too short to frame.
             self.framing = Framing::Tail(self.at);
             self.gate()?;
+        } else if len >= BIG_PAYLOAD {
+            if let Framing::Inside(end) = self.framing {
+                self.framing = Framing::Full(end);
+            }
         }
         Some((at, len))
     }

@@ -38,12 +38,15 @@ fn a_payload_too_large_to_frame_sits_between_frames() {
     let mut early = whole.clone();
     early[3] -= 1;
     assert!(recognise(&early).is_none(), "a frame that ends before the payload");
-    // The whole body inside one frame, payload and all.
+    // The whole body inside one frame, payload and all, with the frame
+    // running on past the next object. Python 3.4 to 3.6 put a large payload
+    // inside the frame it was filling, but committed that frame at the object
+    // after it, which this does not.
     let inside = cat(&[&head, &carrying(BIG_PAYLOAD), &tail]);
     let mut once = vec![0x80, 4, 0x95];
     once.extend_from_slice(&(inside.len() as u64).to_le_bytes());
     once.extend_from_slice(&inside);
-    assert!(recognise(&once).is_none(), "a large payload inside a frame");
+    assert!(recognise(&once).is_none(), "a frame carried on past the payload it swallowed");
     // A payload one byte short of large, written between frames anyway.
     assert!(recognise(&build(&carrying(BIG_PAYLOAD - 1))).is_none(), "a small payload between frames");
     // No new frame after the payload.
@@ -72,6 +75,42 @@ fn a_payload_too_large_to_frame_sits_between_frames() {
     early_stop.extend_from_slice(&((body.len() - 1) as u64).to_le_bytes());
     early_stop.extend_from_slice(&body);
     assert!(recognise(&early_stop).is_none(), "a frame that ends before the STOP");
+}
+
+/// The other spelling of a payload too large to frame, which Python 3.4 to
+/// 3.6 wrote.
+///
+/// Those releases had no path for writing bytes outside a frame: the payload
+/// went into the frame being filled, which then ran over its target and was
+/// committed at the next `save`. So the frame holds the payload and ends at
+/// the object after it, and the next frame begins there. Python 3.7 writes
+/// the payload between frames instead. Both are real, and both are read.
+#[test]
+fn an_older_framer_left_a_large_payload_in_the_frame_it_was_filling() {
+    let head = cat(&[b"}\x94(", &word("a"), b"K\x01", &word("big")]);
+    let tail = cat(&[&word("c"), b"K\x02u."]);
+    let mut payload = vec![b'B'];
+    payload.extend_from_slice(&(BIG_PAYLOAD as u32).to_le_bytes());
+    payload.resize(payload.len() + BIG_PAYLOAD, 0xa5);
+    payload.push(0x94);
+    // The first frame runs from the dictionary to the memo mark behind the
+    // payload, which is where the writer's next `save` began.
+    let first = cat(&[&head, &payload]);
+    let mut whole = vec![0x80, 4, 0x95];
+    whole.extend_from_slice(&(first.len() as u64).to_le_bytes());
+    whole.extend_from_slice(&first);
+    whole.push(0x95);
+    whole.extend_from_slice(&(tail.len() as u64).to_le_bytes());
+    whole.extend_from_slice(&tail);
+    let found = recognise(&whole).unwrap();
+    let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
+    assert!(matches!(entries[1].1.kind, Kind::Bytes { len, .. } if len == BIG_PAYLOAD));
+
+    // A frame that ended one object too early, before the memo mark rather
+    // than after it, is not where the writer committed.
+    let mut early = whole.clone();
+    early[3] -= 1;
+    assert!(recognise(&early).is_none(), "a frame ending inside the payload's instruction");
 }
 
 /// A frame ends in front of an object and nowhere else, and the fixed run

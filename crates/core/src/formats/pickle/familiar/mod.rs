@@ -408,7 +408,7 @@ impl<'a> Cursor<'a> {
         // frame that simply stopped early is a non-match.
         match self.framing {
             Framing::Unframed => {}
-            Framing::Inside(end) if end == self.at => {}
+            Framing::Inside(end) | Framing::Full(end) if end == self.at => {}
             Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
         }

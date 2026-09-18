@@ -148,7 +148,7 @@ impl Cursor<'_> {
                 if !opens_object(code) {
                     return None;
                 }
-            } else if let Framing::Inside(end) = self.framing {
+            } else if let Framing::Inside(end) | Framing::Full(end) = self.framing {
                 // Everything else continues an object already begun, so the
                 // frame it is in has to reach past it.
                 if self.at >= end {
