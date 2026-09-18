@@ -114,6 +114,14 @@ fn a_byte_string_below_protocol_3_is_a_call_to_codecs() {
     let Kind::Object { what, items, .. } = &found.value.kind else { panic!("a call expected") };
     assert_eq!(*what, Shape::Bytes);
     assert_eq!(&items[0].kind, &Kind::Text { at: 25, len: 2 });
+    // A character latin-1 never spelled is a text no pickler wrote there: the
+    // original bytes each became the character of the same number, so every
+    // one of them is under 0x100.
+    let wide_char = older(
+        2,
+        &cat(&[b"c_codecs\nencode\n", &at_slot(0), &wide("\u{4e2d}"), &at_slot(1), &wide("latin1"), &at_slot(2), b"\x86", &at_slot(3), b"R", &at_slot(4), b"."]),
+    );
+    assert!(recognise(&wide_char).is_none());
     // Any other encoding is a byte string this cannot read back.
     for other in ["latin2", "LATIN1", "utf-8", "ascii-"] {
         assert!(recognise(&made(other)).is_none(), "{other} was read as latin-1");

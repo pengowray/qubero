@@ -369,7 +369,9 @@ from a list rather than from a file.
   eight-byte integer. Python 2's `int` was a machine word, so the line covers
   exactly the range between the two.
 - **`_codecs.encode` under any encoding but `latin1`**, which is a byte string
-  this cannot read back.
+  this cannot read back, and a `latin1` run holding a character above 0x100,
+  which is a text no pickler put there: every byte of the original became the
+  character of the same number.
 - **A `long` that fits a four-byte integer**, which Python 2 wrote as LONG1
   where Python 3 writes BININT. The rule that a small number in a wide field
   is a non-match is the protocol 4 one, kept as it is: no file in the corpus
@@ -429,6 +431,19 @@ dictionary the way the C picklers do, so its lists end one way and its
 dictionaries the other; PyPy's is a Python copy that walks both the `pickle.py`
 way. So under that numbering a list ends one way only, a dictionary ends either
 way, and the same way throughout the file.
+
+All of that is measured from the corpus and checked against `Modules/cPickle.c`
+on CPython's 2.7 branch. `put` is `if (Py_REFCNT(ob) < 2 || self->fast) return
+0;`, which is the mark left out. `put2` numbers a slot `PyDict_Size(self->memo)
++ 1`, under a comment reading "Make sure memo keys are positive!", which is the
+base of one. `save_list` hands `batch_list` an iterator and `batch_list` calls
+`PyIter_Next`, which is a new reference, so a list item is always filed; there
+is no `batch_list_exact`, which is why a list of its ends the way `pickle.py`
+ends one. `save_dict` calls `batch_dict_exact`, which walks the dictionary with
+`PyDict_Next` and borrows, so a key or a value the program made on the spot has
+a reference count of one and no mark. And a string shorter than two characters
+goes through `save_string(self, args, 0)`, which neither files it nor looks it
+up, so the second empty string in a file is spelled again rather than named.
 
 The other tell is the memo mark after `BYTEARRAY8`. The C pickler has always
 filed a bytearray in the memo; `pickle.py` did not until Python 3.10, which is

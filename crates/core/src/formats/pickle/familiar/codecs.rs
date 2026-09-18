@@ -66,6 +66,7 @@ impl Cursor<'_> {
             Kind::Text { at, len } => (at, len),
             _ => return None,
         };
+        self.latin1(at, len)?;
         self.encoding_word()?;
         self.exact(&[0x86])?;
         self.memoize(Bound::Opaque)?;
@@ -76,6 +77,9 @@ impl Cursor<'_> {
     fn encoded(&mut self, start: usize) -> Option<Value> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
         let text = self.text()?;
+        if let Kind::Text { at, len } = text.kind {
+            self.latin1(at, len)?;
+        }
         let encoding = self.encoding_word()?;
         self.exact(&[0x86])?;
         self.memoize(Bound::Opaque)?;
@@ -102,6 +106,15 @@ impl Cursor<'_> {
         self.exact(b")")?;
         self.exact(b"R")?;
         Some(self.at)
+    }
+
+    /// Whether this text is one latin-1 could have spelled, which is a text of
+    /// characters under 0x100. A pickler wrote every byte of the original as
+    /// the character of the same number, so anything above that is a text no
+    /// pickler put there and a run this has no bytes to read back.
+    fn latin1(&self, at: usize, len: usize) -> Option<()> {
+        let held = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+        held.chars().all(|c| u32::from(c) < 0x100).then_some(())
     }
 
     /// The encoding the bytes were handed to `_codecs` under, spelled here or
