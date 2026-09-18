@@ -322,6 +322,10 @@ const PROBES: &[Probe] = &[
     // string whose last word and the version byte after it say which file.
     Probe::Which(adios::sniff_signed),
     Probe::Signatures,
+    // JSON written the way a person or `json.dump(indent=2)` writes it: the
+    // table above knows `{"` and nothing else, and a brace, a newline and two
+    // spaces before the first key is how most JSON on a disk begins.
+    Probe::Is("json", is_json),
     // The Amiga container, whose form type says which format it holds.
     Probe::Which(|h, _| match h.len() >= 12 && h.starts_with(b"FORM") {
         false => None,
@@ -761,6 +765,36 @@ fn is_coff(head: &[u8], len: u64) -> bool {
     (symbols_at == 0 && symbols == 0)
         || (symbols_at >= table_end as u64
             && symbols_at.checked_add(symbols.saturating_mul(18)).is_some_and(|end| end + 4 <= len))
+}
+
+/// JSON that does not open `{"`: white space first, a key on the next line, or
+/// an array at the top. A scalar on its own is a legal document and is not
+/// claimed, since `42` and `null` are also what any text file could say.
+///
+/// A file that fits the window is parsed, which settles it. A longer one is
+/// judged on how it opens: a brace and then a key or the closing brace, or a
+/// bracket and then the start of a value. `[section]` opens an INI file, and
+/// a letter after the bracket is only a value when it spells one of the three
+/// words JSON has.
+fn is_json(head: &[u8], len: u64) -> bool {
+    let space = |b: &u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r');
+    let mut rest = head.iter().skip_while(|b| space(b));
+    let opens = rest.next().copied();
+    let after = rest.find(|b| !space(b)).copied();
+    let plausible = match (opens, after) {
+        (Some(b'{'), Some(b'"' | b'}')) => true,
+        (Some(b'['), Some(b'{' | b'[' | b']' | b'"' | b'-' | b'0'..=b'9')) => true,
+        (Some(b'['), Some(b't' | b'f' | b'n')) => {
+            let at = head.iter().position(|b| *b == b'[').map_or(0, |i| i + 1);
+            let word = &head[at + head[at..].iter().take_while(|b| space(b)).count()..];
+            [&b"true"[..], b"false", b"null"].iter().any(|w| word.starts_with(w))
+        }
+        _ => false,
+    };
+    match head.len() as u64 == len {
+        true => plausible && crate::json::parse(head).is_ok(),
+        false => plausible,
+    }
 }
 
 /// OMF modules begin with a named THEADR/LHEADR record. The length includes
@@ -2010,6 +2044,19 @@ mod tests {
         let checksum = 0u8.wrapping_sub(omf.iter().fold(0u8, |sum, &b| sum.wrapping_add(b)));
         omf.push(checksum);
         assert_eq!(sniffed(&omf), Some("omf"));
+    }
+
+    /// JSON as it is usually written, which the `{"` signature never saw.
+    #[test]
+    fn json_is_recognised_however_it_is_laid_out() {
+        for text in [&b"{\n  \"a\": 1\n}\n"[..], b"  {}", b"[1, 2, 3]", b"[\n  {\"a\": null}\n]", b"[true]", b"[]"] {
+            assert_eq!(sniff(text, text.len() as u64), Some("json"), "{:?}", String::from_utf8_lossy(text));
+        }
+        for text in [&b"[section]\nkey=value\n"[..], b"[network]\n", b"{ not json }", b"{\n  \"a\": \n", b"42", b"null", b"[1, 2"] {
+            assert_ne!(sniff(text, text.len() as u64), Some("json"), "{:?}", String::from_utf8_lossy(text));
+        }
+        // Longer than the window, so it is judged on how it opens.
+        assert_eq!(sniff(b"{\n  \"a\": [", 1 << 20), Some("json"));
     }
 
     /// `80 02 7d` opens a protocol 2 pickle of a dict, and reads as an OMF
