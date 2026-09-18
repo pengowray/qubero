@@ -69,9 +69,15 @@ const ADDRESSES_KEY = "qubero.table.addresses";
 /** Whether the reader wants the tables that arrive turned to arrive turned.
  *  Kept for those tables only; see `startsTurned`. */
 const TURNED_KEY = "qubero.table.turned";
-/** How wide a column of addresses and one of sizes are, in characters. */
-const AT_WIDTH = 12;
-const SIZE_WIDTH = 9;
+/** How wide a column of addresses and one of sizes start out, in characters.
+ *  They widen to what is in them like any other column: a size of
+ *  `4,000 bytes` in a column cut for `27 bytes` read `4,000 by...`, with
+ *  nothing to say what the rest was. */
+const AT_WIDTH = 9;
+const SIZE_WIDTH = 8;
+/** What in the view is cut short with an ellipsis when it does not fit, and so
+ *  needs its full text somewhere. */
+const CUT_SHORT = ".tbl-th, .tbl-cell";
 
 /** One data column as it is drawn: how wide it is and which side its values
  *  sit, its header cell, and how many wrong values its cells hold over the
@@ -135,6 +141,9 @@ export class TableView {
   private pickedRecord = 0;
   /** How wide the column of row names is, in a table whose rows have them. */
   private nameFit: ColumnFit = fitOf(TABLE.rowName);
+  /** How wide the two address columns are: as wide as the widest seen. */
+  private atWidth = Math.max(AT_WIDTH, TABLE.storedAt.length);
+  private sizeWidth = Math.max(SIZE_WIDTH, TABLE.size.length);
   private readonly meaning: HTMLElement;
   /** The selected rows, as they are drawn: records, or fields when turned. the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
@@ -187,6 +196,7 @@ export class TableView {
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
     this.scroller.addEventListener("keydown", (e) => this.onKey(e));
+    this.scroller.addEventListener("mouseover", (e) => this.sayInFull(e));
     new ResizeObserver(() => this.paintAgain()).observe(this.scroller);
     // Bytes arriving turn a waiting row into a row; so does an edit.
     doc.onChange(() => this.schedule());
@@ -313,7 +323,7 @@ export class TableView {
     if (this.plan.rowNames) out.push(this.nameFit.width);
     if (this.rate !== null) out.push(timeWidth(this.plan.count, this.rate));
     out.push(...this.columns.map((column) => column.fit.width));
-    if (this.addresses) out.push(AT_WIDTH, SIZE_WIDTH);
+    if (this.addresses) out.push(this.atWidth, this.sizeWidth);
     return out;
   }
 
@@ -405,6 +415,13 @@ export class TableView {
       this.nameFit = { width: Math.min(FIT_MAX, row.name.length), numeric: false };
       widened = true;
     }
+    const at = formatOffset(row.offsetBits).length;
+    const size = bitSizeText(row.sizeBits).length;
+    if (at > this.atWidth || size > this.sizeWidth) {
+      this.atWidth = Math.max(this.atWidth, at);
+      this.sizeWidth = Math.max(this.sizeWidth, size);
+      widened = widened || this.addresses;
+    }
     for (const [c, column] of this.columns.entries()) {
       const was = column.fit;
       const now = fitCell(was, row.cells[c]);
@@ -478,6 +495,22 @@ export class TableView {
       out.push(row);
     }
     return out;
+  }
+
+  /**
+   * Give a cell that is cut short its full text on hover.
+   *
+   * Asked as the pointer arrives rather than written on every cell as it is
+   * drawn, because whether a cell is cut short is a fact about how wide it
+   * came out, and a tooltip repeating a value that can be read where it is
+   * only gets in the way of the one beside it. A cell that already has
+   * something to say on hover, its value and what is wrong with it, keeps
+   * that.
+   */
+  private sayInFull(e: MouseEvent): void {
+    const target = e.target;
+    if (!(target instanceof HTMLElement) || !target.matches(CUT_SHORT) || target.title !== "") return;
+    if (target.scrollWidth > target.clientWidth) target.title = target.textContent ?? "";
   }
 
   // ----- drawing -----
