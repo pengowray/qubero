@@ -660,9 +660,8 @@ fn the_forms_match_these_samples_and_no_others() {
         // and the two axes.
         ("proto5-pandas-dataframe.pickle", Some("pandas-frame-p4-p5-v1")),
         ("proto5-pandas-series.pickle", Some("pandas-frame-p4-p5-v1")),
-        // Every index kind, including the datetime one, which is an `M8`
-        // dtype and two calls no form reads yet.
-        ("proto5-pandas-index-types.pickle", None),
+        // Every index kind, the datetime one included.
+        ("proto5-pandas-index-types.pickle", Some("pandas-frame-p4-p5-v1")),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -693,9 +692,6 @@ const FAMILIES: &[(&str, Option<&str>)] = &[
     // An array and a scalar, which are two productions of one form.
     ("numpy", Some("numpy-array-p4-p5-v6")),
     ("dataframe", Some("pandas-frame-p4-p5-v1")),
-    // A datetime index is an `M8` dtype, whose state carries the unit it
-    // counts in, and two calls of its own. No form reads one yet.
-    ("dataframe-datetime-index", None),
     ("series", Some("pandas-frame-p4-p5-v1")),
     ("sklearn", Some("sklearn-estimator-p4-p5-v1")),
     ("scipy", Some("scipy-sparse-p4-p5-v1")),
@@ -1092,6 +1088,14 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
         // A series is the same table with one value column, headed by the
         // name the series was given.
         ("series-float", &["index", "score"], &["int64", "float64"], &[&["0", "1.5"], &["1", "2.5"], &["2", "3.5"]]),
+        // A date is written as a count of the unit its dtype names, and the
+        // cell shows the date rather than the count.
+        (
+            "dataframe-datetime-index",
+            &["index", "v"],
+            &["datetime64", "float64"],
+            &[&["2020-01-01", "1"], &["2020-01-02", "2"], &["2020-01-03", "3"]],
+        ),
         // A categorical cell shows the category its code names.
         (
             "series-categorical",
@@ -1119,7 +1123,11 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
             let where_ = format!("{}/{name}", dir.file_name().unwrap().to_string_lossy());
             let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
             assert_eq!(shape.names, *columns, "{where_}");
-            assert_eq!(shape.units, *units, "{where_}");
+            // The unit a date counts in is the writer's: pandas 3.0 counts in
+            // microseconds where every release before it counted nanoseconds,
+            // and the column's type says which.
+            let said: Vec<&str> = shape.units.iter().map(|u| u.split('[').next().unwrap_or(u)).collect();
+            assert_eq!(said, *units, "{where_}");
             assert_eq!(shape.row_word.as_deref(), Some("row"), "{where_}");
             let read = ev.pickle_cells(&doc, &[1], 0, want.len() as u64 + 1).unwrap();
             let said: Vec<Vec<String>> = read.iter().map(|row| row.iter().map(cell_text).collect()).collect();

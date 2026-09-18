@@ -20,7 +20,7 @@ use super::pickletree::{spot, Part, Says, MOST_SHOWN_TEXT as MOST_SHOWN};
 use super::*;
 use crate::formats::pickle::familiar::{Dtype, Kind, Names, Shape, Value as Captured};
 use crate::formats::pickle::shapes;
-use crate::template::{Cells, TableShape};
+use crate::template::{Cells, Endian, TableShape};
 
 /// What the manager under a frame or a series is made of, however the release
 /// that wrote it spelled the manager.
@@ -299,6 +299,13 @@ pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
             })?;
             let names = entries.iter().find_map(|(_, v)| categories(v))?;
             Some(Values::Coded(codes, names))
+        }
+        // And an array of pandas' own is an ordinary object with the array it
+        // wraps among its attributes, which is where a datetime column was
+        // before 1.5.
+        Kind::Instance { class, state: Some(state) } if class_name(class)?.ends_with("Array") => {
+            let Kind::Dict(entries) = &state.kind else { return None };
+            entries.iter().find_map(|(_, v)| values_of(v))
         }
         _ => None,
     }
@@ -593,8 +600,19 @@ impl Evaluator {
     }
 
     /// One number of a run, read as the type its dtype says.
+    ///
+    /// A date is the one that is not read as its bytes: it is a count of the
+    /// unit its dtype names, and a reader wants the date rather than the
+    /// count, so it is read as a whole number and written out.
     fn number_at<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<Value>> {
-        let Dtype::Plain(spelling) = n.dtype else { return Ok(None) };
+        let spelling = match n.dtype {
+            Dtype::Plain(spelling) => spelling,
+            Dtype::Datetime { unit, .. } => {
+                let count = self.date_count(doc, r, base, n, elem)?;
+                return Ok(count.and_then(|count| iso_time(count, unit)).map(Value::Str));
+            }
+            _ => return Ok(None),
+        };
         let Some((ty, width)) = shapes::element(spelling) else { return Ok(None) };
         let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
         let offset = base + at * 8;
@@ -605,6 +623,22 @@ impl Evaluator {
         Ok(match read {
             Value::Float(f) if f.is_nan() => None,
             other => Some(other),
+        })
+    }
+
+    /// One value of a run of dates, as the whole number it is written as.
+    fn date_count<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<i64>> {
+        let Dtype::Datetime { spelling, .. } = n.dtype else { return Ok(None) };
+        let Some((_, width)) = shapes::element(spelling) else { return Ok(None) };
+        let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
+        let offset = base + at * 8;
+        let size = width * 8;
+        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+        let endian = if spelling.starts_with('>') { Endian::Big } else { Endian::Little };
+        let read = self.primitive_value(doc, &[], &one, &Ty::Int { bits: 64, endian }, size)?;
+        Ok(match read {
+            Value::Int(count) => i64::try_from(count).ok(),
+            _ => None,
         })
     }
 
@@ -773,6 +807,74 @@ fn label_text(label: &Option<Value>) -> Option<String> {
         Some(Value::Float(f)) => Some(f.to_string()),
         _ => None,
     }
+}
+
+/// A count of `unit` from 1970 as the date it is: ISO 8601, no zone, which is
+/// how pandas shows one. Midnight with nothing after it is a date alone.
+///
+/// The value pandas writes where it has no date is the smallest number a
+/// 64-bit integer holds, which comes back as nothing the way a NaN does. Units
+/// finer than a nanosecond are not read: nothing writes one and the arithmetic
+/// would not fit.
+fn iso_time(count: i64, unit: &str) -> Option<String> {
+    if count == i64::MIN {
+        return None;
+    }
+    // A year and a month are calendar units rather than a length of time, so
+    // they are counted on the calendar rather than in nanoseconds.
+    if unit == "Y" {
+        return Some(format!("{:04}-01-01", 1970 + count));
+    }
+    if unit == "M" {
+        let months = 1970i64 * 12 + count;
+        return Some(format!("{:04}-{:02}-01", months.div_euclid(12), months.rem_euclid(12) + 1));
+    }
+    let per: i128 = match unit {
+        "W" => 604_800 * NANOS_PER_SECOND,
+        "D" => 86_400 * NANOS_PER_SECOND,
+        "h" => 3_600 * NANOS_PER_SECOND,
+        "m" => 60 * NANOS_PER_SECOND,
+        "s" => NANOS_PER_SECOND,
+        "ms" => 1_000_000,
+        "us" => 1_000,
+        "ns" => 1,
+        _ => return None,
+    };
+    let total = i128::from(count).checked_mul(per)?;
+    let seconds = total.div_euclid(NANOS_PER_SECOND);
+    let nanos = total.rem_euclid(NANOS_PER_SECOND) as u32;
+    let days = i64::try_from(seconds.div_euclid(86_400)).ok()?;
+    let rest = seconds.rem_euclid(86_400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    if rest == 0 && nanos == 0 {
+        return Some(format!("{year:04}-{month:02}-{day:02}"));
+    }
+    let clock = format!("{:02}:{:02}:{:02}", rest / 3600, (rest / 60) % 60, rest % 60);
+    let fraction = match nanos {
+        0 => String::new(),
+        n if n % 1_000_000 == 0 => format!(".{:03}", n / 1_000_000),
+        n if n % 1_000 == 0 => format!(".{:06}", n / 1_000),
+        n => format!(".{n:09}"),
+    };
+    Some(format!("{year:04}-{month:02}-{day:02}T{clock}{fraction}"))
+}
+
+const NANOS_PER_SECOND: i128 = 1_000_000_000;
+
+/// A civil date from days since 1970-01-01, by Howard Hinnant's algorithm.
+/// The other way round is `eval::time::days_from_civil`, and the reason
+/// neither pulls in a calendar crate is written there.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// A summary row read at a glance, cut where it stops being one.

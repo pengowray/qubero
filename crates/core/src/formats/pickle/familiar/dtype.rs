@@ -20,6 +20,9 @@ const PLAIN: &[&str] = &["b1", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8", "
 /// The most columns a structured dtype may name. NumPy's own limit is far
 /// higher; this bounds the loop and is well past any record a file holds.
 const MAX_COLUMNS: usize = 256;
+/// The units a datetime may count in, which are NumPy's own and are the whole
+/// of what its numbers mean.
+const UNITS: &[&str] = &["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"];
 
 impl Cursor<'_> {
     /// The dtype of an array: the whole `numpy.dtype` construction and the
@@ -67,9 +70,11 @@ impl Cursor<'_> {
         // and only the spellings the reader has a type for.
         let record = records && kind.strip_prefix('V').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
         // `O8` is one pickled object a value, which only a form that reads an
-        // array of them allows.
+        // array of them allows. `M8` is a count of a unit of time, and the
+        // unit is in the state rather than in the letters.
         let objects = kind == "O8" && self.allow.object_arrays;
-        if !record && !objects && !PLAIN.contains(&kind) {
+        let datetime = kind == "M8";
+        if !record && !objects && !datetime && !PLAIN.contains(&kind) {
             return None;
         }
         let kind = kind.to_string();
@@ -82,12 +87,24 @@ impl Cursor<'_> {
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         let slot = self.memoize(Bound::Opaque)?;
-        // The state the BUILD sets: version 3, the byte order, no subarray,
+        // The state the BUILD sets: the version, the byte order, no subarray,
         // and then either nothing where a record's names, columns and width
-        // would be, or all three of them.
-        self.atoms(&[b"(", b"K\x03"])?;
+        // would be, or all three of them. A dtype carrying metadata is version
+        // 4 and everything else is version 3, and the only metadata read here
+        // is the unit a datetime counts in.
+        self.atoms(&[b"(", if datetime { b"K\x04" } else { b"K\x03" }])?;
         let order = self.byte_order(&kind)?;
         self.atoms(&[b"N"])?;
+        if datetime {
+            self.atoms(&[b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", b"K\0"])?;
+            let unit = self.datetime_unit()?;
+            self.exact(b"t")?;
+            self.memoize(Bound::Opaque)?;
+            self.exact(b"b")?;
+            let dtype = Dtype::Datetime { spelling: format!("{order}{kind}[{unit}]"), unit };
+            self.memo.fill(slot, Bound::Dtype(dtype.clone()));
+            return Some(dtype);
+        }
         let dtype = match record {
             true => self.record_state(&kind)?,
             false => {
@@ -107,6 +124,42 @@ impl Cursor<'_> {
         self.exact(b"b")?;
         self.memo.fill(slot, Bound::Dtype(dtype.clone()));
         Some(dtype)
+    }
+
+    /// The unit a datetime counts in, which NumPy writes beside a tuple of the
+    /// unit, a numerator, a denominator and an event count. What stands beside
+    /// it is an empty dictionary up to NumPy 1.x and `None` from 2.x, and
+    /// neither says anything. Only a plain unit is read: a count of three days
+    /// is a numerator this has no word for.
+    fn datetime_unit(&mut self) -> Option<String> {
+        self.gate()?;
+        match self.byte()? {
+            b'}' => {
+                self.memoize(Bound::Opaque)?;
+            }
+            b'N' => {}
+            _ => return None,
+        }
+        self.gate()?;
+        self.exact(b"(")?;
+        self.gate()?;
+        self.exact(b"C")?;
+        let len = self.byte()? as usize;
+        let at = self.at;
+        self.take(len)?;
+        let unit = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+        if !UNITS.contains(&unit) {
+            return None;
+        }
+        let unit = unit.to_string();
+        self.says("unit", at, len);
+        self.memoize(Bound::Bytes { at, len })?;
+        self.atoms(&[b"K\x01", b"K\x01", b"K\x01"])?;
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"\x86")?;
+        self.memoize(Bound::Opaque)?;
+        Some(unit)
     }
 
     /// The rest of a structured dtype's state: the column names, the column

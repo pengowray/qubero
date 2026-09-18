@@ -154,6 +154,9 @@ pub enum Kind {
         fortran_order: bool,
         items: Vec<Value>,
     },
+    /// A NumPy dtype standing on its own rather than describing an array,
+    /// which is what pandas hands a datetime column beside its numbers.
+    DType(Dtype),
     /// What a REDUCE of one of a form's enumerated callables made. `names`
     /// names the arguments, in the order the library writes them, and `state`
     /// is what a BUILD after the call handed the result.
@@ -181,6 +184,11 @@ pub enum Dtype {
     /// One pickled object a value, which is NumPy's `O8`. There is nothing to
     /// measure: the values are written after the array rather than in it.
     Objects,
+    /// A count of a unit of time from 1970, which is NumPy's `M8`. `spelling`
+    /// is `<M8[ns]` and `unit` the `ns` in it, which is the whole of what the
+    /// count means and is carried in the dtype's state rather than in its
+    /// letters.
+    Datetime { spelling: String, unit: String },
 }
 
 /// One column of a structured dtype: what NumPy calls it, what one of them
@@ -199,6 +207,7 @@ impl Dtype {
             Dtype::Plain(spelling) => Some(crate::formats::pickle::shapes::dtype(spelling)?.1),
             Dtype::Record { width, .. } => Some(*width),
             Dtype::Objects => None,
+            Dtype::Datetime { spelling, .. } => Some(crate::formats::pickle::shapes::dtype(spelling)?.1),
         }
     }
 
@@ -211,6 +220,7 @@ impl Dtype {
                 format!("V{width} ({})", named.join(", "))
             }
             Dtype::Objects => OBJECT_DTYPE.to_string(),
+            Dtype::Datetime { unit, .. } => format!("datetime64[{unit}]"),
         }
     }
 }
@@ -343,6 +353,8 @@ pub enum Shape {
     Object,
     /// One run of a pandas frame's columns, with where in the frame they sit.
     Block,
+    /// A NumPy dtype on its own: how one value of an array is read.
+    DType,
 }
 
 impl Shape {
@@ -366,6 +378,7 @@ impl Shape {
             Shape::Class => "class",
             Shape::Object => "object",
             Shape::Block => "block",
+            Shape::DType => "dtype",
         }
     }
 }

@@ -77,6 +77,7 @@ impl Cursor<'_> {
         let shape = match dtype {
             Dtype::Plain(spelling) => crate::formats::pickle::shapes::dtype(spelling)?.0,
             Dtype::Record { .. } => 0,
+            Dtype::Datetime { spelling, .. } => crate::formats::pickle::shapes::dtype(spelling)?.0,
             // An array of objects never reaches here: its values are read
             // rather than measured.
             Dtype::Objects => return None,
@@ -99,7 +100,7 @@ impl Cursor<'_> {
     /// names and fixed instruction for instruction around it.
     pub(super) fn numpy(&mut self) -> Option<Value> {
         let start = self.at;
-        for production in [Cursor::reconstructed, Cursor::frombuffer, Cursor::scalar] {
+        for production in [Cursor::reconstructed, Cursor::frombuffer, Cursor::scalar, Cursor::dtype_value] {
             let here = self.save();
             match production(self, start) {
                 Some(value) => return Some(value),
@@ -107,6 +108,18 @@ impl Cursor<'_> {
             }
         }
         None
+    }
+
+    /// A dtype standing on its own rather than describing an array, which is
+    /// what pandas hands a datetime column beside its numbers. Tried after the
+    /// three array productions, which name their own callable first, so a
+    /// dtype inside one of them is never read as one of these.
+    fn dtype_value(&mut self, start: usize) -> Option<Value> {
+        let dtype = self.dtype()?;
+        // The names it was built from belong to this run and not to whatever
+        // call comes next, so the run is closed here like any other.
+        self.finish_call("numpy dtype call", start, self.at);
+        Some(self.span(start, Kind::DType(dtype)))
     }
 
     /// `numpy.core.numeric._frombuffer(buffer, dtype, shape, order)`, which

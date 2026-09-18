@@ -175,3 +175,54 @@ fn a_block_is_values_a_slice_and_a_number() {
     let bare = cat(&[&class("pandas._libs.internals", "_unpickle_block"), b"K\x01", &slice, b"K\x02\x87\x94R\x94"]);
     assert!(recognise(&framed(&frame(&bare))).is_none());
 }
+
+/// A date is a count of the unit its dtype names, and the unit is in the
+/// dtype's state rather than in its letters. So a datetime dtype is version 4
+/// with a ninth part, and everything else is version 3 with eight.
+#[test]
+fn a_datetime_dtype_carries_the_unit_it_counts_in() {
+    let dtype = |version: &[u8], unit: &str, beside: &[u8]| {
+        let mut w = Writing::default();
+        w.word("numpy");
+        w.word("dtype");
+        w.raw(b"\x93");
+        w.mark();
+        w.word("M8");
+        w.raw(b"\x89\x88\x87");
+        w.mark();
+        w.raw(b"R");
+        w.mark();
+        w.raw(b"(");
+        w.raw(version);
+        w.word("<");
+        w.raw(b"NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\0");
+        w.raw(beside);
+        w.raw(b"(C");
+        w.raw(&[unit.len() as u8]);
+        w.raw(unit.as_bytes());
+        w.mark();
+        w.raw(b"K\x01K\x01K\x01t");
+        w.mark();
+        w.raw(b"\x86");
+        w.mark();
+        w.raw(b"t");
+        w.mark();
+        w.raw(b"b");
+        w.out
+    };
+    // Standing on its own, which is where pandas writes one beside a column's
+    // numbers. `None` beside the unit is numpy 2.x and an empty dictionary is
+    // 1.x; both are read.
+    for beside in [&b"N"[..], b"}\x94"] {
+        let bytes = framed(&cat(&[&frame(&dtype(b"K\x04", "ns", beside)), b""]));
+        let found = recognise(&bytes).unwrap();
+        let Kind::Instance { state: Some(state), .. } = &found.value.kind else { panic!("object expected") };
+        let Kind::Dict(entries) = &state.kind else { panic!("state expected") };
+        let Kind::DType(dtype) = &entries[0].1.kind else { panic!("dtype expected") };
+        assert_eq!(dtype.name(), "datetime64[ns]");
+    }
+    // Version 3, which is what every dtype with nothing to say writes, and a
+    // unit numpy does not have.
+    assert!(recognise(&framed(&frame(&dtype(b"K\x03", "ns", b"N")))).is_none());
+    assert!(recognise(&framed(&frame(&dtype(b"K\x04", "zz", b"N")))).is_none());
+}

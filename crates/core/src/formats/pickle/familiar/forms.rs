@@ -108,7 +108,23 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: "pandas.core.indexes.base._new_Index",
         what: Shape::Object,
         names: &["type", "state"],
-        shape: |args| (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Dict(_))).then_some(()),
+        shape: new_index,
+    },
+    // An index of dates is rebuilt by a call of its own, with the same two
+    // arguments.
+    Reduce {
+        path: "pandas.core.indexes.datetimes._new_DatetimeIndex",
+        what: Shape::Object,
+        names: &["type", "state"],
+        shape: new_index,
+    },
+    // How far apart the dates of a regular index are, which pandas writes as
+    // a call of the offset class with a count and whether it was normalised.
+    Reduce {
+        path: "pandas._libs.tslibs.offsets.Day",
+        what: Shape::Object,
+        names: &["n", "normalize"],
+        shape: |args| (matches!(args[0].kind, Kind::Int { .. }) && matches!(args[1].kind, Kind::Bool(_))).then_some(()),
     },
     Reduce {
         path: "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked",
@@ -130,6 +146,12 @@ const PANDAS_CALLS: &[Reduce] = &[
 /// of those wrapped in a class of pandas' own.
 fn holds_values(kind: &Kind) -> bool {
     matches!(kind, Kind::Array { .. } | Kind::Objects { .. } | Kind::Made { .. } | Kind::Instance { .. })
+}
+
+/// `_new_Index(cls, state)`: the class of the index and the dictionary that
+/// finishes it.
+fn new_index(args: &[Value]) -> Option<()> {
+    (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Dict(_))).then_some(())
 }
 
 /// `StringDtype(storage, na_value)`: a word and a float, which is a NaN.

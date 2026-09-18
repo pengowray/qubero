@@ -279,6 +279,17 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             // A reference is the BINGET and a row saying what is at the other
             // end of it, since the two bytes themselves say nothing.
             Kind::Ref(_) => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
+            // A dtype on its own, which says how one value is read. The run
+            // of instructions that built it is inside it, with the letters it
+            // was given named in that.
+            Kind::DType(dtype) => {
+                let notes = vec![(Label::Field(DTYPE_FIELD), Part::Note(dtype.name()))];
+                let kids = match call_of(found, v) {
+                    Some(call) => vec![(Label::Field(call.name), Part::Call(call, v))],
+                    None => Vec::new(),
+                };
+                (notes, kids)
+            }
             // A class the file named. The whole dotted path is the node's own
             // value rather than a row under it, so that an object says what it
             // is on one line: these trees are deep, and a row that has to be
@@ -475,6 +486,7 @@ fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
             Kind::Object { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,
+            Kind::DType(_) => Shape::DType,
             Kind::Instance { .. } => Shape::Object,
             Kind::Made { what, .. } => *what,
             _ => return None,
@@ -514,7 +526,9 @@ fn leaf(value: &Value) -> Option<(T, usize, usize)> {
 /// of named columns with the padding NumPy left between them named too.
 fn numbers_ty(dtype: &Dtype, count: u64) -> Option<T> {
     match dtype {
-        Dtype::Plain(spelling) => shapes::run(spelling, count),
+        // A datetime is a count of its unit, and the type NumPy's table gives
+        // it says which unit, so a reader of the numbers sees that too.
+        Dtype::Plain(spelling) | Dtype::Datetime { spelling, .. } => shapes::run(spelling, count),
         Dtype::Record { columns, width } => {
             let mut fields: Vec<(String, T)> = Vec::new();
             let mut reached = 0u64;

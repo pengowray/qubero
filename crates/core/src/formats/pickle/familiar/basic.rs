@@ -110,7 +110,7 @@ fn hashable(value: &Value) -> bool {
         // file in the corpus writes either as a key, so neither is read as
         // one until something does.
         Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
-        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } | Kind::Objects { .. } => false,
+        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } | Kind::Objects { .. } | Kind::DType(_) => false,
     }
 }
 
