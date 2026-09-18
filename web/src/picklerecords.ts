@@ -90,7 +90,11 @@ function entryCell(doc: Doc, entry: TemplateNode, field: string | null): RecordC
     const said = inside.status === "ok" ? inside.node.find((p) => p.name === REFERS_TO_FIELD) : undefined;
     return said === undefined ? { text: "", kind: "unread" } : leafCell(said);
   }
-  return { text: value.type, kind: "composite" };
+  // A value that holds others. The entry's own row already says it in a few
+  // words, the date a `datetime` is or `list of 3`, which tells a reader more
+  // than the name of the type; the type is what is left when it says nothing.
+  const said = entry.kind !== "composite" && entry.value !== "";
+  return { text: said ? entry.value : value.type, kind: "composite" };
 }
 
 /** A leaf as a cell. `None`, `True` and `False` are opcodes with no operand,

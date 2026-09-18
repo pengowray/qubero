@@ -57,11 +57,17 @@ const HIDES_MACHINERY = "picklefpf";
  *  nothing more to show. A value that is a list reads `list of 3`, which is
  *  not the list, and a key that is a tuple is not in the name, so both of
  *  those stay open. A key the file named by reference is still in the name. */
+/** The values that are one thing however many fields they are written as: a
+ *  date is a class and ten packed bytes, and its row says the date. A list's
+ *  row says `list of 3`, which is not the list, so containers are not here. */
+const ONE_VALUE: ReadonlySet<string> = new Set(["datetime", "date", "time", "timedelta", "timezone", "Decimal", "Fraction", "path", "integer", "text", "reference"]);
+
 function entrySaysItself(node: TemplateNode, kids: readonly TemplateNode[]): boolean {
   if (node.type !== "entry" || node.kind === "composite" || node.value === "") return false;
   const plain = (k: TemplateNode | undefined): boolean => k !== undefined && !k.composite;
   const key = kids.find((k) => k.name === "key");
-  return plain(kids.find((k) => k.name === "value")) && (plain(key) || key?.type === "reference");
+  const value = kids.find((k) => k.name === "value");
+  return (plain(value) || (value !== undefined && ONE_VALUE.has(value.type))) && (plain(key) || key?.type === "reference");
 }
 /** The same template, where the question is how its dicts are drawn. */
 const FAMILIAR_PICKLE = HIDES_MACHINERY;
