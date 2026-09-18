@@ -42,6 +42,10 @@ pub struct Cell {
     /// few records that say something else are what the reader is scrolling
     /// for. The text stays on the cell for its tooltip, and for the width the
     /// table is laid out to.
+    ///
+    /// Never true of a record that is only numbers, whose repetition is the
+    /// shape of the data and not a sentence to look past. See
+    /// `Evaluator::numbers_only`.
     pub repeat: bool,
     /// What is wrong with this element's value, when something is. The node's
     /// own: a table of values is a view like any other and says the same words
@@ -307,6 +311,9 @@ impl Evaluator {
     /// record's cell is a sentence about the record, and the same sentence
     /// written down a screenful is what the reader has to look past.
     ///
+    /// A record that is itself a row of numbers is left alone for the first of
+    /// those reasons rather than marked for the second. See [`Self::numbers_only`].
+    ///
     /// The comparison is against the element before it in the file, not the
     /// first one on screen, so that a stretch of identical records reads the
     /// same wherever the window happens to begin. That costs one element more
@@ -315,9 +322,9 @@ impl Evaluator {
     /// its text, which is the harmless way to be wrong about it.
     fn mark_repeats<S: Source>(&mut self, doc: &Document<S>, path: &[usize], out: &mut [Cell]) -> R<()> {
         let mut prev: Option<String> = None;
+        let mut p = path.to_vec();
         let first = out.first().filter(|c| c.kind == "composite" && c.index > 0).map(|c| c.index);
         if let Some(i) = first {
-            let mut p = path.to_vec();
             p.push(i as usize - 1);
             let before = self.node(doc, &p);
             p.pop();
@@ -334,10 +341,53 @@ impl Evaluator {
                 prev = None;
                 continue;
             }
-            c.repeat = prev.as_deref() == Some(c.text.as_str());
+            p.push(c.index as usize);
+            let numbers = self.numbers_only(doc, &p)?;
+            p.pop();
+            c.repeat = !numbers && prev.as_deref() == Some(c.text.as_str());
             prev = Some(c.text.clone());
         }
         Ok(())
+    }
+
+    /// Whether a record reads as a row of numbers rather than as a sentence
+    /// about itself.
+    ///
+    /// The ditto is for records that say something. A structure the format
+    /// declared inline and gave no reading of does not: it is a table row
+    /// wearing a name. A Melco stitch is two signed bytes called `dx` and
+    /// `dy`, and twelve identical ones are not one message written twelve
+    /// times, they are a straight line thirty millimetres long. This is
+    /// [`Self::mark_repeats`]'s own exemption for a run of numbers, reaching
+    /// the numbers a format wrote down as a record.
+    ///
+    /// All three tests are needed. `inline` is the format saying this belongs
+    /// on one row; a `reads_as` is the format saying that row is a sentence,
+    /// and an `.exp` command reading `jump 16 -16` is one, so two of those in
+    /// a row still earn a ditto. What is left is judged by its values, since a
+    /// field holding bytes or a name or a flag is something to read even where
+    /// the fields beside it are numbers.
+    ///
+    /// Every node this asks for was read by [`Self::cell`] a moment ago, so
+    /// the whole of it is memo lookups.
+    fn numbers_only<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<bool> {
+        if !matches!(self.memo[path].ty.base(), Ty::Struct(s) if s.inline && s.line.is_empty()) {
+            return Ok(false);
+        }
+        let n = self.node(doc, path)?.child_count;
+        if n == 0 {
+            return Ok(false);
+        }
+        let mut p = path.to_vec();
+        for i in 0..n as usize {
+            p.push(i);
+            let number = matches!(kind_of(&self.node(doc, &p)?.value), "uint" | "int" | "float");
+            p.pop();
+            if !number {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// One packed block as the weights inside it, or `None` for an element
@@ -594,6 +644,22 @@ mod tests {
         }
         bytes.extend_from_slice(&packet(0x12, 7, &[1; 8]));
         (doc(bytes), Evaluator::new(crate::formats::builtin("spp").expect("the spp template")))
+    }
+
+    /// A record that is nothing but numbers keeps its numbers. A Melco stitch
+    /// is a `dx` and a `dy` and no reading of its own, so a run of identical
+    /// ones is a straight line and not one sentence written three times. The
+    /// commands in the same run do have a reading, and two alike still ditto.
+    #[test]
+    fn a_record_that_is_only_numbers_is_never_a_repeat() {
+        // Three stitches the same length, two identical jumps, one more stitch.
+        let bytes = vec![0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x80, 0x04, 0x01, 0x01, 0x80, 0x04, 0x01, 0x01, 0x05, 0x05];
+        let d = doc(bytes);
+        let mut e = Evaluator::new(crate::formats::builtin("exp").expect("the exp template"));
+        let cells = e.run_cells(&d, &[0], 0, u64::MAX, 100).unwrap();
+        let said: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(said, ["5 5", "5 5", "5 5", "jump \u{b7} 1 \u{b7} 1", "jump \u{b7} 1 \u{b7} 1", "5 5"]);
+        assert_eq!(cells.iter().map(|c| c.repeat).collect::<Vec<_>>(), [false, false, false, false, true, false]);
     }
 
     /// A record reads as the line its format declares: what tells one from the
