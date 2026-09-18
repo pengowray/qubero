@@ -2189,19 +2189,25 @@ mod tests {
     /// for a 4 x 6 array, and nothing else in the file is.
     #[test]
     fn a_matched_array_is_a_table_of_its_rows() {
-        let (doc, mut ev) = read(MATRIX);
-        let mut tables = Vec::new();
-        let mut stack = vec![Vec::new()];
-        while let Some(path) = stack.pop() {
-            let info = ev.node(&doc, &path).unwrap();
-            if info.table {
-                tables.push((info.name.clone(), ev.table_shape(&doc, &path).unwrap().expect("a shape").columns));
+        // The protocol 5 array's numbers sit one level deeper, inside the
+        // call that was handed them, so the table has to be found there too.
+        let numbers: Vec<u8> = (0u8..12).flat_map(|n| [n, 0]).collect();
+        let buffered = proto5(&cat(&[&frombuffer(&mutable(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]));
+        for (bytes, columns) in [(MATRIX.to_vec(), 6), (buffered, 4)] {
+            let (doc, mut ev) = read(&bytes);
+            let mut tables = Vec::new();
+            let mut stack = vec![Vec::new()];
+            while let Some(path) = stack.pop() {
+                let info = ev.node(&doc, &path).unwrap();
+                if info.table {
+                    tables.push((info.name.clone(), ev.table_shape(&doc, &path).unwrap().expect("a shape").columns));
+                }
+                if path.len() < 6 {
+                    stack.extend((0..info.child_count.min(80) as usize).map(|i| [path.as_slice(), &[i]].concat()));
+                }
             }
-            if path.len() < 5 {
-                stack.extend((0..info.child_count.min(80) as usize).map(|i| [path.as_slice(), &[i]].concat()));
-            }
+            assert_eq!(tables, vec![("numbers".to_string(), Some(columns))]);
         }
-        assert_eq!(tables, vec![("numbers".to_string(), Some(6))]);
     }
 
     /// A pickle no form matches has nothing for this template to show, and
