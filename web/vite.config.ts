@@ -38,7 +38,11 @@ function localFiles(): Plugin {
         }
         let size = 0;
         try {
-          size = statSync(path).size;
+          const stat = statSync(path);
+          // A directory has no bytes to stream, and piping one throws EISDIR
+          // outside any handler, which takes the whole dev server down.
+          if (!stat.isFile()) throw new Error("not a file");
+          size = stat.size;
         } catch {
           next();
           return;
