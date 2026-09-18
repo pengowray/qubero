@@ -362,8 +362,8 @@ const PROBES: &[Probe] = &[
     //
     // Only where the window is the whole file. A form matches all of a file or
     // none of it, and a window that stops early cannot say which: the answer
-    // for a file longer than `SNIFF_WINDOW` is the opcode listing, and the
-    // reader can pick the other template themselves.
+    // for a file longer than `SNIFF_WINDOW` is `pickle`, and a caller holding
+    // the rest of the file asks `pickle::is_familiar` about all of it.
     Probe::Is("picklefpf", |h, len| h.len() as u64 == len && pickle::familiar::recognise(h).is_some()),
     // A pickle, which is a program rather than a document: protocol 2 and up
     // open with two bytes and protocol 0 and 1 open with an opcode that could

@@ -398,6 +398,25 @@ fn frame() -> T {
 /// and a value), so the second number asks for nothing a real file lacks.
 const UNOPENED_OPCODES: usize = 64;
 const UNOPENED_KINDS: usize = 4;
+/// How much of one operand the window has to hold before a short walk cut
+/// inside it is believed. A window that ends a few bytes into a number says
+/// nothing; four kilobytes of one value and still no end to it is a blob.
+const UNOPENED_BLOB: usize = 4096;
+
+/// The largest file a familiar form is looked for in, which is the limit the
+/// field tree reads one under (`MOST_BYTES` in `eval::pickletree`). Matching
+/// reads every byte at once, so there has to be one.
+pub const FAMILIAR_MOST_BYTES: u64 = 256 << 20;
+
+/// Whether the whole of a file matches a Familiar Pickle Form.
+///
+/// The sniffer can only say so for a file that fits its window, since a form
+/// matches all of a file or none of it, and an array of any size does not fit.
+/// So a caller that the sniffer told `pickle` about a longer file reads the
+/// rest and asks here, and opens it as `picklefpf` when the answer is yes.
+pub fn is_familiar(whole: &[u8]) -> bool {
+    whole.len() as u64 <= FAMILIAR_MOST_BYTES && familiar::recognise(whole).is_some()
+}
 
 pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {
     let opener = matches!(head, [0x80, 2..=5, ..]);
@@ -409,7 +428,17 @@ pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {
         // opener, and a list of 2,500 numbers written at either is longer
         // than the window. A few opcodes are not evidence, and neither are
         // many of one kind: every line of a word list under `p` is a PUT.
-        Walk::Cut { opcodes, kinds } => len > head.len() as u64 && (opener || (opcodes >= UNOPENED_OPCODES && kinds >= UNOPENED_KINDS)),
+        //
+        // Or a short walk that the window cut inside one operand. A dict with
+        // a 68 KB blob under its second key is six opcodes and then the blob,
+        // so it never reaches sixty-four; what it shows instead is an operand
+        // too long for the window, measured to end inside the file when it is
+        // one that carries its length.
+        Walk::Cut { opcodes, kinds, inside } => {
+            let long = opcodes >= UNOPENED_OPCODES && kinds >= UNOPENED_KINDS;
+            let blob = kinds >= UNOPENED_KINDS && inside.is_some_and(|reach| reach.is_none_or(|end| end < len));
+            len > head.len() as u64 && (opener || long || blob)
+        }
         Walk::No => false,
     }
 }
@@ -491,9 +520,11 @@ fn line_terminated(code: u8) -> bool {
 enum Walk {
     /// Reached `STOP`, one past the full stop, having read this many operands.
     Stopped { end: usize, operands: usize },
-    /// Ran out of bytes in the middle of an opcode or its operand, having
-    /// read this many opcodes, of this many different kinds.
-    Cut { opcodes: usize, kinds: usize },
+    /// Ran out of bytes, having read this many opcodes, of this many different
+    /// kinds. `inside` is set when the bytes ran out part way through an
+    /// operand rather than between two opcodes, and holds where that operand
+    /// ends when it says how long it is: a line does not.
+    Cut { opcodes: usize, kinds: usize, inside: Option<Option<u64>> },
     /// A byte that is not an opcode, or an operand that cannot be read.
     No,
 }
@@ -508,12 +539,12 @@ fn walk(bytes: &[u8]) -> Walk {
     let mut operands = 0usize;
     let mut opcodes = 0usize;
     let mut seen = [false; 256];
-    let cut = |opcodes: usize, seen: &[bool; 256]| Walk::Cut { opcodes, kinds: seen.iter().filter(|s| **s).count() };
+    let cut = |opcodes: usize, seen: &[bool; 256], inside: Option<Option<u64>>| Walk::Cut { opcodes, kinds: seen.iter().filter(|s| **s).count(), inside };
     // A file of nothing is not a pickle, and neither is one that never stops.
     // The cap is the opcode count rather than the byte count, since the
     // shortest opcode is one byte and this is only asked of a window.
     for _ in 0..bytes.len().max(1) {
-        let Some(&code) = bytes.get(at) else { return cut(opcodes, &seen) };
+        let Some(&code) = bytes.get(at) else { return cut(opcodes, &seen, None) };
         if OPCODE.iter().all(|(c, _)| *c != code as i128) {
             return Walk::No;
         }
@@ -527,15 +558,15 @@ fn walk(bytes: &[u8]) -> Walk {
             // one. Saying so only when nothing at all was left called a file
             // no pickle whenever the window ended inside an operand: two bytes
             // of a BININT's four, or a line with its newline past the end.
-            None => return if refuses_length(bytes, at, code) { Walk::No } else { cut(opcodes, &seen) },
+            None => return if refuses_length(bytes, at, code) { Walk::No } else { cut(opcodes, &seen, (bytes.len() - at >= UNOPENED_BLOB).then_some(None)) },
         };
         if next > at {
             operands += 1;
         }
-        at = next;
-        if at > bytes.len() {
-            return cut(opcodes, &seen);
+        if next > bytes.len() {
+            return cut(opcodes, &seen, (bytes.len() - at >= UNOPENED_BLOB).then_some(Some(next as u64)));
         }
+        at = next;
         opcodes += 1;
         seen[code as usize] = true;
     }
@@ -663,6 +694,14 @@ mod tests {
         assert!(!is_pickle(&words, 1 << 20), "a word list under p is one opcode over and over");
         // A length that could never be one is a refusal wherever the window ends.
         assert!(!is_pickle(b"\x80\x02X\xff\xff\xff\xff", 1 << 20));
+        // A short walk is believed when what cut it is one long value: a dict
+        // whose second key holds 68 KB, at protocol 1 and at protocol 0.
+        let blob = |front: &[u8]| front.iter().copied().chain(std::iter::repeat_n(b'x', 8000)).collect::<Vec<u8>>();
+        let binary = blob(b"}q\x00(U\x06beforeq\x01K\x01U\x04blobq\x02T\xa0\x09\x01\x00");
+        assert!(is_pickle(&binary, 1 << 20), "a BINSTRING of 68 KB that ends inside the file");
+        assert!(!is_pickle(&binary, 60_000), "the same length in a file too short to hold it");
+        assert!(is_pickle(&blob(b"(dp0\nS'before'\np1\nI1\nsS'blob'\np2\nS'"), 1 << 20), "a STRING line with no end in the window");
+        assert!(!is_pickle(&blob(b"S'"), 1 << 20), "one kind of opcode is not a pickle, however long its line");
     }
 
     /// Text that is not a pickle at all, which is the case that matters:
