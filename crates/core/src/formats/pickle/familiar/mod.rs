@@ -19,6 +19,7 @@ mod cursor;
 mod lines;
 mod dtype;
 mod forms;
+mod joblib;
 mod memo;
 mod numpy;
 mod object;
@@ -192,6 +193,8 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         arrays: 0,
         objects: 0,
         instances: 0,
+        wrappers: 0,
+        raws: Vec::new(),
         furthest: 0,
     };
     let found = c.whole(form);
@@ -200,20 +203,42 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
     found
 }
 
+/// What the bytes in front of a joblib array's numbers are called: one byte
+/// saying how many follow, and that many. Not an opcode and not a value, and
+/// named so that a matched file still has no byte left over.
+pub const PADDING: &str = "padding";
+
 /// Every instruction of a file a form has just matched.
 ///
 /// The same walk the listing does, over bytes already known to be a whole
 /// pickle: it reaches the STOP and stops there, so what comes back covers the
 /// file exactly. Names are `pickletools`' own.
-fn instructions(bytes: &[u8]) -> Vec<Instr> {
-    super::opcodes(bytes)
-        .iter()
-        .map(|op| Instr {
-            at: op.at as usize,
-            end: op.end as usize,
-            name: super::opcode_name(op.code),
-        })
-        .collect()
+///
+/// A joblib file has runs in it that are not opcodes, so the walk is done in
+/// the segments between them. Each segment starts where a run ends, which is
+/// a boundary between two instructions, so nothing straddles one.
+fn instructions(bytes: &[u8], raws: &[joblib::Raw]) -> Vec<Instr> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    for raw in raws {
+        walked(bytes, from, raw.pad_at, &mut out);
+        if raw.data_at > raw.pad_at {
+            out.push(Instr { at: raw.pad_at, end: raw.data_at, name: PADDING });
+        }
+        from = raw.end;
+    }
+    walked(bytes, from, bytes.len(), &mut out);
+    out
+}
+
+/// The opcodes of one segment, counted from the front of the file.
+fn walked(bytes: &[u8], from: usize, to: usize, out: &mut Vec<Instr>) {
+    let Some(window) = bytes.get(from..to) else { return };
+    out.extend(super::opcodes(window).iter().map(|op| Instr {
+        at: from + op.at as usize,
+        end: from + op.end as usize,
+        name: super::opcode_name(op.code),
+    }));
 }
 
 /// Whether a class the file named is anywhere in what it built.
@@ -302,6 +327,12 @@ impl<'a> Cursor<'a> {
         if !needed {
             return None;
         }
+        // A form that reads what `joblib.dump` writes requires the file to
+        // hold one, the way every other production a form allows is one the
+        // file has to use.
+        if self.allow.joblib && self.wrappers == 0 {
+            return None;
+        }
         Some(Match {
             form,
             proto: self.proto,
@@ -309,7 +340,7 @@ impl<'a> Cursor<'a> {
             value,
             body,
             calls: std::mem::take(&mut self.calls),
-            ops: instructions(self.bytes),
+            ops: instructions(self.bytes, &self.raws),
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),
             runs: std::mem::take(&mut self.runs),

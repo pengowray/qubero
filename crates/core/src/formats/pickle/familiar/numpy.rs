@@ -27,7 +27,7 @@ impl Cursor<'_> {
     /// A shape, as the tuple its arity is written with: EMPTY_TUPLE for none,
     /// TUPLE1 to TUPLE3 for one to three, and MARK..TUPLE past that. Only the
     /// counted tuples carry a memo mark; CPython never files an empty one.
-    fn dimensions(&mut self) -> Option<Vec<u64>> {
+    pub(super) fn dimensions(&mut self) -> Option<Vec<u64>> {
         self.gate()?;
         {
             // A shape with no dimensions, which protocol 1 and up write with
@@ -108,7 +108,7 @@ impl Cursor<'_> {
     }
 
     /// Whether this many bytes is what the dtype and the shape come to.
-    fn fits(&self, dtype: &Dtype, dimensions: &[u64], len: usize) -> Option<Payload> {
+    pub(super) fn fits(&self, dtype: &Dtype, dimensions: &[u64], len: usize) -> Option<Payload> {
         // A record has no case in the payload table, so the opcode listing
         // shows it as the bytes it is and the familiar form reads the columns.
         let shape = match dtype {
@@ -215,7 +215,7 @@ impl Cursor<'_> {
 
     /// The letter `_frombuffer` is told to lay the numbers out by, spelled
     /// out here or named where an earlier array spelled it.
-    fn storage_order(&mut self) -> Option<bool> {
+    pub(super) fn storage_order(&mut self) -> Option<bool> {
         for (letter, fortran) in [("C", false), ("F", true)] {
             let here = self.save();
             if let Some(said) = self.word_or_reference(letter) {
@@ -319,7 +319,7 @@ impl Cursor<'_> {
     /// Only where the run really is those bytes. A protocol 2 array's numbers
     /// are a text run that spells them in latin-1, and reading that run as
     /// numbers would be reading the spelling rather than the numbers.
-    fn reads(&mut self, at: usize, payload: Payload, storage: Storage) {
+    pub(super) fn reads(&mut self, at: usize, payload: Payload, storage: Storage) {
         if storage == Storage::Raw {
             self.payloads.push((at, payload));
         }

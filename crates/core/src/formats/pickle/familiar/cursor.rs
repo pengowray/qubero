@@ -51,6 +51,12 @@ pub(super) struct Cursor<'a> {
     /// How many objects of a named class the file built, which is what says a
     /// library form read what it is for.
     pub(super) instances: usize,
+    /// How many arrays arrived wrapped the way `joblib.dump` writes one, with
+    /// their bytes in the file after the wrapper rather than inside it.
+    pub(super) wrappers: usize,
+    /// Where each of those runs of bytes is. The listing walks the opcodes in
+    /// the segments between them and names the padding in front of each.
+    pub(super) raws: Vec<super::joblib::Raw>,
     pub(super) furthest: usize,
 }
 
@@ -95,6 +101,8 @@ pub(super) struct Save {
     pub(super) arrays: usize,
     pub(super) objects: usize,
     pub(super) instances: usize,
+    pub(super) wrappers: usize,
+    pub(super) raws: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -187,6 +195,8 @@ impl<'a> Cursor<'a> {
             arrays: self.arrays,
             objects: self.objects,
             instances: self.instances,
+            wrappers: self.wrappers,
+            raws: self.raws.len(),
         }
     }
 
@@ -222,6 +232,8 @@ impl<'a> Cursor<'a> {
         self.arrays = s.arrays;
         self.objects = s.objects;
         self.instances = s.instances;
+        self.wrappers = s.wrappers;
+        self.raws.truncate(s.raws);
     }
 
     /// FRAME and its eight-byte length, which must land inside the file.

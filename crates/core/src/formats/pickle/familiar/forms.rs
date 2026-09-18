@@ -79,6 +79,26 @@ pub(super) const STDLIB23: &str = "stdlib-values-p2-p3-v1";
 pub(super) const STDLIB1: &str = "stdlib-values-p1-v1";
 pub(super) const STDLIB0: &str = "stdlib-values-p0-v1";
 
+/// What `joblib.dump` writes: the same families, with every array replaced by
+/// the wrapper joblib puts in front of the array's own bytes. See
+/// [`joblib`](super::joblib).
+///
+/// Two rows rather than one, because a joblib file is a file of whatever was
+/// dumped into it: arrays and plain data in one, scikit-learn's estimators in
+/// the other. Neither is a copy of the family it extends: the second names the
+/// same classes and the same calls the plain scikit-learn row does. A frame or
+/// a sparse matrix dumped this way would be one more row each, and no file in
+/// the corpus is one.
+///
+/// Only at protocols 2 and up. joblib builds the wrapper with NEWOBJ, which
+/// arrived at protocol 2, so the two lower ranges have no name here at all.
+pub(super) const JOBLIB: &str = "joblib-arrays-p4-p5-v1";
+pub(super) const JOBLIB23: &str = "joblib-arrays-p2-p3-v1";
+pub(super) const JOBLIB_SKLEARN: &str = "joblib-sklearn-p4-p5-v1";
+pub(super) const JOBLIB_SKLEARN23: &str = "joblib-sklearn-p2-p3-v1";
+/// A range this family is never written at, which [`forms`] leaves out.
+const NOT_WRITTEN: &str = "";
+
 /// Which family a form belongs to, which is what says the file used the
 /// productions the form is for rather than only the ones every form has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +118,11 @@ pub(super) struct Allow {
     pub(super) protocols: &'static [u8],
     pub(super) family: Family,
     pub(super) numpy: bool,
+    /// Whether an array may arrive the way `joblib.dump` writes one, wrapped
+    /// in an object whose state measures the run of bytes after it. A form
+    /// that allows it requires the file to hold at least one, the way a form
+    /// that allows a production requires it everywhere else here.
+    pub(super) joblib: bool,
     pub(super) builtins: bool,
     /// The module prefixes this form may name a class from. Empty for a form
     /// that names no class at all, which is where the basic, NumPy and
@@ -395,6 +420,7 @@ struct Declared {
     ids: [&'static str; 4],
     family: Family,
     numpy: bool,
+    joblib: bool,
     builtins: bool,
     classes: &'static [&'static str],
     names: &'static [&'static str],
@@ -416,6 +442,7 @@ const DECLARED: &[Declared] = &[
         ids: [BASIC, BASIC23, BASIC1, BASIC0],
         family: Family::Basic,
         numpy: false,
+        joblib: false,
         builtins: false,
         classes: NO_CLASSES,
         names: NO_CLASSES,
@@ -428,7 +455,7 @@ const DECLARED: &[Declared] = &[
         ids: [SKLEARN, SKLEARN23, SKLEARN1, SKLEARN0],
         family: Family::Library,
         numpy: true,
-        classes: &["sklearn"],
+        classes: SKLEARN_CLASSES,
         calls: SKLEARN_CALLS,
         ..PLAIN
     },
@@ -448,6 +475,7 @@ const DECLARED: &[Declared] = &[
         names: NO_CLASSES,
         calls: PANDAS_CALLS,
         object_arrays: true,
+        joblib: false,
     },
     // The standard library's own classes. Its builtins are the ones the
     // builtins form already reads, so a file mixing a date with a complex
@@ -461,7 +489,23 @@ const DECLARED: &[Declared] = &[
         calls: super::stdlib::STDLIB_CALLS,
         ..PLAIN
     },
+    // What `joblib.dump` wrote, after the families it extends, so that a
+    // plain pickle of arrays or of estimators keeps the name it already had.
+    Declared { ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Numpy, numpy: true, joblib: true, ..PLAIN },
+    Declared {
+        ids: [JOBLIB_SKLEARN, JOBLIB_SKLEARN23, NOT_WRITTEN, NOT_WRITTEN],
+        family: Family::Library,
+        numpy: true,
+        joblib: true,
+        classes: SKLEARN_CLASSES,
+        calls: SKLEARN_CALLS,
+        ..PLAIN
+    },
 ];
+
+/// The package scikit-learn's classes come from, named by the plain form and
+/// by the joblib one over it.
+const SKLEARN_CLASSES: &[&str] = &["sklearn"];
 
 /// What a family that says nothing else reads, so that a row names only what
 /// makes it different.
@@ -469,6 +513,7 @@ const PLAIN: Declared = Declared {
     ids: [BASIC, BASIC23, BASIC1, BASIC0],
     family: Family::Basic,
     numpy: false,
+    joblib: false,
     builtins: false,
     classes: NO_CLASSES,
     names: NO_CLASSES,
@@ -476,7 +521,7 @@ const PLAIN: Declared = Declared {
     object_arrays: false,
 };
 
-/// Every form: each family at each protocol range.
+/// Every form: each family at each protocol range it is written at.
 pub(super) fn forms() -> Vec<(&'static str, Allow)> {
     DECLARED
         .iter()
@@ -486,6 +531,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                     protocols,
                     family: d.family,
                     numpy: d.numpy,
+                    joblib: d.joblib,
                     builtins: d.builtins,
                     classes: d.classes,
                     names: d.names,
@@ -495,5 +541,6 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                 (d.ids[at], allow)
             })
         })
+        .filter(|(id, _)| !id.is_empty())
         .collect()
 }

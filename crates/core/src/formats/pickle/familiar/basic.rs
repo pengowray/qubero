@@ -479,6 +479,15 @@ impl Cursor<'_> {
                     None => self.restore(here),
                 }
             }
+            // An array `joblib.dump` wrote, which names its own class first
+            // and so fails at its first word when the value is anything else.
+            if self.allow.joblib {
+                let here = self.save();
+                match self.joblib_array() {
+                    Some(value) => return Some(Slot { value, deep: 1, fill: Fill::Shut }),
+                    None => self.restore(here),
+                }
+            }
             if self.allow.numpy {
                 let here = self.save();
                 match self.numpy() {
