@@ -69,6 +69,18 @@ test("a weak template does not yield to a rule that compared two bytes", () => {
   assert.equal(decide({ template: template("pickle", "Python pickle file"), file: { ...xenix, strength: 70 } }).source, "file");
 });
 
+test("a rule on two bytes loses to a signature the file's extension vouches for", () => {
+  const xenix: Identification = { message: "XENIX 8086 relocatable or i286 small model", mime: "application/octet-stream", ext: [], strength: 50, source: "xenix" };
+  const melco = sig("Melco embroidery design", 2, true);
+  const id = decide({ template: null, file: xenix, tools: [], signatures: [melco] });
+  assert.equal(id.name, "Melco embroidery design");
+  assert.equal(id.source, "signature");
+  // Without the extension behind it, two bytes name nothing and the rule stands.
+  assert.equal(decide({ template: null, file: xenix, tools: [], signatures: [sig("Melco embroidery design", 2, false)] }).source, "file");
+  // A rule on four bytes or more stands whatever the extension says.
+  assert.equal(decide({ template: null, file: { ...xenix, strength: 70 }, tools: [], signatures: [melco] }).source, "file");
+});
+
 test("a rule that only half matched loses to the template, and the comma goes", () => {
   const id = decide({ template: template("godot", "Godot binary resource/scene"), file: rule("National Instruments,", []) });
   assert.equal(id.name, "Godot binary resource/scene");

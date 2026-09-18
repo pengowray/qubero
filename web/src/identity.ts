@@ -307,8 +307,10 @@ const fileEvidence = (f: Identification): string =>
  * unless the two agree about the format, in which case the rules' sentence
  * is the name because it says more: the template calls a PNG a PNG, the rule
  * says it is 1280 by 720. A weak template (see `WEAK_TEMPLATES`) yields to
- * a rule that compared four bytes or more either way. With no template, the rules name the file; failing
- * them, the tool that built it; failing that, a signature the file's
+ * a rule that compared four bytes or more either way. With no template, the
+ * rules name the file, unless theirs compared fewer than four bytes and a
+ * signature has the file's extension behind it; failing them, the tool that
+ * built it; failing that, a signature the file's
  * extension vouches for or that is long enough to vouch for itself.
  */
 export function decide(a: Answers): Identity {
@@ -339,10 +341,18 @@ export function decide(a: Answers): Identity {
   const outweighs = f !== null && t !== null && WEAK_TEMPLATES.has(t.name) && f.strength >= WEAK_TEMPLATE_YIELDS_AT;
   if (f !== null && t !== null && !isHalfMatch(f) && (fileAgrees || outweighs)) choose(f.message, "file");
   if (t !== null && !mismatch && templateName !== null) choose(templateName, "template");
+  // A rule that compared fewer than four bytes is ambiguous, and the file's
+  // name settles it: a signature that lists the extension the file has names
+  // it instead, unless the rule lists that extension too, in which case they
+  // are one answer and the rule's sentence says more. The XENIX rule is two
+  // bytes, `80 05`, and says nothing about a file that is called something else.
+  const best = namingMatch(sigs);
+  const ruleIsWeak = f !== null && f.strength < WEAK_TEMPLATE_YIELDS_AT;
+  const sameFormat = f !== null && best !== null && f.ext.some((e) => (best.format.ext ?? []).includes(e.toLowerCase()));
+  if (ruleIsWeak && best !== null && best.extensionAgrees && !sameFormat) choose(best.format.label, "signature");
   if (f !== null) choose(trimmed(f), "file");
   const tool = tools[0];
   if (tool !== undefined) choose(`${nameAndVersion(tool)} (${tool.category})`, "tools");
-  const best = namingMatch(sigs);
   if (best !== null) choose(best.format.label, "signature");
   if (t !== null && templateName !== null) choose(templateName, "template");
 
