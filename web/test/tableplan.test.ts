@@ -20,6 +20,7 @@ import {
   flatNames,
   indexOnly,
   indexWidth,
+  plainIndexes,
   rowCount,
   rowNameOf,
   rowRange,
@@ -258,20 +259,33 @@ test("columns are places only when every one of them is", () => {
   assert.equal(indexOnly([]), false);
 });
 
+test("columns that are only places are called by the number alone", () => {
+  const plain = plainIndexes(places(3));
+  assert.deepEqual(plain.columns.map((c) => c.name), ["0", "1", "2"]);
+  assert.equal(plain.indexColumns, true);
+});
+
+test("the brackets stay where they still tell a place from a name", () => {
+  const mixed = [...places(2), { name: "NAME", unit: "" }];
+  const kept = plainIndexes(mixed);
+  assert.deepEqual(kept.columns.map((c) => c.name), ["[0]", "[1]", "NAME"]);
+  assert.equal(kept.indexColumns, false);
+});
+
 test("two channels of five hundred values arrive turned", () => {
-  assert.equal(turnsByDefault({ count: 2, columns: places(500) }), true);
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(places(500)) }), true);
 });
 
 test("a table stays the way the file has it unless all three hold", () => {
   // Named columns are different facts about one thing, and read across.
   const named = Array.from({ length: 500 }, (_, i) => ({ name: `field ${i}`, unit: "" }));
-  assert.equal(turnsByDefault({ count: 2, columns: named }), false);
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(named) }), false);
   // A few columns fit across the tab as they are.
-  assert.equal(turnsByDefault({ count: 2, columns: places(12) }), false);
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(places(12)) }), false);
   // A matrix has no better way up.
-  assert.equal(turnsByDefault({ count: 400, columns: places(500) }), false);
+  assert.equal(turnsByDefault({ count: 400, ...plainIndexes(places(500)) }), false);
   // Too many records to give a column each.
-  assert.equal(turnsByDefault({ count: TURN_MAX + 1, columns: places(100_000) }), false);
+  assert.equal(turnsByDefault({ count: TURN_MAX + 1, ...plainIndexes(places(5000)) }), false);
 });
 
 test("only a table short enough can be turned", () => {
@@ -281,8 +295,8 @@ test("only a table short enough can be turned", () => {
 });
 
 test("the reader's choice is kept for the tables that arrive turned and no others", () => {
-  const strip = { count: 2, columns: places(500) };
-  const records = { count: 6, columns: [{ name: "ITEM", unit: "" }, { name: "TOTAL", unit: "" }] };
+  const strip = { count: 2, ...plainIndexes(places(500)) };
+  const records = { count: 6, ...plainIndexes([{ name: "ITEM", unit: "" }, { name: "TOTAL", unit: "" }]) };
   assert.equal(startsTurned(strip, null), true);
   assert.equal(startsTurned(strip, "1"), true);
   assert.equal(startsTurned(strip, "0"), false);

@@ -67,6 +67,9 @@ export type TablePlan = {
   /** What one row is: a sample, a record, a value. */
   readonly rowWord: string;
   readonly columns: readonly TableColumn[];
+  /** Whether the columns are places in a list and nothing more, which is when
+   *  they are called `0`, `1`, `2`. Set by `plainIndexes`. */
+  readonly indexColumns: boolean;
   /** Whether the rows have names of their own, which get a column. */
   readonly rowNames: boolean;
   /** What the shape calls one column, for the sentence saying what a row is.
@@ -321,6 +324,32 @@ export function indexOnly(columns: readonly TableColumn[]): boolean {
   return columns.length > 0 && columns.every((c) => /^\[\d+\]$/.test(c.name) && c.unit === "");
 }
 
+/**
+ * Columns that are only places, called by the number alone.
+ *
+ * A list's elements are named `[0]`, `[1]`, `[2]` in the tree, where the
+ * brackets tell a place from a name among the fields around it. Over a table
+ * every heading has them or none does, so they tell nothing apart: five
+ * hundred headings each spend two of their characters saying what the other
+ * four hundred and ninety-nine also say. Where even one column has a name the
+ * brackets are back to doing their job, and stay.
+ *
+ * This is the rule rather than a setting. There is nothing the brackets say
+ * that a reader could want back, and a setting nobody has a reason to change
+ * is one more thing in the bar.
+ */
+export function plainIndexes(columns: readonly TableColumn[]): { readonly columns: readonly TableColumn[]; readonly indexColumns: boolean } {
+  if (!indexOnly(columns)) return { columns, indexColumns: false };
+  return { columns: columns.map((c) => ({ name: c.name.slice(1, -1), unit: c.unit })), indexColumns: true };
+}
+
+/** What `turnsByDefault` needs to know of a plan. */
+export type TurnFacts = {
+  readonly count: number;
+  readonly columns: { readonly length: number };
+  readonly indexColumns: boolean;
+};
+
 /** Wider than this many columns and a table no longer fits across a tab. */
 const WIDE = 20;
 
@@ -333,9 +362,9 @@ const WIDE = 20;
  * four to every row. A square of numbers stays as the file has it, since a
  * matrix has no better way up.
  */
-export function turnsByDefault(plan: { readonly count: number; readonly columns: readonly TableColumn[] }): boolean {
+export function turnsByDefault(plan: TurnFacts): boolean {
   const columns = plan.columns.length;
-  return canTurn(plan.count) && indexOnly(plan.columns) && columns > WIDE && columns >= 4 * plan.count;
+  return canTurn(plan.count) && plan.indexColumns && columns > WIDE && columns >= 4 * plan.count;
 }
 
 /**
@@ -347,7 +376,7 @@ export function turnsByDefault(plan: { readonly count: number; readonly columns:
  * from then on; a reader who turns a strip of samples back has said how they
  * want strips of samples.
  */
-export function startsTurned(plan: { readonly count: number; readonly columns: readonly TableColumn[] }, kept: string | null): boolean {
+export function startsTurned(plan: TurnFacts, kept: string | null): boolean {
   return turnsByDefault(plan) && kept !== "0";
 }
 
@@ -431,6 +460,7 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
     count: rowCount(node.child_count, columns),
     rowWord: shape.row_word ?? childWord(node),
     columns: headings,
+    indexColumns: false,
     rowNames: false,
     columnWord: shape.column_word,
     facts: shape.facts,
@@ -519,6 +549,7 @@ function recordsPlan(doc: Doc, node: TemplateNode): TablePlan | null {
     count: built.rows.length,
     rowWord: built.rowWord ?? childWord(node),
     columns: built.columns.map((name) => ({ name, unit: "" })),
+    indexColumns: false,
     rowNames: false,
     columnWord: null,
     facts: [],
@@ -566,6 +597,7 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
     count: node.child_count,
     rowWord: childWord(node),
     columns: columns.map((name) => ({ name, unit: "" })),
+    indexColumns: false,
     rowNames: named,
     columnWord: null,
     facts: [],
@@ -649,6 +681,7 @@ function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: num
       shape.names.length > 0
         ? shape.names.map((name, i) => ({ name, unit: shape.units[i] ?? "" }))
         : shapeColumns(shape, columnsOf(doc, node, rows)),
+    indexColumns: false,
     rowNames: false,
     columnWord: shape.column_word,
     facts: shape.facts,
@@ -682,6 +715,11 @@ export function isTable(doc: Doc, node: TemplateNode): boolean {
 
 /** How this node reads as a table, or null when it does not read as one. */
 export function tablePlan(doc: Doc, node: TemplateNode): TablePlan | null {
+  const plan = planOf(doc, node);
+  return plan === null ? null : { ...plan, ...plainIndexes(plan.columns) };
+}
+
+function planOf(doc: Doc, node: TemplateNode): TablePlan | null {
   const shape = shapeOf(doc, node);
   if (shape !== null) return shapedPlan(doc, node, shape);
   const cells = cellShapeOf(doc, node);
