@@ -101,7 +101,7 @@ impl Evaluator {
             // records, whose columns are read out of the file here because the
             // cheap question below cannot read anything.
             Some(Ty::Pickle(_)) => match self.pickle_table(path) {
-                Some(shape) => Ok(Some(Arc::new(self.pickle_columns(doc, path, shape)?))),
+                Some(shape) => Ok(self.pickle_columns(doc, path, shape)?.map(Arc::new)),
                 None => Ok(None),
             },
             _ => Ok(None),

@@ -154,6 +154,12 @@ impl<'a, S: Source> Tab<'a, S> {
         self.ev.time_of(self.doc, &self.path_in(path))
     }
 
+    /// The rows `from` up to `to` of the pandas frame at `path`, each as one
+    /// value a column and nothing where the frame has no value.
+    pub fn pickle_cells(&mut self, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<Option<Value>>>> {
+        self.ev.pickle_cells(self.doc, &self.path_in(path), from, to)
+    }
+
     /// What table the field at `path` is, with each fact's path mapped into
     /// the tab's own numbering the way `origins` does it.
     pub fn table_shape(&mut self, path: &[usize]) -> R<Option<TableShapeInfo>> {

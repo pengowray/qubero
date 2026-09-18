@@ -1061,19 +1061,35 @@ struct TableShapeDto {
     cells: Option<CellsDto>,
 }
 
-/// A table whose cells are named nodes inside named rows: a pickled list of
-/// records, whose keys are written beside its values. See
-/// [`qubero_core::template::Cells`].
+/// Where a table's cells are, for a table whose rows are nodes rather than a
+/// run of values. See [`qubero_core::template::Cells`].
 #[derive(Serialize)]
-struct CellsDto {
-    /// The type a node under the field has to be to be a row.
-    row: String,
-    /// The type a node inside a row has to be to be a cell, named by its
-    /// column.
-    cell: String,
-    /// The field inside a cell holding what it is worth, for a cell that is a
-    /// name and a value. Null when the cell is the value.
-    value: Option<String>,
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum CellsDto {
+    /// Named nodes inside named rows: a pickled list of records, whose keys
+    /// are written beside its values.
+    Named {
+        /// The type a node under the field has to be to be a row.
+        row: String,
+        /// The type a node inside a row has to be to be a cell, named by its
+        /// column.
+        cell: String,
+        /// The field inside a cell holding what it is worth, for a cell that
+        /// is a name and a value. Null when the cell is the value.
+        value: Option<String>,
+    },
+    /// Cells the core works out, a window of rows at a time, which is a pandas
+    /// frame. `rows` is how many there are; `Editor::pickle_cells` reads them.
+    Computed { rows: f64 },
+}
+
+/// One cell of a table the core works out. `text` is empty and `kind` is
+/// "absent" for a cell the file has no value for, which is the same nothing a
+/// record without one of the table's keys shows.
+#[derive(Serialize)]
+struct FrameCellDto {
+    text: String,
+    kind: &'static str,
 }
 
 /// One field that describes a table: what it is called, where it is, and what
@@ -4172,6 +4188,39 @@ impl Editor {
         }
     }
 
+    /// The rows `from` up to `to` of the pandas frame at `path`, each as one
+    /// cell a column. JSON, in the same reply shape as the rest.
+    ///
+    /// A frame's cells are not nodes of the tree: its values are in blocks
+    /// written the other way up from the frame, a categorical column is codes
+    /// into another array, and a counted index is not written down at all. So
+    /// the reading is the core's and the view asks for the rows it is showing.
+    pub fn pickle_cells(&mut self, space: u32, path: &[u32], from: f64, to: f64) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let (from, to) = (from.max(0.0) as u64, to.max(0.0) as u64);
+        match self.tab(space) {
+            Err(why) => why,
+            Ok(mut tab) => {
+                tab.ev.begin_slice();
+                reply(tab.pickle_cells(&p, from, to).map(|rows| {
+                    rows.into_iter()
+                        .map(|row| {
+                            row.into_iter()
+                                .map(|cell| match cell {
+                                    None => FrameCellDto { text: String::new(), kind: "absent" },
+                                    Some(v) => {
+                                        let (kind, text, _) = shown(&v);
+                                        FrameCellDto { text, kind }
+                                    }
+                                })
+                                .collect::<Vec<FrameCellDto>>()
+                        })
+                        .collect::<Vec<Vec<FrameCellDto>>>()
+                }))
+            }
+        }
+    }
+
     /// What table the field at `path` reads as, or null when the template
     /// makes no such claim about it. JSON, in the same reply shape as the
     /// rest.
@@ -4206,11 +4255,12 @@ impl Editor {
                             })
                             .collect(),
                         cells: t.cells.map(|c| match c {
-                            qubero_core::template::Cells::Named { row, cell, value } => CellsDto {
+                            qubero_core::template::Cells::Named { row, cell, value } => CellsDto::Named {
                                 row: row.to_string(),
                                 cell: cell.to_string(),
                                 value: value.map(|v| v.to_string()),
                             },
+                            qubero_core::template::Cells::Computed { rows } => CellsDto::Computed { rows: rows as f64 },
                         }),
                     })
                 }))

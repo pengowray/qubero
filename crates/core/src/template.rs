@@ -1946,12 +1946,8 @@ pub struct TableShape {
 /// says it here instead.
 ///
 /// This is the declarative half `web/src/records.ts` was waiting for a second
-/// example of. The first is the pickled list of records; the second is a
-/// pandas frame, whose column names are in its index and whose values are in
-/// blocks, and which wants the `Columns` case below rather than this one:
-/// column `c` is a run somewhere else in the file, `first` values in and
-/// `stride` apart. That case is designed and not built; see
-/// `docs/HANDOVER-pickle-libraries.md`.
+/// example of. The first is the pickled list of records; the second is the
+/// pandas frame, whose cells are not in the tree at all.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cells {
     /// Each row is a node under the field, and each cell is a node inside that
@@ -1965,6 +1961,16 @@ pub enum Cells {
         cell: Arc<str>,
         value: Option<Arc<str>>,
     },
+    /// Every cell worked out by the core, a window of rows at a time, through
+    /// [`Evaluator::pickle_cells`](crate::eval::Evaluator::pickle_cells).
+    ///
+    /// A pandas frame keeps its values in blocks, each written the other way
+    /// up from the frame; a categorical column is codes into another array
+    /// again; and a `RangeIndex` is a start, a stop and a step rather than
+    /// anything written down. None of that is a run a reader can index into,
+    /// so the core reads a cell and the view asks for the rows it is showing.
+    /// `names` and `units` hold the columns and what one value of each is.
+    Computed { rows: u64 },
 }
 
 /// A field holds a moment in time, and this says how to read the number in it.

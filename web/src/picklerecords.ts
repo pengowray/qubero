@@ -17,6 +17,10 @@
 // rows do not exist until something runs it.
 
 import type { Doc, TableCells, TableShape, TemplateNode } from "./doc.ts";
+
+/** The case of `TableCells` this file walks: cells that are nodes of the tree,
+ *  named by their column. */
+type NamedCells = Extract<TableCells, { kind: "named" }>;
 import type { RecordCell, RecordPlan, RecordRow, RecordTable } from "./records.ts";
 
 /** A reference, whose two bytes say nothing on their own: what it names is the
@@ -26,11 +30,11 @@ const REFERS_TO_FIELD = "refers to";
 
 /** The shape the core hung on this node, when it is one whose cells are named
  *  nodes. Everything else is a run of values and is not this file's. */
-function namedCells(doc: Doc, node: TemplateNode): { shape: TableShape; cells: TableCells } | null {
+function namedCells(doc: Doc, node: TemplateNode): { shape: TableShape; cells: NamedCells } | null {
   if (node.table !== true) return null;
   const reply = doc.tableShape(node.path);
   const shape = reply.status === "ok" ? reply.node : null;
-  if (shape === null || shape.cells === null) return null;
+  if (shape === null || shape.cells === null || shape.cells.kind !== "named") return null;
   return { shape, cells: shape.cells };
 }
 
@@ -40,7 +44,7 @@ export function picklePlan(doc: Doc, node: TemplateNode): RecordPlan | null {
   return { build: () => build(doc, node, said.shape, said.cells) };
 }
 
-function build(doc: Doc, node: TemplateNode, shape: TableShape, cells: TableCells): RecordTable | null {
+function build(doc: Doc, node: TemplateNode, shape: TableShape, cells: NamedCells): RecordTable | null {
   const columns = shape.names.map((n) => n);
   const children = doc.templateChildren(node.path, 0, node.child_count);
   if (children.status !== "ok") return { columns, rows: [], pending: true };

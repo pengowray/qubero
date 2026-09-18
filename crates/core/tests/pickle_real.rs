@@ -1055,3 +1055,92 @@ fn a_matched_array_reads_as_its_numbers_under_the_familiar_template() {
         .collect();
     assert_eq!(read, (0..24).map(|n| Value::Float(n as f64)).collect::<Vec<_>>());
 }
+
+/// A pickled frame opens as the table it holds, not as the program that
+/// rebuilds it.
+///
+/// This is the whole point of reading a frame. The values are in blocks, each
+/// written the other way up from the frame; the column names are in an index
+/// beside them; a `RangeIndex` is not written down at all; and a categorical
+/// column is codes into a third array. A reader who is shown any of that
+/// instead of the data has been shown the pickle and not the frame.
+#[test]
+fn a_pickled_frame_opens_as_the_table_it_holds() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // What each object in the matrix is, from `tools/make_pickle_matrix.py`.
+    let cases: &[(&str, &[&str], &[&str], &[&[&str]])] = &[
+        (
+            "dataframe-numeric",
+            &["index", "id", "score"],
+            &["int64", "int64", "float64"],
+            &[&["0", "0", "1.5"], &["1", "1", "2.5"], &["2", "2", "3.5"], &["3", "3", "4.5"]],
+        ),
+        (
+            "dataframe-mixed",
+            &["index", "id", "score", "name"],
+            &["int64", "int64", "float64", "str"],
+            &[
+                &["0", "0", "1.5", "a"],
+                &["1", "1", "2.5", "b"],
+                &["2", "2", "3.5", "c"],
+                &["3", "3", "4.5", "d"],
+            ],
+        ),
+        // A series is the same table with one value column, headed by the
+        // name the series was given.
+        ("series-float", &["index", "score"], &["int64", "float64"], &[&["0", "1.5"], &["1", "2.5"], &["2", "3.5"]]),
+        // A categorical cell shows the category its code names.
+        (
+            "series-categorical",
+            &["index", "value"],
+            &["int64", "category"],
+            &[&["0", "lo"], &["1", "hi"], &["2", "lo"], &["3", "mid"]],
+        ),
+    ];
+    let mut checked = 0;
+    for dir in std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        for path in pickles(&dir) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.contains(".p4.") && !name.contains(".p5.") {
+                continue;
+            }
+            let Some((_, columns, units, want)) = cases.iter().find(|(stem, ..)| name.starts_with(&format!("{stem}."))) else {
+                continue;
+            };
+            let bytes = std::fs::read(&path).unwrap();
+            if formats::pickle::familiar::recognise(&bytes).is_none() {
+                continue;
+            }
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let where_ = format!("{}/{name}", dir.file_name().unwrap().to_string_lossy());
+            let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
+            assert_eq!(shape.names, *columns, "{where_}");
+            assert_eq!(shape.units, *units, "{where_}");
+            assert_eq!(shape.row_word.as_deref(), Some("row"), "{where_}");
+            let read = ev.pickle_cells(&doc, &[1], 0, want.len() as u64 + 1).unwrap();
+            let said: Vec<Vec<String>> = read.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+            let want: Vec<Vec<String>> =
+                want.iter().map(|row| row.iter().map(|c| (*c).to_string()).collect()).collect();
+            assert_eq!(said, want, "{where_}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 12, "only {checked} frames read as tables");
+}
+
+/// A cell as the interface shows it, which for a value the frame has not got
+/// is nothing at all.
+fn cell_text(cell: &Option<Value>) -> String {
+    match cell {
+        None => String::new(),
+        Some(Value::Int(n)) => n.to_string(),
+        Some(Value::UInt(n)) => n.to_string(),
+        Some(Value::Float(f)) => f.to_string(),
+        Some(Value::Str(s)) => s.clone(),
+        Some(other) => format!("{other:?}"),
+    }
+}

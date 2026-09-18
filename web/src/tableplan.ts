@@ -21,7 +21,7 @@
 // No DOM here, so the naming, the grouping arithmetic and the heuristic can be
 // run under `node --test`. `tableview.ts` is the half that draws.
 
-import type { Doc, TableFact, TableShape, TemplateNode } from "./doc.ts";
+import type { Doc, FrameCell, TableFact, TableShape, TemplateNode } from "./doc.ts";
 import { isRecordList, recordTable, type RecordCell, type RecordTable } from "./records.ts";
 import { childWord, countText, TABLE } from "./strings.ts";
 
@@ -488,9 +488,60 @@ function shapeOf(doc: Doc, node: TemplateNode): TableShape | null {
   if (node.table !== true) return null;
   const reply = doc.tableShape(node.path);
   const shape = reply.status === "ok" ? reply.node : null;
-  // A shape whose cells are named nodes is not a run of values, so it is not
-  // laid out from a count. One of the readers in `records.ts` walks it.
+  // A shape that says where its cells are is not a run of values, so it is not
+  // laid out from a count: `computedPlan` below reads one, and one of the
+  // readers in `records.ts` walks the other.
   return shape !== null && shape.cells !== null ? null : shape;
+}
+
+/** The same shape, for the two cases that are not laid out from a count. */
+function cellShapeOf(doc: Doc, node: TemplateNode): TableShape | null {
+  if (node.table !== true) return null;
+  const reply = doc.tableShape(node.path);
+  const shape = reply.status === "ok" ? reply.node : null;
+  return shape !== null && shape.cells !== null ? shape : null;
+}
+
+/**
+ * A table whose cells the core works out, which is a pandas frame.
+ *
+ * Lazy like the shaped plan and for the same reason: a frame is as long as it
+ * is, and the columns, the count and the row word are all answerable without
+ * reading a cell. A window of rows is read at a time and kept until the view
+ * says to forget it.
+ */
+function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: number): TablePlan {
+  let held: { from: number; cells: readonly (readonly FrameCell[])[] } | null = null;
+  const read = (i: number): readonly FrameCell[] | null => {
+    if (held === null || i < held.from || i >= held.from + held.cells.length) {
+      const from = Math.floor(i / WINDOW) * WINDOW;
+      const reply = doc.pickleCells(node.path, from, Math.min(from + WINDOW, rows));
+      if (reply.status !== "ok") return null;
+      held = { from, cells: reply.node };
+    }
+    return held.cells[i - held.from] ?? null;
+  };
+  return {
+    path: node.path,
+    count: rows,
+    rowWord: shape.row_word ?? childWord(node),
+    columns: shape.names.map((name, i) => ({ name, unit: shape.units[i] ?? "" })),
+    columnWord: shape.column_word,
+    facts: shape.facts,
+    rate: shape.rate,
+    row: (i) => {
+      const cells = read(i);
+      if (cells === null) return null;
+      return { cells: cells.map((c) => ({ text: c.text, kind: c.kind })), offsetBits: 0, sizeBits: 0, path: node.path };
+    },
+    // A frame's rows are not a run of bytes: one row is one value out of each
+    // of several blocks, scattered through the file. So a bit of the file is
+    // in no row rather than in the wrong one.
+    rowFor: () => null,
+    forget: () => {
+      held = null;
+    },
+  };
 }
 
 /**
@@ -500,6 +551,7 @@ function shapeOf(doc: Doc, node: TemplateNode): TableShape | null {
  */
 export function isTable(doc: Doc, node: TemplateNode): boolean {
   if (shapeOf(doc, node) !== null) return true;
+  if (cellShapeOf(doc, node) !== null) return true;
   if (isRecordList(doc, node)) return true;
   return guessedPlan(doc, node) !== null;
 }
@@ -508,6 +560,8 @@ export function isTable(doc: Doc, node: TemplateNode): boolean {
 export function tablePlan(doc: Doc, node: TemplateNode): TablePlan | null {
   const shape = shapeOf(doc, node);
   if (shape !== null) return shapedPlan(doc, node, shape);
+  const cells = cellShapeOf(doc, node);
+  if (cells !== null && cells.cells?.kind === "computed") return computedPlan(doc, node, cells, cells.cells.rows);
   if (isRecordList(doc, node)) return recordsPlan(doc, node);
   return guessedPlan(doc, node);
 }

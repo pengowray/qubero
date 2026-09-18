@@ -54,7 +54,7 @@ function shape(names: string[]): TableShape {
     row_word: "row",
     rate: null,
     facts: [],
-    cells: { row: "dict", cell: "entry", value: "value" },
+    cells: { kind: "named", row: "dict", cell: "entry", value: "value" },
   };
 }
 

@@ -350,18 +350,36 @@ export type TableShape = {
   readonly cells: TableCells | null;
 };
 
-/** A table whose cells are named nodes inside named rows: a pickled list of
- *  records, whose keys are written in the file beside its values. The core
- *  names the columns; this says where to find each one inside a row. */
-export type TableCells = {
-  /** The type a node under the field has to be to be a row. */
-  readonly row: string;
-  /** The type a node inside a row has to be to be a cell, named by its
-   *  column. */
-  readonly cell: string;
-  /** The field inside a cell holding what it is worth, or null when the cell
-   *  is the value. */
-  readonly value: string | null;
+/** Where a table's cells are, for a table whose rows are nodes rather than a
+ *  run of values. The core names the columns either way. */
+export type TableCells =
+  | {
+      /** Named nodes inside named rows: a pickled list of records, whose keys
+       *  are written in the file beside its values. */
+      readonly kind: "named";
+      /** The type a node under the field has to be to be a row. */
+      readonly row: string;
+      /** The type a node inside a row has to be to be a cell, named by its
+       *  column. */
+      readonly cell: string;
+      /** The field inside a cell holding what it is worth, or null when the
+       *  cell is the value. */
+      readonly value: string | null;
+    }
+  | {
+      /** Cells the core works out, which is a pandas frame: its values are in
+       *  blocks written the other way up from the frame, a categorical column
+       *  is codes into another array, and a counted index is nowhere in the
+       *  file at all. `pickleCells` reads a window of rows. */
+      readonly kind: "computed";
+      readonly rows: number;
+    };
+
+/** One cell of a computed table. `kind` is `"absent"` with no text for a cell
+ *  the file has no value for: a NaN, a `None`, or a categorical code of -1. */
+export type FrameCell = {
+  readonly text: string;
+  readonly kind: string;
 };
 
 /** The bit range a successful `writeNode` replaced. */
@@ -2793,6 +2811,21 @@ export class Doc {
     const call = (this.editor as { table_shape?: (space: number, path: Uint32Array) => string }).table_shape;
     if (call === undefined) return { status: "ok", node: null };
     return this.handleReply<TableShape | null>(call.call(this.editor, this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * The rows `from` up to `to` of the pandas frame at `path`, each as one cell
+   * a column.
+   *
+   * Asked through the same cast as `tableShape`, for the same reason: a
+   * `src/pkg` built before the core could be asked answers nothing here, and
+   * an empty answer is a table with no rows rather than a broken page.
+   */
+  pickleCells(path: readonly number[], from: number, to: number): TemplateReply<FrameCell[][]> {
+    type Call = (space: number, path: Uint32Array, from: number, to: number) => string;
+    const call = (this.editor as { pickle_cells?: Call }).pickle_cells;
+    if (call === undefined) return { status: "ok", node: [] };
+    return this.handleReply<FrameCell[][]>(call.call(this.editor, this.space, Uint32Array.from(path), from, to));
   }
 
   /**

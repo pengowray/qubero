@@ -94,7 +94,7 @@ const MOST_BYTES: u64 = 256 << 20;
 
 /// One node of a recognised file: where a path lands, and what the node is.
 #[derive(Clone)]
-enum Part<'a> {
+pub(super) enum Part<'a> {
     /// The whole file, which holds the header and the object.
     Doc,
     /// The protocol envelope, read as what matched through it.
@@ -129,7 +129,7 @@ enum Part<'a> {
 
 /// What a node is called by the node above it.
 #[derive(Clone)]
-enum Label {
+pub(super) enum Label {
     Field(&'static str),
     Index(usize),
     /// An entry of a dictionary, named by the key written in the file.
@@ -394,7 +394,7 @@ fn inside(call: &Call, at: usize) -> bool {
 }
 
 /// Where `path`, counted from the pickle field, lands.
-fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<(Label, Part<'a>)> {
+pub(super) fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<(Label, Part<'a>)> {
     let mut here = (Label::Field("file"), Part::Doc);
     for &idx in path {
         here = parts(found, &here.1).into_iter().nth(idx)?;
@@ -509,6 +509,20 @@ impl Evaluator {
         let k = (0..=path.len()).rev().find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Pickle(Shape::Doc))))?;
         let found = self.memo.pickle(&path[..k])?;
         let here = spot(found, &path[k..])?;
+        // A pandas frame or series, whose cells are spread across blocks and
+        // worked out rather than read. Recognised without touching the file,
+        // because this is asked of every node on its way to the screen; the
+        // columns and the row count are read in
+        // [`Evaluator::pickle_columns`].
+        if let (_, Part::Value(v)) = &here {
+            if super::pickleframe::frame_of(v).is_some() {
+                return Some(crate::template::TableShape {
+                    row_word: Some(ROW_WORD.into()),
+                    cells: Some(Cells::Computed { rows: 0 }),
+                    ..Default::default()
+                });
+            }
+        }
         // A list of dictionaries, which is how rows are pickled when nobody
         // reached for pandas. Its columns are the keys, which are written in
         // the file beside the values, so the shape says where a cell is rather
@@ -557,13 +571,18 @@ impl Evaluator {
         doc: &Document<S>,
         path: &[usize],
         shape: crate::template::TableShape,
-    ) -> R<crate::template::TableShape> {
+    ) -> R<Option<crate::template::TableShape>> {
+        // A frame's columns, its row count and what one value of each column
+        // is are all read at once, because none of them is in the node.
+        if matches!(shape.cells, Some(Cells::Computed { .. })) {
+            return self.frame_shape(doc, path);
+        }
         if !matches!(shape.cells, Some(Cells::Named { .. })) {
-            return Ok(shape);
+            return Ok(Some(shape));
         }
         let (root, found) = self.pickle_doc(doc, path)?;
-        let Some((_, Part::Value(v))) = spot(&found, &path[root.len()..]) else { return Ok(shape) };
-        let Kind::List(items) = &v.kind else { return Ok(shape) };
+        let Some((_, Part::Value(v))) = spot(&found, &path[root.len()..]) else { return Ok(Some(shape)) };
+        let Kind::List(items) = &v.kind else { return Ok(Some(shape)) };
         let r = self.memo[&root].clone();
         let base = r.offset;
         let mut names: Vec<Arc<str>> = Vec::new();
@@ -577,12 +596,12 @@ impl Evaluator {
                 }
             }
         }
-        Ok(crate::template::TableShape { names, ..shape })
+        Ok(Some(crate::template::TableShape { names, ..shape }))
     }
 
     /// The path of the pickle field `path` sits in, and what the recogniser
     /// made of it. `path` may be the field itself or any value inside it.
-    fn pickle_doc<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<(Vec<usize>, Arc<Match>)> {
+    pub(super) fn pickle_doc<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<(Vec<usize>, Arc<Match>)> {
         let root = (0..=path.len())
             .rev()
             .find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Pickle(Shape::Doc))));
@@ -648,7 +667,7 @@ impl Evaluator {
     ///
     /// `r` is the pickle field itself: a named string sits wherever the file
     /// first wrote it, which is outside the entry that names it.
-    fn pickle_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, key: &Value) -> R<Option<String>> {
+    pub(super) fn pickle_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, key: &Value) -> R<Option<String>> {
         let (at, len) = match key.kind {
             Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => (at, len),
             Kind::Int { value, .. } => return Ok(Some(value.to_string())),
