@@ -340,6 +340,12 @@ function interior(
   return { columns: shape.names, rows, pending };
 }
 
+/** One field as a cell, keeping whatever is wrong with its value: a float
+ *  column holding a NaN says so here the way it does in the listing. */
+function valueCell(n: TemplateNode): RecordCell {
+  return n.problem === undefined ? { text: n.value, kind: n.kind } : { text: n.value, kind: n.kind, problem: n.problem };
+}
+
 /**
  * The columns of one record payload.
  *
@@ -361,7 +367,7 @@ function keyCells(doc: Doc, cell: Map<string, TemplateNode>, want: number): Reco
   if (kids.node.length > want) return "wrong";
   return Array.from({ length: want }, (_, c) => {
     const column = kids.node[c];
-    return column === undefined ? { text: "", kind: "unread" } : { text: column.value, kind: column.kind };
+    return column === undefined ? { text: "", kind: "unread" } : valueCell(column);
   });
 }
 
@@ -406,7 +412,7 @@ function schemaCells(doc: Doc, db: Database, cell: Map<string, TemplateNode>): R
   return SCHEMA_COLUMNS.map((name) => {
     const field = record.get(name);
     if (field === undefined) return { text: "", kind: "unread" };
-    if (name !== "rootpage") return { text: field.value, kind: field.kind };
+    if (name !== "rootpage") return valueCell(field);
     // A view or a trigger has no b-tree and stores 0, which points nowhere.
     return pageCell(db, field.value);
   });

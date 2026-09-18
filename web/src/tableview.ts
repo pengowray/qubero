@@ -22,8 +22,8 @@ import type { Doc } from "./doc.ts";
 import { el } from "./dom.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
-import { bitSizeText, REPORT, TABLE } from "./strings.ts";
-import { fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { bitSizeText, PROBLEMS, REPORT, TABLE } from "./strings.ts";
+import { FIT_MAX, fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
 /** Height of one row, which must match `--tbl-row` in the stylesheet: the rows
  *  are placed by arithmetic on it, so a row that drew taller would slide out
@@ -53,6 +53,19 @@ export type TablePick = {
   readonly endBit: number;
 };
 
+/** The one mark both tiers wear, the same shape the listing and the hex chips
+ *  use. It only says look here; the words are on the cell's hover and the
+ *  colour repeats the tier. Hidden from a screen reader, which gets the
+ *  words. See docs/DESIGN-wrong-values.md. */
+function glyph(invalid: boolean): HTMLElement {
+  const dot = el("span", {
+    className: `problem-glyph ${invalid ? "is-invalid" : "is-undefined"}`,
+    textContent: PROBLEMS.glyph,
+  });
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+
 export class TableView {
   readonly el: HTMLElement;
   private readonly doc: Doc;
@@ -69,6 +82,9 @@ export class TableView {
   /** The header cell of each data column, so a column found to be numeric can
    *  be turned to face its values without the header being built again. */
   private heads: HTMLElement[] = [];
+  /** Wrong values seen in each column, invalid then undefined, over the rows
+   *  read so far. Thrown away with the rows whenever the file changes. */
+  private counts: [number, number][] = [];
   private addresses = false;
   /** The selected rows: the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
@@ -107,6 +123,7 @@ export class TableView {
     this.refreshCopy();
     this.canvas.style.height = `${Math.min(MAX_CANVAS, plan.count * ROW)}px`;
     this.fits = plan.columns.map((_, c) => fitOf(this.headingOf(c)));
+    this.counts = plan.columns.map(() => [0, 0]);
     this.layColumns();
     this.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
@@ -187,6 +204,61 @@ export class TableView {
     return column.unit === "" ? column.name : `${column.name} (${column.unit})`;
   }
 
+  /** The heading as it is drawn: the column's name and unit, then how many of
+   *  its cells hold a wrong value. A reader scrolling a run of samples sees
+   *  one marked cell at a time and no way to tell whether it is the only one,
+   *  so the count is what says how much there is to look for. */
+  private headTextOf(c: number): string {
+    const count = this.counts[c];
+    if (count === undefined) return this.headingOf(c);
+    const more = PROBLEMS.column(count[0], count[1], this.have.size < this.plan.count);
+    return more === "" ? this.headingOf(c) : `${this.headingOf(c)} ${more}`;
+  }
+
+  /** A row has been read: add whatever is wrong in it to its columns' counts,
+   *  and write any heading whose count changed. The heading is allowed to
+   *  widen its column, since a count nobody can read is not a count. */
+  private countRow(row: TableRow): void {
+    let widened = false;
+    // Every heading is rewritten once the last row arrives, because that is
+    // when `so far` comes off all of them at once.
+    const settled = this.have.size >= this.plan.count;
+    for (let c = 0; c < this.counts.length; c++) {
+      const count = this.counts[c];
+      if (count === undefined) continue;
+      const problem = row.cells[c]?.problem;
+      if (problem === undefined && !settled) continue;
+      if (problem !== undefined) count[problem.tier === "invalid" ? 0 : 1]++;
+      widened = this.writeHead(c) || widened;
+    }
+    if (widened) this.layColumns();
+  }
+
+  /** Every heading, drawn again with what it says now. Used when the counts
+   *  are thrown away: a heading still reading `2 invalid so far` after the
+   *  rows behind it have gone would be saying something nothing holds up. */
+  private writeHeads(): void {
+    let widened = false;
+    for (let c = 0; c < this.heads.length; c++) widened = this.writeHead(c) || widened;
+    if (widened) this.layColumns();
+  }
+
+  /** One heading, drawn again with what it says now. True when the column had
+   *  to grow to hold it. */
+  private writeHead(c: number): boolean {
+    const head = this.heads[c];
+    const fit = this.fits[c];
+    if (head === undefined || fit === undefined) return false;
+    const text = this.headTextOf(c);
+    if (head.textContent === text) return false;
+    head.textContent = text;
+    head.title = text;
+    const width = Math.min(FIT_MAX, Math.max(fit.width, text.length));
+    if (width === fit.width) return false;
+    this.fits[c] = { width, numeric: fit.numeric };
+    return true;
+  }
+
   /** A row has been read: widen any column it does not fit, and settle the
    *  side of any column whose first value this is. The track list is written
    *  again only when a width changed, which is a few times at the start and
@@ -211,7 +283,7 @@ export class TableView {
       cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
     }
     this.heads = this.plan.columns.map((_, c) => {
-      const text = this.headingOf(c);
+      const text = this.headTextOf(c);
       const cell = el("span", { className: this.fits[c]?.numeric === true ? "tbl-th tbl-num" : "tbl-th", textContent: text });
       cell.title = text;
       return cell;
@@ -233,8 +305,11 @@ export class TableView {
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
       // What a row said may have been read from bytes that have since
-      // arrived, so the answers go rather than being drawn again.
+      // arrived, so the answers go rather than being drawn again. The counts
+      // are answers about those rows and go with them.
       this.have.clear();
+      this.counts = this.plan.columns.map(() => [0, 0]);
+      this.writeHeads();
       this.plan.forget();
       this.paintAgain();
     });
@@ -297,6 +372,7 @@ export class TableView {
     if (row !== null) {
       this.have.set(i, row);
       this.fitRow(row);
+      this.countRow(row);
     }
     return row;
   }
@@ -340,8 +416,16 @@ export class TableView {
       });
       return button;
     }
-    const element = el("span", { className: `tbl-cell ${fieldClass(cell.kind)}${numeric ? " tbl-num" : ""}`, textContent: cell.text });
-    element.title = cell.text;
+    const problem = cell.problem;
+    const invalid = problem?.tier === "invalid";
+    let className = `tbl-cell ${fieldClass(cell.kind)}${numeric ? " tbl-num" : ""}`;
+    if (invalid) className += " is-invalid";
+    const element = el("span", { className, textContent: cell.text });
+    // The reason is on the cell's hover rather than in it: a column is as wide
+    // as its values and a sentence in every marked cell would take the table
+    // apart. The column heading says how many there are; the glyph says which.
+    element.title = problem === undefined ? cell.text : `${cell.text}\n${problem.text}`;
+    if (problem !== undefined) element.prepend(glyph(invalid));
     return element;
   }
 

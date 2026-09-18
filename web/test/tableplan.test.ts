@@ -26,6 +26,7 @@ import {
   timeWidth,
   uniformColumns,
 } from "../src/tableplan.ts";
+import { PROBLEMS } from "../src/strings.ts";
 
 /** A node as the core sends one, with the few fields this file reads set and
  *  the rest at something harmless. */
@@ -171,6 +172,24 @@ test("a cell says the value, and a field of fields says how many", () => {
     cellOf(node({ name: "values", composite: true, list: true, child_count: 4, kind: "composite" })),
     { text: "4 items", kind: "composite" },
   );
+});
+
+test("a cell carries what is wrong with its value, so the table can mark it", () => {
+  const bad = cellOf(node({ name: "sample", value: "NaN", kind: "float", problem: { tier: "undefined", text: "Not a number (quiet NaN)" } }));
+  assert.deepEqual(bad, { text: "NaN", kind: "float", problem: { tier: "undefined", text: "Not a number (quiet NaN)" } });
+  // A field with nothing wrong carries no key at all, which is what the rest
+  // of the view tests for.
+  assert.equal("problem" in cellOf(node({ name: "age", value: "37" })), false);
+});
+
+test("a column heading counts both tiers, and says so far while rows are unread", () => {
+  assert.equal(PROBLEMS.column(2, 0, false), "\u00b7 2 invalid");
+  assert.equal(PROBLEMS.column(0, 5, false), "\u00b7 5 undefined");
+  assert.equal(PROBLEMS.column(2, 5, false), "\u00b7 2 invalid, 5 undefined");
+  assert.equal(PROBLEMS.column(2, 0, true), "\u00b7 2 invalid so far");
+  // Nothing wrong is nothing on the heading, not a zero.
+  assert.equal(PROBLEMS.column(0, 0, true), "");
+  assert.equal(PROBLEMS.column(1234, 0, false), "\u00b7 1,234 invalid");
 });
 
 test("a column starts as wide as its heading and only ever widens, up to the cap", () => {

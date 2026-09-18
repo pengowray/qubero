@@ -128,12 +128,11 @@ export function columnNameOf(name: string): string {
 }
 
 /** What one cell of a row says: a value, or the count of what is under a field
- *  holding more fields. */
+ *  holding more fields. A wrong value is carried through so the table can mark
+ *  it, which for a run of samples is the only view that ever shows it. */
 export function cellOf(n: TemplateNode): RecordCell {
-  return {
-    text: n.composite ? countText(n.child_count, childWord(n)) : n.value,
-    kind: n.kind,
-  };
+  const text = n.composite ? countText(n.child_count, childWord(n)) : n.value;
+  return n.problem === undefined ? { text, kind: n.kind } : { text, kind: n.kind, problem: n.problem };
 }
 
 /**

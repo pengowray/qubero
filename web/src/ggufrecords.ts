@@ -44,21 +44,27 @@ function build(doc: Doc, node: TemplateNode): RecordTable | null {
       pending = true;
       continue;
     }
-    const cells: RecordCell[] = [valueCell(doc, key), { text: type.value, kind: type.kind }, valueCell(doc, value)];
+    const cells: RecordCell[] = [valueCell(doc, key), scalarCell(type), valueCell(doc, value)];
     rows.push({ cells, path: entry.path, offsetBits: entry.offset_bits, sizeBits: entry.size_bits });
   }
   return { columns: [...COLUMNS], rows, pending };
 }
 
+/** One field as a cell, keeping whatever is wrong with its value so the table
+ *  marks it the way the listing does. */
+function scalarCell(n: TemplateNode): RecordCell {
+  return n.problem === undefined ? { text: n.value, kind: n.kind } : { text: n.value, kind: n.kind, problem: n.problem };
+}
+
 /** What one entry's value reads as: itself, its text, or how many items it
  *  holds and of what. */
 function valueCell(doc: Doc, value: TemplateNode): RecordCell {
-  if (!value.composite) return { text: value.value, kind: value.kind };
+  if (!value.composite) return scalarCell(value);
   const parts = doc.templateChildren(value.path, 0, 3);
   if (parts.status !== "ok") return { text: "", kind: "unread" };
   const named = new Map(parts.node.map((p) => [p.name, p]));
   const text = named.get("text");
-  if (text !== undefined) return { text: text.value, kind: text.kind };
+  if (text !== undefined) return scalarCell(text);
   const items = named.get("items");
   const of = named.get("value_type");
   if (items === undefined) return { text: "", kind: "unread" };

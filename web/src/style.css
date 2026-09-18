@@ -6893,6 +6893,16 @@ summary.kp-group-heading:hover {
   color: var(--muted);
 }
 
+/* A table cell whose value the format rules out, in the same colour and with
+   the same glyph the listing gives a wrong value. Only the value: the row
+   number, the time and the addresses are facts about where it is kept and are
+   not in question. The reason is on the cell's hover and the count is in the
+   column heading, because a column is as wide as its values. */
+.tbl-cell.is-invalid,
+table.rec td.is-invalid {
+  color: var(--warn);
+}
+
 /* The inspector's own row, directly under the value and above the format's
    words about the field. */
 .insp-problem {

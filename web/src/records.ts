@@ -37,7 +37,7 @@
 // no lookups. If two of those turn up, the declarative half belongs in the IR
 // and this file keeps the awkward cases.
 
-import type { Doc, TemplateNode } from "./doc.ts";
+import type { Doc, Problem, TemplateNode } from "./doc.ts";
 import { sqlitePlan } from "./sqliterecords.ts";
 import { ggufPlan } from "./ggufrecords.ts";
 
@@ -59,6 +59,11 @@ export type RecordCell = {
   readonly kind: string;
   /** Set when the value names another part of the file. */
   readonly link?: RecordLink;
+  /** What is wrong with this value, when something is. A table is often the
+   *  only place a reader ever sees a run's values, so a cell that cannot say
+   *  its value is wrong hides the finding the reader opened the file for.
+   *  See docs/DESIGN-wrong-values.md. */
+  readonly problem?: Problem;
 };
 
 export type RecordRow = {

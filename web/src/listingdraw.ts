@@ -396,9 +396,13 @@ function drawRecord(c: DrawContext, item: Extract<Item, { kind: "record" }>): HT
  *  is a link there, which is rule 7's cross-reference: `data-reads` is the
  *  same route the rows' "→ cells" links already take. */
 function drawCell(cell: RecordCell): HTMLElement {
-  const td = el("td", fieldClass(cell.kind));
+  const problem = cell.problem;
+  const invalid = problem?.tier === "invalid";
+  const td = el("td", `${fieldClass(cell.kind)}${invalid ? " is-invalid" : ""}`);
+  if (problem !== undefined) td.title = `${cell.text}\n${problem.text}`;
   if (cell.link === undefined) {
     td.textContent = cell.text;
+    if (problem !== undefined) td.prepend(glyph(invalid));
     return td;
   }
   const link = el("button", "rec-link", cell.link.text);
