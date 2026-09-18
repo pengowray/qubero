@@ -72,7 +72,7 @@ export type Identity = {
  * not one of them either: its evidence is the opcodes stopping exactly where
  * joblib writes an array's bytes, which no first-bytes rule can see.
  */
-export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
+export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "lzma", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
 
 /**
  * The weakest rule a weak template yields to. A rule's strength is 20, plus
@@ -122,6 +122,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   compress: ["z"],
   bzip2: ["bz2"],
   lzip: ["lz"],
+  lzma: ["lzma"],
   xz: ["xz"],
   zstd: ["zst"],
   lz4: ["lz4"],

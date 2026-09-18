@@ -97,6 +97,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   zstd: "Zstandard stream",
   lz4: "LZ4 frame",
   lzip: "lzip stream",
+  lzma: "LZMA stream",
   compress: "compress .Z stream",
   tar: "tar archive",
   "7z": "7-Zip archive",

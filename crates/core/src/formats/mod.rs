@@ -120,6 +120,7 @@ mod lha;
 mod lnk;
 mod lz4;
 mod lzip;
+mod lzma;
 mod mat;
 mod mca;
 mod midi;
@@ -263,6 +264,7 @@ pub use lha::lha;
 pub use lnk::lnk;
 pub use lz4::lz4;
 pub use lzip::lzip;
+pub use lzma::lzma;
 pub use mat::mat;
 pub use mca::mca;
 pub use midi::midi;
@@ -482,6 +484,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("tap", |_| tap()),
     ("exp", |_| exp()),
     ("lha", |_| lha()),
+    ("lzma", |_| lzma()),
     ("lnk", |_| lnk()),
     ("cbor", |_| cbor()),
     ("bencode", |_| bencode()),

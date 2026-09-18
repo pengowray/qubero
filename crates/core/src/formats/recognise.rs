@@ -413,6 +413,11 @@ const PROBES: &[Probe] = &[
     // lengths have to agree with each other, with the 0x0D that ends the
     // column list, and with the length of the file.
     Probe::Is("dbf", dbf::is_dbf),
+    // A raw LZMA file, which has no magic number either: a settings byte, a
+    // dictionary size, a length and the nought every LZMA1 stream opens with,
+    // all four agreeing. xz and lzip are the same coder behind a signature and
+    // have already spoken.
+    Probe::Is("lzma", |h, _| lzma::is_lzma(h)),
     // Last of all, because it is the weakest evidence there is: a zlib
     // stream has no signature, only two bytes that agree with each other.
     Probe::Is("zlib", |h, _| zlib::is_zlib(h)),
@@ -2116,13 +2121,16 @@ mod tests {
         let plain = include_bytes!("../../tests/fixtures/pickle/numpy-f32-matrix.pickle");
         assert_eq!(sniff(plain, plain.len() as u64), Some("picklefpf"));
 
-        // The name on its own claims nothing. A whole file naming the module
-        // and not reading as one is not opened as one.
+        // A joblib file whose padding is wrong is still a joblib file: what
+        // the sniffer answers is what the bytes are, and the template says
+        // whether it can read them. The one whose array holds objects is the
+        // real case, and it is in the collection under `does-not-read`.
         let mut broken = whole.to_vec();
         broken[222] = 2;
-        assert_ne!(sniff(&broken, broken.len() as u64), Some("joblib"));
-        // Nor does a pickle that merely holds the words: the walk reaches its
-        // STOP, so nothing was cut short by bytes that are not opcodes.
+        assert_eq!(sniff(&broken, broken.len() as u64), Some("joblib"));
+        assert!(pickle::familiar::recognise(&broken).is_none());
+        // A pickle that merely holds the words is not one: the walk reaches
+        // its STOP, so nothing was cut short by bytes that are not opcodes.
         let mentions = b"\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00\x8c\x13joblib.numpy_pickle\x94.";
         assert_ne!(sniff(mentions, mentions.len() as u64), Some("joblib"));
     }
