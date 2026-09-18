@@ -355,6 +355,12 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // A file `joblib.dump` wrote, which is a pickle with each array's numbers
+    // written into the stream after the object that describes them. Asked
+    // before the two pickle probes because neither of them can say yes to one:
+    // the opcodes stop where the first array's bytes begin. See
+    // [`pickle::is_joblib`] for what the evidence is.
+    Probe::Is("joblib", pickle::is_joblib),
     // A pickle a Familiar Pickle Form matches whole, which is the strongest
     // evidence anything here has: a reviewed grammar consumed every byte of
     // the file, opcodes and operands, and knows what each one is. So it is
@@ -2092,6 +2098,33 @@ mod tests {
         for pickle in [&b"I5\n."[..], b"F1.5\n.", b"Vhello\np0\n.", b"(lp0\nI1\naI2\na."] {
             assert_eq!(sniff(pickle, pickle.len() as u64), Some("picklefpf"), "{:?}", std::str::from_utf8(pickle));
         }
+    }
+
+    /// A file `joblib.dump` wrote, which no pickle probe can claim: the
+    /// opcodes stop where the first array's bytes begin.
+    #[test]
+    fn a_joblib_file_is_recognised_where_its_opcodes_run_out() {
+        let whole = include_bytes!("../../tests/fixtures/pickle/joblib-array-small.joblib");
+        assert_eq!(sniff(whole, whole.len() as u64), Some("joblib"));
+        assert!(!pickle::is_pickle(whole, whole.len() as u64));
+        // A window that stops before the end is still enough: the evidence is
+        // at the front, and a joblib file is nearly always longer than one.
+        assert_eq!(sniff(&whole[..250], whole.len() as u64), Some("joblib"));
+
+        // A pickle of the same array that joblib had nothing to do with is a
+        // pickle: its opcodes reach the STOP.
+        let plain = include_bytes!("../../tests/fixtures/pickle/numpy-f32-matrix.pickle");
+        assert_eq!(sniff(plain, plain.len() as u64), Some("picklefpf"));
+
+        // The name on its own claims nothing. A whole file naming the module
+        // and not reading as one is not opened as one.
+        let mut broken = whole.to_vec();
+        broken[222] = 2;
+        assert_ne!(sniff(&broken, broken.len() as u64), Some("joblib"));
+        // Nor does a pickle that merely holds the words: the walk reaches its
+        // STOP, so nothing was cut short by bytes that are not opcodes.
+        let mentions = b"\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00\x8c\x13joblib.numpy_pickle\x94.";
+        assert_ne!(sniff(mentions, mentions.len() as u64), Some("joblib"));
     }
 
     /// A Melco design has no signature, so its name is what claims it, and

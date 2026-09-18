@@ -68,7 +68,9 @@ export type Identity = {
  * only that the bytes read as some program; matching a Familiar Pickle Form
  * says a reviewed grammar accounted for every opcode and operand in the file
  * and knows what each one holds. That is stronger evidence than any rule
- * keyed on a file's first bytes, so it does not yield to file(1).
+ * keyed on a file's first bytes, so it does not yield to file(1). `joblib` is
+ * not one of them either: its evidence is the opcodes stopping exactly where
+ * joblib writes an array's bytes, which no first-bytes rule can see.
  */
 export const WEAK_TEMPLATES: ReadonlySet<string> = new Set(["zlib", "mat", "bencode", "pickle", "com", "cue", "godottext"]);
 
@@ -222,6 +224,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   bencode: ["torrent"],
   pickle: ["pickle", "pkl", "p"],
   picklefpf: ["pickle", "pkl", "p"],
+  joblib: ["joblib", "pkl"],
   eps: ["eps", "epsf", "epsi"],
   c16: ["c16"],
   omezarr: ["json"],

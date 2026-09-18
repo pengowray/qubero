@@ -9,6 +9,7 @@ use crate::formats::pickle::shapes;
 mod arrays;
 mod frames;
 mod grammar;
+mod joblib;
 mod objects;
 mod older;
 mod pandas;

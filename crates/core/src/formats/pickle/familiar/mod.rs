@@ -64,6 +64,9 @@ const MAX_BATCH: usize = 1000;
 const NO_OPCODE: u8 = 0;
 /// How NumPy spells the dtype whose values are pickled objects.
 const OBJECT_DTYPE: &str = "|O8";
+/// The module joblib puts its array wrapper in, which is the one name that
+/// says a pickle was written by `joblib.dump`. See [`joblib`].
+pub const JOBLIB_MODULE: &str = "joblib.numpy_pickle";
 /// The most dimensions a shape may declare, which is NumPy's own limit.
 const MAX_DIMENSIONS: usize = 32;
 /// A payload this size or larger is written between frames rather than inside

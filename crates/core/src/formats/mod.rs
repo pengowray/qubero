@@ -286,7 +286,7 @@ pub use pdb::{pdb, pdb2};
 pub use pdf::pdf;
 pub use ppdb::ppdb;
 pub use pi1::pi1;
-pub use pickle::{familiar_pickle, pickle};
+pub use pickle::{familiar_pickle, joblib_pickle, pickle};
 pub use picotron::{p64png, p64rom};
 pub use psd::psd;
 pub use bdb::bdb;
@@ -487,6 +487,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("bencode", |_| bencode()),
     ("pickle", |_| pickle()),
     ("picklefpf", |_| familiar_pickle()),
+    ("joblib", |_| joblib_pickle()),
     ("cpio", |_| cpio()),
     ("ar", |_| ar()),
     ("rpm", |_| rpm()),

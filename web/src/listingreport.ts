@@ -45,12 +45,13 @@ const OVERSCAN = 6;
  *  walking the tree for the views that are showing. */
 const HIDDEN_WALK_MS = 300;
 
-/** The one template whose listing leaves out the rows it calls machinery. A
+/** The templates whose listing leaves out the rows they call machinery. A
  *  familiar pickle writes an opcode byte between every two values, so a dict
- *  entry of a key and a value is five rows; every other template that marks
- *  machinery (FITS, Arrow, PDB and the rest) means it as a note about what a
- *  field is for, and draws every one of them as it always has. */
-const HIDES_MACHINERY = "picklefpf";
+ *  entry of a key and a value is five rows, and a joblib file is that reading
+ *  again; every other template that marks machinery (FITS, Arrow, PDB and the
+ *  rest) means it as a note about what a field is for, and draws every one of
+ *  them as it always has. */
+const HIDES_MACHINERY: ReadonlySet<string> = new Set(["picklefpf", "joblib"]);
 
 /** Whether a pickled dict's entry is all on its row: the row is named for the
  *  key and reads as the value, so an entry whose value is one plain field has
@@ -69,7 +70,7 @@ function entrySaysItself(node: TemplateNode, kids: readonly TemplateNode[]): boo
   const value = kids.find((k) => k.name === "value");
   return (plain(value) || (value !== undefined && ONE_VALUE.has(value.type))) && (plain(key) || key?.type === "reference");
 }
-/** The same template, where the question is how its dicts are drawn. */
+/** The same templates, where the question is how their dicts are drawn. */
 const FAMILIAR_PICKLE = HIDES_MACHINERY;
 /** Where the reader's answer to that is kept. A way of reading rather than a
  *  place in one file, so it outlives the file it was set on. */
@@ -387,20 +388,21 @@ export class ListingReport {
   /** How the tree is flattened. Read afresh each time, since what the file
    *  opens with follows its template, and the template can change. */
   private flatOpts(): FlatOptions {
-    const offersSwitch = this.doc.template === HIDES_MACHINERY;
+    const template = this.doc.template ?? "";
+    const offersSwitch = HIDES_MACHINERY.has(template);
     return {
       isRecord: (node) => isRecordList(this.doc, node),
       // A familiar pickle's dict is its entries, and an entry is a key and a
       // value: a row that reads as the value, not a heading over two rows.
       // The sizes alone call a model's attributes headings, since an array
       // under one of them puts the middle entry past sixteen bytes.
-      saysItself: (node, kids) => this.doc.template === FAMILIAR_PICKLE && entrySaysItself(node, kids),
-      density: (_parent, kids) => (this.doc.template === FAMILIAR_PICKLE && kids.some((k) => k.type === "entry") ? "rows" : null),
+      saysItself: (node, kids) => FAMILIAR_PICKLE.has(template) && entrySaysItself(node, kids),
+      density: (_parent, kids) => (FAMILIAR_PICKLE.has(template) && kids.some((k) => k.type === "entry") ? "rows" : null),
       formatCard: (node) => jpegCardKind(this.doc, node),
       card: cardKind(this.doc.template),
       fileBits: this.doc.lengthBits,
       hideMachinery: offersSwitch && !this.showMachinery,
-      listingSwitch: offersSwitch ? { key: HIDES_MACHINERY, on: this.showMachinery } : null,
+      listingSwitch: offersSwitch ? { key: template, on: this.showMachinery } : null,
     };
   }
 
@@ -409,7 +411,7 @@ export class ListingReport {
    *  kept by the same anchor a chunk landing uses, and what is selected does
    *  not move, since hiding a row does not unselect the bytes under it. */
   private toggleSwitch(key: string): void {
-    if (key !== HIDES_MACHINERY) return;
+    if (!HIDES_MACHINERY.has(key)) return;
     this.showMachinery = !this.showMachinery;
     rememberChoice(MACHINERY_KEY, this.showMachinery ? "1" : "0");
     // The keyboard goes with the control the reader just worked: `rebuild`

@@ -1426,3 +1426,183 @@ fn a_list_of_ordered_dicts_opens_as_the_table_it_holds() {
         assert!(checked.iter().any(|name| name.contains(&format!(".p{proto}."))), "no record list at protocol {proto}: {checked:?}");
     }
 }
+
+/// The files `joblib.dump` wrote, and which form each of them reads under.
+///
+/// Written out file by file, the way the pickle matrix is: a file that starts
+/// matching is a form that grew without anyone saying so, and a file that
+/// stops is a regression.
+#[test]
+fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // Each file, the form that reads it, and the template it is opened with.
+    // A compressed file is the compressor's; what is inside it is the form,
+    // and `a_compressed_joblib_file_opens_as_the_joblib_file_it_holds` is that.
+    let want: &[(&str, Option<&str>, &str)] = &[
+        ("array-0d.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("array-big-endian.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("array-empty.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("array-float64.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("array-fortran-order.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("array-small.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("list-of-arrays.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        ("dict-of-arrays.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        // The protocol is the caller's to choose, and 2 writes GLOBAL's two
+        // lines and BINPUT's slot numbers where 4 writes STACK_GLOBAL and
+        // MEMOIZE.
+        ("dict-of-arrays-protocol2.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        // An estimator saved the way scikit-learn's documentation says to,
+        // which is the sklearn objects with their arrays wrapped this way.
+        ("sklearn-linear-regression.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-random-forest.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        // The compressors, each of which holds one of the files above.
+        ("dict-of-arrays-zlib.joblib", None, "zlib"),
+        ("dict-of-arrays-compress-true.joblib", None, "zlib"),
+        ("dict-of-arrays-gzip.joblib", None, "gzip"),
+        ("dict-of-arrays-bz2.joblib", None, "bzip2"),
+        ("dict-of-arrays-xz.joblib", None, "xz"),
+    ];
+    let mut seen = Vec::new();
+    for path in joblibs(&dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let bytes = std::fs::read(&path).unwrap();
+        let Some((_, form, template)) = want.iter().find(|(f, _, _)| *f == name) else {
+            panic!("{name} is not in the matrix; add it with the form it matches, or None");
+        };
+        assert_eq!(formats::pickle::familiar::recognise(&bytes).map(|m| m.form), *form, "{name}");
+        let window = &bytes[..bytes.len().min(0x9000)];
+        assert_eq!(formats::sniff(window, bytes.len() as u64), Some(*template), "{name}");
+        seen.push(name);
+    }
+    for (name, _, _) in want {
+        assert!(seen.iter().any(|s| s == name), "{name} is in the matrix and not in the collection");
+    }
+}
+
+/// The numbers a joblib file holds are the numbers that were dumped into it,
+/// read from the run after the wrapper rather than from any opcode.
+///
+/// What `tools/make_torch_joblib_samples.py` dumped, in storage order: a
+/// Fortran array's run goes down its first axis, so its numbers are not the
+/// count in order.
+#[test]
+fn a_joblib_arrays_numbers_are_the_ones_it_was_dumped_with() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let rows: Vec<Vec<u64>> = (0..4).map(|r: u64| (0..6).map(|c| r * 6 + c).collect()).collect();
+    let down: Vec<u64> = (0..6).flat_map(|c: u64| (0..4).map(move |r| r * 6 + c)).collect();
+    let cases: &[(&str, Vec<String>)] = &[
+        ("array-float64.joblib", rows.concat().iter().map(u64::to_string).collect()),
+        ("array-fortran-order.joblib", down.iter().map(u64::to_string).collect()),
+        ("array-big-endian.joblib", (0..6).map(|n: u64| n.to_string()).collect()),
+        ("array-small.joblib", (0..6).map(|n: u64| n.to_string()).collect()),
+        // One value, and none at all.
+        ("array-0d.joblib", vec!["2.5".into()]),
+        ("array-empty.joblib", Vec::new()),
+    ];
+    for (name, want) in cases {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        assert_eq!(&joblib_numbers(&bytes, name), want, "{name}");
+    }
+}
+
+/// The numbers of the one array in a joblib file, read through the template
+/// the sniffer names it with rather than the pickle one.
+fn joblib_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
+    let doc = Document::new(MemSource(bytes.to_vec()));
+    let mut ev = Evaluator::new(formats::builtin("joblib").unwrap());
+    let mut rows = Vec::new();
+    walk_rows(&doc, &mut ev, &[], 0, &mut rows);
+    let row = rows.iter().find(|r| r.name == "numbers").unwrap_or_else(|| panic!("{where_}: no numbers row"));
+    let node = ev.node(&doc, &row.path).unwrap();
+    (0..node.child_count as usize)
+        .map(|i| {
+            let mut at = row.path.clone();
+            at.push(i);
+            cell_text(&Some(ev.node(&doc, &at).unwrap().value))
+        })
+        .collect()
+}
+
+/// A compressed joblib file: the stream opens as a space, and the space reads
+/// as the joblib file it holds rather than as text.
+///
+/// joblib writes the same bytes into a compressor as it writes into a plain
+/// file: the same wrapper, the same `allow_mmap`, and the same padding counted
+/// from the position in the unpacked stream. So there is one form, and the
+/// only thing the compressor changes is where it is read.
+#[test]
+fn a_compressed_joblib_file_opens_as_the_joblib_file_it_holds() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let plain = std::fs::read(dir.join("dict-of-arrays.joblib")).unwrap();
+    for name in ["dict-of-arrays-zlib.joblib", "dict-of-arrays-gzip.joblib", "dict-of-arrays-bz2.joblib", "dict-of-arrays-xz.joblib", "dict-of-arrays-compress-true.joblib"] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let window = &bytes[..bytes.len().min(0x9000)];
+        let template = formats::sniff(window, bytes.len() as u64).unwrap_or_else(|| panic!("{name}: not recognised"));
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin(template).unwrap());
+        let run = stream_node(&doc, &mut ev).unwrap_or_else(|| panic!("{name}: no compressed run"));
+        let id = ev.open_space(&doc, 0, &run).unwrap_or_else(|e| panic!("{name} at {run:?}: {e:?}")).unwrap_or_else(|| panic!("{name}: the stream does not open"));
+        let space = ev.space(id).unwrap();
+        assert_eq!(space.template, "joblib", "{name}");
+        assert!(space.recognised, "{name}: the template came from the stream and not from the bytes");
+        assert_eq!(space.bytes(), plain.as_slice(), "{name}: a compressor changes nothing about what joblib writes");
+    }
+}
+
+/// The field holding the whole of what a compressed file unpacks to.
+///
+/// Named `decoded` where a format joins one stream from several runs, which
+/// is what gzip does: a member is a piece of the file and only the join is the
+/// file. Everywhere else it is the one field whose bytes are a stream.
+fn stream_node(doc: &Document<MemSource>, ev: &mut Evaluator) -> Option<Vec<usize>> {
+    let root = ev.node(doc, &[]).ok()?;
+    for i in 0..root.child_count as usize {
+        if ev.node(doc, &[i]).ok()?.name != "decoded" {
+            continue;
+        }
+        // bzip2 and xz lay the field over the whole stream, so the run is one
+        // level further down; gzip joins the members and the join is the run.
+        return decoded_node(doc, ev, &[i], 0).or(Some(vec![i]));
+    }
+    decoded_node(doc, ev, &[], 0)
+}
+
+/// The first field of a reading whose bytes are a stream of their own.
+fn decoded_node(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], depth: usize) -> Option<Vec<usize>> {
+    if depth > 6 {
+        return None;
+    }
+    let node = ev.node(doc, path).ok()?;
+    if node.decoded {
+        return Some(path.to_vec());
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = path.to_vec();
+        next.push(i);
+        if let Some(found) = decoded_node(doc, ev, &next, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn joblibs(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "joblib"))
+        .collect();
+    out.sort();
+    out
+}

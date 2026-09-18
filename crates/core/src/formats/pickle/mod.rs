@@ -157,6 +157,18 @@ pub fn familiar_pickle() -> Template {
     Template::new("picklefpf", T::pickle())
 }
 
+/// A file `joblib.dump` wrote, which is the same reading again.
+///
+/// A joblib file is a pickle with each array's numbers written into the stream
+/// after the small object that describes them, so it is not a pickle any
+/// reader that stops at a byte which is not an opcode can walk. A template of
+/// its own rather than a second name for [`familiar_pickle`], because a reader
+/// asking what the file is wants the answer joblib, and because the plain
+/// pickle listing cannot read one at all.
+pub fn joblib_pickle() -> Template {
+    Template::new("joblib", T::pickle())
+}
+
 /// A run of opcodes, ending at the `.` that stops the machine.
 ///
 /// The same run at the top of the file and inside a frame, because they are
@@ -416,6 +428,41 @@ pub const FAMILIAR_MOST_BYTES: u64 = 256 << 20;
 /// rest and asks here, and opens it as `picklefpf` when the answer is yes.
 pub fn is_familiar(whole: &[u8]) -> bool {
     whole.len() as u64 <= FAMILIAR_MOST_BYTES && familiar::recognise(whole).is_some()
+}
+
+/// Whether these bytes are a file `joblib.dump` wrote.
+///
+/// The signature is where the walk stops. joblib hands the pickler a
+/// `NumpyArrayWrapper` for every array, commits the frame, and writes the
+/// array's bytes straight out, so the opcodes run out immediately after the
+/// BUILD that finished that object and the byte there is the padding count.
+/// Three things together, and each is cheap: the protocol opener, the walk
+/// ending after a BUILD with bytes still to come, and the wrapper's module
+/// named somewhere in what was walked.
+///
+/// For a file the window holds whole, the form has to match as well, which is
+/// the line [`is_familiar`] answers to: nothing is claimed on the strength of
+/// a name written inside a file.
+pub(super) fn is_joblib(head: &[u8], len: u64) -> bool {
+    if !matches!(head, [0x80, 2..=5, ..]) {
+        return false;
+    }
+    let ops = opcodes(head);
+    let stopped_at_a_build = ops.last().is_some_and(|op| op.code == b'b' && (op.end as usize) < head.len());
+    if !stopped_at_a_build || !ops.iter().any(names_wrapper) {
+        return false;
+    }
+    head.len() as u64 != len || familiar::recognise(head).is_some()
+}
+
+/// Whether this instruction names the module joblib puts its array wrapper
+/// in, either as the string STACK_GLOBAL joins or as GLOBAL's first line.
+fn names_wrapper(op: &machine::Op) -> bool {
+    match op.code {
+        0x8c | 0x58 | 0x8d => op.operand == familiar::JOBLIB_MODULE.as_bytes(),
+        0x63 => op.operand.starts_with(familiar::JOBLIB_MODULE.as_bytes()) && op.operand.get(familiar::JOBLIB_MODULE.len()) == Some(&b'\n'),
+        _ => false,
+    }
 }
 
 pub(super) fn is_pickle(head: &[u8], len: u64) -> bool {

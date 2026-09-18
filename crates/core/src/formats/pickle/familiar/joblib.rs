@@ -14,10 +14,10 @@
 
 use super::cursor::{Cursor, Framing};
 use super::memo::Bound;
-use super::{Kind, Shape, Storage, Value};
+use super::{Kind, Shape, Storage, Value, JOBLIB_MODULE as MODULE};
 
-/// The module and the class joblib names for every array it writes.
-const MODULE: &str = "joblib.numpy_pickle";
+/// The class joblib names for every array it writes, in the module
+/// [`JOBLIB_MODULE`](super::JOBLIB_MODULE).
 const WRAPPER: &str = "NumpyArrayWrapper";
 /// The class of the array the wrapper stands for. `numpy.matrix` and
 /// `numpy.memmap` reach the same writer and would be named here; no file in
@@ -110,23 +110,27 @@ impl Cursor<'_> {
         let count = count_of(&dimensions)?;
         let len = usize::try_from(count.checked_mul(dtype.width()?)?).ok()?;
         self.take(len)?;
-        // A new frame begins after the run, unless what is left of the file is
-        // too short to frame. Below protocol 4 there are no frames at all.
+        // Where the array ends, which is where the value ends: a new frame
+        // begins after the run, and that header belongs to whatever comes
+        // next rather than to this. Below protocol 4 there are no frames at
+        // all, and the file simply carries on.
+        let end = self.at;
         if self.framing != Framing::Unframed {
-            self.framing = Framing::Tail(self.at);
+            self.framing = Framing::Tail(end);
         }
         self.gate()?;
 
         let payload = self.fits(&dtype, &dimensions, len)?;
-        self.raws.push(Raw { pad_at, data_at, end: self.at });
+        self.raws.push(Raw { pad_at, data_at, end });
         self.finish_call("wrapper", start, wrapper_ends);
         self.arrays += 1;
         self.wrappers += 1;
         self.reads(data_at, payload, Storage::Raw);
-        Some(self.span(
-            start,
-            Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
-        ))
+        Some(Value {
+            at: start,
+            len: end - start,
+            kind: Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
+        })
     }
 
     /// One of the wrapper's attribute names, spelled here or named where an

@@ -185,6 +185,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   bencode: "Bencoded data (torrent)",
   pickle: "Python pickle",
   picklefpf: "Python pickle (familiar form)",
+  joblib: "joblib file (familiar form)",
   gitindex: "Git index",
   gitpackidx: "Git pack index",
   appledouble: "AppleDouble",
@@ -257,6 +258,7 @@ export const templateSentence = (doc: Doc, name: string): string | null => {
       return bgzfSentence(doc.bgzfContents());
     case "pickle":
     case "picklefpf":
+    case "joblib":
       return pyBasicSentence(doc);
     default:
       return null;

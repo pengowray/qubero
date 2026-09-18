@@ -2172,6 +2172,10 @@ export const LISTING_SWITCH: Readonly<Record<string, { readonly label: string; r
     label: "Show opcode rows",
     title: "PROTO, MEMOIZE, MARK and the other opcode bytes written between the values",
   },
+  joblib: {
+    label: "Show opcode rows",
+    title: "PROTO, MEMOIZE, MARK and the other opcode bytes written between the values, and the padding in front of each array",
+  },
 };
 
 // ---- the JPEG cards ----
