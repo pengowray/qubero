@@ -315,14 +315,14 @@ const PYBASIC_MODULE = "basictoken";
 const PYBASIC_SEARCH = 4096;
 
 /**
- * A `.bas` that is a pickle is a program an older PyBasic saved, when SAVE
- * pickled the interpreter's table of lines (it did in August 2020, issue 7 of
- * richpl/PyBasic); the current one writes the listing as text.
- * The extension alone is not believed, since `.bas` is every BASIC there has
- * been: the pickle has to name PyBasic's token module as well.
+ * A program PyBasic's SAVE wrote between December 2018 and September 2021
+ * (richpl/PyBasic aa9f3fa to bdf710d), when it pickled the interpreter's table
+ * of lines: a dict of line numbers to lists of `basictoken.BASICToken`. Since
+ * dfd5c0b it writes the listing as text. The file's name says nothing either
+ * way: that SAVE wrote to whatever name was typed and added no `.bas`, so what
+ * is asked is whether the pickle names PyBasic's token module.
  */
 const pyBasicSentence = (doc: Doc): string | null => {
-  if (!/\.bas$/i.test(doc.name)) return null;
   const { bytes } = doc.read(0, Math.min(PYBASIC_SEARCH, doc.lengthBytes));
   let text = "";
   for (const b of bytes) text += String.fromCharCode(b);
