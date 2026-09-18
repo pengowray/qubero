@@ -14,14 +14,21 @@
 // repository, and the test counts the requests to prove that none happens
 // before the button in the licence notice is pressed.
 //
-// SAMPLES points at the sample collection, OUT_DIR at where the screenshots go.
+// OUT_DIR is where the screenshots go. The sample collection is found beside
+// the checkout, or wherever QUBERO_SAMPLES names.
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { samplesDir } from "./samples.mjs";
+
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const samples = process.env.SAMPLES || "/home/pengo/sync/dropbox/projects/qubero-samples";
+const samples = samplesDir();
+if (samples === null) {
+  console.log("skipped: no sample collection. Put `qubero-samples` beside this checkout, or point QUBERO_SAMPLES at it.");
+  process.exit(0);
+}
 const outDir = process.env.OUT_DIR || fileURLToPath(new URL("out", import.meta.url));
 const bundled = fileURLToPath(new URL("../../crates/core/formats-hexpat/", import.meta.url));
 await mkdir(outDir, { recursive: true });

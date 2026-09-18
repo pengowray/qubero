@@ -8,13 +8,20 @@
 //   PLAYWRIGHT_MODULE="file:///C:/Users/pengo/AppData/Roaming/npm/node_modules/playwright/index.mjs" \
 //   TEST_URL="http://localhost:17279" node test/diagram.browser.mjs
 //
-// SAMPLES points at the sample collection; OUT_DIR is where the screenshots go.
+// OUT_DIR is where the screenshots go. The sample collection is found beside
+// the checkout, or wherever QUBERO_SAMPLES names.
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
+import { samplesDir } from "./samples.mjs";
+
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const samples = process.env.SAMPLES || "C:/Users/pengo/Dropbox/projects/qubero-samples";
+const samples = samplesDir();
+if (samples === null) {
+  console.log("skipped: no sample collection. Put `qubero-samples` beside this checkout, or point QUBERO_SAMPLES at it.");
+  process.exit(0);
+}
 const outDir = process.env.OUT_DIR || new URL("out", import.meta.url).pathname.replace(/^\//, "");
 await mkdir(outDir, { recursive: true });
 

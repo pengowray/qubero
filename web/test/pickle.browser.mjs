@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 
+import { sampleFile } from "./samples.mjs";
+
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const message = "Matched a Familiar Pickle Form";
 const form = "numpy-numeric-array-p4-p5-v3";
@@ -21,15 +23,9 @@ const shot = (page, name) => page.screenshot({ path: new URL(name, out).pathname
 /** The one sample a form matches whole. The copy committed as a fixture is the
  *  same bytes, for a checkout with no sample collection beside it. */
 const sample = () => {
-  const named = process.env.QUBERO_SAMPLES === undefined ? null : new URL(`file://${process.env.QUBERO_SAMPLES}/pickle/proto4-numpy-array.pickle`);
-  const beside = new URL("../../../qubero-samples/pickle/proto4-numpy-array.pickle", import.meta.url);
-  for (const at of [named, beside]) {
-    if (at === null) continue;
-    try {
-      return readFileSync(at);
-    } catch {
-      continue;
-    }
+  const collected = sampleFile("pickle", "proto4-numpy-array.pickle");
+  if (collected !== null) {
+    return readFileSync(collected);
   }
   return readFileSync(new URL("../../crates/core/tests/fixtures/pickle/numpy-f32-matrix.pickle", import.meta.url));
 };
