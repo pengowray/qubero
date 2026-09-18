@@ -10,6 +10,7 @@ mod arrays;
 mod frames;
 mod grammar;
 mod objects;
+mod older;
 mod pandas;
 mod tree;
 

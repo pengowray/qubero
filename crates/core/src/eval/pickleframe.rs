@@ -14,7 +14,7 @@
 //! a value a Familiar Pickle Form already matched and placed, and this is the
 //! shape of them. [`picklecells`](super::picklecells) reads the values out.
 
-use crate::formats::pickle::familiar::{Dtype, Kind, Names, Shape, Value as Captured};
+use crate::formats::pickle::familiar::{Dtype, Kind, Names, Shape, Storage, Value as Captured};
 
 /// What the manager under a frame or a series is made of, however the release
 /// that wrote it spelled the manager.
@@ -264,7 +264,10 @@ impl Values<'_> {
 /// wrapped them in.
 pub(super) fn values_of(value: &Captured) -> Option<Values<'_>> {
     match &value.kind {
-        Kind::Array { at, dtype, dimensions, fortran_order, .. } => {
+        // Only an array whose numbers are in the file as numbers. Protocol 2
+        // writes them as the text they spell in latin-1, and a cell read off
+        // that run would be read off the spelling.
+        Kind::Array { at, dtype, dimensions, fortran_order, storage: Storage::Raw, .. } => {
             Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order }))
         }
         Kind::Objects { items, .. } => Some(Values::Texts(items)),

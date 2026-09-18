@@ -821,6 +821,37 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
         ("py3.4/basic-list-1000.p4.pickle", EITHER),
         // And a file with no batch edge in it at all, which is most files.
         ("py3.4/basic-records.p4.pickle", EITHER),
+        // The same edges at protocol 3 and 2, where the tells are the same
+        // ones: the two picklers part at the tail of a long container and
+        // nowhere else.
+        ("py3.4/basic-list-1001.p3.pickle", C),
+        ("py3.4/basic-list-1001.p3.pypickle.pickle", PY),
+        ("py3.4/basic-dict-1000.p3.pickle", C),
+        ("py3.4/basic-dict-1000.p3.pypickle.pickle", PY),
+        ("py3.4/basic-list-1001.p2.pickle", C),
+        ("py3.4/basic-dict-1001.p2.pickle", C),
+        ("py3.4/basic-list-1000.p3.pickle", EITHER),
+        // A set of 1,001 does say which pickler wrote it below protocol 4,
+        // where a set is a call over a list rather than a container of its
+        // own: the list ends the way that pickler ends a list.
+        ("py3.4/basic-set-1001.p3.pickle", C),
+        ("py3.4/basic-set-1001.p3.pypickle.pickle", PY),
+        ("py3.4/basic-set-1001.p2.pickle", C),
+        // Python 2. `pickle.py` there is the pure pickler and ends every
+        // container its way; `cPickle` numbers the memo from one, which is
+        // what says it wrote the file whether or not a batch edge is in it.
+        ("py2.7/basic-list-1001.p2.pickle", PY),
+        ("py2.7/basic-dict-1000.p2.pickle", PY),
+        ("py2.7/basic-set-1001.p2.pickle", PY),
+        ("py2.7/basic-list-1000.p2.pickle", EITHER),
+        ("py2.7/basic-records.p2.pickle", EITHER),
+        ("py2.7/basic-list-1001.p2.cpickle.pickle", C),
+        ("py2.7/basic-dict-1000.p2.cpickle.pickle", C),
+        ("py2.7/basic-records.p2.cpickle.pickle", C),
+        // PyPy's `cPickle` is a Python copy of CPython's: it numbers the memo
+        // the same way and ends a dictionary the way `pickle.py` does.
+        ("pypy2.7/basic-dict-1000.p2.cpickle.pickle", C),
+        ("pypy2.7/basic-records.p2.cpickle.pickle", C),
     ];
     for (file, said) in want {
         let Ok(bytes) = std::fs::read(root.join(file)) else { panic!("{file} is not in the collection") };
@@ -963,6 +994,65 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
         checked += 1;
     }
     assert!(checked >= 20, "only {checked} samples matched a form");
+}
+
+/// The same reading, over the matrix's protocol 2 and 3 files.
+///
+/// The sibling `pickle/` folder has two of those and the matrix has hundreds,
+/// including every shape the older grammar reads that the newer one does not:
+/// a byte string written as a call to `_codecs`, a set built from a list, a
+/// Python 2 `str`, an `INT` text line, and an array whose numbers reached the
+/// file as latin-1 text. A handful of each is walked here rather than all of
+/// them, since walking a file of a hundred thousand rows says nothing the
+/// first one did not.
+#[test]
+fn the_older_protocols_read_as_a_tree_with_no_bytes_left_over() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let old = "py3.6-numpy1.19-pandas1.1-sklearn0.24";
+    let want: &[&str] = &[
+        // Python 3 at both protocols: text, a byte string written as a call,
+        // records, one list under several names and a list holding itself.
+        "py3.4/basic-records.p3.pickle",
+        "py3.4/basic-records.p2.pickle",
+        "py3.4/basic-nested.p3.pickle",
+        "py3.4/basic-nested.p2.pickle",
+        "py3.4/basic-shared-list.p2.pickle",
+        "py3.4/basic-self-reference.p3.pickle",
+        "py3.4/basic-int-keys.p2.pickle",
+        // A set of 1,001, which below protocol 4 is a call over a list.
+        "py3.4/basic-set-1001.p3.pickle",
+        "py3.4/basic-set-1001.p2.pickle",
+        // Python 2: `str` rather than text, `long`, and the `INT` text line
+        // an `int` too wide for BININT went out as.
+        "py2.7/basic-nested.p2.pickle",
+        "py2.7/basic-nested.p2.cpickle.pickle",
+        "py2.7/basic-int-keys.p2.cpickle.pickle",
+        "pypy2.7/basic-records.p2.cpickle.pickle",
+        // Arrays and scalars at both protocols, and a library object.
+        &format!("{old}/numpy-1d-int64.p3.pickle"),
+        &format!("{old}/numpy-1d-int64.p2.pickle"),
+        &format!("{old}/numpy-2d-float32.p2.pickle"),
+        &format!("{old}/numpy-scalar-float64.p2.pickle"),
+        &format!("{old}/numpy-dict-of-arrays.p2.pickle"),
+        &format!("{old}/sklearn-standard-scaler.p2.pickle"),
+        &format!("{old}/series-float.p3.pickle"),
+        &format!("{old}/dataframe-numeric.p2.pickle"),
+    ];
+    for file in want {
+        let Ok(bytes) = std::fs::read(root.join(file)) else { panic!("{file} is not in the collection") };
+        let form = formats::pickle::familiar::recognise(&bytes)
+            .unwrap_or_else(|| panic!("{file} matched no form"))
+            .form
+            .to_string();
+        let rows = familiar_rows(bytes.clone());
+        assert_eq!(rows[0].len, bytes.len() as u64, "{file}: the root is not the file");
+        assert_eq!(row(&rows, "form").value, Value::Str(form), "{file}");
+        assert_eq!(row(&rows, "protocol").value, Value::UInt(u128::from(bytes[1])), "{file}");
+        covers(&rows, file);
+    }
 }
 
 /// Every node's children tile it: they start where it starts, they follow each

@@ -544,6 +544,37 @@ fn instructions(bytes: &[u8]) -> Vec<Instr> {
         .collect()
 }
 
+/// Whether a class the file named is anywhere in what it built.
+///
+/// Walked with a list rather than by recursion: the tree is bounded in depth,
+/// but so is the stack this runs on, and nothing here needs the call frames.
+fn holds_class(value: &Value) -> bool {
+    let mut left = vec![value];
+    while let Some(value) = left.pop() {
+        match &value.kind {
+            Kind::Class { .. } => return true,
+            Kind::List(items)
+            | Kind::Tuple(items)
+            | Kind::Set(items)
+            | Kind::FrozenSet(items)
+            | Kind::Object { items, .. }
+            | Kind::Objects { items, .. } => left.extend(items),
+            Kind::Dict(entries) => left.extend(entries.iter().flat_map(|(k, v)| [k, v])),
+            Kind::Instance { class, state } => {
+                left.push(class);
+                left.extend(state.as_deref());
+            }
+            Kind::Made { callable, items, state, .. } => {
+                left.push(callable);
+                left.extend(items);
+                left.extend(state.as_deref());
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 impl<'a> Cursor<'a> {
     fn whole(&mut self, form: &'static str) -> Option<Match> {
         self.exact(&[0x80])?;
@@ -571,6 +602,13 @@ impl<'a> Cursor<'a> {
             Framing::Inside(end) | Framing::Full(end) if end == self.at => {}
             Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
+        }
+        // A class a form names no classes for is there to be called, and the
+        // call is what the form read. One that survived into the tree instead
+        // of being folded away by its call is a class the file is handing the
+        // reader as data, which is the one thing the contract rules out.
+        if self.allow.classes.is_empty() && holds_class(&value) {
+            return None;
         }
         let plain = self.arrays == 0 && self.objects == 0 && self.instances == 0;
         let needed = match self.allow.family {
