@@ -8,6 +8,7 @@
 //! tables rest on is in [`object`](super::object): a module prefix says which
 //! classes may be *named*, and never which callables may be *called*.
 
+use super::cursor::Cursor;
 use super::{Kind, Names, Shape, Value};
 
 /// The forms, each a named grammar over the same envelope. They differ in
@@ -67,6 +68,17 @@ pub(super) const SKLEARN0: &str = "sklearn-estimator-p0-v1";
 pub(super) const SCIPY0: &str = "scipy-sparse-p0-v1";
 pub(super) const PANDAS0: &str = "pandas-frame-p0-v1";
 
+/// The standard library's own classes, which is what a pickle of ordinary
+/// program state is full of: dates, ordered and defaulting dictionaries,
+/// counters, queues, exact numbers, ids and paths. Each is a `REDUCE` of one
+/// enumerated callable with the argument shape that callable is written with,
+/// and `uuid.UUID` is the plain object production. See
+/// [`stdlib`](super::stdlib).
+pub(super) const STDLIB: &str = "stdlib-values-p4-p5-v1";
+pub(super) const STDLIB23: &str = "stdlib-values-p2-p3-v1";
+pub(super) const STDLIB1: &str = "stdlib-values-p1-v1";
+pub(super) const STDLIB0: &str = "stdlib-values-p0-v1";
+
 /// Which family a form belongs to, which is what says the file used the
 /// productions the form is for rather than only the ones every form has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +103,12 @@ pub(super) struct Allow {
     /// that names no class at all, which is where the basic, NumPy and
     /// builtins forms stand.
     pub(super) classes: &'static [&'static str],
+    /// The globals this form may name and never calls, by their whole dotted
+    /// path. What a `collections.defaultdict` is handed as its factory is one
+    /// of a short list of builtin classes, and `builtins` is not a package any
+    /// class at all may be named from, so those are enumerated here rather
+    /// than reached by a module prefix.
+    pub(super) names: &'static [&'static str],
     /// The callables this form's own library writes, and that it accepts a
     /// REDUCE of. The calls every form below protocol 4 shares are not here:
     /// the protocol decides those and [`Cursor::calls`](super::cursor::Cursor)
@@ -106,6 +124,12 @@ pub(super) struct Allow {
 /// One callable a form accepts a REDUCE of, and what the library writes as its
 /// arguments. `shape` is the check against those arguments; `names` says what
 /// each of them is called, and its length is the arity.
+///
+/// A callable written with more than one argument shape has a row each, and
+/// the first whose arity and shape both fit is the one the file matched: a
+/// `datetime.datetime` takes a tzinfo when it is aware and not when it is
+/// naive, and `collections.deque` was written three different ways across the
+/// releases in the corpus.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Reduce {
     pub(super) path: &'static str,
@@ -115,7 +139,35 @@ pub(super) struct Reduce {
     /// What the result of the call is, in the tree.
     pub(super) what: Shape,
     pub(super) names: &'static [&'static str],
-    pub(super) shape: fn(&[Value]) -> Option<()>,
+    /// What the arguments are beyond their count, and what becomes of the
+    /// result. [`Args::Fixed`] for all but the standard library's containers.
+    pub(super) args: Args,
+    pub(super) shape: fn(&Cursor, &[Value]) -> Option<()>,
+}
+
+/// What a call's arguments are beyond their number, and what the opcodes after
+/// it may do to the result.
+///
+/// The standard library's containers are the reason this is not always
+/// [`Args::Fixed`]. A path is its parts, however many there are; a `Counter`
+/// is called with the mapping it holds; and an `OrderedDict`, a `defaultdict`
+/// and a `deque` are called empty and filled by the `SETITEMS` or `APPENDS`
+/// after them, which is a container being built the way every other container
+/// in a pickle is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Args {
+    /// A fixed few, one per name in `names`.
+    Fixed,
+    /// However many of one thing, under the one word `names` holds.
+    Many,
+    /// The one argument is what the result holds, so it is read as the
+    /// result's contents rather than as an argument beside them.
+    Contents,
+    /// The result is empty and the opcodes after it fill it the way a
+    /// dictionary is filled.
+    FillsDict,
+    /// The same, filled the way a list is.
+    FillsList,
 }
 
 /// How a REDUCE named its callable.
@@ -144,7 +196,8 @@ const SKLEARN_CALLS: &[Reduce] = &[Reduce {
     path: "sklearn.tree._tree.Tree",
     what: Shape::Object,
     names: &["n_features", "n_classes", "n_outputs"],
-    shape: |args| {
+    args: Args::Fixed,
+    shape: |_c, args| {
         matches!(
             (&args[0].kind, &args[1].kind, &args[2].kind),
             (Kind::Int { .. }, Kind::Array { .. }, Kind::Int { .. })
@@ -152,7 +205,9 @@ const SKLEARN_CALLS: &[Reduce] = &[Reduce {
         .then_some(())
     },
 }];
-/// A form that names no class, which is every form below the library ones.
+/// A form that names no class, which is every form below the library ones,
+/// and a form that names no global it never calls, which is every form but the
+/// standard library's.
 const NO_CLASSES: &[&str] = &[];
 
 /// The calls pandas writes, which is the whole of what a REDUCE may do under
@@ -169,14 +224,16 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: "pandas.core.internals.managers.BlockManager",
         what: Shape::Object,
         names: &["blocks", "axes"],
-        shape: |args| (matches!(args[0].kind, Kind::Tuple(_)) && matches!(args[1].kind, Kind::List(_))).then_some(()),
+        args: Args::Fixed,
+        shape: |_c, args| (matches!(args[0].kind, Kind::Tuple(_)) && matches!(args[1].kind, Kind::List(_))).then_some(()),
     },
     Reduce {
         via: Via::Global,
         path: "pandas._libs.internals._unpickle_block",
         what: Shape::Block,
         names: &["values", "placement", "ndim"],
-        shape: |args| {
+        args: Args::Fixed,
+        shape: |_c, args| {
             // The placement is a slice of the frame's columns. pandas writes an
             // array of positions instead when a block's columns are not next to
             // each other, and that is a non-match until there is a file with
@@ -192,6 +249,7 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: "pandas.core.indexes.base._new_Index",
         what: Shape::Object,
         names: &["type", "state"],
+        args: Args::Fixed,
         shape: new_index,
     },
     // An index of dates is rebuilt by a call of its own, with the same two
@@ -201,6 +259,7 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: "pandas.core.indexes.datetimes._new_DatetimeIndex",
         what: Shape::Object,
         names: &["type", "state"],
+        args: Args::Fixed,
         shape: new_index,
     },
     // How far apart the dates of a regular index are, which pandas writes as
@@ -210,14 +269,16 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: "pandas._libs.tslibs.offsets.Day",
         what: Shape::Object,
         names: &["n", "normalize"],
-        shape: |args| (matches!(args[0].kind, Kind::Int { .. }) && matches!(args[1].kind, Kind::Bool(_))).then_some(()),
+        args: Args::Fixed,
+        shape: |_c, args| (matches!(args[0].kind, Kind::Int { .. }) && matches!(args[1].kind, Kind::Bool(_))).then_some(()),
     },
     Reduce {
         via: Via::Global,
         path: "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked",
         what: Shape::Object,
         names: &["type", "checksum", "state"],
-        shape: |args| {
+        args: Args::Fixed,
+        shape: |_c, args| {
             (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Int { .. }) && matches!(args[2].kind, Kind::None))
                 .then_some(())
         },
@@ -225,8 +286,8 @@ const PANDAS_CALLS: &[Reduce] = &[
     // pandas 3.0 writes the dtype of a text column as a call of its storage
     // and the value it uses for a missing entry. Both spellings of the module
     // are named, as numpy's two are.
-    Reduce { via: Via::Global, path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
-    Reduce { via: Via::Global, path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
+    Reduce { via: Via::Global, path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], args: Args::Fixed, shape: string_dtype },
+    Reduce { via: Via::Global, path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], args: Args::Fixed, shape: string_dtype },
     // pandas 1.3 writes a block as a `functools.partial` over `new_block` and
     // then calls the partial. Both halves are here: the partial may be made
     // only over this one global, and only what the partial made may be called.
@@ -235,14 +296,16 @@ const PANDAS_CALLS: &[Reduce] = &[
         path: PARTIAL,
         what: Shape::Object,
         names: &["func"],
-        shape: |args| matches!(&args[0].kind, Kind::Class { path, .. } if path == NEW_BLOCK).then_some(()),
+        args: Args::Fixed,
+        shape: |_c, args| matches!(&args[0].kind, Kind::Class { path, .. } if path == NEW_BLOCK).then_some(()),
     },
     Reduce {
         via: Via::Partial,
         path: NEW_BLOCK,
         what: Shape::Block,
         names: &["values", "placement"],
-        shape: |args| {
+        args: Args::Fixed,
+        shape: |_c, args| {
             (holds_values(&args[0].kind) && matches!(args[1].kind, Kind::Made { what: Shape::Slice, .. })).then_some(())
         },
     },
@@ -259,12 +322,12 @@ fn holds_values(kind: &Kind) -> bool {
 
 /// `_new_Index(cls, state)`: the class of the index and the dictionary that
 /// finishes it.
-fn new_index(args: &[Value]) -> Option<()> {
+fn new_index(_c: &Cursor, args: &[Value]) -> Option<()> {
     (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Dict(_))).then_some(())
 }
 
 /// `StringDtype(storage, na_value)`: a word and a float, which is a NaN.
-fn string_dtype(args: &[Value]) -> Option<()> {
+fn string_dtype(_c: &Cursor, args: &[Value]) -> Option<()> {
     (matches!(args[0].kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. })) && matches!(args[1].kind, Kind::Float { .. }))
         .then_some(())
 }
@@ -278,16 +341,16 @@ fn string_dtype(args: &[Value]) -> Option<()> {
 /// 2 has for it; a byte string with anything in it goes through `_codecs` and
 /// is a fixed run, in `codecs.rs`. `fix_imports` is what moves the module
 /// between `builtins` and `__builtin__`, and the protocol decides which.
-const SET_CALL: Reduce = Reduce { via: Via::Global, path: "builtins.set", what: Shape::Set, names: &["members"], shape: members };
+const SET_CALL: Reduce = Reduce { via: Via::Global, path: "builtins.set", what: Shape::Set, names: &["members"], args: Args::Fixed, shape: members };
 const OLD_SET_CALL: Reduce = Reduce { path: "__builtin__.set", ..SET_CALL };
 const FROZEN_CALL: Reduce =
-    Reduce { via: Via::Global, path: "builtins.frozenset", what: Shape::FrozenSet, names: &["members"], shape: members };
+    Reduce { via: Via::Global, path: "builtins.frozenset", what: Shape::FrozenSet, names: &["members"], args: Args::Fixed, shape: members };
 const OLD_FROZEN_CALL: Reduce = Reduce { path: "__builtin__.frozenset", ..FROZEN_CALL };
 
 /// `set(members)` and `frozenset(members)`: the members, written out for the
 /// call and never named out of the memo, since the container holding them is
 /// made for the call. CPython hands over a list and PyPy a tuple.
-fn members(args: &[Value]) -> Option<()> {
+fn members(_c: &Cursor, args: &[Value]) -> Option<()> {
     matches!(args[0].kind, Kind::List(_) | Kind::Tuple(_)).then_some(())
 }
 
@@ -311,7 +374,8 @@ pub(super) const MAKE_OBJECT: &[Reduce] = &[Reduce {
     path: RECONSTRUCTOR,
     what: Shape::Object,
     names: &["type", "base", "state"],
-    shape: |args| {
+    args: Args::Fixed,
+    shape: |_c, args| {
         (matches!(&args[0].kind, Kind::Class { .. })
             && matches!(&args[1].kind, Kind::Class { path, .. } if path == BASE_CLASS)
             && matches!(args[2].kind, Kind::None))
@@ -333,6 +397,7 @@ struct Declared {
     numpy: bool,
     builtins: bool,
     classes: &'static [&'static str],
+    names: &'static [&'static str],
     calls: &'static [Reduce],
     object_arrays: bool,
 }
@@ -353,6 +418,7 @@ const DECLARED: &[Declared] = &[
         numpy: false,
         builtins: false,
         classes: NO_CLASSES,
+        names: NO_CLASSES,
         calls: NO_CALLS,
         object_arrays: false,
     },
@@ -379,8 +445,21 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         builtins: true,
         classes: &["pandas"],
+        names: NO_CLASSES,
         calls: PANDAS_CALLS,
         object_arrays: true,
+    },
+    // The standard library's own classes. Its builtins are the ones the
+    // builtins form already reads, so a file mixing a date with a complex
+    // number is read here and one holding only the second stays there.
+    Declared {
+        ids: [STDLIB, STDLIB23, STDLIB1, STDLIB0],
+        family: Family::Library,
+        builtins: true,
+        classes: super::stdlib::STDLIB_MODULES,
+        names: super::stdlib::FACTORIES,
+        calls: super::stdlib::STDLIB_CALLS,
+        ..PLAIN
     },
 ];
 
@@ -392,6 +471,7 @@ const PLAIN: Declared = Declared {
     numpy: false,
     builtins: false,
     classes: NO_CLASSES,
+    names: NO_CLASSES,
     calls: NO_CALLS,
     object_arrays: false,
 };
@@ -408,6 +488,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                     numpy: d.numpy,
                     builtins: d.builtins,
                     classes: d.classes,
+                    names: d.names,
                     calls: d.calls,
                     object_arrays: d.object_arrays,
                 };

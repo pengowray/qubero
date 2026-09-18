@@ -14,7 +14,7 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
-use super::forms::{Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
+use super::forms::{Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
 
@@ -24,6 +24,22 @@ fn path_of(value: &Value) -> Option<&str> {
         Kind::Class { path, .. } => Some(path),
         _ => None,
     }
+}
+
+/// Whether this row of the calls table is the one the file wrote: the arity it
+/// names, and the check it makes against the arguments themselves.
+///
+/// A path names one word for however many parts it has; every other call names
+/// one word per argument.
+fn fits(c: &Cursor, call: &Reduce, held: &[Value]) -> bool {
+    let arity = match call.args {
+        Args::Many => held.len(),
+        // A call whose one argument is what the result holds names no
+        // arguments at all, since the contents are the value.
+        Args::Contents => 1,
+        _ => call.names.len(),
+    };
+    held.len() == arity && (call.shape)(c, held).is_some()
 }
 
 impl Cursor<'_> {
@@ -48,7 +64,10 @@ impl Cursor<'_> {
             // handed, and the one class a form may name and never call.
             Some((module, _)) => {
                 self.module_fits(module)
-                    && (self.whitelisted(module) || path == BASE_CLASS || self.calls().any(|call| call.path == path))
+                    && (self.whitelisted(module)
+                        || path == BASE_CLASS
+                        || self.allow.names.contains(&path)
+                        || self.calls().any(|call| call.path == path))
             }
             None => false,
         }
@@ -128,6 +147,7 @@ impl Cursor<'_> {
         match code {
             0x93 => self.class_named(items),
             0x81 => self.new_object(at, items),
+            0x92 => self.new_object_ex(at, items),
             b'R' => self.reduced(at, items),
             b'b' => self.built(items),
             _ => None,
@@ -169,6 +189,20 @@ impl Cursor<'_> {
     /// Only an empty tuple. A NEWOBJ with arguments is a class being handed
     /// values to construct itself from, and what those mean is the class's
     /// business rather than the file's.
+    /// NEWOBJ_EX over an empty tuple and an empty dictionary, which is what
+    /// Python 3.4 wrote where every release after it writes NEWOBJ: the same
+    /// `cls.__new__(cls)`, with a place for keyword arguments that has none in
+    /// it. Arguments of either kind are refused for the same reason NEWOBJ's
+    /// are.
+    fn new_object_ex(&mut self, at: usize, mut items: Vec<Value>) -> Option<Kind> {
+        let keywords = items.pop()?;
+        match keywords.kind {
+            Kind::Dict(ref held) if held.is_empty() => {}
+            _ => return None,
+        }
+        self.new_object(at, items)
+    }
+
     fn new_object(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [class, args] = <[Value; 2]>::try_from(items).ok()?;
         let Kind::Class { ref path, .. } = class.kind else { return None };
@@ -235,12 +269,17 @@ impl Cursor<'_> {
             }
             _ => return None,
         };
-        let call = self.calls().find(|call| call.path == path && call.via == via)?;
-        let Kind::Tuple(held) = args.kind else { return None };
-        if held.len() != call.names.len() {
-            return None;
-        }
-        (call.shape)(&held)?;
+        let (tuple_at, tuple_len) = (args.at, args.len);
+        let Kind::Tuple(mut held) = args.kind else { return None };
+        // A callable written with more than one argument shape has a row each,
+        // so every row of that name is asked rather than only the first: a
+        // `datetime.datetime` carries a zone when it is aware and not when it
+        // is naive, and `collections.deque` was written three ways across the
+        // releases in the corpus.
+        let call = {
+            let c = &*self;
+            c.calls().find(|call| call.path == path && call.via == via && fits(c, call, &held))?
+        };
         // A set and a frozenset are containers, not objects. Below protocol 4
         // a pickler builds one by calling the class with the list of members,
         // and what comes out is the container protocol 4 writes as a literal,
@@ -264,7 +303,22 @@ impl Cursor<'_> {
         if self.whitelisted(path.rsplit_once('.')?.0) {
             self.instances += 1;
         }
-        Some(Kind::Made { what: call.what, names: call.names, callable: Some(Box::new(callable)), items: held, state: None })
+        // What the result holds beyond its arguments. A path has as many parts
+        // as it has, so the whole tuple is the one argument; a `Counter` is
+        // called with the mapping it holds, which is the counter itself; and
+        // the three containers the opcodes after the call fill are made empty
+        // here and filled by [`Cursor::one`] and [`Cursor::batch`].
+        let state = match call.args {
+            Args::Many => {
+                held = vec![Value { at: tuple_at, len: tuple_len, kind: Kind::Tuple(held) }];
+                None
+            }
+            Args::Contents => Some(Box::new(held.drain(..).next()?)),
+            Args::FillsDict => Some(Box::new(Value { at: self.at, len: 0, kind: Kind::Dict(Vec::new()) })),
+            Args::FillsList => Some(Box::new(Value { at: self.at, len: 0, kind: Kind::List(Vec::new()) })),
+            Args::Fixed => None,
+        };
+        Some(Kind::Made { what: call.what, names: call.names, callable: Some(Box::new(callable)), items: held, state })
     }
 
     /// `copy_reg._reconstructor(cls, object, None)`, which is `cls.__new__(cls)`

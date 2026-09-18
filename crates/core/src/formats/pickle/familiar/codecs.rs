@@ -151,27 +151,54 @@ impl Cursor<'_> {
         held.chars().all(|c| u32::from(c) < 0x100).then_some(())
     }
 
-    /// The encoding the bytes were handed to `_codecs` under, spelled here or
-    /// named where an earlier byte string spelled it. Only `latin1`: any other
-    /// encoding is a byte string this does not know how to read back.
+    /// A whole text that spells a run of bytes in latin-1, wherever a fixed run
+    /// is handed one: the bytes of a `bytearray` reach Python 2 this way.
+    pub(super) fn latin1_text(&mut self) -> Option<Value> {
+        let value = self.text()?;
+        match value.kind {
+            Kind::Text { at, len } => self.latin1(at, len)?,
+            // A protocol 0 line that spells its characters rather than being
+            // them, worked out once when the form read the line.
+            Kind::Spelled { at, bytes: false, .. } => {
+                let held = String::from_utf8(self.decoded_at(at)?.to_vec()).ok()?;
+                held.chars().all(|c| u32::from(c) < 0x100).then_some(())?
+            }
+            _ => return None,
+        }
+        Some(value)
+    }
+
+    /// The encoding the bytes were handed to `_codecs` under. Only `latin1`:
+    /// any other encoding is a byte string this does not know how to read back.
     fn encoding_word(&mut self) -> Option<Value> {
+        // Only Python 3 writes this call, and it writes text.
+        self.exact_word(LATIN1, false)
+    }
+
+    /// A word a fixed run knows the spelling of, spelled here or named where
+    /// the file wrote it earlier.
+    ///
+    /// `py2` says the writer was Python 2, whose ordinary string was a `str`
+    /// rather than text and is written with the opcodes for one. A word inside
+    /// a call only Python 3 writes is text at every protocol.
+    pub(super) fn exact_word(&mut self, want: &str, py2: bool) -> Option<Value> {
         self.gate()?;
         let start = self.at;
         if self.at_reference() {
             let here = self.save();
             if let Some(Bound::Text { at, len }) = self.reference().cloned() {
-                if self.bytes.get(at..at + len) == Some(LATIN1.as_bytes()) {
+                if self.bytes.get(at..at + len) == Some(want.as_bytes()) {
                     return Some(self.span(start, Kind::Ref(Names::Text { at, len })));
                 }
             }
             self.restore(here);
             return None;
         }
-        let value = self.text()?;
-        match value.kind {
-            Kind::Text { at, len } if self.bytes.get(at..at + len) == Some(LATIN1.as_bytes()) => Some(value),
-            _ => None,
-        }
+        let value = match (py2, self.proto, self.peek()?) {
+            (true, 0..=2, b'U' | b'T') => self.py2_string()?,
+            (true, 0, b'S') => self.string_line()?,
+            _ => self.text()?,
+        };
+        (self.text_value(&value).as_deref() == Some(want)).then_some(value)
     }
-
 }

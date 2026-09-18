@@ -4,7 +4,13 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::{Kind, Shape, Value, BOUNDS, CONTENT, HALVES};
+use super::{Kind, Shape, Value, BOUNDS, CONTENT, HALVES, SPELLED};
+
+/// The encoding Python 2 hands `bytearray` beside the text, which is the one
+/// that maps every byte to the character of the same number. Spelled with the
+/// hyphen, where `_codecs.encode` is handed the name without one: the two are
+/// the same encoding and each call is written the way its own caller wrote it.
+const BYTEARRAY_ENCODING: &str = "latin-1";
 
 impl Cursor<'_> {
     /// The builtin types a pickle writes as a call rather than as a literal.
@@ -19,6 +25,11 @@ impl Cursor<'_> {
             ("slice", Shape::Slice, BOUNDS, 3),
             ("range", Shape::Range, BOUNDS, 3),
             ("complex", Shape::Complex, HALVES, 2),
+            // Python 2 had no type for a run of bytes to hand the class, so it
+            // hands over the latin-1 text those bytes spell and the encoding
+            // that turns the one back into the other, which is the same detour
+            // a byte string itself takes at protocol 2.
+            ("bytearray", Shape::ByteArray, SPELLED, 2),
             ("bytearray", Shape::ByteArray, CONTENT, 1),
             ("bytearray", Shape::ByteArray, CONTENT, 0),
         ];
@@ -34,6 +45,11 @@ impl Cursor<'_> {
             if what == Shape::ByteArray && self.proto > 4 {
                 continue;
             }
+            // The two-argument spelling is Python 2's, and Python 2 stopped at
+            // protocol 2.
+            if names == SPELLED && self.proto > 2 {
+                continue;
+            }
             let name = match (old, what) {
                 (true, Shape::Range) => "xrange",
                 _ => name,
@@ -45,14 +61,18 @@ impl Cursor<'_> {
                     self.open_tuple()?;
                 }
                 let mut items = Vec::new();
-                for _ in 0..arity {
+                for i in 0..arity {
                     items.push(match what {
                         // A slice's bounds are integers or None; a range's are
-                        // always integers; a complex is two floats; and a
-                        // bytearray is made from one byte string.
+                        // always integers; and a complex is two floats.
                         Shape::Slice => self.int_or_none()?,
                         Shape::Range => self.integer()?,
                         Shape::Complex => self.binfloat()?,
+                        // Python 2's bytearray: the text and the encoding it
+                        // was spelled in. Everywhere else a bytearray is made
+                        // from one byte string.
+                        _ if names == SPELLED && i == 0 => self.latin1_text()?,
+                        _ if names == SPELLED => self.exact_word(BYTEARRAY_ENCODING, true)?,
                         _ => self.byte_string()?,
                     });
                 }

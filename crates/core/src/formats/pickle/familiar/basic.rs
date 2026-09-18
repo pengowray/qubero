@@ -46,6 +46,41 @@ enum Fill {
     Batched(usize),
 }
 
+/// What a container's entries go into: the value itself, or the state of a
+/// call whose result the opcodes after it fill.
+///
+/// `collections.OrderedDict()` is a call, and the SETITEMS after it fills what
+/// the call made. So the fold looks through a call's result to the empty
+/// container the calls table put there, and everything else about filling is
+/// the same code.
+fn filled(kind: &mut Kind) -> &mut Kind {
+    match kind {
+        Kind::Made { state: Some(state), .. } => &mut state.kind,
+        other => other,
+    }
+}
+
+/// The same, for a reading that changes nothing.
+fn inside(kind: &Kind) -> &Kind {
+    match kind {
+        Kind::Made { state: Some(state), .. } => &state.kind,
+        other => other,
+    }
+}
+
+/// Whether the opcodes after this value may fill it, which is what the calls
+/// table says by handing the result an empty container to be filled.
+fn opens(kind: &Kind) -> Fill {
+    match kind {
+        Kind::Made { state: Some(state), .. } => match state.kind {
+            Kind::Dict(ref entries) if entries.is_empty() => Fill::Open,
+            Kind::List(ref items) if items.is_empty() => Fill::Open,
+            _ => Fill::Shut,
+        },
+        _ => Fill::Shut,
+    }
+}
+
 /// Whether this opcode begins an object.
 ///
 /// CPython's framer ends a frame where the next object begins and nowhere
@@ -193,17 +228,20 @@ impl Cursor<'_> {
                     let items = stack.split_off(mark.floor);
                     self.batch(&mut stack, items, code)?;
                 }
-                // STACK_GLOBAL, NEWOBJ, REDUCE and BUILD, which only a form
-                // that reads a library object allows. Each folds exactly the
-                // two things written in front of it, in the same order: the
+                // STACK_GLOBAL, NEWOBJ, NEWOBJ_EX, REDUCE and BUILD, which only
+                // a form that reads a library object allows. Each folds exactly
+                // the things written in front of it, in the same order: the
                 // thing being named, called or filled first, and what it is
-                // named, called or filled with second.
-                0x93 | 0x81 | b'R' | b'b' if self.reads_calls() && (code != 0x93 || self.proto >= 4) => {
+                // named, called or filled with after. NEWOBJ_EX takes three,
+                // since it has a place for keyword arguments; the rest take
+                // two. Both arrived with protocol 4.
+                0x93 | 0x81 | 0x92 | b'R' | b'b' if self.reads_calls() && (!matches!(code, 0x93 | 0x92) || self.proto >= 4) => {
                     self.byte()?;
-                    if stack.len() < floor + 2 {
+                    let wants = if code == 0x92 { 3 } else { 2 };
+                    if stack.len() < floor + wants {
                         return None;
                     }
-                    let items = stack.split_off(stack.len() - 2);
+                    let items = stack.split_off(stack.len() - wants);
                     let at = items[0].value.at;
                     self.shut(&items)?;
                     let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
@@ -212,7 +250,8 @@ impl Cursor<'_> {
                     }
                     let values = items.into_iter().map(|slot| slot.value).collect();
                     let kind = self.library(code, at, values)?;
-                    stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill: Fill::Shut });
+                    let fill = opens(&kind);
+                    stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill });
                 }
                 _ => {
                     if stack.len() >= MAX_VALUES {
@@ -240,7 +279,7 @@ impl Cursor<'_> {
     /// container that ends on a full batch is that pickler's spelling.
     fn shut(&mut self, items: &[Slot]) -> Option<()> {
         for slot in items {
-            if slot.fill == Fill::Batched(MAX_BATCH) && !matches!(slot.value.kind, Kind::List(_)) {
+            if slot.fill == Fill::Batched(MAX_BATCH) && !matches!(inside(&slot.value.kind), Kind::List(_)) {
                 self.tail(false, Pickler::Python)?;
             }
         }
@@ -315,9 +354,11 @@ impl Cursor<'_> {
             Fill::Batched(MAX_BATCH) => self.tail(list_like, Pickler::Python)?,
             _ => return None,
         }
-        match &mut into.value.kind {
-            Kind::List(values) => values.push(items.next()?.value),
-            Kind::Dict(entries) => {
+        // APPEND fills a list and SETITEM a dictionary, and neither fills the
+        // other: a container is filled the way its own class is.
+        match (list_like, filled(&mut into.value.kind)) {
+            (true, Kind::List(values)) => values.push(items.next()?.value),
+            (false, Kind::Dict(entries)) => {
                 let key = items.next()?.value;
                 if !hashable(&key) {
                     return None;
@@ -363,7 +404,7 @@ impl Cursor<'_> {
         }
         let taken = items.len();
         let mut items = items.into_iter();
-        let entries = match (code, &mut into.value.kind) {
+        let entries = match (code, filled(&mut into.value.kind)) {
             (b'e', Kind::List(values)) => {
                 values.extend(items.map(|slot| slot.value));
                 taken

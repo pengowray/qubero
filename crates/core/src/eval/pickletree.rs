@@ -134,12 +134,17 @@ impl Evaluator {
         // than how many values make a row. The names are read in
         // [`Evaluator::pickle_columns`], which can reach the bytes.
         if let (_, Part::Value(v)) = &here {
+            // A row is a dictionary, or one of the standard library's own
+            // mappings, which holds its entries exactly as a dictionary does
+            // and is named for the class that made it.
             if let Kind::List(items) = &v.kind {
-                if items.len() >= FEWEST_ROWS && items.iter().all(|x| matches!(x.kind, Kind::Dict(_))) {
+                let row = items.first().and_then(|x| shape_of(&Part::Value(x)));
+                let same = |x: &Value| shape_of(&Part::Value(x)) == row && entries_of(x).is_some();
+                if items.len() >= FEWEST_ROWS && items.iter().all(same) {
                     return Some(crate::template::TableShape {
                         row_word: Some(ROW_WORD.into()),
                         cells: Some(Cells::Named {
-                            row: Shape::Dict.name().into(),
+                            row: row.unwrap_or(Shape::Dict).name().into(),
                             cell: Shape::Entry.name().into(),
                             value: Some(VALUE_FIELD.into()),
                         }),
@@ -212,7 +217,7 @@ impl Evaluator {
         let base = r.offset;
         let mut names: Vec<Arc<str>> = Vec::new();
         for row in items {
-            let Kind::Dict(entries) = &row.kind else { continue };
+            let Some(entries) = entries_of(row) else { continue };
             for (key, _) in entries {
                 if let Some(name) = self.pickle_text(doc, &r, base, key)? {
                     if !names.iter().any(|seen| **seen == *name) {
@@ -341,6 +346,16 @@ impl Evaluator {
                     // A number too wide to be read as one: the digits are what
                     // it is, and the run beneath it is how it was written.
                     Kind::Wide { digits, .. } => Some(digits.clone()),
+                    // One of the standard library's own values, which is a run
+                    // of packed bytes or a run of digits handed to a class and
+                    // reads as the text Python writes the value in.
+                    Kind::Made { what, .. } if super::picklestd::is_stdlib(*what) => {
+                        self.pickle_stdlib(doc, &found, &whole, base, v)?
+                    }
+                    Kind::Instance { .. } if super::picklestd::is_uuid(v) => self.pickle_stdlib(doc, &found, &whole, base, v)?,
+                    // A protocol 0 line that spells its value rather than
+                    // being it, which is worked out when the form matches.
+                    Kind::Spelled { .. } => self.pickle_said(doc, &found, &whole, base, v)?,
                     _ => None,
                 },
                 // An entry reads as what it holds. A fitted model is thirty

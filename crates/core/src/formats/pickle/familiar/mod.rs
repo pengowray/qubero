@@ -22,6 +22,7 @@ mod forms;
 mod memo;
 mod numpy;
 mod object;
+mod stdlib;
 mod values;
 #[cfg(test)]
 mod tests;

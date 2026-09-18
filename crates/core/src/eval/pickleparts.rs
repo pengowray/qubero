@@ -408,7 +408,11 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
 pub(super) fn held<'a>(state: &'a Option<Box<Value>>) -> Vec<(Label, Part<'a>)> {
     match state.as_deref().map(|s| &s.kind) {
         Some(Kind::Dict(entries)) => entries.iter().enumerate().map(|(i, e)| (Label::Key(i), Part::Entry(e))).collect(),
-        Some(Kind::Tuple(items)) => items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))).collect(),
+        // A tuple is the state a class that spells its own out is handed; a
+        // list is what the opcodes after a `collections.deque` filled it with.
+        Some(Kind::Tuple(items)) | Some(Kind::List(items)) => {
+            items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -450,6 +454,13 @@ pub(super) fn call_of<'a>(found: &'a Match, v: &Value) -> Option<&'a Call> {
 /// are placed directly under it.
 pub(super) fn keyed<'a>(part: &Part<'a>) -> Option<&'a Vec<(Value, Value)>> {
     let Part::Value(v) = part else { return None };
+    entries_of(v)
+}
+
+/// The entries a value holds as a dictionary does: a dictionary's own, and the
+/// ones an `OrderedDict`, a `defaultdict` or a `Counter` holds, which travel as
+/// the state of the call that made it.
+pub(super) fn entries_of(v: &Value) -> Option<&Vec<(Value, Value)>> {
     match &v.kind {
         Kind::Dict(entries) => Some(entries),
         Kind::Instance { state: Some(state), .. } | Kind::Made { state: Some(state), .. } => match &state.kind {
@@ -490,6 +501,10 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             Kind::FrozenSet(_) => Shape::FrozenSet,
             Kind::Ref(_) => Shape::Ref,
             Kind::Wide { .. } => Shape::Integer,
+            // A protocol 0 line that spells its value rather than being it,
+            // which is what the row above the `line` row is worth.
+            Kind::Spelled { bytes: true, .. } => Shape::Bytes,
+            Kind::Spelled { .. } => Shape::Text,
             Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
             Kind::Made { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,

@@ -72,6 +72,12 @@ impl Evaluator {
             Kind::Class { path, .. } => Some(path.clone()),
             _ => None,
         };
+        // A date, an exact number, an id or a path reads as the text Python
+        // writes it in, which is worked out from the bytes it was packed into
+        // rather than read where it sits. See [`picklestd`](super::picklestd).
+        if let Some(said) = self.pickle_stdlib(doc, found, whole, base, v)? {
+            return Ok(Some(said));
+        }
         Ok(match &v.kind {
             Kind::None => Some("None".into()),
             Kind::Bool(b) => Some(if *b { "True" } else { "False" }.into()),

@@ -183,34 +183,27 @@ fn a_packed_date_is_read_as_the_fields_in_it() {
     let Some(dir) = folder() else { return };
     let path = dir.join("proto4-datetime.pickle");
     let Ok(bytes) = std::fs::read(&path) else { return };
-    let doc = Document::new(MemSource(bytes));
-    let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
-
-    let mut found = Vec::new();
-    fields(&doc, &mut ev, &[], &mut found, 0);
-    let named = |ty: &str, field: &str| -> Vec<i128> {
-        found.iter().filter(|(t, f, _)| t == ty && f == field).map(|(_, _, v)| *v).collect()
-    };
-    assert_eq!(named("DateTime", "year"), vec![2026; 3], "three datetimes, all this year");
-    assert_eq!(named("Date", "month"), vec![9]);
-    assert_eq!(named("Date", "day"), vec![6]);
-    assert_eq!(named("Time", "microsecond"), vec![250_000]);
+    // The standard library form reads this file now, so the packed runs are
+    // read as the values they hold rather than by the symbolic machine. Every
+    // row is the text Python writes the value in, worked out from the bytes.
+    let rows = familiar_rows(bytes);
+    let said = |name: &str| row(&rows, name).value.clone();
+    assert_eq!(said("date"), Value::Str("2026-09-06".into()));
     // Half past ten and fifteen seconds, in that order. Three one-byte fields
-    // in a row will read as each other if two of them are swapped, and every
-    // other assertion here would still pass.
-    assert_eq!(named("Time", "hour"), vec![10]);
-    assert_eq!(named("Time", "minute"), vec![30]);
-    assert_eq!(named("Time", "second"), vec![15]);
-    // The three datetimes in the order the dict was filled in: the same time
-    // of day, then midnight with a zone on it, then half past two in April.
-    assert_eq!(named("DateTime", "hour"), vec![10, 0, 2]);
-    assert_eq!(named("DateTime", "minute"), vec![30, 0, 30]);
-    assert_eq!(named("DateTime", "second"), vec![15, 0, 0]);
-    // One of the three datetimes is the second two o'clock, and the bit that
-    // says so is inside the month byte.
-    let folds = named("DateTime", "fold");
-    assert_eq!(folds.iter().filter(|f| **f == 1).count(), 1, "folds were {folds:?}");
-    assert!(named("DateTime", "month").contains(&4), "the folded one is in April: {:?}", named("DateTime", "month"));
+    // in a row will read as each other if two of them are swapped, and a
+    // reading that only checked the date would not notice.
+    assert_eq!(said("time"), Value::Str("10:30:15.250000".into()));
+    assert_eq!(said("datetime"), Value::Str("2026-09-06T10:30:15.250000".into()));
+    // Midnight with a zone on it, which is the offset from UTC written after
+    // the clock, and half past two in April, which is the second two o'clock:
+    // its fold bit sits in the top of the month byte and is not the month.
+    assert_eq!(said("with a zone"), Value::Str("2026-09-06T00:00:00+00:00".into()));
+    assert_eq!(said("folded"), Value::Str("2026-04-05T02:30:00".into()));
+    assert_eq!(said("length of time"), Value::Str("3 days, 0:01:01.000007".into()));
+    // The bytes are still where they were, and the row that holds them says
+    // so: a datetime is ten of them and a date is four.
+    let packed: Vec<u64> = rows.iter().filter(|r| r.name == "packed").map(|r| r.len).collect();
+    assert_eq!(packed, vec![4, 6, 10, 10, 10]);
 }
 
 /// A naming row names, and leaves what the thing is to the row that makes it.
@@ -285,38 +278,6 @@ fn annotated(
         let mut next = at.to_vec();
         next.push(i);
         annotated(doc, ev, &next, out, depth + 1);
-    }
-}
-
-/// Every field of every packed record, as its record's type, its own name and
-/// its value.
-fn fields(
-    doc: &Document<MemSource>,
-    ev: &mut Evaluator,
-    at: &[usize],
-    out: &mut Vec<(String, String, i128)>,
-    depth: usize,
-) {
-    if depth > 10 {
-        return;
-    }
-    let Ok(node) = ev.node(doc, at) else { return };
-    if matches!(node.type_name.as_str(), "Date" | "Time" | "DateTime") {
-        for i in 0..node.child_count as usize {
-            let mut child = at.to_vec();
-            child.push(i);
-            if let Ok(f) = ev.node(doc, &child) {
-                if let Some(v) = f.value.as_int() {
-                    out.push((node.type_name.clone(), f.name.clone(), v));
-                }
-            }
-        }
-        return;
-    }
-    for i in 0..node.child_count as usize {
-        let mut next = at.to_vec();
-        next.push(i);
-        fields(doc, ev, &next, out, depth + 1);
     }
 }
 
@@ -640,7 +601,9 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto3-everything.pickle", None),
         ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v1")),
         ("proto4-collections.pickle", None),
-        ("proto4-datetime.pickle", None),
+        // Packed dates, times and spans, each a call of its class with the
+        // run of bytes `_getstate` packed it into.
+        ("proto4-datetime.pickle", Some("stdlib-values-p4-p5-v1")),
         ("proto4-everything.pickle", None),
         ("proto4-newobj.pickle", None),
         ("proto4-numpy-object-array.pickle", None),
@@ -706,6 +669,25 @@ const FAMILIES: &[(&str, [Option<&str>; 4])] = &[
         Some("sklearn-estimator-p0-v1"),
     ]),
     ("scipy", [Some("scipy-sparse-p4-p5-v1"), Some("scipy-sparse-p2-p3-v1"), Some("scipy-sparse-p1-v1"), Some("scipy-sparse-p0-v1")]),
+    // The standard library's own classes: dates, ordered and defaulting
+    // dictionaries, counters, queues, exact numbers, ids and paths.
+    ("stdlib", [Some("stdlib-values-p4-p5-v1"), Some("stdlib-values-p2-p3-v1"), Some("stdlib-values-p1-v1"), Some("stdlib-values-p0-v1")]),
+    // The two whose values are builtins and nothing else, which the builtins
+    // form already reads and keeps reading. A file has to use a form's own
+    // productions to be read under it, and neither of these names a class from
+    // the standard library at all.
+    ("stdlib-complex", [
+        Some("builtins-values-p4-p5-v3"),
+        Some("builtins-values-p2-p3-v1"),
+        Some("builtins-values-p1-v1"),
+        Some("builtins-values-p0-v1"),
+    ]),
+    ("stdlib-range-slice", [
+        Some("builtins-values-p4-p5-v3"),
+        Some("builtins-values-p2-p3-v1"),
+        Some("builtins-values-p1-v1"),
+        Some("builtins-values-p0-v1"),
+    ]),
 ];
 
 /// The row of [`FAMILIES`] a file falls under: its object where that is named,
@@ -1360,4 +1342,83 @@ fn a_library_object_says_what_it_holds_before_how() {
         }
     }
     assert!(checked >= 12, "only {checked} objects said what they hold");
+}
+
+/// A list of `OrderedDict`s is a table, the same way a list of dictionaries
+/// is, and its cells read as the values they hold rather than as the bytes.
+///
+/// This is what a program's own records look like once the standard library is
+/// in them: a date, an exact number and a counter under keys the file wrote
+/// beside them. The claim is the same table at every protocol from every
+/// pickler, since a date reaches protocol 2 as latin-1 text and protocol 0 as
+/// an escaped line and is the same date either way.
+#[test]
+fn a_list_of_ordered_dicts_opens_as_the_table_it_holds() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let columns = ["id", "when", "price", "tags"];
+    // `{"id": i, "when": datetime(2020, 1, 1 + i, 12, 0), "price":
+    // Decimal("9.99") * i, "tags": Counter(["a"] * i)}` for i from 1 to 5,
+    // which is `stdlib_objects` in `tools/make_pickle_matrix.py`.
+    let prices = ["9.99", "19.98", "29.97", "39.96", "49.95"];
+    let want: Vec<Vec<String>> = (1..=5)
+        .map(|i| {
+            vec![
+                i.to_string(),
+                format!("2020-01-{:02}T12:00:00", i + 1),
+                prices[i - 1].to_string(),
+                "Counter of 1".to_string(),
+            ]
+        })
+        .collect();
+    let mut checked: Vec<String> = Vec::new();
+    for dir in std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let env = dir.file_name().unwrap().to_string_lossy().into_owned();
+        // Python 2 hands `OrderedDict` everything it is to hold as one list of
+        // pairs, where every release since creates it empty and fills it with
+        // the opcodes after the call. So a Python 2 record is a list of short
+        // lists rather than a mapping, and it is not this table.
+        if env.starts_with("py2.") || env.starts_with("pypy2.") {
+            continue;
+        }
+        for path in pickles(&dir) {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("stdlib-records.") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let where_ = format!("{}/{name}", dir.file_name().unwrap().to_string_lossy());
+            let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
+            assert_eq!(shape.names, columns, "{where_}");
+            assert_eq!(shape.row_word.as_deref(), Some("row"), "{where_}");
+            // The rows are the nodes under the list and a cell is the entry
+            // named by its column, so the reading is the tree's rather than a
+            // run of values the view walks.
+            let rows = familiar_rows(std::fs::read(&path).unwrap());
+            let said: Vec<Vec<String>> = rows
+                .iter()
+                .filter(|r| r.ty == "OrderedDict")
+                .map(|r| {
+                    columns
+                        .iter()
+                        .map(|column| {
+                            let cell = rows.iter().find(|c| c.name == *column && c.path.starts_with(&r.path)).unwrap();
+                            cell_text(&Some(cell.value.clone()))
+                        })
+                        .collect()
+                })
+                .collect();
+            assert_eq!(said, want, "{where_}");
+            checked.push(name);
+        }
+    }
+    // Every protocol, since the collection keeps one copy of each distinct
+    // byte string and the same records written twice are one file.
+    for proto in 0..=5 {
+        assert!(checked.iter().any(|name| name.contains(&format!(".p{proto}."))), "no record list at protocol {proto}: {checked:?}");
+    }
 }

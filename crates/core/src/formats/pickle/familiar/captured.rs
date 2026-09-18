@@ -119,7 +119,10 @@ pub enum Kind {
     /// is the thing that was called, for the calls whose callable is a value
     /// of the file, and nothing for the ones a form matched inside a fixed run
     /// and folded away: a `slice` says it is a slice without a row saying so
-    /// again. `state` is what a BUILD after the call handed the result.
+    /// again. `state` is what the result holds beyond its arguments: what a
+    /// BUILD after the call handed it, the entries or items the opcodes after
+    /// it filled in, which is how an `OrderedDict` and a `deque` are written,
+    /// or the mapping a `Counter` is called with, which is the counter.
     Made {
         what: Shape,
         names: &'static [&'static str],
@@ -351,6 +354,20 @@ pub enum Shape {
     /// A whole number no integer type here is wide enough to read, shown as
     /// the digits it comes to with its run beneath it.
     Integer,
+    /// The standard library's own classes, each read as the value it is:
+    /// see [`stdlib`](super::stdlib).
+    DateTime,
+    Date,
+    Time,
+    TimeDelta,
+    TimeZone,
+    Decimal,
+    Fraction,
+    Counter,
+    OrderedDict,
+    DefaultDict,
+    Deque,
+    Path,
     /// One key and one value of a dictionary, kept as the pair it is written
     /// as: two keys spelled alike are two entries, not one.
     Entry,
@@ -371,8 +388,13 @@ pub enum Shape {
     FrozenSet,
     ByteArray,
     /// A byte string protocol 2 had to write as text and a call, with the
-    /// text and the encoding it was handed inside it.
+    /// text and the encoding it was handed inside it, or one a protocol 0 line
+    /// spells rather than holds.
     Bytes,
+    /// Text a protocol 0 line spells rather than holds, which is one with an
+    /// escape in it or a character above 0x7f. The node is what the line
+    /// spells and the `line` row inside it is the run the file wrote.
+    Text,
     /// A class or a callable the file named, with the module and the name it
     /// was spelled by inside it.
     Class,
@@ -391,6 +413,20 @@ impl Shape {
             Shape::Header => "header",
             Shape::Dict => "dict",
             Shape::Integer => "integer",
+            // Python's own names for its own classes, which is what a reader
+            // of a pickle is comparing against.
+            Shape::DateTime => "datetime",
+            Shape::Date => "date",
+            Shape::Time => "time",
+            Shape::TimeDelta => "timedelta",
+            Shape::TimeZone => "timezone",
+            Shape::Decimal => "Decimal",
+            Shape::Fraction => "Fraction",
+            Shape::Counter => "Counter",
+            Shape::OrderedDict => "OrderedDict",
+            Shape::DefaultDict => "defaultdict",
+            Shape::Deque => "deque",
+            Shape::Path => "path",
             Shape::Entry => "entry",
             Shape::List => "list",
             Shape::Tuple => "tuple",
@@ -404,6 +440,7 @@ impl Shape {
             Shape::FrozenSet => "frozenset",
             Shape::ByteArray => "bytearray",
             Shape::Bytes => "bytes",
+            Shape::Text => "text",
             Shape::Class => "class",
             Shape::Object => "object",
             Shape::Block => "block",
