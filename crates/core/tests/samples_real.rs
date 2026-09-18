@@ -29,6 +29,18 @@ const KNOWN_FAILURES: &[&str] = &[
     "wk3/sheetjs-lotus-wk3.wk3",
 ];
 
+/// Extensions of files that sit among the samples and say something about
+/// them, with what each is. They are not read, because reading them would test
+/// nothing about a format. Anything else in the collection is a sample and
+/// has to read, a `versions.json` beside a folder of pickles included: that
+/// one is JSON, and the JSON template reads it.
+const ABOUT_A_SAMPLE: &[(&str, &str)] = &[
+    ("md", "notes written for a person"),
+    ("tsv", "a list: where a folder's files came from, or which environments wrote each pickle of `pickle-matrix/`"),
+    ("py", "a script that made the samples beside it"),
+    ("dis", "a binary's own toolchain reading it, the answer key `examples/dis_diff.rs` measures a decoder against"),
+];
+
 #[test]
 fn every_sample_still_reads() {
     let Some(root) = samples() else {
@@ -177,11 +189,9 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
             // The repository's own files: the collection is versioned by its
             // lists, and those are not samples.
             continue;
-        } else if path.extension().is_none_or(|e| e != "md" && e != "tsv" && e != "py" && e != "dis") {
-            // A `.dis` beside a binary is that binary's own toolchain reading
-            // it, kept as the answer key `examples/dis_diff.rs` measures a
-            // decoder against. It is a listing about a sample, not a sample.
-
+        } else if path.extension().is_some_and(|e| ABOUT_A_SAMPLE.iter().any(|(ext, _)| e == *ext)) {
+            continue;
+        } else {
             out.push(path);
         }
     }
