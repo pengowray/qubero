@@ -3,7 +3,8 @@
 //! production reads bytes through this one, so it sits apart from all of them.
 
 use super::memo::Memo;
-use super::{Allow, BIG_PAYLOAD, Call, Kind, Pickler, Said, Value};
+use super::forms::Allow;
+use super::{BIG_PAYLOAD, Call, Kind, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
 pub(super) struct Cursor<'a> {

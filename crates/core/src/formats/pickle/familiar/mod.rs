@@ -15,6 +15,7 @@ mod basic;
 mod builtins;
 mod cursor;
 mod dtype;
+mod forms;
 mod memo;
 mod numpy;
 mod object;
@@ -22,6 +23,7 @@ mod object;
 mod tests;
 
 use cursor::{Cursor, Framing};
+use forms::{forms, Allow, BASIC, BUILTINS, NUMPY};
 use memo::Memo;
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
@@ -63,18 +65,6 @@ const BIG_PAYLOAD: usize = 1 << 16;
 /// A frame's contents shorter than this are written without a FRAME header,
 /// so a run of unframed bytes this short may end the file.
 const MIN_FRAME: usize = 4;
-
-/// The forms, each a named grammar over the same envelope. They differ in
-/// which value productions they allow, and every one of those is enumerated.
-const BASIC: &str = "basic-p4-p5-v5";
-const NUMPY: &str = "numpy-array-p4-p5-v6";
-const BUILTINS: &str = "builtins-values-p4-p5-v3";
-/// The library forms. Each is the plain object production over one module
-/// prefix, with the calls that library writes enumerated beside it, so a file
-/// is read under the form for the library that wrote it and no other.
-const SKLEARN: &str = "sklearn-estimator-p4-p5-v1";
-const SCIPY: &str = "scipy-sparse-p4-p5-v1";
-const PANDAS: &str = "pandas-frame-p4-p5-v1";
 
 /// What the STOP row of the opcode listing says about a match: the contract's
 /// sentence, the form that matched, and where the decoded data is.
@@ -428,122 +418,6 @@ impl Deducer for Program {
     }
 }
 
-/// Which value productions a form allows beyond the basic ones. A form that
-/// allows a production also requires the file to use it, so a file holding
-/// nothing but basic values is read under the basic form and not another.
-#[derive(Debug, Clone, Copy)]
-struct Allow {
-    numpy: bool,
-    builtins: bool,
-    /// The module prefixes this form may name a class from. Empty for a form
-    /// that names no class at all, which is where the basic, NumPy and
-    /// builtins forms stand.
-    classes: &'static [&'static str],
-    /// The callables this form accepts a REDUCE of. Never anything else: see
-    /// [`object`] for why a module prefix cannot stand in for this list.
-    calls: &'static [Reduce],
-    /// Whether an array's values may be pickled objects rather than numbers,
-    /// which is NumPy's `O8` dtype. A pandas index of column names is one, and
-    /// nothing else in the corpus is.
-    object_arrays: bool,
-}
-
-/// One callable a form accepts a REDUCE of, and what the library writes as its
-/// arguments. `shape` is the check against those arguments; `names` says what
-/// each of them is called, and its length is the arity.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct Reduce {
-    pub(super) path: &'static str,
-    /// What the result of the call is, in the tree.
-    pub(super) what: Shape,
-    pub(super) names: &'static [&'static str],
-    pub(super) shape: fn(&[Value]) -> Option<()>,
-}
-
-/// Nothing at all, for a form that enumerates no calls.
-const NO_CALLS: &[Reduce] = &[];
-/// The calls scikit-learn writes. One: a decision tree's array of nodes lives
-/// in a `Tree`, which is constructed from how many features, classes and
-/// outputs it was fitted on and handed its arrays by the BUILD after it.
-const SKLEARN_CALLS: &[Reduce] = &[Reduce {
-    path: "sklearn.tree._tree.Tree",
-    what: Shape::Object,
-    names: &["n_features", "n_classes", "n_outputs"],
-    shape: |args| {
-        matches!(
-            (&args[0].kind, &args[1].kind, &args[2].kind),
-            (Kind::Int { .. }, Kind::Array { .. }, Kind::Int { .. })
-        )
-        .then_some(())
-    },
-}];
-/// A form that names no class, which is every form below the library ones.
-const NO_CLASSES: &[&str] = &[];
-
-/// The calls pandas writes, which is the whole of what a REDUCE may do under
-/// the pandas form.
-///
-/// A frame is a `BlockManager` over blocks of columns and two axes; a block is
-/// an array, where it sits in the frame and how many axes it has; an axis is a
-/// class and the dictionary that finishes it; and an array of something other
-/// than numbers is an `NDArrayBacked` around one that is. The dtype of a text
-/// column in pandas 3.0 is written as a call as well.
-const PANDAS_CALLS: &[Reduce] = &[
-    Reduce {
-        path: "pandas.core.internals.managers.BlockManager",
-        what: Shape::Object,
-        names: &["blocks", "axes"],
-        shape: |args| (matches!(args[0].kind, Kind::Tuple(_)) && matches!(args[1].kind, Kind::List(_))).then_some(()),
-    },
-    Reduce {
-        path: "pandas._libs.internals._unpickle_block",
-        what: Shape::Block,
-        names: &["values", "placement", "ndim"],
-        shape: |args| {
-            // The placement is a slice of the frame's columns. pandas writes an
-            // array of positions instead when a block's columns are not next to
-            // each other, and that is a non-match until there is a file with
-            // one in it.
-            (holds_values(&args[0].kind)
-                && matches!(args[1].kind, Kind::Object { what: Shape::Slice, .. })
-                && matches!(args[2].kind, Kind::Int { .. }))
-            .then_some(())
-        },
-    },
-    Reduce {
-        path: "pandas.core.indexes.base._new_Index",
-        what: Shape::Object,
-        names: &["type", "state"],
-        shape: |args| (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Dict(_))).then_some(()),
-    },
-    Reduce {
-        path: "pandas._libs.arrays.__pyx_unpickle_NDArrayBacked",
-        what: Shape::Object,
-        names: &["type", "checksum", "state"],
-        shape: |args| {
-            (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Int { .. }) && matches!(args[2].kind, Kind::None))
-                .then_some(())
-        },
-    },
-    // pandas 3.0 writes the dtype of a text column as a call of its storage
-    // and the value it uses for a missing entry. Both spellings of the module
-    // are named, as numpy's two are.
-    Reduce { path: "pandas.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
-    Reduce { path: "pandas.core.arrays.string_.StringDtype", what: Shape::Object, names: &["storage", "na_value"], shape: string_dtype },
-];
-
-/// What a block's values may be: numbers, pickled objects, or an array of one
-/// of those wrapped in a class of pandas' own.
-fn holds_values(kind: &Kind) -> bool {
-    matches!(kind, Kind::Array { .. } | Kind::Objects { .. } | Kind::Made { .. } | Kind::Instance { .. })
-}
-
-/// `StringDtype(storage, na_value)`: a word and a float, which is a NaN.
-fn string_dtype(args: &[Value]) -> Option<()> {
-    (matches!(args[0].kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. })) && matches!(args[1].kind, Kind::Float { .. }))
-        .then_some(())
-}
-
 /// Initial envelope: protocol 4/5, unframed or framed the way CPython frames.
 /// Each form is tried in turn over the same bytes, under one shared budget.
 pub fn recognise(bytes: &[u8]) -> Option<Match> {
@@ -552,23 +426,6 @@ pub fn recognise(bytes: &[u8]) -> Option<Match> {
     forms().into_iter().find_map(|(form, allow)| attempt(bytes, form, allow, &mut left, &mut reached))
 }
 
-/// Every form, in the order a file is tried against them.
-fn forms() -> [(&'static str, Allow); 6] {
-    let plain = Allow { numpy: false, builtins: false, classes: NO_CLASSES, calls: NO_CALLS, object_arrays: false };
-    [
-        (BASIC, plain),
-        (NUMPY, Allow { numpy: true, ..plain }),
-        (BUILTINS, Allow { builtins: true, ..plain }),
-        (SKLEARN, Allow { numpy: true, classes: &["sklearn"], calls: SKLEARN_CALLS, ..plain }),
-        (SCIPY, Allow { numpy: true, classes: &["scipy.sparse"], ..plain }),
-        (
-            PANDAS,
-            Allow { numpy: true, builtins: true, classes: &["pandas"], calls: PANDAS_CALLS, object_arrays: true },
-        ),
-    ]
-}
-
-/// One form's whole grammar over the whole file.
 /// How far into the file the forms read before none of them could go on.
 ///
 /// This is not part of matching, and it says nothing about the file: a
