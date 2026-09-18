@@ -168,7 +168,7 @@ fn summary(v: &Value) -> &'static [Says] {
     if super::pickleframe::frame_of(v).is_some() {
         return &[Says::Columns, Says::Rows, Says::Index, Says::Dtypes];
     }
-    if super::pickleframe::is_sparse(v) {
+    if super::picklecells::is_sparse(v) {
         return &[Says::Shape, Says::Stored, Says::Format];
     }
     &[]

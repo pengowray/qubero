@@ -31,6 +31,7 @@ mod kinds;
 mod listing;
 mod memo;
 mod origin;
+mod picklecells;
 mod pickleframe;
 mod pickletree;
 mod placed;
