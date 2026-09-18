@@ -26,8 +26,8 @@ fn captures_basic_values_without_a_machine() {
     assert_eq!(
         seen,
         vec![
-            (20, 2, &Kind::Int { value: 1, at: 21, len: 1 }),
-            (22, 2, &Kind::Int { value: 2, at: 23, len: 1 }),
+            (20, 2, &Kind::Int { value: 1, at: 21, len: 1, spelled: false }),
+            (22, 2, &Kind::Int { value: 2, at: 23, len: 1, spelled: false }),
         ]
     );
     assert_eq!(
@@ -137,7 +137,7 @@ fn nested_empty_containers_and_wide_text_are_captured() {
         kinds,
         vec![
             &Kind::List(vec![]),
-            &Kind::Int { value: 1, at: 17, len: 1 },
+            &Kind::Int { value: 1, at: 17, len: 1, spelled: false },
             &Kind::Dict(vec![])
         ]
     );
@@ -322,8 +322,8 @@ fn a_number_past_the_integer_type_is_its_digits() {
     most.push(0x7f);
     let mut least = vec![0x00; 15];
     least.push(0x80);
-    assert_eq!(kind(&most), Kind::Int { value: i128::MAX, at: 13, len: 16 });
-    assert_eq!(kind(&least), Kind::Int { value: i128::MIN, at: 13, len: 16 });
+    assert_eq!(kind(&most), Kind::Int { value: i128::MAX, at: 13, len: 16, spelled: false });
+    assert_eq!(kind(&least), Kind::Int { value: i128::MIN, at: 13, len: 16, spelled: false });
     // One past each of those takes a seventeenth byte, which carries the
     // sign, and is read as its digits instead.
     let mut above = least.clone();

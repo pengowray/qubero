@@ -262,3 +262,42 @@ fn a_call_of_anything_not_on_the_list_is_a_non_match() {
     ]));
     assert!(recognise(&mixed).is_none());
 }
+
+/// Only the three containers a pickler creates empty are filled by what comes
+/// after them. Everything else a call made is finished when the call is.
+#[test]
+fn a_call_that_is_not_one_of_the_three_is_not_filled_afterwards() {
+    // A `Counter` of nothing, which is a call with an empty dictionary in it
+    // and not a call waiting to be filled.
+    assert!(recognise(&only(&cat(&[&call("collections", "Counter", b"}\x94", 1), &word("a"), b"K\x01s"]))).is_none());
+    assert!(recognise(&only(&call("collections", "Counter", b"}\x94", 1))).is_some());
+    // And a value, which nothing fills either.
+    assert!(recognise(&only(&cat(&[&call("datetime", "date", &blob(b"\x07\xe4\x01\x02"), 1), &word("a"), b"K\x01s"]))).is_none());
+}
+
+/// Python hashes a date, a span, an exact number and a path, so a dictionary
+/// may be keyed by one. It hashes none of the library's containers, which are
+/// mutable, and neither does this.
+#[test]
+fn a_dictionary_may_be_keyed_by_the_values_python_hashes() {
+    let keyed = |key: &[u8]| {
+        let mut body = b"}\x94".to_vec();
+        body.extend_from_slice(key);
+        body.extend_from_slice(b"K\x01s.");
+        framed(&body)
+    };
+    for hashes in [
+        call("datetime", "date", &blob(b"\x07\xe4\x01\x02"), 1),
+        call("datetime", "datetime", &blob(MOMENT), 1),
+        call("datetime", "timedelta", b"K\x01K\x02K\x03", 3),
+        call("decimal", "Decimal", &word("1.50"), 1),
+        call("fractions", "Fraction", &word("1/3"), 1),
+        call("pathlib", "PurePosixPath", &word("/"), 1),
+    ] {
+        assert!(recognise(&keyed(&hashes)).is_some(), "a key Python hashes was refused");
+    }
+    // A counter and a queue are mutable, and Python refuses them as keys the
+    // way it refuses a dictionary and a list.
+    assert!(recognise(&keyed(&call("collections", "Counter", b"}\x94", 1))).is_none());
+    assert!(recognise(&keyed(&cat(&[&call("collections", "deque", b"", 0), b"(K\x01K\x02e"]))).is_none());
+}

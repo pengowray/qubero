@@ -26,10 +26,16 @@ pub enum Kind {
     /// The number, and the operand bytes it was written in. `None` has no
     /// operand and neither has a bool: those two are the opcode byte itself,
     /// which is what their span already covers.
+    ///
+    /// `spelled` says the run at `at`/`len` is the decimal digits rather than
+    /// the number packed into bytes, which is what protocols 0 and 1 write and
+    /// what no integer type reads. Such a number is a node, the way one too
+    /// wide for any type is, with the line beneath it.
     Int {
         value: i128,
         at: usize,
         len: usize,
+        spelled: bool,
     },
     /// A whole number too wide for the integer type above, which is a `LONG1`
     /// of more than sixteen bytes or a line of more digits than one holds.

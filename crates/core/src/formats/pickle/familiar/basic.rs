@@ -72,7 +72,11 @@ fn inside(kind: &Kind) -> &Kind {
 /// table says by handing the result an empty container to be filled.
 fn opens(kind: &Kind) -> Fill {
     match kind {
-        Kind::Made { state: Some(state), .. } => match state.kind {
+        // Named rather than read off the empty container, so that a `Counter`
+        // of nothing and a call whose BUILD handed it an empty dictionary are
+        // not filled by whatever comes next: only these three classes are
+        // written empty and filled afterwards.
+        Kind::Made { what: Shape::OrderedDict | Shape::DefaultDict | Shape::Deque, state: Some(state), .. } => match state.kind {
             Kind::Dict(ref entries) if entries.is_empty() => Fill::Open,
             Kind::List(ref items) if items.is_empty() => Fill::Open,
             _ => Fill::Shut,
@@ -562,20 +566,20 @@ impl Cursor<'_> {
         }
         let start = self.at;
         let kind = match self.byte()? {
-            b'K' => Kind::Int { value: i128::from(self.byte()?), at: start + 1, len: 1 },
+            b'K' => Kind::Int { value: i128::from(self.byte()?), at: start + 1, len: 1, spelled: false },
             b'M' => {
                 let value = i128::from(u16::from_le_bytes(self.take(2)?.try_into().ok()?));
                 if value < 256 {
                     return None;
                 }
-                Kind::Int { value, at: start + 1, len: 2 }
+                Kind::Int { value, at: start + 1, len: 2, spelled: false }
             }
             b'J' => {
                 let value = i128::from(i32::from_le_bytes(self.take(4)?.try_into().ok()?));
                 if (0..=0xffff).contains(&value) {
                     return None;
                 }
-                Kind::Int { value, at: start + 1, len: 4 }
+                Kind::Int { value, at: start + 1, len: 4, spelled: false }
             }
             0x8a if self.proto >= 2 => {
                 let len = usize::from(self.byte()?);
@@ -588,7 +592,7 @@ impl Cursor<'_> {
                 match two_complement(run) {
                     // Anything a four-byte integer holds is written as one.
                     Some(value) if i32::try_from(value).is_ok() => return None,
-                    Some(value) => Kind::Int { value, at, len },
+                    Some(value) => Kind::Int { value, at, len, spelled: false },
                     // Past sixteen bytes there is no integer type to read the
                     // run as, so the number is its digits and the run is a row
                     // beneath them.
@@ -616,7 +620,7 @@ impl Cursor<'_> {
                 if digits != value.to_string() || i32::try_from(value).is_ok() {
                     return None;
                 }
-                Kind::Int { value, at, len }
+                Kind::Int { value, at, len, spelled: true }
             }
             // A `long`, which protocol 2 writes as LONG1 and protocol 1 as a
             // line of digits with the `L` Python 2 spelled one with. Python 3
@@ -630,7 +634,7 @@ impl Cursor<'_> {
                 }
                 match digits.parse::<i128>() {
                     Ok(value) if i32::try_from(value).is_ok() => return None,
-                    Ok(value) => Kind::Int { value, at, len: len - 1 },
+                    Ok(value) => Kind::Int { value, at, len: len - 1, spelled: true },
                     // More digits than the reader's integer type holds, which
                     // is the same number `LONG1` writes in seventeen bytes or
                     // more at the protocols above this one.

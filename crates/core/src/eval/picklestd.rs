@@ -49,13 +49,12 @@ pub(super) fn is_uuid(value: &Value) -> bool {
     class_of(value).is_some_and(|path| path == "uuid.UUID")
 }
 
-/// The whole number an object's state holds under `int`, which is the whole of
-/// what a `uuid.UUID` is.
-fn uuid_number(value: &Value) -> Option<u128> {
-    let Kind::Instance { state: Some(state), .. } = &value.kind else { return None };
-    let Kind::Dict(entries) = &state.kind else { return None };
-    let (_, held) = entries.iter().find(|(key, _)| matches!(key.kind, Kind::Text { .. }))?;
-    match &held.kind {
+/// The name of the one attribute a `uuid.UUID` is rebuilt from.
+const UUID_INT: &str = "int";
+
+/// The whole number a value holds, for the two widths a 128-bit number takes.
+fn whole_number(value: &Value) -> Option<u128> {
+    match &value.kind {
         Kind::Int { value, .. } => u128::try_from(*value).ok(),
         Kind::Wide { digits, .. } => digits.parse().ok(),
         _ => None,
@@ -220,8 +219,19 @@ impl Evaluator {
         base: u64,
         v: &Value,
     ) -> R<Option<String>> {
+        // An id is the one 128-bit number its state holds under `int`. The
+        // attribute is named rather than taken as the only one:
+        // `UUID.__getstate__` writes a second when it knows whether the id is
+        // safe to use across a fork, and what that one says is not the number.
         if is_uuid(v) {
-            return Ok(uuid_number(v).map(hyphenated));
+            let Kind::Instance { state: Some(state), .. } = &v.kind else { return Ok(None) };
+            let Kind::Dict(entries) = &state.kind else { return Ok(None) };
+            for (key, held) in entries {
+                if self.pickle_text(doc, whole, base, key)?.as_deref() == Some(UUID_INT) {
+                    return Ok(whole_number(held).map(hyphenated));
+                }
+            }
+            return Ok(None);
         }
         let Kind::Made { what, items, state, .. } = &v.kind else { return Ok(None) };
         if is_container(*what) {

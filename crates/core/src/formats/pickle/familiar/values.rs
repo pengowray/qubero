@@ -116,7 +116,7 @@ pub(super) fn hashable(value: &Value) -> bool {
         // Python hashes it the same as any other byte string.
         Kind::Made { what: Shape::Bytes, .. } => true,
         Kind::Made { what, items, .. } => {
-            matches!(what, Shape::Slice | Shape::Range | Shape::Complex) && items.iter().all(hashable)
+            (matches!(what, Shape::Slice | Shape::Range | Shape::Complex) || hashes(*what)) && items.iter().all(hashable)
         }
         // A class hashes in Python and an object of one usually does, but no
         // file in the corpus writes either as a key, so neither is read as
@@ -124,6 +124,21 @@ pub(super) fn hashable(value: &Value) -> bool {
         Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
         Kind::Class { .. } | Kind::Instance { .. } | Kind::Objects { .. } | Kind::DType(_) => false,
     }
+}
+
+/// Whether Python hashes one of the standard library's own values, which is
+/// what says a dictionary may be keyed by one.
+///
+/// A date, a span, a zone, an exact number, an id and a path all hash, and a
+/// dictionary keyed by dates is an ordinary thing to write. The library's
+/// containers do not: a `Counter`, an `OrderedDict`, a `defaultdict` and a
+/// `deque` are mutable, and Python refuses them as keys the way it refuses a
+/// dictionary and a list.
+pub(super) fn hashes(what: Shape) -> bool {
+    matches!(
+        what,
+        Shape::DateTime | Shape::Date | Shape::Time | Shape::TimeDelta | Shape::TimeZone | Shape::Decimal | Shape::Fraction | Shape::Path
+    )
 }
 
 impl Cursor<'_> {

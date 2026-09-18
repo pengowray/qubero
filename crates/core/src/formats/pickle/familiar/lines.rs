@@ -242,7 +242,7 @@ impl Cursor<'_> {
         // 128-bit `uuid.UUID` and `2 ** 200` both are. The number is its digits
         // and the line is a row beneath them.
         let kind = match digits.parse::<i128>() {
-            Ok(value) => Kind::Int { value, at, len },
+            Ok(value) => Kind::Int { value, at, len, spelled: true },
             Err(_) => Kind::Wide { at, len, digits: digits.to_string(), spelled: true },
         };
         Some(self.span(start, kind))

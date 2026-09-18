@@ -38,6 +38,10 @@ pub(super) fn leaf(value: &Value) -> Option<(T, usize, usize)> {
     Some(match &value.kind {
         Kind::None => (T::enumeration("null", T::u8(), &[(0x4e, "None")]), value.at, 1),
         Kind::Bool(_) => (T::enumeration("bool", T::u8(), &[(0x88, "True"), (0x89, "False")]), value.at, 1),
+        // A number written as a line of digits is no type at all: the run is
+        // the spelling and there is nothing to read it as. It is a node whose
+        // value is the number, with the line beneath it.
+        Kind::Int { spelled: true, .. } => return None,
         // BININT1 is unsigned and BININT2 is too; BININT is signed, and so is
         // LONG1, whose run of bytes is as long as the number needs.
         Kind::Int { at, len, .. } => {
@@ -354,8 +358,9 @@ impl Evaluator {
                     }
                     Kind::Instance { .. } if super::picklestd::is_uuid(v) => self.pickle_stdlib(doc, &found, &whole, base, v)?,
                     // A protocol 0 line that spells its value rather than
-                    // being it, which is worked out when the form matches.
-                    Kind::Spelled { .. } => self.pickle_said(doc, &found, &whole, base, v)?,
+                    // being it, which is worked out when the form matches, and
+                    // a number written as a line of digits.
+                    Kind::Spelled { .. } | Kind::Int { spelled: true, .. } => self.pickle_said(doc, &found, &whole, base, v)?,
                     _ => None,
                 },
                 // An entry reads as what it holds. A fitted model is thirty
@@ -416,7 +421,7 @@ impl Evaluator {
             // that wide; the digits a protocol 0 or 1 line spells read as the
             // text they are, and the number itself is the row above.
             Part::Wide(v) => {
-                let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. });
+                let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. } | Kind::Int { spelled: true, .. });
                 let len = E::lit((end - at) as i128);
                 let ty = match spelled {
                     true => T::text(StrLen::Fixed(len), Encoding::Ascii),

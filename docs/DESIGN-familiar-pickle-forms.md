@@ -88,8 +88,11 @@ section says what its neighbour does differently.
     and is never batched, which is what `save_frozenset` does.
   - Dictionary keys and set members must be values Python can hash: numbers,
     strings, byte strings, tuples of hashable things, frozensets, the three
-    singletons, and a NumPy scalar. A key of any other kind is not something
-    CPython could have been asked to write.
+    singletons, a NumPy scalar, and, under the standard library form, a date, a
+    time, a datetime, a span, a zone, a `Decimal`, a `Fraction` and a path. A
+    key of any other kind is not something CPython could have been asked to
+    write: a `Counter`, an `OrderedDict`, a `defaultdict` and a `deque` are
+    mutable and Python refuses them as keys itself.
   - `BINGET` and `LONG_BINGET` where a value belongs, naming anything the
     basic productions built earlier: a string, a byte string, a tuple, a
     list, a dictionary, a set, a frozenset or a bytearray. This is how a list
@@ -736,11 +739,17 @@ table like a list of dictionaries, which is what `stdlib-records` is.
 
 A whole number past sixteen bytes is a node whose value is the digits it comes
 to, with the run it was written in as a row beneath it: `bytes` for the
-two's-complement run `LONG1` writes, and `line` for the digits protocols 0 and
-1 spell. There is no integer type that wide, so the number is worked out once
-as the form reads the run and never read back out of the file. A protocol 0
-line that spells a string rather than holding it is the same shape, typed
-`text` or `bytes` with its `line` row under it.
+two's-complement run `LONG1` writes. There is no integer type that wide, so the
+number is worked out once as the form reads the run and never read back out of
+the file.
+
+Every number written as a line of digits is the same shape, whatever its
+width. The run is the spelling and not the number, and reading it as a
+little-endian integer of its own length is how `L1L` used to show as 49; so an
+`INT` line, a `LONG` line and every integer at protocols 0 and 1 are a node
+whose value is the number, with the `line` row under it. A protocol 0 line that
+spells a string rather than holding it is the same shape again, typed `text` or
+`bytes`.
 
 A matched list of records is a table, and the core says so rather than the
 interface working it out. `[{"id": 1, "name": "a"}, ...]` is how rows are

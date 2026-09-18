@@ -296,7 +296,10 @@ impl Cursor<'_> {
         // What the call made, which a later part of the file may name: pandas
         // writes a block's values once and names them again in the dictionary
         // it versions its state with.
-        self.memoize(Bound::Made { what: call.what, at, hashable: false })?;
+        // A name for what the call made may stand where a dictionary key
+        // belongs when Python could have hashed the thing, which a date and an
+        // exact number can be and a counter cannot.
+        self.memoize(Bound::Made { what: call.what, at, hashable: super::values::hashes(call.what) })?;
         // Only a class from the package the form is for says the form read
         // what it is for. The calls every form shares, such as the one that
         // makes a set, say nothing about which form a file belongs to.

@@ -177,7 +177,7 @@ fn an_int_too_wide_for_binint_is_a_line_of_digits() {
     let line = |digits: &str| older(2, &cat(&[b"I", digits.as_bytes(), b"\n."]));
     let bytes = line("-1099511627776");
     let found = recognise(&bytes).unwrap();
-    assert_eq!(found.value.kind, Kind::Int { value: -1_099_511_627_776, at: 3, len: 14 });
+    assert_eq!(found.value.kind, Kind::Int { value: -1_099_511_627_776, at: 3, len: 14, spelled: true });
     // Anything a four-byte integer holds was written as BININT, and CPython
     // writes no leading zero, no sign it does not need and no spaces.
     for wrong in ["5", "-1", "0000000000000005", "+1099511627776", " 1099511627776", "1e30", "99999999999999999999"] {
@@ -359,7 +359,7 @@ fn a_long_at_protocol_1_is_a_line_of_digits() {
     let line = |digits: &str| older(1, &cat(&[b"L", digits.as_bytes(), b"L\n."]));
     let bytes = line("1208925819614629174706176");
     let found = recognise(&bytes).unwrap();
-    assert_eq!(found.value.kind, Kind::Int { value: 1_208_925_819_614_629_174_706_176, at: 1, len: 25 });
+    assert_eq!(found.value.kind, Kind::Int { value: 1_208_925_819_614_629_174_706_176, at: 1, len: 25, spelled: true });
     // A number a four-byte BININT holds was written as one at protocol 1. It
     // is still a protocol 0 file, where every integer is a line, so what is
     // claimed is that none of these is read as protocol 1.
@@ -380,7 +380,7 @@ fn a_long_line_past_the_integer_type_is_its_digits() {
     // Protocol 1, where the file starts at its first value.
     let line = |digits: &str| older(1, &cat(&[b"L", digits.as_bytes(), b"L\n."]));
     let widest = recognise(&line(MOST)).unwrap().value.kind;
-    assert_eq!(widest, Kind::Int { value: i128::MAX, at: 1, len: MOST.len() });
+    assert_eq!(widest, Kind::Int { value: i128::MAX, at: 1, len: MOST.len(), spelled: true });
     for digits in [HUGE, &format!("-{HUGE}"), "170141183460469231731687303715884105728", "-170141183460469231731687303715884105729"] {
         let found = recognise(&line(digits)).unwrap_or_else(|| panic!("{digits} was not read"));
         assert_eq!(found.value.kind, Kind::Wide { at: 1, len: digits.len(), digits: digits.to_string(), spelled: true });
@@ -435,7 +435,7 @@ fn a_file_at_protocol_0_reads_its_values_out_of_lines() {
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict expected") };
     assert_eq!(entries[0].0.kind, Kind::Text { at: 6, len: 4 });
     let Kind::List(items) = &entries[0].1.kind else { panic!("list expected") };
-    assert_eq!(items[0].kind, Kind::Int { value: 1, at: 20, len: 1 });
+    assert_eq!(items[0].kind, Kind::Int { value: 1, at: 20, len: 1, spelled: true });
     assert_eq!(items[1].kind, Kind::Bool(true));
     // Protocol 0 fills a container one entry at a time and has no batch
     // opcode at all.
