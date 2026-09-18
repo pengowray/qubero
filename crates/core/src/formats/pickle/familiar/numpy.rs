@@ -29,9 +29,14 @@ impl Cursor<'_> {
     /// counted tuples carry a memo mark; CPython never files an empty one.
     fn dimensions(&mut self) -> Option<Vec<u64>> {
         self.gate()?;
-        if self.peek()? == b')' {
-            self.byte()?;
-            return Some(Vec::new());
+        {
+            // A shape with no dimensions, which protocol 1 and up write with
+            // the opcode for an empty tuple and protocol 0 as a bare MARK.
+            let here = self.save();
+            if self.empty_tuple().is_some() {
+                return Some(Vec::new());
+            }
+            self.restore(here);
         }
         let marked = self.peek()? == b'(';
         if marked {
@@ -79,6 +84,14 @@ impl Cursor<'_> {
             let (at, len, storage) = self.bytes_run()?;
             if storage == Storage::Raw {
                 let payload = self.fits(dtype, dimensions, len)?;
+                return Some((at, len, payload, storage));
+            }
+            if storage == Storage::Escaped {
+                // Two layers deep and already read: the line's escaping came
+                // off as the form read it and the latin-1 came off with the
+                // call, so what is beside the match is the numbers.
+                let held = self.decoded_at(at)?;
+                let payload = self.fits(dtype, dimensions, held.len())?;
                 return Some((at, len, payload, storage));
             }
             // Read once here rather than per cell: the numbers are nowhere in
@@ -226,7 +239,7 @@ impl Cursor<'_> {
         // The placeholder the reconstructor is given: shape (0,) and a dtype
         // letter, both replaced by the BUILD that follows.
         self.open_tuple()?;
-        self.atoms(&[b"K\0"])?;
+        self.number(0)?;
         self.close_tuple(1)?;
         self.memoize(Bound::Opaque)?;
         self.gate()?;
@@ -268,7 +281,8 @@ impl Cursor<'_> {
         // block manager writes its values once and names them again in the
         // dictionary it versions its state with.
         self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: false })?;
-        self.atoms(&[b"(", b"K\x01"])?;
+        self.atoms(&[b"("])?;
+        self.number(1)?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
         let fortran_order = self.read_flag()?;
@@ -321,16 +335,24 @@ impl Cursor<'_> {
     /// and only what a form has written down is read.
     fn object_values(&mut self, count: u64) -> Option<Vec<Value>> {
         self.gate()?;
-        self.exact(b"]")?;
-        let at = self.at - 1;
+        let at = self.at;
+        // Protocol 0 has no opcode for an empty list and writes a MARK with a
+        // LIST behind it.
+        match self.proto {
+            0 => self.exact(b"(l")?,
+            _ => self.exact(b"]")?,
+        }
         self.memoize(Bound::Made { what: Shape::List, at, hashable: false })?;
         let mut items = Vec::new();
         if count == 0 {
             return Some(items);
         }
-        if count == 1 {
-            items.push(self.object_value()?);
-            self.exact(b"a")?;
+        // Protocol 0 appends one value at a time, however many there are.
+        if count == 1 || self.proto == 0 {
+            while (items.len() as u64) < count {
+                items.push(self.object_value()?);
+                self.exact(b"a")?;
+            }
             return Some(items);
         }
         while (items.len() as u64) < count {
@@ -359,7 +381,8 @@ impl Cursor<'_> {
         self.gate()?;
         match self.peek()? {
             0x8c | 0x58 | 0x8d => self.text(),
-            b'h' | b'j' => {
+            b'V' if self.proto == 0 => self.text_line(),
+            b'h' | b'j' | b'g' => {
                 let start = self.at;
                 let names = match self.reference()?.clone() {
                     Bound::Text { at, len } => Names::Text { at, len },

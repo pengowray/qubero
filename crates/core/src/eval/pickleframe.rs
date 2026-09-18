@@ -274,7 +274,7 @@ pub(super) fn values_of<'a>(found: &'a Match, value: &'a Captured) -> Option<Val
         Kind::Array { at, dtype, dimensions, fortran_order, storage, .. } => {
             let held = match storage {
                 Storage::Raw => None,
-                Storage::Latin1 => Some(found.decoded(*at)?),
+                Storage::Latin1 | Storage::Escaped => Some(found.decoded(*at)?),
             };
             Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order, held }))
         }

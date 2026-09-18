@@ -57,7 +57,7 @@ impl Cursor<'_> {
                     });
                 }
                 if arity == 0 {
-                    self.atoms(&[b")"])?;
+                    self.empty_tuple()?;
                 } else {
                     self.close_tuple(arity)?;
                     self.memoize(Bound::Opaque)?;

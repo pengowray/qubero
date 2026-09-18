@@ -50,7 +50,13 @@ const NUMBERS_FIELD: &str = "numbers";
 /// `numbers` row is that text. The table over the array is the numbers
 /// themselves, decoded when the form matched.
 const WRITTEN_FIELD: &str = "written as";
+/// What a protocol 0 line's own run is called, under the value it spells. The
+/// row above says what the string is; this one is the bytes the file holds.
+const LINE_FIELD: &str = "line";
 const LATIN1_TEXT: &str = "latin-1 text";
+/// The same at protocol 0, where that text is written as a line and escaped
+/// again to fit on one.
+const ESCAPED_TEXT: &str = "latin-1 text, escaped";
 const DTYPE_FIELD: &str = "dtype";
 const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
@@ -119,6 +125,9 @@ pub(super) enum Part<'a> {
     Refers(&'a Value),
     /// A named operand inside a run of instructions.
     Text(&'a Said),
+    /// The run a protocol 0 line spells its value in, read as the text it is.
+    /// The value is on the node above, which is what the line spells.
+    Line(&'a Value),
     /// A run of instructions the form matched as one act, and the array it
     /// rebuilt. The numbers are one of the call's arguments in NumPy's
     /// protocol 5 spelling and follow the call in its protocol 4 one, so the
@@ -212,6 +221,10 @@ fn span(found: &Match, part: &Part) -> (usize, usize) {
         Part::Refers(_) => (0, 0),
         Part::Summary { .. } => (0, 0),
         Part::Text(s) => (s.at, s.at + s.len),
+        Part::Line(v) => match v.kind {
+            Kind::Spelled { at, len, .. } => (at, at + len),
+            _ => (0, 0),
+        },
         Part::Call(c, _) => (c.at, c.at + c.len),
         Part::Protocol => (1, 2),
         Part::Op { at, len } => (*at, at + len),
@@ -267,6 +280,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             }
             (notes, kids)
         }
+        Part::Value(v) if matches!(v.kind, Kind::Spelled { .. }) => (Vec::new(), vec![(Label::Field(LINE_FIELD), Part::Line(v))]),
         Part::Entry(e) => (
             Vec::new(),
             vec![(Label::Field(KEY_FIELD), Part::Value(&e.0)), (Label::Field(VALUE_FIELD), Part::Value(&e.1))],
@@ -450,10 +464,34 @@ fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool, storag
     // Said only where it is worth saying: an array whose numbers are in the
     // file as numbers has nothing to explain, and a row on every array would
     // be a row every reader learns to skip.
-    if storage == Storage::Latin1 {
-        rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string())));
+    match storage {
+        Storage::Raw => {}
+        Storage::Latin1 => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string()))),
+        Storage::Escaped => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(ESCAPED_TEXT.to_string()))),
     }
     rows
+}
+
+/// What a protocol 0 line spells, for a row that shows the value rather than
+/// the spelling. Cut the way a text read out of the file is, since a line as
+/// long as a page is a line a reader takes in at a glance or not at all.
+pub(super) fn spelling_of(found: &Match, at: usize, bytes: bool) -> String {
+    let Some(held) = found.decoded(at) else { return String::new() };
+    match bytes {
+        true => shown(&held[..held.len().min(MOST_SHOWN_BYTES)], false, held.len()),
+        false => {
+            let said = String::from_utf8_lossy(held);
+            shown(&held[..fits(&said, MOST_SHOWN_TEXT)], true, held.len())
+        }
+    }
+}
+
+/// How many bytes of a text to take for a row, cut on a character boundary.
+fn fits(said: &str, most: usize) -> usize {
+    match said.len() <= most {
+        true => said.len(),
+        false => (0..=most).rev().find(|n| said.is_char_boundary(*n)).unwrap_or(0),
+    }
 }
 
 /// The run of instructions that rebuilt this array, which sits inside it.
@@ -645,7 +683,7 @@ impl Evaluator {
         // A protocol 2 array's numbers are nowhere in the file, so there is no
         // run under the node for a table to walk and the core reads the cells
         // instead, out of the run it decoded when the form matched.
-        if *storage == Storage::Latin1 {
+        if *storage != Storage::Raw {
             let columns = inner.filter(|n| *n > 0).unwrap_or(1);
             let count: u64 = dimensions.iter().product();
             // No names: an array's columns are places along an axis, and the
@@ -828,7 +866,7 @@ impl Evaluator {
                 // An entry reads as what it holds. A fitted model is thirty
                 // attributes, and a row each saying `2 fields` makes a reader
                 // open all thirty to find the one that is `True`.
-                Part::Entry(e) => self.pickle_said(doc, &whole, base, &e.1)?,
+                Part::Entry(e) => self.pickle_said(doc, &found, &whole, base, &e.1)?,
                 _ => None,
             };
             self.pickle_node(path, &pr, name, shape, base, at, end - at, said);
@@ -871,6 +909,13 @@ impl Evaluator {
                 let ty = T::text(StrLen::Fixed(E::lit(said.len as i128)), Encoding::Utf8);
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
             }
+            // The run a line spells its value in, which is text of an encoding
+            // nobody declared: it is what `repr` or `raw-unicode-escape` made
+            // of the value, and the row above holds the value itself.
+            Part::Line(_) => {
+                let ty = T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Unknown);
+                Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
+            }
             // The one byte of the envelope with something in it. PROTO is the
             // instruction in front of it, and the frame's length is the
             // listing's business rather than the object's.
@@ -883,6 +928,9 @@ impl Evaluator {
                 // would be showing bytes the file does not hold.
                 let ty = match storage {
                     Storage::Latin1 => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Utf8),
+                    // A protocol 0 line is text of an encoding nobody
+                    // declared: it is what the escaping made of the numbers.
+                    Storage::Escaped => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Unknown),
                     Storage::Raw => match numbers_ty(dtype, count_of(dimensions)) {
                         Some(ty) => ty,
                         None => return fail("this dtype has no type"),
@@ -902,7 +950,7 @@ impl Evaluator {
     /// value itself when it is a single thing, and what kind of thing and how
     /// much of it otherwise. Nothing for a value there is no short word for,
     /// which leaves the row counting its fields as it did.
-    fn pickle_said<S: Source>(&self, doc: &Document<S>, whole: &Resolved, base: u64, v: &Value) -> R<Option<String>> {
+    fn pickle_said<S: Source>(&self, doc: &Document<S>, found: &Match, whole: &Resolved, base: u64, v: &Value) -> R<Option<String>> {
         let mut read = |at: usize, len: usize, text: bool| -> R<String> {
             let most = len.min(if text { MOST_SHOWN_TEXT } else { MOST_SHOWN_BYTES });
             Ok(shown(&self.read(doc, whole, base + at as u64 * 8, most as u64 * 8)?, text, len))
@@ -919,6 +967,9 @@ impl Evaluator {
             Kind::Int { value, .. } => Some(value.to_string()),
             Kind::Float { value, .. } => Some(value.to_string()),
             Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => Some(read(*at, *len, true)?),
+            // A line that spells a value rather than being it reads as what
+            // it spells, which the form worked out when it matched.
+            Kind::Spelled { at, bytes, .. } => Some(spelling_of(found, *at, *bytes)),
             Kind::Bytes { at, len } | Kind::Ref(Names::Bytes { at, len }) => Some(read(*at, *len, false)?),
             Kind::Ref(Names::Made { what, at, .. }) => Some(format!("{} at {:#04x}", what.name(), base as usize / 8 + at)),
             Kind::List(items) => Some(many("list", items.len())),

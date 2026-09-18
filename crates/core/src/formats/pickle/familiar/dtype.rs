@@ -25,6 +25,16 @@ const MAX_COLUMNS: usize = 256;
 const UNITS: &[&str] = &["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"];
 
 impl Cursor<'_> {
+    /// The middle of a dtype's state, which every one of them writes the same
+    /// way: no subarray, no names, no columns, the two bounds NumPy writes as
+    /// minus one, and the flags the dtype was built with.
+    fn three_nones_and_bounds(&mut self, flags: i128) -> Option<()> {
+        self.atoms(&[b"N", b"N"])?;
+        self.number(-1)?;
+        self.number(-1)?;
+        self.number(flags)
+    }
+
     /// Say what the slot the dtype's REDUCE filed holds, now that the BUILD
     /// after it has said what the dtype is. There is no slot when the file
     /// left the mark out, which only `cPickle` does and only for a value
@@ -97,11 +107,12 @@ impl Cursor<'_> {
         // would be, or all three of them. A dtype carrying metadata is version
         // 4 and everything else is version 3, and the only metadata read here
         // is the unit a datetime counts in.
-        self.atoms(&[b"(", if datetime { b"K\x04" } else { b"K\x03" }])?;
+        self.atoms(&[b"("])?;
+        self.number(if datetime { 4 } else { 3 })?;
         let order = self.byte_order(&kind)?;
         self.atoms(&[b"N"])?;
         if datetime {
-            self.atoms(&[b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", b"K\0"])?;
+            self.three_nones_and_bounds(0)?;
             let unit = self.datetime_unit()?;
             self.exact(b"t")?;
             self.memoize(Bound::Opaque)?;
@@ -116,8 +127,8 @@ impl Cursor<'_> {
                 // The flags NumPy builds the dtype with. A dtype of objects
                 // needs the interpreter for everything it does and says so;
                 // every plain one writes nothing.
-                let flags: &[u8] = if objects { b"K\x3f" } else { b"K\0" };
-                self.atoms(&[b"N", b"N", b"J\xff\xff\xff\xff", b"J\xff\xff\xff\xff", flags])?;
+                let flags = if objects { 0x3f } else { 0 };
+                self.three_nones_and_bounds(flags)?;
                 match objects {
                     true => Dtype::Objects,
                     false => Dtype::Plain(format!("{order}{kind}")),
@@ -140,12 +151,16 @@ impl Cursor<'_> {
         self.gate()?;
         self.open_tuple()?;
         self.gate()?;
-        match self.byte()? {
-            b'}' => {
+        // An empty dictionary up to NumPy 1.x and `None` from 2.x, and
+        // neither says anything.
+        match self.peek()? {
+            b'N' => {
+                self.byte()?;
+            }
+            _ => {
+                self.empty_dict()?;
                 self.memoize(Bound::Opaque)?;
             }
-            b'N' => {}
-            _ => return None,
         }
         self.gate()?;
         self.exact(b"(")?;
@@ -172,7 +187,9 @@ impl Cursor<'_> {
         let unit = unit.to_string();
         self.says("unit", at, len);
         self.memoize(Bound::Bytes { at, len })?;
-        self.atoms(&[b"K\x01", b"K\x01", b"K\x01"])?;
+        self.number(1)?;
+        self.number(1)?;
+        self.number(1)?;
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.close_tuple(2)?;
@@ -254,12 +271,12 @@ impl Cursor<'_> {
     /// The dictionary of columns: each name, named out of the memo, against
     /// the pair of a dtype and an offset.
     fn columns(&mut self, names: &[(usize, usize)]) -> Option<Vec<Column>> {
-        self.gate()?;
-        self.exact(b"}")?;
+        self.empty_dict()?;
         self.memoize(Bound::Opaque)?;
         // One entry is written with SETITEM and any longer run with a batch,
-        // which a record short enough never has to split.
-        let batched = names.len() > 1;
+        // which a record short enough never has to split. Protocol 0 has no
+        // batching at all and writes a SETITEM for every entry.
+        let batched = names.len() > 1 && self.proto > 0;
         if batched {
             self.gate()?;
             self.exact(b"(")?;
@@ -285,9 +302,14 @@ impl Cursor<'_> {
             let Kind::Int { value, .. } = self.integer()?.kind else { return None };
             self.close_tuple(2)?;
             self.memoize(Bound::Opaque)?;
+            if self.proto == 0 {
+                self.exact(b"s")?;
+            }
             columns.push(Column { name, dtype, at: u64::try_from(value).ok()? });
         }
-        self.exact(if batched { b"u" } else { b"s" })?;
+        if self.proto > 0 {
+            self.exact(if batched { b"u" } else { b"s" })?;
+        }
         Some(columns)
     }
 

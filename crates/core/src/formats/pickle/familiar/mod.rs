@@ -15,11 +15,13 @@ mod basic;
 mod builtins;
 mod codecs;
 mod cursor;
+mod lines;
 mod dtype;
 mod forms;
 mod memo;
 mod numpy;
 mod object;
+mod values;
 #[cfg(test)]
 mod tests;
 
@@ -66,10 +68,6 @@ const BIG_PAYLOAD: usize = 1 << 16;
 /// A frame's contents shorter than this are written without a FRAME header,
 /// so a run of unframed bytes this short may end the file.
 const MIN_FRAME: usize = 4;
-/// The longest newline-terminated run a form reads as one. Protocols 2 and 3
-/// write a module path, a callable's name and an integer too wide for BININT
-/// that way, and none of those is anywhere near this long.
-const MAX_LINE: usize = 512;
 /// The encoding a pickler below protocol 3 hands a byte string to `_codecs`
 /// under, which is the one that maps every byte to the character of the same
 /// number.
@@ -113,6 +111,17 @@ pub enum Kind {
     Text {
         at: usize,
         len: usize,
+    },
+    /// A text or a byte string the file wrote as a spelling of itself rather
+    /// than as itself, which is a protocol 0 line with an escape in it or a
+    /// character above 0x7f. `at`/`len` are the line's run; what it spells is
+    /// decoded once as the form reads it and kept beside the match, and
+    /// [`Match::decoded`] hands it back. `bytes` says it spells a byte string,
+    /// which a Python 2 `str` holding bytes that are not UTF-8 does.
+    Spelled {
+        at: usize,
+        len: usize,
+        bytes: bool,
     },
     Bytes {
         at: usize,
@@ -194,6 +203,11 @@ pub enum Storage {
     Raw,
     /// The text they spell in latin-1, which is protocol 2.
     Latin1,
+    /// The same, written as a protocol 0 line: the latin-1 text escaped the
+    /// way that protocol escapes one. Two layers, so the bytes are worked out
+    /// as the form reads the run and kept beside the match rather than read
+    /// back out of the file.
+    Escaped,
 }
 
 impl Storage {
@@ -202,7 +216,7 @@ impl Storage {
     /// continuation of the one before it.
     pub fn decoded(self, bytes: &[u8]) -> usize {
         match self {
-            Storage::Raw => bytes.len(),
+            Storage::Raw | Storage::Escaped => bytes.len(),
             Storage::Latin1 => bytes.iter().filter(|b| **b & 0xc0 != 0x80).count(),
         }
     }
@@ -215,7 +229,7 @@ impl Storage {
     /// [`Storage::decoded`] said.
     pub fn read(self, bytes: &[u8]) -> Option<Vec<u8>> {
         match self {
-            Storage::Raw => None,
+            Storage::Raw | Storage::Escaped => None,
             Storage::Latin1 => {
                 let text = std::str::from_utf8(bytes).ok()?;
                 text.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect()

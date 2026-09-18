@@ -54,6 +54,19 @@ pub(super) const SKLEARN1: &str = "sklearn-estimator-p1-v1";
 pub(super) const SCIPY1: &str = "scipy-sparse-p1-v1";
 pub(super) const PANDAS1: &str = "pandas-frame-p1-v1";
 
+/// And at protocol 0, the text protocol: what Python wrote by default until
+/// Python 3.0 and what `pickle.dumps(obj)` gave anyone who never named one.
+///
+/// Every value there is an opcode and a line, so a number is `repr`, a text is
+/// escaped, and a container is filled one entry at a time with no batching in
+/// it at all.
+pub(super) const BASIC0: &str = "basic-p0-v1";
+pub(super) const NUMPY0: &str = "numpy-array-p0-v1";
+pub(super) const BUILTINS0: &str = "builtins-values-p0-v1";
+pub(super) const SKLEARN0: &str = "sklearn-estimator-p0-v1";
+pub(super) const SCIPY0: &str = "scipy-sparse-p0-v1";
+pub(super) const PANDAS0: &str = "pandas-frame-p0-v1";
+
 /// Which family a form belongs to, which is what says the file used the
 /// productions the form is for rather than only the ones every form has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,10 +321,11 @@ const MAKE_OBJECT: &[Reduce] = &[Reduce {
 /// Every form, in the order a file is tried against them. The protocol byte
 /// tells the two halves apart at the second byte of the file, so a file only
 /// ever does the work of the six forms its protocol has.
-pub(super) fn forms() -> [(&'static str, Allow); 18] {
+pub(super) fn forms() -> [(&'static str, Allow); 24] {
     const NEW: &[u8] = &[4, 5];
     const OLD: &[u8] = &[2, 3];
     const ONE: &[u8] = &[1];
+    const NONE_AT_ALL: &[u8] = &[0];
     let plain = Allow {
         protocols: NEW,
         family: Family::Basic,
@@ -323,6 +337,7 @@ pub(super) fn forms() -> [(&'static str, Allow); 18] {
     };
     let old = Allow { protocols: OLD, calls: &[BELOW_FOUR], ..plain };
     let one = Allow { protocols: ONE, ..old };
+    let text = Allow { protocols: NONE_AT_ALL, ..old };
     [
         (BASIC, plain),
         (NUMPY, Allow { family: Family::Numpy, numpy: true, ..plain }),
@@ -373,6 +388,29 @@ pub(super) fn forms() -> [(&'static str, Allow); 18] {
             PANDAS1,
             Allow {
                 protocols: ONE,
+                family: Family::Library,
+                numpy: true,
+                builtins: true,
+                classes: &["pandas"],
+                calls: &[BELOW_FOUR, MAKE_OBJECT, PANDAS_CALLS],
+                object_arrays: true,
+            },
+        ),
+        (BASIC0, text),
+        (NUMPY0, Allow { family: Family::Numpy, numpy: true, ..text }),
+        (BUILTINS0, Allow { family: Family::Builtins, builtins: true, ..text }),
+        (
+            SKLEARN0,
+            Allow { family: Family::Library, numpy: true, classes: &["sklearn"], calls: &[BELOW_FOUR, MAKE_OBJECT, SKLEARN_CALLS], ..text },
+        ),
+        (
+            SCIPY0,
+            Allow { family: Family::Library, numpy: true, classes: &["scipy.sparse"], calls: &[BELOW_FOUR, MAKE_OBJECT], ..text },
+        ),
+        (
+            PANDAS0,
+            Allow {
+                protocols: NONE_AT_ALL,
                 family: Family::Library,
                 numpy: true,
                 builtins: true,

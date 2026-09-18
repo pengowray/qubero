@@ -4,7 +4,7 @@
 
 use super::memo::Memo;
 use super::forms::Allow;
-use super::{BIG_PAYLOAD, Call, Kind, MAX_LINE, NO_OPCODE, Pickler, Said, Value};
+use super::{BIG_PAYLOAD, Call, Kind, NO_OPCODE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
 pub(super) struct Cursor<'a> {
@@ -121,14 +121,38 @@ impl<'a> Cursor<'a> {
     /// name, a callable's name and an integer too wide for `BININT`. Comes
     /// back as the bytes before the newline.
     ///
-    /// A line is bounded: nothing a form reads as one is longer than a module
-    /// path or a number's digits, and an unterminated run would otherwise walk
-    /// the whole file.
+    /// The run reaches to the end of the file rather than to a bound: a
+    /// protocol 0 `STRING` line holds whatever the string held, which is as
+    /// long as the data. A line that does not end is a non-match, and a form
+    /// that hits one stops there, so the scan happens once.
     pub(super) fn line(&mut self) -> Option<(usize, usize)> {
         let at = self.at;
-        let end = self.bytes.get(at..at + MAX_LINE.min(self.bytes.len() - at.min(self.bytes.len())))?.iter().position(|b| *b == b'\n')?;
+        let end = self.bytes.get(at..)?.iter().position(|b| *b == b'\n')?;
         self.take(end + 1)?;
         Some((at, end))
+    }
+
+    /// What a run the form already decoded stands for, and putting something
+    /// else there in its place: a protocol 0 line read as text and then read
+    /// again as the bytes the call it sits in makes of them.
+    pub(super) fn decoded_at(&self, at: usize) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held.clone())
+    }
+
+    pub(super) fn replace_run(&mut self, at: usize, held: Vec<u8>) {
+        if let Some(slot) = self.runs.iter_mut().find(|(start, _)| *start == at) {
+            slot.1 = std::sync::Arc::new(held);
+        }
+    }
+
+    /// A whole number a form knows the value of, in the protocol's spelling:
+    /// BININT1 and its wider kin above protocol 0, and a line of digits at it.
+    pub(super) fn number(&mut self, want: i128) -> Option<()> {
+        self.gate()?;
+        match self.integer()?.kind {
+            Kind::Int { value, .. } if value == want => Some(()),
+            _ => None,
+        }
     }
 
     /// A run of fixed bytes in which each piece is an object of its own.
@@ -291,6 +315,12 @@ impl<'a> Cursor<'a> {
     /// four.
     pub(super) fn text_run(&mut self) -> Option<(usize, usize)> {
         self.gate()?;
+        // Protocol 0 writes a word as a line, and a word a form knows the
+        // spelling of holds no escape, so the run is the word.
+        if self.proto == 0 {
+            self.exact(b"V")?;
+            return self.line()?.into();
+        }
         // A word Python 2 wrote is a `str` rather than text, so at protocol 2
         // the same word has two spellings and the writer decides which.
         if self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
@@ -324,6 +354,25 @@ impl<'a> Cursor<'a> {
         }
         self.gate()?;
         self.exact(b"(")
+    }
+
+    /// The empty tuple, which protocol 1 gave an opcode and protocol 0 writes
+    /// as a MARK with nothing between it and the TUPLE.
+    pub(super) fn empty_tuple(&mut self) -> Option<()> {
+        self.gate()?;
+        match self.proto {
+            0 => self.exact(b"(t"),
+            _ => self.exact(b")"),
+        }
+    }
+
+    /// An empty dictionary, which protocol 0 writes as a MARK and a DICT.
+    pub(super) fn empty_dict(&mut self) -> Option<()> {
+        self.gate()?;
+        match self.proto {
+            0 => self.exact(b"(d"),
+            _ => self.exact(b"}"),
+        }
     }
 
     /// The opcode that closes a tuple of `n` elements, which is TUPLE1 to

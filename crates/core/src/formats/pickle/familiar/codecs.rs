@@ -47,6 +47,16 @@ impl Cursor<'_> {
         // Python 2 had a type for a run of bytes, its `str`, so a pickler
         // there writes one out and the bytes are the bytes. The detour through
         // `_codecs` is Python 3 writing at a protocol with no type for them.
+        if self.proto == 0 {
+            let here = self.save();
+            return match self.encode_call() {
+                Some(held) => Some(held),
+                None => {
+                    self.restore(here);
+                    Some((self.empty_call()?, 0, Storage::Raw))
+                }
+            };
+        }
         if self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
             let code = self.byte()?;
             let (at, len) = self.counted(code, b'U', b'T', NO_OPCODE)?;
@@ -58,29 +68,43 @@ impl Cursor<'_> {
             Some(held) => held,
             None => {
                 self.restore(here);
-                (self.empty_call()?, 0)
+                (self.empty_call()?, 0, Storage::Raw)
             }
         };
         self.says.truncate(said);
-        Some((held.0, held.1, Storage::Latin1))
+        Some(held)
     }
 
     /// `_codecs.encode` over a text and the word `latin1`, up to and including
     /// the REDUCE. The memo mark the REDUCE's result goes in belongs to
     /// whatever the bytes are part of, so it is left to the caller.
-    fn encode_call(&mut self) -> Option<(usize, usize)> {
+    fn encode_call(&mut self) -> Option<(usize, usize, Storage)> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
         self.open_tuple()?;
-        let (at, len) = match self.text()?.kind {
-            Kind::Text { at, len } => (at, len),
+        let (at, len, storage) = match self.text()?.kind {
+            // The run in the file is the latin-1 text, which is what the
+            // caller reads the bytes out of.
+            Kind::Text { at, len } => {
+                self.latin1(at, len)?;
+                (at, len, Storage::Latin1)
+            }
+            // Protocol 0 wrote the text as a line with an escape in it, which
+            // the form read as it went. What the call makes of it is those
+            // characters one byte each, so the run is read again that way and
+            // kept in its place: nothing else names the text of a call whose
+            // result is a buffer.
+            Kind::Spelled { at, len, bytes: false } => {
+                let held = Storage::Latin1.read(&self.decoded_at(at)?)?;
+                self.replace_run(at, held);
+                (at, len, Storage::Escaped)
+            }
             _ => return None,
         };
-        self.latin1(at, len)?;
         self.encoding_word()?;
         self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
-        Some((at, len))
+        Some((at, len, storage))
     }
 
     fn encoded(&mut self, start: usize) -> Option<Value> {
@@ -113,7 +137,7 @@ impl Cursor<'_> {
     /// it stands for, which is where the file has got to.
     fn empty_call(&mut self) -> Option<usize> {
         self.global(&["__builtin__"], "bytes", "module", "class")?;
-        self.exact(b")")?;
+        self.empty_tuple()?;
         self.exact(b"R")?;
         Some(self.at)
     }

@@ -276,7 +276,7 @@ impl Cursor<'_> {
     fn set_made(&mut self, what: Shape, at: usize, held: Vec<Value>) -> Option<Kind> {
         let held = held.into_iter().next()?;
         let (Kind::List(members) | Kind::Tuple(members)) = held.kind else { return None };
-        if !members.iter().all(super::basic::hashable) {
+        if !members.iter().all(super::values::hashable) {
             return None;
         }
         let frozen = what == Shape::FrozenSet;

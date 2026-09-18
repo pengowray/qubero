@@ -360,8 +360,11 @@ fn a_long_at_protocol_1_is_a_line_of_digits() {
     let bytes = line("1208925819614629174706176");
     let found = recognise(&bytes).unwrap();
     assert_eq!(found.value.kind, Kind::Int { value: 1_208_925_819_614_629_174_706_176, at: 1, len: 25 });
+    // A number a four-byte BININT holds was written as one at protocol 1. It
+    // is still a protocol 0 file, where every integer is a line, so what is
+    // claimed is that none of these is read as protocol 1.
     for wrong in ["5", "-1", "0000000000005", "+2147483648", "1e30"] {
-        assert!(recognise(&line(wrong)).is_none(), "{wrong} was read as a long");
+        assert_ne!(recognise(&line(wrong)).map(|m| m.proto), Some(1), "{wrong} was read as a protocol 1 long");
     }
     // The trailing `L` is part of the spelling.
     assert!(recognise(&older(1, b"L2147483648\n.")).is_none());
@@ -390,5 +393,81 @@ fn ordinary_text_is_not_a_familiar_form() {
         b".",
     ] {
         assert!(recognise(text).is_none(), "{:?} read as a familiar form", &text[..text.len().min(20)]);
+    }
+}
+
+/// Protocol 0, where every value is an opcode and a line.
+#[test]
+fn a_file_at_protocol_0_reads_its_values_out_of_lines() {
+    // `{"name": [1, True]}`, written the way protocol 0 writes one: a MARK
+    // and a DICT for the dictionary, a SETITEM an entry, and no batching.
+    let bytes = b"(dp0\nVname\np1\n(lp2\nL1L\naI01\nas.";
+    let found = recognise(bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(bytes)));
+    assert_eq!(found.form, "basic-p0-v1");
+    assert_eq!(found.proto, 0);
+    let Kind::Dict(entries) = &found.value.kind else { panic!("dict expected") };
+    assert_eq!(entries[0].0.kind, Kind::Text { at: 6, len: 4 });
+    let Kind::List(items) = &entries[0].1.kind else { panic!("list expected") };
+    assert_eq!(items[0].kind, Kind::Int { value: 1, at: 20, len: 1 });
+    assert_eq!(items[1].kind, Kind::Bool(true));
+    // Protocol 0 fills a container one entry at a time and has no batch
+    // opcode at all.
+    assert!(recognise(b"(lp0\n(L1L\nL2L\nes.").is_none());
+}
+
+/// A line that spells its value rather than being it is a value of its own,
+/// with the run the file holds under it.
+#[test]
+fn a_line_with_an_escape_in_it_is_the_thing_it_spells() {
+    // `{"caf\u00e9": "a\\b"}`: the first text holds a character above 0x7f,
+    // which `raw-unicode-escape` writes as the byte 0xe9, and the second
+    // holds a backslash, which `save_str` writes as `\u005c`.
+    let bytes = b"(dp0\nVcaf\xe9\np1\nVa\\u005cb\np2\ns.";
+    let found = recognise(bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(bytes)));
+    let Kind::Dict(entries) = &found.value.kind else { panic!("dict expected") };
+    let (key, value) = &entries[0];
+    assert!(matches!(key.kind, Kind::Spelled { bytes: false, .. }));
+    let Kind::Spelled { at: key_at, .. } = key.kind else { panic!() };
+    assert_eq!(found.decoded(key_at).map(|h| h.to_vec()), Some("caf\u{e9}".as_bytes().to_vec()));
+    let Kind::Spelled { at: value_at, .. } = value.kind else { panic!("a spelled value") };
+    assert_eq!(found.decoded(value_at).map(|h| h.to_vec()), Some(b"a\\b".to_vec()));
+}
+
+/// The lines a pickler never wrote are not read.
+#[test]
+fn a_line_no_pickler_wrote_is_a_non_match() {
+    for body in [
+        // An escape `raw-unicode-escape` does not write, and a bare
+        // backslash, which `save_str` replaces before it writes the line.
+        &b"Va\\nb\np0\n."[..],
+        &b"Va\\b\np0\n."[..],
+        &b"Va\\u00E9b\np0\n."[..],
+        // A `STRING` line with no closing quote, with the wrong one, and with
+        // an escape Python 2's `repr` does not write.
+        &b"S'abc\np0\n."[..],
+        &b"S'abc\"\np0\n."[..],
+        &b"S'a\\qb'\np0\n."[..],
+        // Numbers spelled a way `repr` never spells one.
+        &b"F0005.0\n."[..],
+        &b"F+5.0\n."[..],
+        &b"F1e5\n."[..],
+        &b"L007L\n."[..],
+        &b"L5\n."[..],
+        // A memo mark to a slot that is not the next one.
+        &b"(lp3\n."[..],
+        &b"Vone\np0\nVtwo\np2\n."[..],
+        // The opcodes CPython reads and never writes.
+        &b"(i__builtin__\nset\np0\n."[..],
+        &b"(c__builtin__\nset\no."[..],
+        &b"Pabc\n."[..],
+    ] {
+        assert!(recognise(body).is_none(), "{body:?} was read");
+    }
+    // A float spelled either way a pickler spells one, which is the same
+    // number twice: `repr` from the pure picklers, and `%.17g` from Python 2's
+    // cPickle and Python 3.4's C one, which drops the point from a whole
+    // number.
+    for right in [&b"F3.0\n."[..], b"F3\n.", b"F-0.0\n.", b"Finf\n.", b"F-inf\n.", b"Fnan\n.", b"F1e+308\n.", b"F1e-06\n."] {
+        assert!(recognise(right).is_some(), "{right:?} was not read");
     }
 }

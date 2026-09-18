@@ -4,8 +4,9 @@
 //! productions in a file beside this one.
 
 use super::cursor::{Cursor, Framing};
+use super::values::{hashable, shortest, two_complement};
 use super::memo::Bound;
-use super::{Kind, Names, Pickler, Shape, Value, CONTENT, MAX_BATCH, MAX_DEPTH, MAX_VALUES, NO_OPCODE};
+use super::{Kind, Pickler, Shape, Value, MAX_BATCH, MAX_DEPTH, MAX_VALUES};
 
 /// A MARK, and what it holds back: where the opcode itself is, so that a
 /// tuple or a frozenset made over it spans from there, and how tall the
@@ -53,114 +54,11 @@ enum Fill {
 fn opens_object(code: u8) -> bool {
     matches!(
         code,
-        b'N' | 0x88 | 0x89 | b'K' | b'M' | b'J' | 0x8a | b'G' | 0x8c | 0x58 | 0x8d | b'C' | b'B' | 0x8e | 0x96 | b')' | b']' | b'}' | 0x8f | b'h' | b'j' | b'(' | b'c' | b'I' | b'U' | b'T' | b'L'
+        b'N' | 0x88 | 0x89 | b'K' | b'M' | b'J' | 0x8a | b'G' | 0x8c | 0x58 | 0x8d | b'C' | b'B' | 0x8e | 0x96 | b')' | b']' | b'}' | 0x8f | b'h' | b'j' | b'(' | b'c' | b'I' | b'U' | b'T' | b'L' | b'V' | b'S' | b'F' | b'g'
     )
 }
 
-/// A run of little-endian two's-complement bytes, as the number it spells.
-///
-/// LONG1 declares a length of up to 255, which reaches numbers no integer
-/// type here holds. Sixteen bytes is where that stops, so a longer one is a
-/// non-match rather than a number read wrong.
-fn two_complement(bytes: &[u8]) -> Option<i128> {
-    if bytes.is_empty() || bytes.len() > 16 {
-        return None;
-    }
-    let mut value: i128 = if bytes[bytes.len() - 1] & 0x80 == 0 { 0 } else { -1 };
-    for byte in bytes.iter().rev() {
-        value = (value << 8) | i128::from(*byte);
-    }
-    Some(value)
-}
-
-/// How many two's-complement bytes a number needs, which is how many CPython
-/// writes: it takes one more byte than the magnitude's bits fill and drops it
-/// again when the sign bits in it are redundant.
-fn shortest(value: i128) -> usize {
-    (1..16)
-        .find(|len| {
-            let bits = len * 8 - 1;
-            value >= -(1i128 << bits) && value < (1i128 << bits)
-        })
-        .unwrap_or(16)
-}
-
-/// Whether a value may be a dictionary key or a set member.
-///
-/// Python hashes numbers, strings, byte strings, tuples of hashable things,
-/// frozensets and the three singletons, and nothing else a form builds. A key
-/// of any other kind is not something CPython could have been asked to write.
-pub(super) fn hashable(value: &Value) -> bool {
-    match &value.kind {
-        Kind::None | Kind::Bool(_) | Kind::Int { .. } | Kind::Float { .. } => true,
-        Kind::Text { .. } | Kind::Bytes { .. } => true,
-        // A name stands for whatever the slot holds, which hashes or does
-        // not for the same reasons the thing itself does.
-        Kind::Ref(names) => match names {
-            Names::Text { .. } | Names::Bytes { .. } => true,
-            Names::Made { hashable, .. } => *hashable,
-        },
-        Kind::Tuple(items) | Kind::FrozenSet(items) => items.iter().all(hashable),
-        // A NumPy scalar hashes; an array does not.
-        Kind::Array { dimensions, .. } => dimensions.is_empty(),
-        // A byte string below protocol 3 is a call rather than a literal, and
-        // Python hashes it the same as any other byte string.
-        Kind::Object { what: Shape::Bytes, .. } => true,
-        Kind::Object { what, items, .. } => {
-            matches!(what, Shape::Slice | Shape::Range | Shape::Complex) && items.iter().all(hashable)
-        }
-        // A class hashes in Python and an object of one usually does, but no
-        // file in the corpus writes either as a key, so neither is read as
-        // one until something does.
-        Kind::List(_) | Kind::Set(_) | Kind::Dict(_) => false,
-        Kind::Class { .. } | Kind::Instance { .. } | Kind::Made { .. } | Kind::Objects { .. } | Kind::DType(_) => false,
-    }
-}
-
 impl Cursor<'_> {
-    /// Text, in the widths the protocol in hand has.
-    ///
-    /// Protocol 4 added the one-byte and eight-byte lengths and CPython uses
-    /// all three from there. Protocols 2 and 3 have only BINUNICODE, whose
-    /// length is four bytes however short the text is.
-    pub(super) fn text(&mut self) -> Option<Value> {
-        self.gate()?;
-        let start = self.at;
-        let code = self.byte()?;
-        let (at, len) = match self.proto >= 4 {
-            true => self.counted(code, 0x8c, 0x58, 0x8d)?,
-            false => self.counted(code, NO_OPCODE, 0x58, NO_OPCODE)?,
-        };
-        std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
-        self.memoize(Bound::Text { at, len })?;
-        Some(self.span(start, Kind::Text { at, len }))
-    }
-
-    /// A Python 2 `str`, which is a run of bytes that was usually text.
-    ///
-    /// The opcode listing reads one as text of an encoding nobody declared, so
-    /// this does the same: text when the bytes are UTF-8, which covers every
-    /// ASCII string, and a byte string when they are not. Python 2 wrote these
-    /// for every ordinary string it had, and Python 3 writes none of them.
-    fn py2_string(&mut self) -> Option<Value> {
-        if self.proto > 2 {
-            return None;
-        }
-        let start = self.at;
-        let code = self.byte()?;
-        let (at, len) = self.counted(code, b'U', b'T', NO_OPCODE)?;
-        let held = self.bytes.get(at..at + len)?;
-        let kind = match std::str::from_utf8(held).is_ok() {
-            true => Kind::Text { at, len },
-            false => Kind::Bytes { at, len },
-        };
-        self.memoize(match kind {
-            Kind::Text { .. } => Bound::Text { at, len },
-            _ => Bound::Bytes { at, len },
-        })?;
-        Some(self.span(start, kind))
-    }
-
     /// The one object the file holds, read as the run of stack pushes a
     /// pickle writes it as.
     ///
@@ -243,9 +141,32 @@ impl Cursor<'_> {
                         return None;
                     }
                     let what = if code == b't' { Shape::Tuple } else { Shape::FrozenSet };
-                    self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
+                    // Protocol 0 writes an empty tuple as a bare MARK and
+                    // TUPLE and files nothing: it is a singleton, as the
+                    // opcode for it above protocol 0 is.
+                    if !(self.proto == 0 && items.is_empty()) {
+                        self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
+                    }
                     let make = if code == b't' { Kind::Tuple } else { Kind::FrozenSet };
                     stack.push(self.folded(mark.at, items, make)?);
+                }
+                // DICT and LIST, which is how protocol 0 creates one: a MARK
+                // and the opcode, with nothing between them. CPython writes
+                // them empty and fills them with SETITEM and APPEND, so a
+                // container made with anything between the two is a file no
+                // pickler wrote.
+                b'd' | b'l' if self.proto == 0 => {
+                    self.byte()?;
+                    let mark = marks.pop()?;
+                    if stack.len() != mark.floor {
+                        return None;
+                    }
+                    let (kind, what) = match code {
+                        b'd' => (Kind::Dict(Vec::new()), Shape::Dict),
+                        _ => (Kind::List(Vec::new()), Shape::List),
+                    };
+                    self.memoize(Bound::Made { what, at: mark.at, hashable: false })?;
+                    stack.push(Slot { value: Value { at: mark.at, len: self.at - mark.at, kind }, deep: 1, fill: Fill::Open });
                 }
                 // The opcodes that fill a container the file made empty.
                 b'a' | b's' => {
@@ -260,7 +181,8 @@ impl Cursor<'_> {
                 // ADDITEMS arrived with protocol 4, along with the set opcode
                 // it fills.
                 b'e' | b'u' | 0x90 => {
-                    if code == 0x90 && self.proto < 4 {
+                    if self.proto == 0 || (code == 0x90 && self.proto < 4) {
+                        // Protocol 0 fills a container one entry at a time.
                         return None;
                     }
                     self.byte()?;
@@ -383,6 +305,7 @@ impl Cursor<'_> {
         self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
         let mut items = items.into_iter();
+        let proto = self.proto;
         let into = stack.last_mut()?;
         if deep > MAX_DEPTH {
             return None;
@@ -405,7 +328,15 @@ impl Cursor<'_> {
         }
         into.deep = into.deep.max(deep);
         into.value.len = self.at - into.value.at;
-        into.fill = Fill::Shut;
+        // Protocol 0 has no batching: a container is filled one entry at a
+        // time, however many it holds, so it stays open for the next one.
+        // Every protocol above it writes APPEND or SETITEM once and only for
+        // a container holding exactly one thing, or as the tail of a batched
+        // one, and either way nothing more may be put in.
+        into.fill = match proto {
+            0 => Fill::Open,
+            _ => Fill::Shut,
+        };
         Some(())
     }
 
@@ -493,7 +424,7 @@ impl Cursor<'_> {
         // the memo, so they are tried where a string or a reference would be.
         // Each is tried whole and rewound whole, and the work budget is spent
         // either way.
-        if matches!(code, 0x8c | 0x58 | 0x8d | b'h' | b'j' | b'c') {
+        if matches!(code, 0x8c | 0x58 | 0x8d | b'h' | b'j' | b'g' | b'c') {
             // A byte string below protocol 3 is a call to `_codecs.encode`,
             // which is a fixed run like the two below it.
             if self.proto < 3 {
@@ -521,10 +452,13 @@ impl Cursor<'_> {
         let start = self.at;
         let (kind, fill) = match code {
             0x8c | 0x58 | 0x8d => return Some(Slot { value: self.text()?, deep: 1, fill: Fill::Shut }),
-            b'U' | b'T' => return Some(Slot { value: self.py2_string()?, deep: 1, fill: Fill::Shut }),
-            b'h' | b'j' => return Some(Slot { value: self.named()?, deep: 1, fill: Fill::Shut }),
+            b'V' if self.proto == 0 => return Some(Slot { value: self.text_line()?, deep: 1, fill: Fill::Shut }),
+            b'S' if self.proto == 0 => return Some(Slot { value: self.string_line()?, deep: 1, fill: Fill::Shut }),
+            b'F' if self.proto == 0 => return Some(Slot { value: self.float_line()?, deep: 1, fill: Fill::Shut }),
+            b'U' | b'T' if self.proto > 0 => return Some(Slot { value: self.py2_string()?, deep: 1, fill: Fill::Shut }),
+            b'h' | b'j' | b'g' => return Some(Slot { value: self.named()?, deep: 1, fill: Fill::Shut }),
             b'K' | b'M' | b'J' | 0x8a | b'I' | b'L' => return Some(Slot { value: self.integer()?, deep: 1, fill: Fill::Shut }),
-            b'G' => return Some(Slot { value: self.binfloat()?, deep: 1, fill: Fill::Shut }),
+            b'G' if self.proto > 0 => return Some(Slot { value: self.binfloat()?, deep: 1, fill: Fill::Shut }),
             b'C' | b'B' | 0x8e => return Some(Slot { value: self.byte_string()?, deep: 1, fill: Fill::Shut }),
             0x96 => return Some(Slot { value: self.bytearray()?, deep: 1, fill: Fill::Shut }),
             // GLOBAL, which is how protocols 2 and 3 name a class or a
@@ -544,8 +478,10 @@ impl Cursor<'_> {
                 (Kind::Bool(code == 0x88), Fill::Shut)
             }
             // The empty tuple is the one container CPython does not memoize:
-            // it is a singleton, so there is nothing to file.
-            b')' => {
+            // it is a singleton, so there is nothing to file. Protocol 0 has
+            // no opcode for it and writes a MARK with a TUPLE behind it, which
+            // the stack reads as a tuple of nothing like any other.
+            b')' if self.proto > 0 => {
                 self.byte()?;
                 (Kind::Tuple(Vec::new()), Fill::Shut)
             }
@@ -580,6 +516,9 @@ impl Cursor<'_> {
     /// in a wide field is a non-match.
     pub(super) fn integer(&mut self) -> Option<Value> {
         self.gate()?;
+        if self.proto == 0 {
+            return self.number_line();
+        }
         let start = self.at;
         let kind = match self.byte()? {
             b'K' => Kind::Int { value: i128::from(self.byte()?), at: start + 1, len: 1 },
@@ -646,73 +585,5 @@ impl Cursor<'_> {
             _ => return None,
         };
         Some(self.span(start, kind))
-    }
-
-    /// BINGET or LONG_BINGET where a value belongs: the file naming
-    /// something it wrote earlier rather than writing it again.
-    ///
-    /// Any value the basic productions built may be named, which covers one
-    /// list under several keys and a list holding itself: a container is
-    /// filed when it is created, so a name for it exists while it is still
-    /// being filled. What a slot a form could not name holds is opaque, and a
-    /// reference to one is a non-match as before.
-    fn named(&mut self) -> Option<Value> {
-        self.gate()?;
-        let start = self.at;
-        let kind = match self.reference()?.clone() {
-            Bound::Text { at, len } => Kind::Ref(Names::Text { at, len }),
-            Bound::Bytes { at, len } => Kind::Ref(Names::Bytes { at, len }),
-            Bound::Made { what, at, hashable } => Kind::Ref(Names::Made { what, at, hashable }),
-            // A class the file named earlier, which is how the second block of
-            // a frame names the callable the first one spelled out. Only the
-            // modules this form may name a class from: a slot holding one of
-            // the globals a NumPy call names inside its own fixed run is not a
-            // class this form has anything to say about.
-            Bound::Global(path) if self.may_name(&path) => Kind::Class { path, parts: Vec::new() },
-            _ => return None,
-        };
-        Some(self.span(start, kind))
-    }
-
-    /// BYTEARRAY8, which protocol 5 writes for a bytearray where protocol 4
-    /// calls the class. The bytes it was made from are a field of their own,
-    /// so both spellings read the same way.
-    fn bytearray(&mut self) -> Option<Value> {
-        if self.proto < 5 {
-            return None;
-        }
-        self.gate()?;
-        let start = self.at;
-        self.exact(&[0x96])?;
-        let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
-        self.bytearray_memoize(Bound::Made { what: Shape::ByteArray, at: start, hashable: false })?;
-        let held = Value { at, len, kind: Kind::Bytes { at, len } };
-        Some(self.span(start, Kind::Object { what: Shape::ByteArray, names: CONTENT, items: vec![held] }))
-    }
-
-    pub(super) fn binfloat(&mut self) -> Option<Value> {
-        self.gate()?;
-        let start = self.at;
-        self.exact(b"G")?;
-        let value = f64::from_be_bytes(self.take(8)?.try_into().ok()?);
-        Some(self.span(start, Kind::Float { value, at: start + 1, len: 8 }))
-    }
-
-    /// A byte string written as one.
-    ///
-    /// Protocol 3 is where a pickle got a type for bytes at all, and the
-    /// eight-byte length arrived with protocol 4. Protocol 2 writes a byte
-    /// string as a call instead, which is [`Cursor::spelled_bytes`].
-    pub(super) fn byte_string(&mut self) -> Option<Value> {
-        if self.proto < 3 {
-            return self.spelled_bytes();
-        }
-        self.gate()?;
-        let start = self.at;
-        let code = self.byte()?;
-        let widest = if self.proto >= 4 { 0x8e } else { NO_OPCODE };
-        let (at, len) = self.counted(code, b'C', b'B', widest)?;
-        self.memoize(Bound::Bytes { at, len })?;
-        Some(self.span(start, Kind::Bytes { at, len }))
     }
 }

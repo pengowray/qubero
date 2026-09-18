@@ -29,6 +29,14 @@ pub(super) enum Bound {
     Dtype(Dtype),
 }
 
+/// How a memo mark carries its slot number, which the protocol decides.
+enum Mark {
+    /// A line of digits, which is protocol 0's `PUT`.
+    Line,
+    Narrow,
+    Wide,
+}
+
 /// The table itself, which a form appends to and reads back and never edits,
 /// but for the one slot a dtype's byte order arrives too late to fill in.
 pub(super) struct Memo {
@@ -111,21 +119,34 @@ impl Cursor<'_> {
     /// not yet shown itself to start at nought. A missing mark files no slot,
     /// and the numbering carries on where it was.
     fn put(&mut self, bound: Bound) -> Option<Option<usize>> {
-        let wide = match self.peek() {
-            Some(0x71) => false,
-            Some(0x72) => true,
-            _ => {
-                if self.memo_base == Some(0) {
-                    return None;
-                }
-                self.skipped += 1;
-                return Some(None);
+        // Protocol 0 writes the mark as a line of digits; the binary
+        // protocols write the number in one byte or four.
+        let spelling = match (self.proto, self.peek()) {
+            (0, Some(b'p')) => Some(Mark::Line),
+            (0, _) => None,
+            (_, Some(0x71)) => Some(Mark::Narrow),
+            (_, Some(0x72)) => Some(Mark::Wide),
+            _ => None,
+        };
+        let Some(spelling) = spelling else {
+            if self.memo_base == Some(0) {
+                return None;
             }
+            self.skipped += 1;
+            return Some(None);
         };
         self.byte()?;
-        let index = match wide {
-            false => usize::from(self.byte()?),
-            true => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
+        let index = match spelling {
+            Mark::Narrow => usize::from(self.byte()?),
+            Mark::Wide => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
+            Mark::Line => {
+                let (at, len) = self.line()?;
+                let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+                if digits.len() > 1 && digits.starts_with('0') {
+                    return None;
+                }
+                digits.parse::<usize>().ok()?
+            }
         };
 
         let base = match self.memo_base {
@@ -173,8 +194,16 @@ impl Cursor<'_> {
     /// pickler.
     pub(super) fn reference(&mut self) -> Option<&Bound> {
         let slot = match self.byte()? {
-            b'h' => self.byte()? as usize,
-            b'j' => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
+            b'g' if self.proto == 0 => {
+                let (at, len) = self.line()?;
+                let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
+                if digits.len() > 1 && digits.starts_with('0') {
+                    return None;
+                }
+                digits.parse::<usize>().ok()?
+            }
+            b'h' if self.proto > 0 => self.byte()? as usize,
+            b'j' if self.proto > 0 => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
             _ => return None,
         };
         let slot = slot.checked_sub(self.memo_base.unwrap_or(0))?;
@@ -182,7 +211,10 @@ impl Cursor<'_> {
     }
 
     pub(super) fn at_reference(&self) -> bool {
-        matches!(self.peek(), Some(b'h') | Some(b'j'))
+        match self.proto {
+            0 => self.peek() == Some(b'g'),
+            _ => matches!(self.peek(), Some(b'h') | Some(b'j')),
+        }
     }
 
     /// A short text with exactly this spelling, and the memo mark that files
