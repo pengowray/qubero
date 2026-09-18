@@ -1,0 +1,244 @@
+//! The grammar itself: what a form takes and what it turns away, the bounds
+//! a file made to cost something cannot talk its way past, the calls the
+//! builtins form allows, and which form a file is read under.
+
+use super::*;
+
+#[test]
+fn captures_basic_values_without_a_machine() {
+    let bytes = framed(b"}\x94\x8c\x01a\x94]\x94(K\x01K\x02es.");
+    let found = recognise(&bytes).unwrap();
+    assert_eq!(found.form, "basic-p4-p5-v4");
+    // Every node spans the bytes its production consumed, and a leaf says
+    // where inside that its value proper sits.
+    assert_eq!((found.value.at, found.value.len), (11, 15));
+    let Kind::Dict(entries) = &found.value.kind else {
+        panic!("dict expected")
+    };
+    let (key, value) = &entries[0];
+    assert_eq!(entries.len(), 1);
+    assert_eq!((key.at, key.len, &key.kind), (13, 4, &Kind::Text { at: 15, len: 1 }));
+    assert_eq!((value.at, value.len), (17, 8));
+    let Kind::List(items) = &value.kind else {
+        panic!("list expected")
+    };
+    let seen: Vec<_> = items.iter().map(|v| (v.at, v.len, &v.kind)).collect();
+    assert_eq!(
+        seen,
+        vec![
+            (20, 2, &Kind::Int { value: 1, at: 21, len: 1 }),
+            (22, 2, &Kind::Int { value: 2, at: 23, len: 1 }),
+        ]
+    );
+    assert_eq!(
+        found.text(Deduce::Builds, bytes.len() as u64).as_deref(),
+        Some(stop_message("basic-p4-p5-v4").as_str())
+    );
+    assert!(recognise(b"\x80\x05N.").is_some());
+}
+
+#[test]
+fn rejects_incomplete_or_unfamiliar_programs() {
+    let bytes = framed(b"}\x94\x8c\x01a\x94K\x01s.");
+    for end in 0..bytes.len() {
+        assert!(recognise(&bytes[..end]).is_none());
+    }
+    let mut trailing = bytes.clone();
+    trailing.push(b'N');
+    assert!(recognise(&trailing).is_none());
+    for body in [
+        &b"N0N."[..],
+        b"N",
+        b"N..",
+        b"]\x94h\0a.",
+        b"\x8c\x01\xff\x94.",
+        b"\x95\0\0\0\0\0\0\0\0N.",
+    ] {
+        assert!(recognise(&framed(body)).is_none(), "{body:?}");
+    }
+    let mut wrong_frame = bytes;
+    wrong_frame[3] -= 1;
+    assert!(recognise(&wrong_frame).is_none());
+}
+
+#[test]
+fn recursion_is_bounded() {
+    let mut bytes = vec![0x80, 4];
+    for _ in 0..MAX_DEPTH + 1 {
+        bytes.extend_from_slice(b"]\x94");
+    }
+    bytes.push(b'N');
+    bytes.extend(std::iter::repeat_n(b'a', MAX_DEPTH + 1));
+    bytes.push(b'.');
+    assert!(recognise(&bytes).is_none());
+}
+
+/// The bounds a file cannot talk its way past. None of these is a shape
+/// CPython writes; they are what a file made to cost something looks
+/// like, and each is turned away by its own limit rather than by running
+/// out of bytes.
+#[test]
+fn a_hostile_file_costs_what_the_bounds_allow() {
+    // Marks opened and never closed, which is what a nesting bomb is.
+    let mut marks = vec![0x80, 4];
+    marks.extend(std::iter::repeat_n(b'(', MAX_DEPTH + 1));
+    marks.push(b'.');
+    assert!(recognise(&marks).is_none());
+    // Values pushed and never folded, past both the budget and the stack.
+    let mut wide = vec![0x80, 4];
+    wide.extend(std::iter::repeat_n(b'N', MAX_VALUES + 1));
+    wide.push(b'.');
+    assert!(recognise(&wide).is_none());
+    // Memo marks with nothing in front of them to file.
+    let mut memo = vec![0x80, 4];
+    memo.extend(std::iter::repeat_n(0x94, 1000));
+    memo.push(b'.');
+    assert!(recognise(&memo).is_none());
+    // A list whose one batch is longer than CPython ever writes.
+    let mut batch = vec![0x80, 4, b']', 0x94, b'('];
+    batch.extend(std::iter::repeat_n(b'N', MAX_BATCH + 1));
+    batch.extend_from_slice(b"e.");
+    assert!(recognise(&batch).is_none());
+    // And the same length written the way CPython writes it, which is two
+    // batches and a match.
+    let mut batches = vec![0x80, 4, b']', 0x94, b'('];
+    batches.extend(std::iter::repeat_n(b'N', MAX_BATCH));
+    batches.push(b'e');
+    batches.extend_from_slice(b"(Ne.");
+    let found = recognise(&batches).unwrap();
+    let Kind::List(items) = &found.value.kind else { panic!("list") };
+    assert_eq!(items.len(), MAX_BATCH + 1);
+}
+
+#[test]
+fn unmatched_input_keeps_symbolic_inspection() {
+    let bytes = b"\x80\x04\x8c\x02os\x94\x8c\x06system\x94\x93.";
+    assert!(recognise(bytes).is_none());
+    let fallback = Program.run(bytes);
+    let old = machine::Program.run(bytes);
+    for at in 0..=bytes.len() as u64 {
+        assert_eq!(
+            fallback.text(Deduce::Builds, at),
+            old.text(Deduce::Builds, at)
+        );
+    }
+}
+
+#[test]
+fn nested_empty_containers_and_wide_text_are_captured() {
+    let found = recognise(&framed(b"]\x94(]\x94K\x01}\x94\x8c\x01x\x94e.")).unwrap();
+    let Kind::List(values) = found.value.kind else {
+        panic!("list")
+    };
+    let kinds: Vec<_> = values[..3].iter().map(|v| &v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            &Kind::List(vec![]),
+            &Kind::Int { value: 1, at: 17, len: 1 },
+            &Kind::Dict(vec![])
+        ]
+    );
+    assert!(matches!(values[3].kind, Kind::Text { len: 1, .. }));
+    for (code, width) in [(0x58, 4), (0x8d, 8)] {
+        let mut body = vec![code];
+        body.extend_from_slice(&300u64.to_le_bytes()[..width]);
+        body.extend(std::iter::repeat_n(b'x', 300));
+        body.extend_from_slice(b"\x94.");
+        assert!(matches!(
+            recognise(&framed(&body)).unwrap().value.kind,
+            Kind::Text { len: 300, .. }
+        ));
+        body[1..1 + width].fill(255);
+        assert!(recognise(&framed(&body)).is_none());
+    }
+}
+
+/// The builtins a pickle writes as a call: what each one accepts, and what
+/// none of them do.
+#[test]
+fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
+    let call = |name: &str, args: &[u8], arity: u8| {
+        // The empty tuple that says a call took no arguments is the one
+        // CPython does not memoise.
+        let close: Vec<u8> = match arity {
+            0 => vec![b')'],
+            n => vec![0x84 + n, 0x94],
+        };
+        cat(&[&word("builtins"), &word(name), b"\x93\x94", args, &close, b"R\x94"])
+    };
+    let one = |body: Vec<u8>| framed(&cat(&[&body, b"."]));
+    let cases: Vec<(Vec<u8>, Shape)> = vec![
+        (call("slice", b"K\x01K\x0aK\x02", 3), Shape::Slice),
+        (call("slice", b"NNN", 3), Shape::Slice),
+        (call("slice", b"M\x39\x30J\xff\xff\xff\xffK\x02", 3), Shape::Slice),
+        (call("range", b"K\0K\x0aK\x02", 3), Shape::Range),
+        (call("complex", b"G\x3f\xf8\0\0\0\0\0\0G\xc0\x04\0\0\0\0\0\0", 2), Shape::Complex),
+        (call("bytearray", &blob(b"ab"), 1), Shape::ByteArray),
+        // An empty bytearray is the class called with no arguments at all.
+        (call("bytearray", b"", 0), Shape::ByteArray),
+    ];
+    for (body, want) in &cases {
+        let found = recognise(&one(body.clone())).unwrap_or_else(|| panic!("{want:?} was not matched"));
+        assert_eq!(found.form, "builtins-values-p4-p5-v2", "{want:?}");
+        let Kind::Object { what, .. } = &found.value.kind else { panic!("{want:?} is not an object") };
+        assert_eq!(what, want);
+    }
+
+    // The values themselves, read from the bytes they were written in.
+    let found = recognise(&one(call("complex", b"G\x3f\xf8\0\0\0\0\0\0G\xc0\x04\0\0\0\0\0\0", 2))).unwrap();
+    let Kind::Object { items, names, .. } = &found.value.kind else { panic!("object") };
+    assert_eq!(*names, HALVES);
+    let halves: Vec<f64> = items
+        .iter()
+        .map(|v| match v.kind {
+            Kind::Float { value, .. } => value,
+            _ => panic!("not a float"),
+        })
+        .collect();
+    assert_eq!(halves, vec![1.5, -2.5]);
+
+    // And what none of them take: another callable of the same module, the
+    // wrong arity, a value of the wrong kind, and a module that is not
+    // builtins.
+    for body in [
+        call("eval", b"K\x01K\x0aK\x02", 3),
+        call("slice", b"K\x01K\x0a", 2),
+        call("slice", b"K\x01K\x0aK\x02K\x03", 3),
+        call("range", b"NK\x0aK\x02", 3),
+        call("complex", b"K\x01K\x02", 2),
+        call("bytearray", &word("ab"), 1),
+        cat(&[&word("os"), &word("system"), b"\x93\x94)\x94R\x94"]),
+    ] {
+        assert!(recognise(&one(body.clone())).is_none(), "accepted {body:?}");
+    }
+}
+
+/// A form is the productions it allows, and a file is read under exactly
+/// one of them.
+#[test]
+fn a_form_is_the_productions_it_allows() {
+    assert_eq!(recognise(&framed(b"}\x94.")).unwrap().form, "basic-p4-p5-v4");
+    let slice = cat(&[
+        b"}\x94",
+        &word("s"),
+        &word("builtins"),
+        &word("slice"),
+        b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94s.",
+    ]);
+    assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v2");
+    let array = cat(&[b"}\x94", &word("a"), &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]), b"s."]);
+    assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-numeric-array-p4-p5-v4");
+    // A file holding both is read under neither: no form that allows both
+    // has been reviewed.
+    let both = cat(&[
+        b"}\x94(",
+        &word("a"),
+        &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]),
+        &word("s"),
+        &word("builtins"),
+        &word("slice"),
+        b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94u.",
+    ]);
+    assert!(recognise(&framed(&both)).is_none());
+}

@@ -1,7 +1,7 @@
 # Familiar Pickle Forms (FPF)
 
 Status: fifth implementation slice. The recogniser is in
-`crates/core/src/formats/pickle/familiar.rs`; a match is now a template of its
+`crates/core/src/formats/pickle/familiar/`; a match is now a template of its
 own, `picklefpf`, which places the captured tree as fields.
 
 ## Implemented slice and continuation notes
