@@ -5,7 +5,10 @@
 //! is asked on every move of the cursor, and a panel that had to inflate eight
 //! hundred megabytes to draw a row would not draw the row.
 //! [`Evaluator::run_check`] takes the sum, and is asked for by something that
-//! has decided the work is worth doing.
+//! has decided the work is worth doing. [`Evaluator::eager_check`] is the
+//! third: the sum taken without anyone asking, for the small runs where that
+//! costs little enough to do on the way past, so a listing says a checksum is
+//! wrong without the reader opening the inspector on it.
 //!
 //! The rule the whole file is built around: a check that cannot be made must
 //! say so, never guess. A run whose bytes have not arrived is `Pending` and the
@@ -100,6 +103,28 @@ pub struct Verdict {
     pub ok: bool,
 }
 
+/// The longest run a sum is taken over without being asked.
+///
+/// Smaller than the inspector's own cap on purpose. The inspector sums one
+/// field the reader is looking at; this sums every checksum every view draws,
+/// and a listing of a file of thousand-chunk records would be summing all of
+/// them. 64 KiB is `gapcheck.ts`'s cap for the same reason: past it, a reader
+/// who wanted the answer would have asked.
+pub const EAGER_CHECK_BYTES: u64 = 64 * 1024;
+
+/// What came of taking a sum nobody asked for, and whether the answer keeps.
+enum Eager {
+    /// A verdict. Kept until the memo goes.
+    Took(Verdict),
+    /// There is no eager check here, and there will not be one for these
+    /// bytes: no checksum at all, a stream to unpack, or a run over the cap.
+    /// Kept, so the question is not worked out again on every draw.
+    Never,
+    /// The bytes are not here yet, or reading them refused. Not kept, so the
+    /// check happens once they arrive.
+    NotYet,
+}
+
 /// What a check turned out to cover, once the names and expressions in it have
 /// been worked out. The step both queries share.
 struct Coverage {
@@ -178,16 +203,7 @@ impl Evaluator {
                 if *len > crate::codec::CAP_BYTES as u64 {
                     return fail(too_large(*len));
                 }
-                let mut bytes = self.read_in(doc, 0, at * 8, len * 8)?;
-                // The field reads as something else than what is written
-                // there, for the formats that seal a record the checksum is
-                // part of. `coverage` has already made sure the run lands
-                // inside what was read, so the slice cannot be out of bounds.
-                if let Some(b) = c.blanked {
-                    let from = (b.at - at) as usize;
-                    bytes[from..from + b.len as usize].fill(b.byte);
-                }
-                bytes
+                self.covered_bytes(doc, &c, *at, *len)?
             }
             (None, Some(u)) => {
                 let (at, member) = (u.at.clone(), u.member.clone());
@@ -232,6 +248,82 @@ impl Evaluator {
         let Some(stored) = self.stored_value(doc, path, c.algorithm)? else { return Ok(None) };
         let computed = c.algorithm.over(&bytes);
         Ok(Some(Verdict { ok: computed == stored, computed, stored }))
+    }
+
+    /// The covered bytes of a check that is over a run of the file.
+    ///
+    /// Blanked where the format seals a record the checksum is part of, so the
+    /// sum is taken over what the writer summed rather than over its own answer
+    /// written back into the middle of it. `coverage` has already made sure the
+    /// blanked run lands inside what is read, so the slice cannot be out of
+    /// bounds.
+    fn covered_bytes<S: Source>(&self, doc: &Document<S>, c: &Coverage, at: u64, len: u64) -> R<Vec<u8>> {
+        let mut bytes = self.read_in(doc, 0, at * 8, len * 8)?;
+        if let Some(b) = c.blanked {
+            let from = (b.at - at) as usize;
+            bytes[from..from + b.len as usize].fill(b.byte);
+        }
+        Ok(bytes)
+    }
+
+    /// The checksum at `path`, taken without being asked, where taking it costs
+    /// little enough to do while a view draws the field.
+    ///
+    /// This is what puts a bad checksum in front of a reader who has not
+    /// clicked anything. Every other wrong value is one comparison against a
+    /// number the field already read; a checksum reads a run of the file, so it
+    /// is the one case that needs a rule about when it is worth it.
+    ///
+    /// Taken only when all four hold: the sum is over a run of the file rather
+    /// than over what a stream unpacks to, the run is at most
+    /// [`EAGER_CHECK_BYTES`], the bytes are already here, and nothing refused.
+    /// Anything else is Not checked and carries no mark, which is this file's
+    /// rule: a fact the core cannot establish is nothing, not a guess. The
+    /// inspector is unaffected and still sums a field the reader is looking at
+    /// up to its own, larger cap, with `Check the CRC-32` above that.
+    ///
+    /// The verdict is kept until the memo is, so scrolling a PNG does not sum
+    /// its chunks again on every draw. What cannot be answered yet is not kept,
+    /// so the bytes arriving is enough to make the check happen.
+    pub(super) fn eager_check<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<Verdict>> {
+        if let Some(known) = self.sums.get(path) {
+            return Ok(known.clone());
+        }
+        match self.eager(doc, path)? {
+            Eager::Took(v) => {
+                self.sums.insert(path.to_vec(), Some(v.clone()));
+                Ok(Some(v))
+            }
+            Eager::Never => {
+                self.sums.insert(path.to_vec(), None);
+                Ok(None)
+            }
+            Eager::NotYet => Ok(None),
+        }
+    }
+
+    fn eager<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Eager> {
+        let Some(c) = self.coverage(doc, path)? else { return Ok(Eager::Never) };
+        // Unpacking a stream is the whole cost of the format, and is what the
+        // inspector's own button is for. A sum over what a stream comes to is
+        // never taken on the way past, at any size.
+        if c.unpacked.is_some() {
+            return Ok(Eager::Never);
+        }
+        let Some((at, len)) = c.over else { return Ok(Eager::Never) };
+        if len > EAGER_CHECK_BYTES {
+            return Ok(Eager::Never);
+        }
+        // The one place in this file where `Pending` is not passed on. Every
+        // other caller asked for this answer and can wait for the bytes;
+        // nobody asked for this one, and a listing that stalled a row on a
+        // checksum would be charging the reader for a question they did not
+        // put. The document changing is what asks again, and by then the bytes
+        // are here. A refusal is Not checked for the same reason.
+        let Ok(bytes) = self.covered_bytes(doc, &c, at, len) else { return Ok(Eager::NotYet) };
+        let Ok(Some(stored)) = self.stored_value(doc, path, c.algorithm) else { return Ok(Eager::NotYet) };
+        let computed = c.algorithm.over(&bytes);
+        Ok(Eager::Took(Verdict { ok: computed == stored, computed, stored }))
     }
 
     /// The bytes a check covers, worked out but not read.
@@ -706,6 +798,66 @@ mod tests {
             v.extend_from_slice(&crc32(&covered).to_be_bytes());
         }
         v
+    }
+
+    /// The sum taken without anyone asking: it reaches `NodeInfo::problem`,
+    /// so a listing row and a hex chip say a chunk is broken with nothing
+    /// clicked, and the ancestors count it.
+    #[test]
+    fn a_short_crc_over_bytes_that_are_here_is_taken_on_the_way_past() {
+        let mut broken = png();
+        broken[19] ^= 1;
+        let mut r = Read::of("png", broken);
+        let crc = r.at(&[1, 0], "crc");
+        let node = r.ev.node(&r.doc, &crc).unwrap();
+        let problem = node.problem.expect("the sum was taken and did not match");
+        assert_eq!(problem.tier, crate::eval::Tier::Invalid);
+        assert!(problem.text.starts_with("Mismatch: computed "), "{}", problem.text);
+        // The reason names what was computed, which is not what the file
+        // wrote: the value column keeps the stored sum.
+        assert_ne!(problem.text, format!("Mismatch: computed {}", r.must(&crc).stored));
+        assert_eq!(r.ev.node(&r.doc, &[]).unwrap().problems_within, (1, 0));
+
+        // The chunk that is fine says nothing at all.
+        let mut r = Read::of("png", png());
+        let crc = r.at(&[1, 0], "crc");
+        assert_eq!(r.ev.node(&r.doc, &crc).unwrap().problem, None);
+        assert_eq!(r.ev.node(&r.doc, &[]).unwrap().problems_within, (0, 0));
+    }
+
+    /// Past the cap nothing is summed, because nobody asked. The field is
+    /// unmarked and the inspector is still where the answer lives.
+    #[test]
+    fn a_crc_over_more_than_the_cap_is_left_for_the_inspector() {
+        let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
+        let data = vec![7u8; super::EAGER_CHECK_BYTES as usize];
+        v.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut covered = b"IDAT".to_vec();
+        covered.extend_from_slice(&data);
+        v.extend_from_slice(&covered);
+        // A sum that is wrong, so anything that did take it would say so.
+        v.extend_from_slice(&(crc32(&covered) ^ 1).to_be_bytes());
+        let mut r = Read::of("png", v);
+        let crc = r.at(&[1, 0], "crc");
+        // The run is the four-byte name and the data, one byte over the cap.
+        assert_eq!(r.info(&crc).expect("a chunk crc").covered_bytes, super::EAGER_CHECK_BYTES + 4);
+        assert_eq!(r.ev.node(&r.doc, &crc).unwrap().problem, None);
+        // Asked directly, it is still a mismatch: the cap says when, not what.
+        assert!(!r.must(&crc).ok);
+    }
+
+    /// An edit inside the covered run drops the verdict rather than keeping
+    /// the one taken before it.
+    #[test]
+    fn a_kept_verdict_goes_when_the_bytes_under_it_change() {
+        let mut r = Read::of("png", png());
+        let crc = r.at(&[1, 0], "crc");
+        assert_eq!(r.ev.node(&r.doc, &crc).unwrap().problem, None);
+        // The width, inside the run the CRC covers.
+        r.doc.overwrite_bytes(19, &[9]);
+        r.ev.invalidate_from(19 * 8);
+        let problem = r.ev.node(&r.doc, &crc).unwrap().problem;
+        assert!(problem.is_some_and(|p| p.text.starts_with("Mismatch")), "the old verdict was kept");
     }
 
     #[test]
