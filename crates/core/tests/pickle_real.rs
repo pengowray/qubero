@@ -577,10 +577,38 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto4-numpy-shapes.pickle", Some("numpy-numeric-array-p4-p5-v4")),
         ("proto4-numpy-shared-dtype.pickle", Some("numpy-numeric-array-p4-p5-v4")),
         ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v2")),
-        // The rest, none of which any form accepts yet. Some are grammar the
-        // forms have not reached (nonempty tuples, big integers, shared
-        // container references, more than one batch); the library files need
-        // forms of their own, built from reviewed complete structures.
+        // The files written to say what a form takes and what it does not.
+        // Every `familiar-` one is plain data written the ordinary way, and
+        // every `unfamiliar-` one is a pickle Python loads and a form must
+        // still refuse. The two halves are the test: a form that grew far
+        // enough to read the second half would be reading a class, a value
+        // with no bytes of its own, or a program CPython did not write.
+        ("familiar-records.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-long-containers.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-mixed-keys.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-tuples-and-sets.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-big-integers.pickle", Some("basic-p4-p5-v4")),
+        ("familiar-bytearray-p5.pickle", Some("basic-p4-p5-v4")),
+        // Below protocol 5 a bytearray is a call to the class, which is the
+        // other form.
+        ("familiar-bytearray-p4.pickle", Some("builtins-values-p4-p5-v2")),
+        // An instance of a class the file names.
+        ("unfamiliar-class-instance.pickle", None),
+        // One list in two places, and one holding itself: both are a name
+        // pointing at a container, which no form binds.
+        ("unfamiliar-shared-list.pickle", None),
+        ("unfamiliar-recursive-list.pickle", None),
+        // Valid programs CPython did not write: `pickletools.optimize` drops
+        // the memo marks, and the pickler in `pickle.py` ends a list of 1,001
+        // with APPEND where the one in `_pickle.c` writes a batch of one.
+        ("unfamiliar-optimized.pickle", None),
+        ("unfamiliar-pure-python-batches.pickle", None),
+        // An integer past sixteen bytes, and a string that is not UTF-8
+        // because it holds half a surrogate pair.
+        ("unfamiliar-huge-integer.pickle", None),
+        ("unfamiliar-lone-surrogate.pickle", None),
+        // The rest, none of which any form accepts yet. The library files
+        // need forms of their own, built from reviewed complete structures.
         //
         // The `everything` files at every protocol, and `proto4-collections`,
         // are held back by one thing between them: each calls a class the
@@ -679,7 +707,7 @@ fn a_matched_sample_stops_matching_when_its_instructions_change() {
         checked += 1;
         eprintln!("{name}: {} instructions, none of them spare", starts.len());
     }
-    assert!(checked >= 9, "only {checked} samples matched a form");
+    assert!(checked >= 16, "only {checked} samples matched a form");
 }
 
 /// One row of the familiar-form template: how deep it sits, what it is called,
@@ -754,11 +782,12 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
         assert_eq!(rows[0].len, bytes.len() as u64, "{name}: the root is not the file");
         assert_eq!(row(&rows, "message").value, Value::Str(formats::pickle::familiar::MESSAGE.to_string()), "{name}");
         assert_eq!(row(&rows, "form").value, Value::Str(form), "{name}");
-        assert_eq!(row(&rows, "protocol").value, Value::UInt(4), "{name}");
+        // The protocol the file declared, which is the byte after PROTO.
+        assert_eq!(row(&rows, "protocol").value, Value::UInt(u128::from(bytes[1])), "{name}");
         covers(&rows, &name);
         checked += 1;
     }
-    assert!(checked >= 9, "only {checked} samples matched a form");
+    assert!(checked >= 16, "only {checked} samples matched a form");
 }
 
 /// Every node's children tile it: they start where it starts, they follow each
