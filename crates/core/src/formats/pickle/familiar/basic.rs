@@ -5,7 +5,7 @@
 
 use super::cursor::{Cursor, Framing};
 use super::memo::Bound;
-use super::{Kind, Pickler, Shape, Value, CONTENT, MAX_BATCH, MAX_DEPTH, MAX_VALUES, NO_OPCODE};
+use super::{Kind, Names, Pickler, Shape, Value, CONTENT, MAX_BATCH, MAX_DEPTH, MAX_VALUES, NO_OPCODE};
 
 /// A MARK, and what it holds back: where the opcode itself is, so that a
 /// tuple or a frozenset made over it spans from there, and how tall the
@@ -93,9 +93,13 @@ fn shortest(value: i128) -> usize {
 fn hashable(value: &Value) -> bool {
     match &value.kind {
         Kind::None | Kind::Bool(_) | Kind::Int { .. } | Kind::Float { .. } => true,
-        // A slot is only ever named for a string or a byte string, and both
-        // of those hash.
-        Kind::Text { .. } | Kind::Bytes { .. } | Kind::Ref { .. } => true,
+        Kind::Text { .. } | Kind::Bytes { .. } => true,
+        // A name stands for whatever the slot holds, which hashes or does
+        // not for the same reasons the thing itself does.
+        Kind::Ref(names) => match names {
+            Names::Text { .. } | Names::Bytes { .. } => true,
+            Names::Made { hashable, .. } => *hashable,
+        },
         Kind::Tuple(items) | Kind::FrozenSet(items) => items.iter().all(hashable),
         // A NumPy scalar hashes; an array does not.
         Kind::Array { dimensions, .. } => dimensions.is_empty(),
@@ -174,8 +178,9 @@ impl Cursor<'_> {
                         return None;
                     }
                     let items = stack.split_off(stack.len() - arity);
-                    self.memoize(Bound::Opaque)?;
                     let at = items[0].value.at;
+                    let holds = items.iter().all(|slot| hashable(&slot.value));
+                    self.memoize(Bound::Made { what: Shape::Tuple, at, hashable: holds })?;
                     stack.push(self.folded(at, items, Kind::Tuple)?);
                 }
                 // TUPLE and FROZENSET, each over everything since its MARK.
@@ -187,10 +192,12 @@ impl Cursor<'_> {
                         // Three or fewer are written with TUPLE1 to TUPLE3.
                         return None;
                     }
-                    if code == 0x91 && !items.iter().all(|slot| hashable(&slot.value)) {
+                    let holds = items.iter().all(|slot| hashable(&slot.value));
+                    if code == 0x91 && !holds {
                         return None;
                     }
-                    self.memoize(Bound::Opaque)?;
+                    let what = if code == b't' { Shape::Tuple } else { Shape::FrozenSet };
+                    self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
                     let make = if code == b't' { Kind::Tuple } else { Kind::FrozenSet };
                     stack.push(self.folded(mark.at, items, make)?);
                 }
@@ -423,14 +430,17 @@ impl Cursor<'_> {
                 self.byte()?;
                 (Kind::Tuple(Vec::new()), Fill::Shut)
             }
+            // A container is filed in the memo when it is created, before
+            // anything is put in it, so a name for it is available to the
+            // values it holds. That is what a list holding itself is.
             b']' | b'}' | 0x8f => {
                 self.byte()?;
-                self.memoize(Bound::Opaque)?;
-                let kind = match code {
-                    b']' => Kind::List(Vec::new()),
-                    b'}' => Kind::Dict(Vec::new()),
-                    _ => Kind::Set(Vec::new()),
+                let (kind, what) = match code {
+                    b']' => (Kind::List(Vec::new()), Shape::List),
+                    b'}' => (Kind::Dict(Vec::new()), Shape::Dict),
+                    _ => (Kind::Set(Vec::new()), Shape::Set),
                 };
+                self.memoize(Bound::Made { what, at: start, hashable: false })?;
                 (kind, Fill::Open)
             }
             _ => return None,
@@ -480,22 +490,24 @@ impl Cursor<'_> {
         Some(self.span(start, kind))
     }
 
-    /// BINGET or LONG_BINGET where a value belongs: the file naming a string
-    /// or a byte string it wrote earlier rather than writing it again.
+    /// BINGET or LONG_BINGET where a value belongs: the file naming
+    /// something it wrote earlier rather than writing it again.
     ///
-    /// Only those two are bound by name. A slot holding a container is
-    /// opaque, so a file that shares one list between two places, or builds
-    /// one that holds itself, is a non-match rather than a value with no
-    /// bytes of its own.
+    /// Any value the basic productions built may be named, which covers one
+    /// list under several keys and a list holding itself: a container is
+    /// filed when it is created, so a name for it exists while it is still
+    /// being filled. What a slot a form could not name holds is opaque, and a
+    /// reference to one is a non-match as before.
     fn named(&mut self) -> Option<Value> {
         self.gate()?;
         let start = self.at;
-        let kind = match self.reference()?.clone() {
-            Bound::Text { at, len } => Kind::Ref { at, len, text: true },
-            Bound::Bytes { at, len } => Kind::Ref { at, len, text: false },
+        let names = match self.reference()?.clone() {
+            Bound::Text { at, len } => Names::Text { at, len },
+            Bound::Bytes { at, len } => Names::Bytes { at, len },
+            Bound::Made { what, at, hashable } => Names::Made { what, at, hashable },
             _ => return None,
         };
-        Some(self.span(start, kind))
+        Some(self.span(start, Kind::Ref(names)))
     }
 
     /// BYTEARRAY8, which protocol 5 writes for a bytearray where protocol 4
@@ -509,7 +521,7 @@ impl Cursor<'_> {
         let start = self.at;
         self.exact(&[0x96])?;
         let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
-        self.bytearray_memoize(Bound::Opaque)?;
+        self.bytearray_memoize(Bound::Made { what: Shape::ByteArray, at: start, hashable: false })?;
         let held = Value { at, len, kind: Kind::Bytes { at, len } };
         Some(self.span(start, Kind::Object { what: Shape::ByteArray, names: CONTENT, items: vec![held] }))
     }

@@ -4,18 +4,23 @@
 //! that the methods which read or write a slot are in one place.
 
 use super::cursor::Cursor;
-use super::{Pickler, MAX_MEMO};
+use super::{Pickler, Shape, MAX_MEMO};
 
 /// What a memo slot holds, as far as a form is prepared to say.
 ///
 /// A slot a form cannot name is [`Bound::Opaque`], and a reference to one is
-/// a non-match. Only the things a form spelled out itself can be referred to
+/// a non-match. Only the things a form built itself can be referred to
 /// again, which is what keeps `BINGET` from being an arbitrary stack effect.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Bound {
     Opaque,
     Text { at: usize, len: usize },
     Bytes { at: usize, len: usize },
+    /// A container the basic productions built: where the file wrote it, and
+    /// whether Python could hash it. A list, a dictionary and a set are filed
+    /// when they are created and before anything is put in them, so this is
+    /// also what a container still being filled is named by.
+    Made { what: Shape, at: usize, hashable: bool },
     /// A module and a callable the form named exactly, spelled `module.name`.
     Global(String),
     /// A completed NumPy dtype, as the `<f4` spelling it ends up with. The

@@ -78,10 +78,16 @@ form whose productions it uses, and a file mixing two of them matches neither.
     strings, byte strings, tuples of hashable things, frozensets, the three
     singletons, and a NumPy scalar. A key of any other kind is not something
     CPython could have been asked to write.
-  - `BINGET` and `LONG_BINGET` where a value belongs, naming a string or a
-    byte string the file wrote earlier. This is how a list of records is
-    written: every dictionary after the first names its keys instead of
-    spelling them again.
+  - `BINGET` and `LONG_BINGET` where a value belongs, naming anything the
+    basic productions built earlier: a string, a byte string, a tuple, a
+    list, a dictionary, a set, a frozenset or a bytearray. This is how a list
+    of records is written, every dictionary after the first naming its keys
+    instead of spelling them again, and it is also how one list under several
+    keys is written and how a list that holds itself is. A container is filed
+    in the memo when it is created and before anything is put in it, so a
+    name for one still being filled is ordinary rather than forward. A name
+    may stand where a dictionary key belongs only when what it names hashes,
+    which is decided where the thing was built.
 - `numpy-numeric-array-p4-p5-v5`: the basic productions plus an array or a
   scalar, anywhere a value may stand, with at least one of them present.
   Matches exact `_reconstruct` and `scalar` sequences for
@@ -125,18 +131,14 @@ introduced.
 
 ### What stays a non-match, and why
 
-- **A name pointing at a container.** A slot holding a list, a dictionary, a
-  set, a tuple or a frozenset is opaque, so `BINGET` may not name one. This
-  rules out one list under two keys and a list holding itself, and it also
-  rules out two identical tuple literals in one file, which the compiler folds
-  into one object. The decision is about what could be shown: the second
-  occurrence is two bytes, so a form that took it would be publishing a value
-  that is not in the file, and following the name to the first occurrence
-  would either duplicate the tree or leave a node that tiles nothing. Binding
-  containers is safe from cycles, since CPython writes a container's memo
-  slot only after its contents and writes a genuinely recursive one with
-  `POP` or `POP_MARK`, which no form accepts. It is the display that is
-  unsolved, not the grammar.
+- **A name pointing at a slot no form could say anything about.** The memo
+  still holds `Opaque` for the intermediate values inside a NumPy or builtins
+  call, and a `BINGET` naming one of those is a non-match as before. What a
+  form built itself may be named; what it only matched its way past may not.
+- **A container written with `POP` or `POP_MARK`.** A tuple that holds itself
+  cannot be built postfix, so CPython writes the elements, throws them away
+  and names the tuple the recursion already made. No form accepts either
+  opcode, so that file is a non-match.
 - **A class the file names.** Unchanged, and the point of the contract.
 - **An integer past sixteen bytes**, and `LONG4`, which CPython writes only
   past 2^2040. Neither is a number the reader has a type for.
@@ -291,7 +293,12 @@ a reference is a node of its own, typed `reference`, holding a `refers to` row
 and the `BINGET` beside it. The row is worked out rather than read in place:
 what the reference names sits wherever the file first wrote it, which is
 outside the reference and often outside the whole value it is part of. A long
-one is cut at 120 bytes, and a named byte string is shown in hex. A dictionary
+one is cut at 120 bytes, and a named byte string is shown in hex. A named
+container is not shown at all: the row says what it is and where the file
+wrote it, `list at 0x0b`, since a copy under the reference would be a value
+the file says twice and holds once, and the container a self-reference names
+has not been finished at the point the name is read. So a reference is always
+the two bytes of its `BINGET` and never grows a subtree. A dictionary
 entry whose key is a named string is still called by that string; one whose key
 is a whole number is called by its digits; a key of any other kind leaves the
 entry numbered by its place, because a float or a tuple written out as a name
@@ -305,8 +312,8 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, eighteen files match today. The nine `familiar-` files
-and the six `unfamiliar-` ones were written for this: the first half is plain
+Of the sibling corpus, twenty files match today. The eleven `familiar-` files
+and the four `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
 one half or the other.
@@ -331,9 +338,9 @@ one half or the other.
 | `proto4-numpy-shapes.pickle` | `numpy-numeric-array-p4-p5-v5`, including a scalar |
 | `proto4-numpy-shared-dtype.pickle` | `numpy-numeric-array-p4-p5-v5` |
 | `familiar-numpy-large-p5.pickle` | `numpy-numeric-array-p4-p5-v5`: numbers too large to frame, so the boundary lands inside the call |
+| `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
+| `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
-| `unfamiliar-shared-list.pickle` | one list under two keys, named the second time |
-| `unfamiliar-recursive-list.pickle` | a list holding itself |
 | `unfamiliar-optimized.pickle` | `pickletools.optimize` took the memo marks out |
 | `unfamiliar-huge-integer.pickle` | two to the two hundredth, which needs twenty-six bytes |
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
@@ -399,17 +406,11 @@ Next steps, in order:
    `Decimal`, `Fraction`, `OrderedDict`, `defaultdict`, `Counter`, `deque`.
    A namedtuple names a class defined by the file that wrote it, and no list
    can hold that.
-3. Decide how a name pointing at a container should be shown, and then bind
-   containers. The grammar is the easy half; what a reader should see where
-   the second copy of a shared list would be is the open question, and until
-   it has an answer `unfamiliar-shared-list.pickle` stays a non-match. This is
-   the widening worth doing next: four hundred random JSON-like payloads at
-   protocol 4 and 5 were run through the forms and three of them matched
-   nothing, all three because two tuples spelled alike in one source file are
-   one object. The likeliest answer is that a `refers to` row for a container
-   says what it is and where the file wrote it, the way it already says what a
-   named string holds, so that the reference stays two bytes and the reader is
-   sent to the bytes rather than shown a copy of them.
+3. Done: a name may point at a container. The `refers to` row says what it is
+   and where the file wrote it, `list at 0x0b`, so the reference stays the two
+   bytes it is and the reader is sent to the bytes rather than shown a copy of
+   them. What is still open is navigation: the row names an offset and does
+   not take the reader there.
 4. Add the protocol 2/3 alternatives (BINUNICODE, BINPUT, LONG_BINPUT, no
    framing) alongside a fixture a form can match whole. Keep work bounded
    across every alternative.

@@ -601,12 +601,13 @@ fn the_forms_match_these_samples_and_no_others() {
         // boundary lands inside the run of instructions that rebuilds it
         // rather than between two values of the file.
         ("familiar-numpy-large-p5.pickle", Some("numpy-numeric-array-p4-p5-v5")),
+        // One list in two places, and one holding itself. Both are a name
+        // pointing at a container, which the basic form reads as a reference
+        // saying what it names and where the file wrote it.
+        ("familiar-shared-list.pickle", Some("basic-p4-p5-v5")),
+        ("familiar-recursive-list.pickle", Some("basic-p4-p5-v5")),
         // An instance of a class the file names.
         ("unfamiliar-class-instance.pickle", None),
-        // One list in two places, and one holding itself: both are a name
-        // pointing at a container, which no form binds.
-        ("unfamiliar-shared-list.pickle", None),
-        ("unfamiliar-recursive-list.pickle", None),
         // A valid program CPython did not write: `pickletools.optimize` drops
         // the memo marks, which no pickler does.
         ("unfamiliar-optimized.pickle", None),
@@ -759,7 +760,7 @@ fn a_matched_sample_stops_matching_when_its_instructions_change() {
         checked += 1;
         eprintln!("{name}: {} instructions, none of them spare", starts.len());
     }
-    assert!(checked >= 16, "only {checked} samples matched a form");
+    assert!(checked >= 20, "only {checked} samples matched a form");
 }
 
 /// One row of the familiar-form template: how deep it sits, what it is called,
@@ -839,7 +840,7 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
         covers(&rows, &name);
         checked += 1;
     }
-    assert!(checked >= 16, "only {checked} samples matched a form");
+    assert!(checked >= 20, "only {checked} samples matched a form");
 }
 
 /// Every node's children tile it: they start where it starts, they follow each

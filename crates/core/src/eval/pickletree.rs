@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::formats::pickle::familiar::{self, Call, Kind, Match, Said, Value};
+use crate::formats::pickle::familiar::{self, Call, Kind, Match, Names, Said, Value};
 use crate::formats::pickle::shapes;
 use crate::template::{Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
@@ -49,9 +49,11 @@ const SHAPE_FIELD: &str = "shape";
 const ORDER_FIELD: &str = "order";
 const KEY_FIELD: &str = "key";
 const VALUE_FIELD: &str = "value";
-/// What a BINGET says: the file wrote this string or these bytes earlier and
-/// named them here rather than writing them again. The row carries what is at
-/// the other end, since the reference itself is two bytes that say nothing.
+/// What a BINGET says: the file wrote this value earlier and named it here
+/// rather than writing it again. The row carries what is at the other end,
+/// since the reference itself is two bytes that say nothing. A string or a
+/// byte string is shown; a container is named and located, so the reader goes
+/// to the bytes rather than being handed a copy of them.
 const REFERS_FIELD: &str = "refers to";
 /// How much of what a reference names the `refers to` row shows. A repeated
 /// dictionary key is a word or two; anything longer is cut rather than filling
@@ -208,7 +210,7 @@ fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'a>)> {
             ),
             // A reference is the BINGET and a row saying what is at the other
             // end of it, since the two bytes themselves say nothing.
-            Kind::Ref { .. } => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
+            Kind::Ref(_) => (vec![(Label::Field(REFERS_FIELD), Part::Refers(v))], Vec::new()),
             // A builtin written as a call. Its parts are named where Python
             // names them and numbered where it does not.
             Kind::Object { names, items, .. } => (
@@ -314,7 +316,7 @@ fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Tuple(_) => Shape::Tuple,
             Kind::Set(_) => Shape::Set,
             Kind::FrozenSet(_) => Shape::FrozenSet,
-            Kind::Ref { .. } => Shape::Ref,
+            Kind::Ref(_) => Shape::Ref,
             Kind::Array { .. } => Shape::Array,
             Kind::Object { what, .. } => *what,
             _ => return None,
@@ -470,8 +472,7 @@ impl Evaluator {
     /// first wrote it, which is outside the entry that names it.
     fn pickle_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, key: &Value) -> R<Option<String>> {
         let (at, len) = match key.kind {
-            Kind::Text { at, len } => (at, len),
-            Kind::Ref { at, len, text: true } => (at, len),
+            Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => (at, len),
             Kind::Int { value, .. } => return Ok(Some(value.to_string())),
             _ => return Ok(None),
         };
@@ -531,10 +532,22 @@ impl Evaluator {
             // is worked out rather than read in place: its bytes are not
             // inside the reference, which is only the BINGET.
             Part::Refers(v) => {
-                let Kind::Ref { at, len, text } = v.kind else { return fail("no such value") };
-                let read = len.min(if text { MOST_SHOWN_TEXT } else { MOST_SHOWN_BYTES });
-                let bytes = self.read(doc, &whole, base + at as u64 * 8, read as u64 * 8)?;
-                self.pickle_note(path, &pr, name, shown(&bytes, text, len))
+                let Kind::Ref(names) = v.kind else { return fail("no such value") };
+                let said = match names {
+                    // A container is not copied into the row. It is named for
+                    // what it is and for where the file wrote it, so that the
+                    // reader is sent to those bytes: a copy here would be a
+                    // value the file says twice and holds once, and a
+                    // container a reference sits inside is not finished yet.
+                    Names::Made { what, at, .. } => format!("{} at {:#04x}", what.name(), base as usize / 8 + at),
+                    Names::Text { at, len } | Names::Bytes { at, len } => {
+                        let text = matches!(names, Names::Text { .. });
+                        let read = len.min(if text { MOST_SHOWN_TEXT } else { MOST_SHOWN_BYTES });
+                        let bytes = self.read(doc, &whole, base + at as u64 * 8, read as u64 * 8)?;
+                        shown(&bytes, text, len)
+                    }
+                };
+                self.pickle_note(path, &pr, name, said)
             }
             Part::Text(said) => {
                 let ty = T::text(StrLen::Fixed(E::lit(said.len as i128)), Encoding::Utf8);

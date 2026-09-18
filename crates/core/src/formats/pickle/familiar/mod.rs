@@ -109,17 +109,10 @@ pub enum Kind {
         at: usize,
         len: usize,
     },
-    /// A string or a byte string the file wrote once and named again. The
-    /// production is the BINGET alone, which is what the value's own span
-    /// covers; `at`/`len` are the bytes the thing it names was written in,
-    /// somewhere earlier in the file.
-    Ref {
-        at: usize,
-        len: usize,
-        /// Whether the slot holds text. The other kind a slot may be named
-        /// for is a byte string.
-        text: bool,
-    },
+    /// A value the file wrote once and named again. The production is the
+    /// BINGET alone, which is what the value's own span covers; what it names
+    /// sits somewhere earlier in the file, and [`Names`] says where.
+    Ref(Names),
     List(Vec<Value>),
     Tuple(Vec<Value>),
     Set(Vec<Value>),
@@ -138,6 +131,25 @@ pub enum Kind {
         what: Shape,
         names: &'static [&'static str],
         items: Vec<Value>,
+    },
+}
+
+/// What a `BINGET` names, which is what the `refers to` row beside it says.
+///
+/// A string or a byte string is short enough to show, so the row shows it. A
+/// container is not: the reader is sent to the bytes the file wrote it in
+/// rather than shown a copy of them, and a container a reference sits inside
+/// has not been finished yet, which is what a list holding itself is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Names {
+    Text { at: usize, len: usize },
+    Bytes { at: usize, len: usize },
+    Made {
+        what: Shape,
+        at: usize,
+        /// Whether Python could hash the thing, which is what says a
+        /// reference to it could stand where a dictionary key belongs.
+        hashable: bool,
     },
 }
 

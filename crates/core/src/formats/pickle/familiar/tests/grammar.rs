@@ -50,7 +50,9 @@ fn rejects_incomplete_or_unfamiliar_programs() {
         &b"N0N."[..],
         b"N",
         b"N..",
-        b"]\x94h\0a.",
+        // A name for a slot the file never wrote. The slot it would have
+        // is the list itself, which a form does read.
+        b"]\x94h\x01a.",
         b"\x8c\x01\xff\x94.",
         b"\x95\0\0\0\0\0\0\0\0N.",
     ] {

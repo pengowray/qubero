@@ -179,6 +179,29 @@ fn a_named_value_says_what_it_names() {
     tiles(&seen);
 }
 
+/// A reference to a container says what it is and where the file wrote it,
+/// rather than showing a copy of it. One list under two keys is the same list
+/// twice, and a list holding itself names a container the file has not
+/// finished writing, so there is nothing at the other end to copy either way.
+#[test]
+fn a_reference_to_a_container_says_what_it_is_and_where() {
+    // {"a": [1], "b": <the same list>}: slot 0 is the dictionary, 1 the key
+    // `a`, 2 the list, 3 the key `b`.
+    let seen = dump(&framed(b"}\x94(\x8c\x01a\x94]\x94K\x01a\x8c\x01b\x94h\x02u."));
+    let refers: Vec<&V> = seen.iter().filter(|r| r.name == "refers to").map(|r| &r.value).collect();
+    assert_eq!(refers, vec![&V::Str("list at 0x12".into())]);
+    let named = seen.iter().find(|r| r.ty == "reference").unwrap();
+    // The reference is the BINGET and nothing else: the bytes it names are
+    // somewhere else in the file and are not copied under it.
+    assert_eq!((named.at, named.len), (27, 2));
+    tiles(&seen);
+
+    // A list holding itself, which names a container still being filled.
+    let seen = dump(&framed(b"]\x94(K\x01h\0e."));
+    assert_eq!(named_row(&seen, "refers to").value, V::Str("list at 0x0b".into()));
+    tiles(&seen);
+}
+
 /// The values the widened grammar added, each read as what it is: a set
 /// and a frozenset hold their members, a long integer is a signed run of
 /// bytes as wide as it needs, and a protocol 5 bytearray holds the bytes
