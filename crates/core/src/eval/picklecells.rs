@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use super::pickleframe::*;
-use super::pickletree::{spot, Part, Says, MOST_SHOWN_TEXT as MOST_SHOWN};
+use super::pickleparts::{spot, Part, Says};
+use super::picklesaid::MOST_SHOWN_TEXT as MOST_SHOWN;
 use super::*;
 use crate::formats::pickle::familiar::{Dtype, Kind, Match, Value as Captured};
 use crate::formats::pickle::shapes;
