@@ -31,8 +31,15 @@ environment. A venv at `~/.venvs/qubero-samples` covers the newest libraries.
 
 On Python 3 each object is written twice, by `pickle.dump`, which is the C
 pickler, and by `pickle._Pickler`, which is `pickle.py` alone (`.pypickle` in
-the name). PyPy has only the second, and PyPy 3.10's files are byte for byte
-what CPython 3.10's `pickle.py` wrote, all ninety of them.
+the name). PyPy 3.10 has only the second, and its files are byte for byte what
+CPython 3.10's `pickle.py` wrote, all ninety of them.
+
+On Python 2 each object is written twice as well, by `pickle` and by `cPickle`
+(`.cpickle` in the name). PyPy 2.7 has both names, and its `cPickle` is not
+the pure pickler under another name: it is a Python copy of CPython's C one,
+and it numbers the memo from 1 the way that one does. What it does not copy is
+CPython's `cPickle` leaving the memo mark out for a value nothing else holds a
+reference to.
 
 Python 3.14 changed `pickle.DEFAULT_PROTOCOL` from 4 to 5, so from there on a
 file written with no protocol given is protocol 5.
@@ -95,9 +102,9 @@ state is a dict holding three numpy arrays and a shape tuple, so the
 scikit-learn production with another module prefix reads them. The class moved
 (`scipy.sparse.csr` to `scipy.sparse._csr`), which is data to that production.
 
-## What has landed, on 2026-09-18
+## What has landed, on 2026-09-18, and protocols 2 and 3 on 2026-09-19
 
-Steps 1 to 5 of the order below. The safety line and the enumerated calls are
+Every step of the order below. The safety line and the enumerated calls are
 written out in `DESIGN-familiar-pickle-forms.md` under "The safety line for a
 library object"; the code is `crates/core/src/formats/pickle/familiar/`
 (`forms.rs` for the registry, `object.rs` for the class, object, BUILD and
@@ -114,17 +121,36 @@ Every file in `pickle-matrix/` written at protocol 4 or 5 now matches: 168 of
 168. `numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
 structured dtype now, so "numeric" was no longer true.
 
+Each family has a second form at protocols 2 and 3, named for the protocols it
+reads: `basic-p2-p3-v1`, `numpy-array-p2-p3-v1`, `builtins-values-p2-p3-v1`,
+`sklearn-estimator-p2-p3-v1`, `scipy-sparse-p2-p3-v1` and
+`pandas-frame-p2-p3-v1`. All 218 files in `pickle-matrix/` written at protocol
+2 or 3 match, and so do `pickle/proto2-memo-over-256.pickle` and
+`pickle/proto3-numpy-1-module-names.pickle`, which the earlier slices read as
+non-matches. `DESIGN-familiar-pickle-forms.md` has the whole of what differs,
+under "Protocols 2 and 3".
+
+The libraries needed nothing new. scikit-learn, scipy and pandas write
+`GLOBAL`, `NEWOBJ` and `BUILD` below protocol 4 exactly as they write
+`STACK_GLOBAL`, `NEWOBJ` and `BUILD` above it: `copyreg._reconstructor` is in
+no file in the corpus. What the protocols do differ in is where the array
+values sit. Protocol 2 has no opcode for a byte string, so an array's numbers
+go out as the latin-1 text they spell, handed to `_codecs.encode`. The form
+reads that, checks the decoded length against the shape, and says so rather
+than pretending the run is the numbers: the row is `numbers as latin-1 text`,
+a protocol 2 array is not offered as a table, and the cells of a protocol 2
+pandas frame are not read. Decoding that run so that a protocol 2 frame opens
+as a table like every other one is the next thing worth doing for these forms.
+
 A frame opens as a table, and a frame, a series and a sparse matrix say what
 they hold before showing how. See "A library object as the thing it is" in the
 design document.
 
 What is left, in the order it is worth doing:
 
-1. **Protocols 2 and 3**, which is step 5 below and every file written by
-   Python 3.0 to 3.7 and by Python 2. `BINPUT` and `LONG_BINPUT` for `MEMOIZE`,
-   `GLOBAL` for `STACK_GLOBAL`, `BINUNICODE` for `SHORT_BINUNICODE`, and no
-   framing. `forms.rs` is where a form says what it allows, and `mod.rs` and
-   `cursor.rs` were left calm for this.
+1. **A protocol 2 array as its numbers.** The numbers are in the file as
+   latin-1 text, so reading them means decoding that run rather than pointing
+   at it. Until then a protocol 2 frame shows its structure and not its cells.
 2. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
 3. **The standard library's classes**, which are what every remaining
@@ -151,9 +177,10 @@ before it stopped, which is where the next production goes.
 4. The field tree for each: a `DataFrame` wants its columns named and its
    blocks offered as tables (`Evaluator::pickle_table` is where a matched
    array's shape already becomes a table).
-5. Protocol 2 and 3 for the basic and numpy forms (`BINPUT` for `MEMOIZE`,
-   `GLOBAL` for `STACK_GLOBAL`, no frames), since that is every file written
-   by Python 3.0 to 3.7 and by Python 2. Not started.
+5. Done: protocols 2 and 3, for every family rather than only the basic and
+   numpy ones, since the libraries write the same structure there.
+   Protocols 0 and 1 are not in scope; `DESIGN-familiar-pickle-forms.md` says
+   what they would need under "What protocols 0 and 1 would need".
 
 ## Not decided
 
