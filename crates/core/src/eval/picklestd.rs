@@ -67,6 +67,50 @@ fn hyphenated(number: u128) -> String {
     out
 }
 
+/// The whole numbers the leading arguments spell, for a class handed its
+/// fields. Nothing when any of them is something else.
+fn numbers(items: &[Value], how_many: usize) -> Option<Vec<i128>> {
+    items
+        .get(..how_many)?
+        .iter()
+        .map(|x| match x.kind {
+            Kind::Int { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A date, a time or a datetime written as its own constructor's fields, as
+/// ISO 8601 writes it, without the zone the caller adds. Nothing for a value
+/// written the ordinary way, as one run of packed bytes.
+fn fielded(what: Shape, items: &[Value]) -> Option<String> {
+    match (what, items.len()) {
+        (Shape::Date, 3) => {
+            let n = numbers(items, 3)?;
+            Some(format!("{:04}-{:02}-{:02}", n[0], n[1], n[2]))
+        }
+        (Shape::Time, 5) => {
+            let n = numbers(items, 4)?;
+            Some(said_clock(n[0], n[1], n[2], n[3]))
+        }
+        (Shape::DateTime, 8) => {
+            let n = numbers(items, 7)?;
+            Some(format!("{:04}-{:02}-{:02}T{}", n[0], n[1], n[2], said_clock(n[3], n[4], n[5], n[6])))
+        }
+        _ => None,
+    }
+}
+
+/// A clock as ISO 8601 writes one, with the microseconds only where there are
+/// any, which is what [`iso_time`] does with the packed spelling.
+fn said_clock(hour: i128, minute: i128, second: i128, micro: i128) -> String {
+    let clock = format!("{hour:02}:{minute:02}:{second:02}");
+    match micro {
+        0 => clock,
+        micro => format!("{clock}.{micro:06}"),
+    }
+}
+
 /// The year a packed date carries, which is written most significant byte
 /// first where everything else in a pickle is the other way round.
 fn year(packed: &[u8]) -> u16 {
@@ -212,6 +256,19 @@ impl Evaluator {
                 0 => format!("empty {word}"),
                 n => format!("{word} of {n}"),
             }));
+        }
+        // IronPython hands the three date classes their fields rather than
+        // the run of bytes `_getstate` packs them into, so a value of its has
+        // the numbers themselves where every other interpreter has one
+        // packed argument. The arity says which: a date is three fields or
+        // one run, a time five or one, a datetime eight or one.
+        if let Some(said) = fielded(*what, items) {
+            let zone = items.last().filter(|_| *what != Shape::Date).and_then(|z| zone_of(found, z));
+            return Ok(match (zone, matches!(items.last().map(|z| &z.kind), Some(Kind::None))) {
+                (_, true) => Some(said),
+                (Some(zone), false) => said_offset(zone).map(|offset| format!("{said}{offset}")),
+                (None, false) => None,
+            });
         }
         Ok(match what {
             Shape::Date => self.packed(doc, found, whole, base, items.first(), 4)?.map(|p| iso_date(&p)),

@@ -737,11 +737,21 @@ fn family_of(name: &str) -> usize {
     }
 }
 
-/// The same objects as twelve environments wrote them, from Python 2.7 to
-/// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, at every
-/// protocol each has and from both of CPython's picklers: `pickle-matrix/` in
-/// the collection, where a file is kept once under the oldest environment
-/// that wrote those bytes.
+/// The one file in the matrix that no form reads, and why.
+///
+/// GraalPy gives two equal strings one object, so the second of two dates
+/// holding the same packed run names the slot the first wrote. At protocol 0
+/// that run is an escaped line the form decoded once and kept the bytes of,
+/// and reading it a second time would decode what had already been replaced.
+/// `docs/HANDOVER-pickle-libraries.md` has the whole of it.
+const UNREAD: &[&str] = &["graalpy3.11/stdlib-datetime.p0.pypickle.pickle"];
+
+/// The same objects as sixteen environments wrote them, from Python 2.7 to
+/// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, and from
+/// the four interpreters outside that family: Jython 2.7, IronPython 2.7 and
+/// 3.4 and GraalPy for Python 3.11. Every protocol each has and every pickler
+/// each ships: `pickle-matrix/` in the collection, where a file is kept once
+/// under the oldest environment that wrote those bytes.
 ///
 /// A rule rather than a list, since the rule is what the forms claim: plain
 /// data and numpy arrays and scalars match at protocol 4 and 5 whoever wrote
@@ -757,7 +767,15 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
     };
     let mut environments: Vec<PathBuf> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     environments.sort();
-    assert!(environments.len() >= 12, "only {} environments under {}", environments.len(), root.display());
+    assert!(environments.len() >= 16, "only {} environments under {}", environments.len(), root.display());
+    // Every folder has to be one this test knows the rule for. A new
+    // environment arriving with no line here is a run that silently covers
+    // less than it says it does.
+    const KNOWN: &[&str] = &["py2.7", "pypy2.7", "ironpython2.7", "jython2.7", "py3.4", "ironpython3.4", "py3.6", "py3.7", "py3.8", "py3.10", "pypy3.10", "graalpy3.11", "py3.12", "py3.13", "py3.14"];
+    for dir in &environments {
+        let env = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(KNOWN.iter().any(|k| env == *k || env.starts_with(&format!("{k}-"))), "{env} is a new environment; add it to KNOWN and say what it writes");
+    }
     // How many files of each family matched at each of the two protocol
     // ranges, and how many there were, so that the run says what it covered
     // rather than only that it passed.
@@ -779,7 +797,10 @@ fn the_forms_match_every_environment_s_plain_data_and_arrays() {
                 _ if name.contains(".p0.") => Some(3),
                 _ => None,
             };
-            let expected = column.and_then(|c| FAMILIES[i].1[c]);
+            let mut expected = column.and_then(|c| FAMILIES[i].1[c]);
+            if UNREAD.contains(&format!("{env}/{name}").as_str()) {
+                expected = None;
+            }
             let bytes = std::fs::read(&path).unwrap();
             let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
             if let Some(column) = column {
@@ -827,6 +848,11 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
     // batch edge. PyPy 2.7's copy of it numbers the same way, and so does
     // Jython's, which is written in Java.
     const CPICKLE: &str = "cPickle (Python 2's in C, PyPy 2.7's in Python, or Jython's in Java)";
+    // The three sharper readings: a spelling that narrows the broad one above
+    // it to one program.
+    const JYTHON: &str = "cPickle (Jython's, in Java)";
+    const IRON: &str = "cPickle (IronPython's, in C#)";
+    const GRAAL: &str = "_pickle (GraalPy's, in Java)";
     // A file is kept under the oldest environment that wrote those bytes, so
     // every one of these is Python 3.4's copy, and each is also what every
     // later CPython wrote. `basic-list-1001.p4.pypickle.pickle` is byte for
@@ -878,6 +904,38 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
         // A file with no batch edge at all still says `cPickle`, because the
         // memo numbering says it.
         ("py2.7/basic-records.p2.cpickle.pickle", CPICKLE),
+        // The four interpreters outside CPython's family. Each has one
+        // spelling of its own, except IronPython 3.4, whose single pickler
+        // writes what `pickle.py` writes and says nothing more than that.
+        //
+        // A batch of 1,024, or a list of one filled by APPENDS rather than
+        // APPEND. Either narrows "numbers the memo from one" to Jython's.
+        ("jython2.7/basic-dict-1001.p1.cpickle.pickle", JYTHON),
+        ("jython2.7/basic-json-document.p1.cpickle.pickle", JYTHON),
+        // A memo slot taken for an object before the slots its callable and
+        // arguments take, which is IronPython's `cPickle` and no other.
+        ("ironpython2.7/basic-int-keys.p1.cpickle.pickle", IRON),
+        // A protocol 0 float line in Java's spelling, which GraalPy's
+        // `_pickle` writes and its `pickle.py` does not.
+        ("graalpy3.11/basic-json-document.p0.pickle", GRAAL),
+        // And one file from each of the four that says nothing of its own.
+        // A Jython file numbering from one is still one of three `cPickle`s;
+        // every other file here could have come from any pickler at all.
+        // IronPython 3.4 has no sharper line: the files that would have shown
+        // a batch edge are byte for byte CPython 3.4's and are kept under its
+        // folder, where the row already says `pickle.py`, which is true of
+        // IronPython's `_pickle` as well.
+        ("jython2.7/basic-records.p1.cpickle.pickle", CPICKLE),
+        ("ironpython2.7/basic-records.p1.cpickle.pickle", EITHER),
+        ("ironpython3.4/basic-int-keys.p4.pickle", EITHER),
+        ("graalpy3.11/stdlib-datetime-aware.p4.pickle", EITHER),
+        // Files the four wrote byte for byte as CPython did, which are kept
+        // under CPython's folder and keep the broader statement: naming the
+        // interpreter would be naming what the bytes do not show.
+        ("py2.7/basic-dict-1000.p0.cpickle.pickle", CPICKLE),
+        ("py2.7/basic-dict-1000.p1.pickle", PY),
+        ("py3.4/basic-list-1001.p4.pickle", C),
+        ("py3.4/basic-records.p4.pickle", EITHER),
         // PyPy's `cPickle` is a Python copy of CPython's: it numbers the memo
         // the same way and ends a dictionary the way `pickle.py` does, so the
         // row names the module and not which of the two wrote it.
@@ -1552,8 +1610,9 @@ fn a_list_of_ordered_dicts_opens_as_the_table_it_holds() {
         // Python 2 hands `OrderedDict` everything it is to hold as one list of
         // pairs, where every release since creates it empty and fills it with
         // the opcodes after the call. So a Python 2 record is a list of short
-        // lists rather than a mapping, and it is not this table.
-        if env.starts_with("py2.") || env.starts_with("pypy2.") {
+        // lists rather than a mapping, and it is not this table. Jython and
+        // IronPython 2.7 are Python 2 as well, whatever they are written in.
+        if env.contains("2.7") {
             continue;
         }
         for path in pickles(&dir) {
