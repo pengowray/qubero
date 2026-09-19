@@ -34,9 +34,10 @@ const NOT_HERE: &str = "not in this file";
 
 /// What the `order` row says for a view whose elements are neither one run
 /// forwards nor one run down the columns. An array says `C` or `Fortran`
-/// there and a tensor says the same two words; this is the third answer, and
-/// the tensor carrying it has no run of numbers under it.
-const STRIDED_VIEW: &str = "strided view";
+/// there and a tensor says the same two words; this is the third answer, in
+/// the word torch and NumPy both use for it, and the tensor carrying it has
+/// no run of numbers under it.
+const NOT_CONTIGUOUS: &str = "not contiguous";
 
 /// What the `numbers` row says when the tensor's elements are a run and this
 /// file does not hold the entry they are in, which is a `data.pkl` opened on
@@ -51,7 +52,7 @@ fn order_said(tensor: &Tensor) -> &'static str {
     match tensor.contiguous() {
         Some(true) => C_ORDER,
         Some(false) => FORTRAN_ORDER,
-        None => STRIDED_VIEW,
+        None => NOT_CONTIGUOUS,
     }
 }
 

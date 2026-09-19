@@ -654,18 +654,30 @@ its own, since the run is nowhere near the instructions that named it),
 
 **A view that is neither C nor Fortran order** keeps what it had: the `numbers`
 and `stored at` rows and a table whose cells are worked out at the strides.
-The `order` row says which of the three it is, in the same words an array's
-own `order` row uses. A transposed two-dimensional tensor is Fortran order and
+Every tensor now carries an `order` row, `C` or `Fortran` in the words an
+array's own `order` row uses and `not contiguous` for the third answer, which
+is torch's word and NumPy's. A transposed two-dimensional tensor is Fortran order and
 so is a run: `shared-storage-views-zip.pt`'s `grid` is a field, and its table
 is the run as the file holds it, four rows of six, each one column of the
 tensor. What is left with worked-out cells is a slice, a broadcast and a
 transpose of three axes or more, and no sample in the collection holds one.
 
 **Two tensors over one storage** place two runs over overlapping bytes, which
-is what `whole` and `tail` are: 0x380 for 96 bytes and 0x3b0 for 48. Both are
-the reading a reader asked for, and neither is a view of the other, so both
-are counted. `Field::aside` is for a field that is always a second reading and
-neither of these is.
+is what `whole`, `tail` and `grid` are in `shared-storage-views-zip.pt`: 96
+bytes at 0x380, 48 at 0x3b0, and 96 at 0x380 again. Each is the reading its
+own reader asked for and none is a view of the others, so none can be marked
+a second reading in advance the way `Field::aside` marks one. What is true of
+the file is that the bytes are numbers once, so the kind totals count the
+first run over a stretch and pass over a run overlapping it:
+`KindWalk::count_placed`, a list of stretches sorted by where they start, one
+binary search a run.
+
+**A legacy file counts them in the storage.** There the storages are fields
+already -- `torchlegacy.rs` places an element count and a typed run apiece --
+so a tensor's own run over the same bytes is genuinely a second reading, and
+the node carries `Resolved::aside` to say so. That is `Field::aside` for a
+node a parse made rather than a template declared, and `Evaluator::aside`
+asks the node before it asks the parent's field.
 
 **What is still open.**
 
@@ -681,12 +693,14 @@ neither of these is.
   from the template's types and a `Ty::Pickle` node's synthesised children
   are not in it. Selecting the tensor's `numbers` in the tree does go to the
   bytes, which is the direction a reader asks for first.
-- **A legacy file reads those bytes twice.** `torchlegacy.rs` places each
-  storage as a count and a typed run, and the tensor now places its own run
-  over the same bytes. Neither is marked a second reading, so the kind totals
-  count them both. The fix is the same `elsewhere` flag carrying an `aside`
-  beside it, or a `numbers` row that refers to the storage's field rather
-  than placing a run of its own.
+- **A legacy tensor has no row pointing at its storage.** Its `numbers` field
+  is the right bytes and is counted where the storage is, but nothing in the
+  tree says the two are the same run. A reference row the reader can follow
+  is what that wants, and `Says` has no arm for it yet.
+- **The computed-cells path is still there for every tensor.** Only a strided
+  view is offered it now (`pickle_table` answers nothing for a tensor with a
+  run), but `Evaluator::pickle_cells` still answers for any of them, which is
+  what `cells_real.rs` asks of it.
 
 ## What each era wrote, on 2026-09-19
 
