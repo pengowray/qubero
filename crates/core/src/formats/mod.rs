@@ -199,6 +199,7 @@ pub(crate) mod torchlegacy;
 pub(crate) mod torchzip;
 mod zip;
 mod zlib;
+pub mod zipdirectory;
 mod zstd;
 mod wasm;
 pub mod wasm_disasm;

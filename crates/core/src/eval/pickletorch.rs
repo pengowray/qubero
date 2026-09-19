@@ -74,31 +74,6 @@ fn counted(n: u64) -> String {
     }
 }
 
-/// The signatures the directory at the end of an archive is found by, and how
-/// long the fixed part of each record is.
-const END: &[u8] = b"PK\x05\x06";
-const END64: &[u8] = b"PK\x06\x06";
-const LOCATOR: &[u8] = b"PK\x06\x07";
-const CENTRAL: &[u8] = b"PK\x01\x02";
-const LOCAL: &[u8] = b"PK\x03\x04";
-const END_RECORD: u64 = 22;
-const CENTRAL_RECORD: u64 = 46;
-const LOCAL_HEADER: u64 = 30;
-const LOCATOR_RECORD: u64 = 20;
-/// How far back from the end the end record may be: its own bytes and the
-/// longest comment a ZIP may carry.
-const MOST_COMMENT: u64 = (1 << 16) + END_RECORD + LOCATOR_RECORD;
-/// The widest a 32-bit field may be before it is standing in for a 64-bit one
-/// kept in the entry's extra field.
-const WIDE32: u64 = 0xffff_ffff;
-const WIDE16: u64 = 0xffff;
-/// The extra field that holds those 64-bit numbers.
-const ZIP64_EXTRA: u64 = 1;
-/// The most entries the walk will follow. Far past any checkpoint: a storage
-/// is one entry and a model of a few hundred million parameters has a few
-/// hundred of them.
-const MOST_ENTRIES: usize = 1 << 20;
-
 /// One entry of the archive: what it is called, and the run its data is.
 #[derive(Debug)]
 pub(super) struct Held {
@@ -387,99 +362,15 @@ impl Evaluator {
         Ok(out)
     }
 
-    /// The entries the central directory names, or nothing at all when this
-    /// is not an archive or the directory does not read.
+    /// The entries the central directory names, as the runs this file reads
+    /// tensors out of. [`zipdirectory`](crate::formats::zipdirectory) is the
+    /// walk; what belongs here is reading through the evaluator, so that a
+    /// chunk that has not arrived says `Pending` rather than answering out of
+    /// a run of noughts.
     fn directory<S: Source>(&mut self, doc: &Document<S>, space: u32, end: u64) -> R<Vec<Held>> {
-        let none = Vec::new();
-        let look = end.min(MOST_COMMENT);
-        if look < END_RECORD {
-            return Ok(none);
-        }
-        let tail = self.read_in(doc, space, (end - look) * 8, look * 8)?;
-        // The last end record, since a comment may hold the same four bytes.
-        let Some(found) = (0..=tail.len() - END_RECORD as usize).rev().find(|i| tail[*i..*i + 4] == *END) else {
-            return Ok(none);
-        };
-        let at = |i: usize| -> u64 { u32::from_le_bytes(tail[found + i..found + i + 4].try_into().unwrap_or([0; 4])) as u64 };
-        let short = |i: usize| -> u64 { u16::from_le_bytes(tail[found + i..found + i + 2].try_into().unwrap_or([0; 2])) as u64 };
-        let (mut count, mut size, mut start) = (short(10), at(12), at(16));
-        // Past four gigabytes the numbers do not fit, and the real ones are in
-        // a record of their own that a locator in front of the end record
-        // points at. Every checkpoint of a large model is one of these.
-        if count == WIDE16 || size == WIDE32 || start == WIDE32 {
-            let Some((held, at)) = self.zip64_end(doc, space, &tail, found)? else { return Ok(none) };
-            let _ = at;
-            (count, size, start) = held;
-        }
-        if size == 0 || start.checked_add(size).is_none_or(|to| to > end) {
-            return Ok(none);
-        }
-        let held = self.read_in(doc, space, start * 8, size * 8)?;
-        let mut out = Vec::new();
-        let mut cursor = 0usize;
-        while out.len() < MOST_ENTRIES && (out.len() as u64) < count.max(1) {
-            let Some(record) = held.get(cursor..cursor + CENTRAL_RECORD as usize) else { break };
-            if record[..4] != *CENTRAL {
-                break;
-            }
-            let short = |i: usize| u16::from_le_bytes([record[i], record[i + 1]]) as u64;
-            let long = |i: usize| u32::from_le_bytes([record[i], record[i + 1], record[i + 2], record[i + 3]]) as u64;
-            let (method, mut packed) = (short(10), long(20));
-            let (name_len, extra_len, comment_len) = (short(28), short(30), short(32));
-            let mut local = long(42);
-            let names_at = cursor + CENTRAL_RECORD as usize;
-            let Some(name) = held.get(names_at..names_at + name_len as usize) else { break };
-            let name = String::from_utf8_lossy(name).replace('\\', "/");
-            let extra = held.get(names_at + name_len as usize..names_at + name_len as usize + extra_len as usize).unwrap_or(&[]);
-            // The 64-bit sizes, in the order ZIP64 writes them and only for the
-            // fields whose 32-bit place holds the mark saying so.
-            if packed == WIDE32 || local == WIDE32 {
-                let wide = zip64_extra(extra);
-                let mut next = wide.iter().copied();
-                if long(24) == WIDE32 {
-                    next.next();
-                }
-                if packed == WIDE32 {
-                    packed = next.next().unwrap_or(packed);
-                }
-                if local == WIDE32 {
-                    local = next.next().unwrap_or(local);
-                }
-            }
-            cursor = names_at + (name_len + extra_len + comment_len) as usize;
-            // Where the data begins, which only the local header says: the
-            // extra field there is padded for alignment and is not the one the
-            // directory carries.
-            let Ok(head) = self.read_in(doc, space, local * 8, LOCAL_HEADER * 8) else { continue };
-            if head.len() < LOCAL_HEADER as usize || head[..4] != *LOCAL {
-                continue;
-            }
-            let here = |i: usize| u16::from_le_bytes([head[i], head[i + 1]]) as u64;
-            let data_at = local + LOCAL_HEADER + here(26) + here(28);
-            if data_at.checked_add(packed).is_none_or(|to| to > end) {
-                continue;
-            }
-            out.push(Held { name, at: data_at, len: packed, method: method as u16, legacy: false });
-        }
-        Ok(out)
-    }
-
-    /// The counts and the place of the directory as ZIP64 writes them, found
-    /// through the locator that sits in front of the end record.
-    #[allow(clippy::type_complexity)]
-    fn zip64_end<S: Source>(&mut self, doc: &Document<S>, space: u32, tail: &[u8], found: usize) -> R<Option<((u64, u64, u64), u64)>> {
-        let Some(at) = found.checked_sub(LOCATOR_RECORD as usize) else { return Ok(None) };
-        let Some(locator) = tail.get(at..at + LOCATOR_RECORD as usize) else { return Ok(None) };
-        if locator[..4] != *LOCATOR {
-            return Ok(None);
-        }
-        let where_at = u64::from_le_bytes(locator[8..16].try_into().unwrap_or([0; 8]));
-        let record = self.read_in(doc, space, where_at * 8, 56 * 8)?;
-        if record.len() < 56 || record[..4] != *END64 {
-            return Ok(None);
-        }
-        let long = |i: usize| u64::from_le_bytes(record[i..i + 8].try_into().unwrap_or([0; 8]));
-        Ok(Some(((long(32), long(40), long(48)), where_at)))
+        let mut read = |at: u64, len: u64| self.read_in(doc, space, at * 8, len * 8);
+        let found = crate::formats::zipdirectory::entries(&mut read, end)?;
+        Ok(found.into_iter().map(|e| Held { name: e.name, at: e.at, len: e.len, method: e.method, legacy: false }).collect())
     }
 
     /// The summary over a state dict: one row a tensor, saying what a reader
@@ -643,24 +534,6 @@ fn complex_said(real: &Value, imaginary: &Value) -> String {
 /// word is `little` or `big`.
 const BYTEORDER_ENTRY: &str = "byteorder";
 const MOST_BYTEORDER: u64 = 8;
-
-/// The 64-bit numbers an entry's ZIP64 extra field holds, in the order it
-/// writes them: the unpacked size, the packed size, where the local header is,
-/// and which disk it is on. Only the ones whose 32-bit place held the mark are
-/// written, so the caller takes them in turn.
-fn zip64_extra(extra: &[u8]) -> Vec<u64> {
-    let mut at = 0usize;
-    while let Some(head) = extra.get(at..at + 4) {
-        let id = u16::from_le_bytes([head[0], head[1]]) as u64;
-        let len = u16::from_le_bytes([head[2], head[3]]) as usize;
-        let Some(body) = extra.get(at + 4..at + 4 + len) else { return Vec::new() };
-        if id == ZIP64_EXTRA {
-            return body.chunks_exact(8).map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8]))).collect();
-        }
-        at += 4 + len;
-    }
-    Vec::new()
-}
 
 /// The rows a tensor shows and the nodes under it.
 ///

@@ -1266,6 +1266,16 @@ fn archive_by_names(names: &[&[u8]]) -> &'static str {
 
 /// The name of every entry in the central directory, when the end of the file
 /// holds the end record and the whole directory before it. Nothing otherwise.
+///
+/// Deliberately not [`zipdirectory::entries`], although the two walk the same
+/// records. That one answers where each entry's *data* is, which only the
+/// local header says, so it reads one per entry and passes over an entry whose
+/// header it cannot reach; a sniffer has a window rather than a file and would
+/// silently miss the very names it is deciding on. This one reads the names
+/// out of the window it was given and answers nothing at all when the
+/// directory is not in it, which is the answer a sniffer wants. Both read the
+/// directory's place out of the end record's own field rather than subtracting
+/// its length, which is the one thing they used to disagree about.
 fn zip_directory_names(tail: &[u8], len: u64) -> Option<Vec<&[u8]>> {
     let u16_at = |at: usize| tail.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |at: usize| tail.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64);
