@@ -13,6 +13,7 @@ use crate::template::{Deduce, Deduced, Deducer};
 
 mod basic;
 mod captured;
+mod matched;
 mod builtins;
 mod codecs;
 mod cursor;
@@ -36,6 +37,7 @@ mod values;
 mod tests;
 
 pub use captured::*;
+pub use matched::*;
 pub use lines::{named, spelled};
 pub use picklers::Pickler;
 
