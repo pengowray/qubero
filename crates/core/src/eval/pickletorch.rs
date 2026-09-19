@@ -67,6 +67,31 @@ pub(super) struct Held {
     pub(super) method: u16,
 }
 
+/// What the summary over a state dict says about each tensor, in the order a
+/// reader asks it: which weight this is, what one value of it is, how many
+/// there are and how they are arranged.
+pub(super) const TENSOR_COLUMNS: &[&str] = &["name", "dtype", "shape", "values"];
+/// What one row of that table is.
+pub(super) const TENSOR_ROW: &str = "tensor";
+/// The fewest tensors that make a summary. One tensor is a tensor, and its own
+/// rows already say all of this.
+const FEWEST_TENSORS: usize = 2;
+
+/// The tensors a mapping holds, keyed the way the file keyed them, or nothing
+/// for a mapping holding anything else.
+///
+/// What a state dict is: `{"layer.weight": tensor, "layer.bias": tensor}`,
+/// written as a dictionary or as the `OrderedDict` `nn.Module.state_dict()
+/// returns. A checkpoint's top level holds an epoch and a loss beside it and
+/// is not one; the state dict inside it is.
+pub(super) fn tensor_table(value: &Captured) -> Option<Vec<(&Captured, &Tensor)>> {
+    let entries = super::pickleparts::entries_of(value)?;
+    if entries.len() < FEWEST_TENSORS {
+        return None;
+    }
+    entries.iter().map(|(key, held)| Some((key, tensor_of(held)?))).collect()
+}
+
 /// The tensor a value is, for the rows and the table that read one.
 pub(super) fn tensor_of(value: &Captured) -> Option<&Tensor> {
     match &value.kind {
@@ -278,6 +303,33 @@ impl Evaluator {
         }
         let long = |i: usize| u64::from_le_bytes(record[i..i + 8].try_into().unwrap_or([0; 8]));
         Ok(Some(((long(32), long(40), long(48)), where_at)))
+    }
+
+    /// The summary over a state dict: one row a tensor, saying what a reader
+    /// opens a checkpoint to find out.
+    ///
+    /// Nothing is read out of the storages here. Every column is something the
+    /// pickle already said, so the table costs one read a row, for the key.
+    pub(super) fn tensor_rows<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        r: &Resolved,
+        base: u64,
+        held: &[(&Captured, &Tensor)],
+        from: u64,
+        to: u64,
+    ) -> R<Vec<Vec<Option<Value>>>> {
+        let mut out = Vec::new();
+        for (key, tensor) in held.iter().skip(from as usize).take(to.saturating_sub(from) as usize) {
+            let name = self.pickle_text(doc, r, base, key)?;
+            out.push(vec![
+                name.map(Value::Str),
+                Some(Value::Str(tensor.dtype.word().to_string())),
+                Some(Value::Str(super::pickleparts::extent(&tensor.size))),
+                Some(Value::UInt(u128::from(tensor.values()))),
+            ]);
+        }
+        Ok(out)
     }
 
     /// A run of the pickle read as the text it is, for the two the tensor

@@ -11,6 +11,9 @@ shape; anything else is the opcode listing.
 **What landed for joblib, and what the note below had wrong**, is under
 "joblib.dump: what landed". Read it before the paragraphs above it: those were
 written from a first reading of the bytes and two of their guesses are wrong.
+**What landed for torch** is under "torch.save: what landed", on 2026-09-19,
+and the same warning applies to the torch paragraphs above it: three of their
+guesses are wrong and the section says which.
 
 The owner wants both supported. The goal is the data: a checkpoint's tensors and
 a joblib file's arrays open as tables, as a NumPy array in a plain pickle does.
@@ -270,6 +273,132 @@ with other settings still opens by its extension or by naming the template.
    beside the pickle, which is a different format. Containers, the way the
    pickle matrix was made.
 
+## torch.save: what landed, on 2026-09-19
+
+The ZIP, and everything in the pickle. Not the legacy file.
+
+The code is `crates/core/src/formats/pickle/familiar/torch.rs` for the
+production, one `torch` flag on `Allow` and one `Declared` row in `forms.rs`,
+`crates/core/src/formats/torchzip.rs` for the template and its schema builder,
+`crates/core/src/eval/pickletorch.rs` for finding a tensor's numbers and
+reading them, and a probe and an `archive_by_names` branch in `recognise.rs`.
+The unit tests are `familiar/tests/torch.rs` over one fixture, and the real
+files are `crates/core/tests/torch_real.rs`, ten tests over `torch/`.
+
+| Form | What it reads | Matched |
+| --- | --- | --- |
+| `torch-tensors-p2-p3-v1` | tensors, and plain data around them | 9 of the 10 archives in `torch/`, and `pickle/proto2-torch-state-dict.pickle` |
+| `torch-tensors-p4-p5-v1` | the same at the protocol the caller may ask for | `state-dict-zip-protocol4.pt` |
+
+There is no name at protocol 1 or 0. torch writes protocol 2 by default and
+takes a higher one from the caller; it has never written either of the lower
+two, and a tensor's instructions there have not been measured.
+
+**The tensor, exactly.** `GLOBAL torch._utils _rebuild_tensor_v2`, `MARK`,
+then the persistent id -- `MARK`, the word `storage`, `GLOBAL torch <X>Storage`,
+the key, the device, the element count, a `None` in a legacy file, `TUPLE`,
+its memo mark, `BINPERSID` -- then the storage offset, the size tuple, the
+stride tuple, the requires-grad flag, an empty `collections.OrderedDict()`,
+`TUPLE` and `REDUCE`. Ten storage classes are enumerated, one per dtype torch
+has a class for. `_rebuild_parameter` wraps one and what comes out is the same
+tensor with a note that it is a parameter.
+
+**Why a persistent id is safe to name.** `BINPERSID` in a pickle machine hands
+the tuple to the loader's `persistent_load`, which is a function of the loading
+program. This reader has no such function and fetches nothing: the tuple is
+read as the five or six fixed parts it is, every part checked against what
+torch writes, and what comes out is a note saying where the numbers are. The
+opcode is folded away inside the tensor's own run, so a `BINPERSID` anywhere
+else, or over any other tuple, is a non-match.
+
+**Recognition is by the names in the archive.** `is_torch_zip` asks the front
+of the file for a stored entry named `<folder>/data.pkl`, which is what torch
+writes first; `archive_by_names` asks the central directory for `data.pkl` and
+`version` under one folder, which is the whole test and is what catches a
+checkpoint whose pickle sits behind gigabytes of weights. `is_pickle` is
+untouched.
+
+**The template is the archive with the pickle placed in it**, not a stream
+opened out of it. `torchzip` is `zip::records(true)` and one `Ty::Schema` node
+whose builder finds the `data.pkl` entry and places `T::pickle()` at that
+entry's own bytes, the way `adios/dataset.rs` places a BP5 dataset. That is
+what makes the numbers reachable: the pickle and every storage are then
+offsets in one space, so a tensor's bytes have a place in the file, the hex
+view can go there, and no second space is opened for a file that is already
+laid out flat. Opening the entry as a stream would also have cost the form:
+`template_for` sniffs a stream's bytes, and `picklefpf` needs the whole file
+in the window, so any `data.pkl` over 36 KB would have opened as the opcode
+listing instead.
+
+**Three things the note above had wrong.**
+
+- **The entries are streamed.** The note says every entry is stored and
+  aligned, which is true, but the local headers carry `0` for both sizes and
+  set the streaming flag: torch's writer puts the real sizes in a descriptor
+  after the data. So a walk of local records cannot get from one entry to the
+  next, and `eval/pickletorch.rs` reads the central directory instead, ZIP64
+  included, since a checkpoint past four gigabytes is an ordinary one.
+- **`_rebuild_parameter` is not written like the tensor.** It takes three
+  arguments, so protocol 2 closes them with `TUPLE3` and opens with no `MARK`
+  at all. Only the tensor's six need one.
+- **A state dict is not a plain `OrderedDict`.** `nn.Module.state_dict()`
+  returns one filled with the weights and then given a `_metadata` attribute,
+  so the pickle is `SETITEMS` and then `BUILD` over the same object. The
+  contents and the attributes are two different things arriving the same way:
+  `Kind::Made` has an `attrs` slot beside `state` now, and the node shows them
+  as an `attributes` row under the entries. Without that, no checkpoint saved
+  the ordinary way read at all, and the hand-made sample hid it.
+
+**What a tensor shows**: `dtype` as the plain word, `shape`, `stride`,
+`storage offset`, `storage` (the key), `location`, `requires grad`, `numbers`
+= `12 values in data/0`, and `stored at` = `0x380, 48 bytes`, which is this
+tensor's own window rather than the whole storage. The storage class stays
+reachable as a named operand inside the run of instructions that rebuilt it.
+Its table is the numbers in that entry: rows along the first axis, columns
+along the last, every value at the offset its storage offset and stride put
+it, so a transposed view reads down the storage and two windows onto one
+storage read as the two tensors they are. A mapping of nothing but tensors
+opens as a summary of `name, dtype, shape, values`, one row a tensor.
+
+**What is left for torch**, in the order it is worth doing:
+
+1. **The legacy file.** Not started. Recognition is easy -- the first pickle
+   is always the same fifteen bytes, `80 02 8a 0a` and the magic number -- and
+   the reading is not: the file is five pickles in a row and then the
+   storages, and the IR cannot size a field at a pickle's `STOP`. A new
+   `Deduce` answered by a small `Deducer` would give the five boundaries. The
+   storages are harder than they look: the legacy format writes an element
+   *count* and the element *size* comes from the storage class in the fourth
+   pickle, so the run cannot be typed without reading that pickle, which is
+   the same cross-reference the ZIP has. `torch/state-dict-legacy.pt` is in
+   the collection and in `samples_real`'s `KNOWN_FAILURES`.
+2. **The calls no sample holds.** `_rebuild_tensor_v3` with
+   `torch.storage.UntypedStorage` and a dtype argument, which is how the
+   float8 types are written; the complex and quantised storage classes;
+   `_rebuild_sparse_tensor`, `_rebuild_meta_tensor_no_storage`,
+   `_rebuild_device_tensor_from_numpy` and `_rebuild_wrapper_subclass`. Each
+   is a row in `STORAGES` or in the calls table and a sample beside it.
+3. **`torch.Size`, `torch.device` and `torch.dtype` as values.** The optimizer
+   state in the corpus holds none: Adam's state is tensors and counts. A
+   sample that has one would say what shape each is written in.
+4. **Older torch.** The forms are written for what 2.14 writes. torch 1.x
+   ZIPs and 0.4 to 1.5 legacy files want containers, the way the pickle matrix
+   was made.
+5. **A tensor's numbers as a field rather than a table.** See below.
+
+**What a proper IR answer would need**, now that the shape of it is known. The
+gap is a field in one ZIP entry placed by another entry's contents: the
+tensor's numbers are at `data/<key>`, and `<key>` is a string the pickle
+holds. `Ty::At` places a field at an expression, so the missing piece is an
+expression that resolves an archive entry by name -- something like
+`E::entry_of(&["records"], E::field("key"))`, evaluated by walking the same
+central directory `pickletorch.rs` walks, and a `Ty::Strided` that lays a
+typed run out by a size and a stride rather than contiguously. With those two
+a tensor would be an ordinary field: hex view, selection, byte addresses per
+cell, and the reading counted once. Without the second, a non-contiguous view
+would still need computed cells. zarr-in-zip wants the first of them too,
+which is the argument for doing it rather than widening `pickletorch.rs`.
+
 ## Samples, and when they go into the collection
 
 The `joblib/` samples are in the collection since 2026-09-19, eighteen of them,
@@ -277,13 +406,13 @@ with `array-of-objects.joblib` under `does-not-read`. The generator gained a
 0-d array, an empty array, a list of three arrays and one small array that is
 also a fixture in this repository.
 
-`torch/` is still held back in the session scratch folder, because nothing
-reads one and every one of them would fail `samples_real` for every session:
-state dict as ZIP and legacy, one tensor, every dtype, shared storage and
-views, a training checkpoint, protocol 4. Regenerate with the script (it writes
-both folders into the collection root, so move `torch/` back out); commit them
-with the change that reads them. The collection already has
-`pickle/proto2-torch-state-dict.pickle`, a `data.pkl` on its own.
+The `torch/` samples are in the collection since 2026-09-19, eleven of them.
+The generator gained a module's parameters, a 0-d and an empty tensor, a real
+`model.state_dict()` beside an `optimizer.state_dict()`, and a storage longer
+than any sniff window. `pickle/proto2-torch-state-dict.pickle` is still a
+`data.pkl` on its own and was rewritten the same day: it spelled the storage
+class as a plain string where torch's `persistent_id` hands the pickler the
+class itself, so it claimed to be what torch writes and was not.
 
 Older writers matter as much here as they did for pickle: torch 1.x ZIPs, torch
 0.4 to 1.5 legacy files, joblib 0.9 to 1.x. Containers can make them the way the
@@ -295,9 +424,11 @@ before calling either form done.
 1. ~~joblib uncompressed: the wrapper production and the run after it.~~ Done.
 2. ~~joblib compressed: the decoded space's template, and raw LZMA
    recognition.~~ Done, and the first of those needed no work.
-3. The torch family in the pickle (persistent id, `_rebuild_tensor_v2`), so
-   `data.pkl` on its own reads with tensors that say where their numbers are.
-4. `torchzip`: recognition by names, the archive beside its contents, tensors
-   reading their numbers from the entry they name, the summary table.
-5. The legacy torch file.
-6. Older versions from containers, and the samples into the collection.
+3. ~~The torch family in the pickle (persistent id, `_rebuild_tensor_v2`), so
+   `data.pkl` on its own reads with tensors that say where their numbers
+   are.~~ Done.
+4. ~~`torchzip`: recognition by names, the archive beside its contents,
+   tensors reading their numbers from the entry they name, the summary
+   table.~~ Done.
+5. The legacy torch file. Not started; see "What is left for torch".
+6. Older versions from containers. The samples are in the collection.

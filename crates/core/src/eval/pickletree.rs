@@ -153,6 +153,19 @@ impl Evaluator {
                 return None;
             }
         }
+        // A state dict, which is a mapping of nothing but tensors. What a
+        // reader opens a checkpoint for is which weights are in it and how
+        // big each one is, and that is a table before it is a tree.
+        if let (_, Part::Value(v)) = &here {
+            if let Some(held) = super::pickletorch::tensor_table(v) {
+                return Some(crate::template::TableShape {
+                    names: super::pickletorch::TENSOR_COLUMNS.iter().map(|n| (*n).into()).collect(),
+                    row_word: Some(super::pickletorch::TENSOR_ROW.into()),
+                    cells: Some(Cells::Computed { rows: held.len() as u64 }),
+                    ..Default::default()
+                });
+            }
+        }
         // A list of dictionaries, which is how rows are pickled when nobody
         // reached for pandas. Its columns are the keys, which are written in
         // the file beside the values, so the shape says where a cell is rather
@@ -233,6 +246,9 @@ impl Evaluator {
             match spot(&found, &path[root.len()..]) {
                 Some((_, Part::Data(_))) => return Ok(Some(shape)),
                 Some((_, Part::Value(v))) if super::pickletorch::tensor_of(v).is_some() => return Ok(Some(shape)),
+                // A state dict's summary names its own columns, so there is
+                // nothing under it to read them from.
+                Some((_, Part::Value(v))) if super::pickletorch::tensor_table(v).is_some() => return Ok(Some(shape)),
                 _ => {}
             }
             return self.frame_shape(doc, path);

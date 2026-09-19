@@ -85,6 +85,13 @@ impl Evaluator {
             let base = r.offset;
             return self.tensor_cells(doc, &r, base, tensor, from, to);
         }
+        // A state dict, whose rows are what the pickle already said about each
+        // tensor rather than any of their values.
+        if let Some(held) = super::pickletorch::tensor_table(object) {
+            let r = self.memo[&root].clone();
+            let base = r.offset;
+            return self.tensor_rows(doc, &r, base, &held, from, to);
+        }
         let Some(frame) = frame_of(object) else { return fail("not a frame") };
         let r = self.memo[&root].clone();
         let base = r.offset;

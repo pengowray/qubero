@@ -185,6 +185,45 @@ fn the_shapes_that_are_not_a_rectangle_still_read() {
     assert!(ev.pickle_cells(&doc, &empty, 0, 4).unwrap().is_empty());
 }
 
+/// The summary a reader opens a checkpoint for: one row per tensor, before
+/// any of the structure that holds them.
+#[test]
+fn a_state_dict_opens_as_a_list_of_what_is_in_it() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "state-dict-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    let at = under(&doc, &mut ev, &held, "data");
+    let shape = ev.table_shape(&doc, &at).unwrap().unwrap();
+    assert_eq!(shape.names, vec!["name", "dtype", "shape", "values"]);
+    assert_eq!(shape.row_word.as_deref(), Some("tensor"));
+    assert!(matches!(shape.cells, Some(Cells::Computed { rows: 3 })), "{:?}", shape.cells);
+    let cells = ev.pickle_cells(&doc, &at, 0, 3).unwrap();
+    let said: Vec<Vec<String>> = cells
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| match cell {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(Value::UInt(n)) => n.to_string(),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(said[0], vec!["layer.weight", "float32", "3 x 4", "12"]);
+    assert_eq!(said[1], vec!["layer.bias", "float32", "3", "3"]);
+    assert_eq!(said[2], vec!["steps", "int64", "()", "1"]);
+    // A checkpoint's top level is not one: it holds an epoch and a note
+    // beside the weights. The state dict inside it is.
+    let (doc, mut ev) = open(&dir, "checkpoint-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    let top = under(&doc, &mut ev, &held, "data");
+    assert!(ev.table_shape(&doc, &top).unwrap().is_none());
+    let model = under(&doc, &mut ev, &held, "data/model/value");
+    let shape = ev.table_shape(&doc, &model).unwrap().unwrap();
+    assert!(matches!(shape.cells, Some(Cells::Computed { rows: 3 })), "{:?}", shape.cells);
+}
+
 /// What `optimizer.state_dict()` really holds, which is a state dict with a
 /// `_metadata` attribute on it and the optimizer's own bookkeeping beside it.
 #[test]

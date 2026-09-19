@@ -428,22 +428,54 @@ Three things are worth carrying forward:
 `tools/make_mixed_pickle_samples.py` in the collection writes the twelve
 `pickle/mixed-*.pickle` files, six objects at protocol 4 and at protocol 2.
 
+## torch: landed on 2026-09-19
+
+`torch.save` writes a ZIP holding a protocol 2 pickle whose tensors name their
+numbers with a persistent id, and the numbers are other entries of the same
+archive. Two forms read the pickle, `torch-tensors-p2-p3-v1` and
+`torch-tensors-p4-p5-v1`, and a template called `torchzip` reads the archive
+around it. Every sample in `torch/` reads but the legacy file. The whole of
+it is in `docs/DESIGN-pickle-containers.md` under "torch.save: what landed",
+including the three things the design note guessed wrong.
+
+**How the family was added**, which is the recipe above with three things
+more.
+
+- **A form may allow a production that names no class.** A tensor's storage
+  class is named inside the tensor's own fixed run and never reaches the tree,
+  so the torch row's `classes` is empty and `collections.OrderedDict` is named
+  through the calls table rather than as a package classes may come from.
+  That is what keeps a state dict a torch file rather than a mixture of torch
+  and the standard library, and it needed one change in `holds_class`: a
+  callable a `Made` carries is the thing an enumerated call named in order to
+  be called, checked against the list when the REDUCE was read, and not a
+  class handed to the reader as data.
+- **A call's contents and its attributes are two slots.**
+  `nn.Module.state_dict()` is an `OrderedDict` filled by `SETITEMS` and then
+  given a `_metadata` attribute by `BUILD`, so `Kind::Made` has `attrs`
+  beside `state` and the node shows an `attributes` row under the entries.
+  Every checkpoint saved the ordinary way needs it.
+- **A template may place a pickle inside an archive.** `torchzip` is the
+  archive's records and one `Ty::Schema` node that puts `T::pickle()` at the
+  `data.pkl` entry's own bytes, which is `adios/dataset.rs`'s move. The pickle
+  and the storages then share one space, which is what lets a tensor's table
+  read the entry the tensor named.
+
+`cargo test -p qubero-core --test torch_real` is the real-files test, ten of
+them, and it asserts the tables cell for cell against what the generator
+wrote.
+
 ## Not decided
 
-- torch. `torch.save` writes a ZIP holding a protocol 2 pickle with persistent
-  ids for the tensor storage, and the storages as other entries of the ZIP. It
-  can reuse three things from the joblib work: the segmented instruction walk
-  in `familiar/mod.rs`, which is what lets a matched file hold bytes that are
-  not opcodes; the `Raw` run and the `padding` row that came with it; and the
-  shape of `pickle::is_joblib`, which recognises a file by where its opcodes
-  stop rather than by what is at its front. The legacy torch file is a run of
-  pickles and then binary, which is the same problem again.
+- The legacy torch file, which is a run of five pickles and then the
+  storages. `is_pickle` refuses it because the first STOP is not the end, and
+  sizing a field at a pickle's STOP is something the IR cannot say. See
+  "What is left for torch" in `docs/DESIGN-pickle-containers.md`.
 
-  It can reuse a fourth thing now: a checkpoint is an `OrderedDict` of tensors
-  beside plain values and sometimes numpy arrays, which is three families in one
-  file. So torch wants the tensor production and a `Pack::Torch` beside it, and
-  the mixed form carries the rest: `{"epoch": 3, "loss": 0.125, "model":
-  OrderedDict, "note": str}` is basic and the standard library and torch, and
-  nothing about that combination needs a row of its own. Add the tensor
-  production's own `Declared` row for a file of nothing but tensors, and let a
-  checkpoint fall to the mixed form, the way a joblib file holding dates does.
+  One guess in the paragraph this replaces turned out wrong and is worth
+  keeping: a checkpoint does **not** fall to the mixed form. The torch row
+  reads plain values around its tensors the way the joblib rows read plain
+  data around their arrays, so `{"epoch": 3, "loss": 0.125, "model":
+  OrderedDict, "note": str}` is `torch-tensors-p2-p3-v1`. A checkpoint holding
+  a date or a NumPy array beside its weights is two families and falls to the
+  mixed form, which is where that guess was right.
