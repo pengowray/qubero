@@ -7,6 +7,48 @@ use super::memo::Bound;
 use super::{Dtype, Kind, Shape, Storage, Value, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
 
+/// The scalar types a form may name and never calls, by their whole dotted
+/// path.
+///
+/// A library keeps the type it will make its numbers in as a plain setting:
+/// `OneHotEncoder(dtype=numpy.float64)` and `CountVectorizer(dtype=numpy.int64)`
+/// both hold one, and it reaches the file as a global that nothing calls. So
+/// it goes through the `names` column, which means "may name, never call", and
+/// `numpy` stays a package no class at all may be named from.
+///
+/// Both spellings of the two that were renamed are here: NumPy 2 calls the
+/// boolean type `bool` where 1.x called it `bool_`, and on Linux 1.x spelled
+/// the widest float and complex types by their widths.
+pub(super) const TYPE_NAMES: &[&str] = &[
+    "numpy.bool",
+    "numpy.bool_",
+    "numpy.int8",
+    "numpy.int16",
+    "numpy.int32",
+    "numpy.int64",
+    "numpy.longlong",
+    "numpy.uint8",
+    "numpy.uint16",
+    "numpy.uint32",
+    "numpy.uint64",
+    "numpy.ulonglong",
+    "numpy.float16",
+    "numpy.float32",
+    "numpy.float64",
+    "numpy.longdouble",
+    "numpy.float128",
+    "numpy.complex64",
+    "numpy.complex128",
+    "numpy.clongdouble",
+    "numpy.complex256",
+    "numpy.str_",
+    "numpy.bytes_",
+    "numpy.object_",
+    "numpy.void",
+    "numpy.datetime64",
+    "numpy.timedelta64",
+];
+
 /// How many values a shape holds, which is what a list of objects has to come
 /// to. Zero when any dimension is.
 fn count_of(dimensions: &[u64]) -> Option<u64> {

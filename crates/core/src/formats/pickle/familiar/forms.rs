@@ -523,6 +523,7 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         classes: SKLEARN_CLASSES,
         extension: Some(Extension::Sklearn),
+        names: super::numpy::TYPE_NAMES,
         calls: SKLEARN_CALLS,
         ..PLAIN
     },
@@ -532,6 +533,7 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         classes: &["scipy.sparse"],
         extension: Some(Extension::Scipy),
+        names: super::numpy::TYPE_NAMES,
         ..PLAIN
     },
     Declared {
@@ -541,7 +543,7 @@ const DECLARED: &[Declared] = &[
         builtins: true,
         classes: &["pandas"],
         extension: Some(Extension::Pandas),
-        names: NO_CLASSES,
+        names: super::numpy::TYPE_NAMES,
         calls: PANDAS_CALLS,
         object_arrays: true,
         joblib: Wrapped::Refused,
@@ -599,9 +601,10 @@ const DECLARED: &[Declared] = &[
         joblib: Wrapped::Required,
         classes: SKLEARN_CLASSES,
         extension: Some(Extension::Sklearn),
+        names: super::numpy::TYPE_NAMES,
         calls: SKLEARN_CALLS,
-        // A classifier fitted on labels that are strings keeps them in
-        // `classes_`, which is an array of objects.
+        // An estimator fitted on labels that are not numbers keeps them in
+        // `classes_`, and a column of them in a frame is an array of objects.
         object_arrays: true,
         ..PLAIN
     },
