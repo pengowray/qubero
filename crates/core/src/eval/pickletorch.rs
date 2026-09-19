@@ -371,6 +371,15 @@ impl Evaluator {
     ///
     /// Nothing is read out of the storages here. Every column is something the
     /// pickle already said, so the table costs one read a row, for the key.
+    ///
+    /// The rows are about tensors rather than about runs of bytes, and only
+    /// two of the four columns are anywhere. The name is the run of
+    /// instructions that spell it, which is where a reader looking for
+    /// `layer.weight` in the hex view would find it; the count of values is
+    /// the numbers it counts, which is the tensor's own window in the file and
+    /// the one address a reader opens a checkpoint for. The dtype and the
+    /// shape are said by the instructions that rebuild the tensor rather than
+    /// written as a value, so those cells say so instead of pointing.
     pub(super) fn tensor_rows<S: Source>(
         &mut self,
         doc: &Document<S>,
@@ -379,15 +388,20 @@ impl Evaluator {
         held: &[(&Captured, &Tensor)],
         from: u64,
         to: u64,
-    ) -> R<Vec<Vec<Option<Value>>>> {
+    ) -> R<Vec<Vec<FrameCell>>> {
         let mut out = Vec::new();
         for (key, tensor) in held.iter().skip(from as usize).take(to.saturating_sub(from) as usize) {
             let name = self.pickle_text(doc, r, base, key)?;
+            let spelled = CellAt::Bytes { space: r.space, offset_bits: base + key.at as u64 * 8, size_bits: key.len as u64 * 8 };
+            let numbers = match self.tensor_run(doc, r, base, tensor)? {
+                Some((at, len)) => CellAt::Bytes { space: r.space, offset_bits: at * 8, size_bits: len * 8 },
+                None => CellAt::Nowhere,
+            };
             out.push(vec![
-                name.map(Value::Str),
-                Some(Value::Str(tensor.dtype.word().to_string())),
-                Some(Value::Str(super::pickleparts::extent(&tensor.size))),
-                Some(Value::UInt(u128::from(tensor.values()))),
+                FrameCell { value: name.map(Value::Str), at: spelled },
+                FrameCell { value: Some(Value::Str(tensor.dtype.word().to_string())), at: CellAt::Said },
+                FrameCell { value: Some(Value::Str(super::pickleparts::extent(&tensor.size))), at: CellAt::Said },
+                FrameCell { value: Some(Value::UInt(u128::from(tensor.values()))), at: numbers },
             ]);
         }
         Ok(out)
@@ -412,7 +426,7 @@ impl Evaluator {
         tensor: &Tensor,
         from: u64,
         to: u64,
-    ) -> R<Vec<Vec<Option<Value>>>> {
+    ) -> R<Vec<Vec<FrameCell>>> {
         let Some((start, len)) = self.storage_run(doc, r, base, tensor)? else {
             return fail("this file does not hold the entry the tensor names");
         };
@@ -430,7 +444,9 @@ impl Evaluator {
         Ok(out)
     }
 
-    /// One value of a tensor, read where the stride puts it.
+    /// One value of a tensor, read where the stride puts it, and pointing at
+    /// the bytes it was read from: the entry's data, the tensor's offset into
+    /// its storage, and one step of the stride per axis.
     #[allow(clippy::too_many_arguments)]
     fn one_element<S: Source>(
         &mut self,
@@ -443,11 +459,11 @@ impl Evaluator {
         width: u64,
         row: u64,
         column: u64,
-    ) -> R<Option<Value>> {
-        let Some(elem) = tensor.element(row, column) else { return Ok(None) };
-        let Some(at) = elem.checked_mul(width) else { return Ok(None) };
+    ) -> R<FrameCell> {
+        let Some(elem) = tensor.element(row, column) else { return Ok(FrameCell::nowhere()) };
+        let Some(at) = elem.checked_mul(width) else { return Ok(FrameCell::nowhere()) };
         if at.checked_add(width).is_none_or(|end| end > len) {
-            return Ok(None);
+            return Ok(FrameCell::nowhere());
         }
         let offset = (start + at) * 8;
         // A complex number is a pair: the real part and then the imaginary
@@ -457,14 +473,17 @@ impl Evaluator {
             true => width * 4,
             false => width * 8,
         };
+        // The cell covers the whole element, which for a complex number is
+        // both halves of the pair.
+        let cell = CellAt::Bytes { space: r.space, offset_bits: offset, size_bits: width * 8 };
         let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
         let real = self.primitive_value(doc, &[], &one, ty, size)?;
         if !tensor.dtype.complex() {
-            return Ok(Some(real));
+            return Ok(FrameCell { value: Some(real), at: cell });
         }
         let next = Resolved { offset: offset + size, cursor: offset + size, limit: offset + size * 2, size: Some(size), ..r.clone() };
         let imaginary = self.primitive_value(doc, &[], &next, ty, size)?;
-        Ok(Some(Value::Str(complex_said(&real, &imaginary))))
+        Ok(FrameCell { value: Some(Value::Str(complex_said(&real, &imaginary))), at: cell })
     }
 
     /// Which way round the numbers are, which the archive says in a record of

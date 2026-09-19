@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, FrameCell, Value};
 use qubero_core::formats;
 use qubero_core::source::{ChunkStore, MemSource};
 
@@ -1627,14 +1627,20 @@ fn array_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
         .map(|i| {
             let mut at = row.path.clone();
             at.push(i);
-            cell_text(&Some(ev.node(&doc, &at).unwrap().value))
+            value_text(&Some(ev.node(&doc, &at).unwrap().value))
         })
         .collect()
 }
 
 /// A cell as the interface shows it, which for a value the frame has not got
 /// is nothing at all.
-fn cell_text(cell: &Option<Value>) -> String {
+fn cell_text(cell: &FrameCell) -> String {
+    value_text(&cell.value)
+}
+
+/// The same for a value read off a node of the tree rather than out of a
+/// table.
+fn value_text(cell: &Option<Value>) -> String {
     match cell {
         None => String::new(),
         Some(Value::Int(n)) => n.to_string(),
@@ -1792,7 +1798,7 @@ fn a_mixed_file_reads_as_every_family_it_holds() {
                 let mut at = frame.path.clone();
                 at.push(i);
                 let n = ev.node(&doc, &at).unwrap();
-                (n.name.clone(), cell_text(&Some(n.value)))
+                (n.name.clone(), value_text(&Some(n.value)))
             })
             .collect();
         let expected = [
@@ -1885,7 +1891,7 @@ fn a_list_of_ordered_dicts_opens_as_the_table_it_holds() {
                         .iter()
                         .map(|column| {
                             let cell = rows.iter().find(|c| c.name == *column && c.path.starts_with(&r.path)).unwrap();
-                            cell_text(&Some(cell.value.clone()))
+                            value_text(&Some(cell.value.clone()))
                         })
                         .collect()
                 })

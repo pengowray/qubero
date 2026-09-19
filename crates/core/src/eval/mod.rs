@@ -69,6 +69,7 @@ pub use space::{JoinedRun, SingleRun, Space, SpaceId, View};
 pub use tab::Tab;
 pub use stitch::PartHit;
 pub use cells::Cell;
+pub use picklecells::{CellAt, FrameCell};
 pub use check::{Blanked, CheckInfo, Verdict};
 pub use valid::ValidVerdict;
 pub use table::TableShapeInfo;

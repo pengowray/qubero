@@ -155,8 +155,9 @@ impl<'a, S: Source> Tab<'a, S> {
     }
 
     /// The rows `from` up to `to` of the pandas frame at `path`, each as one
-    /// value a column and nothing where the frame has no value.
-    pub fn pickle_cells(&mut self, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<Option<Value>>>> {
+    /// value a column and nothing where the frame has no value. Every cell
+    /// says where its own bytes are; see [`FrameCell`].
+    pub fn pickle_cells(&mut self, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<FrameCell>>> {
         self.ev.pickle_cells(self.doc, &self.path_in(path), from, to)
     }
 

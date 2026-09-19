@@ -17,6 +17,51 @@ use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Value as Captu
 use crate::formats::pickle::shapes;
 use crate::template::{Cells, Endian, TableShape};
 
+/// One cell of a computed table: what it says, and where the bytes it was read
+/// from are.
+///
+/// The address is the cell's own. A frame's row is one value out of each of
+/// several blocks, scattered through the file, so there is no run of bytes the
+/// row is and nothing but a per-cell address would be true.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameCell {
+    /// What the cell says, or nothing where the file holds no value for it: a
+    /// NaN, a `None`, a categorical code of -1.
+    pub value: Option<Value>,
+    pub at: CellAt,
+}
+
+/// Where a computed cell's bytes are, for the three reasons a cell may have
+/// none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellAt {
+    /// A run of the address space `space`. 0 is the file; anything else is a
+    /// space the file opened inside itself, and the offset counts from that
+    /// space's own start.
+    Bytes { space: u32, offset_bits: u64, size_bits: u64 },
+    /// Counted out rather than written down, which is a `RangeIndex` label: a
+    /// start and a step, and no bytes anywhere holding the number.
+    Counted,
+    /// Said of the row rather than read out of it, which is what the dtype and
+    /// the shape columns of a checkpoint's summary are.
+    Said,
+    /// Nowhere this reading can point at: a run whose dtype it does not read,
+    /// a value past the end of the bytes the file holds.
+    Nowhere,
+}
+
+impl FrameCell {
+    /// A cell with a value and a run of bytes behind it.
+    pub(super) fn at(value: Option<Value>, at: CellAt) -> Self {
+        FrameCell { value, at }
+    }
+
+    /// A cell this reading could not place.
+    pub(super) fn nowhere() -> Self {
+        FrameCell { value: None, at: CellAt::Nowhere }
+    }
+}
+
 impl Evaluator {
     /// The table a pandas frame or series is: the index and then the columns,
     /// with what one value of each is, over as many rows as the index says.
@@ -67,7 +112,7 @@ impl Evaluator {
 
     /// The rows `from` up to `to`, each as one value a column, with nothing
     /// where the frame has no value.
-    pub fn pickle_cells<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<Option<Value>>>> {
+    pub fn pickle_cells<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<FrameCell>>> {
         let (root, found) = self.pickle_doc(doc, path)?;
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return fail("not a frame") };
         // A tensor, whose values are in another entry of the archive and are
@@ -203,22 +248,33 @@ impl Evaluator {
     }
 
     /// The label the index files row `row` under.
+    ///
+    /// A counted index is the one with no bytes: it is a start, a stop and a
+    /// step, and the number in the cell was never written anywhere. The cell
+    /// says so rather than pointing at the bounds it was counted from, which
+    /// are three numbers somewhere else and not this row's.
     #[allow(clippy::too_many_arguments)]
-    fn index_label<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, found: &Match, index: &Captured, row: u64) -> R<Option<Value>> {
-        let Some(state) = index_state(index) else { return Ok(None) };
+    fn index_label<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, found: &Match, index: &Captured, row: u64) -> R<FrameCell> {
+        let Some(state) = index_state(index) else { return Ok(FrameCell::nowhere()) };
         if is_range(index) {
             let (start, _, step) = self.range_bounds(doc, r, base, state)?;
-            let (Some(start), Some(step)) = (start, step) else { return Ok(None) };
+            let (Some(start), Some(step)) = (start, step) else { return Ok(FrameCell::at(None, CellAt::Counted)) };
             let at = start.checked_add(step.checked_mul(i128::from(row)).unwrap_or(0));
-            return Ok(at.map(Value::Int));
+            return Ok(FrameCell::at(at.map(Value::Int), CellAt::Counted));
         }
-        let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
-        let Some(held) = values_of(&found, values) else { return Ok(None) };
+        let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(FrameCell::nowhere()) };
+        let Some(held) = values_of(&found, values) else { return Ok(FrameCell::nowhere()) };
         self.one_value(doc, root, r, base, found, &held, 0, row)
     }
 
     /// One value of a column, or nothing where the frame has none.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Three kinds of cell and three kinds of address. A number is in a run,
+    /// either in the file or in the space the file spelled it into. A pickled
+    /// object is the instructions that rebuild it, and the cell points at all
+    /// of them: the opcode as well as its payload, since that run is what the
+    /// file says this value is. A category is a code in one run naming a name
+    /// in another, and the code is the byte this row holds.
     #[allow(clippy::too_many_arguments)]
     fn one_value<S: Source>(
         &mut self,
@@ -230,32 +286,34 @@ impl Evaluator {
         held: &Values,
         column: u64,
         row: u64,
-    ) -> R<Option<Value>> {
-        let Some(elem) = held.at(column, row) else { return Ok(None) };
+    ) -> R<FrameCell> {
+        let Some(elem) = held.at(column, row) else { return Ok(FrameCell::nowhere()) };
         match held {
             Values::Numbers(n) => self.number_at(doc, root, r, base, n, elem),
             Values::Texts(items) => {
-                let Some(item) = items.get(elem as usize) else { return Ok(None) };
+                let Some(item) = items.get(elem as usize) else { return Ok(FrameCell::nowhere()) };
+                let at = CellAt::Bytes { space: r.space, offset_bits: base + item.at as u64 * 8, size_bits: item.len as u64 * 8 };
                 if let Some(said) = self.pickle_text(doc, r, base, item)? {
-                    return Ok(Some(Value::Str(said)));
+                    return Ok(FrameCell::at(Some(Value::Str(said)), at));
                 }
                 // Anything else a column of objects holds: a date, a list, an
                 // exact number. The cell says what the tree's own row for that
                 // value says, which is the value itself where it is one thing
                 // and what kind of thing and how much of it where it is not.
-                Ok(self.pickle_said(doc, found, r, base, item)?.map(Value::Str))
+                Ok(FrameCell::at(self.pickle_said(doc, found, r, base, item)?.map(Value::Str), at))
             }
             Values::Coded(codes, names) => {
-                let code = match self.number_at(doc, root, r, base, codes, elem)? {
+                let held = self.number_at(doc, root, r, base, codes, elem)?;
+                let code = match held.value {
                     Some(Value::Int(code)) => code,
                     Some(Value::UInt(code)) => i128::try_from(code).unwrap_or(NO_CATEGORY),
-                    _ => return Ok(None),
+                    _ => return Ok(FrameCell::at(None, held.at)),
                 };
                 if code == NO_CATEGORY || code < 0 {
-                    return Ok(None);
+                    return Ok(FrameCell::at(None, held.at));
                 }
-                let Some(item) = usize::try_from(code).ok().and_then(|at| names.get(at)) else { return Ok(None) };
-                Ok(self.pickle_text(doc, r, base, item)?.map(Value::Str))
+                let Some(item) = usize::try_from(code).ok().and_then(|at| names.get(at)) else { return Ok(FrameCell::at(None, held.at)) };
+                Ok(FrameCell::at(self.pickle_text(doc, r, base, item)?.map(Value::Str), held.at))
             }
         }
     }
@@ -266,54 +324,70 @@ impl Evaluator {
     /// unit its dtype names, and a reader wants the date rather than the
     /// count, so it is read as a whole number and written out.
     #[allow(clippy::too_many_arguments)]
-    fn number_at<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<Value>> {
+    fn number_at<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<FrameCell> {
         let spelling = match n.dtype {
             Dtype::Plain(spelling) => spelling,
             Dtype::Datetime { unit, .. } => {
-                let count = self.date_count(doc, root, r, base, n, elem)?;
-                return Ok(count.and_then(|count| iso_time(count, unit)).map(Value::Str));
+                let (count, at) = self.date_count(doc, root, r, base, n, elem)?;
+                return Ok(FrameCell::at(count.and_then(|count| iso_time(count, unit)).map(Value::Str), at));
             }
-            _ => return Ok(None),
+            _ => return Ok(FrameCell::nowhere()),
         };
-        let Some((ty, width)) = shapes::element(spelling) else { return Ok(None) };
-        let read = match &n.spelled {
-            Some(at) => self.space_value(doc, root, at, elem, &ty, width)?,
-            None => {
-                let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
-                let offset = base + at * 8;
-                let size = width * 8;
-                let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
-                Some(self.primitive_value(doc, &[], &one, &ty, size)?)
-            }
-        };
-        // A NaN is how pandas writes a number it has not got.
-        Ok(match read {
-            Some(Value::Float(f)) if f.is_nan() => None,
-            other => other,
-        })
+        let Some((ty, width)) = shapes::element(spelling) else { return Ok(FrameCell::nowhere()) };
+        let (read, at) = self.element_at(doc, root, r, base, n, elem, &ty, width)?;
+        // A NaN is how pandas writes a number it has not got. The bytes are
+        // still there, so the cell still says where they are.
+        Ok(FrameCell::at(
+            match read {
+                Some(Value::Float(f)) if f.is_nan() => None,
+                other => other,
+            },
+            at,
+        ))
     }
 
-    /// One value of a run of dates, as the whole number it is written as.
+    /// One value of a run of dates, as the whole number it is written as, and
+    /// where that number is.
     #[allow(clippy::too_many_arguments)]
-    fn date_count<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<i64>> {
-        let Dtype::Datetime { spelling, .. } = n.dtype else { return Ok(None) };
-        let Some((_, width)) = shapes::element(spelling) else { return Ok(None) };
+    fn date_count<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<(Option<i64>, CellAt)> {
+        let Dtype::Datetime { spelling, .. } = n.dtype else { return Ok((None, CellAt::Nowhere)) };
+        let Some((_, width)) = shapes::element(spelling) else { return Ok((None, CellAt::Nowhere)) };
         let endian = if spelling.starts_with('>') { Endian::Big } else { Endian::Little };
         let ty = Ty::Int { bits: 64, endian };
-        let read = match &n.spelled {
-            Some(at) => self.space_value(doc, root, at, elem, &ty, width)?,
-            None => {
-                let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
-                let offset = base + at * 8;
-                let size = width * 8;
-                let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
-                Some(self.primitive_value(doc, &[], &one, &ty, size)?)
-            }
-        };
-        Ok(match read {
-            Some(Value::Int(count)) => i64::try_from(count).ok(),
-            _ => None,
-        })
+        let (read, at) = self.element_at(doc, root, r, base, n, elem, &ty, width)?;
+        Ok((
+            match read {
+                Some(Value::Int(count)) => i64::try_from(count).ok(),
+                _ => None,
+            },
+            at,
+        ))
+    }
+
+    /// Element `elem` of a run, read as `ty`, and where it is: a run of the
+    /// file at protocol 3 and up, and a run of the space the numbers were
+    /// spelled into below it.
+    #[allow(clippy::too_many_arguments)]
+    fn element_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        r: &Resolved,
+        base: u64,
+        n: &Numbers,
+        elem: u64,
+        ty: &Ty,
+        width: u64,
+    ) -> R<(Option<Value>, CellAt)> {
+        if let Some(spelled) = &n.spelled {
+            return self.space_value(doc, root, spelled, elem, ty, width);
+        }
+        let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok((None, CellAt::Nowhere)) };
+        let offset = base + at * 8;
+        let size = width * 8;
+        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
+        let read = self.primitive_value(doc, &[], &one, ty, size)?;
+        Ok((Some(read), CellAt::Bytes { space: r.space, offset_bits: offset, size_bits: size }))
     }
 
     /// One value out of a run the file did not write as bytes.
@@ -327,8 +401,12 @@ impl Evaluator {
     ///
     /// `at` is counted from the pickle field, so the node's own path is that
     /// under the pickle's root.
+    ///
+    /// The address the cell gets is a run of that space rather than of the
+    /// file, and is numbered the way every other address in the space is: the
+    /// space's own id, counted from its own start.
     #[allow(clippy::too_many_arguments)]
-    fn space_value<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: &[usize], elem: u64, ty: &Ty, width: u64) -> R<Option<Value>> {
+    fn space_value<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: &[usize], elem: u64, ty: &Ty, width: u64) -> R<(Option<Value>, CellAt)> {
         let path = [root, at].concat();
         self.resolve(doc, &path)?;
         let super::space::Opened::Space(id) = self.open_space_at(doc, &path)? else {
@@ -336,14 +414,15 @@ impl Evaluator {
         };
         let Some(held) = self.spaces.buf(id).cloned() else { return fail("this array's numbers are no longer open") };
         let size = width * 8;
-        let Some(offset) = elem.checked_mul(size) else { return Ok(None) };
+        let Some(offset) = elem.checked_mul(size) else { return Ok((None, CellAt::Nowhere)) };
         if offset.checked_add(size).is_none_or(|end| end > held.len() as u64 * 8) {
-            return Ok(None);
+            return Ok((None, CellAt::Nowhere));
         }
         let run = Document::new(crate::source::ArcSource(held));
         let r = self.memo[&path].clone();
         let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), space: 0, ..r };
-        Ok(Some(self.primitive_value(&run, &[], &one, ty, size)?))
+        let read = self.primitive_value(&run, &[], &one, ty, size)?;
+        Ok((Some(read), CellAt::Bytes { space: id, offset_bits: offset, size_bits: size }))
     }
 
     /// The label at position `c` of the axis that names a frame's columns.
@@ -358,7 +437,7 @@ impl Evaluator {
         let Some(state) = index_state(axis) else { return Ok(None) };
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
         let Some(held) = values_of(&found, values) else { return Ok(None) };
-        Ok(match self.one_value(doc, root, r, base, found, &held, 0, c)? {
+        Ok(match self.one_value(doc, root, r, base, found, &held, 0, c)?.value {
             Some(Value::Str(said)) => Some(said),
             Some(Value::Int(n)) => Some(n.to_string()),
             Some(Value::UInt(n)) => Some(n.to_string()),
@@ -462,8 +541,8 @@ impl Evaluator {
         }
         // The first and the last label, which is what a reader wants of an
         // index of dates and is still true of one of names.
-        let first = self.index_label(doc, root, r, base, found, frame.index, 0)?;
-        let last = self.index_label(doc, root, r, base, found, frame.index, rows - 1)?;
+        let first = self.index_label(doc, root, r, base, found, frame.index, 0)?.value;
+        let last = self.index_label(doc, root, r, base, found, frame.index, rows - 1)?.value;
         Ok(match (label_text(&first), label_text(&last)) {
             (Some(first), Some(last)) if rows > 1 => format!("{kind} {first} to {last}"),
             (Some(first), _) => format!("{kind} {first}"),

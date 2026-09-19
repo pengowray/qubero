@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, FrameCell, Value};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
@@ -59,7 +59,13 @@ fn row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
 
 /// A cell as the interface shows it, which for a value the file has not got is
 /// nothing at all.
-fn cell_text(cell: &Option<Value>) -> String {
+fn cell_text(cell: &FrameCell) -> String {
+    value_text(&cell.value)
+}
+
+/// The same for a value read off a node of the tree rather than out of a
+/// table.
+fn value_text(cell: &Option<Value>) -> String {
     match cell {
         None => String::new(),
         Some(Value::Int(n)) => n.to_string(),
@@ -278,7 +284,7 @@ fn joblib_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
         .map(|i| {
             let mut at = row.path.clone();
             at.push(i);
-            cell_text(&Some(ev.node(&doc, &at).unwrap().value))
+            value_text(&Some(ev.node(&doc, &at).unwrap().value))
         })
         .collect()
 }
@@ -419,8 +425,8 @@ fn an_object_array_joblib_wrote_reads_as_the_values_it_holds() {
     let nested = row(&rows, "nested pickle");
     let protocols: Vec<&Row> = rows.iter().filter(|r| r.name == "protocol").collect();
     assert_eq!(protocols.len(), 2);
-    assert_eq!(cell_text(&Some(protocols[0].value.clone())), "4");
-    assert_eq!(cell_text(&Some(protocols[1].value.clone())), "5");
+    assert_eq!(value_text(&Some(protocols[0].value.clone())), "4");
+    assert_eq!(value_text(&Some(protocols[1].value.clone())), "5");
     assert!(protocols[1].at > nested.at && protocols[1].at < nested.at + nested.len);
     // `numpy.array(["a", None, 3], dtype=object)`, in order: a string, the
     // singleton and a number, which is more than the text and `None` an
@@ -428,7 +434,7 @@ fn an_object_array_joblib_wrote_reads_as_the_values_it_holds() {
     let values: Vec<(String, String)> = rows
         .iter()
         .filter(|r| r.depth == nested.depth + 1 && r.name.starts_with('['))
-        .map(|r| (r.ty.clone(), cell_text(&Some(r.value.clone()))))
+        .map(|r| (r.ty.clone(), value_text(&Some(r.value.clone()))))
         .collect();
     assert_eq!(values[0], ("utf8[]".to_string(), "a".to_string()));
     assert_eq!(values[1].0, "null");

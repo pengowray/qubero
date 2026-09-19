@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, FrameCell, Value};
 use qubero_core::template::Cells;
 use qubero_core::formats;
 use qubero_core::source::MemSource;
@@ -154,7 +154,7 @@ fn every_dtype_reads_as_the_numbers_it_is() {
         let at = tensor_at(&doc, &mut ev, word);
         assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str(word.to_string()), "{word}");
         let cells = ev.pickle_cells(&doc, &at, 0, 4).unwrap();
-        let held: Vec<Value> = cells.into_iter().flatten().flatten().collect();
+        let held: Vec<Value> = cells.into_iter().flatten().filter_map(|cell| cell.value).collect();
         assert_eq!(held.len(), 4, "{word}");
         for value in held {
             let one = match value {
@@ -197,7 +197,7 @@ fn the_dtypes_without_a_storage_class_read_as_the_numbers_they_are() {
         assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str((*word).to_string()), "{name}");
         assert_eq!(row(&doc, &mut ev, &at, "numbers"), Value::Str("4 values in data/0".into()), "{name}");
         let cells = ev.pickle_cells(&doc, &at, 0, 4).unwrap();
-        let held: Vec<Value> = cells.into_iter().flatten().flatten().collect();
+        let held: Vec<Value> = cells.into_iter().flatten().filter_map(|cell| cell.value).collect();
         // A complex number is one cell holding a pair, in Python's own
         // spelling for a complex literal.
         let ones: Vec<Value> = match word.starts_with("complex") {
@@ -303,7 +303,7 @@ fn a_real_state_dict_and_checkpoint_open_as_their_tensors() {
     assert_eq!(shape.names, vec!["name", "dtype", "shape", "values"]);
     let said: Vec<String> = ev.pickle_cells(&doc, &at, 0, 1).unwrap()[0]
         .iter()
-        .map(|cell| match cell {
+        .map(|cell| match &cell.value {
             Some(Value::Str(s)) => s.clone(),
             Some(Value::UInt(n)) => n.to_string(),
             other => panic!("{other:?}"),
@@ -376,7 +376,7 @@ fn a_state_dict_opens_as_a_list_of_what_is_in_it() {
         .iter()
         .map(|row| {
             row.iter()
-                .map(|cell| match cell {
+                .map(|cell| match &cell.value {
                     Some(Value::Str(s)) => s.clone(),
                     Some(Value::UInt(n)) => n.to_string(),
                     other => panic!("{other:?}"),
@@ -458,12 +458,12 @@ fn under(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], name: &str
 }
 
 /// A table's cells as plain numbers, with nothing where the table has none.
-fn numbers(cells: &[Vec<Option<Value>>]) -> Vec<Vec<f64>> {
+fn numbers(cells: &[Vec<FrameCell>]) -> Vec<Vec<f64>> {
     cells
         .iter()
         .map(|row| {
             row.iter()
-                .map(|cell| match cell {
+                .map(|cell| match &cell.value {
                     Some(Value::Float(f)) => *f,
                     Some(Value::Int(n)) => *n as f64,
                     Some(Value::UInt(n)) => *n as f64,

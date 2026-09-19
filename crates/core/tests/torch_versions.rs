@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, Value};
+use qubero_core::eval::{Evaluator, FrameCell, Value};
 use qubero_core::formats;
 use qubero_core::source::MemSource;
 
@@ -243,12 +243,12 @@ fn under(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], name: &str
 }
 
 /// A table's cells as plain numbers.
-fn numbers(cells: &[Vec<Option<Value>>]) -> Vec<Vec<f64>> {
+fn numbers(cells: &[Vec<FrameCell>]) -> Vec<Vec<f64>> {
     cells
         .iter()
         .map(|row| {
             row.iter()
-                .map(|cell| match cell {
+                .map(|cell| match &cell.value {
                     Some(Value::Float(f)) => *f,
                     Some(Value::Int(n)) => *n as f64,
                     Some(Value::UInt(n)) => *n as f64,
