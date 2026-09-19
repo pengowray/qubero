@@ -662,6 +662,24 @@ fn the_forms_match_these_samples_and_no_others() {
         // already had rather than being read as a mixture of one.
         ("mixed-list-of-frames-p4.pickle", Some("pandas-frame-p4-p5-v1")),
         ("mixed-list-of-frames-p2.pickle", Some("pandas-frame-p2-p3-v1")),
+        // Columns of objects holding more than text. A column of dates or of
+        // exact numbers uses the standard library's productions, so the frame
+        // is a mixture; a column of lists is containers of plain values, which
+        // every form already reads, so that frame keeps the pandas form.
+        ("mixed-frame-of-dates-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-frame-of-dates-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-frame-of-decimals-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-frame-of-decimals-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-frame-of-lists-p4.pickle", Some("pandas-frame-p4-p5-v1")),
+        ("mixed-frame-of-lists-p2.pickle", Some("pandas-frame-p2-p3-v1")),
+        // An array of objects holding tuples, beside a date so that the file
+        // is a mixture: an array of objects alone is numpy and nothing else.
+        ("mixed-array-of-tuples-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-array-of-tuples-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        // The same column of objects holding instances of a class no form
+        // names, which is where the widening stops.
+        ("unfamiliar-frame-of-instances-p4.pickle", None),
+        ("unfamiliar-frame-of-instances-p2.pickle", None),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -1335,6 +1353,103 @@ fn a_frame_placed_by_a_named_slice_opens_as_the_table_it_holds() {
     }
 }
 
+/// A column of objects opens as its values, whatever was pickled into it.
+///
+/// A pandas column of objects holds whatever Python was holding: dates, lists,
+/// exact numbers. Each value is a whole object of the pickle rather than a run
+/// of bytes, so the claim is cell for cell: the date as a date, the list as
+/// what kind of thing it is and how much of it, the exact number as its
+/// digits. The header says `object` rather than `str`, which is pandas' own
+/// word for the dtype and is what a reader compares against.
+#[test]
+fn a_column_of_objects_opens_as_the_values_it_holds() {
+    let Some(dir) = folder() else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let cases: &[(&str, &[&str], &[&str], &[&[&str]])] = &[
+        (
+            "mixed-frame-of-dates",
+            &["index", "day", "reading"],
+            &["int64", "object", "float64"],
+            &[&["0", "2026-09-17", "1.5"], &["1", "2026-09-18", "2.5"], &["2", "2026-09-19", "3.5"]],
+        ),
+        (
+            "mixed-frame-of-lists",
+            &["index", "items", "n"],
+            &["int64", "object", "int64"],
+            &[&["0", "list of 3", "3"], &["1", "list of 1", "1"], &["2", "list of 2", "2"]],
+        ),
+        (
+            "mixed-frame-of-decimals",
+            &["index", "price"],
+            &["int64", "object"],
+            &[&["0", "1.25"], &["1", "0.10"], &["2", "99.99"]],
+        ),
+    ];
+    for (stem, columns, units, want) in cases {
+        for protocol in ["p4", "p2"] {
+            let name = format!("{stem}-{protocol}.pickle");
+            let bytes = std::fs::read(dir.join(&name)).unwrap();
+            let doc = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{name}: no table"));
+            assert_eq!(shape.names, *columns, "{name}");
+            assert_eq!(shape.units, *units, "{name}");
+            let read = ev.pickle_cells(&doc, &[1], 0, want.len() as u64 + 1).unwrap();
+            let said: Vec<Vec<String>> = read.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+            let want: Vec<Vec<String>> = want.iter().map(|row| row.iter().map(|c| (*c).to_string()).collect()).collect();
+            assert_eq!(said, want, "{name}");
+        }
+    }
+}
+
+/// An array of objects holding a class no form names stays a non-match.
+///
+/// The values in such an array are read by the same grammar as the rest of the
+/// file, and that grammar names a class only from the modules the form listed.
+/// So widening what an array of objects may hold widens it by exactly the
+/// productions the file's form already allows, and not by one more.
+#[test]
+fn an_array_of_objects_holding_an_unnamed_class_is_a_non_match() {
+    let Some(dir) = folder() else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    for name in ["unfamiliar-frame-of-instances-p4.pickle", "unfamiliar-frame-of-instances-p2.pickle"] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let found = formats::pickle::familiar::recognise(&bytes);
+        assert!(found.is_none(), "{name}: matched {:?}", found.map(|f| f.form));
+    }
+}
+
+/// A joblib file's nested pickle holds whatever a column of objects holds.
+///
+/// `joblib.dump` writes an array of objects as a whole pickle inside the
+/// stream, read by the same grammar with the outer stream's memo and framing
+/// put aside. So a column of dates follows from the widening rather than
+/// needing anything of its own, and this is the file that says so.
+#[test]
+fn a_joblib_nested_pickle_holds_a_column_of_dates() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let name = "pandas-frame-of-dates.joblib";
+    let bytes = std::fs::read(dir.join(name)).unwrap();
+    let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{name} matched no form"));
+    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.extensions(), "builtins, stdlib, numpy, pandas, joblib");
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{name}: no table"));
+    assert_eq!(shape.names, ["index", "day", "reading"]);
+    assert_eq!(shape.units, ["int64", "object", "float64"]);
+    let read = ev.pickle_cells(&doc, &[1], 0, 3).unwrap();
+    let said: Vec<Vec<String>> = read.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+    assert_eq!(said, [["0", "2026-09-17", "1.5"], ["1", "2026-09-18", "2.5"], ["2", "2026-09-19", "3.5"]]);
+}
+
 /// An array reads as the same numbers at every protocol a form takes.
 ///
 /// Protocol 2 has no opcode for a byte string, so an array's numbers go out as
@@ -1505,6 +1620,21 @@ fn a_mixed_file_reads_as_every_family_it_holds() {
         // too, which is why it is worth having on every file and not only on
         // a mixed one.
         ("mixed-list-of-frames-p4.pickle", "pandas-frame-p4-p5-v1", "builtins, numpy, pandas"),
+        // A column of objects holding dates, which makes the file use the
+        // standard library's own production: the values in such a column are
+        // read by the same grammar as the rest of the file, so a date in one
+        // counts the way a date anywhere else does.
+        ("mixed-frame-of-dates-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-of-dates-p2.pickle", "mixed-values-p2-p3-v1", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-of-decimals-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
+        // A column of lists is containers of plain values, which every form
+        // already reads, so the frame keeps the pandas form.
+        ("mixed-frame-of-lists-p4.pickle", "pandas-frame-p4-p5-v1", "builtins, numpy, pandas"),
+        ("mixed-frame-of-lists-p2.pickle", "pandas-frame-p2-p3-v1", "builtins, numpy, pandas"),
+        // An array of objects holding tuples, beside a date. The array alone
+        // is numpy and nothing else, and the mixed form wants two.
+        ("mixed-array-of-tuples-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
+        ("mixed-array-of-tuples-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy"),
     ];
     for (name, form, extensions) in want {
         let bytes = std::fs::read(dir.join(name)).unwrap();
@@ -1702,6 +1832,9 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // object arrays and so two nested pickles.
         ("pandas-frame-named-columns.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         ("scipy-csr-matrix.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        // A frame with a column of dates, so the nested pickle joblib writes
+        // for that column holds dates rather than text.
+        ("pandas-frame-of-dates.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         // The compressors, each of which holds one of the files above.
         ("dict-of-arrays-zlib.joblib", None, "zlib"),
         ("dict-of-arrays-compress-true.joblib", None, "zlib"),

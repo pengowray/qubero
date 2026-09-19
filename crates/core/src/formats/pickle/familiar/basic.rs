@@ -86,6 +86,14 @@ fn opens(kind: &Kind) -> Fill {
     }
 }
 
+/// What one opcode of the run did.
+enum Step {
+    /// It folded or pushed something, and the run goes on.
+    Went,
+    /// It was the STOP, so what is on the stack is the whole of the object.
+    Stopped,
+}
+
 /// Whether this opcode begins an object.
 ///
 /// CPython's framer ends a frame where the next object begins and nowhere
@@ -116,170 +124,236 @@ impl Cursor<'_> {
     pub(super) fn object(&mut self) -> Option<Value> {
         let mut stack: Vec<Slot> = Vec::new();
         let mut marks: Vec<Mark> = Vec::new();
-        loop {
-            self.left = self.left.checked_sub(1)?;
-            let mut code = self.peek()?;
-            if code == 0x95 || opens_object(code) {
-                // A frame may end here, and the next one begin.
-                self.gate()?;
-                code = self.peek()?;
-                if !opens_object(code) {
-                    return None;
-                }
-            } else if let Framing::Inside(end) | Framing::Full(end) = self.framing {
-                // Everything else continues an object already begun, so the
-                // frame it is in has to reach past it.
-                if self.at >= end {
-                    return None;
-                }
-            }
-            if code == b'.' {
-                break;
-            }
-            let start = self.at;
-            let floor = marks.last().map_or(0, |mark| mark.floor);
-            match code {
-                b'(' => {
-                    if marks.len() >= MAX_DEPTH {
-                        return None;
-                    }
-                    self.byte()?;
-                    marks.push(Mark { at: start, floor: stack.len() });
-                }
-                // TUPLE1, TUPLE2 and TUPLE3, which take the one to three
-                // things above them. A tuple of four or more is written over
-                // a MARK instead, and an empty one has an opcode of its own.
-                0x85..=0x87 if self.proto >= 2 => {
-                    let arity = (code - 0x84) as usize;
-                    self.byte()?;
-                    if stack.len() < floor + arity {
-                        return None;
-                    }
-                    let items = stack.split_off(stack.len() - arity);
-                    let at = items[0].value.at;
-                    let holds = items.iter().all(|slot| hashable(&slot.value));
-                    self.memoize(Bound::Made { what: Shape::Tuple, at, hashable: holds })?;
-                    stack.push(self.folded(at, items, Kind::Tuple)?);
-                }
-                // TUPLE and FROZENSET, each over everything since its MARK.
-                // FROZENSET arrived with protocol 4; below it a frozenset is
-                // a call of the class, which the calls table reads.
-                b't' | 0x91 => {
-                    if code == 0x91 && self.proto < 4 {
-                        return None;
-                    }
-                    self.byte()?;
-                    let mark = marks.pop()?;
-                    let items = stack.split_off(mark.floor);
-                    if code == b't' && items.len() < 4 && self.proto >= 2 {
-                        // Three or fewer are written with TUPLE1 to TUPLE3
-                        // from protocol 2, which is where those opcodes are.
-                        return None;
-                    }
-                    let holds = items.iter().all(|slot| hashable(&slot.value));
-                    if code == 0x91 && !holds {
-                        return None;
-                    }
-                    let what = if code == b't' { Shape::Tuple } else { Shape::FrozenSet };
-                    // Protocol 0 writes an empty tuple as a bare MARK and
-                    // TUPLE and files nothing: it is a singleton, as the
-                    // opcode for it above protocol 0 is. Jython's `cPickle` is
-                    // the one that files it, because `save_tuple` there takes
-                    // the same path for an empty tuple as for any other and
-                    // ends it with a `put`.
-                    let singleton = self.proto == 0 && items.is_empty();
-                    if !singleton || self.peek() == Some(b'p') {
-                        if singleton {
-                            self.wrote(Pickler::Jython)?;
-                        }
-                        self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
-                    }
-                    let make = if code == b't' { Kind::Tuple } else { Kind::FrozenSet };
-                    stack.push(self.folded(mark.at, items, make)?);
-                }
-                // DICT and LIST, which is how protocol 0 creates one: a MARK
-                // and the opcode, with nothing between them. CPython writes
-                // them empty and fills them with SETITEM and APPEND, so a
-                // container made with anything between the two is a file no
-                // pickler wrote.
-                b'd' | b'l' if self.proto == 0 => {
-                    self.byte()?;
-                    let mark = marks.pop()?;
-                    if stack.len() != mark.floor {
-                        return None;
-                    }
-                    let (kind, what) = match code {
-                        b'd' => (Kind::Dict(Vec::new()), Shape::Dict),
-                        _ => (Kind::List(Vec::new()), Shape::List),
-                    };
-                    self.memoize(Bound::Made { what, at: mark.at, hashable: false })?;
-                    stack.push(Slot { value: Value { at: mark.at, len: self.at - mark.at, kind }, deep: 1, fill: Fill::Open });
-                }
-                // The opcodes that fill a container the file made empty.
-                b'a' | b's' => {
-                    self.byte()?;
-                    let wants = if code == b'a' { 1 } else { 2 };
-                    if stack.len() < floor + wants + 1 {
-                        return None;
-                    }
-                    let items = stack.split_off(stack.len() - wants);
-                    self.one(&mut stack, items, code == b'a')?;
-                }
-                // ADDITEMS arrived with protocol 4, along with the set opcode
-                // it fills.
-                b'e' | b'u' | 0x90 => {
-                    if self.proto == 0 || (code == 0x90 && self.proto < 4) {
-                        // Protocol 0 fills a container one entry at a time.
-                        return None;
-                    }
-                    self.byte()?;
-                    let mark = marks.pop()?;
-                    if mark.floor == 0 {
-                        return None;
-                    }
-                    let items = stack.split_off(mark.floor);
-                    self.batch(&mut stack, items, code)?;
-                }
-                // STACK_GLOBAL, NEWOBJ, NEWOBJ_EX, REDUCE and BUILD, which only
-                // a form that reads a library object allows. Each folds exactly
-                // the things written in front of it, in the same order: the
-                // thing being named, called or filled first, and what it is
-                // named, called or filled with after. NEWOBJ_EX takes three,
-                // since it has a place for keyword arguments; the rest take
-                // two. Both arrived with protocol 4.
-                0x93 | 0x81 | 0x92 | b'R' | b'b' if self.reads_calls() && (!matches!(code, 0x93 | 0x92) || self.proto >= 4) => {
-                    self.byte()?;
-                    let wants = if code == 0x92 { 3 } else { 2 };
-                    if stack.len() < floor + wants {
-                        return None;
-                    }
-                    let items = stack.split_off(stack.len() - wants);
-                    let at = items[0].value.at;
-                    self.shut(&items)?;
-                    let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
-                    if deep > MAX_DEPTH {
-                        return None;
-                    }
-                    let values = items.into_iter().map(|slot| slot.value).collect();
-                    let kind = self.library(code, at, values)?;
-                    let fill = opens(&kind);
-                    stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill });
-                }
-                _ => {
-                    if stack.len() >= MAX_VALUES {
-                        return None;
-                    }
-                    let slot = self.push(code)?;
-                    stack.push(slot);
-                }
-            }
-        }
+        while let Step::Went = self.step(&mut stack, &mut marks)? {}
         if stack.len() != 1 || !marks.is_empty() {
             return None;
         }
         let whole = stack.pop()?;
         self.shut(std::slice::from_ref(&whole))?;
         Some(whole.value)
+    }
+
+    /// The list of values an array of pickled objects is handed.
+    ///
+    /// An ordinary list, created empty and filled by the opcodes after it, and
+    /// read against the same stack the rest of the file is read against. So a
+    /// value in it is whatever the file's form allows anywhere else, under the
+    /// same bounds, rather than a leaf read one at a time.
+    ///
+    /// How many values the array's shape comes to is what says where the list
+    /// ends, since the opcode after the last one belongs to the run that made
+    /// the array. A batch that overshoots the count is a non-match.
+    pub(super) fn filled_list(&mut self, count: u64) -> Option<Vec<Value>> {
+        self.gate()?;
+        let at = self.at;
+        // Protocol 0 has no opcode for an empty list and writes a MARK with a
+        // LIST behind it.
+        match self.proto {
+            0 => self.exact(b"(l")?,
+            _ => self.exact(b"]")?,
+        }
+        self.memoize(Bound::Made { what: Shape::List, at, hashable: false })?;
+        // An array of objects holding another one is read from inside the run
+        // that made the outer array, which is this program's own stack as well
+        // as depth in the tree, so both are counted against the same bound.
+        self.nesting += 1;
+        if self.nesting > MAX_DEPTH {
+            return None;
+        }
+        let mut stack = vec![Slot { value: Value { at, len: self.at - at, kind: Kind::List(Vec::new()) }, deep: 1, fill: Fill::Open }];
+        let mut marks: Vec<Mark> = Vec::new();
+        loop {
+            let held = match stack.first().map(|slot| &slot.value.kind) {
+                Some(Kind::List(items)) => items.len() as u64,
+                // The list is no longer what the run is filling, which is a
+                // fold that reached past it.
+                _ => return None,
+            };
+            if held >= count {
+                break;
+            }
+            if let Step::Stopped = self.step(&mut stack, &mut marks)? {
+                return None;
+            }
+        }
+        if stack.len() != 1 || !marks.is_empty() {
+            return None;
+        }
+        self.nesting -= 1;
+        let Kind::List(items) = stack.pop()?.value.kind else { return None };
+        (items.len() as u64 == count).then_some(items)
+    }
+
+    /// One opcode of the run: what it folds off the stack, what it pushes back,
+    /// and whether the run goes on.
+    fn step(&mut self, stack: &mut Vec<Slot>, marks: &mut Vec<Mark>) -> Option<Step> {
+        self.left = self.left.checked_sub(1)?;
+        let mut code = self.peek()?;
+        if code == 0x95 || opens_object(code) {
+            // A frame may end here, and the next one begin.
+            self.gate()?;
+            code = self.peek()?;
+            if !opens_object(code) {
+                return None;
+            }
+        } else if let Framing::Inside(end) | Framing::Full(end) = self.framing {
+            // Everything else continues an object already begun, so the
+            // frame it is in has to reach past it.
+            if self.at >= end {
+                return None;
+            }
+        }
+        if code == b'.' {
+            return Some(Step::Stopped);
+        }
+        let start = self.at;
+        let floor = marks.last().map_or(0, |mark| mark.floor);
+        match code {
+            b'(' => {
+                if marks.len() >= MAX_DEPTH {
+                    return None;
+                }
+                self.byte()?;
+                marks.push(Mark { at: start, floor: stack.len() });
+            }
+            // TUPLE1, TUPLE2 and TUPLE3, which take the one to three
+            // things above them. A tuple of four or more is written over
+            // a MARK instead, and an empty one has an opcode of its own.
+            0x85..=0x87 if self.proto >= 2 => {
+                let arity = (code - 0x84) as usize;
+                self.byte()?;
+                if stack.len() < floor + arity {
+                    return None;
+                }
+                let items = stack.split_off(stack.len() - arity);
+                let at = items[0].value.at;
+                let holds = items.iter().all(|slot| hashable(&slot.value));
+                self.memoize(Bound::Made { what: Shape::Tuple, at, hashable: holds })?;
+                stack.push(self.folded(at, items, Kind::Tuple)?);
+            }
+            // TUPLE and FROZENSET, each over everything since its MARK.
+            // FROZENSET arrived with protocol 4; below it a frozenset is
+            // a call of the class, which the calls table reads.
+            b't' | 0x91 => {
+                if code == 0x91 && self.proto < 4 {
+                    return None;
+                }
+                self.byte()?;
+                let mark = marks.pop()?;
+                let items = stack.split_off(mark.floor);
+                if code == b't' && items.len() < 4 && self.proto >= 2 {
+                    // Three or fewer are written with TUPLE1 to TUPLE3
+                    // from protocol 2, which is where those opcodes are.
+                    return None;
+                }
+                let holds = items.iter().all(|slot| hashable(&slot.value));
+                if code == 0x91 && !holds {
+                    return None;
+                }
+                let what = if code == b't' { Shape::Tuple } else { Shape::FrozenSet };
+                // Protocol 0 writes an empty tuple as a bare MARK and
+                // TUPLE and files nothing: it is a singleton, as the
+                // opcode for it above protocol 0 is. Jython's `cPickle` is
+                // the one that files it, because `save_tuple` there takes
+                // the same path for an empty tuple as for any other and
+                // ends it with a `put`.
+                let singleton = self.proto == 0 && items.is_empty();
+                if !singleton || self.peek() == Some(b'p') {
+                    if singleton {
+                        self.wrote(Pickler::Jython)?;
+                    }
+                    self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
+                }
+                let make = if code == b't' { Kind::Tuple } else { Kind::FrozenSet };
+                stack.push(self.folded(mark.at, items, make)?);
+            }
+            // DICT and LIST, which is how protocol 0 creates one: a MARK
+            // and the opcode, with nothing between them. CPython writes
+            // them empty and fills them with SETITEM and APPEND, so a
+            // container made with anything between the two is a file no
+            // pickler wrote.
+            b'd' | b'l' if self.proto == 0 => {
+                self.byte()?;
+                let mark = marks.pop()?;
+                if stack.len() != mark.floor {
+                    return None;
+                }
+                let (kind, what) = match code {
+                    b'd' => (Kind::Dict(Vec::new()), Shape::Dict),
+                    _ => (Kind::List(Vec::new()), Shape::List),
+                };
+                self.memoize(Bound::Made { what, at: mark.at, hashable: false })?;
+                stack.push(Slot { value: Value { at: mark.at, len: self.at - mark.at, kind }, deep: 1, fill: Fill::Open });
+            }
+            // The opcodes that fill a container the file made empty.
+            b'a' | b's' => {
+                self.byte()?;
+                let wants = if code == b'a' { 1 } else { 2 };
+                if stack.len() < floor + wants + 1 {
+                    return None;
+                }
+                let items = stack.split_off(stack.len() - wants);
+                self.one(stack, items, code == b'a')?;
+            }
+            // ADDITEMS arrived with protocol 4, along with the set opcode
+            // it fills.
+            b'e' | b'u' | 0x90 => {
+                if self.proto == 0 || (code == 0x90 && self.proto < 4) {
+                    // Protocol 0 fills a container one entry at a time.
+                    return None;
+                }
+                self.byte()?;
+                let mark = marks.pop()?;
+                if mark.floor == 0 {
+                    return None;
+                }
+                let items = stack.split_off(mark.floor);
+                self.batch(stack, items, code)?;
+            }
+            // STACK_GLOBAL, NEWOBJ, NEWOBJ_EX, REDUCE and BUILD, which only
+            // a form that reads a library object allows. Each folds exactly
+            // the things written in front of it, in the same order: the
+            // thing being named, called or filled first, and what it is
+            // named, called or filled with after. NEWOBJ_EX takes three,
+            // since it has a place for keyword arguments; the rest take
+            // two. Both arrived with protocol 4.
+            0x93 | 0x81 | 0x92 | b'R' | b'b' if self.reads_calls() && (!matches!(code, 0x93 | 0x92) || self.proto >= 4) => {
+                self.byte()?;
+                let wants = if code == 0x92 { 3 } else { 2 };
+                if stack.len() < floor + wants {
+                    return None;
+                }
+                let items = stack.split_off(stack.len() - wants);
+                let at = items[0].value.at;
+                self.shut(&items)?;
+                let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
+                if self.too_deep(deep) {
+                    return None;
+                }
+                let values = items.into_iter().map(|slot| slot.value).collect();
+                let kind = self.library(code, at, values)?;
+                let fill = opens(&kind);
+                stack.push(Slot { value: Value { at, len: self.at - at, kind }, deep, fill });
+            }
+            _ => {
+                if stack.len() >= MAX_VALUES {
+                    return None;
+                }
+                let slot = self.push(code)?;
+                stack.push(slot);
+            }
+        }
+        Some(Step::Went)
+    }
+
+    /// Whether a value this deep is deeper than a form reads.
+    ///
+    /// Counted from the top of the file rather than from the run in hand. An
+    /// array of pickled objects is read from inside the run that made it, and
+    /// the run below starts its own count at one, so what that run holds is
+    /// [`Cursor::nesting`] deeper than it says.
+    fn too_deep(&self, deep: usize) -> bool {
+        deep.saturating_add(self.nesting) > MAX_DEPTH
     }
 
     /// Every value here has been taken off the stack and is finished, so a
@@ -332,7 +406,7 @@ impl Cursor<'_> {
     fn folded(&mut self, at: usize, items: Vec<Slot>, make: fn(Vec<Value>) -> Kind) -> Option<Slot> {
         self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
-        if deep > MAX_DEPTH {
+        if self.too_deep(deep) {
             return None;
         }
         let values = items.into_iter().map(|slot| slot.value).collect();
@@ -355,12 +429,12 @@ impl Cursor<'_> {
     fn one(&mut self, stack: &mut [Slot], items: Vec<Slot>, list_like: bool) -> Option<()> {
         self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
+        if self.too_deep(deep) {
+            return None;
+        }
         let mut items = items.into_iter();
         let proto = self.proto;
         let into = stack.last_mut()?;
-        if deep > MAX_DEPTH {
-            return None;
-        }
         match into.fill {
             Fill::Open => {}
             Fill::Batched(n) if self.batch_full(n) => self.tail(list_like, Pickler::Python)?,
@@ -410,10 +484,10 @@ impl Cursor<'_> {
     fn batch(&mut self, stack: &mut [Slot], items: Vec<Slot>, code: u8) -> Option<()> {
         self.shut(&items)?;
         let deep = 1 + items.iter().map(|slot| slot.deep).max().unwrap_or(0);
-        let into = stack.last_mut()?;
-        if deep > MAX_DEPTH {
+        if self.too_deep(deep) {
             return None;
         }
+        let into = stack.last_mut()?;
         let taken = items.len();
         let mut items = items.into_iter();
         let entries = match (code, filled(&mut into.value.kind)) {

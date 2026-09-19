@@ -91,7 +91,9 @@ pub(super) struct Allow {
     pub(super) calls: &'static [Reduce],
     /// Whether an array's values may be pickled objects rather than numbers,
     /// which is NumPy's `O8` dtype. A pandas index of column names is one, and
-    /// nothing else in the corpus is.
+    /// so is every pandas column that is not numbers: text, dates, lists,
+    /// exact numbers. What such an array may hold is what this form allows
+    /// anywhere else, since the values are read against the same stack.
     pub(super) object_arrays: bool,
 }
 

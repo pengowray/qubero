@@ -476,6 +476,50 @@ before it stopped, which is where the next production goes.
    Protocols 0 and 1 are not in scope; `DESIGN-familiar-pickle-forms.md` says
    what they would need under "What protocols 0 and 1 would need".
 
+## An array of objects holds more than leaves: landed on 2026-09-19
+
+A pandas column of objects holds whatever Python was holding: dates, lists,
+tuples, exact numbers, and the missing entries between them. Until now such an
+array held leaves only, so a frame with one of those columns matched nothing.
+
+What changed is where the values are read. The list an array of objects is
+handed is an ordinary list, created empty and filled by the opcodes after it,
+so it is now read against the same stack the rest of the file is read against.
+`Cursor::object` was split into `Cursor::step`, one opcode at a time, and
+`Cursor::filled_list`, which seeds that stack with the list and steps until the
+array's shape says the list is full. Both are in `familiar/basic.rs`;
+`familiar/numpy.rs` calls the second where it used to call a leaf reader of its
+own.
+
+Three things follow from reading the values through the one stack rather than
+beside it:
+
+- **The widening is the form's, not the array's.** A value in the array is
+  whatever that file's form allows anywhere else, with the same depth bound,
+  the same work budget, the same batch lengths and the same memo. A class from
+  a module the form does not list is refused at `may_name` wherever it is
+  written, so `unfamiliar-frame-of-instances-p4.pickle` and `-p2` match
+  nothing.
+- **The mixed form picks up the frames that need it.** A column of
+  `datetime.date` or of `decimal.Decimal` uses the standard library's
+  productions, so the file holds two extensions and is read under the mixed
+  form; a column of lists is containers of plain values, which every form
+  already reads, so that frame keeps the pandas form.
+- **joblib follows with no work.** The nested pickle joblib writes where an
+  array of objects would have had its numbers is read by the same grammar, so
+  `joblib/pandas-frame-of-dates.joblib` reads for the same reason.
+
+One bound had to be added. An array of objects inside an array of objects is
+read from inside the run that made the outer one, which is recursion on the
+program's own stack as well as depth in the tree, so `Cursor::nesting` counts
+the open runs and `Cursor::too_deep` adds it to the depth a fold is checking.
+
+The frame table shows such a cell the way the tree's own row shows the value:
+`pickle_text` first, and then the few-word reading from `picklesaid.rs`, so a
+date reads as its ISO spelling and a list as `list of 3`. The column header
+says `object` rather than `str` where the values are not all text, which is
+pandas' own word for the dtype.
+
 ## joblib: landed on 2026-09-19
 
 `joblib.dump` writes a pickle with each array's bytes in the stream after a

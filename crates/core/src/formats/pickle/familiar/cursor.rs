@@ -71,6 +71,11 @@ pub(super) struct Cursor<'a> {
     /// array's padding and numbers, and a whole pickle written inside this
     /// one. The listing walks the opcodes in the segments between them.
     pub(super) breaks: Vec<super::joblib::Break>,
+    /// How many runs of opcodes are open inside one another. An array of
+    /// pickled objects is read from inside the run that made it, so the values
+    /// in it are that much further down than the depth their own run counts,
+    /// and this is the difference.
+    pub(super) nesting: usize,
     pub(super) furthest: usize,
 }
 
@@ -121,6 +126,7 @@ pub(super) struct Save {
     pub(super) wrappers: usize,
     pub(super) tensors: usize,
     pub(super) breaks: usize,
+    pub(super) nesting: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -219,6 +225,7 @@ impl<'a> Cursor<'a> {
             wrappers: self.wrappers,
             tensors: self.tensors,
             breaks: self.breaks.len(),
+            nesting: self.nesting,
         }
     }
 
@@ -297,6 +304,7 @@ impl<'a> Cursor<'a> {
         self.wrappers = s.wrappers;
         self.tensors = s.tensors;
         self.breaks.truncate(s.breaks);
+        self.nesting = s.nesting;
     }
 
     /// FRAME and its eight-byte length, which must land inside the file.

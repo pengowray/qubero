@@ -312,8 +312,9 @@ What the library forms read, and what they do not:
   only into values whose span holds the offset. Two frames built separately
   share nothing and spell everything twice. The sample is
   `mixed-frames-sharing-placements-p4.pickle` and `-p2`.
-- **An array of objects holds text, `None` and names for text**, in a list of
-  up to a thousand a batch, and nothing else. An array of objects can hold
+- **An array of objects holds whatever the file's form allows**, in a list of
+  up to a thousand a batch. A column of dates, of lists or of exact numbers is
+  read the way the same values are read anywhere else in the file. An array of objects can hold
   whatever was pickled into it, and only what a form has written down is read.
 
 ### Extensions compose: the mixed form
@@ -738,22 +739,38 @@ the array is handed a list of them and they are pickled one by one after it.
 There is nothing to measure, which is why `Dtype::width` has no answer for one
 and why `fits` refuses to be asked.
 
-**Which values one may hold**: the leaves the basic productions read. Text, a
-byte string, a whole number, a float, `True`, `False`, `None`, and a `BINGET`
-naming a string the file wrote earlier. That is what an object array really
-holds in the files it turns up in: a pandas column of objects is strings and
-numbers with the missing entries between them, a pandas index of column names
-is strings, and a classifier's `classes_` is the labels it was fitted on.
+**Which values one may hold**, since 2026-09-19: whatever the file's form
+allows anywhere else. The list is an ordinary list, created empty and filled by
+the opcodes after it, so it is read against the same stack the rest of the file
+is read against rather than value by value. Text, numbers and the missing
+entries between them, which is what a pandas column of objects usually holds;
+containers of those, which is what a column of lists or of tuples is; and, when
+the file's form allows the standard library, a `datetime.date` or a
+`decimal.Decimal`, which is what a column of dates or of money is. The bounds
+are the ones everything else is held to: the same depth, the same work budget,
+the same batch lengths, the same memo.
 
-**Which it may not**: a container and a call. A list, a dictionary or a set is
-created empty and filled by the opcodes after it, and a `datetime` is a REDUCE
-of a class; both are the stack machine's work rather than one value's, and
-reading them here would mean running the machine inside a production that is
-not it. No file in the corpus holds either inside an object array. A column of
-dates is not this case: pandas writes one as an `M8` array of counts, which is
-numbers. An object array holding a date, a list or an object is the gap, and
-what closes it is reading the values through the same stack the rest of the
-file is read against rather than one at a time.
+Reading them through the one stack is what makes the widening exactly as
+strict as the rest of the grammar rather than a second, looser reading. An
+array of objects under the pandas form may hold what a pandas file may hold; an
+array of objects under the NumPy form is still a non-match, because that form
+does not allow one at all. A class the form's own prefixes do not cover is
+refused at `may_name` wherever it is written, so an array of objects holding an
+instance of a class no extension enumerates matches nothing, the way it did
+before. The samples that say so are `unfamiliar-frame-of-instances-p4.pickle`
+and `-p2`.
+
+One thing follows rather than being arranged: a frame with a column of dates
+uses the standard library's productions, so it is a mixture and is read under
+the mixed form where a plain frame keeps the pandas one. A column of lists is
+containers of plain values, which every form already reads, so that frame keeps
+the pandas form. A `datetime.datetime` column is neither case: pandas writes
+one as an `M8` array of counts, which is numbers.
+
+Counting is what says where the list ends. The array's shape says how many
+values there are, and the opcode after the last one belongs to the run that
+made the array, so the fill stops at the count and a batch that overshoots it
+is a non-match.
 
 **Which forms allow it** is a flag in the `DECLARED` table, `object_arrays`,
 and it is on for the pandas form, the two joblib forms and the mixed form.

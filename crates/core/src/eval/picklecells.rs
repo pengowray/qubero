@@ -13,7 +13,7 @@ use super::pickleframe::*;
 use super::pickleparts::{spot, Part, Says};
 use super::picklesaid::MOST_SHOWN_TEXT as MOST_SHOWN;
 use super::*;
-use crate::formats::pickle::familiar::{Dtype, Kind, Match, Value as Captured};
+use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Value as Captured};
 use crate::formats::pickle::shapes;
 use crate::template::{Cells, Endian, TableShape};
 
@@ -114,7 +114,7 @@ impl Evaluator {
         for row in from..to.min(rows) {
             let mut cells = vec![self.index_label(doc, &r, base, &found, frame.index, row)?];
             for (j, held) in &placed {
-                cells.push(self.one_value(doc, &r, base, held, *j, row)?);
+                cells.push(self.one_value(doc, &r, base, &found, held, *j, row)?);
             }
             out.push(cells);
         }
@@ -257,15 +257,17 @@ impl Evaluator {
         }
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
         let Some(held) = values_of(&found, values) else { return Ok(None) };
-        self.one_value(doc, r, base, &held, 0, row)
+        self.one_value(doc, r, base, found, &held, 0, row)
     }
 
     /// One value of a column, or nothing where the frame has none.
+    #[allow(clippy::too_many_arguments)]
     fn one_value<S: Source>(
         &mut self,
         doc: &Document<S>,
         r: &Resolved,
         base: u64,
+        found: &Match,
         held: &Values,
         column: u64,
         row: u64,
@@ -275,7 +277,14 @@ impl Evaluator {
             Values::Numbers(n) => self.number_at(doc, r, base, n, elem),
             Values::Texts(items) => {
                 let Some(item) = items.get(elem as usize) else { return Ok(None) };
-                Ok(self.pickle_text(doc, r, base, item)?.map(Value::Str))
+                if let Some(said) = self.pickle_text(doc, r, base, item)? {
+                    return Ok(Some(Value::Str(said)));
+                }
+                // Anything else a column of objects holds: a date, a list, an
+                // exact number. The cell says what the tree's own row for that
+                // value says, which is the value itself where it is one thing
+                // and what kind of thing and how much of it where it is not.
+                Ok(self.pickle_said(doc, found, r, base, item)?.map(Value::Str))
             }
             Values::Coded(codes, names) => {
                 let code = match self.number_at(doc, r, base, codes, elem)? {
@@ -375,7 +384,7 @@ impl Evaluator {
         let Some(state) = index_state(axis) else { return Ok(None) };
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
         let Some(held) = values_of(&found, values) else { return Ok(None) };
-        Ok(match self.one_value(doc, r, base, &held, 0, c)? {
+        Ok(match self.one_value(doc, r, base, found, &held, 0, c)? {
             Some(Value::Str(said)) => Some(said),
             Some(Value::Int(n)) => Some(n.to_string()),
             Some(Value::UInt(n)) => Some(n.to_string()),
@@ -385,12 +394,26 @@ impl Evaluator {
 }
 
 /// What one value of a run is, in the header.
+///
+/// A column of pickled objects is whatever was pickled into it. `str` where
+/// every value is text, which is what such a column usually holds and what a
+/// reader wants told apart from a column of numbers; `object`, pandas' own
+/// word for the dtype, where the values are dates, lists or a mixture.
 fn word_of(held: &Values) -> String {
     match held {
         Values::Numbers(n) => dtype_word(n.dtype),
-        Values::Texts(_) => "str".into(),
+        Values::Texts(items) => match items.iter().all(is_text) {
+            true => "str".into(),
+            false => "object".into(),
+        },
         Values::Coded(..) => "category".into(),
     }
+}
+
+/// Whether one value of a column of objects is text, or the missing entry
+/// between two of them, which pandas writes as `None`.
+fn is_text(value: &Captured) -> bool {
+    matches!(value.kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. }) | Kind::None)
 }
 
 /// Whether an object is one of scipy's sparse matrices, which keep their

@@ -225,6 +225,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         wrappers: 0,
         tensors: 0,
         breaks: Vec::new(),
+        nesting: 0,
         furthest: 0,
     };
     let found = c.whole(form);
