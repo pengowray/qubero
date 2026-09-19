@@ -303,3 +303,73 @@ const NAME: &str = "TorchLegacy";
 const STORAGE_NAME: &str = "storage";
 const NOT_LEGACY: &str =
     "Not laid out as a legacy checkpoint: this file opens with torch's magic number, but its five pickles and the storages after them do not account for every byte. Open it as a Python pickle to see what it does hold.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real file, `torch.save(state_dict, path,
+    /// _use_new_zipfile_serialization=False)` from torch 2.14.
+    const LEGACY_FILE: &[u8] = include_bytes!("../../tests/fixtures/pickle/torch-state-dict-legacy.pt");
+
+    fn read_of(bytes: &[u8]) -> impl FnMut(u64, u64) -> R<Vec<u8>> + '_ {
+        move |at, len| {
+            let (at, len) = (at as usize, len as usize);
+            Ok(bytes.get(at..at + len).unwrap_or_default().to_vec())
+        }
+    }
+
+    fn laid_out(bytes: &[u8]) -> Option<Layout> {
+        layout(&mut read_of(bytes), bytes.len() as u64).unwrap()
+    }
+
+    #[test]
+    fn the_five_pickles_and_the_storages_cover_the_whole_file() {
+        let found = laid_out(LEGACY_FILE).unwrap();
+        assert_eq!(found.pickles.len(), PICKLES.len());
+        assert_eq!(found.storages.len(), 3);
+        let last = found.storages.last().unwrap();
+        assert_eq!(last.at + last.len, LEGACY_FILE.len() as u64);
+        // The width comes from the data pickle and from nowhere else: the
+        // counts say three, one and twelve elements.
+        let widths: Vec<u64> = found.storages.iter().map(|s| s.len / s.dtype.width()).collect();
+        assert_eq!(widths, [3, 1, 12]);
+    }
+
+    /// A file whose parts do not reach its end is a file laid out some other
+    /// way, and placing fields in it would be placing them at offsets nothing
+    /// checked.
+    #[test]
+    fn a_file_with_a_byte_left_over_is_refused() {
+        let mut longer = LEGACY_FILE.to_vec();
+        longer.push(0);
+        assert!(laid_out(&longer).is_none());
+        let shorter = &LEGACY_FILE[..LEGACY_FILE.len() - 1];
+        assert!(laid_out(shorter).is_none());
+    }
+
+    /// A file saved on a big-endian machine is refused rather than read the
+    /// wrong way round. Every number in it would be reversed, and nothing
+    /// here has ever been measured against one.
+    #[test]
+    fn a_file_saved_the_other_way_round_is_refused() {
+        // The word, its memo mark, and then the flag: protocol 2 writes a
+        // BINPUT between the two, so the flag is the first NEWTRUE after it.
+        let word = LEGACY_FILE.windows(13).position(|w| w == b"little_endian").unwrap();
+        let at = word + LEGACY_FILE[word..].iter().position(|b| *b == 0x88).unwrap();
+        let mut other = LEGACY_FILE.to_vec();
+        other[at] = 0x89;
+        assert!(laid_out(&other).is_none());
+    }
+
+    /// The magic number, and nothing else. A pickle that opens some other way
+    /// is not this format, whatever else it is.
+    #[test]
+    fn only_the_magic_number_opens_one() {
+        assert!(is_torch_legacy(LEGACY_FILE));
+        let mut other = LEGACY_FILE.to_vec();
+        other[4] ^= 1;
+        assert!(!is_torch_legacy(&other));
+        assert!(laid_out(&other).is_none());
+    }
+}
