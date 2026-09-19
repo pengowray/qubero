@@ -178,6 +178,14 @@ design document.
 
 | File | What it holds | Lines |
 | --- | --- | --- |
+The line counts are from that day; the two moves of 2026-09-19 that follow the
+scikit-learn breadth sweep are `familiar/sklearn.rs`, which holds
+`SKLEARN_CALLS` and `SKLEARN_CLASSES` the way `stdlib.rs` holds its own,
+`familiar/torch.rs`, which took `TORCH_CALLS` and `TORCH_CLASSES` out of
+`forms.rs` for the same reason, and `familiar/integer.rs`, which is
+`Cursor::integer` and the widths CPython writes a whole number in, out of
+`basic.rs`.
+
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 424 |
 | `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, the run after it, and the pickle it writes instead for an array of objects | 294 |
 | `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage`, `Tensor` | 648 |
@@ -643,6 +651,133 @@ more.
 `cargo test -p qubero-core --test torch_real` is the real-files test, ten of
 them, and it asserts the tables cell for cell against what the generator
 wrote.
+
+## scikit-learn breadth: landed on 2026-09-19
+
+A `LogisticRegression` fitted on labels that are strings did not read, and
+`LogisticRegression` is the model saved more often than any other. That one
+file was the measurement that said the earlier pass had been tested on the
+estimators it happened to have rather than on the ones people save. So the
+sweep: `tools/make_sklearn_breadth_samples.py` in the collection fits
+twenty-seven estimators on sixteen rows of three features and writes each one
+twice, once with `pickle.dumps` at protocol 4 and once with `joblib.dump`,
+which are the two ways scikit-learn's own documentation says to save a model.
+
+Before the sweep, fourteen of the twenty-seven read plainly. After it,
+twenty-six do, and the one that does not is written down below with its
+reason.
+
+| Estimator | Plain | joblib |
+| --- | --- | --- |
+| LogisticRegression | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| LogisticRegression on string labels | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| Ridge, Lasso, LinearSVC, GaussianNB | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| SGDClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| SVC | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| KNeighborsClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| DecisionTreeRegressor, RandomForestClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| GradientBoostingClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| HistGradientBoostingClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| KMeans, PCA, StandardScaler, MinMaxScaler | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| OneHotEncoder, LabelEncoder, SimpleImputer | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| TfidfVectorizer | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| CountVectorizer | `sklearn-estimator-p4-p5-v1` | `sklearn-estimator-p4-p5-v1` |
+| Pipeline of a scaler and a model | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| MLPClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
+| ColumnTransformer | `mixed-values-p4-p5-v1` | `mixed-values-p4-p5-v1` |
+| KNeighborsClassifier on a sparse matrix | `mixed-values-p4-p5-v1` | `mixed-values-p4-p5-v1` |
+| GridSearchCV | no form | no form |
+
+A `CountVectorizer` holds no array at all: its vocabulary is a dictionary of
+words to positions. So there is no wrapper for `joblib.dump` to write and the
+file is byte for byte the plain pickle, which is the form it reads as. The two
+`mixed-values` rows are files holding a second family beside scikit-learn's: a
+column transformer places its columns with `builtins.slice`, which is the
+language's own value, and a nearest-neighbour model fitted on a sparse matrix
+keeps that matrix, which is scipy's.
+
+**What the non-matches turned out to be**, seven causes across thirteen files,
+each found by running `pickle_forms` over the sweep and reading the bytes at
+the offset it stopped:
+
+- **A dtype of fixed-width text.** `numpy.dtype('U3')` is three characters and
+  twelve bytes, and unlike every other plain dtype the width is in the state
+  rather than in the letters: `S5` writes `5, 1, 0` where a number's dtype
+  writes `-1, -1, 0`, and `U3` writes `12, 4, 8`. `dtype.rs` reads those now
+  and holds the width in the state to the width the letters come to. This is
+  what the reported file was stopping at, and what a `LabelEncoder` is made of.
+- **A NumPy scalar type named and never called.** `OneHotEncoder(dtype=numpy.float64)`
+  and `CountVectorizer(dtype=numpy.int64)` keep the type they will make their
+  numbers in as a plain setting, so it reaches the file as a global that
+  nothing calls. `numpy::TYPE_NAMES` enumerates the twenty-seven of them by
+  their whole dotted path and the scikit-learn, scipy, pandas and joblib rows
+  name it, which is the same `names` mechanism a `defaultdict`'s factory goes
+  through. `numpy` is still a package no class at all may be named from.
+- **An array whose numbers are the run an earlier array wrote.** A fitted
+  `SVC` writes `_probA` and `_probB` both empty, which is one byte string to
+  Python, so the second array is a BINGET where the run would be. `numbers`
+  in `numpy.rs` reads that at protocol 3 and up, and the node says
+  `written as: bytes an earlier array wrote` rather than placing a run that
+  sits outside it.
+- **The Cython losses.** `sklearn._loss._loss.CyHalfBinomialLoss()`,
+  `sklearn._loss.link.LogitLink()` and
+  `sklearn.linear_model._sgd_fast.Hinge(1.0)` are Cython classes whose
+  `__reduce__` hands the class back with nothing or with the one number it was
+  configured with. Fifteen of them are enumerated in the new
+  `familiar/sklearn.rs`, each by its whole dotted path and with the argument
+  shape measured against scikit-learn 1.9's bytes.
+- **`newObj`.** A Cython class has no `__new__` a pickle can reach through
+  NEWOBJ, so the module keeps a one-line function that does it. Three modules
+  have one: `sklearn.neighbors._kd_tree`, `sklearn.neighbors._ball_tree` and
+  `sklearn.metrics._dist_metrics`. Each takes one argument, the class, which
+  came through the same `may_name` check as every other class, and the BUILD
+  after it is the state exactly as for an estimator.
+- **What `random_state` holds after a fit.** A `RandomState` or a `Generator`
+  is one call over a bit generator and the bit generator is one call over its
+  class: `__randomstate_ctor`, `__generator_ctor` and `__bit_generator_ctor`,
+  all in `numpy.random._pickle`, with `__pyx_unpickle_SeedSequence` beside
+  them for a `Generator`'s seed. The five bit generator classes and the seed
+  sequence are named and never called. The rows are declared in `numpy.rs`
+  because they are NumPy's, and listed in `SKLEARN_CALLS` because that is
+  where a file holds one.
+- **A structured dtype naming a column out of the memo.** A histogram
+  gradient boosting model's nodes have an `is_categorical` column, and the
+  estimator has already written that word, so NumPy hands the pickler one
+  string for both. `column_name` in `dtype.rs` reads a reference there.
+
+One row moved that no file in the collection noticed: the plain scikit-learn
+form has `object_arrays: true` now, which the joblib row over it already had.
+`GradientBoostingClassifier.estimators_` is an array of objects, one tree per
+stage, so the plain pickle used to fall to the mixed form while its joblib
+twin read as scikit-learn's. The verdict of all 1,433 files in `pickle/`,
+`pickle-matrix/`, `joblib/` and `torch/` is otherwise byte for byte what it
+was.
+
+**What is still refused, and why.** `GridSearchCV.cv_results_` is a dictionary
+of `numpy.ma.MaskedArray`, which is an array, a mask of which of its entries
+count and a fill value, rebuilt by `numpy.ma.core._mareconstruct(MaskedArray,
+ndarray, (0,), b'b')` and finished by a BUILD whose state is a seven-part
+tuple: the version, the shape, the dtype, the storage order, the numbers, the
+mask and the fill. Reading it as a call with an opaque tuple under it would be
+easy and would show bytes where the numbers are; reading it properly means a
+production of its own that reads the data and the mask as the two arrays they
+are, which is what the sparse matrix table wants as well. The samples are
+`pickle/unfamiliar-sklearn-grid-search-cv.pickle` and
+`joblib/does-not-read/sklearn-grid-search-cv.joblib`.
+
+Two smaller things left where they are:
+
+- **A `CyHalfMultinomialLoss` is written the Cython `__pyx_unpickle_` way**
+  rather than as a call of its class, which is one `__pyx_unpickle_<Name>`
+  function per class and so a list that grows with every class. Only a
+  multiclass boosted model holds one; the binary one in the collection does
+  not.
+- **A table over an array whose numbers are elsewhere.** The node says where
+  the run is and does not place it, so there is no run under it for a table to
+  walk. Both files in the collection that do this hold empty arrays, so there
+  is nothing to show either way. A decoded run as a space of its own is the
+  change that would give such an array a table, and it is the next item under
+  "What is left".
 
 ## Not decided
 
