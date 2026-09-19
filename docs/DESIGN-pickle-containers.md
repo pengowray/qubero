@@ -656,11 +656,12 @@ its own, since the run is nowhere near the instructions that named it),
 and `stored at` rows and a table whose cells are worked out at the strides.
 Every tensor now carries an `order` row, `C` or `Fortran` in the words an
 array's own `order` row uses and `not contiguous` for the third answer, which
-is torch's word and NumPy's. A transposed two-dimensional tensor is Fortran order and
-so is a run: `shared-storage-views-zip.pt`'s `grid` is a field, and its table
-is the run as the file holds it, four rows of six, each one column of the
-tensor. What is left with worked-out cells is a slice, a broadcast and a
-transpose of three axes or more, and no sample in the collection holds one.
+is torch's word and NumPy's. A transposed two-dimensional tensor is Fortran
+order and so is a run: `shared-storage-views-zip.pt`'s `grid` is a field, and
+its table is the run as the file holds it, four rows of six, each one column
+of the tensor. What is left with worked-out cells is a slice, a broadcast and
+a transpose of three axes or more, and no sample in the collection holds one,
+so the third answer is tested against made-up strides and not against a file.
 
 **Two tensors over one storage** place two runs over overlapping bytes, which
 is what `whole`, `tail` and `grid` are in `shared-storage-views-zip.pt`: 96
@@ -677,7 +678,12 @@ already -- `torchlegacy.rs` places an element count and a typed run apiece --
 so a tensor's own run over the same bytes is genuinely a second reading, and
 the node carries `Resolved::aside` to say so. That is `Field::aside` for a
 node a parse made rather than a template declared, and `Evaluator::aside`
-asks the node before it asks the parent's field.
+asks the node before it asks the parent's field. Both halves of the question
+are asked, in `Evaluator::storages_are_fields`: the template has to be the one
+that places the storages, and the runs in hand have to be the ones its layout
+walk found. A legacy file read as the contents of something else is the same
+bytes with nothing placing them, and calling its tensors a second reading
+would leave the numbers counted nowhere.
 
 **What is still open.**
 
