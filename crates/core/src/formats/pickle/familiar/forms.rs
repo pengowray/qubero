@@ -175,98 +175,9 @@ pub(super) const PARTIAL: &str = "functools.partial";
 
 /// Nothing at all, for a form that enumerates no calls of its own.
 const NO_CALLS: &[Reduce] = &[];
-/// The calls scikit-learn writes. One: a decision tree's array of nodes lives
-/// in a `Tree`, which is constructed from how many features, classes and
-/// outputs it was fitted on and handed its arrays by the BUILD after it.
-/// The calls a torch file writes that are not the tensor production's own
-/// fixed run.
-///
-/// A state dict is a `collections.OrderedDict`, which the standard library's
-/// table already describes, so the row is shared rather than copied. The rest
-/// are torch's own values: the shape of a tensor written on its own, the
-/// device a tensor was on, and the sparse tensor that is two tensors and the
-/// shape they stand for.
-const TORCH_CALLS: &[Reduce] = &[
-    super::stdlib::ORDERED_DICT,
-    // `torch.Size` is a tuple subclass, so it is the class called with the
-    // tuple of extents.
-    Reduce {
-        via: Via::Global,
-        path: "torch.Size",
-        what: Shape::Size,
-        names: &["extents"],
-        args: Args::Contents,
-        shape: |_c, args| matches!(args[0].kind, Kind::Tuple(_)).then_some(()),
-    },
-    // `torch.device('cpu')` and `torch.device('cuda', 0)`, which is the type
-    // of device and, where the file has more than one of them, which.
-    Reduce {
-        via: Via::Global,
-        path: "torch.device",
-        what: Shape::Object,
-        names: &["type"],
-        args: Args::Fixed,
-        shape: |_c, args| said(&args[0]).then_some(()),
-    },
-    Reduce {
-        via: Via::Global,
-        path: "torch.device",
-        what: Shape::Object,
-        names: &["type", "index"],
-        args: Args::Fixed,
-        shape: |_c, args| (said(&args[0]) && matches!(args[1].kind, Kind::Int { .. })).then_some(()),
-    },
-    // The layout a sparse tensor is stored in, which torch writes as a call
-    // of one function over the layout's own name. Only the one layout whose
-    // data this reader has measured: the others hand over a different tuple.
-    Reduce {
-        via: Via::Global,
-        path: "torch.serialization._get_layout",
-        what: Shape::Object,
-        names: &["layout"],
-        args: Args::Fixed,
-        shape: |c, args| (c.text_of(&args[0]) == Some(SPARSE_COO)).then_some(()),
-    },
-    // `_rebuild_sparse_tensor(layout, (indices, values, size, is_coalesced))`.
-    // Nothing is densified: the two tensors are read where they are and the
-    // shape they stand for is beside them.
-    Reduce {
-        via: Via::Global,
-        path: "torch._utils._rebuild_sparse_tensor",
-        what: Shape::SparseTensor,
-        names: &["layout", "data"],
-        args: Args::Fixed,
-        shape: |_c, args| (matches!(args[0].kind, Kind::Made { what: Shape::Object, .. }) && sparse_data(&args[1].kind)).then_some(()),
-    },
-];
-
-/// The one sparse layout whose stored form this reader has measured.
-const SPARSE_COO: &str = "torch.sparse_coo";
-
-/// Whether a value is text, spelled here or named where the file spelled it.
-fn said(value: &Value) -> bool {
-    matches!(value.kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. }))
-}
-
-/// What a COO sparse tensor is stored as: the indices, the values, the shape
-/// the two stand for, and whether torch knew the indices were in order. The
-/// last is left out by releases before it existed.
-fn sparse_data(kind: &Kind) -> bool {
-    let Kind::Tuple(held) = kind else { return false };
-    let (indices, values, size, rest) = match held.as_slice() {
-        [indices, values, size] => (indices, values, size, true),
-        [indices, values, size, coalesced] => (indices, values, size, matches!(coalesced.kind, Kind::Bool(_) | Kind::None)),
-        _ => return false,
-    };
-    matches!(indices.kind, Kind::Tensor(_)) && matches!(values.kind, Kind::Tensor(_)) && matches!(size.kind, Kind::Made { what: Shape::Size, .. }) && rest
-}
-
-/// The package torch's own classes are named from, which is the modules a
-/// saved module's class may come from and nothing wider: a whole `nn.Module`
-/// pickled as an object is a class under here with a state dict for state.
-const TORCH_CLASSES: &[&str] = &["torch.nn"];
 
 use super::sklearn::{SKLEARN_CALLS, SKLEARN_CLASSES};
+use super::torch::{TORCH_CALLS, TORCH_CLASSES};
 
 /// A form that names no class, which is every form below the library ones,
 /// and a form that names no global it never calls, which is every form but the

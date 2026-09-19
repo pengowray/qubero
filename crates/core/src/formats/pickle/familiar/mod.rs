@@ -20,6 +20,7 @@ mod lines;
 mod dtype;
 mod formnames;
 mod forms;
+mod integer;
 mod joblib;
 mod memo;
 mod numpy;
