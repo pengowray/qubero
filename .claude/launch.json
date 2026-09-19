@@ -33,6 +33,17 @@
       "cwd": "web",
       "port": 17274,
       "autoPort": true
+    },
+    {
+      "name": "web-samples-nowatch",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "QUBERO_NO_WATCH=1 QUBERO_FILES=/home/pengo/sync/dropbox/projects/qubero-samples npm run dev"
+      ],
+      "cwd": "web",
+      "port": 17275,
+      "autoPort": true
     }
   ]
 }

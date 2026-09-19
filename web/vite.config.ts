@@ -121,7 +121,12 @@ export default defineConfig({
   // `strictPort` for the other half of that: a port in use is an error rather
   // than a quiet move to the next one. Vite has no way to tell whoever started
   // it that it went somewhere else.
-  server: { port: Number(process.env["PORT"]) || 17272, strictPort: true },
+  //
+  // `QUBERO_NO_WATCH=1` serves without watching the source for changes. A
+  // machine running several checkouts' dev servers beside a file syncer runs
+  // out of inotify watches, and vite then dies at startup with ENOSPC; a server
+  // started only to look at a page, or for a browser test, needs no reloads.
+  server: { port: Number(process.env["PORT"]) || 17272, strictPort: true, ...(process.env["QUBERO_NO_WATCH"] ? { watch: null } : {}) },
   build: { target: "es2022" },
   plugins: [whereAmI(), localFiles()],
 });
