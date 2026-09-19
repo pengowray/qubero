@@ -177,7 +177,7 @@ fn the_shapes_that_are_not_a_rectangle_still_read() {
     let Some(dir) = folder() else { return };
     let (doc, mut ev) = open(&dir, "edge-shapes-zip.pt");
     let scalar = tensor_at(&doc, &mut ev, "scalar");
-    assert_eq!(row(&doc, &mut ev, &scalar, "numbers"), Value::Str("1 values in data/0".into()));
+    assert_eq!(row(&doc, &mut ev, &scalar, "numbers"), Value::Str("1 value in data/0".into()));
     assert!(ev.table_shape(&doc, &scalar).unwrap().is_none());
     let empty = tensor_at(&doc, &mut ev, "empty");
     assert_eq!(row(&doc, &mut ev, &empty, "shape"), Value::Str("0 x 3".into()));

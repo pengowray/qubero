@@ -31,6 +31,15 @@ use crate::template::Endian;
 /// which is what a `data.pkl` opened on its own is.
 const NOT_HERE: &str = "not in this file";
 
+/// How many values there are, said the way English says it: a tensor with no
+/// dimensions holds one value, not one values.
+fn counted(n: u64) -> String {
+    match n {
+        1 => "1 value".to_string(),
+        n => format!("{n} values"),
+    }
+}
+
 /// The signatures the directory at the end of an archive is found by, and how
 /// long the fixed part of each record is.
 const END: &[u8] = b"PK\x05\x06";
@@ -137,7 +146,7 @@ impl Evaluator {
             Says::Location => self.run_text(doc, r, base, tensor.location),
             // Where the numbers are in the format, which is true of the file
             // whether or not this reading can reach them.
-            Says::Numbers => Ok(format!("{} values in {DATA_FOLDER}/{key}", tensor.values())),
+            Says::Numbers => Ok(format!("{} in {DATA_FOLDER}/{key}", counted(tensor.values()))),
             // And where that entry is in this file, for a reader who wants to
             // go there. The tensor's own window inside it, since a view may
             // start past the front of its storage.
