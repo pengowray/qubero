@@ -14,7 +14,7 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
-use super::forms::{Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
+use super::forms::{covers, pack_of, Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
 
@@ -49,9 +49,17 @@ impl Cursor<'_> {
     /// with the same letters: pandas 3.0 spells its frame's module `pandas`
     /// where 2.x spelled it `pandas.core.frame`, and `sklearnish` is neither.
     pub(super) fn whitelisted(&self, module: &str) -> bool {
-        self.allow.classes.iter().any(|package| {
-            module.strip_prefix(package).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-        })
+        covers(self.allow.classes, module)
+    }
+
+    /// Which library this class came from, noted as the object is built, so
+    /// that a file holding two libraries' values says so. Nothing for a module
+    /// no family claims, which is every callable a form names without naming
+    /// the package it is in.
+    fn from_pack(&mut self, module: &str) {
+        if let Some(pack) = pack_of(module) {
+            self.packs.add(pack);
+        }
     }
 
     /// Whether this form may name this global at all: a class from a module
@@ -219,6 +227,7 @@ impl Cursor<'_> {
         // the tree it was configured from, named where it was made.
         self.memoize(Bound::Made { what: Shape::Object, at, hashable: false })?;
         self.instances += 1;
+        self.from_pack(module);
         Some(Kind::Instance { class: Box::new(class), state: None })
     }
 
@@ -303,8 +312,10 @@ impl Cursor<'_> {
         // Only a class from the package the form is for says the form read
         // what it is for. The calls every form shares, such as the one that
         // makes a set, say nothing about which form a file belongs to.
-        if self.whitelisted(path.rsplit_once('.')?.0) {
+        let module = path.rsplit_once('.')?.0;
+        if self.whitelisted(module) {
             self.instances += 1;
+            self.from_pack(module);
         }
         // What the result holds beyond its arguments. A path has as many parts
         // as it has, so the whole tuple is the one argument; a `Counter` is
@@ -333,11 +344,13 @@ impl Cursor<'_> {
     fn reconstructed_object(&mut self, at: usize, held: Vec<Value>) -> Option<Kind> {
         let class = held.into_iter().next()?;
         let Kind::Class { ref path, .. } = class.kind else { return None };
-        if !self.whitelisted(path.rsplit_once('.')?.0) {
+        let module = path.rsplit_once('.')?.0;
+        if !self.whitelisted(module) {
             return None;
         }
         self.memoize(Bound::Made { what: Shape::Object, at, hashable: false })?;
         self.instances += 1;
+        self.from_pack(module);
         Some(Kind::Instance { class: Box::new(class), state: None })
     }
 

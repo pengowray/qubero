@@ -290,8 +290,10 @@ fn a_form_is_the_productions_it_allows() {
     assert_eq!(recognise(&framed(&slice)).unwrap().form, "builtins-values-p4-p5-v3");
     let array = cat(&[b"}\x94", &word("a"), &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]), b"s."]);
     assert_eq!(recognise(&framed(&array)).unwrap().form, "numpy-array-p4-p5-v6");
-    // A file holding both is read under neither: no form that allows both
-    // has been reviewed.
+    // A file holding both is read under the mixed form, which is every
+    // family's productions at once and says which of them the file used.
+    // Neither single-family form takes it: each requires the file to have
+    // used its own production and nothing else's.
     let both = cat(&[
         b"}\x94(",
         &word("a"),
@@ -301,7 +303,9 @@ fn a_form_is_the_productions_it_allows() {
         &word("slice"),
         b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94u.",
     ]);
-    assert!(recognise(&framed(&both)).is_none());
+    let found = recognise(&framed(&both)).unwrap();
+    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.families(), "basic, builtins, numpy");
 }
 
 /// A LONG1 declares up to 255 bytes and sixteen is as far as the reader's

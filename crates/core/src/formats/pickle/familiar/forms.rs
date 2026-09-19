@@ -1,12 +1,17 @@
 //! Which forms there are, what each one allows, and the calls each one accepts
 //! a REDUCE of.
 //!
-//! One grammar, read under one of six names. A form differs from its
+//! One grammar, read under one name per family. A form differs from its
 //! neighbours only in which value productions it allows and which callables it
 //! names, and both of those are written here rather than scattered through the
 //! productions, so that widening a form is an edit to one table. The rule the
 //! tables rest on is in [`object`](super::object): a module prefix says which
 //! classes may be *named*, and never which callables may be *called*.
+//!
+//! One more name over all of them: the mixed form, whose tables are the union
+//! of every family's. A union of enumerated sets is an enumerated set, so the
+//! safety line does not move, and it is built here from [`DECLARED`] rather
+//! than written out, so a family added to that table is in the union already.
 
 use super::cursor::Cursor;
 use super::{Kind, Names, Shape, Value};
@@ -99,6 +104,21 @@ pub(super) const JOBLIB_SKLEARN23: &str = "joblib-sklearn-p2-p3-v1";
 /// A range this family is never written at, which [`forms`] leaves out.
 const NOT_WRITTEN: &str = "";
 
+/// A file holding values of more than one family, which is what a pickle of
+/// ordinary program state is: a date beside an array, a frame beside a note, a
+/// fitted model beside the day it was fitted.
+///
+/// Every family's classes, calls and named globals at once, with the joblib
+/// wrapper allowed and not required. Tried after all of them, so a file of one
+/// family keeps the name it already had, and it requires the file to have used
+/// two families of values, so that the name it goes by is true of it.
+pub(super) const MIXED: &str = "mixed-values-p4-p5-v1";
+pub(super) const MIXED23: &str = "mixed-values-p2-p3-v1";
+pub(super) const MIXED1: &str = "mixed-values-p1-v1";
+pub(super) const MIXED0: &str = "mixed-values-p0-v1";
+/// Its four names, in the order of [`RANGES`], as a family's row holds them.
+const MIXED_IDS: [&str; 4] = [MIXED, MIXED23, MIXED1, MIXED0];
+
 /// Which family a form belongs to, which is what says the file used the
 /// productions the form is for rather than only the ones every form has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +127,115 @@ pub(super) enum Family {
     Numpy,
     Builtins,
     Library,
+    /// Two or more of the families below, counted as [`Packs::families`]
+    /// counts them.
+    Mixed,
+}
+
+/// One family whose own productions a file used.
+///
+/// Not a form. A form is a grammar and requires the file to use what it is
+/// for; this is what the file turned out to have used, which under the mixed
+/// form is several at once. The order is the order the `families` row names
+/// them in: the language's own values, then the standard library, then the
+/// array libraries, then how the arrays reached the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Pack {
+    Builtins,
+    Stdlib,
+    Numpy,
+    Scipy,
+    Sklearn,
+    Pandas,
+    /// Not a family of values: how the arrays were written. Named in the row
+    /// because a reader wants to know, and not counted towards the two the
+    /// mixed form wants, because a file of nothing but arrays `joblib.dump`
+    /// wrote holds one family's worth of data however it was written.
+    Joblib,
+}
+
+/// Every pack in that order, with what the row calls it.
+const EVERY: &[(Pack, &str)] = &[
+    (Pack::Builtins, "builtins"),
+    (Pack::Stdlib, "stdlib"),
+    (Pack::Numpy, "numpy"),
+    (Pack::Scipy, "scipy"),
+    (Pack::Sklearn, "sklearn"),
+    (Pack::Pandas, "pandas"),
+    (Pack::Joblib, "joblib"),
+];
+
+/// What the `families` row calls the grammar every form reads and every file
+/// is read against, which is the name the plain form already goes by.
+const BASIC_PACK: &str = "basic";
+
+/// Which of them a file used, as the bits of one word, so that a form attempt
+/// carries it in the cursor and puts it back on a rewind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Packs(u8);
+
+impl Packs {
+    pub(super) fn add(&mut self, pack: Pack) {
+        self.0 |= 1 << pack as u8;
+    }
+
+    /// The same, for a production that already keeps a count of itself.
+    pub(super) fn set(&mut self, pack: Pack, used: bool) {
+        if used {
+            self.add(pack);
+        }
+    }
+
+    fn has(self, pack: Pack) -> bool {
+        self.0 & (1 << pack as u8) != 0
+    }
+
+    /// How many families of values the file used, which is what the mixed
+    /// form wants two of.
+    pub(super) fn families(self) -> usize {
+        EVERY.iter().filter(|(pack, _)| *pack != Pack::Joblib && self.has(*pack)).count()
+    }
+
+    /// What the `families` row says: the basic grammar the file was read
+    /// against, and then everything it used beyond it.
+    pub(super) fn names(self) -> String {
+        let mut out = String::from(BASIC_PACK);
+        for (_, name) in EVERY.iter().filter(|(pack, _)| self.has(*pack)) {
+            out.push_str(", ");
+            out.push_str(name);
+        }
+        out
+    }
+}
+
+/// Whether a module is under one of these packages: the package itself or
+/// anything below it, and nothing that merely starts with the same letters, so
+/// that `pandas` reaches `pandas.core.frame` and `sklearnish` is neither.
+pub(super) fn covers(packages: &[&str], module: &str) -> bool {
+    packages
+        .iter()
+        .any(|package| module.strip_prefix(package).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+}
+
+/// Which family a class named from this module belongs to, asked of the same
+/// prefixes the forms are declared with so that the two cannot drift apart.
+pub(super) fn pack_of(module: &str) -> Option<Pack> {
+    DECLARED.iter().find_map(|d| covers(d.classes, module).then_some(d.pack).flatten())
+}
+
+/// Whether a form reads an array the way `joblib.dump` writes one, and whether
+/// it holds the file to having one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Wrapped {
+    /// No such production: the form reads an array where the numbers are.
+    Refused,
+    /// The form reads one and the file has to hold at least one, the way a
+    /// form that allows a production requires the file to use it.
+    Required,
+    /// The form reads one and says nothing about whether the file has any,
+    /// which is where the mixed form stands: the wrapper is one production
+    /// among several and another of them is what made the file mixed.
+    Allowed,
 }
 
 /// Which value productions a form allows beyond the basic ones. A form that
@@ -119,10 +248,9 @@ pub(super) struct Allow {
     pub(super) family: Family,
     pub(super) numpy: bool,
     /// Whether an array may arrive the way `joblib.dump` writes one, wrapped
-    /// in an object whose state measures the run of bytes after it. A form
-    /// that allows it requires the file to hold at least one, the way a form
-    /// that allows a production requires it everywhere else here.
-    pub(super) joblib: bool,
+    /// in an object whose state measures the run of bytes after it, and
+    /// whether the file has to hold one.
+    pub(super) joblib: Wrapped,
     pub(super) builtins: bool,
     /// The module prefixes this form may name a class from. Empty for a form
     /// that names no class at all, which is where the basic, NumPy and
@@ -420,9 +548,14 @@ struct Declared {
     ids: [&'static str; 4],
     family: Family,
     numpy: bool,
-    joblib: bool,
+    joblib: Wrapped,
     builtins: bool,
     classes: &'static [&'static str],
+    /// Which family the classes this row whitelists belong to, which is what
+    /// [`pack_of`] answers with. Nothing for a row that whitelists none: the
+    /// three productions that are nobody's classes keep a count of themselves
+    /// and the bit is read off that instead.
+    pack: Option<Pack>,
     names: &'static [&'static str],
     calls: &'static [Reduce],
     object_arrays: bool,
@@ -442,9 +575,10 @@ const DECLARED: &[Declared] = &[
         ids: [BASIC, BASIC23, BASIC1, BASIC0],
         family: Family::Basic,
         numpy: false,
-        joblib: false,
+        joblib: Wrapped::Refused,
         builtins: false,
         classes: NO_CLASSES,
+        pack: None,
         names: NO_CLASSES,
         calls: NO_CALLS,
         object_arrays: false,
@@ -456,6 +590,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         numpy: true,
         classes: SKLEARN_CLASSES,
+        pack: Some(Pack::Sklearn),
         calls: SKLEARN_CALLS,
         ..PLAIN
     },
@@ -464,6 +599,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         numpy: true,
         classes: &["scipy.sparse"],
+        pack: Some(Pack::Scipy),
         ..PLAIN
     },
     Declared {
@@ -472,10 +608,11 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         builtins: true,
         classes: &["pandas"],
+        pack: Some(Pack::Pandas),
         names: NO_CLASSES,
         calls: PANDAS_CALLS,
         object_arrays: true,
-        joblib: false,
+        joblib: Wrapped::Refused,
     },
     // The standard library's own classes. Its builtins are the ones the
     // builtins form already reads, so a file mixing a date with a complex
@@ -485,19 +622,21 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         builtins: true,
         classes: super::stdlib::STDLIB_MODULES,
+        pack: Some(Pack::Stdlib),
         names: super::stdlib::FACTORIES,
         calls: super::stdlib::STDLIB_CALLS,
         ..PLAIN
     },
     // What `joblib.dump` wrote, after the families it extends, so that a
     // plain pickle of arrays or of estimators keeps the name it already had.
-    Declared { ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Numpy, numpy: true, joblib: true, ..PLAIN },
+    Declared { ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Numpy, numpy: true, joblib: Wrapped::Required, ..PLAIN },
     Declared {
         ids: [JOBLIB_SKLEARN, JOBLIB_SKLEARN23, NOT_WRITTEN, NOT_WRITTEN],
         family: Family::Library,
         numpy: true,
-        joblib: true,
+        joblib: Wrapped::Required,
         classes: SKLEARN_CLASSES,
+        pack: Some(Pack::Sklearn),
         calls: SKLEARN_CALLS,
         ..PLAIN
     },
@@ -513,17 +652,62 @@ const PLAIN: Declared = Declared {
     ids: [BASIC, BASIC23, BASIC1, BASIC0],
     family: Family::Basic,
     numpy: false,
-    joblib: false,
+    joblib: Wrapped::Refused,
     builtins: false,
     classes: NO_CLASSES,
+    pack: None,
     names: NO_CLASSES,
     calls: NO_CALLS,
     object_arrays: false,
 };
 
-/// Every form: each family at each protocol range it is written at.
+/// What the mixed form names: every family's class prefixes, named globals and
+/// enumerated calls in one table each.
+///
+/// Gathered from [`DECLARED`] rather than written out, so that the union is
+/// the families and cannot fall behind them. A row kept twice is kept once
+/// here: scikit-learn's one call is named by the plain row and by the joblib
+/// one over it, and the reading of it is the same either way.
+struct Union {
+    classes: Vec<&'static str>,
+    names: Vec<&'static str>,
+    calls: Vec<Reduce>,
+}
+
+fn union() -> &'static Union {
+    static UNION: std::sync::OnceLock<Union> = std::sync::OnceLock::new();
+    UNION.get_or_init(|| {
+        let mut u = Union { classes: Vec::new(), names: Vec::new(), calls: Vec::new() };
+        for d in DECLARED {
+            for package in d.classes {
+                if !u.classes.contains(package) {
+                    u.classes.push(package);
+                }
+            }
+            for name in d.names {
+                if !u.names.contains(name) {
+                    u.names.push(name);
+                }
+            }
+            for call in d.calls {
+                let seen = |had: &Reduce| had.path == call.path && had.via == call.via && had.names == call.names;
+                if !u.calls.iter().any(seen) {
+                    u.calls.push(*call);
+                }
+            }
+        }
+        u
+    })
+}
+
+/// Every form: each family at each protocol range it is written at, and then
+/// the mixed form at each of them.
+///
+/// The mixed form is last because it is the widest, and being last is what
+/// keeps every file that already had a name: a file of one family matches the
+/// form for that family before this one is tried at all.
 pub(super) fn forms() -> Vec<(&'static str, Allow)> {
-    DECLARED
+    let mut out: Vec<(&'static str, Allow)> = DECLARED
         .iter()
         .flat_map(|d| {
             RANGES.iter().enumerate().map(move |(at, protocols)| {
@@ -542,5 +726,21 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
             })
         })
         .filter(|(id, _)| !id.is_empty())
-        .collect()
+        .collect();
+    let all = union();
+    out.extend(RANGES.iter().enumerate().map(|(at, protocols)| {
+        let allow = Allow {
+            protocols,
+            family: Family::Mixed,
+            numpy: true,
+            joblib: Wrapped::Allowed,
+            builtins: true,
+            classes: &all.classes,
+            names: &all.names,
+            calls: &all.calls,
+            object_arrays: true,
+        };
+        (MIXED_IDS[at], allow)
+    }));
+    out
 }

@@ -3,7 +3,7 @@
 //! production reads bytes through this one, so it sits apart from all of them.
 
 use super::memo::Memo;
-use super::forms::Allow;
+use super::forms::{Allow, Packs};
 use super::{BIG_PAYLOAD, Call, Kind, NO_OPCODE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
@@ -51,6 +51,11 @@ pub(super) struct Cursor<'a> {
     /// How many objects of a named class the file built, which is what says a
     /// library form read what it is for.
     pub(super) instances: usize,
+    /// Which library each of those classes came from, which the mixed form
+    /// counts and the `families` row names. The three productions that name
+    /// no class are not here: each keeps a count of itself and the bit is
+    /// read off that at the end of the match.
+    pub(super) packs: Packs,
     /// How many arrays arrived wrapped the way `joblib.dump` writes one, with
     /// their bytes in the file after the wrapper rather than inside it.
     pub(super) wrappers: usize,
@@ -101,6 +106,7 @@ pub(super) struct Save {
     pub(super) arrays: usize,
     pub(super) objects: usize,
     pub(super) instances: usize,
+    pub(super) packs: Packs,
     pub(super) wrappers: usize,
     pub(super) raws: usize,
 }
@@ -195,6 +201,7 @@ impl<'a> Cursor<'a> {
             arrays: self.arrays,
             objects: self.objects,
             instances: self.instances,
+            packs: self.packs,
             wrappers: self.wrappers,
             raws: self.raws.len(),
         }
@@ -232,6 +239,7 @@ impl<'a> Cursor<'a> {
         self.arrays = s.arrays;
         self.objects = s.objects;
         self.instances = s.instances;
+        self.packs = s.packs;
         self.wrappers = s.wrappers;
         self.raws.truncate(s.raws);
     }

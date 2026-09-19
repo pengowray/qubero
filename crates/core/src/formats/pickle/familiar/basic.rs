@@ -481,7 +481,7 @@ impl Cursor<'_> {
             }
             // An array `joblib.dump` wrote, which names its own class first
             // and so fails at its first word when the value is anything else.
-            if self.allow.joblib {
+            if self.allow.joblib != super::forms::Wrapped::Refused {
                 let here = self.save();
                 match self.joblib_array() {
                     Some(value) => return Some(Slot { value, deep: 1, fill: Fill::Shut }),
