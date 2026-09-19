@@ -10,14 +10,22 @@
 //! local records for the entry of that name, the way
 //! [`picklecells`](super::picklecells) walks a frame's blocks for a cell.
 //!
+//! A tensor whose elements run through its storage in order gets them as a
+//! field: [`Evaluator::tensor_numbers`] works out where the run is and
+//! `pickletree.rs` places a typed run there, so the numbers have byte
+//! addresses, a listing row, the hex view and the ordinary array table. A view
+//! that steps over its storage is no run, and its table is still worked out a
+//! cell at a time in [`Evaluator::tensor_cells`].
+//!
 //! **Why the records are walked here rather than declared in the template.**
 //! A tensor is a field of one ZIP entry placed by the contents of another, and
 //! the IR cannot say that: `Ty::At` places a field at an offset, and nothing
 //! works an offset out from an entry's *name*. `formats/torchzip.rs` closes
 //! half of it by placing the pickle in the archive's own space, so the pickle
 //! and the storages share one set of addresses; the other half, resolving
-//! `data/<key>` to a run, is done here. See `docs/DESIGN-pickle-containers.md`
-//! for what closing it properly would need.
+//! `data/<key>` to a run, is done here. So the field is placed at an address
+//! this file worked out rather than at one the template can show a reader. See
+//! `docs/DESIGN-pickle-containers.md` for what closing it properly would need.
 
 use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, C_ORDER, DTYPE_FIELD, FORTRAN_ORDER, IS_FIELD, NUMBERS_FIELD, ORDER_FIELD, REQUIRES_GRAD_FIELD, SCALE_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD, ZERO_POINT_FIELD};
 use crate::formats::pickle::familiar::Match;
