@@ -35,7 +35,13 @@ fn main() {
         if meant_to_fail {
             kept += 1;
         }
-        let sniffed = formats::sniff(&bytes[..bytes.len().min(formats::SNIFF_WINDOW)], bytes.len() as u64);
+        // Head and tail, as the editor asks: an archive's central directory
+        // names every entry, and what a ZIP really holds can be told only
+        // there. torch 1.5 writes `version` before `data.pkl`, so the entry
+        // that says the archive is a checkpoint is not the first one.
+        let head = &bytes[..bytes.len().min(formats::SNIFF_WINDOW)];
+        let tail = &bytes[bytes.len().saturating_sub(formats::SNIFF_TAIL_WINDOW)..];
+        let sniffed = formats::sniff_ends(head, tail, bytes.len() as u64);
         let Some(name) = sniffed else {
             // Silence is right for the collection at large, where a file no
             // template matches is one waiting for a template. A file kept to
