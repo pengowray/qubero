@@ -86,6 +86,13 @@ impl Cursor<'_> {
                 self.latin1(at, len)?;
                 (at, len, Storage::Latin1)
             }
+            // An equal text the file wrote earlier and named here, where the
+            // run it names is the text itself. One that is a line spelling
+            // its characters has no quote to be read back by, and is left.
+            Kind::Ref(Names::Text { at, len }) if self.names_text(at, len) => {
+                self.latin1(at, len)?;
+                (at, len, Storage::Latin1)
+            }
             // Protocol 0 wrote the text as a line with an escape in it. What
             // the call makes of it is those characters one byte each, so the
             // run is two spellings deep and the caller opens it through both
@@ -162,12 +169,16 @@ impl Cursor<'_> {
     /// CPython files a text under the address of the object, so two equal
     /// runs are two slots and the second is spelled out again. GraalPy hands
     /// back one object for both, so the second is a reference. That is the
-    /// runtime's own string table and not its pickler: a reference comes back
-    /// as the run it names, and the bytes are read there.
+    /// runtime's own string table and not its pickler.
+    ///
+    /// A reference comes back naming the run rather than holding it, at every
+    /// protocol. The value is the two bytes of the BINGET and the run is
+    /// somewhere earlier in the file, under the value that wrote it: held as a
+    /// text, the tree would place that earlier run under this call, and every
+    /// instruction between the two would be listed, and counted, a second time.
     ///
     /// At protocol 0 the run it names is a line, and a line is not always the
-    /// text it stands for. The reference comes back naming the run rather than
-    /// holding it either way, so the bytes under it are read the same way the
+    /// text it stands for, so the bytes under it are read the same way the
     /// line's own reading read them. Only Python 3 writes this call, and its
     /// protocol 0 texts go out as UNICODE lines, so the escaping is the one
     /// `raw-unicode-escape` writes.
@@ -179,9 +190,6 @@ impl Cursor<'_> {
         let start = self.at;
         let here = self.save();
         match self.reference().cloned() {
-            Some(Bound::Text { at, len }) if self.names_text(at, len) => Some(self.span(start, Kind::Text { at, len })),
-            // A protocol 0 line that spells its text is not the text: it is
-            // named rather than held, and read where the file wrote it.
             Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Ref(Names::Text { at, len }))),
             _ => {
                 self.restore(here);
