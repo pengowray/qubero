@@ -127,6 +127,11 @@ pub(super) enum Part<'a> {
     Entry(&'a (Value, Value)),
     /// The numbers of a matched array, read as its dtype says.
     Data(&'a Value),
+    /// The numbers of a tensor, which are in another entry of the archive or
+    /// further down the file rather than in the pickle. No bytes here, since
+    /// the run is nowhere near the instructions that named it: where it is, is
+    /// worked out when the node is placed, and the field is placed there.
+    Numbers(&'a familiar::Tensor),
     /// What a BINGET names, read where the file wrote it. The row has no
     /// bytes of its own: the reference is two bytes and the thing it names is
     /// somewhere else entirely.
@@ -261,6 +266,7 @@ pub(super) fn span(found: &Match, part: &Part) -> (usize, usize) {
         },
         Part::Refers(_) => (0, 0),
         Part::Summary { .. } => (0, 0),
+        Part::Numbers(..) => (0, 0),
         Part::Text(s) => (s.at, s.at + s.len),
         Part::Line(v) => match v.kind {
             Kind::Spelled { at, len, .. } => (at, at + len),

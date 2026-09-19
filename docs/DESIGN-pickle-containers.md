@@ -618,6 +618,76 @@ the one thing option 1 was missing: every cell can now say where it is, and
 the view can select those bytes. S6 and `Ty::Strided` are still what a field
 would need.
 
+### The numbers as an ordinary field: landed on 2026-09-19
+
+A tensor whose elements run through its storage in order now has a `numbers`
+child that is a typed run placed in the entry the pickle named: `f32[12]` at
+0x380 for `layer.weight` of `state-dict-zip.pt`. Byte addresses, a listing
+row, the hex view, selection and editing are all the machinery every other
+field uses, and the table over it is the ordinary array table rather than
+cells the core works out.
+
+**What a `Place` may say.** The spike's question was whether a node a parse
+synthesises can point outside the bytes of the node that holds it. It can.
+`Evaluator::place_pickle_child` hands back a `Place` with its own offset and
+limit, and nothing between there and `remember` holds it to its parent: the
+"extends beyond its parent" checks in `place_child` and `size_within` are
+against the limit the place carries, which is the run's own end. What had to
+be added is one fact the rest of the reading needs, on `Resolved` and on
+`Place`: `elsewhere`, true for a node a parse put somewhere rather than after
+the sibling before it. That is what `Ty::At` says for a field a template
+placed, and the kind totals ask the two questions together
+(`eval/kinds.rs`, the `deferred` queue): without it the walk would move its
+cursor to another entry of the archive and count every byte in between as a
+gap.
+
+**Nothing is counted twice.** `zip::records(true)` already marks each entry's
+`data` as a second reading, which is what `torchzip` asks for, so the bytes
+belong to whatever reads them as what they are. Before this they belonged to
+nothing and read as a gap.
+
+**Where the parts are.** `Part::Numbers` in `eval/pickleparts.rs` (no bytes of
+its own, since the run is nowhere near the instructions that named it),
+`Tensor::contiguous` in `familiar/captured.rs`, `Evaluator::tensor_numbers` in
+`eval/pickletorch.rs`, the arm in `place_pickle_child` and the table in
+`pickle_table`.
+
+**A view that is neither C nor Fortran order** keeps what it had: the `numbers`
+and `stored at` rows and a table whose cells are worked out at the strides.
+The `order` row says which of the three it is, in the same words an array's
+own `order` row uses. A transposed two-dimensional tensor is Fortran order and
+so is a run: `shared-storage-views-zip.pt`'s `grid` is a field, and its table
+is the run as the file holds it, four rows of six, each one column of the
+tensor. What is left with worked-out cells is a slice, a broadcast and a
+transpose of three axes or more, and no sample in the collection holds one.
+
+**Two tensors over one storage** place two runs over overlapping bytes, which
+is what `whole` and `tail` are: 0x380 for 96 bytes and 0x3b0 for 48. Both are
+the reading a reader asked for, and neither is a view of the other, so both
+are counted. `Field::aside` is for a field that is always a second reading and
+neither of these is.
+
+**What is still open.**
+
+- **The lookup is still Rust.** `pickletorch.rs` walks the central directory
+  for `data/<key>`; the IR still cannot say "the data of the entry named X",
+  which is `E::entry_of` in the paragraph above. The `numbers` field reports
+  no expression that placed it, so the inspector's depends-on graph does not
+  show the archive's directory. Closing it means the expression, its text
+  form in `template_text.rs`, its diagram and graph arms, and a `Ty` for the
+  run; zarr-in-ZIP wants the same expression.
+- **The hex view does not lead back to a tensor.** Clicking a byte of
+  `data/0` lands on the ZIP record's `data` field: `placed::Index` is walked
+  from the template's types and a `Ty::Pickle` node's synthesised children
+  are not in it. Selecting the tensor's `numbers` in the tree does go to the
+  bytes, which is the direction a reader asks for first.
+- **A legacy file reads those bytes twice.** `torchlegacy.rs` places each
+  storage as a count and a typed run, and the tensor now places its own run
+  over the same bytes. Neither is marked a second reading, so the kind totals
+  count them both. The fix is the same `elsewhere` flag carrying an `aside`
+  beside it, or a `numbers` row that refers to the storage's field rather
+  than placing a run of its own.
+
 ## What each era wrote, on 2026-09-19
 
 Nine container environments: eight with both libraries, from torch 0.4.1 with

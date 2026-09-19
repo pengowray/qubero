@@ -85,14 +85,16 @@ fn a_tensor_says_what_it_is_and_where_its_numbers_are() {
     assert_eq!(named_row(&seen, "dtype").value, V::Str("float32".into()));
     assert_eq!(named_row(&seen, "shape").value, V::Str("3 x 4".into()));
     assert_eq!(named_row(&seen, "stride").value, V::Str("4, 1".into()));
+    assert_eq!(named_row(&seen, "order").value, V::Str("C".into()));
     assert_eq!(named_row(&seen, "storage offset").value, V::Str("0".into()));
     assert_eq!(named_row(&seen, "storage").value, V::Str("0".into()));
     assert_eq!(named_row(&seen, "location").value, V::Str("cpu".into()));
     assert_eq!(named_row(&seen, "requires grad").value, V::Str("False".into()));
-    assert_eq!(named_row(&seen, "numbers").value, V::Str("12 values in data/0".into()));
     // Nothing in this file holds them: a `data.pkl` on its own is the pickle
-    // and none of the storages.
-    assert_eq!(named_row(&seen, "stored at").value, V::Str("not in this file".into()));
+    // and none of the storages, so the row says where they are in the format
+    // and that they are not here. In an archive the same row is the numbers
+    // themselves, placed in the entry it names.
+    assert_eq!(named_row(&seen, "numbers").value, V::Str("12 values in data/0, not in this file".into()));
     // The entry row of the dictionary entry above it says the whole of what a
     // reader skimming a state dict wants.
     assert_eq!(named_row(&seen, "layer.weight").value, V::Str("float32 tensor 3 x 4".into()));

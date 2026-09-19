@@ -665,6 +665,19 @@ struct Resolved {
     /// rather than from a template says so here: the instructions a Familiar
     /// Pickle Form fixed are machinery of the value they build.
     machinery: bool,
+    /// True for a node whose bytes are somewhere other than after the sibling
+    /// before it: it was put where something the file says, rather than laid
+    /// out in order.
+    ///
+    /// What [`Ty::At`] says in a template, for a node a parse placed instead.
+    /// A torch tensor's numbers are in another entry of the archive, and the
+    /// pickle tree hands them back at that offset; a reading that laid them
+    /// out after the tensor's own bytes would leave every byte in between
+    /// reading as a gap. Everything that walks a node's children in file
+    /// order asks this the way it asks whether the type places its own
+    /// children. False for every node a template placed, which say it in
+    /// their type.
+    elsewhere: bool,
 }
 
 /// What a computed field came to, kept on its node: a whole number for a
@@ -694,6 +707,9 @@ struct Place {
     space: u32,
     /// See [`Resolved::machinery`]. False for every place a template made.
     machinery: bool,
+    /// See [`Resolved::elsewhere`]. False for every place a template made,
+    /// which says it in the type instead.
+    elsewhere: bool,
 }
 
 pub struct Evaluator {
@@ -1660,9 +1676,10 @@ impl Evaluator {
         // Reading the child is what goes deeper, and a file that nests pays
         // for every frame still open above it.
         let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
-        let machinery = place.machinery;
+        let (machinery, elsewhere) = (place.machinery, place.elsewhere);
         let mut r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
         r.machinery = machinery;
+        r.elsewhere = elsewhere;
         self.remember(path, r);
         Ok(())
     }
@@ -1725,6 +1742,7 @@ impl Evaluator {
                     limit: pr.limit,
                     space: pr.space,
                     machinery: false,
+                    elsewhere: false,
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
@@ -1744,7 +1762,7 @@ impl Evaluator {
                 space::Opened::Refused(_) => return fail("this stream did not open"),
             };
             let limit = self.spaces.len_bits(space);
-            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false }));
+            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false, elsewhere: false }));
         }
         // A field that reads its contents from somewhere else in the file is
         // not bounded by the structure it was declared in: an object header
@@ -1778,6 +1796,7 @@ impl Evaluator {
                         space: pr.space,
                         payload: None,
                         machinery: false,
+                        elsewhere: false,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -1885,7 +1904,7 @@ impl Evaluator {
                 return fail("field extends beyond the end of the file");
             }
         }
-        Ok(Some(Place { name, ty, offset, limit, space, machinery: false }))
+        Ok(Some(Place { name, ty, offset, limit, space, machinery: false, elsewhere: false }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -2332,6 +2351,7 @@ impl Evaluator {
                         space,
                         payload: None,
                         machinery: false,
+                        elsewhere: false,
                     });
                 }
                 Ty::Match { on, cases, default } => {
@@ -2382,6 +2402,7 @@ impl Evaluator {
                         space,
                         payload: None,
                         machinery: false,
+                        elsewhere: false,
                     });
                 }
             }
@@ -2769,7 +2790,7 @@ impl Evaluator {
             return fail("this stream is no longer open");
         };
         let place = |name: String, ty: Ty, at: u64| {
-            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false }))
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false }))
         };
         match part {
             TracedPart::Blocks => {

@@ -147,12 +147,34 @@ impl Evaluator {
                 });
             }
         }
+        // A tensor's numbers, which are a run of their own wherever the entry
+        // holding them is. The same table an array's numbers are: rows along
+        // the first axis of the shape and columns along the last, or the other
+        // way round for a tensor laid out in Fortran order.
+        if let (_, Part::Numbers(tensor)) = &here {
+            let inner = match (tensor.size.len(), tensor.contiguous()) {
+                (0, _) => return None,
+                (1, _) => None,
+                (_, Some(false)) => tensor.size.first().copied(),
+                _ => tensor.size.last().copied(),
+            };
+            return Some(crate::template::TableShape {
+                columns: inner.filter(|n| *n > 0).map(|n| E::lit(n as i128)),
+                row_word: inner.map(|_| "row".into()),
+                ..Default::default()
+            });
+        }
         // A tensor, whose numbers are in another entry of the archive. How
         // many rows and columns it has is in the match, so the shape is
         // settled here and the cells are read in
-        // [`Evaluator::tensor_cells`].
+        // [`Evaluator::tensor_cells`]. Only a view that steps through its
+        // storage: a tensor whose elements are one run has them as a field of
+        // its own, and the table is over that.
         if let (_, Part::Value(v)) = &here {
             if let Some(tensor) = super::pickletorch::tensor_of(v) {
+                if tensor.contiguous().is_some() {
+                    return None;
+                }
                 if tensor.columns() > 0 {
                     return Some(crate::template::TableShape {
                         row_word: Some(ROW_WORD.into()),
@@ -443,6 +465,21 @@ impl Evaluator {
                 };
                 self.pickle_note(path, &pr, name, said)
             }
+            // A tensor's numbers, which are in another entry of the archive or
+            // further down the file. Placed where they are, so they are read,
+            // drawn and edited as the ordinary run of numbers they are; a row
+            // saying where to look, for a pickle whose file does not hold
+            // them.
+            Part::Numbers(tensor) => match self.tensor_numbers(doc, &whole, base, tensor)? {
+                Some((ty, at, len)) => {
+                    let offset = at * 8;
+                    Ok(Some(Place { name, ty, offset, limit: offset + len * 8, space: pr.space, machinery: false, elsewhere: true }))
+                }
+                None => {
+                    let key = self.run_text(doc, &whole, base, tensor.key)?;
+                    self.pickle_note(path, &pr, name, super::pickletorch::numbers_elsewhere(tensor, &key))
+                }
+            },
             // What a reader came for, before the structure that holds it.
             Part::Summary { of, says } => {
                 let said = self.pickle_summary(doc, &root, path, &found, of, says)?;
@@ -523,6 +560,7 @@ impl Evaluator {
             computed: Some(Computed::Text(text.as_str().into())),
             space: pr.space,
             machinery: false,
+            elsewhere: false,
         };
         self.remember(path, r);
         Ok(None)
@@ -546,6 +584,7 @@ impl Evaluator {
             computed: said.map(|said| Computed::Text(said.as_str().into())),
             space: pr.space,
             machinery: false,
+            elsewhere: false,
         };
         self.remember(path, r);
     }
@@ -553,6 +592,6 @@ impl Evaluator {
     /// Where a leaf goes, for the ordinary machinery to read it there.
     fn pickle_place(&self, pr: &Resolved, name: Name, ty: T, base: u64, at: usize, len: usize, machinery: bool) -> Place {
         let offset = base + at as u64 * 8;
-        Place { name, ty, offset, limit: offset + len as u64 * 8, space: pr.space, machinery }
+        Place { name, ty, offset, limit: offset + len as u64 * 8, space: pr.space, machinery, elsewhere: false }
     }
 }

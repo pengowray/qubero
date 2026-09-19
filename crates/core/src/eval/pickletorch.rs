@@ -19,18 +19,41 @@
 //! `data/<key>` to a run, is done here. See `docs/DESIGN-pickle-containers.md`
 //! for what closing it properly would need.
 
-use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, DTYPE_FIELD, IS_FIELD, REQUIRES_GRAD_FIELD, SCALE_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD, ZERO_POINT_FIELD};
+use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, C_ORDER, DTYPE_FIELD, FORTRAN_ORDER, IS_FIELD, NUMBERS_FIELD, ORDER_FIELD, REQUIRES_GRAD_FIELD, SCALE_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD, ZERO_POINT_FIELD};
 use crate::formats::pickle::familiar::Match;
 use std::sync::Arc;
 
 use super::*;
 use crate::formats::pickle::familiar::{Kind, Tensor, TensorType, Value as Captured};
 use crate::formats::torchzip::{DATA_FOLDER, PICKLE_ENTRY};
-use crate::template::Endian;
+use crate::template::{Endian, Expr as E, Ty as T};
 
 /// What the `stored at` row says when nothing in this file holds the numbers,
 /// which is what a `data.pkl` opened on its own is.
 const NOT_HERE: &str = "not in this file";
+
+/// What the `order` row says for a view whose elements are neither one run
+/// forwards nor one run down the columns. An array says `C` or `Fortran`
+/// there and a tensor says the same two words; this is the third answer, and
+/// the tensor carrying it has no run of numbers under it.
+const STRIDED_VIEW: &str = "strided view";
+
+/// What the `numbers` row says when the tensor's elements are a run and this
+/// file does not hold the entry they are in, which is a `data.pkl` opened on
+/// its own.
+pub(super) fn numbers_elsewhere(tensor: &Tensor, key: &str) -> String {
+    format!("{} in {DATA_FOLDER}/{key}, {NOT_HERE}", counted(tensor.values()))
+}
+
+/// Which way a tensor's elements run through its storage, in the words the
+/// `order` row of an array uses.
+fn order_said(tensor: &Tensor) -> &'static str {
+    match tensor.contiguous() {
+        Some(true) => C_ORDER,
+        Some(false) => FORTRAN_ORDER,
+        None => STRIDED_VIEW,
+    }
+}
 
 /// How many values there are, said the way English says it: a tensor with no
 /// dimensions holds one value, not one values.
@@ -146,6 +169,23 @@ pub(crate) fn element_ty(dtype: TensorType, endian: Endian) -> Ty {
     }
 }
 
+/// How one element of a tensor reads when it is a field rather than a cell of
+/// a computed table: the type [`element_ty`] gives it, and for a complex
+/// number the pair of halves Python writes it as.
+fn element_run(dtype: TensorType, endian: Endian) -> Ty {
+    let held = element_ty(dtype, endian);
+    match dtype.complex() {
+        true => T::structure(COMPLEX_NAME, vec![(REAL_FIELD, held.clone()), (IMAGINARY_FIELD, held)]),
+        false => held,
+    }
+}
+
+/// What one complex element is called, and its two halves, which are the
+/// words Python's own `complex` uses for them.
+const COMPLEX_NAME: &str = "Complex";
+const REAL_FIELD: &str = "real";
+const IMAGINARY_FIELD: &str = "imaginary";
+
 impl Evaluator {
     /// What one of a tensor's rows says.
     pub(super) fn tensor_summary<S: Source>(
@@ -172,6 +212,32 @@ impl Evaluator {
             }),
             _ => Ok(String::new()),
         }
+    }
+
+    /// Where a tensor's numbers go, as the typed run they are.
+    ///
+    /// The one place in the reading where a field is placed outside the bytes
+    /// of the node that named it: the pickle is the archive entry `data.pkl`
+    /// and the numbers are in `data/<key>`, which is the same space and a long
+    /// way off. The run is the tensor's own window rather than the whole
+    /// storage, so two views onto one storage place two runs of their own and
+    /// each says what its reader asked for. The entry's own reading of those
+    /// bytes is the archive's, and `zip::records(true)` already says that one
+    /// is the second reading, so nothing is counted twice.
+    ///
+    /// Nothing when this file does not hold the entry, which is a `data.pkl`
+    /// opened on its own: the caller writes the row that says so.
+    pub(super) fn tensor_numbers<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        r: &Resolved,
+        base: u64,
+        tensor: &Tensor,
+    ) -> R<Option<(Ty, u64, u64)>> {
+        let Some((at, len)) = self.tensor_run(doc, r, base, tensor)? else { return Ok(None) };
+        let endian = self.byte_order(doc, r, base)?;
+        let ty = T::array(element_run(tensor.dtype, endian), E::lit(tensor.values() as i128));
+        Ok(Some((ty, at, len)))
     }
 
     /// The run this tensor's own values sit in: where its first element is and
@@ -412,7 +478,7 @@ impl Evaluator {
     /// names: a run written once and referred to again is read where it was
     /// written, which is why this goes through the pickle field rather than
     /// through the tensor's own bytes.
-    fn run_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, (at, len): (usize, usize)) -> R<String> {
+    pub(super) fn run_text<S: Source>(&self, doc: &Document<S>, r: &Resolved, base: u64, (at, len): (usize, usize)) -> R<String> {
         let bytes = self.read(doc, r, base + at as u64 * 8, len as u64 * 8)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
@@ -565,6 +631,12 @@ pub(super) fn tensor_parts<'a>(
             // stride is a step per axis and not a shape, and `4 x 1`
             // beside `3 x 4` reads as a second shape.
             (Label::Field(STRIDE_FIELD), Part::Note(t.stride.iter().map(u64::to_string).collect::<Vec<_>>().join(", "))),
+            // Which way the strides run, in the words an array's own `order`
+            // row uses, and the third answer for a view that runs neither
+            // way. What the row is worth is that the first two say the
+            // elements are one run of the file and the third says they are
+            // not.
+            (Label::Field(ORDER_FIELD), Part::Note(order_said(t).to_string())),
             (Label::Field(STORAGE_OFFSET_FIELD), Part::Note(t.offset.to_string())),
         ];
         // Said only of a parameter: every tensor would carry the row
@@ -586,11 +658,20 @@ pub(super) fn tensor_parts<'a>(
             notes.push((Label::Field(SCALE_FIELD), Part::Note(q.scale.to_string())));
             notes.push((Label::Field(ZERO_POINT_FIELD), Part::Note(q.zero_point.to_string())));
         }
-        notes.extend(
-            [Says::Numbers, Says::StoredAt]
-                .into_iter()
-                .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
-        );
+        // The numbers themselves, for a tensor whose elements run through its
+        // storage one after another: a typed run placed where the entry it
+        // named holds it, which is a field like any other. A view that steps
+        // through its storage rather than reading it in order is no run, so it
+        // keeps the two rows saying where its numbers are and the table reads
+        // them one element at a time.
+        match t.contiguous() {
+            Some(_) => notes.push((Label::Field(NUMBERS_FIELD), Part::Numbers(t))),
+            None => notes.extend(
+                [Says::Numbers, Says::StoredAt]
+                    .into_iter()
+                    .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
+            ),
+        }
         let kids = match call_of(found, v) {
             Some(call) => vec![(Label::Field(call.name), Part::Call(call, v))],
             None => Vec::new(),

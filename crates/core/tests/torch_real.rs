@@ -91,34 +91,92 @@ fn every_archive_reads_as_the_tensors_it_holds() {
     }
 }
 
-/// `layer.weight` is `arange(12).reshape(3, 4)`, and the table over it is
-/// those twelve numbers in three rows of four.
+/// `layer.weight` is `arange(12).reshape(3, 4)`, and its numbers are a field
+/// of their own at the entry the key names: twelve `f32` at 0x380, with a
+/// table over them of three rows of four.
 #[test]
-fn a_tensors_table_is_the_numbers_in_the_entry_it_names() {
+fn a_tensors_numbers_are_a_field_in_the_entry_it_names() {
     let Some(dir) = folder() else { return };
     let (doc, mut ev) = open(&dir, "state-dict-zip.pt");
     let at = tensor_at(&doc, &mut ev, "layer.weight");
     assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str("float32".into()));
     assert_eq!(row(&doc, &mut ev, &at, "shape"), Value::Str("3 x 4".into()));
-    assert_eq!(row(&doc, &mut ev, &at, "numbers"), Value::Str("12 values in data/0".into()));
-    // The entry the key names, found in the archive's own records, so the
-    // reader can go to those bytes.
-    assert_eq!(row(&doc, &mut ev, &at, "stored at"), Value::Str("0x380, 48 bytes".into()));
-    let shape = ev.table_shape(&doc, &at).unwrap().unwrap();
-    assert!(matches!(shape.cells, Some(Cells::Computed { rows: 3 })), "{:?}", shape.cells);
-    let cells = ev.pickle_cells(&doc, &at, 0, 3).unwrap();
-    assert_eq!(numbers(&cells), vec![vec![0.0, 1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0, 7.0], vec![8.0, 9.0, 10.0, 11.0]]);
-    // The bias is three zeroes in one column, and the step count is one value
-    // and so no table at all.
-    let bias = tensor_at(&doc, &mut ev, "layer.bias");
-    assert_eq!(numbers(&ev.pickle_cells(&doc, &bias, 0, 3).unwrap()), vec![vec![0.0], vec![0.0], vec![0.0]]);
+    // The numbers themselves, placed in the entry's data rather than
+    // described by a row: where they are, how long they are, and what they
+    // read as.
+    let held = under(&doc, &mut ev, &at, "numbers");
+    let node = ev.node(&doc, &held).unwrap();
+    assert_eq!((node.offset_bits / 8, node.size_bits / 8), (0x380, 48));
+    assert_eq!(node.child_count, 12);
+    assert_eq!(values(&doc, &mut ev, &held), (0..12).map(|n| n as f64).collect::<Vec<_>>());
+    // And they are the entry's own bytes, read from the file itself rather
+    // than through the tree.
+    let bytes = std::fs::read(dir.join("state-dict-zip.pt")).unwrap();
+    let said: Vec<f32> = bytes[0x380..0x380 + 48].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    assert_eq!(said, (0..12).map(|n| n as f32).collect::<Vec<_>>());
+    // The table is the ordinary one a run of numbers gets: the last axis is
+    // the columns, and nothing works the cells out.
+    let shape = ev.table_shape(&doc, &held).unwrap().unwrap();
+    assert_eq!(shape.columns, Some(4));
+    assert!(shape.cells.is_none(), "{:?}", shape.cells);
+    // The tensor itself is no longer a table: the numbers under it are.
+    assert!(ev.table_shape(&doc, &at).unwrap().is_none());
+    // The bias is three zeroes, and the step count is one value, which is a
+    // field of one number and no table.
+    let held = tensor_at(&doc, &mut ev, "layer.bias");
+    let bias = under(&doc, &mut ev, &held, "numbers");
+    assert_eq!(values(&doc, &mut ev, &bias), vec![0.0, 0.0, 0.0]);
     let steps = tensor_at(&doc, &mut ev, "steps");
     assert_eq!(row(&doc, &mut ev, &steps, "shape"), Value::Str("()".into()));
     assert!(ev.table_shape(&doc, &steps).unwrap().is_none());
+    let one = under(&doc, &mut ev, &steps, "numbers");
+    assert!(ev.table_shape(&doc, &one).unwrap().is_none());
+    assert_eq!(values(&doc, &mut ev, &one).len(), 1);
+}
+
+/// The numbers are outside the tensor that named them, and what is left under
+/// it still tiles its own bytes.
+///
+/// The one rule a field placed elsewhere has to keep, which is the rule an
+/// `At` keeps in every other template: the node it hangs off is neither
+/// longer nor shorter for it, and nothing in between reads as a gap.
+#[test]
+fn the_numbers_are_placed_outside_the_tensor_and_leave_it_whole() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "state-dict-zip.pt");
+    let at = tensor_at(&doc, &mut ev, "layer.weight");
+    let node = ev.node(&doc, &at).unwrap();
+    let (from, to) = (node.offset_bits, node.offset_bits + node.size_bits);
+    let mut placed = Vec::new();
+    let mut want = from;
+    for i in 0..node.child_count as usize {
+        let mut here = at.to_vec();
+        here.push(i);
+        let kid = ev.node(&doc, &here).unwrap();
+        if kid.offset_bits < from || kid.offset_bits >= to {
+            placed.push(kid.name.clone());
+            continue;
+        }
+        // A row worked out from the match covers no bytes and belongs where
+        // the tensor starts.
+        if kid.size_bits == 0 {
+            assert_eq!(kid.offset_bits, from, "{}", kid.name);
+            continue;
+        }
+        assert_eq!(kid.offset_bits, want, "{} leaves bytes over", kid.name);
+        want = kid.offset_bits + kid.size_bits;
+    }
+    assert_eq!(want, to, "bytes left over under the tensor");
+    assert_eq!(placed, vec!["numbers".to_string()]);
 }
 
 /// Two windows onto one storage, one of them transposed, read as the two
 /// tensors they are rather than as the bytes they share.
+///
+/// The two that read their storage in order are runs of their own, over
+/// overlapping bytes: the entry's own reading of those bytes is the archive's
+/// and is the one put aside, so nothing is counted twice. The transpose is
+/// not a run at all and keeps the table whose cells are worked out.
 #[test]
 fn a_view_is_read_at_the_stride_it_declares() {
     let Some(dir) = folder() else { return };
@@ -126,23 +184,34 @@ fn a_view_is_read_at_the_stride_it_declares() {
     // `base = arange(24, float32)`, saved whole, as its tail from twelve, and
     // as `base.reshape(4, 6).t()`, which is the same storage with its strides
     // the other way round.
-    let whole = tensor_at(&doc, &mut ev, "whole");
-    let cells = ev.pickle_cells(&doc, &whole, 0, 24).unwrap();
-    assert_eq!(numbers(&cells).concat(), (0..24).map(|n| n as f64).collect::<Vec<_>>());
+    let held = tensor_at(&doc, &mut ev, "whole");
+    let whole = under(&doc, &mut ev, &held, "numbers");
+    assert_eq!(values(&doc, &mut ev, &whole), (0..24).map(|n| n as f64).collect::<Vec<_>>());
     let tail = tensor_at(&doc, &mut ev, "tail");
     assert_eq!(row(&doc, &mut ev, &tail, "storage offset"), Value::Str("12".into()));
     // The same entry, twelve elements in: one storage, two tensors.
     assert_eq!(row(&doc, &mut ev, &tail, "storage"), Value::Str("0".into()));
-    assert_eq!(row(&doc, &mut ev, &tail, "stored at"), Value::Str("0x3b0, 48 bytes".into()));
-    assert_eq!(numbers(&ev.pickle_cells(&doc, &tail, 0, 12).unwrap()).concat(), (12..24).map(|n| n as f64).collect::<Vec<_>>());
-    // The transpose: shape 6 by 4 over a storage laid out 4 by 6, so going
-    // along a row of the table steps six values through the file.
+    let tail = under(&doc, &mut ev, &tail, "numbers");
+    let node = ev.node(&doc, &tail).unwrap();
+    assert_eq!((node.offset_bits / 8, node.size_bits / 8), (0x3b0, 48));
+    assert_eq!(values(&doc, &mut ev, &tail), (12..24).map(|n| n as f64).collect::<Vec<_>>());
+    // The two runs start twelve elements apart in the same entry, which is
+    // one storage read twice over and is what the file says.
+    assert_eq!(ev.node(&doc, &whole).unwrap().offset_bits / 8 + 48, node.offset_bits / 8);
+    // The transpose: shape 6 by 4 over a storage laid out 4 by 6. Its strides
+    // run down the columns rather than along the rows, which is one run of
+    // the file all the same, so it is a field and its `order` row says which
+    // way the run goes. The table over it is the run as the file holds it:
+    // four rows of six, each of them one column of the tensor.
     let grid = tensor_at(&doc, &mut ev, "grid");
     assert_eq!(row(&doc, &mut ev, &grid, "shape"), Value::Str("6 x 4".into()));
     assert_eq!(row(&doc, &mut ev, &grid, "stride"), Value::Str("1, 6".into()));
-    let cells = numbers(&ev.pickle_cells(&doc, &grid, 0, 6).unwrap());
-    assert_eq!(cells[0], vec![0.0, 6.0, 12.0, 18.0]);
-    assert_eq!(cells[5], vec![5.0, 11.0, 17.0, 23.0]);
+    assert_eq!(row(&doc, &mut ev, &grid, "order"), Value::Str("Fortran".into()));
+    let grid = under(&doc, &mut ev, &grid, "numbers");
+    let node = ev.node(&doc, &grid).unwrap();
+    assert_eq!((node.offset_bits / 8, node.size_bits / 8), (0x380, 96));
+    assert_eq!(ev.table_shape(&doc, &grid).unwrap().unwrap().columns, Some(6));
+    assert_eq!(values(&doc, &mut ev, &grid), (0..24).map(|n| n as f64).collect::<Vec<_>>());
 }
 
 /// One tensor of each dtype torch has a storage class for, each holding ones.
@@ -153,18 +222,8 @@ fn every_dtype_reads_as_the_numbers_it_is() {
     for word in ["float16", "bfloat16", "float32", "float64", "uint8", "int8", "int16", "int32", "int64", "bool"] {
         let at = tensor_at(&doc, &mut ev, word);
         assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str(word.to_string()), "{word}");
-        let cells = ev.pickle_cells(&doc, &at, 0, 4).unwrap();
-        let held: Vec<Value> = cells.into_iter().flatten().filter_map(|cell| cell.value).collect();
-        assert_eq!(held.len(), 4, "{word}");
-        for value in held {
-            let one = match value {
-                Value::Float(f) => f,
-                Value::Int(n) => n as f64,
-                Value::UInt(n) => n as f64,
-                other => panic!("{word}: {other:?}"),
-            };
-            assert_eq!(one, 1.0, "{word}");
-        }
+        let held = under(&doc, &mut ev, &at, "numbers");
+        assert_eq!(values(&doc, &mut ev, &held), vec![1.0; 4], "{word}");
     }
 }
 
@@ -195,24 +254,21 @@ fn the_dtypes_without_a_storage_class_read_as_the_numbers_they_are() {
         assert_eq!(row(&doc, &mut ev, &held, "header/form"), Value::Str("torch-tensors-p2-p3-v1".into()), "{name}");
         let at = under(&doc, &mut ev, &held, "data");
         assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str((*word).to_string()), "{name}");
-        assert_eq!(row(&doc, &mut ev, &at, "numbers"), Value::Str("4 values in data/0".into()), "{name}");
-        let cells = ev.pickle_cells(&doc, &at, 0, 4).unwrap();
-        let held: Vec<Value> = cells.into_iter().flatten().filter_map(|cell| cell.value).collect();
-        // A complex number is one cell holding a pair, in Python's own
-        // spelling for a complex literal.
-        let ones: Vec<Value> = match word.starts_with("complex") {
-            true => (0..4).map(|_| Value::Str("1+0j".into())).collect(),
-            false => (0..4).map(|_| Value::Float(1.0)).collect(),
-        };
-        let held: Vec<Value> = held
-            .into_iter()
-            .map(|v| match v {
-                Value::UInt(n) => Value::Float(n as f64),
-                Value::Int(n) => Value::Float(n as f64),
-                other => other,
-            })
-            .collect();
-        assert_eq!(held, ones, "{name}");
+        let held = under(&doc, &mut ev, &at, "numbers");
+        assert_eq!(ev.node(&doc, &held).unwrap().child_count, 4, "{name}");
+        // A complex element is a pair of fields, the real part and then the
+        // imaginary one, which is how Python writes a complex number.
+        match word.starts_with("complex") {
+            true => {
+                for i in 0..4 {
+                    let mut one = held.clone();
+                    one.push(i);
+                    assert_eq!(row(&doc, &mut ev, &one, "real"), Value::Float(1.0), "{name}");
+                    assert_eq!(row(&doc, &mut ev, &one, "imaginary"), Value::Float(0.0), "{name}");
+                }
+            }
+            false => assert_eq!(values(&doc, &mut ev, &held), vec![1.0; 4], "{name}"),
+        }
     }
 }
 
@@ -231,7 +287,8 @@ fn a_quantised_tensor_reads_as_its_stored_integers() {
     assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str("qint8".into()));
     assert_eq!(row(&doc, &mut ev, &at, "scale"), Value::Str("0.5".into()));
     assert_eq!(row(&doc, &mut ev, &at, "zero point"), Value::Str("0".into()));
-    assert_eq!(numbers(&ev.pickle_cells(&doc, &at, 0, 4).unwrap()).concat(), vec![0.0, 2.0, 4.0, 6.0]);
+    let held = under(&doc, &mut ev, &at, "numbers");
+    assert_eq!(values(&doc, &mut ev, &held), vec![0.0, 2.0, 4.0, 6.0]);
 }
 
 /// A sparse tensor reads as the two tensors it is made of.
@@ -339,9 +396,15 @@ fn a_long_storage_reads_at_both_ends() {
     let Some(dir) = folder() else { return };
     let (doc, mut ev) = open(&dir, "long-storage-zip.pt");
     let at = tensor_at(&doc, &mut ev, "long");
-    assert_eq!(row(&doc, &mut ev, &at, "numbers"), Value::Str("100000 values in data/0".into()));
-    let cells = numbers(&ev.pickle_cells(&doc, &at, 99_998, 100_000).unwrap());
-    assert_eq!(cells, vec![vec![99_998.0], vec![99_999.0]]);
+    let held = under(&doc, &mut ev, &at, "numbers");
+    let node = ev.node(&doc, &held).unwrap();
+    assert_eq!(node.child_count, 100_000);
+    // The far end of it, read as the field it is rather than the whole run.
+    for (i, want) in [(0usize, 0.0), (99_998, 99_998.0), (99_999, 99_999.0)] {
+        let mut one = held.clone();
+        one.push(i);
+        assert_eq!(ev.node(&doc, &one).unwrap().value, Value::Float(want));
+    }
 }
 
 /// A shape with no dimensions and a shape with a dimension of nought, which
@@ -351,12 +414,15 @@ fn the_shapes_that_are_not_a_rectangle_still_read() {
     let Some(dir) = folder() else { return };
     let (doc, mut ev) = open(&dir, "edge-shapes-zip.pt");
     let scalar = tensor_at(&doc, &mut ev, "scalar");
-    assert_eq!(row(&doc, &mut ev, &scalar, "numbers"), Value::Str("1 value in data/0".into()));
     assert!(ev.table_shape(&doc, &scalar).unwrap().is_none());
+    let one = under(&doc, &mut ev, &scalar, "numbers");
+    assert_eq!(ev.node(&doc, &one).unwrap().child_count, 1);
     let empty = tensor_at(&doc, &mut ev, "empty");
     assert_eq!(row(&doc, &mut ev, &empty, "shape"), Value::Str("0 x 3".into()));
-    assert_eq!(row(&doc, &mut ev, &empty, "numbers"), Value::Str("0 values in data/1".into()));
-    assert!(ev.pickle_cells(&doc, &empty, 0, 4).unwrap().is_empty());
+    // No values at all, so the run covers no bytes and holds nothing.
+    let none = under(&doc, &mut ev, &empty, "numbers");
+    let node = ev.node(&doc, &none).unwrap();
+    assert_eq!((node.child_count, node.size_bits), (0, 0));
 }
 
 /// The summary a reader opens a checkpoint for: one row per tensor, before
@@ -455,6 +521,23 @@ fn under(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], name: &str
         here.push(found.unwrap_or_else(|| panic!("no {part} under {here:?} for {name}")));
     }
     here
+}
+
+/// The values of a run of numbers, read as the fields they are.
+fn values(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize]) -> Vec<f64> {
+    let count = ev.node(doc, at).unwrap().child_count;
+    (0..count as usize)
+        .map(|i| {
+            let mut here = at.to_vec();
+            here.push(i);
+            match ev.node(doc, &here).unwrap().value {
+                Value::Float(f) => f,
+                Value::Int(n) => n as f64,
+                Value::UInt(n) => n as f64,
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect()
 }
 
 /// A table's cells as plain numbers, with nothing where the table has none.
@@ -579,13 +662,13 @@ fn a_legacy_tensor_opens_as_the_table_the_archive_holds() {
         for said in ["dtype", "shape", "stride", "storage offset", "requires grad"] {
             assert_eq!(row(&old_doc, &mut old_ev, &old_at, said), row(&zip_doc, &mut zip_ev, &new_at, said), "{name}: {said}");
         }
-        let want = zip_ev.pickle_cells(&zip_doc, &new_at, 0, 64).unwrap();
-        let said = old_ev.pickle_cells(&old_doc, &old_at, 0, 64).unwrap();
-        assert_eq!(numbers(&said), numbers(&want), "{name}");
-        // And the row saying where the numbers are points into this file,
-        // which for a legacy checkpoint is the run after the fifth pickle.
-        let stored = row(&old_doc, &mut old_ev, &old_at, "stored at");
-        assert!(matches!(&stored, Value::Str(s) if s.contains("0x")), "{name}: {stored:?}");
+        let want = under(&zip_doc, &mut zip_ev, &new_at, "numbers");
+        let said = under(&old_doc, &mut old_ev, &old_at, "numbers");
+        assert_eq!(values(&old_doc, &mut old_ev, &said), values(&zip_doc, &mut zip_ev, &want), "{name}");
+        // And the numbers are placed in this file, which for a legacy
+        // checkpoint is the run after the fifth pickle.
+        let node = old_ev.node(&old_doc, &said).unwrap();
+        assert!(node.offset_bits > 0, "{name}");
     }
 }
 

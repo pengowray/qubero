@@ -478,6 +478,47 @@ impl Tensor {
         }
     }
 
+    /// Which way the tensor's elements run through its storage, when they run
+    /// through it one after another with nothing skipped and nothing read
+    /// twice.
+    ///
+    /// `Some(true)` for C order, where the last axis steps by one element;
+    /// `Some(false)` for Fortran order, where the first one does; nothing for
+    /// a view that is neither, which is what a transpose of more than one
+    /// axis, a slice and a broadcast all are.
+    ///
+    /// An axis holding one element is skipped. Its stride can be anything at
+    /// all, because nothing ever steps along it, and torch writes whatever the
+    /// tensor it was made from happened to have there. A tensor holding one
+    /// element or none is C order: there is no step to take either way, and
+    /// the run is the one reading of the bytes.
+    pub fn contiguous(&self) -> Option<bool> {
+        if self.size.len() != self.stride.len() {
+            return None;
+        }
+        if self.values() <= 1 {
+            return Some(true);
+        }
+        let runs = |axes: Vec<usize>| {
+            let mut step = 1u64;
+            for axis in axes {
+                let n = self.size[axis];
+                if n != 1 && self.stride[axis] != step {
+                    return false;
+                }
+                step = match step.checked_mul(n) {
+                    Some(s) => s,
+                    None => return false,
+                };
+            }
+            true
+        };
+        if runs((0..self.size.len()).rev().collect()) {
+            return Some(true);
+        }
+        runs((0..self.size.len()).collect()).then_some(false)
+    }
+
     /// How many columns it has, which is the last axis, or one for a tensor of
     /// a single dimension.
     pub fn columns(&self) -> u64 {

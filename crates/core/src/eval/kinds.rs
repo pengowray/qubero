@@ -460,8 +460,12 @@ impl Evaluator {
         }
         // A field that puts its own children somewhere waits until the ones
         // laid out in order are done, so that where they landed can be judged
-        // against what those cover. See `deferred`.
-        if in_order && places(&r.ty) && !region(&r) {
+        // against what those cover. See `deferred`. So does a field a parse
+        // put somewhere itself, which is a torch tensor's numbers: laid out
+        // in order it would move the cursor to another entry of the archive
+        // and every byte in between would read as a gap. See
+        // `Resolved::elsewhere`.
+        if in_order && (places(&r.ty) || r.elsewhere) && !region(&r) {
             let f = &mut walk.stack[top];
             f.deferred.push(idx);
             f.next += 1;
