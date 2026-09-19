@@ -50,7 +50,7 @@ import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
-import { cellPlaceIn, drawAddress, fieldWhereLines, rowHasBytes, whereLines } from "./tableaddress.ts";
+import { cellPlaceIn, drawAddress, fieldWhereLines, rowHasBytes, whatLines, whereLines } from "./tableaddress.ts";
 import { tableBar, type Bar } from "./tablebar.ts";
 import { TableColumns } from "./tablecolumns.ts";
 import { TableExportPanel } from "./tableexportpanel.ts";
@@ -454,6 +454,9 @@ export class TableView {
     // as its values and a sentence in every marked cell would take the table
     // apart. The column heading says how many there are; the glyph says which.
     const lines = [cell.text];
+    // What the cell is, where that is not its value: a masked array's hidden
+    // entry is drawn empty, and this is what says which nothing it is.
+    lines.push(...whatLines(cell));
     if (problem !== undefined) lines.push(problem.text);
     // Where this one cell's bytes are, for the tables whose rows are not a run
     // of the file. Only with the address columns on: a reader who has not

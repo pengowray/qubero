@@ -1056,10 +1056,12 @@ It shows empty and **keeps its address**, because the number is in the file and
 the array only says not to count it: a reader who wants the stored number
 clicks the cell and the hex view selects those bytes. That is a different fact
 from a cell the file has no value for, so it is a field of its own rather than
-a third `kind`, and the interface says which: the hover reads
-`Masked: the array does not count this value.` above the address line. A mask
-this reading cannot read leaves every cell showing its number, rather than
-blanking a table on a doubt.
+a third `kind`, and the interface says which: the cell's hover reads `Masked`
+above whatever else it says. That line is there whether or not the address
+columns are on, because it is about the value rather than about where it sits;
+`whatLines` in `web/src/tableaddress.ts` is the one that answers it and
+`whereLines` stays the address. A mask this reading cannot read leaves every
+cell showing its number, rather than blanking a table on a doubt.
 
 `a_masked_array_s_hidden_cells_are_empty_and_still_say_where_they_are` in
 `cells_real.rs` checks the four samples cell for cell at both protocols, and

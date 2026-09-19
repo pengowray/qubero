@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import type { CellAt, Doc, FrameCell, TableShape, TemplateNode } from "../src/doc.ts";
 import { computedCell, isTable, tablePlan } from "../src/tableplan.ts";
-import { whereLines } from "../src/tableaddress.ts";
+import { whatLines, whereLines } from "../src/tableaddress.ts";
 import { TABLE } from "../src/strings.ts";
 
 function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
@@ -234,10 +234,14 @@ test("a masked cell keeps its address and says it is masked", () => {
   assert.equal(hidden.masked, true);
   assert.deepEqual(hidden.at, { space: 0, offsetBits: 64, sizeBits: 64 });
   assert.equal(hidden.noBytes, undefined);
-  assert.deepEqual(whereLines(hidden), [TABLE.maskedCell, TABLE.cellAt("@0x8", "8 bytes")]);
+  // What it is is said whether or not the addresses are on; where it is is
+  // the address line, which they turn on.
+  assert.deepEqual(whatLines(hidden), [TABLE.maskedCell]);
+  assert.deepEqual(whereLines(hidden), [TABLE.cellAt("@0x8", "8 bytes")]);
 
   const shown = computedCell({ text: "1.5", kind: "float", at: bytesAt(128, 64), masked: false });
   assert.equal(shown.masked, undefined);
+  assert.deepEqual(whatLines(shown), []);
   assert.deepEqual(whereLines(shown), [TABLE.cellAt("@0x10", "8 bytes")]);
 
   // And the reason a cell has no bytes at all is still the only line.
