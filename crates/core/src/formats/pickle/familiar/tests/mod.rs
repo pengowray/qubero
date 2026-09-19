@@ -85,6 +85,9 @@ struct Row {
     len: u64,
     value: V,
     machinery: bool,
+    /// Which address space the row's bytes are in. 0 is the file; a run the
+    /// file spelled rather than wrote opens a space of its own.
+    space: u32,
 }
 
 /// Every row under `path`, in file order, with the rows inside a node
@@ -98,6 +101,7 @@ fn rows(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], depth: us
         at: node.offset_bits / 8,
         len: node.size_bits / 8,
         value: node.value.clone(),
+        space: node.space,
         machinery: node.machinery == Some(true),
     });
     // An array's numbers are a run of values rather than the shape of the
@@ -135,7 +139,9 @@ fn tiles(seen: &[Row]) {
         let kids: Vec<&Row> = seen[i + 1..]
             .iter()
             .take_while(|r| r.depth > row.depth)
-            .filter(|r| r.depth == row.depth + 1)
+            // A child in another space is not part of this row's tiling: what a
+            // decoded run holds starts at byte 0 of the space it opened.
+            .filter(|r| r.depth == row.depth + 1 && r.space == row.space)
             .collect();
         if kids.is_empty() {
             continue;
