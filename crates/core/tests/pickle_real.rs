@@ -631,6 +631,26 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto5-pandas-series.pickle", Some("pandas-frame-p4-p5-v1")),
         // Every index kind, the datetime one included.
         ("proto5-pandas-index-types.pickle", Some("pandas-frame-p4-p5-v1")),
+        // Files holding values of more than one family, which is what an
+        // ordinary pickle of a program's state is. Each is written at
+        // protocol 4 and at protocol 2, which are two grammars over the same
+        // data. No single-family form takes one of them: each requires the
+        // file to have used its own production and nothing else's, and the
+        // mixed form is the union of all of them.
+        ("mixed-date-and-array-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-date-and-array-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-ordereddict-of-arrays-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-ordereddict-of-arrays-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-model-and-metadata-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-model-and-metadata-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-frame-and-notes-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-frame-and-notes-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-decimal-and-array-p4.pickle", Some("mixed-values-p4-p5-v1")),
+        ("mixed-decimal-and-array-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        // One family all the way down, kept beside them: it keeps the name it
+        // already had rather than being read as a mixture of one.
+        ("mixed-list-of-frames-p4.pickle", Some("pandas-frame-p4-p5-v1")),
+        ("mixed-list-of-frames-p2.pickle", Some("pandas-frame-p2-p3-v1")),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -1348,6 +1368,109 @@ fn a_library_object_says_what_it_holds_before_how() {
     assert!(checked >= 12, "only {checked} objects said what they hold");
 }
 
+/// A file holding two families reads as both of them, and everything under it
+/// keeps working where it sits rather than only at the root.
+///
+/// A frame at the root of a file is the easy case, and it is not the case
+/// anyone has: a frame arrives inside the dictionary that carries the note and
+/// the date beside it. So the claim is the placing as much as the match: the
+/// form, the row that says which families are in the file, and then the frame
+/// deep in the tree offering the same table and the same summary rows it
+/// offers at the root.
+#[test]
+fn a_mixed_file_reads_as_every_family_it_holds() {
+    let Some(dir) = folder() else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // Each file, the form, and what the `families` row says.
+    let want: &[(&str, &str, &str)] = &[
+        ("mixed-date-and-array-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
+        ("mixed-date-and-array-p2.pickle", "mixed-values-p2-p3-v1", "basic, stdlib, numpy"),
+        ("mixed-ordereddict-of-arrays-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
+        ("mixed-decimal-and-array-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
+        // A fitted model with the day it was fitted: the estimator brings its
+        // arrays with it, so three names rather than two.
+        ("mixed-model-and-metadata-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy, sklearn"),
+        ("mixed-model-and-metadata-p2.pickle", "mixed-values-p2-p3-v1", "basic, stdlib, numpy, sklearn"),
+        // pandas places a block by writing a `slice`, which is the builtins
+        // production, so a frame brings that name with it too.
+        ("mixed-frame-and-notes-p4.pickle", "mixed-values-p4-p5-v1", "basic, builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-and-notes-p2.pickle", "mixed-values-p2-p3-v1", "basic, builtins, stdlib, numpy, pandas"),
+        // One family, which keeps the name it already had. The row says so
+        // too, which is why it is worth having on every file and not only on
+        // a mixed one.
+        ("mixed-list-of-frames-p4.pickle", "pandas-frame-p4-p5-v1", "basic, builtins, numpy, pandas"),
+    ];
+    for (name, form, families) in want {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{name} matched no form"));
+        assert_eq!(found.form, *form, "{name}");
+        assert_eq!(found.families(), *families, "{name}");
+        let rows = familiar_rows(bytes);
+        assert_eq!(row(&rows, "form").value, Value::Str((*form).into()), "{name}");
+        assert_eq!(row(&rows, "families").value, Value::Str((*families).into()), "{name}");
+        // The row every file has, whatever else it holds.
+        assert!(rows.iter().any(|r| r.name == "pickler"), "{name}: no pickler row");
+    }
+
+    // The frame inside the dictionary, which is where a frame really lives.
+    // It opens with the four rows a frame opens with and it offers the table
+    // it holds, both of them on the frame's own node rather than the file's.
+    for (name, made) in [("mixed-frame-and-notes-p4.pickle", "2026-09-19T10:08:00"), ("mixed-frame-and-notes-p2.pickle", "2026-09-19T10:08:00")] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let doc = Document::new(MemSource(bytes.clone()));
+        let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+        let mut rows = Vec::new();
+        walk_rows(&doc, &mut ev, &[], 0, &mut rows);
+        // The three entries of the dictionary, read as what they are.
+        assert_eq!(row(&rows, "note").value, Value::Str("three rows, two numbers and a label".into()), "{name}");
+        assert_eq!(row(&rows, "made").value, Value::Str(made.into()), "{name}");
+        // The entry the frame arrived under, and the frame itself, which is
+        // the `value` half of that entry and not the entry.
+        // The entry, not the FRAME opcode of the envelope, which goes by the
+        // same word.
+        let entry = rows.iter().find(|r| r.name == "frame" && r.ty == "entry").unwrap_or_else(|| panic!("{name}: no frame entry"));
+        let frame = rows
+            .iter()
+            .find(|r| r.name == "value" && r.path.len() == entry.path.len() + 1 && r.path.starts_with(&entry.path))
+            .unwrap_or_else(|| panic!("{name}: the frame entry holds no value"));
+        assert!(frame.path.len() > 2, "{name}: the frame is at the root, not inside the dictionary");
+        // What a reader came for, before the structure that holds it.
+        let summary: Vec<(String, String)> = (0..4)
+            .map(|i| {
+                let mut at = frame.path.clone();
+                at.push(i);
+                let n = ev.node(&doc, &at).unwrap();
+                (n.name.clone(), cell_text(&Some(n.value)))
+            })
+            .collect();
+        let expected = [
+            ("columns", "x, y, label"),
+            ("rows", "3"),
+            ("index", "RangeIndex 0 to 3"),
+            ("dtypes", "x int64, y float64, label str"),
+        ];
+        assert_eq!(summary, expected.map(|(n, v)| (n.to_string(), v.to_string())).to_vec(), "{name}");
+        // And the table, worked out from the blocks wherever the frame sits.
+        let shape = ev.table_shape(&doc, &frame.path).unwrap().unwrap_or_else(|| panic!("{name}: the frame offers no table"));
+        assert_eq!(shape.names, ["index", "x", "y", "label"], "{name}");
+        let read = ev.pickle_cells(&doc, &frame.path, 0, 4).unwrap();
+        let said: Vec<Vec<String>> = read.iter().map(|r| r.iter().map(cell_text).collect()).collect();
+        assert_eq!(said, vec![vec!["0", "1", "0.5", "a"], vec!["1", "2", "1.5", "b"], vec!["2", "3", "2.5", "c"]], "{name}");
+    }
+
+    // The array beside the date, which is a run of numbers wherever it sits.
+    // Protocol 2 writes those numbers as the latin-1 text they spell, so the
+    // claim is the same six values from two different spellings.
+    for name in ["mixed-date-and-array-p4.pickle", "mixed-date-and-array-p2.pickle"] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let rows = familiar_rows(bytes.clone());
+        assert_eq!(row(&rows, "when").value, Value::Str("2026-09-19T10:08:00".into()), "{name}");
+        assert_eq!(array_numbers(&bytes, name), (0..6).map(|n| n.to_string()).collect::<Vec<_>>(), "{name}");
+    }
+}
+
 /// A list of `OrderedDict`s is a table, the same way a list of dictionaries
 /// is, and its cells read as the values they hold rather than as the bytes.
 ///
@@ -1458,6 +1581,13 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // which is the sklearn objects with their arrays wrapped this way.
         ("sklearn-linear-regression.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
         ("sklearn-random-forest.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        // What else goes into a joblib file beside the arrays. Each of these
+        // is the wrapper and one more family in the one stream, which is the
+        // mixed form: the two rows above are the two mixtures joblib was
+        // given a name of its own for, and these are the rest.
+        ("stdlib-and-arrays.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("pandas-frame.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("scipy-csr-matrix.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         // The compressors, each of which holds one of the files above.
         ("dict-of-arrays-zlib.joblib", None, "zlib"),
         ("dict-of-arrays-compress-true.joblib", None, "zlib"),
