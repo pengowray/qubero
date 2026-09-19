@@ -36,7 +36,7 @@ pub use picklers::Pickler;
 
 use cursor::{Cursor, Framing};
 use forms::{forms, Allow, Family, Wrapped};
-use packs::{Pack, Packs};
+use packs::{Extension, Extensions};
 use memo::Memo;
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
@@ -111,9 +111,9 @@ pub struct Match {
     /// Every instruction in the file, in order, so that the bytes no value
     /// covers can be named rather than left over.
     pub ops: Vec<Instr>,
-    /// Which families' own productions the file used, which the mixed form
-    /// wants two of and the `families` row names.
-    packs: Packs,
+    /// Which extensions' own productions the file used, which the mixed form
+    /// wants two of and the `form extensions` row names.
+    extensions: Extensions,
     stop: usize,
     payloads: Vec<(usize, Payload)>,
     /// The bytes of every run the file did not write as bytes, by where the
@@ -130,14 +130,18 @@ impl Match {
         self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held)
     }
 
-    /// Which families of values the file turned out to hold, in a fixed order
-    /// and starting with the grammar every one of them is read against.
+    /// Everything the file used beyond the basic grammar, in a fixed order,
+    /// and `none` for a file the basic grammar read on its own.
+    ///
+    /// The basic grammar is not in the list: every form reads it, so it is the
+    /// form itself rather than an extension of it, and the `form` row above
+    /// already says which form that is.
     ///
     /// Said of every matched file and not only a mixed one. The form names a
     /// grammar and this names what the file used, and a reader comparing two
     /// files wants to see the same rows in both.
-    pub fn families(&self) -> String {
-        self.packs.names()
+    pub fn extensions(&self) -> String {
+        self.extensions.names()
     }
 }
 
@@ -215,7 +219,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         arrays: 0,
         objects: 0,
         instances: 0,
-        packs: Packs::default(),
+        extensions: Extensions::default(),
         wrappers: 0,
         tensors: 0,
         breaks: Vec::new(),
@@ -377,10 +381,10 @@ impl<'a> Cursor<'a> {
         // What the file used, which is the classes noted as they were built
         // and the three productions that name no class, each of which already
         // keeps a count of itself.
-        let mut packs = self.packs;
-        packs.set(Pack::Numpy, self.arrays > 0);
-        packs.set(Pack::Builtins, self.objects > 0);
-        packs.set(Pack::Joblib, self.wrappers > 0);
+        let mut extensions = self.extensions;
+        extensions.set(Extension::Numpy, self.arrays > 0);
+        extensions.set(Extension::Builtins, self.objects > 0);
+        extensions.set(Extension::Joblib, self.wrappers > 0);
         let plain = self.arrays == 0 && self.objects == 0 && self.instances == 0;
         let needed = match self.allow.family {
             Family::Basic => plain,
@@ -400,7 +404,7 @@ impl<'a> Cursor<'a> {
             // name. Two is the count whatever the pair is, so the widest
             // production the union allows, an array of pickled objects, still
             // needs something from a second family beside it.
-            Family::Mixed => packs.families() >= 2,
+            Family::Mixed => extensions.families() >= 2,
         };
         if !needed {
             return None;
@@ -419,7 +423,7 @@ impl<'a> Cursor<'a> {
             body,
             calls: std::mem::take(&mut self.calls),
             ops: instructions(self.bytes, &self.breaks),
-            packs,
+            extensions,
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),
             runs: std::mem::take(&mut self.runs),

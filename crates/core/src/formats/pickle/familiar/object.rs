@@ -14,7 +14,7 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
-use super::forms::{pack_of, Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
+use super::forms::{extension_of, Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
 use super::packs::covers;
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
@@ -79,8 +79,8 @@ impl Cursor<'_> {
     /// no family claims, which is every callable a form names without naming
     /// the package it is in.
     fn from_pack(&mut self, module: &str) {
-        if let Some(pack) = pack_of(module) {
-            self.packs.add(pack);
+        if let Some(pack) = extension_of(module) {
+            self.extensions.add(pack);
         }
     }
 

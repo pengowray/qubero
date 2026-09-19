@@ -329,7 +329,7 @@ fn a_mixed_file_holding_an_unenumerated_call_is_still_refused() {
     let plain = entries(b"");
     let found = recognise(&plain).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&plain)));
     assert_eq!(found.form, "mixed-values-p4-p5-v1");
-    assert_eq!(found.families(), "basic, stdlib, numpy");
+    assert_eq!(found.extensions(), "stdlib, numpy");
     // One more entry, and the only thing that changed is a REDUCE of a class
     // `collections` has and the calls table does not.
     let extra = cat(&[&word("x"), &call("collections", "ChainMap", b"", 0)]);

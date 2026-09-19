@@ -4,7 +4,7 @@
 
 use super::memo::Memo;
 use super::forms::Allow;
-use super::packs::Packs;
+use super::packs::Extensions;
 use super::{BIG_PAYLOAD, Call, Kind, NO_OPCODE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
@@ -60,7 +60,7 @@ pub(super) struct Cursor<'a> {
     /// counts and the `families` row names. The three productions that name
     /// no class are not here: each keeps a count of itself and the bit is
     /// read off that at the end of the match.
-    pub(super) packs: Packs,
+    pub(super) extensions: Extensions,
     /// How many arrays arrived wrapped the way `joblib.dump` writes one, with
     /// their bytes in the file after the wrapper rather than inside it.
     pub(super) wrappers: usize,
@@ -117,7 +117,7 @@ pub(super) struct Save {
     pub(super) arrays: usize,
     pub(super) objects: usize,
     pub(super) instances: usize,
-    pub(super) packs: Packs,
+    pub(super) extensions: Extensions,
     pub(super) wrappers: usize,
     pub(super) tensors: usize,
     pub(super) breaks: usize,
@@ -215,7 +215,7 @@ impl<'a> Cursor<'a> {
             arrays: self.arrays,
             objects: self.objects,
             instances: self.instances,
-            packs: self.packs,
+            extensions: self.extensions,
             wrappers: self.wrappers,
             tensors: self.tensors,
             breaks: self.breaks.len(),
@@ -293,7 +293,7 @@ impl<'a> Cursor<'a> {
         self.arrays = s.arrays;
         self.objects = s.objects;
         self.instances = s.instances;
-        self.packs = s.packs;
+        self.extensions = s.extensions;
         self.wrappers = s.wrappers;
         self.tensors = s.tensors;
         self.breaks.truncate(s.breaks);

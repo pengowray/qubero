@@ -373,8 +373,10 @@ only permits the wrapper, since something else is what made the file mixed. So a
 joblib file holding dates, a pandas frame or a scipy sparse matrix is read here,
 and one holding arrays or scikit-learn estimators alone keeps its own name.
 
-**The `families` row.** The header of a matched file now says `form` and then
-`families`: which families of values the file turned out to hold, in a fixed
+**The `form extensions` row.** The header of a matched file says `form` and
+then `form extensions`: the basic grammar is the form, and these are what the
+file used beside it. A file the basic grammar read on its own says `none`.
+What the row names is which of them the file turned out to hold, in a fixed
 order, always opening with `basic`, which is the grammar every form reads and
 every file is read against. `basic, stdlib, numpy` for a date beside an array;
 `basic, builtins, stdlib, numpy, pandas` for a frame with a note and a date,

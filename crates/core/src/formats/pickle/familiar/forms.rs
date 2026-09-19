@@ -14,7 +14,7 @@
 //! than written out, so a family added to that table is in the union already.
 
 use super::cursor::Cursor;
-use super::packs::{covers, Pack};
+use super::packs::{covers, Extension};
 use super::{Kind, Names, Shape, Value};
 
 /// The forms, each a named grammar over the same envelope. They differ in
@@ -141,14 +141,14 @@ pub(super) enum Family {
     /// Tensors, and whatever plain data was saved beside them.
     Torch,
     /// Two or more of the families a file may use, counted as
-    /// [`Packs::families`](super::packs::Packs::families) counts them.
+    /// [`Extensions::families`](super::packs::Extensions::families) counts them.
     Mixed,
 }
 
 /// Which family a class named from this module belongs to, asked of the same
 /// prefixes the forms are declared with so that the two cannot drift apart.
-pub(super) fn pack_of(module: &str) -> Option<Pack> {
-    DECLARED.iter().find_map(|d| covers(d.classes, module).then_some(d.pack).flatten())
+pub(super) fn extension_of(module: &str) -> Option<Extension> {
+    DECLARED.iter().find_map(|d| covers(d.classes, module).then_some(d.extension).flatten())
 }
 
 /// Whether a form reads an array the way `joblib.dump` writes one, and whether
@@ -501,7 +501,7 @@ struct Declared {
     /// [`pack_of`] answers with. Nothing for a row that whitelists none: the
     /// three productions that are nobody's classes keep a count of themselves
     /// and the bit is read off that instead.
-    pack: Option<Pack>,
+    extension: Option<Extension>,
     names: &'static [&'static str],
     calls: &'static [Reduce],
     object_arrays: bool,
@@ -525,7 +525,7 @@ const DECLARED: &[Declared] = &[
         builtins: false,
         torch: false,
         classes: NO_CLASSES,
-        pack: None,
+        extension: None,
         names: NO_CLASSES,
         calls: NO_CALLS,
         object_arrays: false,
@@ -537,7 +537,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         numpy: true,
         classes: SKLEARN_CLASSES,
-        pack: Some(Pack::Sklearn),
+        extension: Some(Extension::Sklearn),
         calls: SKLEARN_CALLS,
         ..PLAIN
     },
@@ -546,7 +546,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         numpy: true,
         classes: &["scipy.sparse"],
-        pack: Some(Pack::Scipy),
+        extension: Some(Extension::Scipy),
         ..PLAIN
     },
     Declared {
@@ -555,7 +555,7 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         builtins: true,
         classes: &["pandas"],
-        pack: Some(Pack::Pandas),
+        extension: Some(Extension::Pandas),
         names: NO_CLASSES,
         calls: PANDAS_CALLS,
         object_arrays: true,
@@ -570,7 +570,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Library,
         builtins: true,
         classes: super::stdlib::STDLIB_MODULES,
-        pack: Some(Pack::Stdlib),
+        extension: Some(Extension::Stdlib),
         names: super::stdlib::FACTORIES,
         calls: super::stdlib::STDLIB_CALLS,
         ..PLAIN
@@ -602,7 +602,7 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         joblib: Wrapped::Required,
         classes: SKLEARN_CLASSES,
-        pack: Some(Pack::Sklearn),
+        extension: Some(Extension::Sklearn),
         calls: SKLEARN_CALLS,
         // A classifier fitted on labels that are strings keeps them in
         // `classes_`, which is an array of objects.
@@ -625,7 +625,7 @@ const PLAIN: Declared = Declared {
     builtins: false,
     torch: false,
     classes: NO_CLASSES,
-    pack: None,
+    extension: None,
     names: NO_CLASSES,
     calls: NO_CALLS,
     object_arrays: false,

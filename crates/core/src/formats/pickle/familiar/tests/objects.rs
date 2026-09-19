@@ -161,7 +161,7 @@ fn the_template_places_an_object_s_attributes_beside_its_class() {
             (1, "header", "header"),
             (2, "message", "computed text"),
             (2, "form", "computed text"),
-            (2, "families", "computed text"),
+            (2, "form extensions", "computed text"),
             (2, "pickler", "computed text"),
             (2, "proto", "bytes[]"),
             (2, "protocol", "u8"),
@@ -197,7 +197,7 @@ fn the_template_places_an_object_s_attributes_beside_its_class() {
     assert_eq!(named_row(&seen, "module").value, V::Str("sklearn.dummy".into()));
     assert_eq!(named_row(&seen, "name").value, V::Str("Thing".into()));
     assert_eq!(named_row(&seen, "form").value, V::Str("sklearn-estimator-p4-p5-v1".into()));
-    assert_eq!(named_row(&seen, "families").value, V::Str("basic, sklearn".into()));
+    assert_eq!(named_row(&seen, "form extensions").value, V::Str("sklearn".into()));
 }
 
 /// A structured dtype, which is what a record array's values are and what

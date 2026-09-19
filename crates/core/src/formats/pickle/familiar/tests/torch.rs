@@ -40,7 +40,7 @@ fn a_state_dict_is_the_tensors_it_holds() {
     assert_eq!(found.proto, 2);
     // A state dict is an `OrderedDict`, and the form reads it without the
     // file counting as the standard library's: `torch` is the one family here.
-    assert_eq!(found.families(), "basic, torch");
+    assert_eq!(found.extensions(), "torch");
     let held = tensors(&found);
     assert_eq!(held.len(), 3);
     let weight = held[0];

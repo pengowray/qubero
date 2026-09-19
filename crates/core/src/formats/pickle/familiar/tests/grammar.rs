@@ -331,7 +331,7 @@ fn a_form_is_the_productions_it_allows() {
     ]);
     let found = recognise(&framed(&both)).unwrap();
     assert_eq!(found.form, "mixed-values-p4-p5-v1");
-    assert_eq!(found.families(), "basic, builtins, numpy");
+    assert_eq!(found.extensions(), "builtins, numpy");
 }
 
 /// A LONG1 declares up to 255 bytes and sixteen is as far as the reader's

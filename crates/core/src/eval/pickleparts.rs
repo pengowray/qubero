@@ -16,12 +16,13 @@ pub(super) const DATA_FIELD: &str = "data";
 /// the protocol the writer used.
 pub(super) const MESSAGE_FIELD: &str = "message";
 pub(super) const FORM_FIELD: &str = "form";
-/// Which families of values the file turned out to hold, which the form only
+/// Which extensions of the basic grammar the file turned out to use, which
+/// the form only
 /// says for a file that holds one. A mixed file needs the row to say anything
 /// at all, and every other file gets it for the same reason the `pickler` row
 /// is always there: a reader comparing two files wants the same rows in both.
 /// The first name is always `basic`, which is the grammar every form reads.
-pub(super) const FAMILIES_FIELD: &str = "families";
+pub(super) const EXTENSIONS_FIELD: &str = "form extensions";
 /// Which of CPython's two picklers wrote the file. Most files say nothing
 /// either way, and the row says that rather than going missing: a reader
 /// comparing two files wants to see the same rows in both.
@@ -315,7 +316,7 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             let mut notes = vec![
                 (Label::Field(MESSAGE_FIELD), Part::Note(familiar::MESSAGE.to_string())),
                 (Label::Field(FORM_FIELD), Part::Note(found.form.to_string())),
-                (Label::Field(FAMILIES_FIELD), Part::Note(found.families())),
+                (Label::Field(EXTENSIONS_FIELD), Part::Note(found.extensions())),
                 (Label::Field(PICKLER_FIELD), Part::Note(found.pickler.name().to_string())),
             ];
             // PROTO and the number arrived with protocol 2. Below that the

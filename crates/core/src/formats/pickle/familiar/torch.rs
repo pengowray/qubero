@@ -30,7 +30,7 @@
 
 use super::cursor::Cursor;
 use super::memo::Bound;
-use super::packs::Pack;
+use super::packs::Extension;
 use super::{Kind, Names, Shape, Tensor, TensorType, Value};
 
 /// The module the two rebuilding functions are in.
@@ -132,7 +132,7 @@ impl Cursor<'_> {
         }
         self.finish_call("tensor rebuild call", start, self.at);
         self.tensors += 1;
-        self.packs.add(Pack::Torch);
+        self.extensions.add(Extension::Torch);
         Some(self.span(start, Kind::Tensor(tensor)))
     }
 

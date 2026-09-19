@@ -523,12 +523,14 @@ Three things are worth carrying forward:
   only permits one. So `joblib/stdlib-and-arrays.joblib`,
   `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` read now,
   and the plain array and estimator files keep their own names.
-- **The header says `families` under `form`.** `Packs` in `forms.rs` is a bitset
-  of which families the file used, put back on a rewind like every other
-  counter; `pack_of` answers which family a module belongs to by asking the same
-  `DECLARED` prefixes the forms are declared with, so the two cannot drift. The
-  row is on every matched file, opens with `basic`, and reads
-  `basic, builtins, stdlib, numpy, pandas` for a frame with a note and a date.
+- **The header says `form extensions` under `form`.** `Extensions` in
+  `packs.rs` is a bitset of which of them the file used, put back on a rewind
+  like every other counter; `extension_of` answers which extension a module
+  belongs to by asking the same `DECLARED` prefixes the forms are declared
+  with, so the two cannot drift. The row is on every matched file, leaves out
+  the basic grammar because that is the form itself, says `none` for a file
+  that used nothing else, and reads `builtins, stdlib, numpy, pandas` for a
+  frame with a note and a date. It was called `families` until 2026-09-19.
 
 `tools/make_mixed_pickle_samples.py` in the collection writes the twelve
 `pickle/mixed-*.pickle` files, six objects at protocol 4 and at protocol 2.

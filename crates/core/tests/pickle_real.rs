@@ -1478,7 +1478,7 @@ fn a_library_object_says_what_it_holds_before_how() {
 /// A frame at the root of a file is the easy case, and it is not the case
 /// anyone has: a frame arrives inside the dictionary that carries the note and
 /// the date beside it. So the claim is the placing as much as the match: the
-/// form, the row that says which families are in the file, and then the frame
+/// form, the row that says which extensions the file used, and then the frame
 /// deep in the tree offering the same table and the same summary rows it
 /// offers at the root.
 #[test]
@@ -1487,33 +1487,33 @@ fn a_mixed_file_reads_as_every_family_it_holds() {
         eprintln!("{}", qubero_samples::missing());
         return;
     };
-    // Each file, the form, and what the `families` row says.
+    // Each file, the form, and what the `form extensions` row says.
     let want: &[(&str, &str, &str)] = &[
-        ("mixed-date-and-array-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
-        ("mixed-date-and-array-p2.pickle", "mixed-values-p2-p3-v1", "basic, stdlib, numpy"),
-        ("mixed-ordereddict-of-arrays-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
-        ("mixed-decimal-and-array-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy"),
+        ("mixed-date-and-array-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
+        ("mixed-date-and-array-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy"),
+        ("mixed-ordereddict-of-arrays-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
+        ("mixed-decimal-and-array-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
         // A fitted model with the day it was fitted: the estimator brings its
         // arrays with it, so three names rather than two.
-        ("mixed-model-and-metadata-p4.pickle", "mixed-values-p4-p5-v1", "basic, stdlib, numpy, sklearn"),
-        ("mixed-model-and-metadata-p2.pickle", "mixed-values-p2-p3-v1", "basic, stdlib, numpy, sklearn"),
+        ("mixed-model-and-metadata-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy, sklearn"),
+        ("mixed-model-and-metadata-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy, sklearn"),
         // pandas places a block by writing a `slice`, which is the builtins
         // production, so a frame brings that name with it too.
-        ("mixed-frame-and-notes-p4.pickle", "mixed-values-p4-p5-v1", "basic, builtins, stdlib, numpy, pandas"),
-        ("mixed-frame-and-notes-p2.pickle", "mixed-values-p2-p3-v1", "basic, builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-and-notes-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-and-notes-p2.pickle", "mixed-values-p2-p3-v1", "builtins, stdlib, numpy, pandas"),
         // One family, which keeps the name it already had. The row says so
         // too, which is why it is worth having on every file and not only on
         // a mixed one.
-        ("mixed-list-of-frames-p4.pickle", "pandas-frame-p4-p5-v1", "basic, builtins, numpy, pandas"),
+        ("mixed-list-of-frames-p4.pickle", "pandas-frame-p4-p5-v1", "builtins, numpy, pandas"),
     ];
-    for (name, form, families) in want {
+    for (name, form, extensions) in want {
         let bytes = std::fs::read(dir.join(name)).unwrap();
         let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{name} matched no form"));
         assert_eq!(found.form, *form, "{name}");
-        assert_eq!(found.families(), *families, "{name}");
+        assert_eq!(found.extensions(), *extensions, "{name}");
         let rows = familiar_rows(bytes);
         assert_eq!(row(&rows, "form").value, Value::Str((*form).into()), "{name}");
-        assert_eq!(row(&rows, "families").value, Value::Str((*families).into()), "{name}");
+        assert_eq!(row(&rows, "form extensions").value, Value::Str((*extensions).into()), "{name}");
         // The row every file has, whatever else it holds.
         assert!(rows.iter().any(|r| r.name == "pickler"), "{name}: no pickler row");
     }
