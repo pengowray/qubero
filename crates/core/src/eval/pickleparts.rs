@@ -75,6 +75,18 @@ pub(super) const NO_DIMENSIONS: &str = "()";
 /// the record the run starts, so two runs of padding are told apart.
 pub(super) const RECORD_NAME: &str = "record";
 pub(super) const PADDING_FIELD: &str = "padding at";
+/// What a tensor says about itself beyond its dtype and its shape: how far
+/// apart two neighbouring values of each axis are, how far into the storage
+/// its first value sits, which storage it is a window onto, which device that
+/// storage was on, and whether gradients are kept for it.
+pub(super) const STRIDE_FIELD: &str = "stride";
+pub(super) const STORAGE_OFFSET_FIELD: &str = "storage offset";
+pub(super) const STORAGE_FIELD: &str = "storage";
+pub(super) const LOCATION_FIELD: &str = "location";
+pub(super) const REQUIRES_GRAD_FIELD: &str = "requires grad";
+/// What a tensor is, for the row that says so, when the reader wants the word
+/// rather than the shape. The entry row over it says both.
+pub(super) const IS_FIELD: &str = "is";
 
 /// The fewest dictionaries that make a list of records. One dictionary is a
 /// record, not a list of them.
@@ -150,6 +162,16 @@ pub(super) enum Says {
     Shape,
     Stored,
     Format,
+    /// Which storage a tensor is a window onto, which is the key naming the
+    /// archive entry or the run that holds its numbers.
+    Storage,
+    /// The device the storage was on when it was saved.
+    Location,
+    /// Where a tensor's numbers are, which is not in the pickle.
+    Numbers,
+    /// Where those bytes are in this file, once the archive has been asked
+    /// which entry the key names.
+    StoredAt,
 }
 
 impl Says {
@@ -163,6 +185,10 @@ impl Says {
             Says::Shape => "shape",
             Says::Stored => "stored values",
             Says::Format => "format",
+            Says::Storage => STORAGE_FIELD,
+            Says::Location => LOCATION_FIELD,
+            Says::Numbers => NUMBERS_FIELD,
+            Says::StoredAt => "stored at",
         }
     }
 }
@@ -177,6 +203,15 @@ pub(super) fn summary(v: &Value) -> &'static [Says] {
         return &[Says::Shape, Says::Stored, Says::Format];
     }
     &[]
+}
+
+/// A shape as a reader says it out loud: `3 x 4`, and NumPy's own spelling for
+/// a shape with no dimensions at all.
+pub(super) fn extent(dimensions: &[u64]) -> String {
+    match dimensions.is_empty() {
+        true => NO_DIMENSIONS.to_string(),
+        false => dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
+    }
 }
 
 /// What a node is called by the node above it.
@@ -375,6 +410,43 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                 kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))));
                 (notes, kids)
             }
+            // A tensor says what it is and where its numbers are, and then
+            // the run of instructions that rebuilt it. The numbers are in
+            // another entry of the archive or further down the file, so there
+            // is nothing under it to read as values: the rows say where to
+            // look and the table reads them from there.
+            Kind::Tensor(t) => {
+                let mut notes = vec![
+                    (Label::Field(DTYPE_FIELD), Part::Note(t.dtype.word().to_string())),
+                    (Label::Field(SHAPE_FIELD), Part::Note(extent(&t.size))),
+                    // Commas rather than the `x` a shape is written with: a
+                    // stride is a step per axis and not a shape, and `4 x 1`
+                    // beside `3 x 4` reads as a second shape.
+                    (Label::Field(STRIDE_FIELD), Part::Note(t.stride.iter().map(u64::to_string).collect::<Vec<_>>().join(", "))),
+                    (Label::Field(STORAGE_OFFSET_FIELD), Part::Note(t.offset.to_string())),
+                ];
+                // Said only of a parameter: every tensor would carry the row
+                // and a reader would learn to skip it.
+                if t.parameter {
+                    notes.insert(0, (Label::Field(IS_FIELD), Part::Note(super::picklesaid::PARAMETER_WORD.to_string())));
+                }
+                notes.extend(
+                    [Says::Storage, Says::Location]
+                        .into_iter()
+                        .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
+                );
+                notes.push((Label::Field(REQUIRES_GRAD_FIELD), Part::Note(said_flag(t.requires_grad))));
+                notes.extend(
+                    [Says::Numbers, Says::StoredAt]
+                        .into_iter()
+                        .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
+                );
+                let kids = match call_of(found, v) {
+                    Some(call) => vec![(Label::Field(call.name), Part::Call(call, v))],
+                    None => Vec::new(),
+                };
+                (notes, kids)
+            }
             Kind::Array { dtype, dimensions, fortran_order, storage, .. } => {
                 let notes = says_array(dtype, dimensions, *fortran_order, *storage);
                 let mut kids = Vec::new();
@@ -427,10 +499,7 @@ pub(super) fn held<'a>(state: &'a Option<Box<Value>>) -> Vec<(Label, Part<'a>)> 
 /// What an array says about itself before its values: how one of them is read,
 /// how many there are and which way round they run.
 pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool, storage: Storage) -> Vec<(Label, Part<'a>)> {
-    let shape = match dimensions.is_empty() {
-        true => NO_DIMENSIONS.to_string(),
-        false => dimensions.iter().map(u64::to_string).collect::<Vec<_>>().join(" x "),
-    };
+    let shape = extent(dimensions);
     let order = match fortran_order {
         true => FORTRAN_ORDER,
         false => C_ORDER,
@@ -449,6 +518,16 @@ pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: b
         Storage::Escaped => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(ESCAPED_TEXT.to_string()))),
     }
     rows
+}
+
+/// A flag as Python spells it, which is what a reader of a pickle is
+/// comparing against.
+fn said_flag(flag: bool) -> String {
+    match flag {
+        true => "True",
+        false => "False",
+    }
+    .to_string()
 }
 
 /// The run of instructions that rebuilt this array, which sits inside it.
@@ -518,6 +597,7 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             Kind::Class { .. } => Shape::Class,
             Kind::DType(_) => Shape::DType,
             Kind::Instance { .. } => Shape::Object,
+            Kind::Tensor(_) => Shape::Tensor,
             _ => return None,
         },
         _ => return None,

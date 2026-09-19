@@ -112,6 +112,10 @@ pub(super) fn hashable(value: &Value) -> bool {
         Kind::Tuple(items) | Kind::FrozenSet(items) => items.iter().all(hashable),
         // A NumPy scalar hashes; an array does not.
         Kind::Array { dimensions, .. } => dimensions.is_empty(),
+        // A torch tensor hashes by identity, so Python could have written one
+        // as a dictionary key. Refused until a file does: a key is what names
+        // an entry on screen, and a tensor has no name to be.
+        Kind::Tensor(_) => false,
         // A byte string below protocol 3 is a call rather than a literal, and
         // Python hashes it the same as any other byte string.
         Kind::Made { what: Shape::Bytes, .. } => true,

@@ -488,6 +488,15 @@ impl Cursor<'_> {
                     None => self.restore(here),
                 }
             }
+            // A tensor, which names `torch._utils` first and so fails at its
+            // first word when the value is anything else.
+            if self.allow.torch {
+                let here = self.save();
+                match self.torch_value() {
+                    Some(value) => return Some(Slot { value, deep: 1, fill: Fill::Shut }),
+                    None => self.restore(here),
+                }
+            }
             if self.allow.numpy {
                 let here = self.save();
                 match self.numpy() {

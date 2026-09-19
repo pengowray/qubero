@@ -103,6 +103,15 @@ pub(super) const JOBLIB: &str = "joblib-arrays-p4-p5-v1";
 pub(super) const JOBLIB23: &str = "joblib-arrays-p2-p3-v1";
 pub(super) const JOBLIB_SKLEARN: &str = "joblib-sklearn-p4-p5-v1";
 pub(super) const JOBLIB_SKLEARN23: &str = "joblib-sklearn-p2-p3-v1";
+/// What `torch.save` writes: tensors, and whatever plain data was saved
+/// beside them. See [`torch`](super::torch).
+///
+/// Only at protocols 2 and up. torch writes protocol 2 by default and takes a
+/// higher one from the caller; it has never written 1 or 0, and a tensor's
+/// instructions at those protocols have not been measured, so the family has
+/// no name there.
+pub(super) const TORCH: &str = "torch-tensors-p4-p5-v1";
+pub(super) const TORCH23: &str = "torch-tensors-p2-p3-v1";
 /// A range this family is never written at, which [`forms`] leaves out.
 const NOT_WRITTEN: &str = "";
 
@@ -129,6 +138,8 @@ pub(super) enum Family {
     Numpy,
     Builtins,
     Library,
+    /// Tensors, and whatever plain data was saved beside them.
+    Torch,
     /// Two or more of the families a file may use, counted as
     /// [`Packs::families`](super::packs::Packs::families) counts them.
     Mixed,
@@ -169,6 +180,9 @@ pub(super) struct Allow {
     /// whether the file has to hold one.
     pub(super) joblib: Wrapped,
     pub(super) builtins: bool,
+    /// Whether this form reads the calls `torch.save` writes for a tensor,
+    /// which carry a persistent id naming numbers kept outside the pickle.
+    pub(super) torch: bool,
     /// The module prefixes this form may name a class from. Empty for a form
     /// that names no class at all, which is where the basic, NumPy and
     /// builtins forms stand.
@@ -261,6 +275,12 @@ const NO_CALLS: &[Reduce] = &[];
 /// The calls scikit-learn writes. One: a decision tree's array of nodes lives
 /// in a `Tree`, which is constructed from how many features, classes and
 /// outputs it was fitted on and handed its arrays by the BUILD after it.
+/// The calls a torch file writes that are not the tensor production's own
+/// fixed run. One: a state dict is a `collections.OrderedDict`, which the
+/// standard library's table already describes, so the row is shared rather
+/// than copied.
+const TORCH_CALLS: &[Reduce] = &[super::stdlib::ORDERED_DICT];
+
 const SKLEARN_CALLS: &[Reduce] = &[Reduce {
     via: Via::Global,
     path: "sklearn.tree._tree.Tree",
@@ -467,6 +487,7 @@ struct Declared {
     numpy: bool,
     joblib: Wrapped,
     builtins: bool,
+    torch: bool,
     classes: &'static [&'static str],
     /// Which family the classes this row whitelists belong to, which is what
     /// [`pack_of`] answers with. Nothing for a row that whitelists none: the
@@ -494,6 +515,7 @@ const DECLARED: &[Declared] = &[
         numpy: false,
         joblib: Wrapped::Refused,
         builtins: false,
+        torch: false,
         classes: NO_CLASSES,
         pack: None,
         names: NO_CLASSES,
@@ -530,6 +552,7 @@ const DECLARED: &[Declared] = &[
         calls: PANDAS_CALLS,
         object_arrays: true,
         joblib: Wrapped::Refused,
+        torch: false,
     },
     // The standard library's own classes. Its builtins are the ones the
     // builtins form already reads, so a file mixing a date with a complex
@@ -547,6 +570,13 @@ const DECLARED: &[Declared] = &[
     // What `joblib.dump` wrote, after the families it extends, so that a
     // plain pickle of arrays or of estimators keeps the name it already had.
     Declared { ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Numpy, numpy: true, joblib: Wrapped::Required, ..PLAIN },
+    // What `torch.save` writes. The classes list is empty on purpose: a
+    // tensor's storage class is named inside the tensor's own fixed run and
+    // never reaches the tree, and `collections` is named through the one call
+    // below rather than as a package a class may come from, so a state dict
+    // is a torch file rather than a mixture of torch and the standard
+    // library.
+    Declared { ids: [TORCH, TORCH23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Torch, torch: true, calls: TORCH_CALLS, ..PLAIN },
     Declared {
         ids: [JOBLIB_SKLEARN, JOBLIB_SKLEARN23, NOT_WRITTEN, NOT_WRITTEN],
         family: Family::Library,
@@ -571,6 +601,7 @@ const PLAIN: Declared = Declared {
     numpy: false,
     joblib: Wrapped::Refused,
     builtins: false,
+    torch: false,
     classes: NO_CLASSES,
     pack: None,
     names: NO_CLASSES,
@@ -634,6 +665,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                     numpy: d.numpy,
                     joblib: d.joblib,
                     builtins: d.builtins,
+                    torch: d.torch,
                     classes: d.classes,
                     names: d.names,
                     calls: d.calls,
@@ -652,6 +684,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
             numpy: true,
             joblib: Wrapped::Allowed,
             builtins: true,
+            torch: true,
             classes: &all.classes,
             names: &all.names,
             calls: &all.calls,

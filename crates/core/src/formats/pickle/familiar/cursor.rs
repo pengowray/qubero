@@ -60,6 +60,9 @@ pub(super) struct Cursor<'a> {
     /// How many arrays arrived wrapped the way `joblib.dump` writes one, with
     /// their bytes in the file after the wrapper rather than inside it.
     pub(super) wrappers: usize,
+    /// How many torch tensors the file rebuilt, which is what says a torch
+    /// form read what it is for.
+    pub(super) tensors: usize,
     /// Where each of those runs of bytes is. The listing walks the opcodes in
     /// the segments between them and names the padding in front of each.
     pub(super) raws: Vec<super::joblib::Raw>,
@@ -109,6 +112,7 @@ pub(super) struct Save {
     pub(super) instances: usize,
     pub(super) packs: Packs,
     pub(super) wrappers: usize,
+    pub(super) tensors: usize,
     pub(super) raws: usize,
 }
 
@@ -204,6 +208,7 @@ impl<'a> Cursor<'a> {
             instances: self.instances,
             packs: self.packs,
             wrappers: self.wrappers,
+            tensors: self.tensors,
             raws: self.raws.len(),
         }
     }
@@ -242,6 +247,7 @@ impl<'a> Cursor<'a> {
         self.instances = s.instances;
         self.packs = s.packs;
         self.wrappers = s.wrappers;
+        self.tensors = s.tensors;
         self.raws.truncate(s.raws);
     }
 
@@ -451,5 +457,20 @@ impl<'a> Cursor<'a> {
     pub(super) fn finish_call(&mut self, name: &'static str, at: usize, end: usize) {
         let says = std::mem::take(&mut self.says);
         self.calls.push(Call { name, at, len: end - at, says });
+    }
+
+    /// Widen the run just closed to take in the one that wraps it, under a
+    /// name of its own.
+    ///
+    /// A parameter is a tensor with a word around it, and the two calls are
+    /// one act: the names matched in either belong to the whole, and a run
+    /// inside the value's own bytes is what [`call_of`] looks for.
+    pub(super) fn join_calls(&mut self, name: &'static str, at: usize) {
+        let end = self.at;
+        if let Some(call) = self.calls.last_mut() {
+            call.name = name;
+            call.at = at;
+            call.len = end - at;
+        }
     }
 }

@@ -601,7 +601,7 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto2-everything.pickle", None),
         ("proto2-extension-registry.pickle", None),
         ("proto2-memo-over-256.pickle", Some("basic-p2-p3-v1")),
-        ("proto2-torch-state-dict.pickle", None),
+        ("proto2-torch-state-dict.pickle", Some("torch-tensors-p2-p3-v1")),
         ("proto3-everything.pickle", None),
         ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v1")),
         ("proto4-collections.pickle", None),
@@ -643,6 +643,12 @@ fn the_forms_match_these_samples_and_no_others() {
         ("mixed-ordereddict-of-arrays-p2.pickle", Some("mixed-values-p2-p3-v1")),
         ("mixed-model-and-metadata-p4.pickle", Some("mixed-values-p4-p5-v1")),
         ("mixed-model-and-metadata-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        // Two frames sharing their placements, which pandas writes as a block
+        // placed by an array of positions rather than by a slice. No form
+        // reads one; `HANDOVER-pickle-libraries.md` has it as the fourth
+        // thing left to do, and the samples arrived before the production.
+        ("mixed-frames-sharing-placements-p4.pickle", None),
+        ("mixed-frames-sharing-placements-p2.pickle", None),
         ("mixed-frame-and-notes-p4.pickle", Some("mixed-values-p4-p5-v1")),
         ("mixed-frame-and-notes-p2.pickle", Some("mixed-values-p2-p3-v1")),
         ("mixed-decimal-and-array-p4.pickle", Some("mixed-values-p4-p5-v1")),

@@ -24,6 +24,7 @@ pub(super) enum Pack {
     Scipy,
     Sklearn,
     Pandas,
+    Torch,
     /// Not a family of values: how the arrays were written. Named in the row
     /// because a reader wants to know, and not counted towards the two the
     /// mixed form wants, because a file of nothing but arrays `joblib.dump`
@@ -39,6 +40,7 @@ const EVERY: &[(Pack, &str)] = &[
     (Pack::Scipy, "scipy"),
     (Pack::Sklearn, "sklearn"),
     (Pack::Pandas, "pandas"),
+    (Pack::Torch, "torch"),
     (Pack::Joblib, "joblib"),
 ];
 

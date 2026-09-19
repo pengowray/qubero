@@ -424,6 +424,12 @@ impl Evaluator {
                 })
             }
             Says::Shape | Says::Stored | Says::Format => self.sparse_summary(doc, &r, base, found, object, says),
+            // A tensor's rows: which storage it is a window onto, and where
+            // in the file those numbers are.
+            Says::Storage | Says::Location | Says::Numbers | Says::StoredAt => match super::pickletorch::tensor_of(object) {
+                Some(tensor) => self.tensor_summary(doc, &r, base, tensor, says),
+                None => Ok(String::new()),
+            },
         }
     }
 

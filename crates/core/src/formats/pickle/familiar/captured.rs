@@ -121,6 +121,10 @@ pub enum Kind {
     /// A NumPy dtype standing on its own rather than describing an array,
     /// which is what pandas hands a datetime column beside its numbers.
     DType(Dtype),
+    /// A torch tensor: everything `_rebuild_tensor_v2` was called with, and
+    /// nothing of the numbers, which are in another entry of the archive or
+    /// further down the same file. See [`torch`](super::torch).
+    Tensor(Tensor),
     /// What a call made: one of a form's enumerated callables, or one of the
     /// builtin types a pickle has to write as a call rather than as a literal.
     ///
@@ -241,6 +245,167 @@ impl Dtype {
             }
             Dtype::Objects => OBJECT_DTYPE.to_string(),
             Dtype::Datetime { unit, .. } => format!("datetime64[{unit}]"),
+        }
+    }
+}
+
+/// A torch tensor, as the call that rebuilds it wrote it.
+///
+/// Every part is read out of the fixed run in [`torch`](super::torch); nothing
+/// here is the numbers. A tensor is a window onto a storage: `offset` and
+/// `stride` are counted in elements of `dtype`, and `count` is how many
+/// elements the storage the persistent id names holds.
+#[derive(Debug, PartialEq)]
+pub struct Tensor {
+    pub dtype: TensorType,
+    /// The class the persistent id named, spelled whole: `torch.FloatStorage`.
+    /// The dtype above is the plain word for the same thing.
+    pub storage_class: &'static str,
+    /// The run the storage key sits in, which names the archive entry
+    /// `data/<key>` or, in a legacy file, an entry of the key list.
+    pub key: (usize, usize),
+    /// The run the device the storage was on sits in: `cpu`.
+    pub location: (usize, usize),
+    /// How many elements the whole storage holds.
+    pub count: u64,
+    /// How far into the storage this tensor's first element is, in elements.
+    pub offset: u64,
+    pub size: Vec<u64>,
+    pub stride: Vec<u64>,
+    pub requires_grad: bool,
+    /// Whether `_rebuild_parameter` wrapped it, which is what a module's
+    /// weights are.
+    pub parameter: bool,
+}
+
+/// What one element of a tensor is.
+///
+/// Torch's own set rather than NumPy's letters: `BFloat16Storage` has no NumPy
+/// spelling at all, so a tensor says what it is in its own vocabulary and the
+/// reading maps that to a type. [`torch::STORAGES`](super::torch::STORAGES) is
+/// the table of which storage class is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TensorType {
+    Float16,
+    BFloat16,
+    Float32,
+    Float64,
+    Int8,
+    UInt8,
+    Int16,
+    Int32,
+    Int64,
+    Bool,
+}
+
+impl TensorType {
+    /// The plain word for it, which is what torch itself prints and what the
+    /// `dtype` row and the entry row say.
+    pub fn word(self) -> &'static str {
+        match self {
+            TensorType::Float16 => "float16",
+            TensorType::BFloat16 => "bfloat16",
+            TensorType::Float32 => "float32",
+            TensorType::Float64 => "float64",
+            TensorType::Int8 => "int8",
+            TensorType::UInt8 => "uint8",
+            TensorType::Int16 => "int16",
+            TensorType::Int32 => "int32",
+            TensorType::Int64 => "int64",
+            TensorType::Bool => "bool",
+        }
+    }
+
+    /// How many bytes one element takes.
+    pub fn width(self) -> u64 {
+        match self {
+            TensorType::Int8 | TensorType::UInt8 | TensorType::Bool => 1,
+            TensorType::Float16 | TensorType::BFloat16 | TensorType::Int16 => 2,
+            TensorType::Float32 | TensorType::Int32 => 4,
+            TensorType::Float64 | TensorType::Int64 => 8,
+        }
+    }
+}
+
+impl Tensor {
+    /// How many elements the tensor itself holds, which is its shape
+    /// multiplied out. A tensor with no dimensions holds one.
+    pub fn values(&self) -> u64 {
+        match self.size.contains(&0) {
+            true => 0,
+            false => self.size.iter().product(),
+        }
+    }
+
+    /// How far past the storage's start the last element of this view sits, in
+    /// elements. What the storage has to be long enough for.
+    ///
+    /// A view need not be contiguous and need not start at nought: a transpose
+    /// keeps the storage and swaps the strides, and two tensors may be two
+    /// windows onto one storage. So the reach is the first element plus the
+    /// furthest step each axis can take.
+    pub fn reach(&self) -> Option<u64> {
+        if self.values() == 0 {
+            return Some(self.offset);
+        }
+        let mut last = self.offset;
+        for (n, step) in self.size.iter().zip(&self.stride) {
+            last = last.checked_add(n.checked_sub(1)?.checked_mul(*step)?)?;
+        }
+        last.checked_add(1)
+    }
+
+    /// Where element `(row, column)` of the table sits in the storage, counted
+    /// in elements, for a tensor read as rows along the first axis and columns
+    /// along the second.
+    ///
+    /// A tensor of more than two dimensions is read the way an N-D array's
+    /// table is: the last axis is the columns and every axis before it is
+    /// unwound into the rows.
+    pub fn element(&self, row: u64, column: u64) -> Option<u64> {
+        let mut at = self.offset;
+        let (last, rest) = self.size.split_last()?;
+        // One dimension is one column a row, and no dimensions is one value.
+        if self.size.len() == 1 {
+            if row >= *last || column > 0 {
+                return None;
+            }
+            return at.checked_add(row.checked_mul(*self.stride.first()?)?);
+        }
+        if column >= *last {
+            return None;
+        }
+        let mut left = row;
+        for axis in (0..rest.len()).rev() {
+            let n = rest[axis];
+            if n == 0 {
+                return None;
+            }
+            at = at.checked_add((left % n).checked_mul(self.stride[axis])?)?;
+            left /= n;
+        }
+        if left > 0 {
+            return None;
+        }
+        at.checked_add(column.checked_mul(*self.stride.last()?)?)
+    }
+
+    /// How many rows the table has: every axis but the last multiplied out.
+    pub fn rows(&self) -> u64 {
+        match self.size.split_last() {
+            None => 0,
+            Some((last, [])) => *last,
+            Some((_, rest)) => rest.iter().product(),
+        }
+    }
+
+    /// How many columns it has, which is the last axis, or one for a tensor of
+    /// a single dimension.
+    pub fn columns(&self) -> u64 {
+        match self.size.len() {
+            0 => 0,
+            1 => 1,
+            _ => *self.size.last().unwrap_or(&0),
         }
     }
 }
@@ -415,6 +580,8 @@ pub enum Shape {
     Block,
     /// A NumPy dtype on its own: how one value of an array is read.
     DType,
+    /// A torch tensor: a window onto a storage kept somewhere else.
+    Tensor,
 }
 
 impl Shape {
@@ -457,6 +624,7 @@ impl Shape {
             Shape::Object => "object",
             Shape::Block => "block",
             Shape::DType => "dtype",
+            Shape::Tensor => "tensor",
         }
     }
 }

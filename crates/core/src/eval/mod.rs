@@ -36,6 +36,7 @@ mod pickleframe;
 mod pickleparts;
 mod picklesaid;
 mod picklestd;
+mod pickletorch;
 mod pickletree;
 mod placed;
 mod problem;

@@ -16,6 +16,12 @@ use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Value};
 pub(super) const MOST_SHOWN_TEXT: usize = 120;
 pub(super) const MOST_SHOWN_BYTES: usize = 32;
 
+/// What a tensor is called, and what one wrapped in `_rebuild_parameter` is.
+/// Torch's own two words: a parameter is a tensor a module learns, and a
+/// reader looking at a state dict is looking for exactly those.
+pub(super) const TENSOR_WORD: &str = "tensor";
+pub(super) const PARAMETER_WORD: &str = "parameter";
+
 /// What a reference names, as the row saying so shows it: the text itself,
 /// or the bytes in hex when the slot holds a byte string. `whole` is how long
 /// the thing is, so that a long one says it was cut.
@@ -102,6 +108,10 @@ impl Evaluator {
             Kind::Array { dtype: Dtype::Record { .. }, dimensions, .. } => Some(format!("record array {}", across(dimensions))),
             Kind::Array { dtype, dimensions, .. } => Some(format!("{} array {}", super::pickleframe::dtype_word(dtype), across(dimensions))),
             Kind::Objects { dimensions, .. } => Some(format!("object array {}", across(dimensions))),
+            // What a reader opens a checkpoint to see, in the order they will
+            // ask it: what one value is, whether it is a weight, and how many
+            // of them there are.
+            Kind::Tensor(t) => Some(format!("{} {} {}", t.dtype.word(), if t.parameter { PARAMETER_WORD } else { TENSOR_WORD }, super::pickleparts::extent(&t.size))),
             Kind::Class { path, .. } => Some(path.clone()),
             Kind::Instance { class, .. } => path_of(class),
             // A call that carries its callable reads as it; one that folded

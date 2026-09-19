@@ -140,7 +140,7 @@ pub(super) const STDLIB_CALLS: &[Reduce] = &[
     },
     // The three containers a pickler creates empty and fills with the opcodes
     // after the call, which is how every other container in a pickle is built.
-    fills("collections.OrderedDict", Shape::OrderedDict, NOTHING, Args::FillsDict, |_c, _args| Some(())),
+    ORDERED_DICT,
     fills("collections.defaultdict", Shape::DefaultDict, NOTHING, Args::FillsDict, |_c, _args| Some(())),
     fills("collections.defaultdict", Shape::DefaultDict, FACTORY, Args::FillsDict, |c, args| is_factory(c, &args[0])),
     fills("collections.deque", Shape::Deque, NOTHING, Args::FillsList, |_c, _args| Some(())),
@@ -174,6 +174,11 @@ pub(super) const STDLIB_CALLS: &[Reduce] = &[
 /// arguments, and a result nothing fills.
 const PLAIN: Reduce =
     Reduce { path: "", via: Via::Global, what: Shape::Object, names: NOTHING, args: Args::Fixed, shape: |_c, _args| Some(()) };
+
+/// `collections.OrderedDict()`, called empty and filled by the SETITEMS after
+/// it. Named apart from the rest of the table because the torch forms name it
+/// too: a state dict is one of these, and torch is not the standard library.
+pub(super) const ORDERED_DICT: Reduce = fills("collections.OrderedDict", Shape::OrderedDict, NOTHING, Args::FillsDict, |_c, _args| Some(()));
 
 /// One of the three classes whose value is a run of packed bytes, with the
 /// length that run has to be.

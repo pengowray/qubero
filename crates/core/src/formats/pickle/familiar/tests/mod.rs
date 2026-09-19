@@ -14,6 +14,7 @@ mod objects;
 mod older;
 mod pandas;
 mod stdlib;
+mod torch;
 mod tree;
 
 /// A plain dtype's spelling, which is what an array test asserts about. A

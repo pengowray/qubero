@@ -25,6 +25,7 @@ mod numpy;
 mod object;
 mod packs;
 mod stdlib;
+mod torch;
 mod values;
 #[cfg(test)]
 mod tests;
@@ -213,6 +214,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         instances: 0,
         packs: Packs::default(),
         wrappers: 0,
+        tensors: 0,
         raws: Vec::new(),
         furthest: 0,
     };
@@ -279,8 +281,12 @@ fn holds_class(value: &Value) -> bool {
                 left.push(class);
                 left.extend(state.as_deref());
             }
-            Kind::Made { callable, items, state, .. } => {
-                left.extend(callable.as_deref());
+            // Not the callable a `Made` carries. That is the thing one of the
+            // form's enumerated calls named in order to call it, checked
+            // against the list when the REDUCE was read; a class handed to
+            // the reader as data is one nothing called, and those are what
+            // this is looking for.
+            Kind::Made { items, state, .. } => {
                 left.extend(items);
                 left.extend(state.as_deref());
             }
@@ -349,6 +355,11 @@ impl<'a> Cursor<'a> {
             // A library form is the one the file's classes came from, and it
             // has to have read at least one of them.
             Family::Library => self.instances > 0,
+            // A torch file is tensors and whatever plain data was saved
+            // beside them, the way a joblib file is arrays and plain data. A
+            // value of any other family in it, a date or a NumPy array, makes
+            // it a mixture and it is read under the mixed form.
+            Family::Torch => self.tensors > 0 && self.arrays == 0 && self.objects == 0 && self.instances == 0,
             // The mixed form reads every family at once, so what it requires
             // is the mixture: a file of one family is read under the form for
             // that family, which was tried before this one and says so in its
