@@ -198,8 +198,8 @@ impl Says {
 
 /// The summary rows a library object opens with, or nothing for an object
 /// whose attributes already are its summary, which is every estimator.
-pub(super) fn summary(v: &Value) -> &'static [Says] {
-    if super::pickleframe::frame_of(v).is_some() {
+pub(super) fn summary(found: &Match, v: &Value) -> &'static [Says] {
+    if super::pickleframe::frame_of(found, v).is_some() {
         return &[Says::Columns, Says::Rows, Says::Index, Says::Dtypes];
     }
     if super::picklecells::is_sparse(v) {
@@ -378,7 +378,7 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // level down: the dictionary is how the state travels and the
             // attributes are what the object is.
             Kind::Instance { class, state } => {
-                let notes = summary(v)
+                let notes = summary(found, v)
                     .iter()
                     .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says: *says }))
                     .collect();
@@ -577,6 +577,57 @@ pub(super) fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<(Label, Part<
         here = parts(found, &here.1).into_iter().nth(idx)?;
     }
     Some(here)
+}
+
+/// How far the search for a named value will walk before giving up.
+///
+/// A value is spelled out the first time the file writes it and named out of
+/// the memo after that, and what a name points at is wherever the file first
+/// wrote it rather than anywhere near the value naming it. So it is looked
+/// for, and the look is bounded: a row of a table is not worth an unbounded
+/// walk of a file, and a reading that costs too much is no reading.
+const MOST_WALKED: usize = 20_000;
+
+/// The value of this shape the file wrote at this offset, which is what a
+/// `Names::Made` names, or nothing where the walk ran out.
+///
+/// A value's span is its whole production, so only what spans the offset is
+/// walked into, and an array of a million texts written before or after it
+/// is passed over. The walk is bounded and never recursive.
+pub(super) fn made_at(found: &Match, what: Shape, at: usize) -> Option<&Value> {
+    let spans = |value: &&Value| (value.at..value.at + value.len).contains(&at);
+    let mut left = vec![&found.value];
+    let mut budget = MOST_WALKED;
+    while let Some(value) = left.pop() {
+        budget = budget.checked_sub(1)?;
+        // An object is a call or a class and the BUILD that filled it, and
+        // the memo files both as the one shape. An array is filed as an array
+        // whether its values are numbers or pickled after it.
+        let is_it = match &value.kind {
+            Kind::Made { what: made, .. } => *made == what,
+            Kind::Instance { .. } => what == Shape::Object,
+            Kind::Array { .. } | Kind::Objects { .. } => what == Shape::Array,
+            _ => false,
+        };
+        if value.at == at && is_it {
+            return Some(value);
+        }
+        // Only into the values that could hold it, which is anything that
+        // holds others.
+        match &value.kind {
+            Kind::List(items) | Kind::Tuple(items) | Kind::Set(items) | Kind::FrozenSet(items) | Kind::Objects { items, .. } => {
+                left.extend(items.iter().filter(spans))
+            }
+            Kind::Dict(entries) => left.extend(entries.iter().flat_map(|(k, v)| [k, v]).filter(spans)),
+            Kind::Instance { state, .. } => left.extend(state.as_deref().filter(spans)),
+            Kind::Made { items, state, .. } => {
+                left.extend(items.iter().filter(spans));
+                left.extend(state.as_deref().filter(spans));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// What a node of the tree is, for the type column. None for a leaf, which is

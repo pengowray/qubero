@@ -329,7 +329,7 @@ const PANDAS_CALLS: &[Reduce] = &[
             // each other, and that is a non-match until there is a file with
             // one in it.
             (holds_values(&args[0].kind)
-                && matches!(args[1].kind, Kind::Made { what: Shape::Slice, .. })
+                && places(&args[1].kind)
                 && matches!(args[2].kind, Kind::Int { .. }))
             .then_some(())
         },
@@ -396,7 +396,7 @@ const PANDAS_CALLS: &[Reduce] = &[
         names: &["values", "placement"],
         args: Args::Fixed,
         shape: |_c, args| {
-            (holds_values(&args[0].kind) && matches!(args[1].kind, Kind::Made { what: Shape::Slice, .. })).then_some(())
+            (holds_values(&args[0].kind) && places(&args[1].kind)).then_some(())
         },
     },
 ];
@@ -408,6 +408,14 @@ const NEW_BLOCK: &str = "pandas.core.internals.blocks.new_block";
 /// of those wrapped in a class of pandas' own.
 fn holds_values(kind: &Kind) -> bool {
     matches!(kind, Kind::Array { .. } | Kind::Objects { .. } | Kind::Made { .. } | Kind::Instance { .. })
+}
+
+/// Where a block sits: a slice, or a name for a slice the file wrote earlier.
+/// Two frames whose blocks sit in the same places share the slice, which is
+/// what `assign` and a shallow copy leave behind, and the second frame names
+/// it out of the memo rather than spelling it again.
+fn places(kind: &Kind) -> bool {
+    matches!(kind, Kind::Made { what: Shape::Slice, .. } | Kind::Ref(Names::Made { what: Shape::Slice, .. }))
 }
 
 /// `_new_Index(cls, state)`: the class of the index and the dictionary that

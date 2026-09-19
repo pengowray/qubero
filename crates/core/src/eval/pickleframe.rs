@@ -14,6 +14,7 @@
 //! a value a Familiar Pickle Form already matched and placed, and this is the
 //! shape of them. [`picklecells`](super::picklecells) reads the values out.
 
+use super::pickleparts::made_at;
 use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Shape, Storage, Value as Captured};
 
 /// What the manager under a frame or a series is made of, however the release
@@ -108,7 +109,14 @@ fn made_by(callable: &Option<Box<Captured>>) -> Option<&str> {
 /// decided by what the value is rather than by the key's spelling, because the
 /// keys are text in the file and this is asked of every node on its way to the
 /// screen.
-pub(super) fn frame_of(object: &Captured) -> Option<Frame<'_>> {
+///
+/// The match is here for the names in it. A frame made from another, which is
+/// what `assign` and a shallow copy leave behind, shares the first one's axes
+/// and the slices that place its blocks, and pickle writes a shared object
+/// once: the second frame names them out of the memo. What a name points at
+/// is in the first frame and nowhere under this one, so it is looked for from
+/// the top of the match. See [`made_at`].
+pub(super) fn frame_of<'a>(found: &'a Match, object: &'a Captured) -> Option<Frame<'a>> {
     let Kind::Instance { class, state: Some(state) } = &object.kind else { return None };
     let series = match class_name(class)? {
         "Series" => true,
@@ -116,16 +124,24 @@ pub(super) fn frame_of(object: &Captured) -> Option<Frame<'_>> {
         _ => return None,
     };
     let Kind::Dict(entries) = &state.kind else { return None };
-    let manager = entries.iter().find_map(|(_, v)| managed(v))?;
+    let manager = entries.iter().find_map(|(_, v)| managed(found, v))?;
     let (axes, blocks) = manager;
     // A frame names its columns and then its rows; a series has the rows
     // alone. Anything else is a manager this file has not seen.
     let (columns, index) = match (series, axes.len()) {
-        (false, 2) => (Some(&axes[0]), &axes[1]),
-        (true, 1) => (None, &axes[0]),
+        (false, 2) => (Some(axis_of(found, &axes[0])?), axis_of(found, &axes[1])?),
+        (true, 1) => (None, axis_of(found, &axes[0])?),
         _ => return None,
     };
     Some(Frame { columns, index, blocks })
+}
+
+/// An axis of a manager: the index itself, or the one a name for it points at.
+fn axis_of<'a>(found: &'a Match, value: &'a Captured) -> Option<&'a Captured> {
+    match &value.kind {
+        Kind::Ref(Names::Made { what: Shape::Object, at, .. }) => made_at(found, Shape::Object, *at),
+        _ => Some(value),
+    }
 }
 
 /// The axes and the blocks of a manager, whichever of the two spellings it is.
@@ -134,13 +150,13 @@ pub(super) fn frame_of(object: &Captured) -> Option<Frame<'_>> {
 /// the blocks and the axes; 1.1 and every series hand it a tuple whose last
 /// item is a dictionary of the blocks under a version key. The two say the
 /// same thing.
-fn managed(value: &Captured) -> Option<(&[Captured], Vec<Block<'_>>)> {
+fn managed<'a>(found: &'a Match, value: &'a Captured) -> Option<(&'a [Captured], Vec<Block<'a>>)> {
     match &value.kind {
         // The call: (blocks, axes).
         Kind::Made { what: Shape::Object, callable, items, .. } if made_by(callable)? == "BlockManager" => {
             let [blocks, axes] = items.as_slice() else { return None };
             let (Kind::Tuple(blocks), Kind::List(axes)) = (&blocks.kind, &axes.kind) else { return None };
-            let read: Option<Vec<Block>> = blocks.iter().map(called_block).collect();
+            let read: Option<Vec<Block>> = blocks.iter().map(|block| called_block(found, block)).collect();
             Some((axes, read?))
         }
         // The tuple: the axes first, and the blocks in the dictionary last.
@@ -164,7 +180,7 @@ fn managed(value: &Captured) -> Option<(&[Captured], Vec<Block<'_>>)> {
                 Some(Kind::List(arrays)) => arrays,
                 _ => &[],
             };
-            let read: Option<Vec<Block>> = listed.iter().map(|row| stated_block(row, arrays)).collect();
+            let read: Option<Vec<Block>> = listed.iter().map(|row| stated_block(found, row, arrays)).collect();
             Some((axes, read?))
         }
         _ => None,
@@ -172,7 +188,7 @@ fn managed(value: &Captured) -> Option<(&[Captured], Vec<Block<'_>>)> {
 }
 
 /// One block as `_unpickle_block(values, placement, ndim)` wrote it.
-fn called_block(value: &Captured) -> Option<Block<'_>> {
+fn called_block<'a>(found: &Match, value: &'a Captured) -> Option<Block<'a>> {
     let Kind::Made { what: Shape::Block, items, .. } = &value.kind else { return None };
     // `_unpickle_block` is handed the number of axes as well; the partial
     // pandas 1.3 writes already carries it and is handed two.
@@ -180,14 +196,14 @@ fn called_block(value: &Captured) -> Option<Block<'_>> {
         [values, placement] | [values, placement, _] => (values, placement),
         _ => return None,
     };
-    Some(Block { values, placement: slice_of(placement)? })
+    Some(Block { values, placement: slice_of(found, placement)? })
 }
 
 /// One block as the older managers wrote it: a dictionary of its values and
 /// where they sit, found by what each is rather than by the key.
-fn stated_block<'a>(value: &'a Captured, arrays: &'a [Captured]) -> Option<Block<'a>> {
+fn stated_block<'a>(found: &Match, value: &'a Captured, arrays: &'a [Captured]) -> Option<Block<'a>> {
     let Kind::Dict(entries) = &value.kind else { return None };
-    let placement = entries.iter().find_map(|(_, v)| slice_of(v))?;
+    let placement = entries.iter().find_map(|(_, v)| slice_of(found, v))?;
     let values = entries.iter().find_map(|(_, v)| match &v.kind {
         Kind::Array { .. } | Kind::Objects { .. } | Kind::Made { .. } | Kind::Instance { .. } => Some(v),
         // A name for one of the values the manager's tuple already wrote,
@@ -200,7 +216,15 @@ fn stated_block<'a>(value: &'a Captured, arrays: &'a [Captured]) -> Option<Block
 
 /// The start and the step of a `slice`, which is how a block says which of the
 /// frame's columns it holds. A step of nought or less places nothing.
-fn slice_of(value: &Captured) -> Option<(i128, i128)> {
+///
+/// The slice may be a name for one an earlier frame spelled out, and only a
+/// name for a slice: a block's values may be named too, and those are not
+/// where it sits.
+fn slice_of(found: &Match, value: &Captured) -> Option<(i128, i128)> {
+    let value = match &value.kind {
+        Kind::Ref(Names::Made { what: Shape::Slice, at, .. }) => made_at(found, Shape::Slice, *at)?,
+        _ => value,
+    };
     let Kind::Made { what: Shape::Slice, items, .. } = &value.kind else { return None };
     let [start, _, step] = items.as_slice() else { return None };
     let start = match start.kind {
@@ -276,6 +300,10 @@ impl Values<'_> {
 /// wrapped them in.
 pub(super) fn values_of<'a>(found: &'a Match, value: &'a Captured) -> Option<Values<'a>> {
     match &value.kind {
+        // A name for values the file wrote earlier. A column of text copied
+        // from one frame to another is a new wrapper round the same array, so
+        // the second frame names the array the first one spelled out.
+        Kind::Ref(Names::Made { what, at, .. }) => values_of(found, made_at(found, *what, *at)?),
         // An array whose numbers the file wrote as something else carries
         // them beside the match, decoded once when it was read.
         Kind::Array { at, dtype, dimensions, fortran_order, storage, .. } => {

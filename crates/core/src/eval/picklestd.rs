@@ -7,17 +7,9 @@
 //! is worked out here from those bytes and from the zone beside them. See
 //! [`stdlib`](crate::formats::pickle::familiar) for how they are read.
 
+use super::pickleparts::made_at;
 use super::*;
 use crate::formats::pickle::familiar::{Kind, Match, Names, Shape, Value};
-
-/// How far the search for a named zone will walk before giving up.
-///
-/// A datetime is written with its zone spelled out the first time and named
-/// out of the memo after that, and what a name points at is wherever the file
-/// first wrote it rather than anywhere near the value naming it. So the zone
-/// is looked for, and the look is bounded: a row of a table is not worth an
-/// unbounded walk of a file, and a reading that costs too much is no reading.
-const MOST_WALKED: usize = 20_000;
 
 /// The classes whose value is worked out here rather than read where it sits.
 pub(super) fn is_stdlib(what: Shape) -> bool {
@@ -152,40 +144,13 @@ fn said_offset(value: &Value) -> Option<String> {
 /// time the file uses it and named out of the memo after that.
 ///
 /// A name says where the file wrote the thing, so the zone is looked for at
-/// that offset. The walk is bounded and never recursive.
+/// that offset: see [`made_at`].
 fn zone_of<'a>(found: &'a Match, value: &'a Value) -> Option<&'a Value> {
     match &value.kind {
         Kind::Made { what: Shape::TimeZone, .. } => Some(value),
-        Kind::Ref(Names::Made { what: Shape::TimeZone, at, .. }) => at_offset(found, *at),
+        Kind::Ref(Names::Made { what: Shape::TimeZone, at, .. }) => made_at(found, Shape::TimeZone, *at),
         _ => None,
     }
-}
-
-/// The zone the file wrote at this offset, or nothing where the walk ran out.
-fn at_offset(found: &Match, at: usize) -> Option<&Value> {
-    let mut left = vec![&found.value];
-    let mut budget = MOST_WALKED;
-    while let Some(value) = left.pop() {
-        budget = budget.checked_sub(1)?;
-        if value.at == at && matches!(value.kind, Kind::Made { what: Shape::TimeZone, .. }) {
-            return Some(value);
-        }
-        // Only into the values that could hold it, which is anything that
-        // holds others.
-        match &value.kind {
-            Kind::List(items) | Kind::Tuple(items) | Kind::Set(items) | Kind::FrozenSet(items) | Kind::Objects { items, .. } => {
-                left.extend(items)
-            }
-            Kind::Dict(entries) => left.extend(entries.iter().flat_map(|(k, v)| [k, v])),
-            Kind::Instance { state, .. } => left.extend(state.as_deref()),
-            Kind::Made { items, state, .. } => {
-                left.extend(items);
-                left.extend(state.as_deref());
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// A path as Python's `str` writes one: the parts joined by the separator the

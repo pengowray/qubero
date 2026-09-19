@@ -629,6 +629,11 @@ fn the_forms_match_these_samples_and_no_others() {
         // and the two axes.
         ("proto5-pandas-dataframe.pickle", Some("pandas-frame-p4-p5-v1")),
         ("proto5-pandas-series.pickle", Some("pandas-frame-p4-p5-v1")),
+        // Two frames, the second made from the first by `assign`. They share
+        // the slices that place their blocks, so the second frame names each
+        // placement out of the memo rather than spelling it again.
+        ("mixed-frames-sharing-placements-p4.pickle", Some("pandas-frame-p4-p5-v1")),
+        ("mixed-frames-sharing-placements-p2.pickle", Some("pandas-frame-p2-p3-v1")),
         // Every index kind, the datetime one included.
         ("proto5-pandas-index-types.pickle", Some("pandas-frame-p4-p5-v1")),
         // Files holding values of more than one family, which is what an
@@ -1235,6 +1240,40 @@ fn a_pickled_frame_opens_as_the_table_it_holds() {
         }
     }
     assert!(checked >= 36, "only {checked} frames read as tables");
+}
+
+/// A frame whose blocks are placed by a name for a slice opens as its table.
+///
+/// `assign` makes a frame that shares the first one's placements, and pickle
+/// writes a shared object once: the second frame's blocks say where they sit
+/// with a `BINGET`. The slice is in the first frame, which is nowhere under the
+/// second, so the table is only right if the name was followed across them.
+#[test]
+fn a_frame_placed_by_a_named_slice_opens_as_the_table_it_holds() {
+    let Some(dir) = folder() else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let tables: [&[&[&str]]; 2] = [
+        &[&["0", "1", "0.5", "a"], &["1", "2", "1.5", "b"], &["2", "3", "2.5", "c"]],
+        &[&["0", "2", "0.5", "a"], &["1", "4", "1.5", "b"], &["2", "6", "2.5", "c"]],
+    ];
+    for name in ["mixed-frames-sharing-placements-p4.pickle", "mixed-frames-sharing-placements-p2.pickle"] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+        for (i, want) in tables.iter().enumerate() {
+            // The list's own rows come first, and then its items.
+            let path = [1, 3 + i];
+            let shape = ev.table_shape(&doc, &path).unwrap().unwrap_or_else(|| panic!("{name}: frame {i} is no table"));
+            assert_eq!(shape.names, ["index", "x", "y", "label"], "{name}: frame {i}");
+            assert_eq!(shape.units, ["int64", "int64", "float64", "str"], "{name}: frame {i}");
+            let read = ev.pickle_cells(&doc, &path, 0, want.len() as u64 + 1).unwrap();
+            let said: Vec<Vec<String>> = read.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+            let want: Vec<Vec<String>> = want.iter().map(|row| row.iter().map(|c| (*c).to_string()).collect()).collect();
+            assert_eq!(said, want, "{name}: frame {i}");
+        }
+    }
 }
 
 /// An array reads as the same numbers at every protocol a form takes.

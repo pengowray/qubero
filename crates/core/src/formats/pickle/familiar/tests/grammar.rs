@@ -216,6 +216,32 @@ fn the_builtin_calls_take_what_python_writes_and_nothing_else() {
     }
 }
 
+/// What a builtins call made may be named again, and its arguments may not.
+///
+/// Two pandas frames whose blocks sit in the same places share the slice that
+/// says so, and the second frame writes a `BINGET` where the first wrote the
+/// call. The slice is something the form built; the tuple of arguments the
+/// call was handed is only something it matched its way past.
+#[test]
+fn a_builtin_call_may_be_named_again_and_its_arguments_may_not() {
+    // `[slice(1, 10, 2), <slot>]`. Slot 0 is the list, 1 and 2 the two words,
+    // 3 the class, 4 the tuple of arguments and 5 the slice.
+    let listed = |slot: u8| {
+        let slice = cat(&[&word("builtins"), &word("slice"), b"\x93\x94", b"K\x01K\x0aK\x02", b"\x87\x94", b"R\x94"]);
+        framed(&cat(&[b"]\x94(", &slice, &get(slot), b"e."]))
+    };
+    let found = recognise(&listed(5)).expect("a name for the slice");
+    assert_eq!(found.form, "builtins-values-p4-p5-v3");
+    let Kind::List(items) = &found.value.kind else { panic!("not a list") };
+    let [spelled, named] = items.as_slice() else { panic!("not two items") };
+    assert!(matches!(spelled.kind, Kind::Made { what: Shape::Slice, .. }));
+    // The name says where the slice was written, which is where the call
+    // that made it starts.
+    let Kind::Ref(Names::Made { what: Shape::Slice, at, hashable: true }) = named.kind else { panic!("{:?}", named.kind) };
+    assert_eq!(at, spelled.at);
+    assert!(recognise(&listed(4)).is_none(), "named the arguments of a call");
+}
+
 /// The two picklers CPython ships, and the tails that tell them apart.
 ///
 /// `_pickle` writes a batch for whatever a container has left over after a
