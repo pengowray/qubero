@@ -579,7 +579,8 @@ Nine container environments, from torch 0.4.1 with joblib 0.11 to torch 2.14
 with joblib 1.6, and joblib 0.9.4 on its own
 (`/home/pengo/qubero-container-matrix/`, made by
 `tools/make_torch_joblib_matrix.py` and `tools/run_torch_joblib_matrix.sh` in
-the collection). Every file in it reads now except the two named at the end.
+the collection). Every file in it reads now except the three named at the
+end.
 
 **torch, by release.** Each row is what that release wrote that the one above
 it did not.
@@ -588,9 +589,9 @@ it did not.
 | --- | --- |
 | 0.4.1 | `_rebuild_tensor_v2`'s sixth argument is the tensor's own `_backward_hooks`, which is `None` until a hook is registered. A parameter is `torch.nn.parameter.Parameter(tensor, requires_grad)`, the class called with its tensor. `torch.Size` is closed by NEWOBJ. A module saved whole names its class through the persistent id `('module', cls, source_file, source)` and its state holds `_backend`. |
 | 1.0.1 | The hooks become an empty `OrderedDict()`: see the note "Don't serialize hooks" in `torch/tensor.py`. A parameter becomes `_rebuild_parameter(tensor, requires_grad, OrderedDict())`. |
-| 1.5.1 | The last release that writes the legacy file by default, and the first that can write the ZIP with `_use_new_zipfile_serialization=True`. `_backend` is gone from a module's state. That archive writes `version` before `data.pkl` and puts the ZIP64 end records between the central directory and the ordinary end record. |
+| 1.5.1 | `torch.Size` has a `__reduce__` now and is closed by REDUCE. `_backend` is gone from a module's state; 1.1 still had it, so both changes fall somewhere between 1.1 and 1.5. This is the last release that writes the legacy file by default and the first that can write the ZIP with `_use_new_zipfile_serialization=True`. That archive writes `version` before `data.pkl` and puts the ZIP64 end records between the central directory and the ordinary end record. |
 | 1.8.1 | The archive's folder is `archive/` rather than the file's own name. |
-| 1.13.1 | Storage keys are `0, 1, 2` rather than the addresses the buffers were at. `torch.Size` gains a `__reduce__` and is closed by REDUCE. |
+| 1.13.1 | Storage keys are `0, 1, 2` rather than the addresses the buffers were at. |
 | 2.1.2 | `byteorder` and `.data/serialization_id` join the archive. |
 | 2.14 | `.format_version` and `.storage_alignment` join it, and the dtypes with no storage class arrive through `_rebuild_tensor_v3`. |
 

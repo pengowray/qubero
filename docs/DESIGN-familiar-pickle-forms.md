@@ -216,7 +216,7 @@ so the line is written here and held in `familiar/object.rs`.
   `NEWOBJ` with arguments is read is as one of the enumerated calls, closed by
   that opcode rather than by `REDUCE`, which is the `Via::NewObj` column of the
   calls table: a class with no `__reduce__` of its own that does take arguments
-  is written that way, and `torch.Size` was one until torch 1.13. The row names
+  is written that way, and `torch.Size` was one in torch 1.0 and older. The row names
   the path and checks the arguments, so it is the same enumerated set as every
   other call and not a wider door into NEWOBJ.
 - **A global a form names and never calls is enumerated by its whole dotted

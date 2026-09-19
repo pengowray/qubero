@@ -133,9 +133,10 @@ fn a_dtype_is_named_in_both_tables() {
 /// A persistent id of any other shape is a non-match, whatever it holds.
 #[test]
 fn a_persistent_id_of_the_wrong_shape_is_refused() {
-    // The word the tuple opens with says it is a storage. A legacy file
-    // writes `('module', cls, file, source)` for a class whose source it
-    // saved, and nothing here reads one.
+    // The word the tuple opens with says which of the two persistent ids it
+    // is. A legacy file writes `('module', cls, file, source)` for a class
+    // whose source it saved, and that one is read somewhere else entirely:
+    // neither production takes the other's word.
     assert!(recognise(&edited(b"X\x07\x00\x00\x00storage", b"X\x07\x00\x00\x00storagf")).is_none());
     // The device has to be a text. Five whole numbers in its place make a
     // tuple of nine, the same bytes long and nothing torch wrote.
@@ -206,9 +207,9 @@ fn hooks_that_are_neither_spelling_are_refused() {
     assert!(recognise(&other).is_none());
 }
 
-/// `torch.Size` had no `__reduce__` of its own before torch 1.13, so pickle
-/// wrote `cls.__new__(cls, (2, 3))` for the tuple subclass. The row for that
-/// spelling is the same call closed by NEWOBJ.
+/// `torch.Size` had no `__reduce__` of its own in torch 1.0 and older, so
+/// pickle wrote `cls.__new__(cls, (2, 3))` for the tuple subclass. The row for
+/// that spelling is the same call closed by NEWOBJ.
 #[test]
 fn a_size_that_newobj_closes_reads_as_the_one_reduce_closes() {
     let found = recognise(V04_SIZE).unwrap();

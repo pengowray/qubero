@@ -595,9 +595,11 @@ pub(super) const TORCH_CALLS: &[Reduce] = &[
         args: Args::Contents,
         shape: |_c, args| matches!(args[0].kind, Kind::Tuple(_)).then_some(()),
     },
-    // The same call, closed with NEWOBJ, which is what torch 1.5 and older
+    // The same call, closed with NEWOBJ, which is what torch 1.0 and older
     // wrote: `Size` had no `__reduce__` of its own then, so pickle fell back
-    // to `cls.__new__(cls, (2, 3))` for the tuple subclass.
+    // to `cls.__new__(cls, (2, 3))` for the tuple subclass. torch 1.5 writes
+    // the REDUCE above; the release the change landed in is somewhere between
+    // those two and no sample measures it.
     Reduce {
         via: Via::NewObj,
         path: "torch.Size",
@@ -624,10 +626,10 @@ pub(super) const TORCH_CALLS: &[Reduce] = &[
         args: Args::Fixed,
         shape: |_c, args| (said(&args[0]) && matches!(args[1].kind, Kind::Int { .. })).then_some(()),
     },
-    // The backend a module carried in torch 1.0 and older, which is one
-    // function of no arguments. `nn.Module.__init__` set `self._backend` from
-    // it, so every module saved whole by those releases has one in its state;
-    // torch 1.1 dropped the attribute.
+    // The backend a module carried before torch 1.5, which is one function
+    // of no arguments. `nn.Module.__init__` set `self._backend` from it as
+    // late as 1.1, so a module saved whole by those releases has one in its
+    // state; by 1.5 the attribute is gone.
     Reduce {
         via: Via::Global,
         path: "torch.nn.backends.thnn._get_thnn_function_backend",
