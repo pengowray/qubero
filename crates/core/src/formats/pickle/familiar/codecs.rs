@@ -189,16 +189,21 @@ impl Cursor<'_> {
         let start = self.at;
         let here = self.save();
         match self.reference().cloned() {
-            // Below protocol 1 the run is a line, and a line that spells its
-            // text is not the text: it is named rather than held, and read
-            // where the file wrote it.
-            Some(Bound::Text { at, len }) if self.proto > 0 => Some(self.span(start, Kind::Text { at, len })),
+            Some(Bound::Text { at, len }) if self.names_text(at, len) => Some(self.span(start, Kind::Text { at, len })),
+            // A protocol 0 line that spells its text is not the text: it is
+            // named rather than held, and read where the file wrote it.
             Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Ref(Names::Text { at, len }))),
             _ => {
                 self.restore(here);
                 None
             }
         }
+    }
+
+    /// Whether the run at `at` is the text it stands for rather than a line
+    /// spelling one, which is what says the bytes may be read where they sit.
+    fn names_text(&self, at: usize, len: usize) -> bool {
+        self.bytes.get(at..at.wrapping_add(len)).is_none_or(|run| super::lines::is_named_text(run, self.proto))
     }
 
     /// The bytes a text the call was handed spells, for a text named where the

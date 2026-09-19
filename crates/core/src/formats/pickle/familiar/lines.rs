@@ -82,10 +82,17 @@ pub fn spelled(line: &[u8], quote: Option<u8>) -> Option<Vec<u8>> {
 /// for; from protocol 1 up the run is the text. One place decides which, so
 /// the recogniser and the reading never disagree about what a named run holds.
 pub fn named(run: &[u8], proto: u8) -> Option<Vec<u8>> {
-    match proto == 0 && !is_itself(run) {
-        true => spelled(run, None),
-        false => Some(run.to_vec()),
+    match is_named_text(run, proto) {
+        true => Some(run.to_vec()),
+        false => spelled(run, None),
     }
+}
+
+/// Whether the run a reference names is the text it stands for rather than a
+/// line spelling one. Protocol 0 is the only protocol that writes a text as a
+/// line, and most of its lines are still what they stand for.
+pub(super) fn is_named_text(run: &[u8], proto: u8) -> bool {
+    proto > 0 || is_itself(run)
 }
 
 /// Whether a run of bytes is what it stands for, which is what says a text may
