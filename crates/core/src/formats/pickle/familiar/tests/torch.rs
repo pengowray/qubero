@@ -285,3 +285,47 @@ fn a_persistent_id_outside_a_tensor_is_not_a_familiar_form() {
     ]);
     assert!(recognise(&framed(&body)).is_none());
 }
+
+/// Which way a tensor's elements run through its storage, which is what says
+/// whether they are a run of the file at all.
+///
+/// The `numbers` field hangs off this answer: a tensor that is one run gets
+/// one, and a view that steps over its storage keeps the table whose cells
+/// are worked out at the strides.
+#[test]
+fn a_tensor_is_one_run_when_its_strides_say_so() {
+    let held = |size: &[u64], stride: &[u64]| {
+        crate::formats::pickle::familiar::Tensor {
+            dtype: crate::formats::pickle::familiar::TensorType::Float32,
+            dtype_at: (0, 0),
+            storage_class: "torch.FloatStorage",
+            key: (0, 0),
+            location: (0, 0),
+            count: size.iter().product(),
+            offset: 0,
+            size: size.to_vec(),
+            size_at: (0, 0),
+            stride: stride.to_vec(),
+            requires_grad: false,
+            parameter: false,
+            quantizer: None,
+        }
+        .contiguous()
+    };
+    // Laid out along the last axis, which is what torch writes by default.
+    assert_eq!(held(&[3, 4], &[4, 1]), Some(true));
+    assert_eq!(held(&[12], &[1]), Some(true));
+    // Down the columns, which a transposed two-dimensional tensor is.
+    assert_eq!(held(&[6, 4], &[1, 6]), Some(false));
+    // An axis holding one element is stepped along by nothing at all, so
+    // whatever stride the tensor it was made from left there says nothing.
+    assert_eq!(held(&[1, 4], &[99, 1]), Some(true));
+    // A view that skips: every other row of a 4 by 6, and a transpose of
+    // three axes, which is neither order.
+    assert_eq!(held(&[2, 6], &[12, 1]), None);
+    assert_eq!(held(&[2, 3, 4], &[1, 8, 2]), None);
+    // One value and none are one run either way, and the word for that is
+    // the one every other tensor of this file uses.
+    assert_eq!(held(&[], &[]), Some(true));
+    assert_eq!(held(&[0, 3], &[3, 1]), Some(true));
+}
