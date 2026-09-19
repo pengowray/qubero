@@ -46,6 +46,12 @@ pub(super) const LINE_FIELD: &str = "line";
 /// protocols 0 and 1 write, and this where it wrote two's-complement bytes.
 pub(super) const BYTES_FIELD: &str = "bytes";
 pub(super) const LATIN1_TEXT: &str = "latin-1 text";
+/// The same row for an array whose numbers are a run some earlier array
+/// wrote. Two arrays holding the same bytes are one byte string to Python, so
+/// the second names that run rather than spelling it again. The run is outside
+/// this array's own bytes, so it is said here and placed under the array that
+/// wrote it.
+pub(super) const EARLIER_RUN: &str = "bytes an earlier array wrote";
 /// The same at protocol 0, where that text is written as a line and escaped
 /// again to fit on one.
 pub(super) const ESCAPED_TEXT: &str = "latin-1 text, escaped";
@@ -450,7 +456,12 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             }
             Kind::Tensor(t) => super::pickletorch::tensor_parts(found, v, t),
             Kind::Array { dtype, dimensions, fortran_order, storage, .. } => {
-                let notes = says_array(dtype, dimensions, *fortran_order, *storage);
+                // Whether the numbers are in this array's own bytes. An array
+                // that names the run an earlier one wrote points outside
+                // itself, so the run is said in a note and placed under the
+                // array that wrote it rather than twice over.
+                let elsewhere = !holds_run(v);
+                let notes = says_array(dtype, dimensions, *fortran_order, *storage, elsewhere);
                 let mut kids = Vec::new();
                 // The call that rebuilt this array, when it is this array's:
                 // a form matches one, and it sits inside the array's bytes.
@@ -459,7 +470,7 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                     kids.push((Label::Field(call.name), Part::Call(call, v)));
                 }
                 // The numbers, unless the call was handed them and holds them.
-                if !call.is_some_and(|c| inside(c, span(found, &Part::Data(v)).0)) {
+                if !elsewhere && !call.is_some_and(|c| inside(c, span(found, &Part::Data(v)).0)) {
                     kids.push((Label::Field(NUMBERS_FIELD), Part::Data(v)));
                 }
                 (notes, kids)
@@ -500,7 +511,7 @@ pub(super) fn held<'a>(state: &'a Option<Box<Value>>) -> Vec<(Label, Part<'a>)> 
 
 /// What an array says about itself before its values: how one of them is read,
 /// how many there are and which way round they run.
-pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool, storage: Storage) -> Vec<(Label, Part<'a>)> {
+pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: bool, storage: Storage, elsewhere: bool) -> Vec<(Label, Part<'a>)> {
     let shape = extent(dimensions);
     let order = match fortran_order {
         true => FORTRAN_ORDER,
@@ -514,10 +525,11 @@ pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: b
     // Said only where it is worth saying: an array whose numbers are in the
     // file as numbers has nothing to explain, and a row on every array would
     // be a row every reader learns to skip.
-    match storage {
-        Storage::Raw => {}
-        Storage::Latin1 => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string()))),
-        Storage::Escaped => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(ESCAPED_TEXT.to_string()))),
+    match (elsewhere, storage) {
+        (true, _) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(EARLIER_RUN.to_string()))),
+        (false, Storage::Raw) => {}
+        (false, Storage::Latin1) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string()))),
+        (false, Storage::Escaped) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(ESCAPED_TEXT.to_string()))),
     }
     rows
 }
@@ -530,6 +542,13 @@ pub(super) fn said_flag(flag: bool) -> String {
         false => "False",
     }
     .to_string()
+}
+
+/// Whether an array's numbers are in the array's own bytes, which they are
+/// unless the file named a run it wrote earlier.
+pub(super) fn holds_run(v: &Value) -> bool {
+    let Kind::Array { at, len, .. } = &v.kind else { return true };
+    *at >= v.at && at + len <= v.at + v.len
 }
 
 /// The run of instructions that rebuilt this array, which sits inside it.

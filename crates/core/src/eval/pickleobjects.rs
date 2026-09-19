@@ -20,7 +20,7 @@ pub(super) fn object_array<'a>(
     nested: &Option<usize>,
 ) -> (Vec<(Label, Part<'a>)>, Vec<(Label, Part<'a>)>) {
 
-        let notes = says_array(&Dtype::Objects, dimensions, fortran_order, Storage::Raw);
+        let notes = says_array(&Dtype::Objects, dimensions, fortran_order, Storage::Raw, false);
         let mut kids = Vec::new();
         if let Some(call) = call_of(found, v) {
             kids.push((Label::Field(call.name), Part::Call(call, v)));
