@@ -23,6 +23,7 @@ mod joblib;
 mod memo;
 mod numpy;
 mod object;
+mod packs;
 mod stdlib;
 mod values;
 #[cfg(test)]
@@ -31,7 +32,8 @@ mod tests;
 pub use captured::*;
 
 use cursor::{Cursor, Framing};
-use forms::{forms, Allow, Family, Pack, Packs, Wrapped};
+use forms::{forms, Allow, Family, Wrapped};
+use packs::{Pack, Packs};
 use memo::Memo;
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";

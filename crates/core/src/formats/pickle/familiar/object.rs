@@ -14,7 +14,8 @@
 //! place to be deciding which.
 
 use super::cursor::Cursor;
-use super::forms::{covers, pack_of, Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
+use super::forms::{pack_of, Args, Reduce, Via, BASE_CLASS, PARTIAL, RECONSTRUCTOR};
+use super::packs::covers;
 use super::memo::Bound;
 use super::{Kind, Shape, Value};
 

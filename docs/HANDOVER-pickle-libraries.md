@@ -181,7 +181,8 @@ design document.
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 381 |
 | `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, and the run after it | 191 |
 | `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 462 |
-| `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 746 |
+| `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 663 |
+| `familiar/packs.rs` | which families a file turned out to use, as the bits of one word | 95 |
 | `familiar/basic.rs` | the stack a pickle is read against | 657 |
 | `familiar/values.rs` | the leaf productions, and what Python can hash | 187 |
 | `familiar/lines.rs` | protocol 0: the lines, and the two escapings | 256 |

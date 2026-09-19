@@ -3,7 +3,8 @@
 //! production reads bytes through this one, so it sits apart from all of them.
 
 use super::memo::Memo;
-use super::forms::{Allow, Packs};
+use super::forms::Allow;
+use super::packs::Packs;
 use super::{BIG_PAYLOAD, Call, Kind, NO_OPCODE, Pickler, Said, Value};
 use crate::formats::pickle::known::Payload;
 
