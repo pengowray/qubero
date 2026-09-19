@@ -448,6 +448,11 @@ impl Evaluator {
     /// describes, and so belongs in no total. A property of the parent's
     /// declaration, the same as `name_from` is. See [`crate::template::Field::aside`].
     pub(super) fn aside(&self, path: &[usize]) -> bool {
+        // A node a parse made says it on itself: nothing declared it, so there
+        // is no field for the rule below to read. See [`Resolved::aside`].
+        if self.memo.get(path).is_some_and(|r| r.aside) {
+            return true;
+        }
         let Some((&idx, parent)) = path.split_last() else { return false };
         let Some(r) = self.memo.get(parent) else { return false };
         let Ty::Struct(s) = r.ty.base() else { return false };

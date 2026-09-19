@@ -678,6 +678,14 @@ struct Resolved {
     /// children. False for every node a template placed, which say it in
     /// their type.
     elsewhere: bool,
+    /// True for a node that is a second reading of bytes another field of
+    /// this file already describes, so that nothing counts them twice.
+    ///
+    /// What [`crate::template::Field::aside`] says about a field a template
+    /// declared, for a node a parse made instead. A tensor in a legacy
+    /// checkpoint reads the numbers its own storage field has already placed,
+    /// and the storage is where those bytes are counted.
+    aside: bool,
 }
 
 /// What a computed field came to, kept on its node: a whole number for a
@@ -710,6 +718,9 @@ struct Place {
     /// See [`Resolved::elsewhere`]. False for every place a template made,
     /// which says it in the type instead.
     elsewhere: bool,
+    /// See [`Resolved::aside`]. False for every place a template made, which
+    /// says it on the field instead.
+    aside: bool,
 }
 
 pub struct Evaluator {
@@ -1676,10 +1687,11 @@ impl Evaluator {
         // Reading the child is what goes deeper, and a file that nests pays
         // for every frame still open above it.
         let Some(place) = self.place_child(doc, path, parent, idx)? else { return Ok(()) };
-        let (machinery, elsewhere) = (place.machinery, place.elsewhere);
+        let (machinery, elsewhere, aside) = (place.machinery, place.elsewhere, place.aside);
         let mut r = self.effective(doc, path, place.name, place.ty, place.offset, place.limit, place.space)?;
         r.machinery = machinery;
         r.elsewhere = elsewhere;
+        r.aside = aside;
         self.remember(path, r);
         Ok(())
     }
@@ -1743,6 +1755,7 @@ impl Evaluator {
                     space: pr.space,
                     machinery: false,
                     elsewhere: false,
+                    aside: false,
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
@@ -1762,7 +1775,7 @@ impl Evaluator {
                 space::Opened::Refused(_) => return fail("this stream did not open"),
             };
             let limit = self.spaces.len_bits(space);
-            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false, elsewhere: false }));
+            return Ok(Some(Place { name, ty, offset: 0, limit, space, machinery: false, elsewhere: false, aside: false }));
         }
         // A field that reads its contents from somewhere else in the file is
         // not bounded by the structure it was declared in: an object header
@@ -1797,6 +1810,7 @@ impl Evaluator {
                         payload: None,
                         machinery: false,
                         elsewhere: false,
+                        aside: false,
                     };
                     self.remember(path, r);
                     return Ok(None);
@@ -1904,7 +1918,7 @@ impl Evaluator {
                 return fail("field extends beyond the end of the file");
             }
         }
-        Ok(Some(Place { name, ty, offset, limit, space, machinery: false, elsewhere: false }))
+        Ok(Some(Place { name, ty, offset, limit, space, machinery: false, elsewhere: false, aside: false }))
     }
 
     /// Refuse an offset that points back at something already open above it.
@@ -2352,6 +2366,7 @@ impl Evaluator {
                         payload: None,
                         machinery: false,
                         elsewhere: false,
+                        aside: false,
                     });
                 }
                 Ty::Match { on, cases, default } => {
@@ -2403,6 +2418,7 @@ impl Evaluator {
                         payload: None,
                         machinery: false,
                         elsewhere: false,
+                        aside: false,
                     });
                 }
             }
@@ -2790,7 +2806,7 @@ impl Evaluator {
             return fail("this stream is no longer open");
         };
         let place = |name: String, ty: Ty, at: u64| {
-            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false }))
+            Ok(Some(Place { name: Name::Field(name.into()), ty, offset: base + at, limit: pr.limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
         };
         match part {
             TracedPart::Blocks => {

@@ -471,9 +471,10 @@ impl Evaluator {
             // saying where to look, for a pickle whose file does not hold
             // them.
             Part::Numbers(tensor) => match self.tensor_numbers(doc, &whole, base, tensor)? {
-                Some((ty, at, len)) => {
-                    let offset = at * 8;
-                    Ok(Some(Place { name, ty, offset, limit: offset + len * 8, space: pr.space, machinery: false, elsewhere: true }))
+                Some(held) => {
+                    let offset = held.at * 8;
+                    let limit = offset + held.len * 8;
+                    Ok(Some(Place { name, ty: held.ty, offset, limit, space: pr.space, machinery: false, elsewhere: true, aside: held.aside }))
                 }
                 None => {
                     let key = self.run_text(doc, &whole, base, tensor.key)?;
@@ -561,6 +562,7 @@ impl Evaluator {
             space: pr.space,
             machinery: false,
             elsewhere: false,
+            aside: false,
         };
         self.remember(path, r);
         Ok(None)
@@ -585,6 +587,7 @@ impl Evaluator {
             space: pr.space,
             machinery: false,
             elsewhere: false,
+            aside: false,
         };
         self.remember(path, r);
     }
@@ -592,6 +595,6 @@ impl Evaluator {
     /// Where a leaf goes, for the ordinary machinery to read it there.
     fn pickle_place(&self, pr: &Resolved, name: Name, ty: T, base: u64, at: usize, len: usize, machinery: bool) -> Place {
         let offset = base + at as u64 * 8;
-        Place { name, ty, offset, limit: offset + len as u64 * 8, space: pr.space, machinery, elsewhere: false }
+        Place { name, ty, offset, limit: offset + len as u64 * 8, space: pr.space, machinery, elsewhere: false, aside: false }
     }
 }

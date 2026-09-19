@@ -258,7 +258,7 @@ impl Evaluator {
             Opened::Refused(_) => return fail("this stream did not open"),
         };
         let limit = self.spaces.len_bits(space);
-        Ok(Some(Place { name: pr.name.clone(), ty: inner.clone(), offset: 0, limit, space, machinery: false, elsewhere: false }))
+        Ok(Some(Place { name: pr.name.clone(), ty: inner.clone(), offset: 0, limit, space, machinery: false, elsewhere: false, aside: false }))
     }
 
     /// `n` bits of a stitched space from bit `at`, from as many parts as

@@ -250,6 +250,9 @@ pub struct KindWalk {
     /// same thing reached by exactly the same start and length is the case a
     /// graph makes; anything that overlaps some other way is left as it was.
     reached_by_address: FxHashSet<(u64, u64)>,
+    /// Every stretch a node a parse placed has already been counted over,
+    /// sorted by where it starts. See [`KindWalk::count_placed`].
+    placed_runs: Vec<(u64, u64)>,
     /// True once the root has been placed, which is what tells a walk that has
     /// not begun from one that has finished. Both have an empty stack.
     started: bool,
@@ -280,6 +283,7 @@ impl KindWalk {
             unmapped_bits: 0,
             reached_bits: 0,
             reached_by_address: FxHashSet::default(),
+            placed_runs: Vec::new(),
             started: false,
             done: false,
             file_bits,
@@ -339,6 +343,31 @@ impl KindWalk {
 
     fn reach(&mut self, bit: u64) {
         self.reached_bits = self.reached_bits.max(bit.min(self.file_bits));
+    }
+
+    /// Whether this is the first reading of `from..to` by a node a parse
+    /// placed, and take it down when it is.
+    ///
+    /// Two torch tensors can be two windows onto one storage, and one of them
+    /// can be the whole of it. Each is the reading its own reader asked for
+    /// and neither is a view of the other, so neither can be marked a second
+    /// reading in advance the way [`crate::template::Field::aside`] marks
+    /// one. What is true of the file is that the bytes are numbers once, so
+    /// the first run over a stretch counts it and a run overlapping that one
+    /// counts nothing.
+    ///
+    /// Kept sorted by where each run starts, so a checkpoint of a few hundred
+    /// storages costs a binary search apiece rather than a scan.
+    fn count_placed(&mut self, from: u64, to: u64) -> bool {
+        let i = self.placed_runs.partition_point(|(start, _)| *start <= from);
+        if i > 0 && self.placed_runs[i - 1].1 > from {
+            return false;
+        }
+        if self.placed_runs.get(i).is_some_and(|(start, _)| *start < to) {
+            return false;
+        }
+        self.placed_runs.insert(i, (from, to));
+        true
     }
 }
 
@@ -501,6 +530,13 @@ impl Evaluator {
         // down, so a go that stops short never finds its own child already
         // noted. See `reached_by_address`.
         if walk.stack[top].at && scale == 1 && !walk.reached_by_address.insert((r.offset, size)) {
+            self.note_born(walk, top, &path);
+            self.step_past(walk, top, in_order);
+            return Ok(());
+        }
+        // A run a parse placed over bytes another one has already been counted
+        // over: two torch tensors onto one storage. See `count_placed`.
+        if r.elsewhere && size > 0 && !walk.count_placed(r.offset, r.offset + size) {
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());

@@ -269,10 +269,15 @@ fn read_layout(head: &[u8], read: &mut dyn FnMut(u64, u64) -> R<Vec<u8>>, file_l
     (at == file_len).then_some(Layout { pickles, storages })
 }
 
+/// What the template is called, which `eval/pickletorch.rs` asks for: the
+/// storages of a file read under it are fields already, so a tensor's own run
+/// over the same bytes is a second reading of them.
+pub(crate) const TEMPLATE: &str = "torchlegacy";
+
 /// A legacy `torch.save` file: the five pickles, and the storages after them.
 pub fn torch_legacy() -> Template {
     let root = T::schema(LEGACY, Vec::new(), vec![KeyPart::TextLit("torch".into())]);
-    Template::new("torchlegacy", root).with_schema(LEGACY, Arc::new(Checkpoint))
+    Template::new(TEMPLATE, root).with_schema(LEGACY, Arc::new(Checkpoint))
 }
 
 /// The builder for [`LEGACY`].

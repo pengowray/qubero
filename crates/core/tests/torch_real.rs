@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use qubero_core::document::Document;
-use qubero_core::eval::{Evaluator, FrameCell, Value};
+use qubero_core::eval::{Evaluator, FrameCell, KindWalk, Value};
 use qubero_core::template::Cells;
 use qubero_core::formats;
 use qubero_core::source::MemSource;
@@ -168,6 +168,46 @@ fn the_numbers_are_placed_outside_the_tensor_and_leave_it_whole() {
     }
     assert_eq!(want, to, "bytes left over under the tensor");
     assert_eq!(placed, vec!["numbers".to_string()]);
+}
+
+/// The whole-file totals still add up with the numbers placed in another
+/// entry, for one tensor, for two sharing a storage, and for a legacy file.
+///
+/// The same claim `kinds_real.rs` makes of the whole collection, over the
+/// three files this change is about: nothing reaches past the end, and what
+/// is covered and what is a gap never come to more than what was reached. A
+/// run placed in another entry would break it twice over if the walk laid it
+/// out in order: the bytes in between would be a gap and the entry's own
+/// reading would be counted beside it.
+#[test]
+fn the_totals_add_up_with_the_numbers_placed_elsewhere() {
+    let Some(dir) = folder() else { return };
+    for (name, template) in [
+        ("state-dict-zip.pt", "torchzip"),
+        ("shared-storage-views-zip.pt", "torchzip"),
+        ("every-dtype-zip.pt", "torchzip"),
+        ("state-dict-legacy.pt", "torchlegacy"),
+    ] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let len = bytes.len() as u64 * 8;
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin(template).unwrap());
+        let mut walk = KindWalk::new(len);
+        let out = loop {
+            let out = ev.kind_totals_step(&doc, &mut walk).unwrap();
+            if out.done {
+                break out;
+            }
+        };
+        assert!(out.reached_bits <= len, "{name}: reached {} of {len}", out.reached_bits);
+        assert!(
+            out.covered_bits + out.unmapped_bits <= out.reached_bits,
+            "{name}: {} covered and {} unmapped of {} reached",
+            out.covered_bits,
+            out.unmapped_bits,
+            out.reached_bits
+        );
+    }
 }
 
 /// Two windows onto one storage, one of them transposed, read as the two

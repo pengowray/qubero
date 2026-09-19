@@ -169,6 +169,16 @@ pub(crate) fn element_ty(dtype: TensorType, endian: Endian) -> Ty {
     }
 }
 
+/// Where a tensor's numbers go and how they read: the run's type, where it
+/// starts in the space the pickle is in, how long it is, and whether another
+/// field of this file already describes those bytes.
+pub(super) struct Numbers {
+    pub(super) ty: Ty,
+    pub(super) at: u64,
+    pub(super) len: u64,
+    pub(super) aside: bool,
+}
+
 /// How one element of a tensor reads when it is a field rather than a cell of
 /// a computed table: the type [`element_ty`] gives it, and for a complex
 /// number the pair of halves Python writes it as.
@@ -233,11 +243,24 @@ impl Evaluator {
         r: &Resolved,
         base: u64,
         tensor: &Tensor,
-    ) -> R<Option<(Ty, u64, u64)>> {
+    ) -> R<Option<Numbers>> {
         let Some((at, len)) = self.tensor_run(doc, r, base, tensor)? else { return Ok(None) };
         let endian = self.byte_order(doc, r, base)?;
         let ty = T::array(element_run(tensor.dtype, endian), E::lit(tensor.values() as i128));
-        Ok(Some((ty, at, len)))
+        Ok(Some(Numbers { ty, at, len, aside: self.storages_are_fields() }))
+    }
+
+    /// Whether this file's storages are fields of the template already.
+    ///
+    /// A legacy checkpoint's are: `formats/torchlegacy.rs` places each one as
+    /// an element count and a typed run of numbers, because everything is in
+    /// one space there and the layout says where each of them is. So a
+    /// tensor's own run over the same bytes is a second reading of what that
+    /// field describes, and the field is where they are counted. In an
+    /// archive nothing else reads them as numbers: the entry's own reading is
+    /// the one put aside, which is what `zip::records(true)` says.
+    fn storages_are_fields(&self) -> bool {
+        self.template.name == crate::formats::torchlegacy::TEMPLATE
     }
 
     /// The run this tensor's own values sit in: where its first element is and

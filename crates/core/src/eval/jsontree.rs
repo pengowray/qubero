@@ -95,6 +95,7 @@ impl Evaluator {
             space: self.memo[parent].space,
             machinery: false,
             elsewhere: false,
+            aside: false,
         };
         self.remember(path, r);
         Ok(())
