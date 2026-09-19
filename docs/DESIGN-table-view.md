@@ -125,13 +125,22 @@ part null; a pending read answers pending like every other call.
   in windows; a shape with `columns = k` makes row `i` from elements
   `i*k .. i*k+k`. Pure enough to test under `node --test` with `TemplateNode`
   fixtures.
-- `tableview.ts`: the tab page. A bar with the title, the count, the facts
-  (links), the row-meaning line, and the address checkbox. A sticky header
-  row. Virtual rows of a fixed height, with scroll position mapped to row
-  index by ratio when the row count exceeds what a canvas can be tall enough
-  for (a ten-minute stereo WAV is 26 million rows). Row click picks the row;
-  the file tab's cursor moving into the table selects and scrolls to the row.
-  Keyboard: arrows, page, home, end.
+- `tableview.ts`: the tab page. The header row, the columns and what they have
+  learnt about themselves, the rows as they are drawn, the selection, and the
+  copy. Row click picks the row; the file tab's cursor moving into the table
+  selects and scrolls to the row. Keyboard: arrows, page, home, end. Four
+  modules around it hold the halves that stand on their own:
+  - `tablebar.ts`: the bar. The title, the count, the facts (links), the
+    row-meaning line, the rows-or-columns choice, the address checkbox, and
+    the two buttons the view owns.
+  - `tablescroll.ts`: which rows the scroll position is asking for and where
+    to draw them, with the scroll position mapped to row index by ratio when
+    the row count exceeds what a canvas can be tall enough for (a ten-minute
+    stereo WAV is 26 million rows).
+  - `tableaddress.ts`: where a row, a cell or a turned table's drawn row is
+    stored, said in words.
+  - `tabletext.ts`, `tableexport.ts`, `tableexportpanel.ts`: the table as
+    text, and saving it as a file.
 - `tabs.ts`: a tab has a `kind`: the document, or a table of a path in a
   document. `forSpace` skips table tabs; `close` does not ask about unsaved
   edits for a table tab; the edited mark is only on document tabs.

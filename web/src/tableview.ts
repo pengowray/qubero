@@ -51,20 +51,12 @@ import type { RecordCell } from "./records.ts";
 import { PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
 import { cellPlaceIn, copiedAddress, drawAddress, fieldWhereLines, rowHasBytes, whereLines } from "./tableaddress.ts";
+import { tableBar, type Bar } from "./tablebar.ts";
 import { TableExportPanel } from "./tableexportpanel.ts";
-import { canTurn, FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, rowRun, startsTurned, timeText, timeWidth, TURN_MAX, turnsByDefault, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, rowRun, startsTurned, timeText, timeWidth, turnsByDefault, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
+import { OVERSCAN, ROW, RowScroll } from "./tablescroll.ts";
 import { headerCells, leadKinds, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
 
-/** Height of one row, which must match `--tbl-row` in the stylesheet: the rows
- *  are placed by arithmetic on it, so a row that drew taller would slide out
- *  from under its own place. */
-const ROW = 22;
-/** Rows drawn above and below the window, so a wheel notch has somewhere to go
- *  before the next paint. */
-const OVERSCAN = 8;
-/** How tall the canvas is allowed to get. Past this the scroll bar stands for
- *  the rows by ratio rather than by pixels. */
-const MAX_CANVAS = 16_000_000;
 /** How many rows one copy may hold. The text is built in memory before the
  *  clipboard sees it, and a hundred thousand rows of samples is already a few
  *  megabytes; a reader after more than that wants an export, not a paste. */
@@ -84,9 +76,6 @@ const TURNED_KEY = "qubero.table.turned";
  *  nothing to say what the rest was. */
 const AT_WIDTH = 9;
 const SIZE_WIDTH = 8;
-/** How many views have made a rows-or-columns choice, for naming each one's
- *  radio buttons apart. */
-let arrangeGroups = 0;
 /** What in the view is cut short with an ellipsis when it does not fit, and so
  *  needs its full text somewhere. */
 const CUT_SHORT = ".tbl-th, .tbl-cell";
@@ -156,7 +145,7 @@ export class TableView {
   /** How wide the two address columns are: as wide as the widest seen. */
   private atWidth = Math.max(AT_WIDTH, TABLE.storedAt.length);
   private sizeWidth = Math.max(SIZE_WIDTH, TABLE.size.length);
-  private readonly meaning: HTMLElement;
+  private readonly barLine: Bar;
   /** The selected rows, as they are drawn: records, or fields when turned. the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
    *  either way round. Null when nothing is selected. */
@@ -169,6 +158,8 @@ export class TableView {
   /** True while a pick this view made is being sent out, so the cursor move it
    *  causes does not come back and undo the scroll position. */
   private picking = false;
+  /** Which rows the scroll position is asking for, and where to put them. */
+  private readonly rows: RowScroll;
   private drawn: { from: number; to: number; base: number; addresses: boolean } | null = null;
   private frame = 0;
 
@@ -183,12 +174,12 @@ export class TableView {
     this.plan = plan;
     this.addresses = storedText(ADDRESSES_KEY) === "1";
     this.turned = startsTurned(plan, storedText(TURNED_KEY));
-    this.meaning = el("span", { className: "tbl-meaning" });
     this.el = el("div", { className: "tableview" });
     this.head = el("div", { className: "tbl-head" });
     this.scroller = el("div", { className: "tbl-scroll" });
     this.scroller.tabIndex = 0;
     this.canvas = el("div", { className: "tbl-canvas" });
+    this.rows = new RowScroll(this.scroller, this.canvas, this.head);
     // The sheet is as wide as its columns. The header is what sizes it, being
     // the one thing in it that is laid out in the ordinary flow: the rows are
     // placed by arithmetic and take whatever width the sheet has.
@@ -212,7 +203,22 @@ export class TableView {
       release: () => plan.forget(),
       say: (text) => this.say(text),
     });
-    this.el.append(this.bar(opts.title), this.scroller, this.notice);
+    this.barLine = tableBar({
+      title: opts.title,
+      plan,
+      turned: this.turned,
+      addresses: this.addresses,
+      copyButton: this.copyButton,
+      exporter: this.exporter.el,
+      onTurn: (turned) => this.turn(turned),
+      onAddresses: (on) => {
+        this.addresses = on;
+        rememberChoice(ADDRESSES_KEY, on ? "1" : "0");
+        this.layAgain();
+      },
+      onFactPick: (path) => this.onFactPick(path),
+    });
+    this.el.append(this.barLine.el, this.scroller, this.notice);
     this.refreshCopy();
     this.columns = plan.columns.map((_, c) => ({
       fit: fitOf(this.headingOf(c)),
@@ -237,66 +243,6 @@ export class TableView {
     this.paintAgain();
   }
 
-  // ----- the bar above the table -----
-
-  private bar(title: string): HTMLElement {
-    const bar = el("header", { className: "tbl-bar" });
-    bar.append(el("b", { className: "tbl-title", textContent: title }));
-    bar.append(el("span", { className: "tbl-count", textContent: TABLE.count(this.plan.count, this.plan.rowWord) }));
-    for (const fact of this.plan.facts) {
-      const button = el("button", {
-        type: "button",
-        className: "tbl-fact",
-        textContent: `${fact.label} ${factValue(fact.value)}`,
-      });
-      button.title = TABLE.factTitle(fact.label);
-      button.addEventListener("click", () => this.onFactPick(fact.path));
-      bar.append(button);
-    }
-    if (this.rate !== null) bar.append(this.meaning);
-    this.sayMeaning();
-    const arrange = this.arrangeChoice();
-    const box = el("input", { type: "checkbox", className: "tbl-addr-box", checked: this.addresses });
-    box.addEventListener("change", () => {
-      this.addresses = box.checked;
-      rememberChoice(ADDRESSES_KEY, box.checked ? "1" : "0");
-      this.layAgain();
-    });
-    // The controls sit together at the far end, away from the facts.
-    bar.append(el("div", { className: "tbl-controls" }, arrange, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton, this.exporter.el));
-    return bar;
-  }
-
-  /**
-   * Which way round the table is drawn, as a label and its two answers:
-   * `Samples in: (o) rows ( ) columns`. The answer filled in is the state, so a
-   * table that arrived turned says so without the reader working it out. A
-   * table too long to turn has `columns` greyed, with the reason on hover.
-   */
-  private arrangeChoice(): HTMLElement {
-    // Several tables can be open in one page, and radio buttons that share a
-    // name are one group wherever they are, so each view's name is its own.
-    const name = `tbl-arrange-${++arrangeGroups}`;
-    const can = canTurn(this.plan.count);
-    const choice = (turned: boolean, text: string): HTMLElement => {
-      const box = el("input", { type: "radio", name, checked: this.turned === turned, disabled: turned && !can });
-      box.addEventListener("change", () => {
-        if (box.checked) this.turn(turned);
-      });
-      const label = el("label", { className: "tbl-check" }, box, text);
-      if (box.disabled) {
-        label.classList.add("is-off");
-        label.title = TABLE.turnTooMany(this.plan.rowWord, TURN_MAX);
-      }
-      return label;
-    };
-    const group = el("span", { className: "tbl-arrange" }, el("span", { className: "tbl-arrange-word", textContent: TABLE.arrange(this.plan.rowWord) }), choice(false, TABLE.arrangeRows), choice(true, TABLE.arrangeColumns));
-    group.setAttribute("role", "radiogroup");
-    group.setAttribute("aria-label", TABLE.arrange(this.plan.rowWord));
-    group.title = TABLE.arrangeTitle(this.plan.rowWord);
-    return group;
-  }
-
   /** Rows a second, or null for a table whose rows are not spaced in time. */
   private get rate(): number | null {
     const rate = this.plan.rate;
@@ -306,18 +252,6 @@ export class TableView {
   /** The columns that are about a record rather than in it. */
   private get lead(): Lead {
     return { named: this.plan.rowNames, rate: this.rate, addresses: this.addresses };
-  }
-
-  /** The sentence saying what one row is, which is one column when the table
-   *  is turned. */
-  private sayMeaning(): void {
-    const rate = this.rate;
-    if (rate === null) return;
-    const word = this.plan.columnWord;
-    const said = rate.toLocaleString();
-    const rows = this.plan.rowWord;
-    if (this.turned) this.meaning.textContent = word === null ? TABLE.columnMeaningPlain(rows, said) : TABLE.columnMeaning(rows, word, said);
-    else this.meaning.textContent = word === null ? TABLE.rowMeaningPlain(rows, said) : TABLE.rowMeaning(rows, word, said);
   }
 
   /**
@@ -334,9 +268,8 @@ export class TableView {
     this.anchor = null;
     this.focus = null;
     this.pickedRecord = 0;
-    this.scroller.scrollTop = 0;
-    this.scroller.scrollLeft = 0;
-    this.sayMeaning();
+    this.rows.home();
+    this.barLine.sayMeaning(on);
     this.refreshCopy();
     this.sizeCanvas();
     this.layAgain();
@@ -348,7 +281,7 @@ export class TableView {
   }
 
   private sizeCanvas(): void {
-    this.canvas.style.height = `${Math.min(MAX_CANVAS, this.shownRows * ROW)}px`;
+    this.rows.setCount(this.shownRows);
   }
 
   /** The columns, the headings and the rows, all again: which columns there
@@ -609,33 +542,9 @@ export class TableView {
     this.paint();
   }
 
-  /** How many rows fit on screen, at least one so a short tab still draws.
-   *  The header is stuck over the top of the scroller, so what is left for the
-   *  rows is the scroller less the header. */
+  /** How many rows fit on screen, at least one so a short tab still draws. */
   private onScreen(): number {
-    return Math.max(1, Math.floor((this.scroller.clientHeight - this.head.offsetHeight) / ROW));
-  }
-
-  /** How far the scroll bar can go. The header is in the scroller with the
-   *  canvas, so it is part of what is scrolled through. */
-  private travel(): number {
-    return this.head.offsetHeight + this.canvas.clientHeight - this.scroller.clientHeight;
-  }
-
-  /** True once the rows are taller than a canvas is allowed to be, which is
-   *  where the scroll bar stops standing for pixels. */
-  private get capped(): boolean {
-    return this.shownRows * ROW > MAX_CANVAS;
-  }
-
-  /** The first row the scroll position is asking for. Under the cap that is
-   *  division; past it the bar's place in its own travel is the reader's place
-   *  in the rows, which is the only mapping left once the pixels run out. */
-  private firstVisible(): number {
-    if (!this.capped) return Math.floor(this.scroller.scrollTop / ROW);
-    const travel = this.travel();
-    const ratio = travel <= 0 ? 0 : this.scroller.scrollTop / travel;
-    return Math.round(ratio * Math.max(0, this.shownRows - this.onScreen()));
+    return this.rows.onScreen();
   }
 
   private paint(): void {
@@ -649,20 +558,14 @@ export class TableView {
       this.layColumns();
       this.fillHead();
     }
-    const firstVisible = this.firstVisible();
-    const first = Math.max(0, firstVisible - OVERSCAN);
-    const last = Math.min(this.shownRows, firstVisible + this.onScreen() + OVERSCAN);
-    // Under the cap a row sits at its own place on the canvas. Past it the
-    // canvas is shorter than the rows would need, so the window is drawn where
-    // the reader is looking: at the top of the viewport, wherever that is.
-    const base = this.capped ? this.scroller.scrollTop - (firstVisible - first) * ROW : first * ROW;
+    const { from, to, base } = this.rows.window();
     const was = this.drawn;
-    if (was !== null && was.from === first && was.to === last && was.base === base && was.addresses === this.addresses) return;
-    this.drawn = { from: first, to: last, base, addresses: this.addresses };
+    if (was !== null && was.from === from && was.to === to && was.base === base && was.addresses === this.addresses) return;
+    this.drawn = { from, to, base, addresses: this.addresses };
     const out: HTMLElement[] = [];
-    for (let i = first; i < last; i++) {
+    for (let i = from; i < to; i++) {
       const element = this.turned ? this.drawTurned(i, records) : this.drawRecord(i);
-      element.style.top = `${base + (i - first) * ROW}px`;
+      element.style.top = `${base + (i - from) * ROW}px`;
       element.dataset["index"] = String(i);
       out.push(element);
     }
@@ -849,17 +752,7 @@ export class TableView {
   }
 
   private scrollToRow(i: number): void {
-    const onScreen = this.onScreen();
-    const first = this.firstVisible();
-    if (i >= first && i < first + onScreen) return;
-    const want = Math.max(0, i - Math.floor(onScreen / 2));
-    if (!this.capped) {
-      this.scroller.scrollTop = want * ROW;
-      return;
-    }
-    const travel = this.travel();
-    const rows = Math.max(1, this.shownRows - onScreen);
-    this.scroller.scrollTop = Math.max(0, Math.min(travel, (want / rows) * travel));
+    this.rows.scrollToRow(i);
   }
 
   // ----- input -----
@@ -900,7 +793,7 @@ export class TableView {
     const page = Math.max(1, this.onScreen() - 1);
     const by: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page };
     const move = by[e.key];
-    const from = this.focus ?? this.firstVisible();
+    const from = this.focus ?? this.rows.firstVisible();
     if (move !== undefined) {
       e.preventDefault();
       this.pick(Math.max(0, Math.min(this.shownRows - 1, from + move)), e.shiftKey);
@@ -1032,12 +925,4 @@ export class TableView {
       this.notice.hidden = true;
     }, NOTICE_MS);
   }
-}
-
-/** A fact's value as the bar shows it: a number gets its thousands separators,
- *  since `44,100` is read at a glance and `44100` is counted. Anything else is
- *  shown as the core wrote it. */
-function factValue(value: string): string {
-  const n = Number(value);
-  return value.trim() !== "" && Number.isFinite(n) ? n.toLocaleString() : value;
 }
