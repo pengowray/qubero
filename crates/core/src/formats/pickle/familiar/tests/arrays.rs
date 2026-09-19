@@ -133,6 +133,31 @@ fn numeric_dtype_branches_check_byte_order_and_payload_width() {
     }
 }
 
+/// Fixed-width text is the one plain dtype whose letters do not say how many
+/// bytes a value is: `U3` is three characters and twelve bytes. So the width
+/// is read out of the state, where every other plain dtype writes minus one,
+/// and an array of labels is measured against that. A classifier fitted on
+/// labels that are strings holds one.
+#[test]
+fn a_text_dtype_takes_its_width_from_the_state_rather_than_its_letters() {
+    for (kind, order, elsize, alignment, flags) in [("U2", b'<', 8u8, 4u8, 8u8), ("U3", b'>', 12, 4, 8), ("S4", b'|', 4, 1, 0), ("S1", b'|', 1, 1, 0)] {
+        let mut body = standalone();
+        replace(&mut body, b"\x8c\x02f4\x94", &word(kind));
+        let bounds = [b'K', elsize, b'K', alignment, b'K', flags];
+        let state = cat(&[&[0x8c, 1, order, 0x94][..], b"NNN", &bounds]);
+        replace(&mut body, b"\x8c\x01<\x94NNNJ\xff\xff\xff\xffJ\xff\xff\xff\xffK\x00", &state);
+        replace(&mut body, b"K\x04K\x06\x86\x94", &[b'K', 96 / elsize, 0x85, 0x94]);
+        let found = recognise(&framed(&body)).unwrap_or_else(|| panic!("{kind} was refused"));
+        let Kind::Array { dtype, dimensions, len, .. } = &found.value.kind else { panic!("array expected for {kind}") };
+        assert_eq!((spelling(dtype), dimensions.as_slice(), *len), (format!("{}{kind}", char::from(order)).as_str(), &[96 / u64::from(elsize)][..], 96));
+        // The width in the state and the width in the letters have to agree,
+        // or the array would be measured in values of the wrong size.
+        let mut wrong = body.clone();
+        replace(&mut wrong, &bounds, &[b'K', elsize + 1, b'K', alignment, b'K', flags]);
+        assert!(recognise(&framed(&wrong)).is_none(), "accepted a width the letters of {kind} disagree with");
+    }
+}
+
 #[test]
 fn scalar_empty_and_wide_arrays_obey_length_and_shape_constraints() {
     let mut base = standalone();

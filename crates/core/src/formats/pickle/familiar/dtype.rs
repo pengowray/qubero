@@ -24,14 +24,34 @@ const MAX_COLUMNS: usize = 256;
 /// of what its numbers mean.
 const UNITS: &[&str] = &["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"];
 
+/// How wide one value of a fixed-width text dtype is, how NumPy aligns it and
+/// the flags it is built with, or nothing when the letters are not text.
+///
+/// The letters count characters rather than bytes, so unlike every other plain
+/// dtype the width has to come out of the state: `S5` is five bytes and `U5`
+/// is five four-byte characters, which is UTF-32. A classifier fitted on
+/// labels that are strings keeps them in an array of one of these.
+fn text_bounds(kind: &str) -> Option<(i128, i128, i128)> {
+    let (per, alignment, flags) = match kind.as_bytes().first()? {
+        b'S' => (1, 1, 0),
+        b'U' => (4, 4, 8),
+        _ => return None,
+    };
+    let count: i128 = kind.get(1..)?.parse().ok()?;
+    (count > 0).then_some((count * per, alignment, flags))
+}
+
 impl Cursor<'_> {
     /// The middle of a dtype's state, which every one of them writes the same
-    /// way: no subarray, no names, no columns, the two bounds NumPy writes as
-    /// minus one, and the flags the dtype was built with.
-    fn three_nones_and_bounds(&mut self, flags: i128) -> Option<()> {
+    /// way: no subarray, no names, no columns, the width and the alignment,
+    /// and the flags the dtype was built with. A dtype whose width is in its
+    /// letters writes minus one for both numbers; fixed-width text is the one
+    /// plain kind that writes them out, because the letters say how many
+    /// characters and not how many bytes.
+    fn three_nones_and_bounds(&mut self, width: i128, alignment: i128, flags: i128) -> Option<()> {
         self.atoms(&[b"N", b"N"])?;
-        self.number(-1)?;
-        self.number(-1)?;
+        self.number(width)?;
+        self.number(alignment)?;
         self.number(flags)
     }
 
@@ -88,7 +108,8 @@ impl Cursor<'_> {
         // unit is in the state rather than in the letters.
         let objects = kind == "O8" && self.allow.object_arrays;
         let datetime = kind == "M8";
-        if !record && !objects && !datetime && !PLAIN.contains(&kind) {
+        let text = text_bounds(kind);
+        if !record && !objects && !datetime && text.is_none() && !PLAIN.contains(&kind) {
             return None;
         }
         let kind = kind.to_string();
@@ -112,7 +133,7 @@ impl Cursor<'_> {
         let order = self.byte_order(&kind)?;
         self.atoms(&[b"N"])?;
         if datetime {
-            self.three_nones_and_bounds(0)?;
+            self.three_nones_and_bounds(-1, -1, 0)?;
             let unit = self.datetime_unit()?;
             self.exact(b"t")?;
             self.memoize(Bound::Opaque)?;
@@ -127,11 +148,22 @@ impl Cursor<'_> {
                 // The flags NumPy builds the dtype with. A dtype of objects
                 // needs the interpreter for everything it does and says so;
                 // every plain one writes nothing.
-                let flags = if objects { 0x3f } else { 0 };
-                self.three_nones_and_bounds(flags)?;
+                let (width, alignment, flags) = match (objects, text) {
+                    (true, _) => (-1, -1, 0x3f),
+                    (false, Some(bounds)) => bounds,
+                    (false, None) => (-1, -1, 0),
+                };
+                self.three_nones_and_bounds(width, alignment, flags)?;
                 match objects {
                     true => Dtype::Objects,
-                    false => Dtype::Plain(format!("{order}{kind}")),
+                    false => {
+                        let spelling = format!("{order}{kind}");
+                        // The reader has a type per width up to the one the
+                        // `.npy` table stops at, and a wider text dtype has
+                        // no reading rather than a wrong one.
+                        shapes::dtype(&spelling)?;
+                        Dtype::Plain(spelling)
+                    }
                 }
             }
         };
@@ -344,7 +376,9 @@ impl Cursor<'_> {
             return None;
         }
         let order = *self.bytes.get(at)?;
-        let orderless = matches!(kind, "b1" | "i1" | "u1" | "O8") || kind.starts_with('V');
+        // A run of bytes has no order either, so `S5` is written `|S5` where
+        // `U5` is a run of four-byte characters and has one.
+        let orderless = matches!(kind, "b1" | "i1" | "u1" | "O8") || kind.starts_with('V') || kind.starts_with('S');
         if (orderless && order != b'|') || (!orderless && !matches!(order, b'<' | b'>')) {
             return None;
         }
