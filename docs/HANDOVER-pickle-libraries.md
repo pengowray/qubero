@@ -914,3 +914,44 @@ records in between, so the walk started inside the last entry and the archive
 read as a plain ZIP. The end record's own offset field says where the
 directory is, and that is what is read now. `eval/pickletorch.rs` already did
 it the right way.
+
+## Every computed cell says where its bytes are: landed on 2026-09-19
+
+Three of the tables the reader gets are worked out by the core rather than laid
+out as a run of fields: a pandas frame or series, a torch tensor, and the
+summary over a state dict. Until now their cells carried no address at all,
+and `computedPlan` in `web/src/tableplan.ts` handed every row `offsetBits: 0,
+sizeBits: 0`, so with "Show byte addresses" on every row of a frame said
+`@0x0 · 0 bytes`.
+
+The address is on the cell rather than on the row, because a row of one of
+these tables is not a run of the file. A frame's row is one value out of each
+of several blocks; at protocol 2 two cells of one row can even be in two
+different spaces, since the numbers were spelled as latin-1 text and the
+strings beside them were not. `DESIGN-pickle-containers.md` has the `CellAt`
+type and what each table's cells carry.
+
+What the view does with it, when the addresses are on:
+
+- A row whose cells are one run of one space is drawn as before: where it
+  starts, and how long it is.
+- A row whose cells are in several places shows the first cell's address and
+  `per cell` for the size, with "This row's cells are in different places.
+  Hover a cell for its address." on both.
+- A row with no bytes at all says which nothing it is: `computed` for a
+  counted index, `not stored` for a fact the pickle states, `unknown`
+  otherwise.
+- Every cell's hover gains a line: its address and size, or the reason it has
+  none.
+- Clicking a cell selects that cell's bytes in the hex view. A cell inside an
+  unpacked stream, or with no bytes, leaves the cursor where it is rather than
+  moving it somewhere the reader did not click. Shift-click still extends the
+  row selection.
+
+With the addresses off nothing changed: no address column, and a cell's hover
+is its text and any problem on it, as before.
+
+`crates/core/tests/cells_real.rs` checks the addresses against the bytes they
+name: it reads the run each cell points at and compares it with what the cell
+says. `crates/core/tests/joblib_real.rs` is the joblib half of
+`pickle_real.rs`, split out unchanged in the commit before it.

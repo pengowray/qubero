@@ -573,6 +573,51 @@ cell, and the reading counted once. Without the second, a non-contiguous view
 would still need computed cells. zarr-in-zip wants the first of them too,
 which is the argument for doing it rather than widening `pickletorch.rs`.
 
+### Cells that say where their bytes are: landed on 2026-09-19
+
+Option 1 with the range exposed, which the paragraph above said to take first.
+`Evaluator::pickle_cells` no longer hands back a bare value per cell. It hands
+back a `FrameCell`: the value, and a `CellAt` saying where the bytes behind it
+are or why there are none.
+
+```rust
+pub enum CellAt {
+    Bytes { space: u32, offset_bits: u64, size_bits: u64 },
+    Counted,   // a RangeIndex label, worked out from a start and a step
+    Said,      // a fact the pickle states: a tensor's dtype and shape
+    Nowhere,   // this reading cannot say
+}
+```
+
+`space` is the numbering `NodeInfo::space` uses, so a cell of a protocol 2
+array points into the space that array's spelled numbers opened and a cell in
+the file points at the file. What each of the three tables carries:
+
+- **A pandas frame or series.** A number is its element of the run, in the
+  file at protocol 3 and up and in the spelled space below it. A cell of an
+  object column is the whole pickled value, opcode included, which for a
+  string written earlier is the instruction that names it out of the memo. A
+  categorical cell is its code, not the category's name. A `RangeIndex` label
+  is `Counted`.
+- **A torch tensor.** The entry's data, plus the storage offset and one step
+  of the stride per axis, times the element size. A complex number is the
+  whole pair. In a legacy file the same arithmetic lands inside the storage's
+  own field, so the cells and the tree agree.
+- **The summary over a state dict.** The name cell is the instructions that
+  spell the key; the count of values is the tensor's own window in the file,
+  which is what `stored at` says. The dtype and the shape are `Said`: the
+  instructions that rebuild the tensor state them and no run of bytes holds
+  them as a value.
+
+**What this did not close.** A tensor is still not an ordinary field. There is
+no node for it in the tree, so no hex view over it, no listing row, no
+editing, and nothing the annotation column can draw. The reading is still
+`pickletorch.rs` walking the central directory rather than the IR, and a
+non-contiguous view is still worked out per cell. What the tables gained is
+the one thing option 1 was missing: every cell can now say where it is, and
+the view can select those bytes. S6 and `Ty::Strided` are still what a field
+would need.
+
 ## What each era wrote, on 2026-09-19
 
 Nine container environments: eight with both libraries, from torch 0.4.1 with
