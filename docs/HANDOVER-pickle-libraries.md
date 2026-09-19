@@ -150,26 +150,15 @@ The libraries needed nothing new. scikit-learn, scipy and pandas write
 `STACK_GLOBAL`, `NEWOBJ` and `BUILD` above it: `copyreg._reconstructor` is in
 no file in the corpus. What the protocols do differ in is where the array
 values sit. Protocol 2 has no opcode for a byte string, so an array's numbers
-go out as the latin-1 text they spell, handed to `_codecs.encode`. The form
-decodes that run once as it reads it and keeps the bytes beside the match, and
-every cell of the array and of any frame holding it is read from there, so a
-protocol 2 frame, series and array open as the same table, cell for cell, as
-the same object at protocol 4. `a_pickled_frame_opens_as_the_table_it_holds`
+go out as the latin-1 text they spell, handed to `_codecs.encode`, and
+protocol 0 writes that same text as an escaped line. Either way the run opens
+as a space of its own and the numbers are ordinary fields of it, so a
+protocol 0 or 2 frame, series and array open as the same table, cell for cell,
+as the same object at protocol 4. `a_pickled_frame_opens_as_the_table_it_holds`
 and `an_array_reads_as_the_same_numbers_at_every_protocol` in
-`crates/core/tests/pickle_real.rs` are that claim.
-
-What that costs, and what would replace it: the decoded bytes are a copy, held
-for as long as the match is, so a protocol 2 file of arrays is read into memory
-twice. The honest shape for this is a space of its own, the way a compressed
-stream gets one (`eval/space.rs`, `Spaces::add`): the numbers would then be
-ordinary typed fields at ordinary offsets in that space, the hex view would
-show the decoded bytes, and nothing would need a computed-cell path. What
-stands in the way is that a space is entered through a `Ty::Decoded` node,
-which wants a `Codec` of its own and a trace. The spike of 2026-09-19, written
-up below, measured that cost: three arms in `codec.rs` and none anywhere else,
-because the evaluator, the listing, the diagram and the graph match on
-`Ty::Decoded` and on `Packing` rather than on `Codec`. What is left is the
-frame table, which reads its cells without a path to open a space with.
+`crates/core/tests/pickle_real.rs` are that claim, and
+`a_spelled_array_opens_its_numbers_as_a_space` is the claim that a value in
+one of those spaces has an address in it.
 
 A frame opens as a table, and a frame, a series and a sparse matrix say what
 they hold before showing how. See "A library object as the thing it is" in the
@@ -450,11 +439,10 @@ same change as "an array's decoded numbers as a space of their own" below.
 
 What is left from the earlier pass, in the order it is worth doing:
 
-1. **An array's decoded numbers as a space of their own**, replacing the copy
-   kept beside the match. Protocol 0 doubles the reason: its arrays are
-   decoded twice over. The unknown that held this up is answered: see "A
-   decoded run as a space of its own: the spike" below, which has the result
-   and the list of what is left to build.
+1. **A byte string below protocol 3 as the bytes it spells**, wherever one is
+   written, rather than only where an array holds one. See "A decoded run as a
+   space of its own" below for what that takes and why dates were left out of
+   it.
 2. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
 3. **An exception rebuilt from its message**, which is what every remaining
@@ -784,103 +772,89 @@ Two smaller things left where they are:
   change that would give such an array a table, and it is the next item under
   "What is left".
 
-## A decoded run as a space of its own: the spike, on 2026-09-19
+## A decoded run as a space of its own: landed on 2026-09-19
 
-Two earlier passes put this off because the one thing nobody knew was whether
-a node the pickle tree *synthesises* can carry a decoded space at all: the
-tree makes its nodes up from the match rather than declaring them in a
-template, and `Ty::Decoded` is reached through the template. The spike was
-written to answer that and nothing else, and then reverted.
+A protocol 2 array written by Python 3 stores its numbers as latin-1 text,
+handed to `_codecs.encode`; at protocol 0 that text is escaped again to fit on
+a line. Before this the recogniser decoded such a run once and kept the bytes
+beside the match, the tree carried a `written as` note, and the table over the
+array had its cells worked out by the core with no byte addresses under them.
+Now the run opens the way every other packed run in a file opens.
 
-**It works.** In `pickletree::place_pickle_child`, the `Part::Data` arm for a
-protocol 2 array was changed from
+**What a reader sees.** The `numbers` row is the run in the file, at the
+offset the pickler wrote it, typed `latin-1 text` or `latin-1 text, escaped`.
+Under it, in a space of its own, is the run of numbers: `f32 le[]` at byte 0
+of that space, with a value at every ordinary offset. The table hangs on the
+numbers rather than on the run, and "Show byte addresses" over it says where
+each value is in the decoded bytes. The `written as` note is gone, because the
+node's own type says what it was decoded from; the note stays for the one
+thing a type cannot say, an array naming the run an earlier array wrote.
 
-```rust
-Storage::Latin1 => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Utf8),
-```
+**What it is made of.**
 
-to `T::decoded(E::lit((end - at) as i128), Codec::Latin1Text, numbers_ty(dtype, count_of(dimensions))?)`,
-and `numpy-2d-float32.p2.pickle` read as:
+- `codec/pytext.rs` holds both decoders and the `raw-unicode-escape`
+  un-escaper, which `familiar/lines.rs` calls too: one reading of a line,
+  wherever it is asked for. `Codec::Latin1Text` and
+  `Codec::EscapedLatin1Text` are three arms in `codec.rs` and nothing
+  anywhere else, as the spike measured. The trace is a step a character, with
+  runs of characters written as themselves coalesced, so a selection in the
+  space maps back to the bytes of the run that spelled it; past the step
+  budget it falls back to one step over the whole run.
+- `pickletree::place_pickle_child`'s `Part::Data` arm returns
+  `T::decoded(len, codec, numbers_ty(..))` for a run that is not `Storage::Raw`.
+  A bare `Ty::Decoded` has no length of its own, which `Ty::decoded()` handles
+  by wrapping it in a `Ty::Sized`.
+- `Evaluator::pickle_table` answers for the numbers node rather than the run,
+  and `table.rs::table_at` routes a `Ty::Decoded` parent to it. A table over
+  the run itself would be a one-row table, since the run holds one thing.
+- `pickleparts::locate` is the inverse of `spot`: it walks the tree down to
+  the node whose run starts at a byte, which is what a frame's cell reader
+  needs to open a space with. `Numbers` carries that path instead of the
+  decoded bytes, and `picklecells::space_value` opens the space and reads the
+  cell out of its buffer. A frame's cells are still `Cells::Computed`, since a
+  frame is assembled across blocks, but they are read through the spaces.
+- Nothing in `web/src` was keyed on a codec name or on `written as`, so the
+  interface needed no change.
 
-```
-[1, 7] numbers : latin-1 text = Composite { count: 1 } (872 bits at c1)
-  [1, 7, 0] numbers : f32 le[] = Composite { count: 24 } (768 bits at 0)
-    [1, 7, 0, 0] [0] : f32 le = Float(0.0) (32 bits at 0)
-    [1, 7, 0, 1] [1] : f32 le = Float(1.0) (32 bits at 4)
-    ...
-```
+**The Python 2 arrays are not this.** Python 2 had a type for a run of bytes,
+so its arrays go out as `BINSTRING` and the numbers are the bytes. Those open
+no space and read as they did.
 
-which is the whole of what the job is for: the numbers are ordinary typed
-fields at ordinary offsets in a space of their own, the run they came from is
-still at 0xc1 in the file, and nothing computed a cell.
+**What a frame's cells still cannot do** is carry an address. `computedPlan`
+in `web/src/tableplan.ts` hands every computed row `offsetBits: 0`, and a
+frame's row is not one run anyway: its cells are in different blocks and now
+in different spaces. Giving them addresses means a `(space, offset, size)` per
+*cell* rather than per row, through the wasm binding, `computedPlan` and a
+`tableview` whose two address columns are per row. That is a job of its own.
 
-**What it cost, and what the earlier estimate got wrong.** Three arms, all in
-`codec.rs`: `Codec::as_str`, the `match` in `decode_traced`, and the list of
-codecs in `decode` that go through the traced path. The evaluator, the
-listing, the diagram and the graph match on `Ty::Decoded` and on `Packing`,
-never on `Codec`, so none of them needed touching. The decoder itself is ten
-lines: the run is UTF-8, every character has to be under 0x100, and each one
-is a byte. The trace is `frames::whole`, which is the truth here.
+**What did not come for free.** The earlier note said the GraalPy file would
+read once nothing was replaced. It would not. GraalPy hands back one object
+for two equal strings, so the second `_codecs.encode` of the same packed date
+is a `BINGET`, and `encoded_text` read that reference as a counted text and
+held its run to being UTF-8. At protocol 0 the run is a line, and a line is
+not always the text it stands for. `familiar::named` decides which, by the
+protocol and the run, and both the recogniser and the reading ask it. The
+matrix now reads with no exceptions and `UNREAD` in `pickle_real.rs` is empty.
 
-**One thing to know before starting.** A bare `Ty::Decoded` fails with
-`latin-1 text has no length of its own`: `size.rs` has no arm for it because a
-decoded run is always wrapped in a `Ty::Sized` that says how long the packed
-side is. `Ty::decoded()` does that wrapping, and the pickle tree knows the
-length exactly, so this is one call rather than a problem.
+**What was left alone, and why.**
 
-**Why the rest was not built in the same sitting.** The job lands whole or not
-at all, and the piece that makes it whole is the frame table, which is neither
-small nor local. What is left, in the order it has to happen:
-
-1. **A second codec for protocol 0.** `Codec::RawUnicodeEscapeLatin1` beside
-   `Codec::Latin1Text`, or one variant with a flag. The un-escaping is in
-   `familiar/lines.rs` and has to be lifted into a function the codec can call,
-   because the recogniser still needs the decoded *length* to check an array's
-   shape against its dtype (`Cursor::fits`). Note that a `Kind::Spelled` text
-   line decodes to text and an array's line decodes to bytes, so the pair is
-   escape-only and escape-then-latin-1 rather than one codec.
-2. **Delete the copy.** `Match::runs`, `Match::decoded`, `Cursor::decoded_at`
-   and `Cursor::replace_run` all go. The consumers are `pickleframe.rs:312`,
-   `picklestd.rs:352` and `:359`, `picklesaid.rs:47`, and two assertions in
-   `familiar/tests/older.rs`. `codecs.rs::encode_call` stops replacing the run
-   and hands back the line's own `at` and `len`.
-3. **The GraalPy file comes off the `UNREAD` list for free.** It fails today
-   because two dates hold the same packed run, GraalPy gives both the same
-   memo slot, and the second `_codecs.encode` names a line the first one
-   already decoded *and replaced*. Once nothing is replaced, the second
-   reference reads the same unchanged `Kind::Spelled` and the file reads.
-4. **The frame table, which is the hard piece.** `pickleframe::values_of`
-   returns `Numbers { held }` and `picklecells::number_at` reads either those
-   held bytes or the file. The replacement wants the decoded node's space, and
-   a space is opened by path: `open_space_at` takes the path of the
-   `Ty::Decoded` node, and the frame's cell reader does not have one. What it
-   needs is the inverse of `spot` in `pickletree.rs`, a
-   `locate(found, at) -> Vec<usize>` that descends `parts()` taking the child
-   whose `span` covers `at` until it reaches the `Part::Data`. Then `Numbers`
-   carries a space id instead of `held`, and `number_at`'s existing "read it
-   from the file" branch reads it from that space with `at: 0` instead. The
-   same helper answers `picklestd`.
-5. **The table shape.** `pickletree.rs` around line 205 returns
-   `Cells::Computed` for any storage that is not `Raw`; that goes, and the
-   ordinary columns path takes over. Check where `TableShape` attaches now
-   that the `Part::Data` node is a decoded node with the array one level
-   below it: `table.rs:103` routes only `Ty::Pickle` nodes to `pickle_table`.
-6. **The notes.** `says_array` drops `written as: latin-1 text` and
-   `latin-1 text, escaped`, because the decoded node's own type name says it.
-   `bytes an earlier array wrote` stays: that one is about where a run is, not
-   about how it was written.
-7. **Tiling.** `covers()` in `pickle_real.rs` walks children against a running
-   cursor, and a decoded node's child is at offset 0 of another space. Read
-   what `decoded_real.rs` does about that before assuming
-   `the_older_protocols_read_as_a_tree_with_no_bytes_left_over` survives.
-8. **The web app.** Nothing in `web/src` or `web/test` holds a table of codec
-   names, so the "Open unpacked" buttons in `listingdraw.ts` should need no
-   special case. Worth one grep before believing it.
-
-Gate it on a `pickle_forms` dump over `pickle/`, `pickle-matrix/`, `joblib/`
-and `torch/` before and after, with the diagnostic offset normalised away, and
-on `a_pickled_frame_opens_as_the_table_it_holds` and
-`an_array_reads_as_the_same_numbers_at_every_protocol` passing cell for cell.
+- *A `Kind::Spelled` line as a space.* An escaped text line already shows its
+  transformation: the node's value is what the line spells and its `line` row
+  is the run the file holds. Making it a space would put a level and an
+  "Open unpacked" affordance under every protocol 0 string with an accent or
+  a backslash in it, which in a file of strings is most of the tree, and would
+  show the reader nothing the two rows do not.
+- *A packed date at protocols 0 to 2.* Its run is not a date's run: it is the
+  text argument of a general `_codecs.encode`, the same one a `bytes` value
+  and a `bytearray` are written with. Opening it for dates alone would make a
+  date's run a space while an identical byte string beside it stayed text. A
+  date has no field structure at any protocol either -- at protocol 4 the run
+  is a `packed` row of bytes with the date worked out on the row above -- so
+  the space would open onto bytes, not onto a year and a month. The change
+  worth making is the general one: a byte string below protocol 3 opens as the
+  bytes it spells, whatever holds it. That wants the `text` argument of a
+  `Shape::Bytes` call placed as a decoded node, an inner type per holder, and
+  tests for each.
 
 ## Not decided
 
