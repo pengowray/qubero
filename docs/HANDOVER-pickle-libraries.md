@@ -178,7 +178,8 @@ scikit-learn breadth sweep are `familiar/sklearn.rs`, which holds
 
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 424 |
 | `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, the run after it, and the pickle it writes instead for an array of objects | 294 |
-| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage`, `Tensor` | 648 |
+| `familiar/captured.rs` | the values a match holds: `Value`, `Kind`, `Dtype`, `Storage`, `Tensor` | 586 |
+| `familiar/matched.rs` | the instructions it matched, and the word each node goes by: `Said`, `Call`, `Instr`, `Shape` | 191 |
 | `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 607 |
 | `familiar/formnames.rs` | the name each form goes by, which is what the rest of the program says to this one | 121 |
 | `familiar/python2.rs` | the three spellings Python 2 had and Python 3 dropped | 121 |
@@ -193,7 +194,8 @@ scikit-learn breadth sweep are `familiar/sklearn.rs`, which holds
 | `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 455, 353, 116, 385 |
 | `familiar/torch.rs` | a tensor, and the persistent id that says where its numbers are | 261 |
 | `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 400 |
-| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 711 |
+| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 655 |
+| `eval/picklenames.rs` | every word a row goes by, and the bounds the reading works under | 114 |
 | `eval/pickletree.rs` | placing and naming those, and the table shapes | 556 |
 | `eval/picklesaid.rs` | what a value comes to in a few words | 116 |
 | `eval/picklestd.rs` | a date, an exact number, an id or a path as the text Python writes it in | 335 |
@@ -1132,3 +1134,22 @@ record's own field now.
 `index_summary`, `sparse_summary` and `iso_time`, out of `picklecells.rs` and
 beside `picklesaid.rs`. Every one of them ends in a string a reader sees;
 `picklecells.rs` is 477 lines now rather than 690 and is about bytes.
+
+## Two more splits, on 2026-09-20
+
+The same claim as the two before them: `pickle_forms` over `pickle-matrix/`,
+`pickle/`, `joblib/` and `torch/` is byte for byte what it was, and so is a
+tree dump of a grid search, a masked array at both protocols, a torch archive,
+a joblib container and a pandas frame.
+
+**`familiar/matched.rs`** is `Said`, `Call`, `Instr` and `Shape`, out of
+`familiar/captured.rs` (764 lines, now 586). The line is between the values a
+form captured and the instructions it matched: a value says which kind of node
+it is through `Shape` and nothing in the new file knows what a value holds, so
+a family added to the recogniser adds one name to one file and one arm to the
+other. Both are re-exported by `familiar/mod.rs`, so nothing outside changed.
+
+**`eval/picklenames.rs`** is every word a row goes by, out of
+`eval/pickleparts.rs` (755 lines, now 655). Two different kinds of thing to
+get right: these are strings a reader sees, and that is a walk over the tree.
+`pickleparts` re-exports them, so an arm still reads as the name it uses.
