@@ -2024,6 +2024,15 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         ("dict-of-arrays-xz.joblib", None, "xz"),
         // Raw LZMA, which is the same coder with no container round it.
         ("dict-of-arrays-lzma.joblib", None, "lzma"),
+        // What joblib 1.1 and older wrote: the same wrapper with no
+        // `numpy_array_alignment_bytes` key and no padding byte, so the
+        // numbers begin at the BUILD. `joblib_versions.rs` reads them.
+        ("v0.11-array-big-endian.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        ("v0.11-array-float64.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        ("v0.11-array-fortran-order.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        ("v0.11-dict-of-arrays.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        ("v1.1-dict-of-arrays.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
+        ("v1.1-dict-of-arrays-zlib.joblib", None, "zlib"),
     ];
     let mut seen = Vec::new();
     for path in joblibs(&dir) {
