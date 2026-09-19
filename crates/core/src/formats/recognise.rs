@@ -1270,11 +1270,15 @@ fn zip_directory_names(tail: &[u8], len: u64) -> Option<Vec<&[u8]>> {
     // bytes inside a comment.
     let lowest = tail.len().saturating_sub(22 + 0xFFFF);
     let end = (lowest..=tail.len().checked_sub(22)?).rev().find(|&i| tail[i..i + 4] == *b"PK\x05\x06" && u16_at(i + 20) == Some(tail.len() - 22 - i))?;
-    let (mut count, mut size, mut before) = (u16_at(end + 10)? as u64, u32_at(end + 12)?, end);
+    // Where the file says the directory begins, rather than the end record
+    // less its length. The two are not the same: a writer may put the ZIP64
+    // records between the directory and the end record even when every number
+    // fits without them, which is what torch 1.5 did, and subtracting then
+    // starts the walk inside the last entry.
+    let (mut count, mut size, mut starts_at) = (u16_at(end + 10)? as u64, u32_at(end + 12)?, u32_at(end + 16)?);
     // A ZIP64 archive says the numbers that did not fit in a record of its own,
-    // which a locator right before the end record finds. The directory ends
-    // where that record starts.
-    if count == 0xFFFF || size == 0xFFFF_FFFF {
+    // which a locator right before the end record finds.
+    if count == 0xFFFF || size == 0xFFFF_FFFF || starts_at == 0xFFFF_FFFF {
         let locator = end.checked_sub(20)?;
         if tail[locator..locator + 4] != *b"PK\x06\x07" {
             return None;
@@ -1285,9 +1289,13 @@ fn zip_directory_names(tail: &[u8], len: u64) -> Option<Vec<&[u8]>> {
         if tail.get(record..record + 4)? != b"PK\x06\x06" {
             return None;
         }
-        (count, size, before) = (u64_at(record + 32)?, u64_at(record + 40)?, record);
+        (count, size, starts_at) = (u64_at(record + 32)?, u64_at(record + 40)?, u64_at(record + 48)?);
     }
-    let mut at = before.checked_sub(usize::try_from(size).ok()?)?;
+    // The tail may not reach back as far as the directory, in which case the
+    // names are not all here and the archive is whatever its front said.
+    let from = len.checked_sub(tail.len() as u64)?;
+    let mut at = usize::try_from(starts_at.checked_sub(from)?).ok()?;
+    let before = at.checked_add(usize::try_from(size).ok()?)?;
     let mut names = Vec::new();
     while at < before && (names.len() as u64) < count {
         if tail.get(at..at + 4)? != b"PK\x01\x02" {
@@ -1889,7 +1897,9 @@ mod tests {
         v.extend_from_slice(&count.to_le_bytes());
         v.extend_from_slice(&count.to_le_bytes());
         v.extend_from_slice(&(if wide { 0xFFFF_FFFF } else { size as u32 }).to_le_bytes());
-        v.extend_from_slice(&(if wide { 0xFFFF_FFFF } else { before as u32 }).to_le_bytes());
+        // Where the directory begins, or the mark saying it did not fit, which
+        // is what a writer puts here for an archive past four gigabytes.
+        v.extend_from_slice(&u32::try_from(before).unwrap_or(0xFFFF_FFFF).to_le_bytes());
         v.extend_from_slice(&(comment.len() as u16).to_le_bytes());
         v.extend_from_slice(comment);
         let len = before as u64 + v.len() as u64;
@@ -1901,9 +1911,10 @@ mod tests {
         let head = zip_entry(b"steps.bp5/data.0", &[7; 64], false);
         let names: [&[u8]; 4] = [b"steps.bp5/data.0", b"steps.bp5/md.idx", b"steps.bp5/mmd.0", b"steps.bp5/md.0"];
         // Far into a file too long for the front to see its end, with a comment
-        // holding the end record's own four bytes, and with ZIP64 records.
-        for (wide, comment) in [(false, &b""[..]), (false, &b"PK\x05\x06 in a comment"[..]), (true, &b""[..])] {
-            let (tail, len) = directory_tail(&names, wide, comment, 5_000_000_000);
+        // holding the end record's own four bytes, and, past four gigabytes,
+        // with the ZIP64 records a writer has to write there.
+        for (wide, comment, before) in [(false, &b""[..], 3_000_000_000), (false, &b"PK\x05\x06 in a comment"[..], 3_000_000_000), (true, &b""[..], 5_000_000_000)] {
+            let (tail, len) = directory_tail(&names, wide, comment, before);
             assert_eq!(sniff_ends(&head, &tail, len), Some("adioszip"), "wide {wide}, comment {comment:?}");
         }
         let (tail, len) = directory_tail(&[b"a.zarr/0.0", b"a.zarr/.zarray"], false, b"", 90_000);
@@ -1915,6 +1926,28 @@ mod tests {
         assert_eq!(sniff_ends(&head, &tail[10..], len), Some("zip"));
         // And a file the front names otherwise is not asked of its end.
         assert_eq!(sniff_ends(b"%PDF-1.7", &tail, len), Some("pdf"));
+    }
+
+    /// An archive whose ZIP64 records sit between the directory and the end
+    /// record although every number fits without them, which is what torch 1.5
+    /// wrote. The directory is found where the end record says it is and not
+    /// by subtracting its length, so the ZIP64 records in between do not
+    /// start the walk inside the last entry.
+    #[test]
+    fn a_directory_is_found_where_the_end_record_says_it_is() {
+        let head = zip_entry(b"model/version", b"3\n", true);
+        let names: [&[u8]; 3] = [b"model/version", b"model/data.pkl", b"model/data/0"];
+        let before = 90_000usize;
+        let (mut tail, len) = directory_tail(&names, true, b"", before);
+        // The same records, with the numbers the ordinary end record can hold
+        // written out rather than the marks that send a reader to the ZIP64
+        // one. A directory of this size does not need them either way.
+        let size = (tail.len() - 76) as u32;
+        let end = tail.len() - 22;
+        tail[end + 8..end + 12].copy_from_slice(&[names.len() as u8, 0, names.len() as u8, 0]);
+        tail[end + 12..end + 16].copy_from_slice(&size.to_le_bytes());
+        tail[end + 16..end + 20].copy_from_slice(&(before as u32).to_le_bytes());
+        assert_eq!(sniff_ends(&head, &tail, len), Some("torchzip"));
     }
 
     /// A deflated `md.idx` at the front is told by what its first deflate
