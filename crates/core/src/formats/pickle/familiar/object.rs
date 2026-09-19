@@ -245,14 +245,26 @@ impl Cursor<'_> {
 
     fn new_object(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [class, args] = <[Value; 2]>::try_from(items).ok()?;
-        let Kind::Class { ref path, .. } = class.kind else { return None };
+        let Kind::Class { path, .. } = &class.kind else { return None };
+        let path = path.clone();
+        // A NEWOBJ with arguments is one of the enumerated calls closed by
+        // this opcode rather than by REDUCE, which is how a class that defines
+        // no reduce of its own but does take arguments is written: `torch.Size`
+        // before torch gave it a `__reduce__`. The row says both the path and
+        // the arguments, so nothing is loosened by the class being reached
+        // this way rather than that.
+        if !matches!(args.kind, Kind::Tuple(ref held) if held.is_empty()) {
+            let (tuple_at, tuple_len) = (args.at, args.len);
+            let Kind::Tuple(held) = args.kind else { return None };
+            let call = {
+                let c = &*self;
+                c.calls().find(|call| names_call(call.path, &path) && call.via == Via::NewObj && fits(c, call, &held))?
+            };
+            return self.call_made(call, class, &path, at, (tuple_at, tuple_len), held);
+        }
         let module = path.rsplit_once('.')?.0;
         if !self.whitelisted(module) {
             return None;
-        }
-        match args.kind {
-            Kind::Tuple(ref held) if held.is_empty() => {}
-            _ => return None,
         }
         // An object is filed when it is made, before the BUILD that fills it,
         // so a later attribute may name it: a random forest's `estimator_` is
@@ -307,7 +319,7 @@ impl Cursor<'_> {
     fn reduced(&mut self, at: usize, items: Vec<Value>) -> Option<Kind> {
         let [callable, args] = <[Value; 2]>::try_from(items).ok()?;
         let (path, via) = match &callable.kind {
-            Kind::Class { path, .. } => (path.as_str(), Via::Global),
+            Kind::Class { path, .. } => (path.clone(), Via::Global),
             // The one callable that is itself a call: a `functools.partial`
             // over the one global a form lists it with. Which global the
             // partial was made over was checked when the partial was made, and
@@ -316,12 +328,13 @@ impl Cursor<'_> {
                 if path_of(made.as_deref()?)? != PARTIAL {
                     return None;
                 }
-                (path_of(items.first()?)?, Via::Partial)
+                (path_of(items.first()?)?.to_string(), Via::Partial)
             }
             _ => return None,
         };
+        let path = path.as_str();
         let (tuple_at, tuple_len) = (args.at, args.len);
-        let Kind::Tuple(mut held) = args.kind else { return None };
+        let Kind::Tuple(held) = args.kind else { return None };
         // A callable written with more than one argument shape has a row each,
         // so every row of that name is asked rather than only the first: a
         // `datetime.datetime` carries a zone when it is aware and not when it
@@ -344,6 +357,15 @@ impl Cursor<'_> {
         if path == RECONSTRUCTOR {
             return self.reconstructed_object(at, held);
         }
+        self.call_made(call, callable, path, at, (tuple_at, tuple_len), held)
+    }
+
+    /// What an enumerated call leaves behind, whichever opcode closed it.
+    ///
+    /// REDUCE and NEWOBJ both hand a callable its arguments and push the one
+    /// value that comes out, and a row says which of the two the library
+    /// writes, so what is made of the result is the same either way.
+    fn call_made(&mut self, call: Reduce, callable: Value, path: &str, at: usize, tuple: (usize, usize), mut held: Vec<Value>) -> Option<Kind> {
         // What the call made, which a later part of the file may name: pandas
         // writes a block's values once and names them again in the dictionary
         // it versions its state with.
@@ -367,7 +389,7 @@ impl Cursor<'_> {
         // here and filled by [`Cursor::one`] and [`Cursor::batch`].
         let state = match call.args {
             Args::Many => {
-                held = vec![Value { at: tuple_at, len: tuple_len, kind: Kind::Tuple(held) }];
+                held = vec![Value { at: tuple.0, len: tuple.1, kind: Kind::Tuple(held) }];
                 None
             }
             Args::Contents => Some(Box::new(held.drain(..).next()?)),

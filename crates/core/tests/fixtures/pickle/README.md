@@ -17,6 +17,17 @@ and a list of `arange(4, "int8")`, `arange(4, "int8")` and
 `arange(3, "float32")`. Protocol: 4. Each array's numbers are in the file
 after the wrapper that describes them, padded to sixteen bytes.
 
+`torch-v0.4-parameter-data.pkl` and `torch-v0.4-size-data.pkl` are the data
+pickles of `torch-parameter.pt` and `torch-size-device-dtype.pt` from the
+container matrix run of torch 0.4.1, NumPy 1.19 and Python 3.6, cut out of
+those legacy files at the fourth pickle's own bounds.
+
+Expected objects: `{'p': Parameter(arange(6).reshape(2, 3), float32,
+requires_grad=True)}`, and `{'size': torch.Size((2, 3)), 'device':
+torch.device('cpu'), 'dtype': torch.float32}`. Protocol: 2. They are here for
+the two spellings that release used and no later one does: a tensor whose
+backward hooks are `None`, and a `torch.Size` that NEWOBJ closes.
+
 The Rust tests inspect the committed bytes directly. Python is not required.
 These fixtures establish observed instruction forms, not broad NumPy, joblib
 or producer-version compatibility.

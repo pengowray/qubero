@@ -163,6 +163,79 @@ fn hooks_that_are_not_an_empty_ordered_dict_are_refused() {
     assert!(recognise(&edited(b"\x89h\x00)Rq\x0b", b"\x89h\x00}Rq\x0b")).is_none());
 }
 
+/// The data pickle of `torch.save({'p': Parameter(...)}, path)` under torch
+/// 0.4.1, which is the release before the two spellings below changed. The
+/// parameter holds `arange(6).reshape(2, 3)` as float32.
+const V04_PARAMETER: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/torch-v0.4-parameter-data.pkl");
+/// The data pickle of `torch.save({'size': .., 'device': .., 'dtype': ..})`
+/// under the same release, for the `torch.Size` that NEWOBJ closes.
+const V04_SIZE: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/torch-v0.4-size-data.pkl");
+
+/// torch 0.4 handed `_rebuild_tensor_v2` the tensor's own `_backward_hooks`,
+/// which is `None` until a hook is registered. Every tensor that release
+/// wrote has a `None` where later files have an empty `OrderedDict()`.
+#[test]
+fn a_tensor_whose_hooks_are_none_is_the_tensor_torch_0_4_wrote() {
+    let found = recognise(V04_PARAMETER).unwrap();
+    assert_eq!(found.form, "torch-tensors-p2-p3-v1");
+    let Kind::Dict(entries) = &found.value.kind else { panic!("a dictionary") };
+    let Kind::Tensor(tensor) = &entries[0].1.kind else { panic!("a tensor") };
+    assert_eq!(tensor.dtype, TensorType::Float32);
+    assert_eq!((tensor.size.as_slice(), tensor.stride.as_slice()), (&[2, 3][..], &[3, 1][..]));
+    assert_eq!(tensor.count, 6);
+    // `Parameter.__reduce_ex__` returned the class itself then, called with
+    // the tensor and the flag, so the parameter is read from that call rather
+    // than from `_rebuild_parameter`.
+    assert!(tensor.parameter && tensor.requires_grad);
+    let seen = dump(V04_PARAMETER);
+    assert_eq!(named_row(&seen, "parameter module").value, V::Str("torch.nn.parameter".into()));
+    assert_eq!(named_row(&seen, "parameter class").value, V::Str("Parameter".into()));
+    tiles(&seen);
+}
+
+/// A tensor whose hooks are neither of the two spellings torch has written is
+/// a non-match: a dictionary with something in it is hooks the tensor would
+/// be given.
+#[test]
+fn hooks_that_are_neither_spelling_are_refused() {
+    let mut other = V04_PARAMETER.to_vec();
+    // The `None` in front of the TUPLE that closes the rebuild call, which is
+    // the last of the six arguments.
+    let at = other.windows(3).position(|w| w == b"\x88Nt").unwrap() + 1;
+    other[at] = 0x88;
+    assert!(recognise(&other).is_none());
+}
+
+/// `torch.Size` had no `__reduce__` of its own before torch 1.13, so pickle
+/// wrote `cls.__new__(cls, (2, 3))` for the tuple subclass. The row for that
+/// spelling is the same call closed by NEWOBJ.
+#[test]
+fn a_size_that_newobj_closes_reads_as_the_one_reduce_closes() {
+    let found = recognise(V04_SIZE).unwrap();
+    assert_eq!(found.form, "torch-tensors-p2-p3-v1");
+    let Kind::Dict(entries) = &found.value.kind else { panic!("a dictionary") };
+    let Kind::Made { what: Shape::Size, state: Some(extents), .. } = &entries[0].1.kind else { panic!("a Size") };
+    let Kind::Tuple(held) = &extents.kind else { panic!("the extents") };
+    assert_eq!(held.len(), 2);
+    // The rows are the ones the REDUCE spelling gives: the class the file
+    // named and the extents under it, whichever opcode closed the call.
+    let seen = dump(V04_SIZE);
+    assert_eq!(named_row(&seen, "size").value, V::Str("torch.Size".into()));
+    assert_eq!(named_row(&seen, "class").value, V::Str("torch.Size".into()));
+    tiles(&seen);
+}
+
+/// A NEWOBJ with arguments is only ever one of the enumerated calls. A class
+/// the form may name, handed values it is not written with, is a non-match.
+#[test]
+fn a_newobj_with_arguments_that_no_row_names_is_refused() {
+    let mut other = V04_SIZE.to_vec();
+    // `torch Size` becomes `torch dtype`, which is the same width and is no
+    // row of the calls table.
+    replace(&mut other, b"ctorch\nSize\n", b"ctorch\ndtype\n");
+    assert!(recognise(&other).is_none());
+}
+
 /// `BINPERSID` is read inside the tensor's own run and nowhere else.
 #[test]
 fn a_persistent_id_outside_a_tensor_is_not_a_familiar_form() {

@@ -66,6 +66,13 @@ const REBUILD_TENSOR_V3: &str = "_rebuild_tensor_v3";
 const REBUILD_QTENSOR: &str = "_rebuild_qtensor";
 const REBUILD_PARAMETER: &str = "_rebuild_parameter";
 
+/// The class torch 0.4 wrote a parameter as, called with the tensor it wraps
+/// and the gradient flag. `Parameter.__reduce_ex__` returned the class itself
+/// then; torch 1.0 replaced it with `_rebuild_parameter` and a third argument
+/// for the hooks.
+const PARAMETER_MODULE: &[&str] = &["torch.nn.parameter"];
+const PARAMETER: &str = "Parameter";
+
 /// The storage `_rebuild_tensor_v3` names, which says only how many bytes
 /// there are: the element type arrives as the call's last argument.
 const STORAGE_MODULE: &[&str] = &["torch.storage"];
@@ -207,7 +214,7 @@ impl Cursor<'_> {
     /// value in hand is something else.
     pub(super) fn torch_value(&mut self) -> Option<Value> {
         let start = self.at;
-        for production in [Cursor::rebuilt_tensor, Cursor::rebuilt_qtensor, Cursor::rebuilt_parameter] {
+        for production in [Cursor::rebuilt_tensor, Cursor::rebuilt_qtensor, Cursor::rebuilt_parameter, Cursor::called_parameter] {
             let here = self.save();
             match production(self, start) {
                 Some(value) => return Some(value),
@@ -371,6 +378,33 @@ impl Cursor<'_> {
         Some(self.span(start, Kind::Tensor(tensor)))
     }
 
+    /// `torch.nn.parameter.Parameter(tensor, requires_grad)`, which is how
+    /// torch 0.4 wrote a module's weights: the class itself, called with the
+    /// tensor it wraps.
+    ///
+    /// Nothing is constructed. The call is read as the tensor it holds with a
+    /// note that it was a parameter, the same reading `_rebuild_parameter`
+    /// gets, so a checkpoint from that release opens as the same rows a newer
+    /// one does. The class is named here as one enumerated callable with one
+    /// argument shape, not as a class under a module prefix.
+    fn called_parameter(&mut self, start: usize) -> Option<Value> {
+        self.global(PARAMETER_MODULE, PARAMETER, "parameter module", "parameter class")?;
+        self.open_tuple()?;
+        let inner = self.at;
+        let held = self.rebuilt_tensor(inner)?;
+        let requires_grad = self.read_flag()?;
+        self.close_tuple(2)?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
+        let Kind::Tensor(tensor) = held.kind else { return None };
+        let tensor = Tensor { requires_grad, parameter: true, ..tensor };
+        // The tensor inside closed a run of its own, and the call around it is
+        // one act with it, so the two runs become one.
+        self.join_calls("parameter call", start);
+        Some(self.span(start, Kind::Tensor(tensor)))
+    }
+
     /// The persistent id, which is the whole of what the pickle says about
     /// where the numbers are: the word `storage`, the storage class, the key
     /// that names the run, the device it was on, how many elements it holds,
@@ -426,14 +460,26 @@ impl Cursor<'_> {
         None
     }
 
-    /// The empty dictionary of backward hooks every saved tensor carries.
+    /// The backward hooks every saved tensor carries, which are nothing in
+    /// both the spellings torch has written.
     ///
     /// Folded away rather than read as a value: torch writes it for a
     /// compatibility its own comments call a note to itself, it is empty in
     /// every file anything ever saved, and a dictionary with something in it
     /// is hooks the tensor would be given, which is a non-match.
+    ///
+    /// torch 0.4 handed `Tensor.__reduce_ex__` the tensor's own
+    /// `_backward_hooks`, which is `None` until a hook is registered, so every
+    /// file that release wrote has a `None` here. The note "Don't serialize
+    /// hooks" in torch 1.0's `torch/tensor.py` is where it became an empty
+    /// `OrderedDict()` instead.
     fn empty_hooks(&mut self) -> Option<()> {
         let at = self.at;
+        self.gate()?;
+        if self.peek() == Some(b'N') {
+            self.byte()?;
+            return Some(());
+        }
         self.global(COLLECTIONS, ORDERED_DICT, "hooks module", "hooks class")?;
         self.empty_tuple()?;
         self.exact(b"R")?;
@@ -491,6 +537,17 @@ pub(super) const TORCH_CALLS: &[Reduce] = &[
     // tuple of extents.
     Reduce {
         via: Via::Global,
+        path: "torch.Size",
+        what: Shape::Size,
+        names: &["extents"],
+        args: Args::Contents,
+        shape: |_c, args| matches!(args[0].kind, Kind::Tuple(_)).then_some(()),
+    },
+    // The same call, closed with NEWOBJ, which is what torch 1.5 and older
+    // wrote: `Size` had no `__reduce__` of its own then, so pickle fell back
+    // to `cls.__new__(cls, (2, 3))` for the tuple subclass.
+    Reduce {
+        via: Via::NewObj,
         path: "torch.Size",
         what: Shape::Size,
         names: &["extents"],

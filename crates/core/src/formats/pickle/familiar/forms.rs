@@ -157,17 +157,22 @@ pub(super) enum Args {
     FillsList,
 }
 
-/// How a REDUCE named its callable.
+/// How a call named its callable, and which opcode closed it.
 ///
-/// Almost always the global itself. The one exception is pandas 1.3, which
-/// writes a block as a `functools.partial` over `new_block` and then calls
-/// that: a REDUCE whose callable is what another REDUCE made. Nothing else may
-/// be called that way, and the partial's own call is enumerated like any other,
-/// so what may happen is still a list rather than a rule.
+/// Almost always the global itself, closed by REDUCE. pandas 1.3 writes a
+/// block as a `functools.partial` over `new_block` and then calls that: a
+/// REDUCE whose callable is what another REDUCE made. And a class that takes
+/// arguments but defines no reduce of its own is written with NEWOBJ instead,
+/// which is how torch spelled `torch.Size` until it gave the class a
+/// `__reduce__`. Nothing else may be called any of those ways, and each row
+/// says which one it is, so what may happen is still a list rather than a
+/// rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Via {
     Global,
     Partial,
+    /// `cls.__new__(cls, *args)`, closed by NEWOBJ rather than REDUCE.
+    NewObj,
 }
 
 /// The one callable a form accepts as the maker of another callable.
