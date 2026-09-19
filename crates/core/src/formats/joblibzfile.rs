@@ -36,7 +36,7 @@ pub fn joblibzfile() -> Template {
                 ("magic", T::text(StrLen::Fixed(E::lit(MAGIC.len() as i128)), Encoding::Ascii)),
                 // The unpacked length, as `hex()` spells it and padded with
                 // spaces to the width above.
-                ("unpacked_size", T::text(StrLen::Fixed(E::lit(LENGTH_WIDTH as i128)), Encoding::Ascii)),
+                ("unpacked size", T::text(StrLen::Fixed(E::lit(LENGTH_WIDTH as i128)), Encoding::Ascii)),
                 // The pickle, compressed. The run stays where it is and what
                 // comes out of it opens as a space of its own, which sniffs as
                 // the joblib file it holds.
@@ -87,7 +87,9 @@ mod tests {
         assert!(is_joblib_zfile(&bytes));
         let d = Document::new(MemSource(bytes.clone()));
         let mut e = Evaluator::new(joblibzfile());
-        assert_eq!(e.node(&d, &[1]).unwrap().value, crate::eval::Value::Str("0x16               ".into()));
+        let length = e.node(&d, &[1]).unwrap();
+        assert_eq!(length.name, "unpacked size");
+        assert_eq!(length.value, crate::eval::Value::Str("0x16               ".into()));
         let run = e.node(&d, &[2]).unwrap();
         assert_eq!((run.offset_bits, run.size_bits), (STREAM_AT as u64 * 8, packed.len() as u64 * 8));
         // And what came out of it counts from its own start.
