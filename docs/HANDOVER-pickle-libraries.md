@@ -742,7 +742,9 @@ the offset it stopped:
   them for a `Generator`'s seed. The five bit generator classes and the seed
   sequence are named and never called. The rows are declared in `numpy.rs`
   because they are NumPy's, and listed in `SKLEARN_CALLS` because that is
-  where a file holds one.
+  where a file holds one. `numpy::TYPE_NAMES` is now a list of every NumPy
+  global a form may name rather than of scalar types alone, so its name is one
+  word narrower than what is in it.
 - **A structured dtype naming a column out of the memo.** A histogram
   gradient boosting model's nodes have an `is_categorical` column, and the
   estimator has already written that word, so NumPy hands the pickler one
