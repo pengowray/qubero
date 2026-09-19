@@ -376,11 +376,37 @@ export type TableCells =
     };
 
 /** One cell of a computed table. `kind` is `"absent"` with no text for a cell
- *  the file has no value for: a NaN, a `None`, or a categorical code of -1. */
+ *  the file has no value for: a NaN, a `None`, or a categorical code of -1.
+ *
+ *  `at` is where this cell's own bytes are. A row of one of these tables is
+ *  not a run of the file, so the address belongs to the cell: a frame's row is
+ *  one value out of each of several blocks, and at protocol 2 two of them can
+ *  be in two different spaces. */
 export type FrameCell = {
   readonly text: string;
   readonly kind: string;
+  readonly at: CellAt;
 };
+
+/** Where a computed cell's bytes are, or why it has none. */
+export type CellAt =
+  | {
+      /** A run of the address space `space`, counted the way every other
+       *  address in it is. 0 is the tab's own bytes, which is what the hex
+       *  view shows. */
+      readonly kind: "bytes";
+      readonly space: number;
+      readonly offset_bits: number;
+      readonly size_bits: number;
+    }
+  /** Counted from a start and a step rather than written down, which is a
+   *  `RangeIndex` label. */
+  | { readonly kind: "counted" }
+  /** Said of the row rather than read out of it: the dtype and the shape
+   *  columns of a checkpoint's summary. */
+  | { readonly kind: "said" }
+  /** Nowhere this reading can point at. */
+  | { readonly kind: "nowhere" };
 
 /** The bit range a successful `writeNode` replaced. */
 /** One entry of the annotation column: a field, a run of them, or a stretch

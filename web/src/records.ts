@@ -71,6 +71,23 @@ export type RecordCell = {
    *  its value is wrong hides the finding the reader opened the file for.
    *  See docs/DESIGN-wrong-values.md. */
   readonly problem?: Problem;
+  /** Where this cell's own bytes are, for a table whose rows are not a run of
+   *  the file: a pandas frame, a torch tensor, a checkpoint's summary. Not
+   *  set for a record table's cells, where the row says where it is. */
+  readonly at?: CellPlace;
+  /** Why this cell has no bytes, when it has none and the reason is worth
+   *  saying: a counted index label was never written down, and a fact the
+   *  pickle states about a tensor is not stored as a value. */
+  readonly noBytes?: "counted" | "said" | "nowhere";
+};
+
+/** Where one cell's bytes are. `space` is 0 for the tab's own bytes, which is
+ *  what the hex view shows, and anything else for a stream unpacked inside
+ *  them. See `FrameCell` in doc.ts. */
+export type CellPlace = {
+  readonly space: number;
+  readonly offsetBits: number;
+  readonly sizeBits: number;
 };
 
 export type RecordRow = {

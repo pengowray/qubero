@@ -672,6 +672,41 @@ export const TABLE = {
    *  about the sound and not about the bytes. */
   storedAt: "Stored at",
   size: "Size",
+  /**
+   * The same two columns for a table whose cells are in several places rather
+   * than in one run: a pandas frame's row is one value out of each of a few
+   * blocks, and a transposed tensor's row steps through its storage.
+   *
+   * The row shows where its first cell is, because that is the one address
+   * that is true of the row, and says where to find the others. There is no
+   * one length, so the size column says what there is instead of a number
+   * covering bytes the row does not hold.
+   */
+  cellsApart: "This row's cells are in different places. Hover a cell for its address.",
+  sizePerCell: "per cell",
+  /** A cell with no bytes behind it, in the address column: short enough for
+   *  the column, with the whole reason on the cell's hover below. */
+  noBytes: (why: "counted" | "said" | "nowhere"): string =>
+    why === "counted" ? "computed" : why === "said" ? "not stored" : "unknown",
+  /**
+   * The same on the cell's own hover, which is where there is room to say why.
+   *
+   * Three different nothings, and a reader checking a value against the file
+   * needs to know which: a counted index label was worked out from a start and
+   * a step and was never written anywhere; a tensor's dtype and shape are
+   * stated by the instructions that rebuild it rather than stored as values;
+   * and the third is this reading admitting it cannot say.
+   */
+  noBytesWhy: (why: "counted" | "said" | "nowhere"): string =>
+    why === "counted"
+      ? "No bytes: computed from the index's start and step."
+      : why === "said"
+        ? "No bytes: stated by the pickle's instructions, not stored as a value."
+        : "No bytes: this reading can't say where this value is.",
+  /** Where one cell's bytes are, on its hover, when the address columns are
+   *  shown. `@+` in front of the address means it counts from the start of an
+   *  unpacked stream rather than of the file; see `DECODED_PLUS_TITLE`. */
+  cellAt: (address: string, size: string): string => `${address} · ${size}`,
   /** The tab is open on a field the file no longer has: the template changed
    *  under it, or the bytes it read did. Said rather than left blank, since an
    *  empty tab reads as something broken. */

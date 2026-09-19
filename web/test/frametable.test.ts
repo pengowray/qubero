@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import type { Doc, FrameCell, TableShape, TemplateNode } from "../src/doc.ts";
+import type { CellAt, Doc, FrameCell, TableShape, TemplateNode } from "../src/doc.ts";
 import { isTable, tablePlan } from "../src/tableplan.ts";
 
 function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
@@ -46,6 +46,11 @@ function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
 
 const FRAME = node({ name: "data" });
 
+/** A cell's address, in the tab's own bytes. */
+function bytesAt(offset: number, size: number): CellAt {
+  return { kind: "bytes", space: 0, offset_bits: offset, size_bits: size };
+}
+
 function shape(rows: number): TableShape {
   return {
     columns: null,
@@ -69,9 +74,13 @@ function doc(rows: number, asked: [number, number][]): Doc {
       const out: FrameCell[][] = [];
       for (let i = from; i < to; i += 1) {
         out.push([
-          { text: String(i), kind: "int" },
-          { text: String(i * 2), kind: "int" },
-          i % 3 === 0 ? { text: "", kind: "absent" } : { text: `${i}.5`, kind: "float" },
+          // A counted index, and then two columns in two blocks: the second
+          // block is a thousand bits further on, so the row is not a run.
+          { text: String(i), kind: "int", at: { kind: "counted" } },
+          { text: String(i * 2), kind: "int", at: bytesAt(i * 64, 64) },
+          i % 3 === 0
+            ? { text: "", kind: "absent", at: bytesAt(1000 + i * 64, 64) }
+            : { text: `${i}.5`, kind: "float", at: bytesAt(1000 + i * 64, 64) },
         ]);
       }
       return { status: "ok", node: out };
@@ -140,7 +149,13 @@ function unnamed(rows: number, wide: number): Doc {
     pickleCells: (_path: readonly number[], from: number, to: number) => {
       const out: FrameCell[][] = [];
       for (let i = from; i < to; i += 1) {
-        out.push(Array.from({ length: wide }, (_, c) => ({ text: String(i * wide + c), kind: "int" as const })));
+        out.push(
+          Array.from({ length: wide }, (_, c) => ({
+            text: String(i * wide + c),
+            kind: "int" as const,
+            at: bytesAt((i * wide + c) * 32, 32),
+          })),
+        );
       }
       return { status: "ok", node: out };
     },
@@ -160,4 +175,50 @@ test("a computed table that names no columns heads them the way every other tabl
   // And a table with no rows still has a column rather than none at all.
   const empty = tablePlan(unnamed(0, 3), FRAME);
   assert.equal(empty?.columns.length, 1);
+});
+
+test("a frame's cells carry their own addresses, and the row shows the first", () => {
+  const plan = tablePlan(doc(4, []), FRAME);
+  assert.notEqual(plan, null);
+  if (plan === null) return;
+  const row = plan.row(1);
+  // The index was counted from a start and a step, so it has no bytes and
+  // says which of the reasons that is.
+  assert.equal(row?.cells[0]?.at, undefined);
+  assert.equal(row?.cells[0]?.noBytes, "counted");
+  assert.deepEqual(row?.cells[1]?.at, { space: 0, offsetBits: 64, sizeBits: 64 });
+  assert.deepEqual(row?.cells[2]?.at, { space: 0, offsetBits: 1064, sizeBits: 64 });
+  // The two columns are in two blocks, so the row is not a run of bytes: it
+  // shows where its first cell is and says the rest are elsewhere.
+  assert.equal(row?.offsetBits, 64);
+  assert.equal(row?.space, 0);
+  assert.equal(row?.apart, true);
+});
+
+test("a row whose cells are next to each other is one run, the way an ordinary row is", () => {
+  const plan = tablePlan(unnamed(4, 3), FRAME);
+  const row = plan?.row(1);
+  // Elements 3, 4 and 5 of one array: three values of four bytes, in order.
+  assert.equal(row?.offsetBits, 3 * 32);
+  assert.equal(row?.sizeBits, 96);
+  assert.equal(row?.apart, false);
+});
+
+test("a row with no cell anywhere has no offset to show", () => {
+  const said: Doc = {
+    tableShape: () => ({ status: "ok", node: { ...shape(2), names: ["dtype", "shape"], units: ["", ""] } }),
+    pickleCells: () => ({
+      status: "ok",
+      node: [
+        [
+          { text: "float32", kind: "str", at: { kind: "said" } },
+          { text: "3 x 4", kind: "str", at: { kind: "said" } },
+        ],
+      ],
+    }),
+  } as unknown as Doc;
+  const row = tablePlan(said, FRAME)?.row(0);
+  assert.equal(row?.offsetBits, 0);
+  assert.equal(row?.sizeBits, 0);
+  assert.equal(row?.cells[0]?.noBytes, "said");
 });

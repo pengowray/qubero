@@ -17,12 +17,12 @@
 // is where the reader is in the rows, and the rows on screen are drawn against
 // the viewport rather than against the canvas.
 
-import { formatOffset } from "./doc.ts";
+import { formatAddress } from "./doc.ts";
 import type { Doc } from "./doc.ts";
 import { el } from "./dom.ts";
 import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
-import { bitSizeText, PROBLEMS, REPORT, TABLE } from "./strings.ts";
+import { bitSizeText, DECODED_PLUS_TITLE, PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
 import { FIT_MAX, fitCell, fitOf, indexWidth, timeText, timeWidth, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
 
@@ -402,13 +402,40 @@ export class TableView {
       element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
     }
     for (let c = 0; c < this.plan.columns.length; c++) {
-      element.append(this.drawCell(row.cells[c], this.columns[c]?.fit.numeric === true));
+      const element_ = this.drawCell(row.cells[c], this.columns[c]?.fit.numeric === true);
+      element_.dataset["column"] = String(c);
+      element.append(element_);
     }
-    if (this.addresses) {
-      element.append(el("span", { className: "tbl-cell tbl-at", textContent: formatOffset(row.offsetBits) }));
-      element.append(el("span", { className: "tbl-cell tbl-size tbl-num", textContent: bitSizeText(row.sizeBits) }));
-    }
+    if (this.addresses) element.append(...this.drawAddress(row));
     return element;
+  }
+
+  /**
+   * The two address cells of one row.
+   *
+   * A row that is one run of bytes shows where it starts and how long it is,
+   * which is what every table with a row of its own in the file shows. A row
+   * whose cells are in several places shows the first cell's address and says
+   * so; a row with no bytes at all says why it has none rather than showing
+   * an address of nought.
+   */
+  private drawAddress(row: TableRow): HTMLElement[] {
+    if (!rowHasBytes(row)) {
+      const why = row.cells.find((cell) => cell.noBytes !== undefined)?.noBytes ?? "nowhere";
+      const said = el("span", { className: "tbl-cell tbl-at", textContent: TABLE.noBytes(why) });
+      said.title = TABLE.noBytesWhy(why);
+      return [said, el("span", { className: "tbl-cell tbl-size" })];
+    }
+    const space = row.space ?? 0;
+    const at = el("span", { className: "tbl-cell tbl-at", textContent: formatAddress(row.offsetBits, space) });
+    const size = el("span", { className: "tbl-cell tbl-size tbl-num", textContent: row.apart === true ? TABLE.sizePerCell : bitSizeText(row.sizeBits) });
+    if (row.apart === true) {
+      at.title = TABLE.cellsApart;
+      size.title = TABLE.cellsApart;
+    } else if (space !== 0) {
+      at.title = DECODED_PLUS_TITLE;
+    }
+    return [at, size];
   }
 
   /** One cell. A cell naming another part of the file is a link to it, the
@@ -433,7 +460,16 @@ export class TableView {
     // The reason is on the cell's hover rather than in it: a column is as wide
     // as its values and a sentence in every marked cell would take the table
     // apart. The column heading says how many there are; the glyph says which.
-    element.title = problem === undefined ? cell.text : `${cell.text}\n${problem.text}`;
+    const lines = [cell.text];
+    if (problem !== undefined) lines.push(problem.text);
+    // Where this one cell's bytes are, for the tables whose rows are not a run
+    // of the file. Only with the address columns on: a reader who has not
+    // asked for addresses is reading the values.
+    if (this.addresses) {
+      const where = whereText(cell);
+      if (where !== null) lines.push(where);
+    }
+    element.title = lines.join("\n");
     if (problem !== undefined) element.prepend(glyph(invalid));
     return element;
   }
@@ -504,7 +540,8 @@ export class TableView {
     if (!(target instanceof Element)) return;
     const at = target.closest<HTMLElement>(".tbl-row")?.dataset["index"];
     if (at === undefined) return;
-    this.pick(Number(at), e.shiftKey);
+    const column = target.closest<HTMLElement>(".tbl-cell")?.dataset["column"];
+    this.pick(Number(at), e.shiftKey, column === undefined ? null : Number(column));
   }
 
   /**
@@ -552,8 +589,14 @@ export class TableView {
    * that began at the anchor, the way shift-click and shift-arrow work in
    * every list. The file tab is sent the bytes of the whole selection: its
    * cursor goes to the first row and the mark covers to the last.
+   *
+   * `column` is the cell the reader clicked, for a table whose cells are in
+   * several places. One cell is what was clicked and its bytes are what the
+   * file tab is sent; a cell with no bytes, or with bytes inside an unpacked
+   * stream rather than in this tab, leaves the cursor where it is rather than
+   * moving it somewhere the reader did not click.
    */
-  private pick(i: number, extend = false): void {
+  private pick(i: number, extend = false, column: number | null = null): void {
     this.focus = i;
     if (!extend || this.anchor === null) this.anchor = i;
     this.scrollToRow(i);
@@ -563,11 +606,23 @@ export class TableView {
     if (range === null) return;
     const first = this.rowAt(range.from);
     if (first === null) return;
+    const one = column === null || extend ? undefined : first.cells[column]?.at;
+    if (one !== undefined) {
+      if (one.space !== 0) return;
+      this.send(first.path, one.offsetBits, one.offsetBits + one.sizeBits);
+      return;
+    }
     // The last row of a long selection may not be read yet; then the mark
     // reaches as far as the row the reader just picked, which is read.
     const last = this.rowAt(range.to - 1) ?? this.rowAt(i) ?? first;
+    if ((first.space ?? 0) !== 0 || (last.space ?? 0) !== 0) return;
+    if (!rowHasBytes(first) || !rowHasBytes(last)) return;
+    this.send(first.path, first.offsetBits, last.offsetBits + last.sizeBits);
+  }
+
+  private send(path: readonly number[], startBit: number, endBit: number): void {
     this.picking = true;
-    this.onPick({ path: first.path, startBit: first.offsetBits, endBit: last.offsetBits + last.sizeBits });
+    this.onPick({ path, startBit, endBit });
     this.picking = false;
   }
 
@@ -596,7 +651,7 @@ export class TableView {
       const cells = [String(i)];
       if (rate !== null) cells.push(timeText(i, rate));
       for (let c = 0; c < this.plan.columns.length; c++) cells.push(row.cells[c]?.text ?? "");
-      if (this.addresses) cells.push(formatOffset(row.offsetBits), bitSizeText(row.sizeBits));
+      if (this.addresses) cells.push(...copiedAddress(row));
       lines.push(cells.join("\t"));
     }
     try {
@@ -617,6 +672,40 @@ export class TableView {
       this.notice.hidden = true;
     }, NOTICE_MS);
   }
+}
+
+/** The two address cells of one row as the clipboard gets them, which is what
+ *  the table shows. */
+function copiedAddress(row: TableRow): [string, string] {
+  if (!rowHasBytes(row)) {
+    const why = row.cells.find((cell) => cell.noBytes !== undefined)?.noBytes ?? "nowhere";
+    return [TABLE.noBytes(why), ""];
+  }
+  const at = formatAddress(row.offsetBits, row.space ?? 0);
+  return [at, row.apart === true ? TABLE.sizePerCell : bitSizeText(row.sizeBits)];
+}
+
+/** Whether a row has any bytes behind it.
+ *
+ * Only a table whose cells carry their own addresses can have a row with
+ * none, and such a row is told apart from an ordinary table's by its cells
+ * saying anything about where they are at all. A summary row whose every
+ * column is a fact the pickle states is the row this rules out: it has no
+ * offset, so there is nothing to send the file tab and nothing to draw in the
+ * address column but the reason. */
+function rowHasBytes(row: TableRow): boolean {
+  const placed = row.cells.some((cell) => cell.at !== undefined);
+  if (placed) return true;
+  return !row.cells.some((cell) => cell.noBytes !== undefined);
+}
+
+/** Where one cell's bytes are, or why it has none, for its hover. Null for a
+ *  cell of a table that says nothing about where its cells are, which is every
+ *  table whose rows are runs of the file. */
+function whereText(cell: RecordCell): string | null {
+  const at = cell.at;
+  if (at !== undefined) return TABLE.cellAt(formatAddress(at.offsetBits, at.space), bitSizeText(at.sizeBits));
+  return cell.noBytes === undefined ? null : TABLE.noBytesWhy(cell.noBytes);
 }
 
 /** A fact's value as the bar shows it: a number gets its thousands separators,

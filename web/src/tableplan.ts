@@ -22,7 +22,7 @@
 // run under `node --test`. `tableview.ts` is the half that draws.
 
 import type { Doc, FrameCell, TableFact, TableShape, TemplateNode } from "./doc.ts";
-import { isRecordList, recordTable, type RecordCell, type RecordTable } from "./records.ts";
+import { isRecordList, recordTable, type CellPlace, type RecordCell, type RecordTable } from "./records.ts";
 import { childWord, countText, TABLE } from "./strings.ts";
 
 /** One column of the table: what it is called, and what it is measured in.
@@ -41,6 +41,13 @@ export type TableRow = {
   readonly sizeBits: number;
   /** The field the row was read from, which is what picking it goes to. */
   readonly path: readonly number[];
+  /** Which address space the row's offset counts in. 0, and left out, for the
+   *  tab's own bytes. */
+  readonly space?: number;
+  /** True when the row's cells are in several places rather than one run, so
+   *  the offset above is the first cell's and not the whole row's. A frame's
+   *  row is one value out of each of several blocks. */
+  readonly apart?: boolean;
 };
 
 export type TablePlan = {
@@ -513,6 +520,44 @@ function cellShapeOf(doc: Doc, node: TemplateNode): TableShape | null {
 /** How many columns a computed table that named none has: whatever one row
  *  came back with, since the core works the cells out and the rows are all the
  *  same width. One column for a table with no rows to ask about. */
+/** One cell of a computed table as the view draws it: the core's value, and
+ *  either where its bytes are or why it has none. */
+export function computedCell(cell: FrameCell): RecordCell {
+  if (cell.at.kind === "bytes") {
+    const at = { space: cell.at.space, offsetBits: cell.at.offset_bits, sizeBits: cell.at.size_bits };
+    return { text: cell.text, kind: cell.kind, at };
+  }
+  return { text: cell.text, kind: cell.kind, noBytes: cell.at.kind };
+}
+
+/** Where a row of such a table is, from where its cells are.
+ *
+ * A row that is one run of one space is shown the way an ordinary table's row
+ * is: its start and its length. A row whose cells are in several places, which
+ * is every frame row and every transposed tensor row, shows the first cell's
+ * address and says that the rest are elsewhere, since adding a length to it
+ * would cover bytes the row does not hold. A row with no cell in any space has
+ * no offset to show at all.
+ */
+export function rowRun(places: readonly (CellPlace | null)[]): { offsetBits: number; sizeBits: number; space: number; apart: boolean } {
+  const held = places.filter((p): p is CellPlace => p !== null);
+  const first = held[0];
+  if (first === undefined) return { offsetBits: 0, sizeBits: 0, space: 0, apart: false };
+  let next = first.offsetBits;
+  for (const place of held) {
+    if (place.space !== first.space || place.offsetBits !== next) {
+      return { offsetBits: first.offsetBits, sizeBits: first.sizeBits, space: first.space, apart: true };
+    }
+    next = place.offsetBits + place.sizeBits;
+  }
+  return { offsetBits: first.offsetBits, sizeBits: next - first.offsetBits, space: first.space, apart: false };
+}
+
+/** The place a drawn cell carries, or null for one with no bytes. */
+function cellPlace(cell: FrameCell): CellPlace | null {
+  return cell.at.kind === "bytes" ? { space: cell.at.space, offsetBits: cell.at.offset_bits, sizeBits: cell.at.size_bits } : null;
+}
+
 function columnsOf(doc: Doc, node: TemplateNode, rows: number): number {
   if (rows === 0) return 1;
   const reply = doc.pickleCells(node.path, 0, 1);
@@ -548,7 +593,7 @@ function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: num
     row: (i) => {
       const cells = read(i);
       if (cells === null) return null;
-      return { cells: cells.map((c) => ({ text: c.text, kind: c.kind })), offsetBits: 0, sizeBits: 0, path: node.path };
+      return { ...rowRun(cells.map(cellPlace)), cells: cells.map(computedCell), path: node.path };
     },
     // A frame's rows are not a run of bytes: one row is one value out of each
     // of several blocks, scattered through the file. So a bit of the file is

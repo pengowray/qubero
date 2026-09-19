@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::hexpat::Includes as _;
@@ -1086,10 +1086,44 @@ enum CellsDto {
 /// One cell of a table the core works out. `text` is empty and `kind` is
 /// "absent" for a cell the file has no value for, which is the same nothing a
 /// record without one of the table's keys shows.
+///
+/// `at` is where the cell's own bytes are. A row of one of these tables is not
+/// a run of the file: a frame's row is one value out of each of several
+/// blocks, so the address belongs to the cell and not to the row.
 #[derive(Serialize)]
 struct FrameCellDto {
     text: String,
     kind: &'static str,
+    at: CellAtDto,
+}
+
+/// Where a cell's bytes are, or why it has none. See
+/// [`qubero_core::eval::CellAt`].
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum CellAtDto {
+    /// A run of the address space `space`, counted the way every other address
+    /// in that space is. 0 is the file.
+    Bytes { space: f64, offset_bits: f64, size_bits: f64 },
+    /// Counted out rather than written down, which is a `RangeIndex` label.
+    Counted,
+    /// Said of the row rather than read out of it.
+    Said,
+    /// Nowhere this reading can point at.
+    Nowhere,
+}
+
+impl From<CellAt> for CellAtDto {
+    fn from(at: CellAt) -> Self {
+        match at {
+            CellAt::Bytes { space, offset_bits, size_bits } => {
+                CellAtDto::Bytes { space: space as f64, offset_bits: offset_bits as f64, size_bits: size_bits as f64 }
+            }
+            CellAt::Counted => CellAtDto::Counted,
+            CellAt::Said => CellAtDto::Said,
+            CellAt::Nowhere => CellAtDto::Nowhere,
+        }
+    }
 }
 
 /// One field that describes a table: what it is called, where it is, and what
@@ -4206,11 +4240,14 @@ impl Editor {
                     rows.into_iter()
                         .map(|row| {
                             row.into_iter()
-                                .map(|cell| match cell {
-                                    None => FrameCellDto { text: String::new(), kind: "absent" },
-                                    Some(v) => {
-                                        let (kind, text, _) = shown(&v);
-                                        FrameCellDto { text, kind }
+                                .map(|cell| {
+                                    let at = CellAtDto::from(cell.at);
+                                    match cell.value {
+                                        None => FrameCellDto { text: String::new(), kind: "absent", at },
+                                        Some(v) => {
+                                            let (kind, text, _) = shown(&v);
+                                            FrameCellDto { text, kind, at }
+                                        }
                                     }
                                 })
                                 .collect::<Vec<FrameCellDto>>()
