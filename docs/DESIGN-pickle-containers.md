@@ -771,14 +771,24 @@ reads any of NumPy's own array classes, so `joblib/v1.6-numpy-matrix.joblib`
 reads as `joblib-arrays-p4-p5-v1` with `matrix` on the node. See "NumPy's own
 array classes" in `DESIGN-familiar-pickle-forms.md`.
 
-- A plain pickle of a NumPy object array, which is what joblib 0.9 wrote for
-  one: it has no wrapper, so no joblib form reads it, and the NumPy forms have
-  `object_arrays` off. Widening them would move the verdict of every
-  `mixed-array-of-tuples` file in the collection, so it wants its own pass.
-- joblib 0.9's compressed file, which is not zlib but joblib's own `ZF`
-  container: `ZF0x226` and a length, then the stream. A thirteen-byte header
-  over a codec that already exists, the way `formats/lzma.rs` is, and no
-  sample of it is in the collection yet.
+Both of joblib 0.9's remaining pieces read since 2026-09-20.
+
+- **An array of objects has no wrapper.** joblib wrote one beside the pickle
+  only when there were numbers to write, so an object array reached the stream
+  as an ordinary NumPy pickle. The NumPy forms read an array of objects now,
+  which is what `pickle.dumps` writes for one; that moved the verdict of
+  `pickle/proto4-numpy-object-array.pickle` and of nothing else, since every
+  `mixed-array-of-tuples` file holds a date beside its array and really is two
+  families. `joblib/v0.9-array-of-objects.joblib`.
+- **A compressed file is joblib's own container.** `write_zfile` in
+  `joblib/numpy_pickle_utils.py` writes `ZF`, then the unpacked length as
+  `hex()` spells it left-justified in a field `len(hex(2 ** 64))` wide, then
+  `zlib.compress` of the whole pickle. So the header is twenty-one bytes and
+  everything after it is one zlib stream. `joblibzfile` is that, and the
+  stream opens as a space that sniffs as the pickle it holds, the way every
+  other compressed joblib file does. Nothing of the arrays is elsewhere: a
+  compressed file has nowhere to keep a `.npy` beside it, so the whole bundle
+  is inside the stream. `joblib/v0.9-dict-of-arrays-zfile.joblib`.
 
 ## Samples, and when they go into the collection
 

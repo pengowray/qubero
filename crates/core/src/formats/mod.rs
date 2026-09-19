@@ -96,6 +96,7 @@ mod gwf;
 mod gwf_classes;
 pub mod gwf_vect;
 mod gzip;
+mod joblibzfile;
 mod recognise;
 pub mod sqlite_overflow;
 mod uf2;
@@ -334,6 +335,7 @@ pub use whisper::whisper;
 pub use torchlegacy::torch_legacy;
 pub use torchzip::torch_zip;
 pub use zip::{zarrzip, zip};
+pub use joblibzfile::joblibzfile;
 pub use zlib::zlib;
 pub use zstd::zstd;
 pub use wasm::wasm;
@@ -497,6 +499,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("pickle", |_| pickle()),
     ("picklefpf", |_| familiar_pickle()),
     ("joblib", |_| joblib_pickle()),
+    ("joblibzfile", |_| joblibzfile()),
     ("cpio", |_| cpio()),
     ("ar", |_| ar()),
     ("rpm", |_| rpm()),

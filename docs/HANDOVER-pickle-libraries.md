@@ -1046,3 +1046,38 @@ way a frame draws a cell the file has no value for (`FrameCell { value: None }`,
 which reaches the interface as `kind: "absent"` and an empty cell that still
 carries its address), is `Cells::Computed` over the masked node and a reader
 beside `Evaluator::pickle_cells`. That is the next thing here.
+
+## joblib 0.9's last two pieces: landed on 2026-09-20
+
+`/home/pengo/qubero-container-matrix/py3.6-joblib0.9/` is joblib 0.9.4 under
+Python 3.6, and two of the files it wrote had no reading.
+`DESIGN-pickle-containers.md` has both under "What each era wrote"; what
+belongs here is the shape of each change.
+
+**An object array under the NumPy form.** joblib 0.9 wrote a wrapper only
+where there were numbers to write, so an array of objects reached the stream
+as an ordinary NumPy pickle with nothing of joblib's around it. The question
+was whether the NumPy form should read one at all. It should: an array of
+objects is what `pickle.dumps` writes for one, with no library anywhere near
+it, and the mixed form is for a file holding two families rather than for a
+file holding a kind of array. `object_arrays: true` on the NumPy row is the
+whole change.
+
+**Exactly one verdict moved**, and the previous agent's reason for leaving it
+turned out not to hold: `pickle/proto4-numpy-object-array.pickle` was the
+opcode listing and is `numpy-array-p4-p5-v6`. The `mixed-array-of-tuples`
+files did not move, because each of them holds a date beside the array and is
+two families whichever way the flag goes.
+
+**`joblibzfile`**, in `crates/core/src/formats/joblibzfile.rs`: `ZF`, the
+unpacked length as text, and a zlib stream. Registered in `formats/mod.rs`,
+`recognise.rs`, `web/src/filetype.ts` and `web/src/identity.ts`. The probe
+reads the whole header rather than the two bytes, because `ZF` on its own
+would claim anything: the length has to be what `hex()` writes padded with
+spaces, and a zlib stream has to begin exactly where that field ends.
+
+`joblib/v0.9-array-of-objects.joblib` and
+`joblib/v0.9-dict-of-arrays-zfile.joblib` are the samples, and
+`a_joblib_0_9_compressed_file_is_its_own_container` and
+`a_joblib_0_9_object_array_has_no_wrapper` in `joblib_versions.rs` are the
+claims.

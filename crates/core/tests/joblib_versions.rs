@@ -105,6 +105,49 @@ fn an_unaligned_file_inside_zlib_is_the_same_file() {
     assert_eq!(space.bytes(), plain.as_slice());
 }
 
+/// A compressed file joblib 0.9 wrote is joblib's own container and not the
+/// compressor's: `ZF`, the unpacked length as text, and a zlib stream. What
+/// comes out of the stream is the whole pickle, arrays and all, because a
+/// compressed file has nowhere to keep a `.npy` beside it.
+#[test]
+fn a_joblib_0_9_compressed_file_is_its_own_container() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(dir.join("v0.9-dict-of-arrays-zfile.joblib")).unwrap();
+    let window = &bytes[..bytes.len().min(0x9000)];
+    assert_eq!(formats::sniff(window, bytes.len() as u64), Some("joblibzfile"));
+    let (doc, mut ev) = open(&bytes, "joblibzfile");
+    // The header says how long the pickle is, as `hex()` spells it.
+    assert_eq!(ev.node(&doc, &[1]).unwrap().value, Value::Str("0x226              ".into()));
+    let run = decoded(&doc, &mut ev).expect("a compressed run");
+    let id = ev.open_space(&doc, 0, &run).unwrap().expect("the stream opens");
+    let space = ev.space(id).unwrap();
+    assert_eq!(space.template, "picklefpf");
+    assert!(space.recognised, "the template came from the stream and not from the bytes");
+    let held = space.bytes().to_vec();
+    assert_eq!(held.len(), 0x226);
+    let found = formats::pickle::familiar::recognise(&held).expect("a form reads what came out");
+    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+}
+
+/// An array of objects has no numbers to write beside the pickle, so joblib
+/// 0.9 wrote no wrapper for one at all and the file is an ordinary NumPy
+/// pickle.
+#[test]
+fn a_joblib_0_9_object_array_has_no_wrapper() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(dir.join("v0.9-array-of-objects.joblib")).unwrap();
+    let found = formats::pickle::familiar::recognise(&bytes).expect("no form");
+    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+    let window = &bytes[..bytes.len().min(0x9000)];
+    assert_eq!(formats::sniff(window, bytes.len() as u64), Some("picklefpf"));
+}
+
 /// What joblib wrote before 0.10: the pickle names a `.npy` file per array,
 /// and the numbers are in those files and nowhere in this one.
 ///

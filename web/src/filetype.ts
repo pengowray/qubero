@@ -189,6 +189,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   pickle: "Python pickle",
   picklefpf: "Python pickle (familiar form)",
   joblib: "joblib file (familiar form)",
+  joblibzfile: "joblib compressed file (before 0.10)",
   gitindex: "Git index",
   gitpackidx: "Git pack index",
   appledouble: "AppleDouble",

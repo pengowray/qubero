@@ -367,6 +367,11 @@ const PROBES: &[Probe] = &[
     // the opcodes stop where the first array's bytes begin. See
     // [`pickle::is_joblib`] for what the evidence is.
     Probe::Is("joblib", |h, _| pickle::is_joblib(h)),
+    // The container joblib wrote round a compressed file before 0.10: `ZF`,
+    // the unpacked length as text, and a zlib stream. Asked here rather than
+    // among the signatures because `ZF` is two bytes and the evidence is the
+    // whole header. See [`joblibzfile::is_joblib_zfile`].
+    Probe::Is("joblibzfile", |h, _| joblibzfile::is_joblib_zfile(h)),
     // A pickle a Familiar Pickle Form matches whole, which is the strongest
     // evidence anything here has: a reviewed grammar consumed every byte of
     // the file, opcodes and operands, and knows what each one is. So it is

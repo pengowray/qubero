@@ -231,6 +231,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   pickle: ["pickle", "pkl", "p"],
   picklefpf: ["pickle", "pkl", "p"],
   joblib: ["joblib", "pkl"],
+  joblibzfile: ["joblib", "pkl"],
   eps: ["eps", "epsf", "epsi"],
   c16: ["c16"],
   omezarr: ["json"],
