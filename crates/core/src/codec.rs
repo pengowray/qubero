@@ -28,6 +28,7 @@ pub mod lz4;
 pub mod pico8;
 pub mod pixels;
 pub mod pxu;
+pub mod pytext;
 pub mod rar5;
 pub mod snappy;
 pub mod xz;
@@ -209,6 +210,14 @@ pub enum Codec {
     /// front, and a tree that encoder and decoder both change after every
     /// byte. See [`crate::codec::cdfhuff`].
     CdfAhuff,
+    /// Not compression: text whose characters are each one byte of what it
+    /// stands for, which is how a pickle below protocol 3 carries a run of
+    /// bytes. The run is UTF-8 and every character in it is under 0x100. See
+    /// [`crate::codec::pytext`].
+    Latin1Text,
+    /// The same text written as a protocol 0 line, so `raw-unicode-escape`'s
+    /// escaping comes off before the characters do.
+    EscapedLatin1Text,
 }
 
 impl Codec {
@@ -242,6 +251,8 @@ impl Codec {
             Codec::CdfRle => "cdf rle",
             Codec::CdfHuffman => "cdf huffman",
             Codec::CdfAhuff => "cdf adaptive huffman",
+            Codec::Latin1Text => "latin-1 text",
+            Codec::EscapedLatin1Text => "latin-1 text, escaped",
         }
     }
 }
@@ -1061,6 +1072,8 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::CdfRle => cdfrle::stream(data)?,
         Codec::CdfHuffman => cdfhuff::huffman(data)?,
         Codec::CdfAhuff => cdfhuff::adaptive(data)?,
+        Codec::Latin1Text => pytext::latin1_text(data)?,
+        Codec::EscapedLatin1Text => pytext::escaped_latin1_text(data)?,
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -1121,6 +1134,8 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::CdfRle
         | Codec::CdfHuffman
         | Codec::CdfAhuff
+        | Codec::Latin1Text
+        | Codec::EscapedLatin1Text
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }

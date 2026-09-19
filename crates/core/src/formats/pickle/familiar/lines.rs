@@ -10,63 +10,16 @@
 //! outside the lists below, a float spelled a way `repr` never spells one, and
 //! a number with a leading zero or a plus in front of it are each a non-match,
 //! because each is a file no pickler wrote.
+//!
+//! The escaping a text line goes out under is undone by
+//! [`crate::codec::pytext`], which is also the decoder a node opens a protocol
+//! 0 array's numbers with. One reading of a line, wherever it is asked for.
 
 use std::sync::Arc;
 
 use super::cursor::Cursor;
 use super::memo::Bound;
 use super::{Kind, Value};
-
-/// The escapes `pickle.py` writes inside a `UNICODE` line.
-///
-/// The text goes out `raw-unicode-escape`, which writes a code point above
-/// 0xff as `\uXXXX` and one above 0xffff as `\UXXXXXXXX`, and leaves
-/// everything under 0x100 as the one byte it is. Before that, `save_str`
-/// replaces the five characters that would break the line or the escaping
-/// itself with their own `\uXXXX`: the backslash, the newline, the carriage
-/// return, the NUL and the DOS end-of-file. Python 2 replaced only the first
-/// two, and a file from either is read.
-///
-/// So a backslash in the line is always the start of an escape, and a
-/// backslash that is not is a file no pickler wrote.
-///
-/// CPython's `raw-unicode-escape` writes its hexadecimal in lower case and
-/// Jython's writes it in upper, so the line is held to one case throughout
-/// rather than to either one. That is the interpreter's own text routine and
-/// not its pickler: both of Jython's picklers write the same line.
-fn unescape_text(line: &[u8]) -> Option<String> {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    let mut upper: Option<bool> = None;
-    while let Some((first, tail)) = rest.split_first() {
-        if *first != b'\\' {
-            out.push(char::from(*first));
-            rest = tail;
-            continue;
-        }
-        let wide = match tail.first()? {
-            b'u' => 4,
-            b'U' => 8,
-            _ => return None,
-        };
-        let digits = std::str::from_utf8(tail.get(1..1 + wide)?).ok()?;
-        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-        let here = digits.bytes().any(|b| b.is_ascii_uppercase());
-        if digits.bytes().any(|b| b.is_ascii_lowercase()) && here {
-            return None;
-        }
-        match upper {
-            Some(before) if before != here && digits.bytes().any(|b| b.is_ascii_alphabetic()) => return None,
-            _ if digits.bytes().any(|b| b.is_ascii_alphabetic()) => upper = Some(here),
-            _ => {}
-        }
-        out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
-        rest = tail.get(1 + wide..)?;
-    }
-    Some(out)
-}
 
 /// The escapes Python 2's `repr` of a `str` writes, which is what a `STRING`
 /// line holds: the backslash, the quote the line is written in, the three
@@ -250,7 +203,7 @@ impl Cursor<'_> {
         }
         let held: Vec<u8> = match quoted {
             true => unescape_bytes(line, *self.bytes.get(at.checked_sub(1)?)?)?,
-            false => unescape_text(line)?.into_bytes(),
+            false => crate::codec::pytext::unescaped(line)?.into_bytes(),
         };
         // A `str` whose bytes are not UTF-8 is a byte string, as it is
         // everywhere else; text is text, since it was decoded from characters.
