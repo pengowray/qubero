@@ -91,10 +91,10 @@ fn names_index(names: &[&str]) -> Vec<u8> {
 
 #[test]
 fn a_column_of_names_is_an_array_of_objects() {
+    // On its own an array of objects is what `pickle.dumps` writes for one,
+    // which is NumPy's own writing and the NumPy form's to read.
     let bytes = framed(&cat(&[&object_array(&["id", "score"]), b"."]));
-    // On its own an array of objects belongs to no form: only the pandas form
-    // reads one, and the pandas form needs a class of its own as well.
-    assert!(recognise(&bytes).is_none());
+    assert_eq!(recognise(&bytes).unwrap().form, "numpy-array-p4-p5-v6");
     let bytes = framed(&frame(&names_index(&["id", "score"])));
     let found = recognise(&bytes).unwrap();
     assert_eq!(found.form, "pandas-frame-p4-p5-v1");

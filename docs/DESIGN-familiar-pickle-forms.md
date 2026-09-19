@@ -125,9 +125,9 @@ section says what its neighbour does differently.
   offset, and the width, alignment and flags after them. Every column has to
   fit inside a record and they have to be written in the order they sit in. A
   column's own dtype is a plain one, so the nesting is one level deep. Datetime
-  and external-buffer dtypes/layouts fall back; an `O8` array is read by the
-  pandas form and by the two joblib ones, and by no other, which is where one
-  turns up. See "An array of pickled objects" below.
+  and external-buffer dtypes/layouts fall back; an `O8` array is read here,
+  by the pandas form and by the two joblib ones, which is where one turns up.
+  See "An array of pickled objects" below.
   The class `_reconstruct` is handed is one of NumPy's own, enumerated, and a
   masked array is a production of its own: see the two sections below.
 - `builtins-values-p4-p5-v3`: the basic productions plus the four builtins a
@@ -835,9 +835,9 @@ the same batch lengths, the same memo.
 
 Reading them through the one stack is what makes the widening exactly as
 strict as the rest of the grammar rather than a second, looser reading. An
-array of objects under the pandas form may hold what a pandas file may hold; an
-array of objects under the NumPy form is still a non-match, because that form
-does not allow one at all. A class the form's own prefixes do not cover is
+array of objects under the pandas form may hold what a pandas file may hold,
+and one under the NumPy form may hold what a NumPy file may hold, which is
+plain values and containers of them. A class the form's own prefixes do not cover is
 refused at `may_name` wherever it is written, so an array of objects holding an
 instance of a class no extension enumerates matches nothing, the way it did
 before. The samples that say so are `unfamiliar-frame-of-instances-p4.pickle`
@@ -856,9 +856,20 @@ made the array, so the fill stops at the count and a batch that overshoots it
 is a non-match.
 
 **Which forms allow it** is a flag in the `DECLARED` table, `object_arrays`,
-and it is on for the pandas form, the two joblib forms and the mixed form.
-Everywhere else an `O8` dtype is a non-match, so a plain pickle of one is the
-opcode listing.
+and it is on for the NumPy form, the scikit-learn form, the pandas form, the
+two joblib forms and the mixed form. Everywhere else an `O8` dtype is a
+non-match.
+
+The NumPy form was the last of those, on 2026-09-20. An array of objects is
+what `pickle.dumps` writes for one, with no library anywhere near it, so
+reading it under the form for what NumPy writes is the honest place for it:
+the file is an array of objects rather than a mixture of families, and the
+mixed form is for a file that holds two. One verdict moved and no other:
+`pickle/proto4-numpy-object-array.pickle` was the opcode listing and is
+`numpy-array-p4-p5-v6`. The `mixed-array-of-tuples` files did not move, and the
+reason is that each of them holds a date beside the array, so it really is two
+families; a file of nothing but an array of objects was the only kind that had
+nowhere to go.
 
 **A whole pickle inside the stream.** `joblib.dump` writes every array as a
 wrapper and a run of bytes after it, and an object array has no bytes, so
@@ -1110,12 +1121,12 @@ one half or the other.
 | `proto5-everything.pickle` | the same |
 | `proto4-collections.pickle` | NEWOBJ of a namedtuple class the writing file defined; its OrderedDict, defaultdict, Counter and deque are read |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
-| `proto4-numpy-object-array.pickle` | an object dtype, whose data is pickled values |
 | `proto0-everything.pickle`, `proto1-everything.pickle` | the same call the other `everything` files make |
 | `proto0-persistent-id.pickle`, `handmade-*` | persistent ids, and the opcodes CPython reads and never writes |
 | `proto2-memo-over-256.pickle` | `basic-p2-p3-v1` |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
 | `proto3-numpy-1-module-names.pickle` | `numpy-array-p2-p3-v1` |
+| `proto4-numpy-object-array.pickle` | `numpy-array-p4-p5-v6`: an object dtype, whose values are pickled after the array |
 | `proto4-scipy-coo-matrix`, `proto4-scipy-csc-matrix`, `proto4-scipy-csr-matrix` | `scipy-sparse-p4-p5-v1` |
 | `proto4-sklearn-pipeline`, `proto4-sklearn-random-forest` | `sklearn-estimator-p4-p5-v1` |
 | `proto5-pandas-dataframe`, `proto5-pandas-series`, `proto5-pandas-index-types` | `pandas-frame-p4-p5-v1` |

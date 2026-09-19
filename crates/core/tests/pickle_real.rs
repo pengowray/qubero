@@ -688,7 +688,10 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto4-datetime.pickle", Some("stdlib-values-p4-p5-v1")),
         ("proto4-everything.pickle", None),
         ("proto4-newobj.pickle", None),
-        ("proto4-numpy-object-array.pickle", None),
+        // An array of objects, which is what `pickle.dumps` writes for one and
+        // NumPy's own writing: the values are pickled after the array as the
+        // list it is handed, and they are read against the same stack.
+        ("proto4-numpy-object-array.pickle", Some("numpy-array-p4-p5-v6")),
         ("proto4-persistent-id.pickle", None),
         // Three sparse matrices and a pipeline of two estimators: an object of
         // a class named from a whitelisted module, made with no arguments and

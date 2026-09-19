@@ -425,7 +425,12 @@ const DECLARED: &[Declared] = &[
         calls: NO_CALLS,
         object_arrays: false,
     },
-    Declared { ids: [NUMPY, NUMPY23, NUMPY1, NUMPY0], family: Family::Numpy, numpy: true, ..PLAIN },
+    // An array of objects is what `pickle.dumps` writes for one, with the
+    // values pickled after the array as the list it is handed. That is NumPy's
+    // own writing and nothing else's, so the NumPy form reads it: a file
+    // holding one and nothing else is an array of objects rather than a
+    // mixture of families.
+    Declared { ids: [NUMPY, NUMPY23, NUMPY1, NUMPY0], family: Family::Numpy, numpy: true, object_arrays: true, ..PLAIN },
     Declared { ids: [BUILTINS, BUILTINS23, BUILTINS1, BUILTINS0], family: Family::Builtins, builtins: true, ..PLAIN },
     Declared {
         ids: [SKLEARN, SKLEARN23, SKLEARN1, SKLEARN0],
