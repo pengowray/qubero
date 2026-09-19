@@ -34,6 +34,7 @@ mod origin;
 mod picklecells;
 mod pickleframe;
 mod pickleobjects;
+mod picklenames;
 mod pickleparts;
 mod picklesaid;
 mod picklesummary;
