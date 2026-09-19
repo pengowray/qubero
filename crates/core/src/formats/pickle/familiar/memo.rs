@@ -14,6 +14,17 @@ use super::{Dtype, Pickler, Shape, MAX_MEMO};
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Bound {
     Opaque,
+    /// A slot the file has numbered past without writing.
+    ///
+    /// Two picklers leave one. Python 2's `cPickle` numbers its first slot 1
+    /// and never writes slot 0 at all, so that slot stays empty for the whole
+    /// file. IronPython's takes an object's slot when it starts saving the
+    /// object and writes the mark when the object is finished, so the slots
+    /// its callable and arguments take are numbered in between, and the
+    /// object's own mark fills this in afterwards. Which of the two a file is
+    /// doing is known at the end: an empty slot that stayed empty is the
+    /// first, and one that was filled out of turn is the second.
+    Reserved,
     Text { at: usize, len: usize },
     Bytes { at: usize, len: usize },
     /// A container the basic productions built: where the file wrote it, and
@@ -38,25 +49,42 @@ enum Mark {
 }
 
 /// The table itself, which a form appends to and reads back and never edits,
-/// but for the one slot a dtype's byte order arrives too late to fill in.
+/// but for the one slot a dtype's byte order arrives too late to fill in and
+/// the slot a pickler numbered past and came back to.
 pub(super) struct Memo {
     slots: Vec<Bound>,
+    /// How many slots the file numbered past and came back to fill, which is
+    /// what says IronPython's `cPickle` wrote it.
+    filled_late: usize,
 }
 
 impl Memo {
     pub(super) fn new() -> Self {
-        Memo { slots: Vec::new() }
+        Memo { slots: Vec::new(), filled_late: 0 }
     }
 
-    /// How many slots the file has written, which is the number the next one
-    /// gets.
+    /// How many slots the file has numbered, which is the number the next one
+    /// gets where nothing was reserved.
     pub(super) fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// Back to the length it was, for an alternative that failed.
-    pub(super) fn truncate(&mut self, len: usize) {
+    /// Back to the length it was, for an alternative that failed. A slot
+    /// filled late is filled again on the way back through, so the count of
+    /// those is put back too.
+    pub(super) fn truncate(&mut self, len: usize, filled_late: usize) {
         self.slots.truncate(len);
+        self.filled_late = filled_late;
+    }
+
+    pub(super) fn filled_late(&self) -> usize {
+        self.filled_late
+    }
+
+    /// How many slots the file numbered past and never came back to, which is
+    /// one for a pickler that numbers from 1 and none for every other.
+    pub(super) fn reserved(&self) -> usize {
+        self.slots.iter().filter(|bound| **bound == Bound::Reserved).count()
     }
 
     /// File a value in the next slot, or refuse when the file has written more
@@ -69,9 +97,41 @@ impl Memo {
         Some(self.slots.len() - 1)
     }
 
+    /// File a value in the slot the file numbered, which is the next one
+    /// unless the pickler took a slot for an object before writing what the
+    /// object is made of.
+    ///
+    /// The gap a pickler may leave is one slot per object it has open, so it
+    /// is bounded by the nesting a form follows rather than by the number in
+    /// the file: a mark naming a slot far past the end is a file no pickler
+    /// wrote, and one opcode may not cost the reader a table.
+    fn bind_at(&mut self, index: usize, bound: Bound) -> Option<usize> {
+        if index == self.slots.len() {
+            return self.bind(bound);
+        }
+        if index > self.slots.len() {
+            if index - self.slots.len() > super::MAX_DEPTH || index >= MAX_MEMO {
+                return None;
+            }
+            while self.slots.len() < index {
+                self.slots.push(Bound::Reserved);
+            }
+            return self.bind(bound);
+        }
+        if self.slots.get(index)? != &Bound::Reserved {
+            return None;
+        }
+        self.slots[index] = bound;
+        self.filled_late += 1;
+        Some(index)
+    }
+
     /// What a slot holds, or nothing when the file has not written it.
     fn get(&self, slot: usize) -> Option<&Bound> {
-        self.slots.get(slot)
+        match self.slots.get(slot)? {
+            Bound::Reserved => None,
+            held => Some(held),
+        }
     }
 
     /// Say what a slot holds after the fact, which is what the BUILD that
@@ -106,11 +166,15 @@ impl Cursor<'_> {
 
     /// BINPUT or LONG_BINPUT, and the slot number in it.
     ///
-    /// The number is not read from the file and believed: a slot is the count
-    /// of marks written before it, so the index has to be exactly that, offset
-    /// by the number the file started counting at. Every pickler starts at
-    /// nought but Python 2's `cPickle`, which starts at one; the first mark
-    /// fixes which, and anything else is a non-match.
+    /// The number is not read from the file and believed. A slot is the count
+    /// of slots numbered before it, and the index has to be exactly that, or
+    /// one of the slots a pickler numbered past and has not come back to. Two
+    /// picklers number past one: see [`Bound::Reserved`].
+    ///
+    /// The index is the slot, with nothing subtracted from it. Python 2's
+    /// `cPickle` starting at 1 is slot 0 left empty for the whole file, which
+    /// is the same table every other pickler builds with one more slot in
+    /// front of it, so a reference resolves the same either way.
     ///
     /// A value may have no mark at all. `cPickle` leaves it out for a value
     /// nothing else in the program holds a reference to, which is why a fresh
@@ -149,26 +213,20 @@ impl Cursor<'_> {
             }
         };
 
-        let base = match self.memo_base {
-            Some(base) => base,
-            None => {
-                let base = index.checked_sub(self.memo.len())?;
-                if base > 1 || (base == 0 && self.skipped > 0) {
-                    return None;
-                }
-                self.memo_base = Some(base);
-                if base == 1 {
-                    // Only `cPickle` numbers from one, and it does so whether
-                    // or not a batch edge is in the file.
-                    self.wrote(Pickler::CPickle)?;
-                }
-                base
+        if self.memo_base.is_none() {
+            // The first mark says where the file counts from, and nothing but
+            // nought and one is a numbering a pickler writes. Which pickler
+            // that makes it is settled at the end of the file rather than
+            // here: a first mark of 1 is `cPickle` numbering from one, and it
+            // is also IronPython's taking slot 0 for the object it is part
+            // way through writing.
+            let base = index.checked_sub(self.memo.len())?;
+            if base > 1 || (base == 0 && self.skipped > 0) {
+                return None;
             }
-        };
-        if index != base + self.memo.len() {
-            return None;
+            self.memo_base = Some(base);
         }
-        self.memo.bind(bound).map(Some)
+        self.memo.bind_at(index, bound).map(Some)
     }
 
     /// The memo mark after a BYTEARRAY8, which only one of the two picklers
@@ -187,11 +245,7 @@ impl Cursor<'_> {
     }
 
     /// BINGET or LONG_BINGET, and what the slot it names holds. A slot past
-    /// the end, or one the file has not written, is a non-match.
-    ///
-    /// The number in the file counts from wherever the file's own marks count
-    /// from, which is one for Python 2's `cPickle` and nought for every other
-    /// pickler.
+    /// the end, or one the file numbered and has not written, is a non-match.
     pub(super) fn reference(&mut self) -> Option<&Bound> {
         let slot = match self.byte()? {
             b'g' if self.proto == 0 => {
@@ -206,8 +260,32 @@ impl Cursor<'_> {
             b'j' if self.proto > 0 => u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize,
             _ => return None,
         };
-        let slot = slot.checked_sub(self.memo_base.unwrap_or(0))?;
         self.memo.get(slot)
+    }
+
+    /// What the whole file's numbering says about which pickler wrote it,
+    /// asked once the last mark is in.
+    ///
+    /// A slot the file numbered past is one of two things, and only the end of
+    /// the file says which. Left empty, it is slot 0 of a `cPickle`, which
+    /// numbers its first slot 1 and never writes a slot 0 at all. Filled after
+    /// the slots above it, it is a slot IronPython's `cPickle` took for an
+    /// object before writing what the object is made of. A file doing both, or
+    /// leaving more than the one slot empty, is a file no pickler wrote.
+    pub(super) fn numbering(&mut self) -> Option<()> {
+        let late = self.memo.filled_late();
+        let left = self.memo.reserved();
+        if late > 0 {
+            return match left {
+                0 => self.wrote(Pickler::IronCPickle),
+                _ => None,
+            };
+        }
+        match left {
+            0 => Some(()),
+            1 if self.memo_base == Some(1) => self.wrote(Pickler::CPickle),
+            _ => None,
+        }
     }
 
     pub(super) fn at_reference(&self) -> bool {

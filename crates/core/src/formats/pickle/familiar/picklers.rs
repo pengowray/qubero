@@ -97,15 +97,6 @@ impl Pickler {
             here = here.broader();
         }
     }
-
-    /// How many entries this pickler puts in one batch. Jython's is the one
-    /// that is not a thousand, and [`WIDE_BATCH`] is what it writes instead.
-    pub(super) fn batch(self) -> usize {
-        match self {
-            Pickler::Jython => WIDE_BATCH,
-            _ => super::MAX_BATCH,
-        }
-    }
 }
 
 /// The batch Jython's `cPickle` writes, which is `BATCHSIZE` in

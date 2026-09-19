@@ -103,6 +103,7 @@ pub(super) enum Framing {
 pub(super) struct Save {
     pub(super) at: usize,
     pub(super) memo: usize,
+    pub(super) filled_late: usize,
     pub(super) memo_base: Option<usize>,
     pub(super) skipped: usize,
     pub(super) dicts: Pickler,
@@ -200,6 +201,7 @@ impl<'a> Cursor<'a> {
         Save {
             at: self.at,
             memo: self.memo.len(),
+            filled_late: self.memo.filled_late(),
             memo_base: self.memo_base,
             skipped: self.skipped,
             dicts: self.dicts,
@@ -277,7 +279,7 @@ impl<'a> Cursor<'a> {
     /// alternative that failed does not get to spend again.
     pub(super) fn restore(&mut self, s: Save) {
         self.at = s.at;
-        self.memo.truncate(s.memo);
+        self.memo.truncate(s.memo, s.filled_late);
         self.memo_base = s.memo_base;
         self.skipped = s.skipped;
         self.dicts = s.dicts;

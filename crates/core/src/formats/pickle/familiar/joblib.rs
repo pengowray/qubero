@@ -226,12 +226,13 @@ impl Cursor<'_> {
             // it wrote is a file joblib did not write.
             joblib: std::mem::replace(&mut self.allow.joblib, Wrapped::Refused),
         };
-        let found = self.enveloped(NESTED_PROTOCOLS).map(|(_, value)| value);
+        let found = self.enveloped(NESTED_PROTOCOLS).map(|(_, value)| value).filter(|_| self.numbering().is_some());
         self.proto = outer.proto;
         self.memo = outer.memo;
         self.memo_base = outer.memo_base;
         self.skipped = outer.skipped;
         self.dicts = outer.dicts;
+        self.batch = outer.batch;
         self.framing = outer.framing;
         self.pickler = outer.pickler;
         self.allow.joblib = outer.joblib;

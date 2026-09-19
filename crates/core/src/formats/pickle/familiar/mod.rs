@@ -366,6 +366,7 @@ impl<'a> Cursor<'a> {
         if self.at != self.bytes.len() {
             return None;
         }
+        self.numbering()?;
         // A class a form names no classes for is there to be called, and the
         // call is what the form read. One that survived into the tree instead
         // of being folded away by its call is a class the file is handing the
