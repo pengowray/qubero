@@ -36,6 +36,7 @@ mod values;
 mod tests;
 
 pub use captured::*;
+pub use lines::{named, spelled};
 pub use picklers::Pickler;
 
 use cursor::{Cursor, Framing};
@@ -120,20 +121,9 @@ pub struct Match {
     extensions: Extensions,
     stop: usize,
     payloads: Vec<(usize, Payload)>,
-    /// The bytes of every run the file did not write as bytes, by where the
-    /// run starts. Protocol 2 writes an array's numbers as the latin-1 text
-    /// they spell, so the numbers are nowhere in the file and are decoded once
-    /// here rather than per cell. Empty for every file at protocol 3 and up.
-    runs: Vec<(usize, Arc<Vec<u8>>)>,
 }
 
 impl Match {
-    /// The bytes a run stands for, for a run the file wrote as something else.
-    /// Nothing when the run in the file already is the bytes.
-    pub fn decoded(&self, at: usize) -> Option<&Arc<Vec<u8>>> {
-        self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held)
-    }
-
     /// Everything the file used beyond the basic grammar, in a fixed order,
     /// and `none` for a file the basic grammar read on its own.
     ///
@@ -212,7 +202,6 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         memo: Memo::new(),
         memo_base: None,
         skipped: 0,
-        runs: Vec::new(),
         dicts: Pickler::Undetermined,
         batch: None,
         framing: Framing::Unframed,
@@ -436,7 +425,6 @@ impl<'a> Cursor<'a> {
             extensions,
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),
-            runs: std::mem::take(&mut self.runs),
         })
     }
 }

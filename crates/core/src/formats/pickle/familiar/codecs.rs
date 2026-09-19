@@ -96,14 +96,14 @@ impl Cursor<'_> {
                 self.latin1(at, len)?;
                 (at, len, Storage::Latin1)
             }
-            // Protocol 0 wrote the text as a line with an escape in it, which
-            // the form read as it went. What the call makes of it is those
-            // characters one byte each, so the run is read again that way and
-            // kept in its place: nothing else names the text of a call whose
-            // result is a buffer.
-            Kind::Spelled { at, len, bytes: false } => {
-                let held = Storage::Latin1.read(&self.decoded_at(at)?)?;
-                self.replace_run(at, held);
+            // Protocol 0 wrote the text as a line with an escape in it. What
+            // the call makes of it is those characters one byte each, so the
+            // run is two spellings deep and the caller opens it through both
+            // at once. Read here only far enough to say it is a run this can
+            // read back: the bytes belong to whatever the call is part of.
+            Kind::Spelled { at, len, bytes: false, quote } => {
+                let held = self.spelled_at(at, len, quote)?;
+                Storage::Latin1.read(&held)?;
                 (at, len, Storage::Escaped)
             }
             _ => return None,
@@ -119,8 +119,15 @@ impl Cursor<'_> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
         self.open_tuple()?;
         let text = self.encoded_text()?;
-        if let Kind::Text { at, len } = text.kind {
-            self.latin1(at, len)?;
+        match text.kind {
+            Kind::Text { at, len } => self.latin1(at, len)?,
+            // A text named where the file wrote it, which at protocol 0 may be
+            // a line that spells its characters. Held to the same rule the run
+            // itself is: every character has to fit in one byte.
+            Kind::Ref(Names::Text { at, len }) => {
+                self.named_latin1(at, len)?;
+            }
+            _ => {}
         }
         let encoding = self.encoding_word()?;
         self.close_tuple(2)?;
@@ -167,6 +174,13 @@ impl Cursor<'_> {
     /// back one object for both, so the second is a reference. That is the
     /// runtime's own string table and not its pickler: a reference comes back
     /// as the run it names, and the bytes are read there.
+    ///
+    /// At protocol 0 the run it names is a line, and a line is not always the
+    /// text it stands for. The reference comes back naming the run rather than
+    /// holding it either way, so the bytes under it are read the same way the
+    /// line's own reading read them. Only Python 3 writes this call, and its
+    /// protocol 0 texts go out as UNICODE lines, so the escaping is the one
+    /// `raw-unicode-escape` writes.
     fn encoded_text(&mut self) -> Option<Value> {
         self.gate()?;
         if !self.at_reference() {
@@ -175,12 +189,24 @@ impl Cursor<'_> {
         let start = self.at;
         let here = self.save();
         match self.reference().cloned() {
-            Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Text { at, len })),
+            // Below protocol 1 the run is a line, and a line that spells its
+            // text is not the text: it is named rather than held, and read
+            // where the file wrote it.
+            Some(Bound::Text { at, len }) if self.proto > 0 => Some(self.span(start, Kind::Text { at, len })),
+            Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Ref(Names::Text { at, len }))),
             _ => {
                 self.restore(here);
                 None
             }
         }
+    }
+
+    /// The bytes a text the call was handed spells, for a text named where the
+    /// file wrote it earlier. A line spelling a character latin-1 never held
+    /// is a run this has no bytes to read back, as a counted text of one is.
+    pub(super) fn named_latin1(&self, at: usize, len: usize) -> Option<Vec<u8>> {
+        let run = self.bytes.get(at..at.checked_add(len)?)?;
+        Storage::Latin1.read(&super::named(run, self.proto)?)
     }
 
     /// A whole text that spells a run of bytes in latin-1, wherever a fixed run
@@ -198,8 +224,8 @@ impl Cursor<'_> {
             Kind::Text { at, len } => self.latin1(at, len)?,
             // A protocol 0 line that spells its characters rather than being
             // them, worked out once when the form read the line.
-            Kind::Spelled { at, bytes: false, .. } => {
-                let held = String::from_utf8(self.decoded_at(at)?.to_vec()).ok()?;
+            Kind::Spelled { at, len, bytes: false, quote } => {
+                let held = String::from_utf8(self.spelled_at(at, len, quote)?).ok()?;
                 held.chars().all(|c| u32::from(c) < 0x100).then_some(())?
             }
             _ => return None,

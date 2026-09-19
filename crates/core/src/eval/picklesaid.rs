@@ -41,14 +41,17 @@ pub(super) fn shown(bytes: &[u8], text: bool, whole: usize) -> String {
 }
 
 /// What a protocol 0 line spells, for a row that shows the value rather than
-/// the spelling. Cut the way a text read out of the file is, since a line as
-/// long as a page is a line a reader takes in at a glance or not at all.
-pub(super) fn spelling_of(found: &Match, at: usize, bytes: bool) -> String {
-    let Some(held) = found.decoded(at) else { return String::new() };
+/// the spelling. `line` is the run the file holds and `quote` says how it was
+/// escaped; see [`familiar::spelled`](crate::formats::pickle::familiar::spelled).
+///
+/// Cut the way a text read out of the file is, since a line as long as a page
+/// is a line a reader takes in at a glance or not at all.
+pub(super) fn spelling_of(line: &[u8], quote: Option<u8>, bytes: bool) -> String {
+    let Some(held) = crate::formats::pickle::familiar::spelled(line, quote) else { return String::new() };
     match bytes {
         true => shown(&held[..held.len().min(MOST_SHOWN_BYTES)], false, held.len()),
         false => {
-            let said = String::from_utf8_lossy(held);
+            let said = String::from_utf8_lossy(&held);
             shown(&held[..fits(&said, MOST_SHOWN_TEXT)], true, held.len())
         }
     }
@@ -94,8 +97,11 @@ impl Evaluator {
             Kind::Float { value, .. } => Some(value.to_string()),
             Kind::Text { at, len } | Kind::Ref(Names::Text { at, len }) => Some(read(*at, *len, true)?),
             // A line that spells a value rather than being it reads as what
-            // it spells, which the form worked out when it matched.
-            Kind::Spelled { at, bytes, .. } => Some(spelling_of(found, *at, *bytes)),
+            // it spells, which is the line read back through its escaping.
+            Kind::Spelled { at, len, quote, bytes } => {
+                let line = self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?;
+                Some(spelling_of(&line, *quote, *bytes))
+            }
             Kind::Bytes { at, len } | Kind::Ref(Names::Bytes { at, len }) => Some(read(*at, *len, false)?),
             Kind::Ref(Names::Made { what, at, .. }) => Some(format!("{} at {:#04x}", what.name(), base as usize / 8 + at)),
             Kind::List(items) => Some(many("list", items.len())),

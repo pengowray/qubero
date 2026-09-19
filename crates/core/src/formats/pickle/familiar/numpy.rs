@@ -194,19 +194,20 @@ impl Cursor<'_> {
                 let payload = self.fits(dtype, dimensions, len)?;
                 return Some(Numbers { at, len, payload, storage, named: false });
             }
-            if storage == Storage::Escaped {
-                // Two layers deep and already read: the line's escaping came
-                // off as the form read it and the latin-1 came off with the
-                // call, so what is beside the match is the numbers.
-                let held = self.decoded_at(at)?;
-                let payload = self.fits(dtype, dimensions, held.len())?;
-                return Some(Numbers { at, len, payload, storage, named: false });
-            }
-            // Read once here rather than per cell: the numbers are nowhere in
-            // the file, and everything that wants them wants all of them.
-            let held = storage.read(self.bytes.get(at..at + len)?)?;
-            let payload = self.fits(dtype, dimensions, held.len())?;
-            self.runs.push((at, std::sync::Arc::new(held)));
+            // The numbers are nowhere in the file, so how many of them there
+            // are is a question about the run rather than about its length.
+            // Only the count is worked out here: the bytes themselves come of
+            // opening the run as a space, which is done when a reader asks for
+            // it and not while the form is being matched.
+            let run = self.bytes.get(at..at.checked_add(len)?)?;
+            let held = match storage {
+                // Two spellings deep, so the count is what comes off both.
+                Storage::Escaped => crate::codec::pytext::escaped_latin1_text(run).ok()?.0.len(),
+                // One byte a character, which is every byte of the run that is
+                // not the continuation of the one before it.
+                _ => storage.decoded(run),
+            };
+            let payload = self.fits(dtype, dimensions, held)?;
             return Some(Numbers { at, len, payload, storage, named: false });
         }
         // Two arrays holding the same bytes are one byte string to Python, so

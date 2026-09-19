@@ -319,12 +319,11 @@ fn an_array_written_by_python_2_holds_its_numbers_as_they_are() {
     let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
     assert_eq!(found.form, "numpy-array-p2-p3-v1");
     let Kind::Array { at, len, storage, dimensions, .. } = &found.value.kind else { panic!("array expected") };
-    // The run in the file is the numbers, so nothing was decoded beside the
-    // match and the opcode listing may read the run as the values it holds.
+    // The run in the file is the numbers, so the opcode listing may read it as
+    // the values it holds rather than opening it as anything.
     assert_eq!(*storage, Storage::Raw);
     assert_eq!(*len, numbers.len());
     assert_eq!(dimensions.as_slice(), &[2]);
-    assert!(found.decoded(*at).is_none());
     assert_eq!(&bytes[*at..*at + *len], numbers);
 }
 
@@ -459,10 +458,13 @@ fn a_line_with_an_escape_in_it_is_the_thing_it_spells() {
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict expected") };
     let (key, value) = &entries[0];
     assert!(matches!(key.kind, Kind::Spelled { bytes: false, .. }));
-    let Kind::Spelled { at: key_at, .. } = key.kind else { panic!() };
-    assert_eq!(found.decoded(key_at).map(|h| h.to_vec()), Some("caf\u{e9}".as_bytes().to_vec()));
-    let Kind::Spelled { at: value_at, .. } = value.kind else { panic!("a spelled value") };
-    assert_eq!(found.decoded(value_at).map(|h| h.to_vec()), Some(b"a\\b".to_vec()));
+    // What a line spells is read back out of the run rather than kept beside
+    // the match: the run is in the file, and this is what reads it.
+    let Kind::Spelled { at: key_at, len: key_len, quote: key_quote, .. } = key.kind else { panic!() };
+    let line = |at: usize, len: usize, quote| super::super::spelled(&bytes[at..at + len], quote);
+    assert_eq!(line(key_at, key_len, key_quote), Some("caf\u{e9}".as_bytes().to_vec()));
+    let Kind::Spelled { at: value_at, len: value_len, quote: value_quote, .. } = value.kind else { panic!("a spelled value") };
+    assert_eq!(line(value_at, value_len, value_quote), Some(b"a\\b".to_vec()));
 }
 
 /// The lines a pickler never wrote are not read.

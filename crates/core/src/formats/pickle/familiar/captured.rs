@@ -64,13 +64,20 @@ pub enum Kind {
     },
     /// A text or a byte string the file wrote as a spelling of itself rather
     /// than as itself, which is a protocol 0 line with an escape in it or a
-    /// character above 0x7f. `at`/`len` are the line's run; what it spells is
-    /// decoded once as the form reads it and kept beside the match, and
-    /// [`Match::decoded`] hands it back. `bytes` says it spells a byte string,
-    /// which a Python 2 `str` holding bytes that are not UTF-8 does.
+    /// character above 0x7f. `at`/`len` are the line's run, and what it spells
+    /// is read back out of that run by [`spelled`](super::spelled) whenever
+    /// something wants it: the run is in the file, so a copy of it beside the
+    /// match would be a copy nothing needs.
+    ///
+    /// `quote` is the quote a Python 2 `repr` of a `str` was written in, and
+    /// nothing for a text, which is written `raw-unicode-escape` and has no
+    /// quotes round it. The two escape different things, so it is what says
+    /// how to read the line. `bytes` says what it spells is a byte string,
+    /// which a Python 2 `str` holding bytes that are not UTF-8 is.
     Spelled {
         at: usize,
         len: usize,
+        quote: Option<u8>,
         bytes: bool,
     },
     Bytes {
@@ -191,6 +198,10 @@ impl Storage {
 
     /// The bytes this run stands for, for a run that is not them. One pass,
     /// one byte a character, and nothing for a run that already is the bytes.
+    ///
+    /// The same reading [`Codec::Latin1Text`](crate::codec::Codec::Latin1Text)
+    /// does, for the recogniser, which wants the answer before there is a node
+    /// to open a space on.
     ///
     /// Every character is under 0x100, which the production checked when it
     /// read the run, so each is one byte and the result is as long as

@@ -810,14 +810,10 @@ fn family_of(name: &str) -> usize {
     }
 }
 
-/// The one file in the matrix that no form reads, and why.
-///
-/// GraalPy gives two equal strings one object, so the second of two dates
-/// holding the same packed run names the slot the first wrote. At protocol 0
-/// that run is an escaped line the form decoded once and kept the bytes of,
-/// and reading it a second time would decode what had already been replaced.
-/// `docs/HANDOVER-pickle-libraries.md` has the whole of it.
-const UNREAD: &[&str] = &["graalpy3.11/stdlib-datetime.p0.pypickle.pickle"];
+/// The files in the matrix that no form reads. Empty, and kept: a form that
+/// stops reading a file it read is what this catches, and the list is where
+/// such a file would be written down with the reason.
+const UNREAD: &[&str] = &[];
 
 /// The same objects as sixteen environments wrote them, from Python 2.7 to
 /// 3.14 and PyPy 2.7 and 3.10, with numpy 1.19 to 2.5 beside them, and from

@@ -457,24 +457,28 @@ instructions. What differs:
   0x95 below it is not an opcode.
 - **A NumPy array's numbers reach protocol 2 as latin-1 text**, through the
   same `_codecs.encode` call, and the length checked against the shape is the
-  decoded length. The run is decoded once, as the form reads it, and kept
-  beside the match; every cell of the array and of a frame that holds it is
-  read from there. So a protocol 2 frame, series and array open as the same
-  table, cell for cell, as the same object at protocol 4.
-  - The array's `numbers` row is still the run in the file, which is text, and
-    the array carries a `written as` row saying `latin-1 text` so that a
-    reader opening it is not surprised by what is under it. The opcode listing
-    is not told to read the run as an array: it is a `BINUNICODE` and reading
-    it as numbers would be reading the spelling.
-  - The table over such an array has its cells read by the core, the way a
-    pandas frame's are, because there is no run under the node for a view to
-    walk. It names no columns, since an array's columns are places along an
-    axis rather than names anything wrote down, and the view heads them the
-    way it heads every other run of numbers.
+  decoded length. That length is the only thing worked out while the form
+  matches; the numbers themselves come of opening the run.
+  - The `numbers` row is the run in the file, which is text, and it opens as a
+    space of its own: its type is `latin-1 text`, and the one thing inside it
+    is the numbers, as ordinary typed fields at ordinary offsets in that
+    space. So a value has an address, the ordinary table applies, the ordinary
+    hex view of the space shows the bytes, and nothing is copied or computed.
+    A protocol 2 frame, series and array open as the same table, cell for
+    cell, as the same object at protocol 4.
+  - The node says what it was decoded from, so there is no `written as` row
+    for it. That row is left for the one thing the type cannot say: an array
+    naming the run an earlier array wrote says `bytes an earlier array wrote`.
+  - The opcode listing is not told to read the run as an array: it is a
+    `BINUNICODE` and reading it as numbers would be reading the spelling.
+  - The table hangs on the numbers rather than on the run, since the run holds
+    one thing and a table over it would be one row. It names no columns: an
+    array's columns are places along an axis rather than names anything wrote
+    down, and the view heads them the way it heads every other run of numbers.
   - An array Python 2 wrote is not this. Python 2 had a type for a run of
     bytes, its `str`, so the numbers go out as `SHORT_BINSTRING` or
-    `BINSTRING` and are the bytes they are, with nothing decoded and the
-    ordinary table over them. No file in the corpus is one, since none of the
+    `BINSTRING` and are the bytes they are, with no space and the ordinary
+    table over them. No file in the corpus is one, since none of the
     Python 2 environments has NumPy, so that is a branch with a test written
     to it and no sample behind it.
 
@@ -569,11 +573,24 @@ stack; what changes is that every value is an opcode and a line.
   nothing either way unless its memo numbers from one.
 - **An array's numbers are two layers deep.** They reach the file as
   `_codecs.encode` of a `V` line, so the escaping comes off first and the
-  latin-1 after it, and the `written as` row says `latin-1 text, escaped`. The
-  bytes are worked out once as the form reads the run and kept beside the
-  match, the way protocol 2's are, so a frame, a series and an array at
-  protocol 0 open as the same table, cell for cell, as the same object at
-  protocol 5.
+  latin-1 after it. The run opens as a space through both layers at once and
+  its type reads `latin-1 text, escaped`, exactly as protocol 2's opens
+  through one, so a frame, a series and an array at protocol 0 open as the
+  same table, cell for cell, as the same object at protocol 5.
+- **A line that spells its text is read again rather than kept.** What a `V`
+  or `S` line stands for is worked out from the run whenever something wants
+  it: the run is in the file, and a copy of every escaped string in a file is
+  a copy nothing needs. `familiar::spelled` is the one reading of a line, and
+  `codec::pytext` is the one reading of the escaping under it, which is what
+  lets a node open a protocol 0 array's numbers with the same decoder the
+  recogniser measured them with.
+- **A text named where the file wrote it may name a line.** GraalPy hands back
+  one object for two equal strings, so the second `_codecs.encode` of the same
+  packed run is a `BINGET`. At protocol 0 the run it names is a line, and a
+  line is not always the text it stands for, so `familiar::named` decides
+  which by the protocol and the run and both the recogniser and the reading
+  ask it. Two dates of the same day in one file used to be the one thing in
+  the matrix no form read.
 
 ### What stays a non-match, and why
 

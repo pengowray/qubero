@@ -46,9 +46,6 @@ pub(super) struct Cursor<'a> {
     pub(super) allow: Allow,
     pub(super) calls: Vec<Call>,
     pub(super) payloads: Vec<(usize, Payload)>,
-    /// The bytes of every run the file wrote as something other than bytes,
-    /// decoded once as the run is read. See [`Match::decoded`].
-    pub(super) runs: Vec<(usize, std::sync::Arc<Vec<u8>>)>,
     /// How many of each specific production fired, which is what says the
     /// file belongs to the form that allows it.
     pub(super) arrays: usize,
@@ -116,7 +113,6 @@ pub(super) struct Save {
     pub(super) says: usize,
     pub(super) calls: usize,
     pub(super) payloads: usize,
-    pub(super) runs: usize,
     pub(super) framing: Framing,
     pub(super) pickler: Pickler,
     pub(super) arrays: usize,
@@ -164,17 +160,9 @@ impl<'a> Cursor<'a> {
         Some((at, end))
     }
 
-    /// What a run the form already decoded stands for, and putting something
-    /// else there in its place: a protocol 0 line read as text and then read
-    /// again as the bytes the call it sits in makes of them.
-    pub(super) fn decoded_at(&self, at: usize) -> Option<std::sync::Arc<Vec<u8>>> {
-        self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held.clone())
-    }
-
-    pub(super) fn replace_run(&mut self, at: usize, held: Vec<u8>) {
-        if let Some(slot) = self.runs.iter_mut().find(|(start, _)| *start == at) {
-            slot.1 = std::sync::Arc::new(held);
-        }
+    /// What a protocol 0 line at `at` spells, read again out of the run.
+    pub(super) fn spelled_at(&self, at: usize, len: usize, quote: Option<u8>) -> Option<Vec<u8>> {
+        super::spelled(self.bytes.get(at..at.checked_add(len)?)?, quote)
     }
 
     /// A whole number a form knows the value of, in the protocol's spelling:
@@ -215,7 +203,6 @@ impl<'a> Cursor<'a> {
             says: self.says.len(),
             calls: self.calls.len(),
             payloads: self.payloads.len(),
-            runs: self.runs.len(),
             framing: self.framing,
             pickler: self.pickler,
             arrays: self.arrays,
@@ -294,7 +281,6 @@ impl<'a> Cursor<'a> {
         self.says.truncate(s.says);
         self.calls.truncate(s.calls);
         self.payloads.truncate(s.payloads);
-        self.runs.truncate(s.runs);
         self.framing = s.framing;
         self.pickler = s.pickler;
         self.arrays = s.arrays;

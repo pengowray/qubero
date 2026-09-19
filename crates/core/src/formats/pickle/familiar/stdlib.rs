@@ -311,7 +311,7 @@ impl Cursor<'_> {
             }
             // A line that spells its value rather than being it, which is the
             // one way protocol 0 writes a word with anything awkward in it.
-            Kind::Spelled { at, bytes: false, .. } => String::from_utf8(self.decoded_at(at)?.to_vec()).ok(),
+            Kind::Spelled { at, len, quote, bytes: false } => String::from_utf8(self.spelled_at(at, len, quote)?).ok(),
             _ => None,
         }
     }
@@ -334,10 +334,13 @@ impl Cursor<'_> {
             // A Python 2 `str` written as a protocol 0 line, which is the
             // `repr` of it: the bytes are what the escaping spells, worked out
             // once when the form read the line.
-            Kind::Spelled { at, .. } => Some(self.decoded_at(*at)?.to_vec()),
+            Kind::Spelled { at, len, quote, .. } => self.spelled_at(*at, *len, *quote),
             Kind::Made { what: Shape::Bytes, items, .. } => match items.first()?.kind {
                 Kind::Text { at, len } => Storage::Latin1.read(self.bytes.get(at..at.checked_add(len)?)?),
-                Kind::Spelled { at, .. } => Storage::Latin1.read(&self.decoded_at(at)?),
+                // The text named where the file wrote it earlier, which is how
+                // GraalPy writes the second of two equal ones.
+                Kind::Ref(Names::Text { at, len }) => self.named_latin1(at, len),
+                Kind::Spelled { at, len, quote, .. } => Storage::Latin1.read(&self.spelled_at(at, len, quote)?),
                 _ => None,
             },
             _ => None,

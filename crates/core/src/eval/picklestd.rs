@@ -349,14 +349,28 @@ impl Evaluator {
             Kind::Ref(Names::Bytes { at, len }) | Kind::Ref(Names::Text { at, len }) => {
                 Some(self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?)
             }
-            Kind::Spelled { at, .. } => found.decoded(*at).map(|held| held.to_vec()),
+            Kind::Spelled { at, len, quote, .. } => {
+                let line = self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?;
+                crate::formats::pickle::familiar::spelled(&line, *quote)
+            }
             Kind::Made { what: Shape::Bytes, items, .. } => match items.first().map(|x| &x.kind) {
                 Some(Kind::Text { at, len }) => {
                     let run = self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?;
                     crate::formats::pickle::familiar::Storage::Latin1.read(&run)
                 }
-                Some(Kind::Spelled { at, .. }) => {
-                    found.decoded(*at).and_then(|held| crate::formats::pickle::familiar::Storage::Latin1.read(&held))
+                // The text named where the file wrote it earlier, which is
+                // how GraalPy writes the second of two equal ones. At protocol
+                // 0 that run is a line, which may spell its characters rather
+                // than being them.
+                Some(Kind::Ref(Names::Text { at, len })) => {
+                    let run = self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?;
+                    crate::formats::pickle::familiar::named(&run, found.proto)
+                        .and_then(|held| crate::formats::pickle::familiar::Storage::Latin1.read(&held))
+                }
+                Some(Kind::Spelled { at, len, quote, .. }) => {
+                    let line = self.read(doc, whole, base + *at as u64 * 8, *len as u64 * 8)?;
+                    crate::formats::pickle::familiar::spelled(&line, *quote)
+                        .and_then(|held| crate::formats::pickle::familiar::Storage::Latin1.read(&held))
                 }
                 _ => None,
             },

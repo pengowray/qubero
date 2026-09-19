@@ -15,8 +15,6 @@
 //! [`crate::codec::pytext`], which is also the decoder a node opens a protocol
 //! 0 array's numbers with. One reading of a line, wherever it is asked for.
 
-use std::sync::Arc;
-
 use super::cursor::Cursor;
 use super::memo::Bound;
 use super::{Kind, Value};
@@ -60,6 +58,34 @@ fn unescape_bytes(line: &[u8], quote: u8) -> Option<Vec<u8>> {
         });
     }
     Some(out)
+}
+
+/// What a protocol 0 line spells, read back out of the run the file holds.
+///
+/// `quote` is the quote a Python 2 `repr` of a `str` was written in, and
+/// nothing for a text, which goes out `raw-unicode-escape`. Nothing at all for
+/// a line no pickler wrote, which is what the recogniser holds a line to.
+///
+/// Read on demand rather than kept: every caller of this has the run in front
+/// of it, and a file of escaped strings would otherwise be held twice over.
+pub fn spelled(line: &[u8], quote: Option<u8>) -> Option<Vec<u8>> {
+    match quote {
+        Some(quote) => unescape_bytes(line, quote),
+        None => crate::codec::pytext::unescaped(line).map(String::into_bytes),
+    }
+}
+
+/// What a run a reference names is worth as text, given the protocol the file
+/// was written at.
+///
+/// At protocol 0 a text is a line, and a line is not always the text it stands
+/// for; from protocol 1 up the run is the text. One place decides which, so
+/// the recogniser and the reading never disagree about what a named run holds.
+pub fn named(run: &[u8], proto: u8) -> Option<Vec<u8>> {
+    match proto == 0 && !is_itself(run) {
+        true => spelled(run, None),
+        false => Some(run.to_vec()),
+    }
 }
 
 /// Whether a run of bytes is what it stands for, which is what says a text may
@@ -201,15 +227,18 @@ impl Cursor<'_> {
                 },
             });
         }
-        let held: Vec<u8> = match quoted {
-            true => unescape_bytes(line, *self.bytes.get(at.checked_sub(1)?)?)?,
-            false => crate::codec::pytext::unescaped(line)?.into_bytes(),
+        let quote = match quoted {
+            true => Some(*self.bytes.get(at.checked_sub(1)?)?),
+            false => None,
         };
+        // Read once here to say the line is one a pickler wrote, and read
+        // again wherever what it spells is wanted. Nothing is kept: the run is
+        // in the file and this is a few bytes of arithmetic over it.
+        let held = spelled(line, quote)?;
         // A `str` whose bytes are not UTF-8 is a byte string, as it is
         // everywhere else; text is text, since it was decoded from characters.
         let bytes = quoted && std::str::from_utf8(&held).is_err();
-        self.runs.push((at, Arc::new(held)));
-        Some(Kind::Spelled { at, len, bytes })
+        Some(Kind::Spelled { at, len, quote, bytes })
     }
 
     /// An `INT` or a `LONG` line, which is how protocol 0 and protocol 1 write
