@@ -37,6 +37,17 @@ Expected object: an `OrderedDict` of `layer.weight` (`arange(12).reshape(3,
 Protocol: 4. It is here for the other opener the legacy format has and for
 the storage keys torch named by buffer address before 1.6.
 
+`torch-v1.0-whole-module-data.pkl` is the data pickle of
+`torch.save(torch.nn.Linear(4, 3), path)` from the same run with torch 1.0.1,
+NumPy 1.19 and Python 3.6.
+
+Expected object: a `Linear` whose class arrives through the persistent id
+`('module', cls, source_file, source)` and whose state holds `_backend`,
+`_parameters` (weight `arange(12).reshape(3, 4)` float32 and a bias of three),
+eight empty `OrderedDict`s, `training`, `in_features` and `out_features`.
+Protocol: 2. It is here for the class source a legacy save carries and for the
+backend call torch 1.1 dropped.
+
 The Rust tests inspect the committed bytes directly. Python is not required.
 These fixtures establish observed instruction forms, not broad NumPy, joblib
 or producer-version compatibility.

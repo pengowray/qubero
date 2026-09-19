@@ -208,6 +208,21 @@ impl Cursor<'_> {
         }
         let start = self.at;
         let floor = marks.last().map_or(0, |mark| mark.floor);
+        // The persistent id a legacy `torch.save` writes for the class of a
+        // module saved whole. It opens with a MARK rather than with a name,
+        // so it is tried here rather than among the productions
+        // [`Cursor::push`] reaches. It fails at its second opcode for every
+        // other MARK in the file, the persistent id of a tensor included.
+        if code == b'(' && self.allow.torch {
+            let here = self.save();
+            match self.module_class() {
+                Some(value) => {
+                    stack.push(Slot { value, deep: 1, fill: Fill::Shut });
+                    return Some(Step::Went);
+                }
+                None => self.restore(here),
+            }
+        }
         match code {
             b'(' => {
                 if marks.len() >= MAX_DEPTH {

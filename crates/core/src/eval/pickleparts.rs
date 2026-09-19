@@ -399,12 +399,17 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // opened to say `pandas.core.frame.DataFrame` is a row a reader
             // reads twice. The module and the name are the words the file
             // spelled; a class named out of the memo spelled neither.
+            // A run of instructions inside it is a class that arrived some
+            // way other than by being named: the persistent id a legacy
+            // `torch.save` writes for a module saved whole, which carries the
+            // class's own source text.
             Kind::Class { parts, .. } => (
                 Vec::new(),
                 parts
                     .iter()
                     .zip([MODULE_FIELD, NAME_FIELD])
                     .map(|(x, name)| (Label::Field(name), Part::Value(x)))
+                    .chain(call_of(found, v).map(|call| (Label::Field(call.name), Part::Call(call, v))))
                     .collect(),
             ),
             // An object of a named class. Its attributes are the entries of

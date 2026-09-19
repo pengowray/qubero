@@ -40,7 +40,7 @@
 use super::cursor::Cursor;
 use super::forms::{Args, Reduce, Via};
 use super::memo::Bound;
-use super::packs::Extension;
+use super::packs::{covers, Extension};
 use super::{Kind, Names, Quantizer, Shape, Tensor, TensorType, Value};
 
 /// The module every rebuilding function is in.
@@ -87,6 +87,9 @@ const PER_TENSOR_AFFINE: &str = "per_tensor_affine";
 /// storage rather than the `('module', ...)` a legacy file writes for a class
 /// whose source it saved.
 const STORAGE_WORD: &str = "storage";
+/// The word the other persistent id opens with, which is the class of a
+/// module saved whole.
+const MODULE_WORD: &str = "module";
 
 /// The class an empty dictionary of backward hooks is, in the spellings the
 /// accelerator module goes by.
@@ -448,6 +451,55 @@ impl Cursor<'_> {
         })
     }
 
+    /// The other persistent id a legacy file writes: the class of a module
+    /// saved whole, and the source text torch read off disk to go with it.
+    ///
+    /// `torch.save(model)` before 1.6 went through `persistent_id`, which
+    /// returns `('module', cls, source_file, source)` for a subclass of
+    /// `nn.Module` and leaves the two texts `None` when `inspect` could not
+    /// find them. torch 1.6 stopped writing it, so this is only ever seen in
+    /// a legacy file.
+    ///
+    /// Nothing is compiled and nothing is run. The tuple is four fixed parts,
+    /// the class has to be one this form may name, and the source is a run of
+    /// text with a row of its own: a reader looking at such a file wants to
+    /// see the class it was written against.
+    pub(super) fn module_class(&mut self) -> Option<Value> {
+        let start = self.at;
+        self.atoms(&[b"("])?;
+        if let Some((at, len)) = self.word_or_reference(MODULE_WORD)? {
+            self.says("persistent id kind", at, len);
+        }
+        let class = self.global_line()?;
+        let Kind::Class { ref path, .. } = class.kind else { return None };
+        // Only a class from the package a saved module's class may come from.
+        // `may_name` let it through as one of the form's prefixes or as one of
+        // its enumerated callables, and a callable named here would be a call
+        // this reader has not measured rather than a module.
+        if !covers(TORCH_CLASSES, path.rsplit_once('.')?.0) {
+            return None;
+        }
+        self.said_text("class source file")?;
+        self.said_text("class source")?;
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"Q")?;
+        self.extensions.add(Extension::Torch);
+        self.finish_call("module persistent id", start, self.at);
+        Some(self.span(start, class.kind))
+    }
+
+    /// One part of that tuple, which is text or the `None` torch writes when
+    /// `inspect` could not find it.
+    fn said_text(&mut self, says: &'static str) -> Option<()> {
+        self.gate()?;
+        if self.peek() == Some(b'N') {
+            self.byte()?;
+            return Some(());
+        }
+        self.text_run_or_reference(says).map(|_| ())
+    }
+
     /// One of the enumerated storage classes, named `torch.<class>`.
     fn storage_class(&mut self) -> Option<&'static Storage> {
         for held in STORAGES {
@@ -571,6 +623,18 @@ pub(super) const TORCH_CALLS: &[Reduce] = &[
         names: &["type", "index"],
         args: Args::Fixed,
         shape: |_c, args| (said(&args[0]) && matches!(args[1].kind, Kind::Int { .. })).then_some(()),
+    },
+    // The backend a module carried in torch 1.0 and older, which is one
+    // function of no arguments. `nn.Module.__init__` set `self._backend` from
+    // it, so every module saved whole by those releases has one in its state;
+    // torch 1.1 dropped the attribute.
+    Reduce {
+        via: Via::Global,
+        path: "torch.nn.backends.thnn._get_thnn_function_backend",
+        what: Shape::Object,
+        names: &[],
+        args: Args::Fixed,
+        shape: |_c, _args| Some(()),
     },
     // The layout a sparse tensor is stored in, which torch writes as a call
     // of one function over the layout's own name. Only the one layout whose

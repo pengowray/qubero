@@ -236,6 +236,41 @@ fn a_newobj_with_arguments_that_no_row_names_is_refused() {
     assert!(recognise(&other).is_none());
 }
 
+/// The data pickle of `torch.save(torch.nn.Linear(4, 3), path)` under torch
+/// 1.0.1, which is the legacy way of saving a module whole: the class arrives
+/// through a persistent id carrying its own source text, and the module's
+/// state holds the backend that release gave every module.
+const V10_MODULE: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/torch-v1.0-whole-module-data.pkl");
+
+/// A module saved whole before torch 1.6 names its class through
+/// `('module', cls, source_file, source)`, which is what `persistent_id`
+/// returns for a subclass of `nn.Module`. Nothing is compiled: the source is
+/// a run of text with a row of its own.
+#[test]
+fn a_module_saved_whole_carries_the_source_of_its_class() {
+    let found = recognise(V10_MODULE).unwrap();
+    assert_eq!(found.form, "torch-tensors-p2-p3-v1");
+    let Kind::Instance { class, state: Some(state) } = &found.value.kind else { panic!("an object") };
+    let Kind::Class { path, .. } = &class.kind else { panic!("a class") };
+    assert_eq!(path, "torch.nn.modules.linear.Linear");
+    assert!(matches!(state.kind, Kind::Dict(_)));
+    let seen = dump(V10_MODULE);
+    assert_eq!(named_row(&seen, "persistent id kind").value, V::Str("module".into()));
+    let V::Str(source) = &named_row(&seen, "class source").value else { panic!("the source") };
+    assert!(source.starts_with("class Linear(Module):"));
+    assert_eq!(named_row(&seen, "weight").value, V::Str("float32 parameter 3 x 4".into()));
+    tiles(&seen);
+}
+
+/// The class has to be one a saved module's class may be, which is `torch.nn`
+/// and nothing wider. A persistent id naming anything else is a non-match.
+#[test]
+fn a_module_persistent_id_over_another_class_is_refused() {
+    let mut other = V10_MODULE.to_vec();
+    replace(&mut other, b"ctorch.nn.modules.linear\nLinear\n", b"ctorch.jit.modules.linear\nLinear\n");
+    assert!(recognise(&other).is_none());
+}
+
 /// `BINPERSID` is read inside the tensor's own run and nowhere else.
 #[test]
 fn a_persistent_id_outside_a_tensor_is_not_a_familiar_form() {
