@@ -86,6 +86,14 @@ impl Cursor<'_> {
                 self.latin1(at, len)?;
                 (at, len, Storage::Latin1)
             }
+            // The same run, named where the file wrote it earlier rather than
+            // spelled again. The caller reads the bytes out of the run it
+            // names, which is where an array whose numbers are an earlier
+            // array's run already reads them.
+            Kind::Ref(Names::Text { at, len }) if self.names_text(at, len) => {
+                self.latin1(at, len)?;
+                (at, len, Storage::Latin1)
+            }
             // Protocol 0 wrote the text as a line with an escape in it. What
             // the call makes of it is those characters one byte each, so the
             // run is two spellings deep and the caller opens it through both
@@ -162,15 +170,15 @@ impl Cursor<'_> {
     /// CPython files a text under the address of the object, so two equal
     /// runs are two slots and the second is spelled out again. GraalPy hands
     /// back one object for both, so the second is a reference. That is the
-    /// runtime's own string table and not its pickler: a reference comes back
-    /// as the run it names, and the bytes are read there.
+    /// runtime's own string table and not its pickler.
     ///
-    /// At protocol 0 the run it names is a line, and a line is not always the
-    /// text it stands for. The reference comes back naming the run rather than
-    /// holding it either way, so the bytes under it are read the same way the
-    /// line's own reading read them. Only Python 3 writes this call, and its
-    /// protocol 0 texts go out as UNICODE lines, so the escaping is the one
-    /// `raw-unicode-escape` writes.
+    /// A reference comes back as the reference it is, naming the run rather
+    /// than holding it. Read as the text itself it would be a value whose
+    /// bytes are somewhere else in the file, and every total over the file
+    /// would count that run twice: once under the text that spelled it and
+    /// once under the one naming it. Protocol 0 needs it as well, where the
+    /// run it names is a line and a line is not always the text it stands
+    /// for; `named` is the one reading of either.
     fn encoded_text(&mut self) -> Option<Value> {
         self.gate()?;
         if !self.at_reference() {
@@ -179,9 +187,6 @@ impl Cursor<'_> {
         let start = self.at;
         let here = self.save();
         match self.reference().cloned() {
-            Some(Bound::Text { at, len }) if self.names_text(at, len) => Some(self.span(start, Kind::Text { at, len })),
-            // A protocol 0 line that spells its text is not the text: it is
-            // named rather than held, and read where the file wrote it.
             Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Ref(Names::Text { at, len }))),
             _ => {
                 self.restore(here);

@@ -91,6 +91,43 @@ fn the_fold_bit_is_protocol_4_s_and_is_not_the_month() {
     assert!(recognise(&older(folded)).is_none(), "the fold bit is not written below protocol 4");
 }
 
+/// Two dates of the same day, at protocol 2, where the second names the run
+/// the first spelled rather than spelling it again. GraalPy hands one string
+/// object back for two equal texts, so its `_codecs.encode` is handed a
+/// reference where CPython writes the text out.
+///
+/// The second date reads as the same day, and its `text` row is the reference
+/// it is: a row of the two bytes the file wrote, with the run it names said
+/// on it. Read as the text itself the row would sit on the first date's bytes
+/// and every total over the file would count that run twice.
+#[test]
+fn a_date_naming_an_earlier_date_s_run_reads_it_and_counts_nothing() {
+    // The packed day as the latin-1 text it spells, which is the byte 0xe4
+    // written as the two bytes UTF-8 gives U+00E4.
+    let spelled = b"\x07\xc3\xa4\x01\x02";
+    // Counting the memo marks out: 0 is the list, 1 the class, 2 `encode`,
+    // 3 the text, 4 the word `latin1`, 5 the tuple they are in, 6 the byte
+    // string, 7 the tuple holding it and 8 the date. The second date names
+    // the first four of those and files five more.
+    let mut body = b"\x80\x02]q\x00(cdatetime\ndate\nq\x01c_codecs\nencode\nq\x02X\x05\x00\x00\x00".to_vec();
+    body.extend_from_slice(spelled);
+    body.extend_from_slice(b"q\x03X\x06\x00\x00\x00latin1q\x04\x86q\x05Rq\x06\x85q\x07Rq\x08");
+    body.extend_from_slice(b"h\x01h\x02h\x03h\x04\x86q\tRq\n\x85q\x0bRq\x0ce.");
+    let found = recognise(&body).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&body)));
+    assert_eq!(found.form, "stdlib-values-p2-p3-v1");
+    let seen = dump(&body);
+    tiles(&seen);
+    let days: Vec<&Row> = seen.iter().filter(|r| r.ty == "date").collect();
+    assert_eq!(days.len(), 2, "two dates expected in {seen:#?}");
+    assert_eq!(days[0].value, days[1].value);
+    // The run itself is one row of the file, under the date that spelled it.
+    let texts: Vec<&Row> = seen.iter().filter(|r| r.name == "text").collect();
+    assert_eq!(texts.len(), 2, "each byte string says what it was spelled as");
+    assert_eq!((texts[0].at, texts[0].len), (46, 5));
+    assert_eq!(texts[1].len, 2, "a reference is the BINGET and no bytes of the run it names");
+    assert!(texts[1].at > texts[0].at, "the second date's row is its own two bytes");
+}
+
 /// A `Decimal` is built from the text its own `str` writes, so the text is the
 /// value and a text Python would not have written is not one.
 #[test]

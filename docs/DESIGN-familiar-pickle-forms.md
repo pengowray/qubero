@@ -590,13 +590,16 @@ stack; what changes is that every value is an opcode and a line.
   `codec::pytext` is the one reading of the escaping under it, which is what
   lets a node open a protocol 0 array's numbers with the same decoder the
   recogniser measured them with.
-- **A text named where the file wrote it may name a line.** GraalPy hands back
-  one object for two equal strings, so the second `_codecs.encode` of the same
-  packed run is a `BINGET`. At protocol 0 the run it names is a line, and a
-  line is not always the text it stands for, so `lines::is_named_text` is the
-  one rule that says which, by the protocol and the run, and the recogniser
-  and the reading both ask it. Two dates of the same day in one file used to
-  be the one thing in the matrix no form read.
+- **A text named where the file wrote it stays a reference.** GraalPy hands
+  back one object for two equal strings, so the second `_codecs.encode` of the
+  same packed run is a `BINGET`. The value is the reference, not the text: its
+  row is the two bytes the file wrote, with a `refers to` row saying what is at
+  the other end, and the run is read and counted once, under the value that
+  spelled it. At protocol 0 the run it names is a line, and a line is not
+  always the text it stands for, so `lines::is_named_text` is the one rule that
+  says which, by the protocol and the run, and the recogniser and the reading
+  both ask it. Two dates of the same day in one file used to be the one thing
+  in the matrix no form read.
 
 ### What stays a non-match, and why
 

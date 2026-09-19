@@ -955,3 +955,41 @@ is its text and any problem on it, as before.
 name: it reads the run each cell points at and compares it with what the cell
 says. `crates/core/tests/joblib_real.rs` is the joblib half of
 `pickle_real.rs`, split out unchanged in the commit before it.
+
+## A named run is read where it was written: landed on 2026-09-20
+
+`cargo test -p qubero-core --test kinds_real` failed on four GraalPy files:
+`stdlib-datetime.p1.pypickle.pickle`, `stdlib-datetime.p2.pypickle.pickle`,
+`stdlib-datetime-aware.p1.pypickle.pickle` and
+`stdlib-datetime-aware.p2.pypickle.pickle`. Each counted about 40% more bytes
+than it holds.
+
+**The cause.** GraalPy hands back one object for two equal strings, so the
+second `_codecs.encode` of the same packed day is a `BINGET`.
+`Cursor::encoded_text` came back from that reference with `Kind::Text` holding
+the run it names, which is a value whose bytes are a hundred bytes away from
+the value itself. Two things followed. The `text` row was placed on the first
+date's run, so that run was counted twice. And `pickleparts::parts` lays a
+node's children out in file order and fills what is between them with the
+instructions there, so a child before its parent sent the cursor backwards and
+the fill after it named every instruction from the run's end to the parent's,
+most of the file, as bytes of one byte string.
+
+**The fix**, which is the convention the rest of the tree already keeps: a
+reference is read as the reference it is. `encoded_text` returns
+`Kind::Ref(Names::Text)` at every protocol now rather than only at protocol 0,
+so the row is the two bytes of the `BINGET` with a `refers to` row saying what
+is at the other end, and the run is counted once, under the date that spelled
+it. `Cursor::exact_word` was already written this way. `Cursor::encode_call`,
+which is where an array's numbers reach protocol 2, takes a reference of a run
+that is the text it stands for and reads the numbers there, so the arrays are
+byte for byte what they were.
+
+Nothing else had to change: `Cursor::packed_bytes` and
+`Evaluator::packed` already read both spellings, and `familiar::named` is
+still the one reading of a run a reference names.
+`a_date_naming_an_earlier_date_s_run_reads_it_and_counts_nothing` in
+`familiar/tests/stdlib.rs` is the claim, over two protocol 2 dates of the same
+day. `kinds_real` is worth adding to the merge gate: it is the only test that
+would have caught this, it walks every file in the collection and it takes
+about nine minutes.
