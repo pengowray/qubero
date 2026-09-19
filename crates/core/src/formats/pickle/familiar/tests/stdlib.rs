@@ -301,3 +301,37 @@ fn a_dictionary_may_be_keyed_by_the_values_python_hashes() {
     assert!(recognise(&keyed(&call("collections", "Counter", b"}\x94", 1))).is_none());
     assert!(recognise(&keyed(&cat(&[&call("collections", "deque", b"", 0), b"(K\x01K\x02e"]))).is_none());
 }
+
+/// The mixed form is the union of the families' tables and not a hole in
+/// them: a file holding two families and one call nobody enumerated is
+/// refused, the same way each family alone refuses it.
+///
+/// The extra value is a class from a module a form may name a class *from*,
+/// called. That is the one place a module whitelist could be mistaken for a
+/// call list, and it is the distinction the safety line rests on, so the
+/// widest form is the one to make it against.
+#[test]
+fn a_mixed_file_holding_an_unenumerated_call_is_still_refused() {
+    let entries = |extra: &[u8]| {
+        let mut body = cat(&[
+            b"}\x94(",
+            &word("a"),
+            &one_array(2, "i1", b'|', b"K\x02\x85\x94", &[1, 2]),
+            &word("d"),
+            &call("datetime", "datetime", &blob(MOMENT), 1),
+        ]);
+        body.extend_from_slice(extra);
+        body.extend_from_slice(b"u.");
+        framed(&body)
+    };
+    // The array and the date on their own: two families, so the mixed form
+    // reads it and says which two.
+    let plain = entries(b"");
+    let found = recognise(&plain).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&plain)));
+    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.families(), "basic, stdlib, numpy");
+    // One more entry, and the only thing that changed is a REDUCE of a class
+    // `collections` has and the calls table does not.
+    let extra = cat(&[&word("x"), &call("collections", "ChainMap", b"", 0)]);
+    assert!(recognise(&entries(&extra)).is_none());
+}

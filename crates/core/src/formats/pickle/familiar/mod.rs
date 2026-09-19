@@ -23,6 +23,7 @@ mod joblib;
 mod memo;
 mod numpy;
 mod object;
+mod packs;
 mod stdlib;
 mod values;
 #[cfg(test)]
@@ -31,7 +32,8 @@ mod tests;
 pub use captured::*;
 
 use cursor::{Cursor, Framing};
-use forms::{forms, Allow, Family};
+use forms::{forms, Allow, Family, Wrapped};
+use packs::{Pack, Packs};
 use memo::Memo;
 
 pub const MESSAGE: &str = "Matched a Familiar Pickle Form: bypassed Pickle stack machine decoding.";
@@ -106,6 +108,9 @@ pub struct Match {
     /// Every instruction in the file, in order, so that the bytes no value
     /// covers can be named rather than left over.
     pub ops: Vec<Instr>,
+    /// Which families' own productions the file used, which the mixed form
+    /// wants two of and the `families` row names.
+    packs: Packs,
     stop: usize,
     payloads: Vec<(usize, Payload)>,
     /// The bytes of every run the file did not write as bytes, by where the
@@ -120,6 +125,16 @@ impl Match {
     /// Nothing when the run in the file already is the bytes.
     pub fn decoded(&self, at: usize) -> Option<&Arc<Vec<u8>>> {
         self.runs.iter().find(|(start, _)| *start == at).map(|(_, held)| held)
+    }
+
+    /// Which families of values the file turned out to hold, in a fixed order
+    /// and starting with the grammar every one of them is read against.
+    ///
+    /// Said of every matched file and not only a mixed one. The form names a
+    /// grammar and this names what the file used, and a reader comparing two
+    /// files wants to see the same rows in both.
+    pub fn families(&self) -> String {
+        self.packs.names()
     }
 }
 
@@ -196,6 +211,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         arrays: 0,
         objects: 0,
         instances: 0,
+        packs: Packs::default(),
         wrappers: 0,
         raws: Vec::new(),
         furthest: 0,
@@ -318,6 +334,13 @@ impl<'a> Cursor<'a> {
         if self.allow.classes.is_empty() && holds_class(&value) {
             return None;
         }
+        // What the file used, which is the classes noted as they were built
+        // and the three productions that name no class, each of which already
+        // keeps a count of itself.
+        let mut packs = self.packs;
+        packs.set(Pack::Numpy, self.arrays > 0);
+        packs.set(Pack::Builtins, self.objects > 0);
+        packs.set(Pack::Joblib, self.wrappers > 0);
         let plain = self.arrays == 0 && self.objects == 0 && self.instances == 0;
         let needed = match self.allow.family {
             Family::Basic => plain,
@@ -326,14 +349,21 @@ impl<'a> Cursor<'a> {
             // A library form is the one the file's classes came from, and it
             // has to have read at least one of them.
             Family::Library => self.instances > 0,
+            // The mixed form reads every family at once, so what it requires
+            // is the mixture: a file of one family is read under the form for
+            // that family, which was tried before this one and says so in its
+            // name. Two is the count whatever the pair is, so the widest
+            // production the union allows, an array of pickled objects, still
+            // needs something from a second family beside it.
+            Family::Mixed => packs.families() >= 2,
         };
         if !needed {
             return None;
         }
-        // A form that reads what `joblib.dump` writes requires the file to
+        // A form that is *for* what `joblib.dump` writes requires the file to
         // hold one, the way every other production a form allows is one the
-        // file has to use.
-        if self.allow.joblib && self.wrappers == 0 {
+        // file has to use. The mixed form only permits it.
+        if self.allow.joblib == Wrapped::Required && self.wrappers == 0 {
             return None;
         }
         Some(Match {
@@ -344,6 +374,7 @@ impl<'a> Cursor<'a> {
             body,
             calls: std::mem::take(&mut self.calls),
             ops: instructions(self.bytes, &self.raws),
+            packs,
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),
             runs: std::mem::take(&mut self.runs),

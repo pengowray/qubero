@@ -35,6 +35,7 @@ fn the_familiar_template_places_the_decoded_values() {
             (1, "header", "header", 0, 11),
             (2, "message", "computed text", 0, 0),
             (2, "form", "computed text", 0, 0),
+            (2, "families", "computed text", 0, 0),
             (2, "pickler", "computed text", 0, 0),
             (2, "proto", "bytes[]", 0, 1),
             (2, "protocol", "u8", 1, 1),
@@ -63,6 +64,9 @@ fn the_familiar_template_places_the_decoded_values() {
     );
     assert_eq!(named_row(&seen, "message").value, V::Str(MESSAGE.into()));
     assert_eq!(named_row(&seen, "form").value, V::Str("basic-p4-p5-v5".into()));
+    // What the file used, which for a file of plain data is the grammar every
+    // form reads and nothing beyond it.
+    assert_eq!(named_row(&seen, "families").value, V::Str("basic".into()));
     // Nothing in this file tells the two picklers apart, and the row says so
     // rather than being left out.
     assert_eq!(named_row(&seen, "pickler").value, V::Str(Pickler::Undetermined.name().into()));

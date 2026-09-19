@@ -178,19 +178,20 @@ design document.
 
 | File | What it holds | Lines |
 | --- | --- | --- |
-| `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 317 |
-| `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, and the run after it | 190 |
-| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 397 |
-| `familiar/forms.rs` | the families, declared once each and read at every protocol | 400 |
-| `familiar/basic.rs` | the stack a pickle is read against | 644 |
+| `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 381 |
+| `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, and the run after it | 191 |
+| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 462 |
+| `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 663 |
+| `familiar/packs.rs` | which families a file turned out to use, as the bits of one word | 95 |
+| `familiar/basic.rs` | the stack a pickle is read against | 657 |
 | `familiar/values.rs` | the leaf productions, and what Python can hash | 187 |
 | `familiar/lines.rs` | protocol 0: the lines, and the two escapings | 256 |
 | `familiar/codecs.rs` | a byte string below protocol 3 | 177 |
-| `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 434, 334 |
-| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 110, 358 |
-| `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 398 |
-| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 491 |
-| `eval/pickletree.rs` | placing and naming those, and the table shapes | 445 |
+| `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 454, 334 |
+| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 110, 374 |
+| `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 400 |
+| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 525 |
+| `eval/pickletree.rs` | placing and naming those, and the table shapes | 517 |
 | `eval/picklesaid.rs` | what a value comes to in a few words | 116 |
 | `eval/picklestd.rs` | a date, an exact number, an id or a path as the text Python writes it in | 335 |
 | `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 393, 596 |
@@ -387,6 +388,46 @@ built with `NEWOBJ` needs. The scikit-learn row and the joblib-scikit-learn row
 share one `SKLEARN_CLASSES` and one `SKLEARN_CALLS` rather than either of them
 holding a copy.
 
+## Families compose: landed on 2026-09-19
+
+A form belonged to one family, and a pickle that mixed families matched
+nothing: `{"when": datetime, "weights": ndarray}` was refused by the NumPy form
+at the date and by the standard library's at the array. Six ordinary files
+written with numpy 2.5, pandas 3.0 and scikit-learn 1.9 were the measurement,
+and five of the six read as nothing at all.
+
+There is now one more form per protocol range, `mixed-values-p4-p5-v1` and its
+three lower names, whose class prefixes, named globals and enumerated calls are
+the union of every family's. The union is gathered from `DECLARED` itself, so a
+family added there is in it with no second edit. `DESIGN-familiar-pickle-forms.md`
+has the whole of it under "Families compose: the mixed form", including why a
+union of enumerated sets is still an enumerated set and what was checked before
+believing that.
+
+Three things are worth carrying forward:
+
+- **It is tried last and it requires two families of values.** Being last keeps
+  every file that already had a name. Requiring two is what keeps every file
+  that had none: the widest thing the union allows that no single form does is
+  an array of pickled objects, and a file of nothing but one of those is one
+  family and stays a non-match. The verdict over `pickle/`, `pickle-matrix/`
+  and `joblib/`, 1,076 files, is byte for byte what it was.
+- **`Allow::joblib` is three-state now** (`Wrapped::Refused`, `Required`,
+  `Allowed`) rather than a `bool`. The two joblib forms are *for* what
+  `joblib.dump` writes and hold the file to having a wrapper; the mixed form
+  only permits one. So `joblib/stdlib-and-arrays.joblib`,
+  `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` read now,
+  and the plain array and estimator files keep their own names.
+- **The header says `families` under `form`.** `Packs` in `forms.rs` is a bitset
+  of which families the file used, put back on a rewind like every other
+  counter; `pack_of` answers which family a module belongs to by asking the same
+  `DECLARED` prefixes the forms are declared with, so the two cannot drift. The
+  row is on every matched file, opens with `basic`, and reads
+  `basic, builtins, stdlib, numpy, pandas` for a frame with a note and a date.
+
+`tools/make_mixed_pickle_samples.py` in the collection writes the twelve
+`pickle/mixed-*.pickle` files, six objects at protocol 4 and at protocol 2.
+
 ## Not decided
 
 - torch. `torch.save` writes a ZIP holding a protocol 2 pickle with persistent
@@ -397,3 +438,12 @@ holding a copy.
   shape of `pickle::is_joblib`, which recognises a file by where its opcodes
   stop rather than by what is at its front. The legacy torch file is a run of
   pickles and then binary, which is the same problem again.
+
+  It can reuse a fourth thing now: a checkpoint is an `OrderedDict` of tensors
+  beside plain values and sometimes numpy arrays, which is three families in one
+  file. So torch wants the tensor production and a `Pack::Torch` beside it, and
+  the mixed form carries the rest: `{"epoch": 3, "loss": 0.125, "model":
+  OrderedDict, "note": str}` is basic and the standard library and torch, and
+  nothing about that combination needs a row of its own. Add the tensor
+  production's own `Declared` row for a file of nothing but tensors, and let a
+  checkpoint fall to the mixed form, the way a joblib file holding dates does.
