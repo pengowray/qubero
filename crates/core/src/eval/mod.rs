@@ -36,6 +36,7 @@ mod pickleframe;
 mod pickleobjects;
 mod pickleparts;
 mod picklesaid;
+mod picklesummary;
 mod picklestd;
 mod pickletorch;
 pub(crate) use pickletorch::element_ty;
