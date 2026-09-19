@@ -136,12 +136,20 @@ pub enum Kind {
     /// BUILD after the call handed it, the entries or items the opcodes after
     /// it filled in, which is how an `OrderedDict` and a `deque` are written,
     /// or the mapping a `Counter` is called with, which is the counter.
+    ///
+    /// `attrs` is what a BUILD handed a call whose result was already full.
+    /// `nn.Module.state_dict()` is an `OrderedDict` filled with the weights
+    /// and then given a `_metadata` attribute, so the contents and the
+    /// attributes are two different things arriving the same way and are kept
+    /// apart. Nothing for every other call, where a BUILD's state is the
+    /// result's own and goes in `state`.
     Made {
         what: Shape,
         names: &'static [&'static str],
         callable: Option<Box<Value>>,
         items: Vec<Value>,
         state: Option<Box<Value>>,
+        attrs: Option<Box<Value>>,
     },
 }
 

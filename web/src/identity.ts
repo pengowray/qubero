@@ -111,6 +111,10 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   tar: ["tar"],
   zip: ["zip", "jar", "epub", "docx", "xlsx", "pptx", "odt", "apk", "npz"],
   zarrzip: ["zip"],
+  // What people call a saved model: `.pt` and `.pth` are torch's own, `.ckpt`
+  // is what training frameworks write, and `.bin` is what a model hub serves
+  // one as.
+  torchzip: ["pt", "pth", "ckpt", "bin", "zip"],
   adioszip: ["zip"],
   "7z": ["7z"],
   rar4: ["rar"],

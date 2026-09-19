@@ -77,6 +77,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   xar: "xar archive (macOS .pkg)",
   xm: "FastTracker XM",
   zarrzip: "Zarr ZipStore",
+  torchzip: "PyTorch checkpoint (ZIP)",
   eps: "Encapsulated PostScript",
   rtf: "Rich Text Format",
   elf: "ELF",

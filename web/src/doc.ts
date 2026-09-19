@@ -2405,7 +2405,7 @@ export class Doc {
    * are an archive's records to the byte. Anything that works on entries has
    * to ask this rather than the template's name. */
   get isZip(): boolean {
-    return this.template === "zip" || this.template === "zarrzip" || this.template === "adioszip";
+    return this.template === "zip" || this.template === "zarrzip" || this.template === "adioszip" || this.template === "torchzip";
   }
 
   /** Whether the file is a PNG, whatever else it also is. A PICO-8 cartridge

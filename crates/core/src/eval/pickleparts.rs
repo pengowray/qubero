@@ -87,6 +87,9 @@ pub(super) const REQUIRES_GRAD_FIELD: &str = "requires grad";
 /// What a tensor is, for the row that says so, when the reader wants the word
 /// rather than the shape. The entry row over it says both.
 pub(super) const IS_FIELD: &str = "is";
+/// What a container was given beyond what is in it, which is what
+/// `nn.Module.state_dict()` hangs its `_metadata` off.
+pub(super) const ATTRIBUTES_FIELD: &str = "attributes";
 
 /// The fewest dictionaries that make a list of records. One dictionary is a
 /// record, not a list of them.
@@ -388,7 +391,7 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // `class` row is there for a call whose callable is a value of the
             // file, and left out for a builtin a form matched inside a fixed
             // run, which already says what it is.
-            Kind::Made { names, callable, items, state, .. } => {
+            Kind::Made { names, callable, items, state, attrs, .. } => {
                 let mut kids: Vec<(Label, Part)> =
                     callable.iter().map(|c| (Label::Field(CLASS_FIELD), Part::Value(c))).collect();
                 kids.extend(items.iter().enumerate().map(|(i, x)| match names.get(i) {
@@ -396,6 +399,11 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                     None => (Label::Index(i), Part::Value(x)),
                 }));
                 kids.extend(held(state));
+                // What a BUILD gave a container that was already full, kept
+                // as the one dictionary it is rather than mixed in with the
+                // contents: a state dict's entries are the weights, and
+                // `_metadata` is not one of them.
+                kids.extend(attrs.iter().map(|a| (Label::Field(ATTRIBUTES_FIELD), Part::Value(a))));
                 (Vec::new(), kids)
             }
             // An array whose values are objects. They were pickled after it and

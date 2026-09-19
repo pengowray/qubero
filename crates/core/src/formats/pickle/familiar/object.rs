@@ -252,7 +252,17 @@ impl Cursor<'_> {
         let state = Some(Box::new(state));
         match into.kind {
             Kind::Instance { class, state: None } => Some(Kind::Instance { class, state }),
-            Kind::Made { what, names, callable, items, state: None } => Some(Kind::Made { what, names, callable, items, state }),
+            // A call whose result the BUILD is the state of, which is
+            // every call but the three containers filled by the opcodes
+            // after them.
+            Kind::Made { what, names, callable, items, state: None, attrs } => Some(Kind::Made { what, names, callable, items, state, attrs }),
+            // One of those three, already full: the BUILD is giving it
+            // attributes rather than contents. `nn.Module.state_dict()` is an
+            // `OrderedDict` of weights with a `_metadata` attribute, and the
+            // two are not the same thing.
+            Kind::Made { what, names, callable, items, state: held, attrs: None } => {
+                Some(Kind::Made { what, names, callable, items, state: held, attrs: state })
+            }
             _ => None,
         }
     }
@@ -333,7 +343,7 @@ impl Cursor<'_> {
             Args::FillsList => Some(Box::new(Value { at: self.at, len: 0, kind: Kind::List(Vec::new()) })),
             Args::Fixed => None,
         };
-        Some(Kind::Made { what: call.what, names: call.names, callable: Some(Box::new(callable)), items: held, state })
+        Some(Kind::Made { what: call.what, names: call.names, callable: Some(Box::new(callable)), items: held, state, attrs: None })
     }
 
     /// `copy_reg._reconstructor(cls, object, None)`, which is `cls.__new__(cls)`

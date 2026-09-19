@@ -121,7 +121,7 @@ impl Cursor<'_> {
         // Python hashes a byte string, so a name for one may stand where a
         // dictionary key belongs.
         self.memoize(Bound::Made { what: Shape::Bytes, at: start, hashable: true })?;
-        Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None }))
+        Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None, attrs: None }))
     }
 
     /// `bytes()` with no arguments, which is what an empty byte string is

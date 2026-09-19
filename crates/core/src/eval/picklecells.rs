@@ -78,6 +78,13 @@ impl Evaluator {
             return self.array_cells(doc, &r, base, &found, array, from, to);
         }
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return fail("not a frame") };
+        // A tensor, whose values are in another entry of the archive and are
+        // read there rather than anywhere under this node.
+        if let Some(tensor) = super::pickletorch::tensor_of(object) {
+            let r = self.memo[&root].clone();
+            let base = r.offset;
+            return self.tensor_cells(doc, &r, base, tensor, from, to);
+        }
         let Some(frame) = frame_of(object) else { return fail("not a frame") };
         let r = self.memo[&root].clone();
         let base = r.offset;

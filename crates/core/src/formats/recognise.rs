@@ -298,6 +298,7 @@ const PROBES: &[Probe] = &[
     Probe::Is("omf", |h, _| is_omf(h)),
     Probe::Is("msdos", is_dos),
     Probe::Is("adioszip", |h, _| is_adios_zip(h)),
+    Probe::Is("torchzip", |h, _| is_torch_zip(h)),
     Probe::Is("zarrzip", |h, _| is_zarr_zip(h)),
     Probe::Is("lha", |h, _| is_lha(h)),
     Probe::Is("lnk", |h, _| is_lnk(h)),
@@ -1055,6 +1056,17 @@ fn is_zarr_zip(head: &[u8]) -> bool {
     any_local_entry(head, |entry| is_zarr_key(entry.name))
 }
 
+/// Whether these leading bytes are a checkpoint `torch.save` wrote.
+///
+/// torch puts everything under one folder and writes `data.pkl` first, so the
+/// front of the file says so: a stored entry named `<folder>/data.pkl`. The
+/// folder is what tells it from a loose pickle somebody zipped, and the whole
+/// test at the end of the file, where every name is known, also asks for the
+/// `version` entry beside it. See [`archive_by_names`].
+fn is_torch_zip(head: &[u8]) -> bool {
+    any_local_entry(head, |entry| entry.method == 0 && leaf_of(entry.name) == b"data.pkl" && entry.name.contains(&b'/'))
+}
+
 /// Whether a ZIP holds a BP5 directory: its index or its formats, recognised
 /// as themselves from the bytes the window has of them, stored or deflated.
 fn is_adios_zip(head: &[u8]) -> bool {
@@ -1225,6 +1237,16 @@ fn archive_by_names(names: &[&[u8]]) -> &'static str {
     });
     if dataset {
         return "adioszip";
+    }
+    // A checkpoint `torch.save` wrote: `data.pkl` and `version` under one
+    // folder, which is what torch has written since 1.6 and what its own
+    // reader looks for.
+    let torched = names.iter().filter(|n| leaf_of(n) == b"data.pkl").any(|pickle| {
+        let dir = dir_of(pickle);
+        !dir.is_empty() && names.iter().any(|n| leaf_of(n) == b"version" && dir_of(n) == dir)
+    });
+    if torched {
+        return "torchzip";
     }
     if names.iter().any(|n| is_zarr_key(n)) {
         return "zarrzip";

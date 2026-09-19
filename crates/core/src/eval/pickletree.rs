@@ -135,6 +135,24 @@ impl Evaluator {
                 });
             }
         }
+        // A tensor, whose numbers are in another entry of the archive. How
+        // many rows and columns it has is in the match, so the shape is
+        // settled here and the cells are read in
+        // [`Evaluator::tensor_cells`].
+        if let (_, Part::Value(v)) = &here {
+            if let Some(tensor) = super::pickletorch::tensor_of(v) {
+                if tensor.columns() > 0 {
+                    return Some(crate::template::TableShape {
+                        row_word: Some(ROW_WORD.into()),
+                        cells: Some(Cells::Computed { rows: tensor.rows() }),
+                        ..Default::default()
+                    });
+                }
+                // A tensor of no dimensions is one value, and one value is
+                // not a table.
+                return None;
+            }
+        }
         // A list of dictionaries, which is how rows are pickled when nobody
         // reached for pandas. Its columns are the keys, which are written in
         // the file beside the values, so the shape says where a cell is rather
@@ -209,8 +227,13 @@ impl Evaluator {
         // columns are places along an axis rather than names in the file.
         if matches!(shape.cells, Some(Cells::Computed { .. })) {
             let (root, found) = self.pickle_doc(doc, path)?;
-            if matches!(spot(&found, &path[root.len()..]), Some((_, Part::Data(_)))) {
-                return Ok(Some(shape));
+            // An array whose cells the core reads, and a tensor, have both
+            // said all of it already: their columns are places along an axis
+            // rather than names written in the file.
+            match spot(&found, &path[root.len()..]) {
+                Some((_, Part::Data(_))) => return Ok(Some(shape)),
+                Some((_, Part::Value(v))) if super::pickletorch::tensor_of(v).is_some() => return Ok(Some(shape)),
+                _ => {}
             }
             return self.frame_shape(doc, path);
         }

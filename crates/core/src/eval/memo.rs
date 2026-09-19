@@ -82,6 +82,13 @@ pub(super) struct Memo {
     /// pickle field it was run over. Kept beside the nodes for the reason the
     /// parsed JSON is: the values are placed from it rather than read.
     pickle: FxHashMap<Vec<usize>, Arc<Match>>,
+    /// Which entry of an archive is where, for each space one has been walked
+    /// in. Keyed by space rather than by path: an archive is the space it is
+    /// and every node in it asks the same question. Kept for a torch
+    /// checkpoint, where a tensor in the pickle names a storage in another
+    /// entry and every row and every cell of it has to find that entry. See
+    /// [`pickletorch`](super::pickletorch).
+    archives: FxHashMap<u32, Arc<Vec<super::pickletorch::Held>>>,
     /// What a tagged search over a named list has learned, by the stretch of
     /// bytes the list covers and the field of an element the label is read
     /// from: `(space, offset, limit, key)`. Not by path, so that every
@@ -154,6 +161,7 @@ impl Memo {
             self.json.remove(&p);
             self.pickle.remove(&p);
         }
+        self.archives.clear();
         // A stitched stream's node is a field of the file and stays, but the
         // parts its walk found were read from bytes that may be what changed,
         // and the space they made is going. So the walk starts again.
@@ -264,6 +272,7 @@ impl Memo {
         self.lists.retain(|p, _| !inside(p));
         self.json.retain(|p, _| !inside(p));
         self.pickle.retain(|p, _| !inside(p));
+        self.archives.clear();
     }
 
     /// What the list at `path` has learned about itself. A node that is not a
@@ -322,6 +331,15 @@ impl Memo {
 
     pub(super) fn remember_pickle(&mut self, path: Vec<usize>, found: Arc<Match>) {
         self.pickle.insert(path, found);
+    }
+
+    /// Where every entry of the archive in `space` is, if it has been walked.
+    pub(super) fn archive(&self, space: u32) -> Option<&Arc<Vec<super::pickletorch::Held>>> {
+        self.archives.get(&space)
+    }
+
+    pub(super) fn remember_archive(&mut self, space: u32, held: Arc<Vec<super::pickletorch::Held>>) {
+        self.archives.insert(space, held);
     }
 
     /// What running the file said about it, if it has been run.
@@ -419,6 +437,7 @@ impl Memo {
         self.lists.clear();
         self.json.clear();
         self.pickle.clear();
+        self.archives.clear();
         self.tags.clear();
         self.tag_entries = 0;
         self.deduced = None;
@@ -518,6 +537,9 @@ impl Memo {
         // A recognition covers the whole file, so nothing that was edited
         // ended before the edit and the file is recognised again.
         self.pickle.retain(|path, _| self.nodes.get(path).is_some_and(ended));
+        // An archive's own records may be what moved, so the walk that found
+        // its entries runs again.
+        self.archives.clear();
         // A run over the whole file says nothing about which half of it an
         // edit touched, so an edit anywhere means running it again.
         self.deduced = None;

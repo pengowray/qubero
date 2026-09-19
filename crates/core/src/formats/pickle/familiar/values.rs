@@ -231,7 +231,7 @@ impl Cursor<'_> {
         let (at, len) = self.counted(0x96, NO_OPCODE, NO_OPCODE, 0x96)?;
         self.bytearray_memoize(Bound::Made { what: Shape::ByteArray, at: start, hashable: false })?;
         let held = Value { at, len, kind: Kind::Bytes { at, len } };
-        Some(self.span(start, Kind::Made { what: Shape::ByteArray, names: CONTENT, callable: None, items: vec![held], state: None }))
+        Some(self.span(start, Kind::Made { what: Shape::ByteArray, names: CONTENT, callable: None, items: vec![held], state: None, attrs: None }))
     }
 
     pub(super) fn binfloat(&mut self) -> Option<Value> {

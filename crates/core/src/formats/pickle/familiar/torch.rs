@@ -145,12 +145,15 @@ impl Cursor<'_> {
     /// carries is the one that counts, so it replaces the tensor's.
     fn rebuilt_parameter(&mut self, start: usize) -> Option<Value> {
         self.global(UTILS, REBUILD_PARAMETER, "rebuild module", "rebuild call")?;
-        self.atoms(&[b"("])?;
+        // Three arguments, so the tuple closes with TUPLE3 and opens with no
+        // MARK at all. The tensor's own six need a MARK, which is why the two
+        // calls are written differently.
+        self.open_tuple()?;
         let inner = self.at;
         let held = self.rebuilt_tensor(inner)?;
         let requires_grad = self.read_flag()?;
         self.empty_hooks()?;
-        self.exact(b"t")?;
+        self.close_tuple(3)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
