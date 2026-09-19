@@ -53,6 +53,9 @@ pub(super) fn leaf(value: &Value) -> Option<(T, usize, usize)> {
             };
             (ty, *at, *len)
         }
+        // A float a line spells is the same: `F5.5` is three characters, and
+        // eight bytes read from there as a number run past the line.
+        Kind::Float { spelled: true, .. } => return None,
         // The one big-endian number in the format.
         Kind::Float { at, len, .. } => (T::F64(Big), *at, *len),
         Kind::Text { at, len } => (T::text(StrLen::Fixed(E::lit(*len as i128)), Encoding::Utf8), *at, *len),
@@ -360,7 +363,7 @@ impl Evaluator {
                     // A protocol 0 line that spells its value rather than
                     // being it, which is worked out when the form matches, and
                     // a number written as a line of digits.
-                    Kind::Spelled { .. } | Kind::Int { spelled: true, .. } => self.pickle_said(doc, &found, &whole, base, v)?,
+                    Kind::Spelled { .. } | Kind::Int { spelled: true, .. } | Kind::Float { spelled: true, .. } => self.pickle_said(doc, &found, &whole, base, v)?,
                     _ => None,
                 },
                 // An entry reads as what it holds. A fitted model is thirty
@@ -421,7 +424,7 @@ impl Evaluator {
             // that wide; the digits a protocol 0 or 1 line spells read as the
             // text they are, and the number itself is the row above.
             Part::Wide(v) => {
-                let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. } | Kind::Int { spelled: true, .. });
+                let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. } | Kind::Int { spelled: true, .. } | Kind::Float { spelled: true, .. });
                 let len = E::lit((end - at) as i128);
                 let ty = match spelled {
                     true => T::text(StrLen::Fixed(len), Encoding::Ascii),

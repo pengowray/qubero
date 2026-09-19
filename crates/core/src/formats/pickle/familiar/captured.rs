@@ -50,10 +50,13 @@ pub enum Kind {
         digits: String,
         spelled: bool,
     },
+    /// `spelled` says the run is the digits Python's `repr` wrote on a
+    /// protocol 0 line rather than the eight bytes of the number.
     Float {
         value: f64,
         at: usize,
         len: usize,
+        spelled: bool,
     },
     Text {
         at: usize,
@@ -360,6 +363,8 @@ pub enum Shape {
     /// A whole number no integer type here is wide enough to read, shown as
     /// the digits it comes to with its run beneath it.
     Integer,
+    /// A float a protocol 0 line spells, which has no bytes to read as one.
+    Real,
     /// The standard library's own classes, each read as the value it is:
     /// see [`stdlib`](super::stdlib).
     DateTime,
@@ -419,6 +424,7 @@ impl Shape {
             Shape::Header => "header",
             Shape::Dict => "dict",
             Shape::Integer => "integer",
+            Shape::Real => "float",
             // Python's own names for its own classes, which is what a reader
             // of a pickle is comparing against.
             Shape::DateTime => "datetime",

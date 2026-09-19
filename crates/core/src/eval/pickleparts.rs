@@ -209,7 +209,7 @@ pub(super) fn span(found: &Match, part: &Part) -> (usize, usize) {
             _ => (0, 0),
         },
         Part::Wide(v) => match v.kind {
-            Kind::Wide { at, len, .. } | Kind::Int { at, len, .. } => (at, at + len),
+            Kind::Wide { at, len, .. } | Kind::Int { at, len, .. } | Kind::Float { at, len, .. } => (at, at + len),
             _ => (0, 0),
         },
         Part::Call(c, _) => (c.at, c.at + c.len),
@@ -271,8 +271,8 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
         // A number no integer type is wide enough to read, with the run it was
         // written in beneath it: the digits where the file spelled them, and
         // the two's-complement bytes otherwise.
-        Part::Value(v) if matches!(v.kind, Kind::Wide { .. } | Kind::Int { spelled: true, .. }) => {
-            let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. } | Kind::Int { spelled: true, .. });
+        Part::Value(v) if matches!(v.kind, Kind::Wide { .. } | Kind::Int { spelled: true, .. } | Kind::Float { spelled: true, .. }) => {
+            let spelled = matches!(v.kind, Kind::Wide { spelled: true, .. } | Kind::Int { spelled: true, .. } | Kind::Float { spelled: true, .. });
             let name = if spelled { LINE_FIELD } else { BYTES_FIELD };
             (Vec::new(), vec![(Label::Field(name), Part::Wide(v))])
         }
@@ -501,6 +501,7 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             Kind::FrozenSet(_) => Shape::FrozenSet,
             Kind::Ref(_) => Shape::Ref,
             Kind::Wide { .. } | Kind::Int { spelled: true, .. } => Shape::Integer,
+            Kind::Float { spelled: true, .. } => Shape::Real,
             // A protocol 0 line that spells its value rather than being it,
             // which is what the row above the `line` row is worth.
             Kind::Spelled { bytes: true, .. } => Shape::Bytes,

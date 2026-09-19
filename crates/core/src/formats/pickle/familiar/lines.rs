@@ -258,6 +258,6 @@ impl Cursor<'_> {
             return None;
         }
         let value = said.parse::<f64>().ok()?;
-        Some(self.span(start, Kind::Float { value, at, len }))
+        Some(self.span(start, Kind::Float { value, at, len, spelled: true }))
     }
 }

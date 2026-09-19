@@ -498,3 +498,20 @@ fn a_line_no_pickler_wrote_is_a_non_match() {
         assert!(recognise(right).is_some(), "{right:?} was not read");
     }
 }
+
+/// A float at protocol 0 is a line of the digits `repr` wrote, `F5.5`, and
+/// not eight bytes: read as eight bytes it ran past its line and the file did
+/// not open. It is a node that reads as the number, with the line beneath it,
+/// the way an integer line is.
+#[test]
+fn a_float_a_line_spells_reads_as_the_number_over_its_line() {
+    // pickle.dumps([1.5, -0.25, 12345678.5], 0) from Python 3
+    let seen = dump(b"(lp0\nF1.5\naF-0.25\naF12345678.5\na.");
+    tiles(&seen);
+    let floats: Vec<&Row> = seen.iter().filter(|r| r.ty == "float").collect();
+    assert_eq!(floats.iter().map(|r| &r.value).collect::<Vec<_>>(), [&V::Str("1.5".into()), &V::Str("-0.25".into()), &V::Str("12345678.5".into())]);
+    // Each line is the characters of its number and nothing more: the third is
+    // ten characters, longer than the eight bytes it was once read as.
+    let lines: Vec<u64> = seen.iter().filter(|r| r.name == "line").map(|r| r.len).collect();
+    assert_eq!(lines, [3, 5, 10]);
+}

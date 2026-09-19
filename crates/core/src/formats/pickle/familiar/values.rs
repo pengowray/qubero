@@ -238,7 +238,7 @@ impl Cursor<'_> {
         let start = self.at;
         self.exact(b"G")?;
         let value = f64::from_be_bytes(self.take(8)?.try_into().ok()?);
-        Some(self.span(start, Kind::Float { value, at: start + 1, len: 8 }))
+        Some(self.span(start, Kind::Float { value, at: start + 1, len: 8, spelled: false }))
     }
 
     /// A byte string written as one.
