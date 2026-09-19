@@ -165,10 +165,11 @@ stream gets one (`eval/space.rs`, `Spaces::add`): the numbers would then be
 ordinary typed fields at ordinary offsets in that space, the hex view would
 show the decoded bytes, and nothing would need a computed-cell path. What
 stands in the way is that a space is entered through a `Ty::Decoded` node,
-which wants a `Codec` of its own and a trace, and every exhaustive `match` on
-`Codec` in the evaluator, the listing, the diagram and the graph would gain an
-arm. That is the next thing worth doing for these forms, and it is a day's work
-rather than an afternoon's.
+which wants a `Codec` of its own and a trace. The spike of 2026-09-19, written
+up below, measured that cost: three arms in `codec.rs` and none anywhere else,
+because the evaluator, the listing, the diagram and the graph match on
+`Ty::Decoded` and on `Packing` rather than on `Codec`. What is left is the
+frame table, which reads its cells without a path to open a space with.
 
 A frame opens as a table, and a frame, a series and a sparse matrix say what
 they hold before showing how. See "A library object as the thing it is" in the
@@ -450,8 +451,10 @@ same change as "an array's decoded numbers as a space of their own" below.
 What is left from the earlier pass, in the order it is worth doing:
 
 1. **An array's decoded numbers as a space of their own**, replacing the copy
-   kept beside the match. See above. Protocol 0 doubles the reason: its arrays
-   are decoded twice over.
+   kept beside the match. Protocol 0 doubles the reason: its arrays are
+   decoded twice over. The unknown that held this up is answered: see "A
+   decoded run as a space of its own: the spike" below, which has the result
+   and the list of what is left to build.
 2. **A sparse matrix as a table** of `row, column, value`, read out of the
    `data`, `indices` and `indptr` it already names. Nothing densifies.
 3. **An exception rebuilt from its message**, which is what every remaining
