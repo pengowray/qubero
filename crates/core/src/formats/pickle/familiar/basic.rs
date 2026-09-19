@@ -646,51 +646,11 @@ impl Cursor<'_> {
                     None => Kind::Wide { at, len, digits: decimal(run)?, spelled: false },
                 }
             }
-            // A text line inside a binary protocol, which is what Python 2
-            // wrote for an `int` too wide for BININT. Its `int` was a machine
-            // word, so this covers the range between a four-byte and an
-            // eight-byte one and nothing else: anything wider was a `long`
-            // and went out as LONG1. Python 3 writes none of these.
-            b'I' if self.proto <= 2 => {
-                let (at, len) = self.line()?;
-                let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
-                // `I01` and `I00` are `True` and `False`, which had no opcode
-                // of their own below protocol 2. The integers one and nought
-                // are `I1` and `I0` where they are written as lines at all,
-                // so the leading zero is the whole of the difference.
-                if self.proto <= 1 && matches!(digits, "01" | "00") {
-                    return Some(self.span(start, Kind::Bool(digits == "01")));
-                }
-                let value = i128::from(digits.parse::<i64>().ok()?);
-                // CPython writes no leading zero, no plus and no space, so the
-                // digits have to be what the number is spelled as.
-                if digits != value.to_string() || i32::try_from(value).is_ok() {
-                    return None;
-                }
-                Kind::Int { value, at, len, spelled: true }
-            }
-            // A `long`, which protocol 2 writes as LONG1 and protocol 1 as a
-            // line of digits with the `L` Python 2 spelled one with. Python 3
-            // writes the same line, `L` and all.
-            b'L' if self.proto <= 1 => {
-                let (at, len) = self.line()?;
-                let digits = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?.strip_suffix('L')?;
-                // CPython writes no leading zero and no plus in front of one.
-                if !super::lines::is_whole(digits) {
-                    return None;
-                }
-                match digits.parse::<i128>() {
-                    // Python 3 writes this line only for a number no BININT
-                    // holds; Python 2 wrote it for every `long`, and on an
-                    // interpreter whose `int` was four bytes wide that
-                    // included small ones. Both are read.
-                    Ok(value) => Kind::Int { value, at, len: len - 1, spelled: true },
-                    // More digits than the reader's integer type holds, which
-                    // is the same number `LONG1` writes in seventeen bytes or
-                    // more at the protocols above this one.
-                    Err(_) => Kind::Wide { at, len: len - 1, digits: digits.to_string(), spelled: true },
-                }
-            }
+            // The two lines Python 2 wrote inside a binary protocol, which is
+            // the one place a protocol's own spellings are not the whole of
+            // it: see [`python2`](super::python2).
+            b'I' if self.proto <= 2 => self.int_line()?,
+            b'L' if self.proto <= 1 => self.long_line()?,
             _ => return None,
         };
         Some(self.span(start, kind))

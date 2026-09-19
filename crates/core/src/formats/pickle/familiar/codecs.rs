@@ -15,10 +15,7 @@ use super::cursor::Cursor;
 use super::memo::Bound;
 use super::{Kind, Names, Shape, Storage, Value, LATIN1, NO_OPCODE, SPELLED};
 
-/// The same encoding under the name its other callers write it by. A codec is
-/// handed `latin1` and a class is handed `latin-1`; each call is written the
-/// way its own caller wrote it.
-const HYPHENATED: &str = "latin-1";
+
 
 impl Cursor<'_> {
     /// `_codecs.encode(text, 'latin1')`, or `bytes()` for an empty one.
@@ -131,29 +128,6 @@ impl Cursor<'_> {
         self.exact(b"R")?;
         // Python hashes a byte string, so a name for one may stand where a
         // dictionary key belongs.
-        self.memoize(Bound::Made { what: Shape::Bytes, at: start, hashable: true })?;
-        Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None, attrs: None }))
-    }
-
-    /// `bytes(text, 'latin-1')`, which is what IronPython 2.7 writes for a
-    /// `str` where CPython 2 writes the bytes themselves.
-    ///
-    /// The same detour as `_codecs.encode`, through the class rather than
-    /// through the codec, and with the encoding spelled the way the class's
-    /// own caller spells it. IronPython's `str` is a .NET string, so its
-    /// `__reduce__` hands over the characters and the encoding that turns
-    /// them back into bytes; both of its picklers write it.
-    fn spelled_call(&mut self, start: usize) -> Option<Value> {
-        if self.proto > 2 {
-            return None;
-        }
-        self.global(&["__builtin__"], "bytes", "module", "class")?;
-        self.open_tuple()?;
-        let text = self.latin1_text()?;
-        let encoding = self.exact_word(HYPHENATED, true)?;
-        self.close_tuple(2)?;
-        self.memoize(Bound::Opaque)?;
-        self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Bytes, at: start, hashable: true })?;
         Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None, attrs: None }))
     }

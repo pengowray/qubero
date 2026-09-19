@@ -33,6 +33,7 @@ mod memo;
 mod origin;
 mod picklecells;
 mod pickleframe;
+mod pickleobjects;
 mod pickleparts;
 mod picklesaid;
 mod picklestd;

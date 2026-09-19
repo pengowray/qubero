@@ -19,9 +19,10 @@
 //! `data/<key>` to a run, is done here. See `docs/DESIGN-pickle-containers.md`
 //! for what closing it properly would need.
 
+use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, DTYPE_FIELD, IS_FIELD, REQUIRES_GRAD_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD};
+use crate::formats::pickle::familiar::Match;
 use std::sync::Arc;
 
-use super::pickleparts::Says;
 use super::*;
 use crate::formats::pickle::familiar::{Kind, Tensor, TensorType, Value as Captured};
 use crate::formats::torchzip::{DATA_FOLDER, PICKLE_ENTRY};
@@ -481,4 +482,48 @@ fn zip64_extra(extra: &[u8]) -> Vec<u64> {
         at += 4 + len;
     }
     Vec::new()
+}
+
+/// The rows a tensor shows and the nodes under it.
+///
+/// A tensor says what it is and where its numbers are, and then the run of
+/// instructions that rebuilt it. The numbers are in another entry of the
+/// archive or further down the file, so there is nothing under it to read as
+/// values: the rows say where to look and the table reads them from there.
+pub(super) fn tensor_parts<'a>(
+    found: &'a Match,
+    v: &'a crate::formats::pickle::familiar::Value,
+    t: &'a crate::formats::pickle::familiar::Tensor,
+) -> (Vec<(Label, Part<'a>)>, Vec<(Label, Part<'a>)>) {
+
+        let mut notes = vec![
+            (Label::Field(DTYPE_FIELD), Part::Note(t.dtype.word().to_string())),
+            (Label::Field(SHAPE_FIELD), Part::Note(extent(&t.size))),
+            // Commas rather than the `x` a shape is written with: a
+            // stride is a step per axis and not a shape, and `4 x 1`
+            // beside `3 x 4` reads as a second shape.
+            (Label::Field(STRIDE_FIELD), Part::Note(t.stride.iter().map(u64::to_string).collect::<Vec<_>>().join(", "))),
+            (Label::Field(STORAGE_OFFSET_FIELD), Part::Note(t.offset.to_string())),
+        ];
+        // Said only of a parameter: every tensor would carry the row
+        // and a reader would learn to skip it.
+        if t.parameter {
+            notes.insert(0, (Label::Field(IS_FIELD), Part::Note(super::picklesaid::PARAMETER_WORD.to_string())));
+        }
+        notes.extend(
+            [Says::Storage, Says::Location]
+                .into_iter()
+                .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
+        );
+        notes.push((Label::Field(REQUIRES_GRAD_FIELD), Part::Note(said_flag(t.requires_grad))));
+        notes.extend(
+            [Says::Numbers, Says::StoredAt]
+                .into_iter()
+                .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
+        );
+        let kids = match call_of(found, v) {
+            Some(call) => vec![(Label::Field(call.name), Part::Call(call, v))],
+            None => Vec::new(),
+        };
+        (notes, kids)
 }

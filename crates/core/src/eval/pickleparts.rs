@@ -190,7 +190,7 @@ pub(super) enum Says {
 
 impl Says {
     /// What the row is called.
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Says::Columns => "columns",
             Says::Rows => "rows",
@@ -437,62 +437,14 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                 kids.extend(attrs.iter().map(|a| (Label::Field(ATTRIBUTES_FIELD), Part::Value(a))));
                 (Vec::new(), kids)
             }
-            // An array whose values are objects. They were pickled after it and
-            // handed to it as a list, so they are nodes of their own rather
-            // than a run of bytes to read.
+            // An array whose values are objects, and a tensor: each a run of
+            // rows saying where its numbers are rather than a value to read
+            // where it sits. Both are in files of their own, beside the
+            // readers that follow those rows.
             Kind::Objects { dimensions, fortran_order, items, nested } => {
-                let notes = says_array(&Dtype::Objects, dimensions, *fortran_order, Storage::Raw);
-                let mut kids = Vec::new();
-                if let Some(call) = call_of(found, v) {
-                    kids.push((Label::Field(call.name), Part::Call(call, v)));
-                }
-                // `joblib.dump` has no way to write these values as bytes, so
-                // it pickles the array into the stream where the bytes would
-                // go. The values are in there, a pickle deeper than the ones
-                // beside them.
-                match nested {
-                    Some(_) => kids.push((Label::Field(NESTED_FIELD), Part::Nested(v))),
-                    None => kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x)))),
-                }
-                (notes, kids)
+                super::pickleobjects::object_array(found, v, dimensions, *fortran_order, items, nested)
             }
-            // A tensor says what it is and where its numbers are, and then
-            // the run of instructions that rebuilt it. The numbers are in
-            // another entry of the archive or further down the file, so there
-            // is nothing under it to read as values: the rows say where to
-            // look and the table reads them from there.
-            Kind::Tensor(t) => {
-                let mut notes = vec![
-                    (Label::Field(DTYPE_FIELD), Part::Note(t.dtype.word().to_string())),
-                    (Label::Field(SHAPE_FIELD), Part::Note(extent(&t.size))),
-                    // Commas rather than the `x` a shape is written with: a
-                    // stride is a step per axis and not a shape, and `4 x 1`
-                    // beside `3 x 4` reads as a second shape.
-                    (Label::Field(STRIDE_FIELD), Part::Note(t.stride.iter().map(u64::to_string).collect::<Vec<_>>().join(", "))),
-                    (Label::Field(STORAGE_OFFSET_FIELD), Part::Note(t.offset.to_string())),
-                ];
-                // Said only of a parameter: every tensor would carry the row
-                // and a reader would learn to skip it.
-                if t.parameter {
-                    notes.insert(0, (Label::Field(IS_FIELD), Part::Note(super::picklesaid::PARAMETER_WORD.to_string())));
-                }
-                notes.extend(
-                    [Says::Storage, Says::Location]
-                        .into_iter()
-                        .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
-                );
-                notes.push((Label::Field(REQUIRES_GRAD_FIELD), Part::Note(said_flag(t.requires_grad))));
-                notes.extend(
-                    [Says::Numbers, Says::StoredAt]
-                        .into_iter()
-                        .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
-                );
-                let kids = match call_of(found, v) {
-                    Some(call) => vec![(Label::Field(call.name), Part::Call(call, v))],
-                    None => Vec::new(),
-                };
-                (notes, kids)
-            }
+            Kind::Tensor(t) => super::pickletorch::tensor_parts(found, v, t),
             Kind::Array { dtype, dimensions, fortran_order, storage, .. } => {
                 let notes = says_array(dtype, dimensions, *fortran_order, *storage);
                 let mut kids = Vec::new();
@@ -568,7 +520,7 @@ pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: b
 
 /// A flag as Python spells it, which is what a reader of a pickle is
 /// comparing against.
-fn said_flag(flag: bool) -> String {
+pub(super) fn said_flag(flag: bool) -> String {
     match flag {
         true => "True",
         false => "False",

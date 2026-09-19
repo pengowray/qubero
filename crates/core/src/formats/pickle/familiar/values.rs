@@ -167,31 +167,6 @@ impl Cursor<'_> {
         Some(self.span(start, Kind::Text { at, len }))
     }
 
-    /// A Python 2 `str`, which is a run of bytes that was usually text.
-    ///
-    /// The opcode listing reads one as text of an encoding nobody declared, so
-    /// this does the same: text when the bytes are UTF-8, which covers every
-    /// ASCII string, and a byte string when they are not. Python 2 wrote these
-    /// for every ordinary string it had, and Python 3 writes none of them.
-    pub(super) fn py2_string(&mut self) -> Option<Value> {
-        if self.proto > 2 {
-            return None;
-        }
-        let start = self.at;
-        let code = self.byte()?;
-        let (at, len) = self.counted(code, b'U', b'T', NO_OPCODE)?;
-        let held = self.bytes.get(at..at + len)?;
-        let kind = match std::str::from_utf8(held).is_ok() {
-            true => Kind::Text { at, len },
-            false => Kind::Bytes { at, len },
-        };
-        self.memoize(match kind {
-            Kind::Text { .. } => Bound::Text { at, len },
-            _ => Bound::Bytes { at, len },
-        })?;
-        Some(self.span(start, kind))
-    }
-
     /// BINGET or LONG_BINGET where a value belongs: the file naming
     /// something it wrote earlier rather than writing it again.
     ///

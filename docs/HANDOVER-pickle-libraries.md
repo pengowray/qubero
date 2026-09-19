@@ -181,7 +181,11 @@ design document.
 | `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 424 |
 | `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, the run after it, and the pickle it writes instead for an array of objects | 294 |
 | `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage`, `Tensor` | 648 |
-| `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 663 |
+| `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 607 |
+| `familiar/formnames.rs` | the name each form goes by, which is what the rest of the program says to this one | 121 |
+| `familiar/python2.rs` | the three spellings Python 2 had and Python 3 dropped | 121 |
+| `familiar/picklers.rs` | the seven statements the `pickler` row makes, and how one sharpens another | 118 |
+| `eval/pickleobjects.rs` | an array of pickled objects, read as the rows it shows | 37 |
 | `familiar/packs.rs` | which families a file turned out to use, as the bits of one word | 95 |
 | `familiar/basic.rs` | the stack a pickle is read against | 657 |
 | `familiar/values.rs` | the leaf productions, and what Python can hash | 187 |
