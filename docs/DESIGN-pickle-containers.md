@@ -249,12 +249,42 @@ thirteen-byte header over them. Recognition holds the settings byte to the
 a PlayStation texture opens `10 00 00 00` and passes every other test. A `.lzma`
 with other settings still opens by its extension or by naming the template.
 
+**The nested pickle after an object array's wrapper landed on 2026-09-19.**
+`write_array` writes the padding and the numbers only in its `else` branch:
+when `array.dtype.hasobject`, it calls `pickle.dump(array, file_handle,
+protocol=5)` instead and there is no padding byte either. So after a wrapper
+whose dtype is `|O8` comes a whole pickle -- its own PROTO, its own framing,
+its own memo numbered from nought, its own STOP -- and then the outer stream
+carries on with the byte after.
+
+The form reads exactly one such pickle, by the same grammar, with the outer
+stream's protocol, memo, framing and pickler put aside and put back after, so
+nothing the inner pickle files reaches the outer memo and a slot number in
+either names what its own stream wrote. The value it holds has to be an object
+array whose shape and order are the ones the wrapper described; anything else,
+a second pickle, or a byte between the nested STOP and the opcode the outer
+stream carries on with, is a non-match. The wrapper's protocol range is the
+outer stream's and the nested pickle declares its own, so a protocol 2 joblib
+file still holds a protocol 5 pickle.
+
+The bytes are instructions like any other. `Cursor::breaks` holds every place
+the opcode walk stops and starts again -- a padding-and-numbers run, and a
+nested pickle, whose STOP would otherwise end the walk of the whole file --
+so the listing still names every byte and the tiling test still holds. The
+tree shows the pickle as a `nested pickle` node inside the array, with a
+`protocol` row of its own, the call that rebuilt the array, and the values.
+`joblib/array-of-objects.joblib`, `joblib/pandas-frame-named-columns.joblib`
+and `joblib/sklearn-string-labels.joblib` moved out of `does-not-read` with
+it, and the folder is gone: nothing joblib writes is refused now.
+
+The object-array production was widened with it, from text, `None` and a name
+for text to every leaf the basic productions read. See "An array of pickled
+objects" in `DESIGN-familiar-pickle-forms.md` for the list and for what is
+still not in it.
+
 **What is left for joblib**, in the order it is worth doing:
 
-1. The nested pickle after an object array's wrapper, which is the one sample
-   in `does-not-read`. It wants a whole stream read with a memo, a framing and
-   a protocol of its own, and it wants the array-of-objects production widened
-   past text and `None`.
+1. **Done on 2026-09-19.** See the two paragraphs above.
 2. **Done on 2026-09-19, and not the way this expected.** A bundle holding a
    standard library value, a frame or a sparse matrix wanted no joblib row of
    its own. Families compose now: the mixed form is the union of every family's
@@ -263,9 +293,8 @@ with other settings still opens by its extension or by naming the template.
    `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` all read as
    `mixed-values-p4-p5-v1`, and the two joblib rows keep the two mixtures they
    were written for. See "Families compose: the mixed form" in
-   `DESIGN-familiar-pickle-forms.md`. A frame with named columns still does not
-   read, for the reason in 1: its column names are an object array, so joblib
-   nests a pickle for them.
+   `DESIGN-familiar-pickle-forms.md`. A frame with named columns reads too
+   since the nested pickle landed later the same day.
 3. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
    named beside `ndarray`. No file in the corpus holds one.
 4. Older joblib. The form is written for the layout 1.2 and later write, with
@@ -401,10 +430,12 @@ which is the argument for doing it rather than widening `pickletorch.rs`.
 
 ## Samples, and when they go into the collection
 
-The `joblib/` samples are in the collection since 2026-09-19, eighteen of them,
-with `array-of-objects.joblib` under `does-not-read`. The generator gained a
-0-d array, an empty array, a list of three arrays and one small array that is
-also a fixture in this repository.
+The `joblib/` samples are in the collection since 2026-09-19, twenty-one of
+them and none refused. The generator gained a 0-d array, an empty array, a
+list of three arrays, one small array that is also a fixture in this
+repository, a frame with named columns and a text column, and a
+`LogisticRegression` fitted on labels that are strings, whose `classes_` is
+an object array and so a nested pickle.
 
 The `torch/` samples are in the collection since 2026-09-19, eleven of them.
 The generator gained a module's parameters, a 0-d and an empty tensor, a real

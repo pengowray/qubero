@@ -1611,6 +1611,9 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
     // and `a_compressed_joblib_file_opens_as_the_joblib_file_it_holds` is that.
     let want: &[(&str, Option<&str>, &str)] = &[
         ("array-0d.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        // An array of objects, whose values joblib cannot write as bytes: it
+        // writes a whole pickle of its own where the numbers would go.
+        ("array-of-objects.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
         ("array-big-endian.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
         ("array-empty.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
         ("array-float64.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
@@ -1626,12 +1629,18 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // which is the sklearn objects with their arrays wrapped this way.
         ("sklearn-linear-regression.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
         ("sklearn-random-forest.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        // A classifier fitted on labels that are strings keeps them in
+        // `classes_`, which is an array of objects and so a nested pickle.
+        ("sklearn-string-labels.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
         // What else goes into a joblib file beside the arrays. Each of these
         // is the wrapper and one more family in the one stream, which is the
         // mixed form: the two rows above are the two mixtures joblib was
         // given a name of its own for, and these are the rest.
         ("stdlib-and-arrays.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         ("pandas-frame.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        // The same frame with named columns and a text column, which are two
+        // object arrays and so two nested pickles.
+        ("pandas-frame-named-columns.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         ("scipy-csr-matrix.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         // The compressors, each of which holds one of the files above.
         ("dict-of-arrays-zlib.joblib", None, "zlib"),
@@ -1782,4 +1791,79 @@ fn joblibs(dir: &Path) -> Vec<PathBuf> {
         .collect();
     out.sort();
     out
+}
+
+/// A frame dumped by joblib opens as the same table as the same frame pickled
+/// plainly, cell for cell.
+///
+/// The two files are nothing alike. Plainly pickled, every column's numbers
+/// are inside the stream; dumped by joblib, each is a wrapper and a run of
+/// bytes after it, except the column names and the text column, which have no
+/// bytes to write and are a whole pickle each. The table is the claim that
+/// none of that reaches the reader.
+#[test]
+fn a_joblib_frame_opens_as_the_table_the_same_frame_pickled_plainly_does() {
+    let (Some(dir), Some(plain)) = (qubero_samples::dir("joblib"), folder()) else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // `tools/make_torch_joblib_samples.py` dumps the same frame
+    // `tools/make_mixed_pickle_samples.py` pickles: three rows, two numbers
+    // and a label.
+    let want: &[&[&str]] = &[&["0", "1", "0.5", "a"], &["1", "2", "1.5", "b"], &["2", "3", "2.5", "c"]];
+    let read = |path: &Path, at: &[usize]| {
+        let bytes = std::fs::read(path).unwrap();
+        let doc = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+        let where_ = path.file_name().unwrap().to_string_lossy().into_owned();
+        let shape = ev.table_shape(&doc, at).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
+        let cells = ev.pickle_cells(&doc, at, 0, want.len() as u64 + 1).unwrap();
+        let said: Vec<Vec<String>> = cells.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+        (shape.names, shape.units, said)
+    };
+    // The joblib file holds the frame and nothing else; the plain one holds a
+    // list of two frames and this is the first of them.
+    let dumped = read(&dir.join("pandas-frame-named-columns.joblib"), &[1]);
+    let pickled = read(&plain.join("mixed-frames-sharing-placements-p4.pickle"), &[1, 3]);
+    assert_eq!(dumped.0, ["index", "x", "y", "label"]);
+    assert_eq!(dumped.1, ["int64", "int64", "float64", "str"]);
+    let want: Vec<Vec<String>> = want.iter().map(|row| row.iter().map(|c| (*c).to_string()).collect()).collect();
+    assert_eq!(dumped.2, want);
+    assert_eq!(dumped, pickled, "the same frame, one dumped and one pickled");
+}
+
+/// An array of objects dumped by joblib reads as the values that were in it,
+/// which is more than text: a pandas column of objects holds strings, numbers
+/// and the missing entries between them.
+#[test]
+fn an_object_array_joblib_wrote_reads_as_the_values_it_holds() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(dir.join("array-of-objects.joblib")).unwrap();
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("joblib").unwrap());
+    let mut rows = Vec::new();
+    walk_rows(&doc, &mut ev, &[], 0, &mut rows);
+    // The pickle joblib wrote where the numbers would go, with a protocol of
+    // its own: the stream is protocol 4 and this one is protocol 5.
+    let nested = row(&rows, "nested pickle");
+    let protocols: Vec<&Row> = rows.iter().filter(|r| r.name == "protocol").collect();
+    assert_eq!(protocols.len(), 2);
+    assert_eq!(cell_text(&Some(protocols[0].value.clone())), "4");
+    assert_eq!(cell_text(&Some(protocols[1].value.clone())), "5");
+    assert!(protocols[1].at > nested.at && protocols[1].at < nested.at + nested.len);
+    // `numpy.array(["a", None, 3], dtype=object)`, in order: a string, the
+    // singleton and a number, which is more than the text and `None` an
+    // object array held before.
+    let values: Vec<(String, String)> = rows
+        .iter()
+        .filter(|r| r.depth == nested.depth + 1 && r.name.starts_with('['))
+        .map(|r| (r.ty.clone(), cell_text(&Some(r.value.clone()))))
+        .collect();
+    assert_eq!(values[0], ("utf8[]".to_string(), "a".to_string()));
+    assert_eq!(values[1].0, "null");
+    assert_eq!(values[2], ("u8".to_string(), "3".to_string()));
+    assert_eq!(values.len(), 3);
 }

@@ -124,9 +124,10 @@ section says what its neighbour does differently.
   tuple, the columns as a dictionary of each name against its own dtype and
   offset, and the width, alignment and flags after them. Every column has to
   fit inside a record and they have to be written in the order they sit in. A
-  column's own dtype is a plain one, so the nesting is one level deep. Object,
-  datetime and external-buffer dtypes/layouts fall back; an `O8` array is read
-  only by the pandas form, which is the only place one turns up.
+  column's own dtype is a plain one, so the nesting is one level deep. Datetime
+  and external-buffer dtypes/layouts fall back; an `O8` array is read by the
+  pandas form and by the two joblib ones, and by no other, which is where one
+  turns up. See "An array of pickled objects" below.
 - `builtins-values-p4-p5-v3`: the basic productions plus the four builtins a
   pickle writes as a call rather than as a literal, with at least one present.
   `builtins.slice` of three integers or Nones, `builtins.range` of three
@@ -691,6 +692,62 @@ the whole of the difference between `numpy-1d-int64.p5.pickle` and its
 records it as `pickle.py` rather than naming a release, since the same bytes
 cannot say more than that. Every slot after such a bytearray is numbered one
 lower, so the mark is read rather than skipped.
+
+### An array of pickled objects
+
+NumPy's `O8` dtype has no numbers to write: the values are Python objects, so
+the array is handed a list of them and they are pickled one by one after it.
+There is nothing to measure, which is why `Dtype::width` has no answer for one
+and why `fits` refuses to be asked.
+
+**Which values one may hold**: the leaves the basic productions read. Text, a
+byte string, a whole number, a float, `True`, `False`, `None`, and a `BINGET`
+naming a string the file wrote earlier. That is what an object array really
+holds in the files it turns up in: a pandas column of objects is strings and
+numbers with the missing entries between them, a pandas index of column names
+is strings, and a classifier's `classes_` is the labels it was fitted on.
+
+**Which it may not**: a container and a call. A list, a dictionary or a set is
+created empty and filled by the opcodes after it, and a `datetime` is a REDUCE
+of a class; both are the stack machine's work rather than one value's, and
+reading them here would mean running the machine inside a production that is
+not it. No file in the corpus holds either inside an object array. A column of
+dates is not this case: pandas writes one as an `M8` array of counts, which is
+numbers. An object array holding a date, a list or an object is the gap, and
+what closes it is reading the values through the same stack the rest of the
+file is read against rather than one at a time.
+
+**Which forms allow it** is a flag in the `DECLARED` table, `object_arrays`,
+and it is on for the pandas form, the two joblib forms and the mixed form.
+Everywhere else an `O8` dtype is a non-match, so a plain pickle of one is the
+opcode listing.
+
+**A whole pickle inside the stream.** `joblib.dump` writes every array as a
+wrapper and a run of bytes after it, and an object array has no bytes, so
+`write_array` calls `pickle.dump(array, file_handle, protocol=5)` and lets a
+second writer write into the same file. What lands in the stream is a whole
+pickle: its own PROTO, its own framing, its own memo numbered from nought, its
+own STOP, and then the outer stream carries on with the byte after. There is no
+padding in front of it either, since the branch that writes the padding is the
+other one.
+
+It is read by the same grammar, with the outer stream's protocol, memo,
+framing, pickler and joblib flag put aside and put back afterwards. So nothing
+the inner pickle files reaches the outer memo, a slot number in either names
+what its own stream wrote, the two may be at different protocols, which they
+always are, and a wrapper of joblib's own inside the nested pickle is a
+non-match, since `pickle.dump` writes none. Exactly one pickle follows the
+wrapper, the value it holds has to be an object array whose shape and order are
+the ones the wrapper described, and a byte between its STOP and the opcode the
+outer stream carries on with is a non-match.
+
+The bytes are instructions like any other, so the listing has to walk them.
+`Cursor::breaks` is every place the opcode walk stops and starts again: a
+joblib run of padding and numbers, which is not opcodes at all, and a nested
+pickle, whose STOP would otherwise end the walk of the whole file. The tree
+shows the pickle as a `nested pickle` node inside the array, with a `protocol`
+row of its own, the run of instructions that rebuilt the array, and the values,
+so a matched file still has no byte left over.
 
 ### The memo, and what a reference may name
 

@@ -252,6 +252,20 @@ fn only_one_nested_pickle_follows_the_wrapper() {
     assert!(recognise(&spaced).is_none());
 }
 
+/// The pickle after the wrapper holds the array and nothing else. One holding
+/// a value of any other kind is a file nothing wrote.
+#[test]
+fn the_nested_pickle_holds_an_array_and_not_some_other_value() {
+    // A whole protocol 5 pickle of the string "a" in place of the one the
+    // file holds, and then the outer STOP. The outer frame ends at the
+    // nested pickle, so nothing in front of this moves.
+    let mut text = OBJECTS[..NESTED_AT].to_vec();
+    text.extend_from_slice(&[0x80, 5]);
+    text.extend_from_slice(&word("a"));
+    text.extend_from_slice(b"..");
+    assert!(recognise(&text).is_none());
+}
+
 /// The wrapper describes the array and the pickle after it holds one, so the
 /// two have to agree. A shape or an order that does not is a non-match.
 #[test]
