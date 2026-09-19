@@ -429,10 +429,11 @@ export class TableView {
     const space = row.space ?? 0;
     const at = el("span", { className: "tbl-cell tbl-at", textContent: formatAddress(row.offsetBits, space) });
     const size = el("span", { className: "tbl-cell tbl-size tbl-num", textContent: row.apart === true ? TABLE.sizePerCell : bitSizeText(row.sizeBits) });
+    const plus = space === 0 ? [] : [DECODED_PLUS_TITLE];
     if (row.apart === true) {
-      at.title = TABLE.cellsApart;
+      at.title = [TABLE.cellsApart, ...plus].join("\n");
       size.title = TABLE.cellsApart;
-    } else if (space !== 0) {
+    } else if (plus.length > 0) {
       at.title = DECODED_PLUS_TITLE;
     }
     return [at, size];
@@ -465,11 +466,8 @@ export class TableView {
     // Where this one cell's bytes are, for the tables whose rows are not a run
     // of the file. Only with the address columns on: a reader who has not
     // asked for addresses is reading the values.
-    if (this.addresses) {
-      const where = whereText(cell);
-      if (where !== null) lines.push(where);
-    }
-    element.title = lines.join("\n");
+    if (this.addresses) lines.push(...whereLines(cell));
+    element.title = lines.filter((line) => line !== "").join("\n");
     if (problem !== undefined) element.prepend(glyph(invalid));
     return element;
   }
@@ -699,13 +697,18 @@ function rowHasBytes(row: TableRow): boolean {
   return !row.cells.some((cell) => cell.noBytes !== undefined);
 }
 
-/** Where one cell's bytes are, or why it has none, for its hover. Null for a
- *  cell of a table that says nothing about where its cells are, which is every
- *  table whose rows are runs of the file. */
-function whereText(cell: RecordCell): string | null {
+/** Where one cell's bytes are, or why it has none, for the lines under its
+ *  text on hover. Empty for a cell of a table that says nothing about where
+ *  its cells are, which is every table whose rows are runs of the file.
+ *
+ *  An address inside an unpacked stream gets a line saying what the `+` in
+ *  front of it counts from. The listing puts those words on the `+` itself;
+ *  a hover cannot carry a hover, so it says them outright. */
+function whereLines(cell: RecordCell): string[] {
   const at = cell.at;
-  if (at !== undefined) return TABLE.cellAt(formatAddress(at.offsetBits, at.space), bitSizeText(at.sizeBits));
-  return cell.noBytes === undefined ? null : TABLE.noBytesWhy(cell.noBytes);
+  if (at === undefined) return cell.noBytes === undefined ? [] : [TABLE.noBytesWhy(cell.noBytes)];
+  const said = TABLE.cellAt(formatAddress(at.offsetBits, at.space), bitSizeText(at.sizeBits));
+  return at.space === 0 ? [said] : [said, DECODED_PLUS_TITLE];
 }
 
 /** A fact's value as the bar shows it: a number gets its thousands separators,

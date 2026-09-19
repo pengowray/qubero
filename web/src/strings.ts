@@ -695,14 +695,14 @@ export const TABLE = {
    * needs to know which: a counted index label was worked out from a start and
    * a step and was never written anywhere; a tensor's dtype and shape are
    * stated by the instructions that rebuild it rather than stored as values;
-   * and the third is this reading admitting it cannot say.
+   * and the third is Qubero admitting it cannot say.
    */
   noBytesWhy: (why: "counted" | "said" | "nowhere"): string =>
     why === "counted"
       ? "No bytes: computed from the index's start and step."
       : why === "said"
         ? "No bytes: stated by the pickle's instructions, not stored as a value."
-        : "No bytes: this reading can't say where this value is.",
+        : "No bytes: Qubero can't say where this value is.",
   /** Where one cell's bytes are, on its hover, when the address columns are
    *  shown. `@+` in front of the address means it counts from the start of an
    *  unpacked stream rather than of the file; see `DECODED_PLUS_TITLE`. */

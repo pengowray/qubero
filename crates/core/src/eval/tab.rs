@@ -157,8 +157,21 @@ impl<'a, S: Source> Tab<'a, S> {
     /// The rows `from` up to `to` of the pandas frame at `path`, each as one
     /// value a column and nothing where the frame has no value. Every cell
     /// says where its own bytes are; see [`FrameCell`].
+    ///
+    /// The spaces are numbered the tab's way, the way a node's are: the
+    /// stream's own bytes are 0, so a cell of a frame inside a compressed
+    /// joblib file points at the tab's bytes and the view can select them.
     pub fn pickle_cells(&mut self, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<FrameCell>>> {
-        self.ev.pickle_cells(self.doc, &self.path_in(path), from, to)
+        let mut rows = self.ev.pickle_cells(self.doc, &self.path_in(path), from, to)?;
+        if self.root.is_empty() {
+            return Ok(rows);
+        }
+        for cell in rows.iter_mut().flatten() {
+            if let CellAt::Bytes { space, .. } = &mut cell.at {
+                *space = self.space_out(*space)?;
+            }
+        }
+        Ok(rows)
     }
 
     /// What table the field at `path` is, with each fact's path mapped into
