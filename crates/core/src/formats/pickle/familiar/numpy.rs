@@ -297,7 +297,7 @@ impl Cursor<'_> {
             self.memoize(Bound::Opaque)?;
             self.exact(b"b")?;
             self.arrays += 1;
-            return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items }));
+            return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items, nested: None }));
         }
         let (at, len, payload, storage) = self.numbers(&dtype, &dimensions)?;
         self.finish_call("ndarray reconstruct call", start, call_ends);
@@ -329,10 +329,9 @@ impl Cursor<'_> {
     /// list written the way CPython writes one: nothing at all, one value and
     /// APPEND, or a run of batches of a thousand.
     ///
-    /// The values are text, the singletons, and names for text written earlier,
-    /// which is what a pandas index of column names holds. Anything else is a
-    /// non-match: an array of objects can hold whatever was pickled into it,
-    /// and only what a form has written down is read.
+    /// The values are the leaves [`Cursor::object_value`] lists. Anything else
+    /// is a non-match: an array of objects can hold whatever was pickled into
+    /// it, and only what a form has written down is read.
     fn object_values(&mut self, count: u64) -> Option<Vec<Value>> {
         self.gate()?;
         let at = self.at;
@@ -377,15 +376,37 @@ impl Cursor<'_> {
     }
 
     /// One value inside an array of objects.
-    fn object_value(&mut self) -> Option<Value> {
+    ///
+    /// The leaves the basic productions read and nothing else: text, byte
+    /// strings, whole numbers, floats, `True`, `False`, `None`, and a name for
+    /// a string the file wrote earlier. That is what a pandas column of
+    /// objects holds -- strings, numbers and the missing entries between them
+    /// -- and what `numpy.array([...], dtype=object)` holds when nobody put a
+    /// container in it.
+    ///
+    /// Not a container and not a call. A list, a dictionary or a set is
+    /// created empty and filled by the opcodes after it, and a date is a
+    /// REDUCE of a class; both are the stack machine's work rather than one
+    /// value's, and no file in the corpus holds either inside an object
+    /// array. `DESIGN-familiar-pickle-forms.md` names that as a gap.
+    pub(super) fn object_value(&mut self) -> Option<Value> {
         self.gate()?;
         match self.peek()? {
             0x8c | 0x58 | 0x8d => self.text(),
             b'V' if self.proto == 0 => self.text_line(),
+            b'S' if self.proto == 0 => self.string_line(),
+            b'F' if self.proto == 0 => self.float_line(),
+            // A Python 2 `str`, which is text where its bytes are UTF-8 and a
+            // byte string where they are not.
+            b'U' | b'T' if self.proto > 0 => self.py2_string(),
+            b'K' | b'M' | b'J' | 0x8a | b'I' | b'L' => self.integer(),
+            b'G' if self.proto > 0 => self.binfloat(),
+            b'C' | b'B' | 0x8e => self.byte_string(),
             b'h' | b'j' | b'g' => {
                 let start = self.at;
                 let names = match self.reference()?.clone() {
                     Bound::Text { at, len } => Names::Text { at, len },
+                    Bound::Bytes { at, len } => Names::Bytes { at, len },
                     _ => return None,
                 };
                 Some(self.span(start, Kind::Ref(names)))
@@ -394,6 +415,14 @@ impl Cursor<'_> {
                 let start = self.at;
                 self.byte()?;
                 Some(self.span(start, Kind::None))
+            }
+            // The two singletons got an opcode each at protocol 2. Below it
+            // they are the integer lines `I01` and `I00`, which the integer
+            // production above reads.
+            0x88 | 0x89 if self.proto >= 2 => {
+                let start = self.at;
+                let code = self.byte()?;
+                Some(self.span(start, Kind::Bool(code == 0x88)))
             }
             _ => None,
         }

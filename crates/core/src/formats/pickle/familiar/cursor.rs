@@ -63,9 +63,10 @@ pub(super) struct Cursor<'a> {
     /// How many torch tensors the file rebuilt, which is what says a torch
     /// form read what it is for.
     pub(super) tensors: usize,
-    /// Where each of those runs of bytes is. The listing walks the opcodes in
-    /// the segments between them and names the padding in front of each.
-    pub(super) raws: Vec<super::joblib::Raw>,
+    /// Every place the run of opcodes stops and starts again: a joblib
+    /// array's padding and numbers, and a whole pickle written inside this
+    /// one. The listing walks the opcodes in the segments between them.
+    pub(super) breaks: Vec<super::joblib::Break>,
     pub(super) furthest: usize,
 }
 
@@ -113,7 +114,7 @@ pub(super) struct Save {
     pub(super) packs: Packs,
     pub(super) wrappers: usize,
     pub(super) tensors: usize,
-    pub(super) raws: usize,
+    pub(super) breaks: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -209,7 +210,7 @@ impl<'a> Cursor<'a> {
             packs: self.packs,
             wrappers: self.wrappers,
             tensors: self.tensors,
-            raws: self.raws.len(),
+            breaks: self.breaks.len(),
         }
     }
 
@@ -248,7 +249,7 @@ impl<'a> Cursor<'a> {
         self.packs = s.packs;
         self.wrappers = s.wrappers;
         self.tensors = s.tensors;
-        self.raws.truncate(s.raws);
+        self.breaks.truncate(s.breaks);
     }
 
     /// FRAME and its eight-byte length, which must land inside the file.

@@ -13,8 +13,9 @@
 //! tree, the table and the reading of the array need nothing added.
 
 use super::cursor::{Cursor, Framing};
-use super::memo::Bound;
-use super::{Kind, Shape, Storage, Value, JOBLIB_MODULE as MODULE};
+use super::forms::Wrapped;
+use super::memo::{Bound, Memo};
+use super::{Dtype, Kind, Pickler, Shape, Storage, Value, JOBLIB_MODULE as MODULE};
 
 /// The class joblib names for every array it writes, in the module
 /// [`JOBLIB_MODULE`](super::JOBLIB_MODULE).
@@ -42,17 +43,44 @@ const PAD: u8 = 0xff;
 /// file; this bounds it to something a byte of padding can reach.
 const MOST_ALIGNMENT: u64 = 128;
 
-/// One run of bytes in a joblib file that is not opcodes: where the padding
-/// count sits, where the array's numbers start, and where they end.
+/// The protocols a nested pickle may declare. joblib 1.6 writes 5, which is
+/// what `write_array` asks `pickle.dump` for; the number is the writer's to
+/// choose and the grammar reads whichever it says, so every protocol with a
+/// PROTO opener is taken. Below protocol 2 there is no opener and no way to
+/// tell where the pickle begins.
+const NESTED_PROTOCOLS: &[u8] = &[2, 3, 4, 5];
+
+/// One place in a matched file where the run of opcodes stops and starts
+/// again.
 ///
-/// Kept so that the listing can name those bytes rather than stop at them:
-/// the opcodes are walked in the segments between these runs, and the padding
-/// becomes a row of its own. See [`Match::raws`](super::Match).
+/// Kept so that the listing can walk the opcodes in the segments between
+/// these rather than stop at the first of them, and so that the bytes that
+/// are not opcodes have a row of their own. See [`Match::ops`](super::Match).
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Raw {
-    pub(super) pad_at: usize,
-    pub(super) data_at: usize,
-    pub(super) end: usize,
+pub(super) enum Break {
+    /// The padding and an array's numbers, which are not opcodes at all:
+    /// where the padding count sits, where the numbers start, and where they
+    /// end.
+    Numbers { pad_at: usize, data_at: usize, end: usize },
+    /// A whole pickle of its own inside the stream. Its bytes are opcodes,
+    /// but its STOP is in the middle of the file and a walk ends at a STOP,
+    /// so the walk is started again on each side of it.
+    Nested { at: usize, end: usize },
+}
+
+/// What the outer stream was keeping while a nested pickle is read, and what
+/// is put back afterwards. Everything here belongs to one stream: the
+/// protocol it declared, the slots it filed, the frames it was written in and
+/// which pickler wrote it.
+struct Outer {
+    proto: u8,
+    memo: Memo,
+    memo_base: Option<usize>,
+    skipped: usize,
+    dicts: Pickler,
+    framing: Framing,
+    pickler: Pickler,
+    joblib: Wrapped,
 }
 
 impl Cursor<'_> {
@@ -102,6 +130,14 @@ impl Cursor<'_> {
         // The frame the wrapper went in was committed before these bytes, so
         // a frame boundary falls exactly here.
         self.gate()?;
+        // An array of objects has no numbers to write. joblib hands the array
+        // to `pickle.dump` instead, so what follows the wrapper is a whole
+        // pickle rather than a run of bytes, and there is no padding in front
+        // of it either: the branch that writes the padding is the other one.
+        if dtype == Dtype::Objects {
+            self.finish_call("wrapper", start, wrapper_ends);
+            return self.nested_array(start, dimensions, fortran_order);
+        }
         let pad_at = self.at;
         if let Some(align) = alignment {
             self.padding(align)?;
@@ -121,7 +157,7 @@ impl Cursor<'_> {
         self.gate()?;
 
         let payload = self.fits(&dtype, &dimensions, len)?;
-        self.raws.push(Raw { pad_at, data_at, end });
+        self.breaks.push(Break::Numbers { pad_at, data_at, end });
         self.finish_call("wrapper", start, wrapper_ends);
         self.arrays += 1;
         self.wrappers += 1;
@@ -131,6 +167,73 @@ impl Cursor<'_> {
             len: end - start,
             kind: Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
         })
+    }
+
+    /// The pickle joblib writes where an array of objects would have had its
+    /// numbers, and the array it holds.
+    ///
+    /// The value is the object array the wrapper described, spanning from the
+    /// class the file named to the nested pickle's STOP, so a reader of the
+    /// tree finds the same array a plain pickle of one holds. The wrapper and
+    /// the pickle after it are how it was written and are rows inside it.
+    fn nested_array(&mut self, start: usize, dimensions: Vec<u64>, fortran_order: bool) -> Option<Value> {
+        let at = self.at;
+        let inner = self.nested_pickle()?;
+        let end = self.at;
+        // Exactly one pickle and nothing else: the value it holds has to be
+        // the array, and the array has to be the one the wrapper described.
+        // A file whose two halves disagree is one nothing wrote.
+        let Kind::Objects { dimensions: held, fortran_order: order, items, .. } = inner.kind else { return None };
+        if held != dimensions || order != fortran_order {
+            return None;
+        }
+        // A new frame begins after the nested pickle, and that header belongs
+        // to whatever comes next rather than to this. Below protocol 4 there
+        // are no frames at all and the stream simply carries on.
+        if self.framing != Framing::Unframed {
+            self.framing = Framing::Tail(end);
+        }
+        self.gate()?;
+        self.breaks.push(Break::Nested { at, end });
+        self.wrappers += 1;
+        Some(Value { at: start, len: end - start, kind: Kind::Objects { dimensions, fortran_order, items, nested: Some(at) } })
+    }
+
+    /// A whole pickle inside the stream: its own PROTO, its own framing, its
+    /// own memo numbered from nought and its own STOP.
+    ///
+    /// `write_array` hands the array to `pickle.dump` with the same open file,
+    /// so what lands in the stream is a pickle written by a second writer that
+    /// knows nothing of the first. It is read by the same grammar with
+    /// everything the outer stream was keeping put aside and put back after,
+    /// so the outer memo is untouched by anything the inner one filed and a
+    /// slot number in either names what its own stream wrote.
+    fn nested_pickle(&mut self) -> Option<Value> {
+        let outer = Outer {
+            proto: self.proto,
+            memo: std::mem::replace(&mut self.memo, Memo::new()),
+            memo_base: self.memo_base.take(),
+            skipped: std::mem::take(&mut self.skipped),
+            dicts: std::mem::replace(&mut self.dicts, Pickler::Undetermined),
+            framing: std::mem::replace(&mut self.framing, Framing::Unframed),
+            // The two picklers are told apart by the tail of a long container,
+            // and these are two files: joblib writes the outer stream with
+            // `pickle.py` and the inner one is whatever `pickle.dump` imports.
+            pickler: std::mem::replace(&mut self.pickler, Pickler::Undetermined),
+            // `pickle.dump` writes no wrapper, so a wrapper inside the pickle
+            // it wrote is a file joblib did not write.
+            joblib: std::mem::replace(&mut self.allow.joblib, Wrapped::Refused),
+        };
+        let found = self.enveloped(NESTED_PROTOCOLS).map(|(_, value)| value);
+        self.proto = outer.proto;
+        self.memo = outer.memo;
+        self.memo_base = outer.memo_base;
+        self.skipped = outer.skipped;
+        self.dicts = outer.dicts;
+        self.framing = outer.framing;
+        self.pickler = outer.pickler;
+        self.allow.joblib = outer.joblib;
+        found
     }
 
     /// One of the wrapper's attribute names, spelled here or named where an

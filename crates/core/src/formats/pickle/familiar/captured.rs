@@ -117,6 +117,11 @@ pub enum Kind {
         dimensions: Vec<u64>,
         fortran_order: bool,
         items: Vec<Value>,
+        /// Where the whole pickle of its own that holds this array starts,
+        /// which is what `joblib.dump` writes in place of a run of numbers
+        /// when the array has no numbers to write. Nothing for an array
+        /// written inside the one stream, which is every other file.
+        nested: Option<usize>,
     },
     /// A NumPy dtype standing on its own rather than describing an array,
     /// which is what pandas hands a datetime column beside its numbers.
@@ -590,6 +595,10 @@ pub enum Shape {
     DType,
     /// A torch tensor: a window onto a storage kept somewhere else.
     Tensor,
+    /// A whole pickle written inside another one, with a protocol, a memo and
+    /// a STOP of its own. `joblib.dump` writes one where an array's numbers
+    /// would go when the array holds pickled objects rather than numbers.
+    Nested,
 }
 
 impl Shape {
@@ -633,6 +642,7 @@ impl Shape {
             Shape::Block => "block",
             Shape::DType => "dtype",
             Shape::Tensor => "tensor",
+            Shape::Nested => "nested pickle",
         }
     }
 }

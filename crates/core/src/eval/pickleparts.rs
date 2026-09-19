@@ -90,6 +90,10 @@ pub(super) const IS_FIELD: &str = "is";
 /// What a container was given beyond what is in it, which is what
 /// `nn.Module.state_dict()` hangs its `_metadata` off.
 pub(super) const ATTRIBUTES_FIELD: &str = "attributes";
+/// The whole pickle `joblib.dump` writes in place of an array's numbers when
+/// the array holds pickled objects. The values are inside it, and so is a
+/// protocol of its own.
+pub(super) const NESTED_FIELD: &str = "nested pickle";
 
 /// The fewest dictionaries that make a list of records. One dictionary is a
 /// record, not a list of them.
@@ -137,9 +141,15 @@ pub(super) enum Part<'a> {
     /// protocol 5 spelling and follow the call in its protocol 4 one, so the
     /// call has to know which.
     Call(&'a Call, &'a Value),
-    /// The protocol number, which is the one byte of the envelope that says
-    /// anything.
-    Protocol,
+    /// A whole pickle written inside another one, which is what
+    /// `joblib.dump` writes where an array of objects would have had its
+    /// numbers. The value is the array it holds.
+    Nested(&'a Value),
+    /// The protocol number a pickle declared, which is the one byte of its
+    /// envelope that says anything. The offset is that byte: the file's own
+    /// is the second byte of the file, and a nested pickle has one of its own
+    /// wherever it starts.
+    Protocol(usize),
     /// One instruction the form fixed, or what is left of one once the value
     /// inside it has been taken out.
     Op { at: usize, len: usize },
@@ -257,7 +267,13 @@ pub(super) fn span(found: &Match, part: &Part) -> (usize, usize) {
             _ => (0, 0),
         },
         Part::Call(c, _) => (c.at, c.at + c.len),
-        Part::Protocol => (1, 2),
+        // From the PROTO the nested pickle opens with to the STOP it ends
+        // with, which is where the value it holds ends.
+        Part::Nested(v) => match v.kind {
+            Kind::Objects { nested: Some(at), .. } => (at, v.at + v.len),
+            _ => (0, 0),
+        },
+        Part::Protocol(at) => (*at, at + 1),
         Part::Op { at, len } => (*at, at + len),
     }
 }
@@ -307,10 +323,24 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // says, so the row is worked out rather than read.
             let mut kids = Vec::new();
             match found.proto >= 2 {
-                true => kids.push((Label::Field(PROTOCOL_FIELD), Part::Protocol)),
+                true => kids.push((Label::Field(PROTOCOL_FIELD), Part::Protocol(1))),
                 false => notes.push((Label::Field(PROTOCOL_FIELD), Part::Note(found.proto.to_string()))),
             }
             (notes, kids)
+        }
+        // A pickle of its own inside the stream: the protocol it declared,
+        // the run of instructions that rebuilt the array, and the values. The
+        // FRAME header and the STOP are instructions like any other and are
+        // filled in between them.
+        Part::Nested(v) => {
+            let at = span(found, here).0;
+            let Kind::Objects { items, .. } = &v.kind else { return Vec::new() };
+            let mut kids = vec![(Label::Field(PROTOCOL_FIELD), Part::Protocol(at + 1))];
+            if let Some(call) = call_from(found, at) {
+                kids.push((Label::Field(call.name), Part::Call(call, v)));
+            }
+            kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))));
+            (Vec::new(), kids)
         }
         Part::Value(v) if matches!(v.kind, Kind::Spelled { .. }) => (Vec::new(), vec![(Label::Field(LINE_FIELD), Part::Line(v))]),
         // A number no integer type is wide enough to read, with the run it was
@@ -409,13 +439,20 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // An array whose values are objects. They were pickled after it and
             // handed to it as a list, so they are nodes of their own rather
             // than a run of bytes to read.
-            Kind::Objects { dimensions, fortran_order, items } => {
+            Kind::Objects { dimensions, fortran_order, items, nested } => {
                 let notes = says_array(&Dtype::Objects, dimensions, *fortran_order, Storage::Raw);
                 let mut kids = Vec::new();
                 if let Some(call) = call_of(found, v) {
                     kids.push((Label::Field(call.name), Part::Call(call, v)));
                 }
-                kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x))));
+                // `joblib.dump` has no way to write these values as bytes, so
+                // it pickles the array into the stream where the bytes would
+                // go. The values are in there, a pickle deeper than the ones
+                // beside them.
+                match nested {
+                    Some(_) => kids.push((Label::Field(NESTED_FIELD), Part::Nested(v))),
+                    None => kids.extend(items.iter().enumerate().map(|(i, x)| (Label::Index(i), Part::Value(x)))),
+                }
                 (notes, kids)
             }
             // A tensor says what it is and where its numbers are, and then
@@ -543,6 +580,15 @@ pub(super) fn call_of<'a>(found: &'a Match, v: &Value) -> Option<&'a Call> {
     found.calls.iter().find(|c| c.at >= v.at && c.at + c.len <= v.at + v.len)
 }
 
+/// The first run of instructions at or after this offset.
+///
+/// An array `joblib.dump` wrote holds two: the wrapper that stands in front
+/// of it, which is what [`call_of`] finds, and the one that rebuilt the array
+/// inside the nested pickle.
+pub(super) fn call_from(found: &Match, at: usize) -> Option<&Call> {
+    found.calls.iter().find(|c| c.at >= at)
+}
+
 /// The entries a node's children are keyed by: a dictionary's own, and the
 /// state dictionary of an object, whose entries are the object's attributes and
 /// are placed directly under it.
@@ -638,6 +684,7 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
         Part::Header => Shape::Header,
         Part::Entry(_) => Shape::Entry,
         Part::Call(..) => Shape::Call,
+        Part::Nested(_) => Shape::Nested,
         Part::Value(v) => match &v.kind {
             Kind::Dict(_) => Shape::Dict,
             Kind::List(_) => Shape::List,

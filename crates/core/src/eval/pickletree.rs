@@ -474,7 +474,7 @@ impl Evaluator {
             // The one byte of the envelope with something in it. PROTO is the
             // instruction in front of it, and the frame's length is the
             // listing's business rather than the object's.
-            Part::Protocol => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, at, end - at, false))),
+            Part::Protocol(_) => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, at, end - at, false))),
             Part::Data(v) => {
                 let Kind::Array { dtype, dimensions, storage, .. } = &v.kind else { return fail("no such value") };
                 // Below protocol 3 the run is the latin-1 spelling of the

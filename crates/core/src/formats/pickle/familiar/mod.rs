@@ -215,7 +215,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         packs: Packs::default(),
         wrappers: 0,
         tensors: 0,
-        raws: Vec::new(),
+        breaks: Vec::new(),
         furthest: 0,
     };
     let found = c.whole(form);
@@ -235,18 +235,31 @@ pub const PADDING: &str = "padding";
 /// pickle: it reaches the STOP and stops there, so what comes back covers the
 /// file exactly. Names are `pickletools`' own.
 ///
-/// A joblib file has runs in it that are not opcodes, so the walk is done in
-/// the segments between them. Each segment starts where a run ends, which is
-/// a boundary between two instructions, so nothing straddles one.
-fn instructions(bytes: &[u8], raws: &[joblib::Raw]) -> Vec<Instr> {
+/// A joblib file has runs in it that are not opcodes and pickles in it that
+/// end before the file does, so the walk is done in the segments between
+/// them. Each segment starts where the one before it ended, which is a
+/// boundary between two instructions, so nothing straddles one.
+fn instructions(bytes: &[u8], breaks: &[joblib::Break]) -> Vec<Instr> {
     let mut out = Vec::new();
     let mut from = 0;
-    for raw in raws {
-        walked(bytes, from, raw.pad_at, &mut out);
-        if raw.data_at > raw.pad_at {
-            out.push(Instr { at: raw.pad_at, end: raw.data_at, name: PADDING });
+    for stop in breaks {
+        match *stop {
+            joblib::Break::Numbers { pad_at, data_at, end } => {
+                walked(bytes, from, pad_at, &mut out);
+                if data_at > pad_at {
+                    out.push(Instr { at: pad_at, end: data_at, name: PADDING });
+                }
+                from = end;
+            }
+            // The nested pickle is opcodes throughout, and its STOP ends the
+            // walk it is in, so it is walked on its own and the outer stream
+            // is walked again after it.
+            joblib::Break::Nested { at, end } => {
+                walked(bytes, from, at, &mut out);
+                walked(bytes, at, end, &mut out);
+                from = end;
+            }
         }
-        from = raw.end;
     }
     walked(bytes, from, bytes.len(), &mut out);
     out
@@ -297,17 +310,28 @@ fn holds_class(value: &Value) -> bool {
 }
 
 impl<'a> Cursor<'a> {
-    fn whole(&mut self, form: &'static str) -> Option<Match> {
+    /// The envelope a pickle is written in and the one object inside it: the
+    /// protocol opener, the frame the writer opened after it, the object, and
+    /// the STOP that ends it.
+    ///
+    /// The whole of a file, and also the whole of a pickle written inside
+    /// another one, which is what `joblib.dump` does with an array of
+    /// objects. What the two do not share is the end: a file has to stop at
+    /// its last byte, and a nested pickle stops at its STOP with the stream
+    /// around it carrying on.
+    /// Comes back with where the object started, which is one past the
+    /// protocol byte and past the frame header when there is one.
+    pub(super) fn enveloped(&mut self, protocols: &[u8]) -> Option<(usize, Value)> {
         // PROTO and the number arrived with protocol 2. Below it a file opens
         // at its first value and says nothing about which protocol it is, so
         // the form that reads it is what says: one using binary opcodes and no
         // opener is protocol 1, and one using none of them is protocol 0.
-        match self.allow.protocols {
+        match protocols {
             [first, ..] if *first < 2 => self.proto = *first,
             _ => {
                 self.exact(&[0x80])?;
                 self.proto = match self.byte()? {
-                    proto if self.allow.protocols.contains(&proto) => proto,
+                    proto if protocols.contains(&proto) => proto,
                     _ => return None,
                 };
             }
@@ -320,18 +344,24 @@ impl<'a> Cursor<'a> {
         let body = self.at;
         let value = self.object()?;
         self.exact(b".")?;
-        if self.at != self.bytes.len() {
-            return None;
-        }
-        // The last frame ends where the STOP does. The one exception is a file
-        // whose large payload left fewer than MIN_FRAME bytes to write after
-        // it, since CPython writes those with no FRAME header in front. A
-        // frame that simply stopped early is a non-match.
+        // The last frame ends where the STOP does. The one exception is a
+        // pickle whose large payload left fewer than MIN_FRAME bytes to write
+        // after it, since CPython writes those with no FRAME header in front.
+        // A frame that simply stopped early is a non-match.
         match self.framing {
             Framing::Unframed => {}
             Framing::Inside(end) | Framing::Full(end) if end == self.at => {}
             Framing::Tail(from) if self.at - from < MIN_FRAME => {}
             _ => return None,
+        }
+        Some((body, value))
+    }
+
+    fn whole(&mut self, form: &'static str) -> Option<Match> {
+        let protocols = self.allow.protocols;
+        let (body, value) = self.enveloped(protocols)?;
+        if self.at != self.bytes.len() {
+            return None;
         }
         // A class a form names no classes for is there to be called, and the
         // call is what the form read. One that survived into the tree instead
@@ -384,7 +414,7 @@ impl<'a> Cursor<'a> {
             value,
             body,
             calls: std::mem::take(&mut self.calls),
-            ops: instructions(self.bytes, &self.raws),
+            ops: instructions(self.bytes, &self.breaks),
             packs,
             stop: self.at - 1,
             payloads: std::mem::take(&mut self.payloads),

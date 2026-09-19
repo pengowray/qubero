@@ -163,3 +163,126 @@ fn a_pickle_with_no_wrapper_in_it_is_not_a_joblib_file() {
     let found = recognise(MATRIX).unwrap();
     assert_eq!(found.form, "numpy-array-p4-p5-v6");
 }
+
+/// An array of objects, `joblib.dump(numpy.array(["a", None, 3],
+/// dtype=object), path)`. joblib has no way to write these values as bytes,
+/// so `write_array` hands the array to `pickle.dump` and lets it write a
+/// whole pickle into the stream where the numbers would have gone.
+const OBJECTS: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/joblib-array-of-objects.joblib");
+
+/// Where that pickle starts, and where its own STOP leaves off. The outer
+/// pickle's STOP is the byte after, which is the last byte of the file.
+const NESTED_AT: usize = 220;
+const NESTED_END: usize = 376;
+
+fn edited_objects(from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut bytes = OBJECTS.to_vec();
+    assert_eq!(from.len(), to.len(), "an edit has to keep every other offset where it was");
+    replace(&mut bytes, from, to);
+    bytes
+}
+
+/// What the wrapper stood for is the array the nested pickle holds, with the
+/// values in it rather than a run of bytes nothing can read.
+#[test]
+fn an_array_of_objects_is_the_array_the_pickle_after_the_wrapper_holds() {
+    let found = recognise(OBJECTS).unwrap();
+    assert_eq!(found.form, "joblib-arrays-p4-p5-v1");
+    // The stream is protocol 4 and the pickle inside it is protocol 5: two
+    // writers, each naming its own.
+    assert_eq!(found.proto, 4);
+    assert_eq!(OBJECTS[NESTED_AT..NESTED_AT + 2], [0x80, 5]);
+    let Kind::Objects { dimensions, fortran_order, items, nested } = &found.value.kind else { panic!("object array") };
+    assert_eq!((dimensions.as_slice(), *fortran_order, *nested), (&[3][..], false, Some(NESTED_AT)));
+    // The value covers the wrapper and the pickle after it, and the outer
+    // STOP is the one byte left.
+    assert_eq!((found.value.at, found.value.at + found.value.len), (11, NESTED_END));
+    assert_eq!(found.ops.last().map(|op| (op.at, op.end)), Some((NESTED_END, OBJECTS.len())));
+    // A string, a None and a number, which is more than text and `None`.
+    assert!(matches!(items[0].kind, Kind::Text { .. }));
+    assert!(matches!(items[1].kind, Kind::None));
+    assert!(matches!(items[2].kind, Kind::Int { value: 3, .. }));
+}
+
+/// The nested pickle is a row of its own, with the protocol it declared under
+/// it, so every byte of the file is accounted for.
+#[test]
+fn the_nested_pickle_is_a_row_with_a_protocol_of_its_own() {
+    let seen = dump(OBJECTS);
+    assert_eq!(named_row(&seen, "dtype").value, V::Str("|O8".into()));
+    assert_eq!(named_row(&seen, "shape").value, V::Str("3".into()));
+    let nested = named_row(&seen, "nested pickle");
+    assert_eq!(nested.ty, "nested pickle");
+    assert_eq!((nested.at, nested.at + nested.len), (NESTED_AT as u64, NESTED_END as u64));
+    // Two protocol rows, the file's and this one's, and they say different
+    // numbers.
+    let protocols: Vec<&Row> = seen.iter().filter(|r| r.name == "protocol").collect();
+    assert_eq!(protocols.len(), 2);
+    assert_eq!((protocols[0].at, protocols[0].value.clone()), (1, V::UInt(4)));
+    assert_eq!((protocols[1].at, protocols[1].value.clone()), (NESTED_AT as u64 + 1, V::UInt(5)));
+    tiles(&seen);
+}
+
+/// The memo of the nested pickle is its own: it numbers from nought while the
+/// outer stream has filled twenty-odd slots, and the outer stream's slots are
+/// still what its own names point at.
+#[test]
+fn the_nested_pickle_numbers_its_memo_from_nought() {
+    // Slot 3 of the inner pickle is `numpy`, which is the word at 273. Under
+    // the outer stream's numbering the same slot holds the wrapper object.
+    assert_eq!(OBJECTS[312..314], [b'h', 3]);
+    assert!(recognise(OBJECTS).is_some());
+    // A slot the inner pickle never wrote is a non-match, however many the
+    // outer one has.
+    assert!(recognise(&edited_objects(b"h\x03\x8c\x05dtype", b"h\x7f\x8c\x05dtype")).is_none());
+}
+
+/// One nested pickle after the wrapper and nothing else. A second one, or
+/// anything at all between the nested STOP and the opcode the outer stream
+/// carries on with, is a file joblib did not write.
+#[test]
+fn only_one_nested_pickle_follows_the_wrapper() {
+    // A second pickle in front of the outer STOP.
+    let mut twice = OBJECTS.to_vec();
+    twice.splice(NESTED_END..NESTED_END, OBJECTS[NESTED_AT..NESTED_END].iter().copied());
+    assert!(recognise(&twice).is_none());
+    // One byte between the nested STOP and the outer one.
+    let mut spaced = OBJECTS.to_vec();
+    spaced.insert(NESTED_END, b'N');
+    assert!(recognise(&spaced).is_none());
+}
+
+/// The wrapper describes the array and the pickle after it holds one, so the
+/// two have to agree. A shape or an order that does not is a non-match.
+#[test]
+fn the_nested_array_is_the_one_the_wrapper_described() {
+    // The wrapper says three values and the array says three; saying four in
+    // either place is two readings of one array.
+    assert!(recognise(&edited_objects(b"\x8c\x05shape\x94K\x03", b"\x8c\x05shape\x94K\x04")).is_none());
+    // The wrapper's own order letter, which the array inside states again.
+    assert!(recognise(&edited_objects(b"\x8c\x05order\x94\x8c\x01C", b"\x8c\x05order\x94\x8c\x01F")).is_none());
+}
+
+/// A nested pickle only ever follows a wrapper whose dtype is `O8`. After any
+/// other the run is the numbers, and a pickle where the numbers belong is
+/// read as the numbers it is not.
+#[test]
+fn a_nested_pickle_after_a_plain_wrapper_is_a_non_match() {
+    // The wrapper's own dtype, which the array inside the nested pickle
+    // spells again further down. Only the first of the two is edited: an
+    // `i8` wrapper measures three bytes of numbers where the pickle begins.
+    const WRAPPER_DTYPE: usize = 138;
+    assert_eq!(&OBJECTS[WRAPPER_DTYPE..WRAPPER_DTYPE + 2], b"O8");
+    let mut plain = OBJECTS.to_vec();
+    plain[WRAPPER_DTYPE..WRAPPER_DTYPE + 2].copy_from_slice(b"i8");
+    assert!(recognise(&plain).is_none());
+}
+
+/// Nothing new may be named inside the nested pickle: it is read by the same
+/// grammar and the same enumerated globals as the stream around it.
+#[test]
+fn the_nested_pickle_names_only_what_the_form_names() {
+    assert!(recognise(&edited_objects(b"\x8c\x16numpy._core.multiarray\x94\x8c\x0c_reconstruct", b"\x8c\x16numpy._core.multiarrax\x94\x8c\x0c_reconstruct")).is_none());
+    // And no wrapper of joblib's own: `pickle.dump` writes none.
+    assert!(recognise(&edited_objects(b"\x8c\x0c_reconstruct", b"\x8c\x0c_reconstrucT")).is_none());
+}

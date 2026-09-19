@@ -577,7 +577,18 @@ const DECLARED: &[Declared] = &[
     },
     // What `joblib.dump` wrote, after the families it extends, so that a
     // plain pickle of arrays or of estimators keeps the name it already had.
-    Declared { ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN], family: Family::Numpy, numpy: true, joblib: Wrapped::Required, ..PLAIN },
+    // Object arrays are read here and nowhere else in the NumPy family:
+    // joblib has no way to write one as a run of bytes, so it pickles the
+    // array into the stream instead, and a file of arrays is a file of
+    // whatever dtypes were dumped into it.
+    Declared {
+        ids: [JOBLIB, JOBLIB23, NOT_WRITTEN, NOT_WRITTEN],
+        family: Family::Numpy,
+        numpy: true,
+        joblib: Wrapped::Required,
+        object_arrays: true,
+        ..PLAIN
+    },
     // What `torch.save` writes. The classes list is empty on purpose: a
     // tensor's storage class is named inside the tensor's own fixed run and
     // never reaches the tree, and `collections` is named through the one call
@@ -593,6 +604,9 @@ const DECLARED: &[Declared] = &[
         classes: SKLEARN_CLASSES,
         pack: Some(Pack::Sklearn),
         calls: SKLEARN_CALLS,
+        // A classifier fitted on labels that are strings keeps them in
+        // `classes_`, which is an array of objects.
+        object_arrays: true,
         ..PLAIN
     },
 ];
