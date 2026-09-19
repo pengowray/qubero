@@ -243,8 +243,11 @@ impl Evaluator {
         if opener != magic {
             return Ok(Vec::new());
         }
-        let head = self.read_in(doc, space, 0, end.min(crate::formats::torchlegacy::MOST_HEAD) * 8)?;
-        let Some(found) = crate::formats::torchlegacy::layout(&head, end) else { return Ok(Vec::new()) };
+        // Read through the evaluator, the way everything else here reads, so
+        // that a chunk that has not arrived says `Pending` rather than
+        // answering out of a run of noughts.
+        let mut read = |at: u64, len: u64| self.read_in(doc, space, at * 8, len * 8);
+        let Some(found) = crate::formats::torchlegacy::layout(&mut read, end)? else { return Ok(Vec::new()) };
         let (at, len) = found.data();
         let mut out = vec![Held { name: PICKLE_ENTRY.to_string(), at, len, method: 0 }];
         out.extend(found.storages.iter().map(|s| Held { name: format!("{DATA_FOLDER}/{}", s.key), at: s.at, len: s.len, method: 0 }));

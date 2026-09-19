@@ -424,6 +424,11 @@ wide one is. The key list gives the order. Each storage is then an ordinary
 `i64` count and a typed run of numbers at its own offset, so the numbers have
 byte addresses, the hex view goes there and the reading is counted once.
 
+Only the five pickles are read out of one head window, and four megabytes is
+far more than any of them come to. The counts are read where each one sits,
+one eight-byte read apiece, because they are spread through the file with a
+storage's numbers between them and a checkpoint is as long as its weights.
+
 **Every byte or nothing.** The builder places the five pickles and the
 storages and then checks that they reach the end of the file exactly. A file
 that opens with torch's magic number and does not add up is a node saying so

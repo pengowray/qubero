@@ -328,7 +328,7 @@ fn a_legacy_checkpoint_reads_as_five_pickles_and_its_storages() {
     let (doc, mut ev) = legacy(&dir, "state-dict-legacy.pt");
     let placed = placements(&doc, &mut ev);
     let names: Vec<&str> = placed.iter().map(|(n, ..)| n.as_str()).collect();
-    assert_eq!(&names[..5], ["magic", "protocol version", "system info", "data", "storage keys"]);
+    assert_eq!(&names[..5], ["magic number", "protocol version", "system info", "data", "storage keys"]);
     // Three storages, one per tensor, named by the key the data pickle gave
     // each of them.
     assert_eq!(names.len(), 5 + 3 * 2);
@@ -419,4 +419,36 @@ fn a_legacy_tensor_opens_as_the_table_the_archive_holds() {
 fn legacy_tensor_at(doc: &Document<MemSource>, ev: &mut Evaluator, name: &str) -> Vec<usize> {
     let held = under(doc, ev, &[], "data/data");
     under(doc, ev, &held, &format!("data/{name}/value"))
+}
+
+/// Every dtype and every view read the legacy way too.
+///
+/// A dtype is a storage class in a persistent id, and it is what says how wide
+/// one element of the run after the fifth pickle is, so a file holding ten of
+/// them is where a width read from the wrong place shows. Three tensors over
+/// one storage is the other: the legacy format writes that storage once, and
+/// the three windows onto it are told apart only by their offsets and strides.
+#[test]
+fn every_legacy_dtype_and_every_legacy_view_reads() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = legacy(&dir, "every-dtype-legacy.pt");
+    for word in ["float16", "bfloat16", "float32", "float64", "uint8", "int8", "int16", "int32", "int64", "bool"] {
+        let at = legacy_tensor_at(&doc, &mut ev, word);
+        assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str(word.to_string()), "{word}");
+        // Four ones. A tensor of one dimension is one value a row.
+        let cells = ev.pickle_cells(&doc, &at, 0, 8).unwrap();
+        assert_eq!(numbers(&cells), vec![vec![1.0]; 4], "{word}");
+    }
+    // One storage of 24 floats under three tensors: the whole of it, its tail
+    // from element twelve, and a transpose whose strides are the other way
+    // round. The same three tables the archive holds.
+    let (zip_doc, mut zip_ev) = open(&dir, "shared-storage-views-zip.pt");
+    let (old_doc, mut old_ev) = legacy(&dir, "shared-storage-views-legacy.pt");
+    for name in ["whole", "tail", "grid"] {
+        let new_at = tensor_at(&zip_doc, &mut zip_ev, name);
+        let old_at = legacy_tensor_at(&old_doc, &mut old_ev, name);
+        let want = zip_ev.pickle_cells(&zip_doc, &new_at, 0, 64).unwrap();
+        let said = old_ev.pickle_cells(&old_doc, &old_at, 0, 64).unwrap();
+        assert_eq!(numbers(&said), numbers(&want), "{name}");
+    }
 }

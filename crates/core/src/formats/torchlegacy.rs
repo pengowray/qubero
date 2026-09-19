@@ -43,7 +43,7 @@ const LEGACY: &str = "torch legacy checkpoint";
 pub(crate) const MAGIC: &[u8] = b"\x80\x02\x8a\x0a\x6c\xfc\x9c\x46\xf9\x20\x6a\xa8\x50\x19\x2e";
 
 /// How many pickles come before the numbers, and what each of them is.
-const PICKLES: [&str; 5] = ["magic", "protocol version", "system info", "data", "storage keys"];
+const PICKLES: [&str; 5] = ["magic number", "protocol version", "system info", "data", "storage keys"];
 /// Which of them is the data pickle, whose persistent ids say what each
 /// storage holds, and which is the list of keys the storages are written in.
 const DATA: usize = 3;
@@ -64,10 +64,12 @@ const ENDIAN: Endian = Endian::Little;
 /// this way: the format predates torch 1.6 and the models of that era have a
 /// few hundred tensors.
 const MOST_STORAGES: usize = 1 << 16;
-/// How much of the file the builder reads to find the pickles. Everything
-/// before the numbers, which is five pickles and the names in them; a
-/// checkpoint of gigabytes still has only a few hundred kilobytes of that.
-pub(crate) const MOST_HEAD: u64 = 4 << 20;
+/// How much of the file is read to find the pickles. Everything before the
+/// numbers, which is five pickles and the names in them; a checkpoint of
+/// gigabytes still has only a few hundred kilobytes of that. The counts after
+/// them are read one at a time where each sits, since they are spread through
+/// the whole file with the numbers between them.
+const MOST_HEAD: u64 = 4 << 20;
 
 /// Whether these leading bytes are a legacy checkpoint.
 ///
@@ -205,26 +207,40 @@ fn window(bytes: &[u8], at: u64, len: u64) -> Option<&[u8]> {
 /// Nothing at all when the bytes are not a legacy checkpoint, when a pickle
 /// does not end, or when a storage the key list names is one the data pickle
 /// said nothing about, since there is then no width to read its numbers at.
-pub(crate) fn layout(bytes: &[u8], file_len: u64) -> Option<Layout> {
-    if !is_torch_legacy(bytes) {
+pub(crate) fn layout(read: &mut dyn FnMut(u64, u64) -> R<Vec<u8>>, file_len: u64) -> R<Option<Layout>> {
+    let head = read(0, MOST_HEAD.min(file_len))?;
+    Ok(read_layout(&head, read, file_len))
+}
+
+/// The same, once the head is in hand, so that every way of failing is one
+/// `None` rather than a mixture of those and errors.
+fn read_layout(head: &[u8], read: &mut dyn FnMut(u64, u64) -> R<Vec<u8>>, file_len: u64) -> Option<Layout> {
+    if !is_torch_legacy(head) {
         return None;
     }
     let mut pickles = Vec::new();
     let mut at = 0u64;
     for _ in 0..PICKLES.len() {
-        let end = pickle_end(bytes, at)?;
+        let end = pickle_end(head, at)?;
         pickles.push((at, end - at));
         at = end;
     }
-    if !saved_little_endian(bytes, pickles[2].0, pickles[2].1)? {
+    if !saved_little_endian(head, pickles[2].0, pickles[2].1)? {
         return None;
     }
-    let dtypes = tensors_by_key(bytes, pickles[DATA].0, pickles[DATA].1)?;
-    let keys = storage_keys(bytes, pickles[KEYS].0, pickles[KEYS].1)?;
+    let dtypes = tensors_by_key(head, pickles[DATA].0, pickles[DATA].1)?;
+    let keys = storage_keys(head, pickles[KEYS].0, pickles[KEYS].1)?;
     let mut storages = Vec::new();
     for key in keys {
         let (_, dtype) = dtypes.iter().find(|(had, _)| *had == key)?;
-        let count = u64::from_le_bytes(window(bytes, at, COUNT_BYTES)?.try_into().ok()?);
+        // Read where it sits rather than out of the head: the counts are
+        // spread through the file with a storage's numbers between them, and
+        // a checkpoint is as long as its weights.
+        if at.checked_add(COUNT_BYTES)? > file_len {
+            return None;
+        }
+        let said = read(at, COUNT_BYTES).ok()?;
+        let count = u64::from_le_bytes(said.as_slice().try_into().ok()?);
         let len = count.checked_mul(dtype.width())?;
         let data = at + COUNT_BYTES;
         if data.checked_add(len)? > file_len {
@@ -251,8 +267,8 @@ struct Checkpoint;
 
 impl SchemaBuilder for Checkpoint {
     fn build(&self, _key: &[KeyValue], table: &mut dyn Descriptions) -> R<Built> {
-        let head = table.bytes(0, MOST_HEAD)?;
-        let Some(found) = layout(&head, table.file_len()) else {
+        let file_len = table.file_len();
+        let Some(found) = layout(&mut |at, len| table.bytes(at, len), file_len)? else {
             let ty = T::structure(NAME, Vec::new()).doc(NOT_LEGACY);
             return Ok(Built { ty, from: None, members_from: Vec::new() });
         };
