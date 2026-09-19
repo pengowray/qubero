@@ -206,6 +206,52 @@ fn a_packed_date_is_read_as_the_fields_in_it() {
     assert_eq!(packed, vec![4, 6, 10, 10, 10]);
 }
 
+/// The opcode listing reads a packed date as its fields too.
+///
+/// A file no form matches is read by the symbolic machine, which finds the
+/// same packed runs and lays each out as a `Date`, `Time` or `DateTime`
+/// structure. This sample holds the dates of `proto4-datetime.pickle` beside
+/// an instance of a class the writing script defined, which every form
+/// refuses, so the listing is what reads it.
+#[test]
+fn the_listing_reads_a_packed_date_as_the_fields_in_it() {
+    let Some(dir) = folder() else { return };
+    let path = dir.join("unfamiliar-dates-beside-a-class.pickle");
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    let form = formats::pickle::familiar::recognise(&bytes).map(|m| m.form);
+    assert_eq!(form, None, "a form matched, so the listing no longer reads this file");
+    let doc = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(formats::builtin("pickle").unwrap());
+
+    let mut found = Vec::new();
+    fields(&doc, &mut ev, &[], &mut found, 0);
+    let named = |ty: &str, field: &str| -> Vec<i128> {
+        found.iter().filter(|(t, f, _)| t == ty && f == field).map(|(_, _, v)| *v).collect()
+    };
+    assert_eq!(named("DateTime", "year"), vec![2026; 3], "three datetimes, all this year");
+    assert_eq!(named("Date", "year"), vec![2026]);
+    assert_eq!(named("Date", "month"), vec![9]);
+    assert_eq!(named("Date", "day"), vec![6]);
+    assert_eq!(named("Time", "microsecond"), vec![250_000]);
+    // Half past ten and fifteen seconds, in that order. Three one-byte fields
+    // in a row will read as each other if two of them are swapped, and every
+    // other assertion here would still pass.
+    assert_eq!(named("Time", "hour"), vec![10]);
+    assert_eq!(named("Time", "minute"), vec![30]);
+    assert_eq!(named("Time", "second"), vec![15]);
+    // The three datetimes in the order the dict was filled in: the same time
+    // of day, then midnight with a zone on it, then half past two in April.
+    assert_eq!(named("DateTime", "day"), vec![6, 6, 5]);
+    assert_eq!(named("DateTime", "hour"), vec![10, 0, 2]);
+    assert_eq!(named("DateTime", "minute"), vec![30, 0, 30]);
+    assert_eq!(named("DateTime", "second"), vec![15, 0, 0]);
+    assert_eq!(named("DateTime", "microsecond"), vec![250_000, 0, 0]);
+    // The last of the three is the second two o'clock, and the bit that says
+    // so is the top of the month byte: 0x84 is April folded, not month 132.
+    assert_eq!(named("DateTime", "fold"), vec![0, 0, 1]);
+    assert_eq!(named("DateTime", "month"), vec![9, 9, 4]);
+}
+
 /// A naming row names, and leaves what the thing is to the row that makes it.
 ///
 /// A pickle names a class, then calls it, then fills it in, and for a while
@@ -278,6 +324,38 @@ fn annotated(
         let mut next = at.to_vec();
         next.push(i);
         annotated(doc, ev, &next, out, depth + 1);
+    }
+}
+
+/// Every field of every packed record, as its record's type, its own name and
+/// its value.
+fn fields(
+    doc: &Document<MemSource>,
+    ev: &mut Evaluator,
+    at: &[usize],
+    out: &mut Vec<(String, String, i128)>,
+    depth: usize,
+) {
+    if depth > 10 {
+        return;
+    }
+    let Ok(node) = ev.node(doc, at) else { return };
+    if matches!(node.type_name.as_str(), "Date" | "Time" | "DateTime") {
+        for i in 0..node.child_count as usize {
+            let mut child = at.to_vec();
+            child.push(i);
+            if let Ok(f) = ev.node(doc, &child) {
+                if let Some(v) = f.value.as_int() {
+                    out.push((node.type_name.clone(), f.name.clone(), v));
+                }
+            }
+        }
+        return;
+    }
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        fields(doc, ev, &next, out, depth + 1);
     }
 }
 
