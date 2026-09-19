@@ -133,6 +133,9 @@ part null; a pending read answers pending like every other call.
   - `tablebar.ts`: the bar. The title, the count, the facts (links), the
     row-meaning line, the rows-or-columns choice, the address checkbox, and
     the two buttons the view owns.
+  - `tablecolumns.ts`: how wide each column is, which side its values sit,
+    what its heading says with the count of wrong values in it, and the header
+    row itself, the right way up and turned.
   - `tablescroll.ts`: which rows the scroll position is asking for and where
     to draw them, with the scroll position mapped to row index by ratio when
     the row count exceeds what a canvas can be tall enough for (a ten-minute

@@ -50,12 +50,13 @@ import { fieldClass } from "./fieldstyle.ts";
 import type { RecordCell } from "./records.ts";
 import { PROBLEMS, REPORT, TABLE } from "./strings.ts";
 import { rememberChoice, storedText } from "./stored.ts";
-import { cellPlaceIn, copiedAddress, drawAddress, fieldWhereLines, rowHasBytes, whereLines } from "./tableaddress.ts";
+import { cellPlaceIn, drawAddress, fieldWhereLines, rowHasBytes, whereLines } from "./tableaddress.ts";
 import { tableBar, type Bar } from "./tablebar.ts";
+import { TableColumns } from "./tablecolumns.ts";
 import { TableExportPanel } from "./tableexportpanel.ts";
-import { FIT_MAX, FIT_MIN, fitCell, fitOf, indexWidth, rowRun, startsTurned, timeText, timeWidth, turnsByDefault, type ColumnFit, type TablePlan, type TableRow } from "./tableplan.ts";
-import { OVERSCAN, ROW, RowScroll } from "./tablescroll.ts";
-import { headerCells, leadKinds, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
+import { rowRun, startsTurned, timeText, turnsByDefault, type TablePlan, type TableRow } from "./tableplan.ts";
+import { ROW, RowScroll } from "./tablescroll.ts";
+import { headerCells, recordCells, tsvLine, turnedLines, type Lead } from "./tabletext.ts";
 
 /** How many rows one copy may hold. The text is built in memory before the
  *  clipboard sees it, and a hundred thousand rows of samples is already a few
@@ -70,29 +71,9 @@ const ADDRESSES_KEY = "qubero.table.addresses";
 /** Whether the reader wants the tables that arrive turned to arrive turned.
  *  Kept for those tables only; see `startsTurned`. */
 const TURNED_KEY = "qubero.table.turned";
-/** How wide a column of addresses and one of sizes start out, in characters.
- *  They widen to what is in them like any other column: a size of
- *  `4,000 bytes` in a column cut for `27 bytes` read `4,000 by...`, with
- *  nothing to say what the rest was. */
-const AT_WIDTH = 9;
-const SIZE_WIDTH = 8;
 /** What in the view is cut short with an ellipsis when it does not fit, and so
  *  needs its full text somewhere. */
 const CUT_SHORT = ".tbl-th, .tbl-cell";
-
-/** One data column as it is drawn: how wide it is and which side its values
- *  sit, its header cell, and how many wrong values its cells hold over the
- *  rows read so far, invalid then undefined.
- *
- *  One record rather than three arrays indexed alike, because the three
- *  answers change together: a count that grows rewrites a heading, and a
- *  heading that no longer fits widens the column. Apart, that was three
- *  lookups a step, each to be checked for a column that was not there. */
-type Column = {
-  fit: ColumnFit;
-  readonly head: HTMLElement;
-  problems: [invalid: number, undefined: number];
-};
 
 /** What picking a row hands on: the row's field, and the bits it covers. */
 export type TablePick = {
@@ -116,7 +97,6 @@ function glyph(invalid: boolean): HTMLElement {
 
 export class TableView {
   readonly el: HTMLElement;
-  private readonly doc: Doc;
   private readonly plan: TablePlan;
   private readonly head: HTMLElement;
   private readonly scroller: HTMLElement;
@@ -124,11 +104,9 @@ export class TableView {
   /** The rows already read, by index. Cleared whenever the file changes, since
    *  that is when what one of them says can stop being true. */
   private readonly have = new Map<number, TableRow>();
-  /** The data columns, in the order they are drawn. Built once and kept: the
-   *  header cells are the same elements from then on, so a column found to be
-   *  numeric is turned to face its values without the header being built
-   *  again. */
-  private readonly columns: Column[];
+  /** The data columns: their widths, their sides, their headings and what
+   *  their cells have been found to hold. */
+  private readonly columns: TableColumns;
   private addresses = false;
   /** Whether the table is drawn turned, a record to a column. */
   private turned = false;
@@ -140,11 +118,6 @@ export class TableView {
    *  one field of every record, and this is the one whose bytes a pick goes
    *  to. */
   private pickedRecord = 0;
-  /** How wide the column of row names is, in a table whose rows have them. */
-  private nameFit: ColumnFit = fitOf(TABLE.rowName);
-  /** How wide the two address columns are: as wide as the widest seen. */
-  private atWidth = Math.max(AT_WIDTH, TABLE.storedAt.length);
-  private sizeWidth = Math.max(SIZE_WIDTH, TABLE.size.length);
   private readonly barLine: Bar;
   /** The selected rows, as they are drawn: records, or fields when turned. the one the selection started on, and the one it was
    *  last extended to. Equal for a single row; the range runs between them
@@ -170,7 +143,6 @@ export class TableView {
   onFactPick: (path: readonly number[]) => void = () => {};
 
   constructor(doc: Doc, plan: TablePlan, opts: { readonly title: string }) {
-    this.doc = doc;
     this.plan = plan;
     this.addresses = storedText(ADDRESSES_KEY) === "1";
     this.turned = startsTurned(plan, storedText(TURNED_KEY));
@@ -195,7 +167,7 @@ export class TableView {
       table: opts.title,
       rowWord: plan.rowWord,
       count: plan.count,
-      headings: () => this.columns.map((_, c) => this.headingOf(c)),
+      headings: () => this.columns.headings(),
       lead: () => this.lead,
       turned: () => this.turned,
       selected: () => this.range(),
@@ -220,14 +192,20 @@ export class TableView {
     });
     this.el.append(this.barLine.el, this.scroller, this.notice);
     this.refreshCopy();
-    this.columns = plan.columns.map((_, c) => ({
-      fit: fitOf(this.headingOf(c)),
-      head: el("span", { className: "tbl-th" }),
-      problems: [0, 0],
-    }));
+    this.columns = new TableColumns({
+      plan,
+      el: this.el,
+      head: this.head,
+      turned: () => this.turned,
+      addresses: () => this.addresses,
+      rate: () => this.rate,
+      lead: () => this.lead,
+      have: this.have,
+      records: () => this.allRecords(),
+    });
     this.sizeCanvas();
-    this.layColumns();
-    this.fillHead();
+    this.columns.lay();
+    this.columns.fillHead();
     this.scroller.addEventListener("scroll", () => this.paint(), { passive: true });
     this.scroller.addEventListener("click", (e) => this.onClick(e));
     this.scroller.addEventListener("keydown", (e) => this.onKey(e));
@@ -288,199 +266,9 @@ export class TableView {
    *  are has changed. */
   private layAgain(): void {
     this.turnedLaid = false;
-    this.layColumns();
-    this.fillHead();
+    this.columns.lay();
+    this.columns.fillHead();
     this.paintAgain();
-  }
-
-  // ----- the columns -----
-
-  /** One track list for the header and every row, so the two line up without
-   *  either measuring the other. Every track is a fixed width: the data
-   *  columns are as wide as what has been seen in them (see `ColumnFit`), so a
-   *  table of one channel is a narrow table and not one number adrift in a
-   *  tab-wide column. */
-  private layColumns(): void {
-    const widths = this.turned ? this.turnedWidths() : this.widths();
-    this.el.style.setProperty("--tbl-cols", widths.map((w) => `${w}ch`).join(" "));
-  }
-
-  /** The tracks of the table the right way up, in `headerCells`' order. */
-  private widths(): number[] {
-    const out = [indexWidth(this.plan.count)];
-    if (this.plan.rowNames) out.push(this.nameFit.width);
-    if (this.rate !== null) out.push(timeWidth(this.plan.count, this.rate));
-    for (const column of this.columns) out.push(column.fit.width);
-    if (this.addresses) out.push(this.atWidth, this.sizeWidth);
-    return out;
-  }
-
-  /** The tracks of the table turned: the labels, then a column a record, each
-   *  as wide as the widest thing in it, heading lines included. Before the
-   *  records are all read a column is as wide as its number. */
-  private turnedWidths(): number[] {
-    const clamp = (n: number): number => Math.min(FIT_MAX, Math.max(FIT_MIN, n));
-    // Loops, not `Math.max(...lengths)`: a strip of samples has a field for
-    // every sample, and an argument for each of a hundred thousand of them is
-    // more than a call can take.
-    let labels = 0;
-    for (const text of headerCells([], this.lead)) labels = Math.max(labels, text.length);
-    for (let c = 0; c < this.columns.length; c++) labels = Math.max(labels, this.headTextOf(c).length);
-    const out = [clamp(labels)];
-    for (let i = 0; i < this.plan.count; i++) {
-      const row = this.have.get(i);
-      if (row === undefined) {
-        out.push(clamp(i.toLocaleString().length));
-        continue;
-      }
-      let widest = 0;
-      for (const text of recordCells(i, row, 0, this.lead)) widest = Math.max(widest, text.length);
-      for (const cell of row.cells) widest = Math.max(widest, cell.text.length);
-      out.push(clamp(widest));
-    }
-    return out;
-  }
-
-  /** The heading of one data column, unit included. */
-  private headingOf(c: number): string {
-    const column = this.plan.columns[c];
-    if (column === undefined) return "";
-    return column.unit === "" ? column.name : `${column.name} (${column.unit})`;
-  }
-
-  /** The heading as it is drawn: the column's name and unit, then how many of
-   *  its cells hold a wrong value. A reader scrolling a run of samples sees
-   *  one marked cell at a time and no way to tell whether it is the only one,
-   *  so the count is what says how much there is to look for. */
-  private headTextOf(c: number): string {
-    const column = this.columns[c];
-    if (column === undefined) return this.headingOf(c);
-    const more = PROBLEMS.column(column.problems[0], column.problems[1], this.have.size < this.plan.count);
-    return more === "" ? this.headingOf(c) : `${this.headingOf(c)} ${more}`;
-  }
-
-  /** A row has been read: add whatever is wrong in it to its columns' counts,
-   *  and write any heading whose count changed. The heading is allowed to
-   *  widen its column, since a count nobody can read is not a count. */
-  private countRow(row: TableRow): void {
-    let widened = false;
-    // Every heading is rewritten once the last row arrives, because that is
-    // when `so far` comes off all of them at once.
-    const settled = this.have.size >= this.plan.count;
-    for (const [c, column] of this.columns.entries()) {
-      const problem = row.cells[c]?.problem;
-      if (problem === undefined && !settled) continue;
-      if (problem !== undefined) column.problems[problem.tier === "invalid" ? 0 : 1]++;
-      widened = this.writeHead(c) || widened;
-    }
-    if (widened) this.layColumns();
-  }
-
-  /** Every heading, drawn again with what it says now. Used when the counts
-   *  are thrown away: a heading still reading `2 invalid so far` after the
-   *  rows behind it have gone would be saying something nothing holds up. */
-  private writeHeads(): void {
-    let widened = false;
-    for (let c = 0; c < this.columns.length; c++) widened = this.writeHead(c) || widened;
-    if (widened) this.layColumns();
-  }
-
-  /** One heading, drawn again with what it says now. True when the column had
-   *  to grow to hold it. */
-  private writeHead(c: number): boolean {
-    const column = this.columns[c];
-    if (column === undefined) return false;
-    const text = this.headTextOf(c);
-    if (column.head.textContent === text) return false;
-    column.head.textContent = text;
-    column.head.title = text;
-    const width = Math.min(FIT_MAX, Math.max(column.fit.width, text.length));
-    if (width === column.fit.width) return false;
-    column.fit = { width, numeric: column.fit.numeric };
-    return true;
-  }
-
-  /** A row has been read: widen any column it does not fit, and settle the
-   *  side of any column whose first value this is. The track list is written
-   *  again only when a width changed, which is a few times at the start and
-   *  then not at all. */
-  private fitRow(row: TableRow): void {
-    let widened = false;
-    if (row.name !== undefined && row.name.length > this.nameFit.width) {
-      this.nameFit = { width: Math.min(FIT_MAX, row.name.length), numeric: false };
-      widened = true;
-    }
-    // Measured from what the columns will say, which for a row whose cells are
-    // apart is `per cell` and for one with no bytes is a word.
-    const [address, sized] = copiedAddress(row);
-    const at = address.length;
-    const size = sized.length;
-    if (at > this.atWidth || size > this.sizeWidth) {
-      this.atWidth = Math.max(this.atWidth, at);
-      this.sizeWidth = Math.max(this.sizeWidth, size);
-      widened = widened || this.addresses;
-    }
-    for (const [c, column] of this.columns.entries()) {
-      const was = column.fit;
-      const now = fitCell(was, row.cells[c]);
-      if (now === was) continue;
-      column.fit = now;
-      if (now.width !== was.width) widened = true;
-      if (now.numeric !== was.numeric) column.head.classList.toggle("tbl-num", now.numeric === true);
-    }
-    if (widened) this.layColumns();
-  }
-
-  /** The header row, assembled from the column headings and whichever of the
-   *  index, time and address cells this table shows. The headings are the same
-   *  elements every time, so what a column has learnt about itself (its width,
-   *  its side, its count) survives the addresses being turned on. */
-  private fillHead(): void {
-    this.writeHeads();
-    if (this.turned) return this.fillTurnedHead();
-    const cells: HTMLElement[] = [el("span", { className: "tbl-th tbl-index tbl-num", textContent: TABLE.index })];
-    if (this.plan.rowNames) cells.push(el("span", { className: "tbl-th", textContent: TABLE.rowName }));
-    if (this.rate !== null) cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.time }));
-    cells.push(...this.columns.map((column) => column.head));
-    if (this.addresses) {
-      cells.push(el("span", { className: "tbl-th", textContent: TABLE.storedAt }));
-      cells.push(el("span", { className: "tbl-th tbl-num", textContent: TABLE.size }));
-    }
-    this.head.replaceChildren(el("div", { className: "tbl-headline" }, ...cells));
-  }
-
-  /**
-   * The headings of a turned table: a line for each thing that is said about
-   * a record, with a cell for every record. What is a column beside the values
-   * the right way up (the number, the name, the time, the address) is a line
-   * above them here, written by the same code that writes a copy of them.
-   *
-   * Until the records have all been read only their numbers are known, so
-   * that is the one line there is.
-   */
-  private fillTurnedHead(): void {
-    const records = this.allRecords();
-    const lead = this.lead;
-    const lines =
-      records === null
-        ? [[TABLE.index, ...Array.from({ length: this.plan.count }, (_, i) => String(i))]]
-        : turnedLines([], records, lead, { from: 0, to: 0 });
-    const kinds = leadKinds(lead);
-    // A column of numbers has its headings over the digits.
-    const numeric = this.columns.every((column) => column.fit.numeric === true);
-    const out = lines.map((line, at) => {
-      const kind = kinds[at] ?? "index";
-      const tint = kind === "index" || kind === "at" ? " tbl-at" : kind === "size" ? " tbl-size" : "";
-      const cells = line.map((text, c) => {
-        if (c === 0) return el("span", { className: "tbl-th tbl-label", textContent: text });
-        const said = kind === "index" ? Number(text).toLocaleString() : text;
-        const cell = el("span", { className: `tbl-th${tint}${numeric ? " tbl-num" : ""}`, textContent: said });
-        cell.title = said;
-        return cell;
-      });
-      return el("div", { className: "tbl-headline" }, ...cells);
-    });
-    this.head.replaceChildren(...out);
   }
 
   /** Every record, or null while any of them is still being read. Only asked
@@ -530,8 +318,7 @@ export class TableView {
       // are answers about those rows and go with them.
       this.have.clear();
       this.turnedLaid = false;
-      for (const column of this.columns) column.problems = [0, 0];
-      this.writeHeads();
+      this.columns.forget();
       this.plan.forget();
       this.paintAgain();
     });
@@ -555,8 +342,8 @@ export class TableView {
     const records = this.turned ? this.allRecords() : null;
     if (records !== null && !this.turnedLaid) {
       this.turnedLaid = true;
-      this.layColumns();
-      this.fillHead();
+      this.columns.lay();
+      this.columns.fillHead();
     }
     const { from, to, base } = this.rows.window();
     const was = this.drawn;
@@ -580,8 +367,7 @@ export class TableView {
     const row = this.plan.row(i);
     if (row !== null) {
       this.have.set(i, row);
-      this.fitRow(row);
-      this.countRow(row);
+      this.columns.read(row);
     }
     return row;
   }
@@ -608,13 +394,13 @@ export class TableView {
    *  since the two address columns are heading lines when the table is turned
    *  and are about the records rather than about this row. */
   private drawTurned(j: number, records: readonly TableRow[] | null): HTMLElement {
-    const label = this.headTextOf(j);
+    const label = this.columns.headTextOf(j);
     if (records === null) return this.drawWaiting(label, "tbl-label");
     const element = el("div", { className: this.isOn(j) ? "tbl-row is-on" : "tbl-row" });
     const heading = el("span", { className: "tbl-cell tbl-label", textContent: label });
     heading.title = this.addresses ? [label, ...fieldWhereLines(records, j)].join("\n") : label;
     element.append(heading);
-    const numeric = this.columns[j]?.fit.numeric === true;
+    const numeric = this.columns.numeric(j);
     for (const [i, row] of records.entries()) {
       const cell = this.drawCell(row.cells[j], numeric);
       cell.dataset["record"] = String(i);
@@ -635,7 +421,7 @@ export class TableView {
     const rate = this.rate;
     if (rate !== null) element.append(el("span", { className: "tbl-cell tbl-time tbl-num", textContent: timeText(i, rate) }));
     for (let c = 0; c < this.plan.columns.length; c++) {
-      const cell = this.drawCell(row.cells[c], this.columns[c]?.fit.numeric === true);
+      const cell = this.drawCell(row.cells[c], this.columns.numeric(c));
       // Which column was clicked, for a table whose cells are each in a place
       // of their own: the cell is what a pick goes to, not the whole row.
       cell.dataset["column"] = String(c);
@@ -893,7 +679,7 @@ export class TableView {
     if (range === null) return;
     const n = range.to - range.from;
     if (n > COPY_LIMIT_ROWS) return this.say(TABLE.copyTooBig(n, COPY_LIMIT_ROWS));
-    const headings = this.columns.map((_, c) => this.headingOf(c));
+    const headings = this.columns.headings();
     let lines: string[][];
     if (this.turned) {
       const records = this.allRecords();
