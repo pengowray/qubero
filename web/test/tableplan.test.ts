@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import type { TableShape, TemplateNode } from "../src/doc.ts";
 import {
+  canTurn,
   cellOf,
   columnNameOf,
   FIT_MAX,
@@ -17,13 +18,20 @@ import {
   fitOf,
   flatFields,
   flatNames,
+  indexOnly,
   indexWidth,
+  plainIndexes,
   rowCount,
+  rowNameOf,
   rowRange,
   shapeColumns,
+  spanOf,
+  startsTurned,
   timeDigits,
   timeText,
   timeWidth,
+  TURN_MAX,
+  turnsByDefault,
   uniformColumns,
 } from "../src/tableplan.ts";
 import { PROBLEMS } from "../src/strings.ts";
@@ -225,4 +233,73 @@ test("the row number and time columns are as wide as their last row", () => {
   // `time (s)` is the floor: at 8 kHz the last of 400 rows is `0.04988`.
   assert.equal(timeWidth(400, 8000), "time (s)".length);
   assert.equal(timeWidth(26_000_000, 44100), timeText(25_999_999, 44100).length);
+});
+
+// ----- which way round a table is drawn -----
+
+/** `n` columns called by their places, as a list of lists has them. */
+function places(n: number): { name: string; unit: string }[] {
+  return Array.from({ length: n }, (_, i) => ({ name: `[${i}]`, unit: "" }));
+}
+
+test("a row is named by what follows its index", () => {
+  assert.equal(rowNameOf("[0] /'Measured Data'/'Phase sweep'"), "/'Measured Data'/'Phase sweep'");
+  assert.equal(rowNameOf("[12]"), undefined);
+  assert.equal(rowNameOf("samples"), undefined);
+});
+
+test("a cell's span is where its field is stored", () => {
+  assert.deepEqual(spanOf(node({ name: "[3]", path: [4, 3], offset_bits: 96, size_bits: 32 })), { offsetBits: 96, sizeBits: 32, path: [4, 3] });
+});
+
+test("columns are places only when every one of them is", () => {
+  assert.equal(indexOnly(places(3)), true);
+  assert.equal(indexOnly([...places(2), { name: "NAME", unit: "" }]), false);
+  assert.equal(indexOnly([{ name: "[0]", unit: "V" }]), false);
+  assert.equal(indexOnly([]), false);
+});
+
+test("columns that are only places are called by the number alone", () => {
+  const plain = plainIndexes(places(3));
+  assert.deepEqual(plain.columns.map((c) => c.name), ["0", "1", "2"]);
+  assert.equal(plain.indexColumns, true);
+});
+
+test("the brackets stay where they still tell a place from a name", () => {
+  const mixed = [...places(2), { name: "NAME", unit: "" }];
+  const kept = plainIndexes(mixed);
+  assert.deepEqual(kept.columns.map((c) => c.name), ["[0]", "[1]", "NAME"]);
+  assert.equal(kept.indexColumns, false);
+});
+
+test("two channels of five hundred values arrive turned", () => {
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(places(500)) }), true);
+});
+
+test("a table stays the way the file has it unless all three hold", () => {
+  // Named columns are different facts about one thing, and read across.
+  const named = Array.from({ length: 500 }, (_, i) => ({ name: `field ${i}`, unit: "" }));
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(named) }), false);
+  // A few columns fit across the tab as they are.
+  assert.equal(turnsByDefault({ count: 2, ...plainIndexes(places(12)) }), false);
+  // A matrix has no better way up.
+  assert.equal(turnsByDefault({ count: 400, ...plainIndexes(places(500)) }), false);
+  // Too many records to give a column each.
+  assert.equal(turnsByDefault({ count: TURN_MAX + 1, ...plainIndexes(places(5000)) }), false);
+});
+
+test("only a table short enough can be turned", () => {
+  assert.equal(canTurn(0), false);
+  assert.equal(canTurn(TURN_MAX), true);
+  assert.equal(canTurn(TURN_MAX + 1), false);
+});
+
+test("the reader's choice is kept for the tables that arrive turned and no others", () => {
+  const strip = { count: 2, ...plainIndexes(places(500)) };
+  const records = { count: 6, ...plainIndexes([{ name: "ITEM", unit: "" }, { name: "TOTAL", unit: "" }]) };
+  assert.equal(startsTurned(strip, null), true);
+  assert.equal(startsTurned(strip, "1"), true);
+  assert.equal(startsTurned(strip, "0"), false);
+  assert.equal(startsTurned(records, "1"), false);
+  assert.equal(startsTurned(records, null), false);
 });

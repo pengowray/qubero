@@ -4005,14 +4005,31 @@ button.insp-xrow-where:hover {
 .tbl-fact:hover {
   color: var(--fg);
 }
-/* The two controls sit at the far end away from the facts. */
-.tbl-addr {
+/* The controls sit together at the far end, away from the facts. */
+.tbl-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-inline-start: auto;
+}
+.tbl-check {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-inline-start: auto;
   color: var(--muted);
   cursor: pointer;
+}
+/* One question and its two answers, kept together as the bar wraps. */
+.tbl-arrange {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.tbl-check.is-off {
+  opacity: 0.6;
+  cursor: default;
 }
 .tbl-copy {
   font: inherit;
@@ -4030,7 +4047,66 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   cursor: default;
 }
-.tbl-head,
+/* The export form hangs under its button, over the table, and is put away by
+   a click anywhere else. */
+.tbl-export {
+  position: relative;
+}
+.tbl-export-form {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: min(28rem, 90vw);
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+}
+.tbl-export-form[hidden] {
+  display: none;
+}
+.tbl-export-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.tbl-export-group[hidden] {
+  display: none;
+}
+.tbl-export-group legend {
+  padding: 0;
+  margin-block-end: 2px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.tbl-export-choice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.tbl-export-choice.is-off,
+.tbl-export-choice:has(input:disabled) {
+  color: var(--muted);
+  cursor: default;
+}
+.tbl-export-size {
+  margin: 0;
+  color: var(--muted);
+}
+.tbl-export-save {
+  align-self: flex-end;
+}
+.tbl-headline,
 .tbl-row {
   display: grid;
   grid-template-columns: var(--tbl-cols);
@@ -4041,9 +4117,16 @@ button.insp-xrow-where:hover {
 /* The headings share the rows' monospace face: the tracks are sized in
    characters from the heading and the values, and a heading in a wider face
    would be the one thing the arithmetic did not cover. */
-.tbl-head {
-  flex: none;
+/* One line of headings for a table the right way up. A turned table has a
+   line for each thing said about a record: its number, its name, its time,
+   where it is stored. */
+.tbl-headline {
   height: var(--tbl-row);
+}
+.tbl-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
@@ -4073,6 +4156,13 @@ button.insp-xrow-where:hover {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+/* What is scrolled: the header and the rows, as wide as the columns make
+   them. At least as wide as the tab, so a narrow table's rows still reach the
+   far edge for the hover and the selection to fill. */
+.tbl-sheet {
+  width: max-content;
+  min-width: 100%;
+}
 .tbl-canvas {
   position: relative;
 }
@@ -4093,6 +4183,41 @@ button.insp-xrow-where:hover {
 .tbl-index,
 .tbl-at {
   color: var(--addr);
+}
+/* The row's number stays at the near edge going across, so a value twenty
+   columns in can still be read against the row it belongs to. It covers what
+   scrolls under it, which means wearing the row's own background. A turned
+   table's rows are called by their headings instead, which stay the same
+   way. */
+.tbl-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+.tbl-index,
+.tbl-label {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  align-self: stretch;
+  line-height: var(--tbl-row);
+  box-sizing: content-box;
+  margin-inline-start: -10px;
+  padding-inline: 10px 4px;
+  margin-inline-end: -5px;
+  border-inline-end: 1px solid var(--line);
+  background: var(--bg);
+}
+.tbl-head .tbl-index,
+.tbl-head .tbl-label {
+  background: var(--panel);
+}
+.tbl-row:hover .tbl-index,
+.tbl-row:hover .tbl-label {
+  background: color-mix(in srgb, var(--fg) 5%, var(--bg));
+}
+.tbl-row.is-on .tbl-index,
+.tbl-row.is-on .tbl-label {
+  background: var(--accent-soft);
 }
 .tbl-size {
   color: var(--muted);

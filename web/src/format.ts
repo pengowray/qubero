@@ -49,6 +49,20 @@ export function formatOffset(bits: number): string {
   return `${ADDRESS_MARK}${offsetDigits(bits)}`;
 }
 
+/**
+ * An address, in whatever space it belongs to. A field of the file gets the
+ * plain address; one inside a decoded stream gets a `+` as well, because
+ * `0x1c` of a stream and `0x1c` of the file are different bytes and a reader
+ * comparing the listing against the hex view has to be able to tell.
+ *
+ * The mark stays in front of the `+`: `@+0x1c`, not `+@0x1c`. Every address
+ * on screen begins with the same character, and what the address is counted
+ * from is the next question, not the first one.
+ */
+export function formatAddress(bits: number, space: number): string {
+  return space === 0 ? formatOffset(bits) : `${ADDRESS_MARK}+${offsetDigits(bits)}`;
+}
+
 /** A size, in the units a reader would say it in. */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

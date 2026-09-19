@@ -2104,19 +2104,11 @@ function describeReadFailure(offset: number, length: number, cause: unknown): st
   return `Could not read ${where} from the original file. ${reason}`;
 }
 
-/**
- * An address, in whatever space it belongs to. A field of the file gets the
- * plain address; one inside a decoded stream gets a `+` as well, because
- * `0x1c` of a stream and `0x1c` of the file are different bytes and a reader
- * comparing the listing against the hex view has to be able to tell.
- *
- * The mark stays in front of the `+`: `@+0x1c`, not `+@0x1c`. Every address
- * on screen begins with the same character, and what the address is counted
- * from is the next question, not the first one.
- */
-export function formatAddress(bits: number, space: number): string {
-  return space === 0 ? formatOffset(bits) : `${ADDRESS_MARK}+${offsetDigits(bits)}`;
-}
+// `formatAddress` lives in format.ts, beside the `formatOffset` it is the
+// wider form of, so the halves of the table view that must stay free of the
+// wasm this module loads can write an address too. Re-exported here because
+// this is where every caller has always asked for it.
+export { formatAddress } from "./format.ts";
 
 /**
  * The shift-and-mask that reads `width` bits starting at `bitOffset` and leaves

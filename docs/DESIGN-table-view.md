@@ -142,6 +142,76 @@ part null; a pending read answers pending like every other call.
   and a run chip in the hex view on double-click, the same gesture that opens
   an unpacked stream.
 
+## Which way round (2026-09-19)
+
+A table means one thing: a row is a record, a column is a field. The plan
+answers in records, and every copy and export is made from that by
+`tabletext.ts`. Which way round the view DRAWS it is a separate state, `turned`,
+with a choice in the bar, `{Rows} in: rows / columns`.
+
+- **Default.** `turnsByDefault`: the table can be turned (at most `TURN_MAX`,
+  1,000, records, since a turned row needs every record read), its columns are
+  only places in a list, and there are more than 20 of them and at least four
+  to every row. Two TDMS channels of 500 values arrive as two columns.
+- **Kept.** `qubero.table.turned`, written only when the reader flips a table
+  that `turnsByDefault` picks out, and read only for those. Flipping a table of
+  records lasts for that tab: it should not turn every dBase file from then on.
+- **What turns.** The rows that scroll and are selected are fields. The facts
+  about a record (number, name, time, address, size) are columns the right way
+  up and lines of sticky heading turned, written by the same `turnedLines` a
+  copy uses. A click goes to the clicked cell's own bytes (`TableRow.spans`),
+  or to the whole record where the plan has no spans.
+- **What does not.** Export writes a record to a row unless the reader picks
+  `columns, as on screen`; JSON is always one object per record. Copy
+  is of the rows on screen and so follows the view.
+- **Headings.** Columns that are all `[n]` are headed `n` (`plainIndexes`);
+  one named column among them keeps the brackets on all. Rows the format names
+  (TDMS channel paths) get a `name` column.
+- **Header.** Inside the scroller, `position: sticky`, in a sheet that is
+  `max-content` wide, so it scrolls across with the rows; the row number (or,
+  turned, the field label) is sticky at the near edge.
+- **Not done: columns are not virtual.** Every column of every drawn row is an
+  element, about 30 microseconds each: 2 rows of 500 is nothing, 50 rows of 500
+  is most of a second a repaint, and 4,000 columns that tall would not scroll.
+  A table both wide and tall needs a column window like the row one; the
+  tracks are fixed `ch` widths, so the arithmetic is prefix sums.
+
+## Where the cells are (2026-09-19)
+
+Most tables have a row that is a run of the file, and `Stored at` and `Size`
+say where it starts and how long it is. The tables the core works out -- a
+pandas frame, a torch tensor, a checkpoint's summary -- do not. A frame's row
+is one value out of each of several blocks, and at protocol 2 two of them can
+be in two different address spaces. So `FrameCell.at` says where each cell is
+or why it has none (`counted`, a `RangeIndex` label worked out from a start and
+a step; `nowhere`, a place this reading cannot find), and `RecordCell` carries
+that through to the view. `tableaddress.ts` holds the words, because the
+columns on screen, a copy and an exported file all have to say the same thing.
+
+- **A row.** `rowRun` over its cells: one run of one space gives an address and
+  a length; cells in several places give the first cell's address, `per cell`
+  for the size, and the reason on hover; a row with no placed cell at all says
+  `computed` or `unknown` instead of an address of nought.
+- **A cell.** Its own address is a line on its hover, under its value and under
+  whatever is wrong with it, and only while the address columns are on. An
+  address in an unpacked stream gets the line that says what the `+` counts
+  from, since a hover cannot carry a hover.
+- **A click.** The cell that was clicked is what the file tab is sent, when the
+  cell has bytes in the tab's own space. A cell elsewhere, or with no bytes,
+  leaves the cursor where it was rather than moving it somewhere unasked.
+- **Turned.** `Stored at` and `Size` are about the record, so turned they are
+  two of the heading lines, a cell to a record, exactly as `turnedLines`
+  writes them. What the drawn row is then -- the same field of every record --
+  has an address of its own, on the row's heading: a frame keeps a column's
+  values in one block, so the run the unturned table could only call `per cell`
+  reads straight down the page. `columnPlaces` collects them, from the cells'
+  own addresses or, for a table read from a list's elements, from
+  `TableRow.spans`. Hover and click follow the drawn cell either way up.
+- **Copy and export.** `recordParts` writes the same two cells the columns
+  draw, so a pasted row does not claim bytes its table never held. An export
+  has them only when the address columns are on, like every other column: the
+  file is what was on screen.
+
 ## Strings
 
 | Where | String |
@@ -157,9 +227,20 @@ part null; a pending read answers pending like every other call.
 | Unnamed column | `{column word} {n}` |
 | Address columns (data lens) | `Stored at`, `Size` |
 | Address checkbox | `Show byte addresses` |
-| Copy button, nothing selected (disabled) | `Copy`; hover `Select rows to copy them as tab-separated text` |
-| Copy button, rows selected | `Copy {n} {rows}`; hover `Copy the selected rows as tab-separated text (Ctrl+C)` |
-| Copy notice | `Copied {n} {rows} as tab-separated text.` |
+| Size, cells in several places | `per cell`; hover, on both columns `This row's cells are in different places. Hover a cell for its address.` |
+| Address, no bytes | `computed`, `unknown`; hover `No bytes: computed from the index's start and step.`, `No bytes: unknown location.` |
+| A cell's address, on its hover | `{address} · {size}`, then `Offset within the unpacked stream` for an address in one |
+| Row name column | `name` |
+| Rows-or-columns choice | `{Rows} in:` `rows` / `columns` (radio pair); hover `One {row} per row, or one {row} per column. (Display only)` |
+| `columns` greyed, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
+| Column meaning, turned | `Each column is one {row} of each {column word}, 1/{rate} s apart.` |
+| Copy button, nothing selected (disabled) | `Copy selected rows`; hover `Select rows to copy them as tab-separated text` |
+| Copy button, rows selected | `Copy selected row`, `Copy {n} selected rows`; hover `Copy the selected rows to the clipboard as tab-separated text, with their headings (Ctrl+C)` |
+| Copy notice | `Copied {n} rows as tab-separated text.` |
+| Export button | `Export...`; while saving `Stop export` |
+| Export form | `Export`: `Whole table`, `Selected rows only ({n})`; `Format`: `CSV`, `TSV`, `JSON`; `{Rows} in` (turned only): `rows`, `columns, as on screen`; `Save file` |
+| Export size | `Writes {n} rows of {m} columns, under one heading row.` / `..., as on screen.` / `Writes {n} objects, one per {row}.` |
+| Export notices | `Exporting row {n} of {total}...`, `Exported {n} rows as {format}.`, `Export stopped.`, `Couldn't export: {message}` |
 | Copy refused, too many | `Selection too large to copy: {n} rows, limit 100,000.` |
 | Copy refused, still reading | `Rows are still loading. Try again in a moment.` |
 | Copy failed | `Couldn't copy to the clipboard.` |

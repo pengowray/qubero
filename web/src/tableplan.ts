@@ -48,6 +48,28 @@ export type TableRow = {
    *  the offset above is the first cell's and not the whole row's. A frame's
    *  row is one value out of each of several blocks. */
   readonly apart?: boolean;
+  /** What the format calls this row, where it calls it anything: a TDMS
+   *  channel's path, which is the only thing telling one run of numbers from
+   *  the next. Only on the rows of a plan whose `rowNames` is true. */
+  readonly name?: string;
+  /** Where each cell is stored, cell for cell. A table drawn turned has a
+   *  record down each column, so a row of it is one field out of every record
+   *  and is stored in as many places as there are records; the cell the reader
+   *  clicked is the only part of it with an address. Absent where the plan
+   *  cannot say, which is every table a format reader builds.
+   *
+   *  A row read from the elements of a list says where its cells are here, in
+   *  the tab's own space, since that is where a field it read from lives. A
+   *  computed table's cells carry their own `at` instead (see `RecordCell`),
+   *  which can be in an unpacked stream and can be missing altogether. */
+  readonly spans?: readonly CellSpan[];
+};
+
+/** Where one cell of a row is stored, and the field it was read from. */
+export type CellSpan = {
+  readonly offsetBits: number;
+  readonly sizeBits: number;
+  readonly path: readonly number[];
 };
 
 export type TablePlan = {
@@ -57,6 +79,11 @@ export type TablePlan = {
   /** What one row is: a sample, a record, a value. */
   readonly rowWord: string;
   readonly columns: readonly TableColumn[];
+  /** Whether the columns are places in a list and nothing more, which is when
+   *  they are called `0`, `1`, `2`. Set by `plainIndexes`. */
+  readonly indexColumns: boolean;
+  /** Whether the rows have names of their own, which get a column. */
+  readonly rowNames: boolean;
   /** What the shape calls one column, for the sentence saying what a row is.
    *  Null for a table whose columns are named individually or not at all. */
   readonly columnWord: string | null;
@@ -132,6 +159,18 @@ export function shapeColumns(shape: TableShape, columns: number): TableColumn[] 
 export function columnNameOf(name: string): string {
   const named = /^\[\d+\]\s+(.+)$/.exec(name);
   return named?.[1] ?? name;
+}
+
+/** What the format named an element of a list, or undefined for an element
+ *  that has only its place. The other half of `columnNameOf`: there the name
+ *  heads a column, here it names a row. */
+export function rowNameOf(name: string): string | undefined {
+  return /^\[\d+\]\s+(.+)$/.exec(name)?.[1];
+}
+
+/** Where a field is stored, as the span of the cell made from it. */
+export function spanOf(n: TemplateNode): CellSpan {
+  return { offsetBits: n.offset_bits, sizeBits: n.size_bits, path: n.path };
 }
 
 /** What one cell of a row says: a value, or the count of what is under a field
@@ -267,6 +306,92 @@ export function timeWidth(count: number, rate: number): number {
   return Math.max(TABLE.time.length, timeText(Math.max(0, count - 1), rate).length);
 }
 
+// ----- which way round the table is drawn -----
+//
+// A table means one thing: a row is a record, a column is a field, and that is
+// what a copy of it, an export of it and anything else built on it can rely
+// on. Which way round it is DRAWN is a separate question with a different
+// answer for different tables. Two channels of five hundred values each, kept
+// channel after channel, are two records of five hundred fields; drawn that
+// way they are a strip five hundred columns wide and two rows tall, and
+// nobody reads numbers along a strip. Turned, they are two columns to read
+// down, which is how every other table of samples looks.
+
+/** The most records a table can have and still be drawn turned. A turned
+ *  table has a column for every record, and drawing any row of it means
+ *  having read all of them; a run of twenty-six million samples is never going
+ *  to be twenty-six million columns. */
+export const TURN_MAX = 1000;
+
+/** Whether a table of this many records can be drawn turned at all. */
+export function canTurn(count: number): boolean {
+  return count > 0 && count <= TURN_MAX;
+}
+
+/** Whether every column is called by its place and nothing else: `[0]`,
+ *  `[1]`, and so on. Those are the columns of a list of lists, where what runs
+ *  across is more of the same thing rather than different facts about one
+ *  thing. */
+export function indexOnly(columns: readonly TableColumn[]): boolean {
+  return columns.length > 0 && columns.every((c) => /^\[\d+\]$/.test(c.name) && c.unit === "");
+}
+
+/**
+ * Columns that are only places, called by the number alone.
+ *
+ * A list's elements are named `[0]`, `[1]`, `[2]` in the tree, where the
+ * brackets tell a place from a name among the fields around it. Over a table
+ * every heading has them or none does, so they tell nothing apart: five
+ * hundred headings each spend two of their characters saying what the other
+ * four hundred and ninety-nine also say. Where even one column has a name the
+ * brackets are back to doing their job, and stay.
+ *
+ * This is the rule rather than a setting. There is nothing the brackets say
+ * that a reader could want back, and a setting nobody has a reason to change
+ * is one more thing in the bar.
+ */
+export function plainIndexes(columns: readonly TableColumn[]): { readonly columns: readonly TableColumn[]; readonly indexColumns: boolean } {
+  if (!indexOnly(columns)) return { columns, indexColumns: false };
+  return { columns: columns.map((c) => ({ name: c.name.slice(1, -1), unit: c.unit })), indexColumns: true };
+}
+
+/** What `turnsByDefault` needs to know of a plan. */
+export type TurnFacts = {
+  readonly count: number;
+  readonly columns: { readonly length: number };
+  readonly indexColumns: boolean;
+};
+
+/** Wider than this many columns and a table no longer fits across a tab. */
+const WIDE = 20;
+
+/**
+ * Whether a table is better drawn turned before the reader has said anything.
+ *
+ * All three of: it can be; its columns are places rather than names, so
+ * nothing is lost by reading them down instead of across; and there are far
+ * more of them than there are rows, more than fit on a screen and at least
+ * four to every row. A square of numbers stays as the file has it, since a
+ * matrix has no better way up.
+ */
+export function turnsByDefault(plan: TurnFacts): boolean {
+  const columns = plan.columns.length;
+  return canTurn(plan.count) && plan.indexColumns && columns > WIDE && columns >= 4 * plan.count;
+}
+
+/**
+ * Which way round a table starts, given what the reader chose last time.
+ *
+ * The choice that is kept is about the tables `turnsByDefault` picks out and
+ * no others. A reader who turns one table of records to read a single record
+ * down the page has not asked for every table of records to arrive sideways
+ * from then on; a reader who turns a strip of samples back has said how they
+ * want strips of samples.
+ */
+export function startsTurned(plan: TurnFacts, kept: string | null): boolean {
+  return turnsByDefault(plan) && kept !== "0";
+}
+
 // ----- asking the file -----
 
 /** The elements of a list, read a window at a time and kept until the file
@@ -347,12 +472,15 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
     count: rowCount(node.child_count, columns),
     rowWord: shape.row_word ?? childWord(node),
     columns: headings,
+    indexColumns: false,
+    rowNames: false,
     columnWord: shape.column_word,
     facts: shape.facts,
     rate: shape.rate,
     row: (i) => {
       const { from, to } = rowRange(i, columns, node.child_count);
       const cells: RecordCell[] = [];
+      const spans: CellSpan[] = [];
       let first: TemplateNode | null = null;
       let last: TemplateNode | null = null;
       for (let at = from; at < to; at++) {
@@ -364,13 +492,18 @@ function shapedPlan(doc: Doc, node: TemplateNode, shape: TableShape): TablePlan 
           const fields = rowFields(doc, element);
           if (fields === null) return null;
           cells.push(...fields.map(cellOf));
-        } else cells.push(cellOf(element));
+          spans.push(...fields.map(spanOf));
+        } else {
+          cells.push(cellOf(element));
+          spans.push(spanOf(element));
+        }
         first ??= element;
         last = element;
       }
       if (first === null || last === null) return null;
       return {
         cells,
+        spans,
         offsetBits: first.offset_bits,
         sizeBits: last.offset_bits + last.size_bits - first.offset_bits,
         path: [...node.path, from],
@@ -428,6 +561,8 @@ function recordsPlan(doc: Doc, node: TemplateNode): TablePlan | null {
     count: built.rows.length,
     rowWord: built.rowWord ?? childWord(node),
     columns: built.columns.map((name) => ({ name, unit: "" })),
+    indexColumns: false,
+    rowNames: false,
     columnWord: null,
     facts: [],
     rate: null,
@@ -463,6 +598,10 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
   if (names === null) return null;
   const columns = uniformColumns(names);
   if (columns === null) return null;
+  // Whether the rows are named is asked of the same few elements the columns
+  // were: the name column has to be there before any row is drawn, and a list
+  // names all of its elements or none of them.
+  const named = rowNameOf(elements.at(0)?.name ?? "") !== undefined;
   return {
     path: node.path,
     forget: () => elements.clear(),
@@ -470,6 +609,8 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
     count: node.child_count,
     rowWord: childWord(node),
     columns: columns.map((name) => ({ name, unit: "" })),
+    indexColumns: false,
+    rowNames: named,
     columnWord: null,
     facts: [],
     rate: null,
@@ -478,11 +619,14 @@ function guessedPlan(doc: Doc, node: TemplateNode): TablePlan | null {
       if (element === null) return null;
       const fields = rowFields(doc, element);
       if (fields === null) return null;
+      const name = named ? rowNameOf(element.name) : undefined;
       return {
         cells: fields.map(cellOf),
+        spans: fields.map(spanOf),
         offsetBits: element.offset_bits,
         sizeBits: element.size_bits,
         path: [...node.path, i],
+        ...(name === undefined ? {} : { name }),
       };
     },
   };
@@ -587,6 +731,8 @@ function computedPlan(doc: Doc, node: TemplateNode, shape: TableShape, rows: num
       shape.names.length > 0
         ? shape.names.map((name, i) => ({ name, unit: shape.units[i] ?? "" }))
         : shapeColumns(shape, columnsOf(doc, node, rows)),
+    indexColumns: false,
+    rowNames: false,
     columnWord: shape.column_word,
     facts: shape.facts,
     rate: shape.rate,
@@ -619,6 +765,11 @@ export function isTable(doc: Doc, node: TemplateNode): boolean {
 
 /** How this node reads as a table, or null when it does not read as one. */
 export function tablePlan(doc: Doc, node: TemplateNode): TablePlan | null {
+  const plan = planOf(doc, node);
+  return plan === null ? null : { ...plan, ...plainIndexes(plan.columns) };
+}
+
+function planOf(doc: Doc, node: TemplateNode): TablePlan | null {
   const shape = shapeOf(doc, node);
   if (shape !== null) return shapedPlan(doc, node, shape);
   const cells = cellShapeOf(doc, node);
