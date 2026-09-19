@@ -3,22 +3,25 @@
 //! sit in. Only the NumPy form allows any of them.
 
 use super::cursor::Cursor;
+use super::forms::{Args, Reduce, Via};
 use super::memo::Bound;
 use super::{Dtype, Kind, Shape, Storage, Value, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
 
-/// The scalar types a form may name and never calls, by their whole dotted
+/// The NumPy globals a form may name and never calls, by their whole dotted
 /// path.
 ///
-/// A library keeps the type it will make its numbers in as a plain setting:
+/// Two sorts, and neither is ever called. A library keeps the type it will
+/// make its numbers in as a plain setting:
 /// `OneHotEncoder(dtype=numpy.float64)` and `CountVectorizer(dtype=numpy.int64)`
-/// both hold one, and it reaches the file as a global that nothing calls. So
-/// it goes through the `names` column, which means "may name, never call", and
-/// `numpy` stays a package no class at all may be named from.
+/// both hold one, and it reaches the file as a global that nothing calls. A
+/// generator's own class is handed to `__bit_generator_ctor` as data in the
+/// same way. So both go through the `names` column, which means "may name,
+/// never call", and `numpy` stays a package no class at all may be named from.
 ///
-/// Both spellings of the two that were renamed are here: NumPy 2 calls the
-/// boolean type `bool` where 1.x called it `bool_`, and on Linux 1.x spelled
-/// the widest float and complex types by their widths.
+/// Both spellings of the two scalar types that were renamed are here: NumPy 2
+/// calls the boolean type `bool` where 1.x called it `bool_`, and on Linux 1.x
+/// spelled the widest float and complex types by their widths.
 pub(super) const TYPE_NAMES: &[&str] = &[
     "numpy.bool",
     "numpy.bool_",
@@ -47,7 +50,58 @@ pub(super) const TYPE_NAMES: &[&str] = &[
     "numpy.void",
     "numpy.datetime64",
     "numpy.timedelta64",
+    // The five bit generators, each in the private module NumPy keeps it in,
+    // and the seed sequence one of them is built from.
+    "numpy.random._mt19937.MT19937",
+    "numpy.random._pcg64.PCG64",
+    "numpy.random._pcg64.PCG64DXSM",
+    "numpy.random._philox.Philox",
+    "numpy.random._sfc64.SFC64",
+    "numpy.random.bit_generator.SeedSequence",
 ];
+
+/// The three calls that rebuild a generator, and what each argument has to be.
+///
+/// A fitted estimator keeps the random numbers it has not used yet, so
+/// `random_state` comes out of a fit holding a whole generator. A
+/// `RandomState` and a `Generator` are each one call over a bit generator,
+/// and the bit generator is one call over its class. The state itself arrives
+/// by BUILD after each of them, as a dictionary of names or as the pair of one
+/// and the seed sequence, which is what the plain object production already
+/// reads. NumPy 1.x hands `__bit_generator_ctor` the name of its class as text
+/// where 2.x hands the class, so both are accepted.
+pub(super) const BIT_GENERATOR_CTOR: Reduce = Reduce {
+    via: Via::Global,
+    path: "numpy.random._pickle.__bit_generator_ctor",
+    what: Shape::Object,
+    names: &["type"],
+    args: Args::Fixed,
+    shape: |c, args| (matches!(args[0].kind, Kind::Class { .. }) || c.text_of(&args[0]).is_some()).then_some(()),
+};
+pub(super) const RANDOM_STATE_CTOR: Reduce =
+    Reduce { path: "numpy.random._pickle.__randomstate_ctor", names: &["bit_generator"], shape: made_object, ..BIT_GENERATOR_CTOR };
+pub(super) const GENERATOR_CTOR: Reduce = Reduce { path: "numpy.random._pickle.__generator_ctor", ..RANDOM_STATE_CTOR };
+
+/// The seed a `Generator`'s bit generator was built from, which Cython
+/// rebuilds the way pandas rebuilds an `NDArrayBacked`: the class, the
+/// checksum of the fields the module was compiled with, and a state that is
+/// `None` because the BUILD after it carries the real one.
+pub(super) const SEED_SEQUENCE_CTOR: Reduce = Reduce {
+    via: Via::Global,
+    path: "numpy.random.bit_generator.__pyx_unpickle_SeedSequence",
+    what: Shape::Object,
+    names: &["type", "checksum", "state"],
+    args: Args::Fixed,
+    shape: |_c, args| {
+        (matches!(args[0].kind, Kind::Class { .. }) && matches!(args[1].kind, Kind::Int { .. }) && matches!(args[2].kind, Kind::None)).then_some(())
+    },
+};
+
+/// The one argument a generator is made from: the bit generator one of the
+/// calls above already made.
+fn made_object(_c: &Cursor, args: &[Value]) -> Option<()> {
+    matches!(args[0].kind, Kind::Made { what: Shape::Object, .. }).then_some(())
+}
 
 /// Where an array's numbers are, how to read the run they sit in, and whether
 /// the run was written here or named where the file wrote it before.

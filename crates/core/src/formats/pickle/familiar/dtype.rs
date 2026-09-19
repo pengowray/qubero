@@ -262,6 +262,27 @@ impl Cursor<'_> {
         Some(Dtype::Record { columns, width })
     }
 
+    /// One column's name, spelled here or named where the file spelled the
+    /// same word before. A column called after something the file has already
+    /// written is one slot to Python, and a histogram gradient boosting
+    /// model's nodes have a `is_categorical` column beside the estimator's own
+    /// attribute of that name.
+    fn column_name(&mut self) -> Option<(usize, usize)> {
+        self.gate()?;
+        if self.at_reference() {
+            let here = self.save();
+            if let Some(Bound::Text { at, len }) = self.reference().cloned() {
+                return Some((at, len));
+            }
+            self.restore(here);
+            return None;
+        }
+        let (at, len) = self.text_run()?;
+        self.says("column", at, len);
+        self.memoize(Bound::Text { at, len })?;
+        Some((at, len))
+    }
+
     /// The tuple of column names, in the order NumPy names them.
     fn column_names(&mut self) -> Option<Vec<(usize, usize)>> {
         self.gate()?;
@@ -277,10 +298,8 @@ impl Cursor<'_> {
             if names.len() == MAX_COLUMNS {
                 return None;
             }
-            let (at, len) = self.text_run()?;
+            let (at, len) = self.column_name()?;
             std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
-            self.says("column", at, len);
-            self.memoize(Bound::Text { at, len })?;
             names.push((at, len));
             if matches!(self.peek()?, b't' | 0x85..=0x87) {
                 break;

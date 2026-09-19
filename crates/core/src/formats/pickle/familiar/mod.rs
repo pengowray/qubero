@@ -27,6 +27,7 @@ mod object;
 mod packs;
 mod picklers;
 mod python2;
+mod sklearn;
 mod stdlib;
 pub mod torch;
 mod values;

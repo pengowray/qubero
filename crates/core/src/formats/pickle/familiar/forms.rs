@@ -266,20 +266,8 @@ fn sparse_data(kind: &Kind) -> bool {
 /// pickled as an object is a class under here with a state dict for state.
 const TORCH_CLASSES: &[&str] = &["torch.nn"];
 
-const SKLEARN_CALLS: &[Reduce] = &[Reduce {
-    via: Via::Global,
-    path: "sklearn.tree._tree.Tree",
-    what: Shape::Object,
-    names: &["n_features", "n_classes", "n_outputs"],
-    args: Args::Fixed,
-    shape: |_c, args| {
-        matches!(
-            (&args[0].kind, &args[1].kind, &args[2].kind),
-            (Kind::Int { .. }, Kind::Array { .. }, Kind::Int { .. })
-        )
-        .then_some(())
-    },
-}];
+use super::sklearn::{SKLEARN_CALLS, SKLEARN_CLASSES};
+
 /// A form that names no class, which is every form below the library ones,
 /// and a form that names no global it never calls, which is every form but the
 /// standard library's.
@@ -609,10 +597,6 @@ const DECLARED: &[Declared] = &[
         ..PLAIN
     },
 ];
-
-/// The package scikit-learn's classes come from, named by the plain form and
-/// by the joblib one over it.
-const SKLEARN_CLASSES: &[&str] = &["sklearn"];
 
 /// What a family that says nothing else reads, so that a row names only what
 /// makes it different.
