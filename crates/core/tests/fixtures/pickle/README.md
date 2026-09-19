@@ -28,6 +28,15 @@ torch.device('cpu'), 'dtype': torch.float32}`. Protocol: 2. They are here for
 the two spellings that release used and no later one does: a tensor whose
 backward hooks are `None`, and a `torch.Size` that NEWOBJ closes.
 
+`torch-v1.5-protocol4-legacy.pt` is `torch-protocol4.pt` from the same run
+with torch 1.5.1, NumPy 1.21 and Python 3.7: `torch.save(state_dict, path,
+pickle_protocol=4)`, which that release wrote as a legacy file.
+
+Expected object: an `OrderedDict` of `layer.weight` (`arange(12).reshape(3,
+4)`, float32), `layer.bias` (three zeroes) and `steps` (the int64 `7`).
+Protocol: 4. It is here for the other opener the legacy format has and for
+the storage keys torch named by buffer address before 1.6.
+
 The Rust tests inspect the committed bytes directly. Python is not required.
 These fixtures establish observed instruction forms, not broad NumPy, joblib
 or producer-version compatibility.

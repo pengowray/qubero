@@ -37,10 +37,19 @@ const LEGACY: &str = "torch legacy checkpoint";
 /// complement, little-endian, and the STOP after it.
 ///
 /// torch writes this at whatever protocol the caller asked for, and every
-/// release writes protocol 2 unless told otherwise. A file saved with
-/// `pickle_protocol=4` opens `80 04 95` instead and is not recognised here;
-/// no sample in the collection is one.
+/// release writes protocol 2 unless told otherwise.
 pub(crate) const MAGIC: &[u8] = b"\x80\x02\x8a\x0a\x6c\xfc\x9c\x46\xf9\x20\x6a\xa8\x50\x19\x2e";
+
+/// The same first pickle from a caller who asked for `pickle_protocol=4`,
+/// which is the same number inside a frame of thirteen bytes. Fixed the whole
+/// way: the opener, the frame length, the `LONG1` and the STOP are all the
+/// pickler's, and the number is torch's.
+pub(crate) const MAGIC_P4: &[u8] = b"\x80\x04\x95\x0d\x00\x00\x00\x00\x00\x00\x00\x8a\x0a\x6c\xfc\x9c\x46\xf9\x20\x6a\xa8\x50\x19\x2e";
+
+/// Every spelling of that first pickle. A protocol 5 file would open
+/// `80 05 95` and read the same way, and no sample in the corpus is one, so
+/// the opener nothing has been measured at is not here.
+const MAGICS: [&[u8]; 2] = [MAGIC, MAGIC_P4];
 
 /// How many pickles come before the numbers, and what each of them is.
 const PICKLES: [&str; 5] = ["magic number", "protocol version", "system info", "data", "storage keys"];
@@ -73,10 +82,11 @@ const MOST_HEAD: u64 = 4 << 20;
 
 /// Whether these leading bytes are a legacy checkpoint.
 ///
-/// The first pickle is the same fifteen bytes in every file torch has written
-/// this way, which is as strong a signature as any format has.
+/// The first pickle is the same run of bytes in every file torch has written
+/// this way, one spelling per protocol the caller may ask for, which is as
+/// strong a signature as any format has.
 pub(crate) fn is_torch_legacy(head: &[u8]) -> bool {
-    head.starts_with(MAGIC)
+    MAGICS.iter().any(|magic| head.starts_with(magic))
 }
 
 /// One storage: the key the data pickle named it by, what one of its elements
@@ -312,6 +322,11 @@ mod tests {
     /// _use_new_zipfile_serialization=False)` from torch 2.14.
     const LEGACY_FILE: &[u8] = include_bytes!("../../tests/fixtures/pickle/torch-state-dict-legacy.pt");
 
+    /// The same state dict from torch 1.5 with `pickle_protocol=4`, which is
+    /// the format's other opener: every pickle in it is framed, and the
+    /// storage keys are the addresses the buffers happened to be at.
+    const LEGACY_P4: &[u8] = include_bytes!("../../tests/fixtures/pickle/torch-v1.5-protocol4-legacy.pt");
+
     fn read_of(bytes: &[u8]) -> impl FnMut(u64, u64) -> R<Vec<u8>> + '_ {
         move |at, len| {
             let (at, len) = (at as usize, len as usize);
@@ -371,5 +386,24 @@ mod tests {
         other[4] ^= 1;
         assert!(!is_torch_legacy(&other));
         assert!(laid_out(&other).is_none());
+    }
+
+    /// A caller who asked for `pickle_protocol=4` gets the same number inside
+    /// a frame. The file is laid out the same way after that: five pickles and
+    /// then the storages, reaching the end exactly.
+    #[test]
+    fn a_checkpoint_saved_at_protocol_four_lays_out_the_same_way() {
+        assert!(is_torch_legacy(LEGACY_P4));
+        let found = laid_out(LEGACY_P4).unwrap();
+        assert_eq!(found.pickles.len(), PICKLES.len());
+        assert_eq!(found.pickles[0], (0, MAGIC_P4.len() as u64));
+        assert_eq!(found.storages.len(), 3);
+        let last = found.storages.last().unwrap();
+        assert_eq!(last.at + last.len, LEGACY_P4.len() as u64);
+        let counts: Vec<u64> = found.storages.iter().map(|s| s.len / s.dtype.width()).collect();
+        assert_eq!(counts, [1, 3, 12]);
+        // The keys are the addresses torch 1.5 named the buffers by, not the
+        // `0, 1, 2` later releases write.
+        assert!(found.storages.iter().all(|s| s.key.len() > 2 && s.key.bytes().all(|b| b.is_ascii_digit())));
     }
 }
