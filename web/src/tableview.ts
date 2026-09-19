@@ -499,13 +499,18 @@ export class TableView {
     }
   }
 
-  /** Which field of a record a bit falls in: turned, that is the row. Null
-   *  where the plan cannot say where its cells are. */
+  /** Which field of a record a bit falls in: turned, that is the row. Asked
+   *  cell by cell the way a pick is, so the two halves of the turned selection
+   *  agree about where a cell is. Null where nothing can place them, and for a
+   *  bit in another space, which is not the one the cursor counts in. */
   private fieldAt(record: number, bit: number): number | null {
-    const spans = this.rowAt(record)?.spans;
-    if (spans === undefined) return null;
-    const at = spans.findIndex((span) => bit >= span.offsetBits && bit < span.offsetBits + span.sizeBits);
-    return at < 0 ? null : at;
+    const row = this.rowAt(record);
+    if (row === null) return null;
+    for (let c = 0; c < row.cells.length; c++) {
+      const place = cellPlaceIn(row, c);
+      if (place !== null && place.space === 0 && bit >= place.offsetBits && bit < place.offsetBits + place.sizeBits) return c;
+    }
+    return null;
   }
 
   /** Turned, scroll across until a record's column is in view, clear of the
