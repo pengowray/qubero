@@ -680,6 +680,61 @@ fn the_forms_match_these_samples_and_no_others() {
         // names, which is where the widening stops.
         ("unfamiliar-frame-of-instances-p4.pickle", None),
         ("unfamiliar-frame-of-instances-p2.pickle", None),
+        // The estimators people actually save, each fitted on sixteen rows of
+        // three features and pickled at protocol 4. `tools/make_sklearn_
+        // breadth_samples.py` in the collection writes them, and the same
+        // objects are in `joblib/` under `joblib.dump`.
+        ("sklearn-logistic-regression.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // Fitted on labels that are strings, so `classes_` is an array of
+        // fixed-width text, whose width is in the dtype's state rather than
+        // in its letters. This is the file that had no reading at all.
+        ("sklearn-logistic-regression-string-labels.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-ridge.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-lasso.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // Its `_loss_function_` is a Cython class rebuilt by REDUCE from the
+        // one number it was configured with.
+        ("sklearn-sgd-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-linear-svc.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // Its `_probA` and `_probB` are both empty, which is one byte string
+        // to Python, so the second array names the run the first wrote.
+        ("sklearn-svc.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // A KD-tree and a distance metric, each made by the `newObj` its own
+        // Cython module keeps and filled by the BUILD after it.
+        ("sklearn-k-neighbors-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-gaussian-nb.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-decision-tree-regressor.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-random-forest-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // `estimators_` is an array of objects, one tree per stage, and the
+        // loss and its link are `sklearn._loss`'s own classes.
+        ("sklearn-gradient-boosting-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // A `Generator` in `_feature_subsample_rng`, and a structured dtype
+        // one of whose columns is named out of the memo.
+        ("sklearn-hist-gradient-boosting-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-kmeans.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-pca.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-standard-scaler.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-min-max-scaler.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // Each keeps the NumPy scalar type it will make its numbers in, which
+        // is a global the form names and never calls.
+        ("sklearn-one-hot-encoder.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-count-vectorizer.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-tfidf-vectorizer.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-label-encoder.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-simple-imputer.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // A `RandomState` in `_random_state`, which is a bit generator, the
+        // numbers it has not used yet and where in them it has got to.
+        ("sklearn-mlp-classifier.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        ("sklearn-pipeline-scaler-and-model.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // Two that hold a second family beside scikit-learn's: a column
+        // transformer places its columns with slices, which are the
+        // language's own values, and a nearest-neighbour model fitted on a
+        // sparse matrix keeps that matrix, which is scipy's.
+        ("sklearn-column-transformer.pickle", Some("mixed-values-p4-p5-v1")),
+        ("sklearn-k-neighbors-classifier-sparse-input.pickle", Some("mixed-values-p4-p5-v1")),
+        // `cv_results_` is a dictionary of `numpy.ma.MaskedArray`, which is
+        // an array and a mask of which of its entries count, rebuilt by
+        // `numpy.ma.core._mareconstruct`. No form reads that yet.
+        ("unfamiliar-sklearn-grid-search-cv.pickle", None),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -1835,6 +1890,44 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // A frame with a column of dates, so the nested pickle joblib writes
         // for that column holds dates rather than text.
         ("pandas-frame-of-dates.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        // The breadth sweep: the estimators people actually save, each dumped
+        // the way scikit-learn's own documentation says to save a model.
+        // `tools/make_sklearn_breadth_samples.py` in the collection writes
+        // them, and the same objects are in `pickle/` pickled plainly.
+        ("sklearn-logistic-regression.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-logistic-regression-string-labels.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-ridge.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-lasso.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-sgd-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-linear-svc.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-svc.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-k-neighbors-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-gaussian-nb.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-decision-tree-regressor.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-random-forest-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-gradient-boosting-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-hist-gradient-boosting-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-kmeans.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-pca.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-standard-scaler.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-min-max-scaler.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-one-hot-encoder.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        // A fitted `CountVectorizer` holds no array at all: its vocabulary is
+        // a dictionary of words to positions. So there is no wrapper for
+        // joblib to write and the file is byte for byte the plain pickle,
+        // which is the form it reads as.
+        ("sklearn-count-vectorizer.joblib", Some("sklearn-estimator-p4-p5-v1"), "picklefpf"),
+        ("sklearn-tfidf-vectorizer.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-label-encoder.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-simple-imputer.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-mlp-classifier.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        ("sklearn-pipeline-scaler-and-model.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
+        // Two of them hold a second family beside scikit-learn's, so the
+        // joblib name is not the narrowest true one and the mixed form is.
+        ("sklearn-column-transformer.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("sklearn-k-neighbors-classifier-sparse-input.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        // The one that does not read is under `does-not-read`, which this
+        // walk does not descend into. See the README there.
         // The compressors, each of which holds one of the files above.
         ("dict-of-arrays-zlib.joblib", None, "zlib"),
         ("dict-of-arrays-compress-true.joblib", None, "zlib"),
