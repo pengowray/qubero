@@ -497,9 +497,9 @@ built with `NEWOBJ` needs. The scikit-learn row and the joblib-scikit-learn row
 share one `SKLEARN_CLASSES` and one `SKLEARN_CALLS` rather than either of them
 holding a copy.
 
-## Families compose: landed on 2026-09-19
+## Extensions compose: landed on 2026-09-19
 
-A form belonged to one family, and a pickle that mixed families matched
+A form allowed one extension, and a pickle that mixed two matched
 nothing: `{"when": datetime, "weights": ndarray}` was refused by the NumPy form
 at the date and by the standard library's at the array. Six ordinary files
 written with numpy 2.5, pandas 3.0 and scikit-learn 1.9 were the measurement,
@@ -509,17 +509,17 @@ There is now one more form per protocol range, `mixed-values-p4-p5-v1` and its
 three lower names, whose class prefixes, named globals and enumerated calls are
 the union of every family's. The union is gathered from `DECLARED` itself, so a
 family added there is in it with no second edit. `DESIGN-familiar-pickle-forms.md`
-has the whole of it under "Families compose: the mixed form", including why a
+has the whole of it under "Extensions compose: the mixed form", including why a
 union of enumerated sets is still an enumerated set and what was checked before
 believing that.
 
 Three things are worth carrying forward:
 
-- **It is tried last and it requires two families of values.** Being last keeps
-  every file that already had a name. Requiring two is what keeps every file
-  that had none: the widest thing the union allows that no single form does is
-  an array of pickled objects, and a file of nothing but one of those is one
-  family and stays a non-match. The verdict over `pickle/`, `pickle-matrix/`
+- **It is tried last and it requires two extensions.** Being last keeps every
+  file that already had a name. Requiring two is what keeps every file that had
+  none: the widest thing the union allows that no single form does is an array
+  of pickled objects, and a file of nothing but one of those is one extension
+  and stays a non-match. The verdict over `pickle/`, `pickle-matrix/`
   and `joblib/`, 1,076 files, is byte for byte what it was.
 - **`Allow::joblib` is three-state now** (`Wrapped::Refused`, `Required`,
   `Allowed`) rather than a `bool`. The two joblib forms are *for* what

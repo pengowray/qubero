@@ -29,8 +29,9 @@ pub(super) enum Family {
     Library,
     /// Tensors, and whatever plain data was saved beside them.
     Torch,
-    /// Two or more of the families a file may use, counted as
-    /// [`Extensions::families`](super::packs::Extensions::families) counts them.
+    /// Two or more of the extensions a file may use beside the basic grammar,
+    /// counted as [`Extensions::count`](super::packs::Extensions::count)
+    /// counts them.
     Mixed,
 }
 
@@ -464,7 +465,7 @@ const DECLARED: &[Declared] = &[
         calls: super::stdlib::STDLIB_CALLS,
         ..PLAIN
     },
-    // What `joblib.dump` wrote, after the families it extends, so that a
+    // What `joblib.dump` wrote, after the extensions it wraps, so that a
     // plain pickle of arrays or of estimators keeps the name it already had.
     // Object arrays are read here and nowhere else in the NumPy family:
     // joblib has no way to write one as a run of bytes, so it pickles the

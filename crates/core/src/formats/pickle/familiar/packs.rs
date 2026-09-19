@@ -69,9 +69,11 @@ impl Extensions {
         self.0 & (1 << extension as u8) != 0
     }
 
-    /// How many families of values the file used, which is what the mixed
-    /// form wants two of.
-    pub(super) fn families(self) -> usize {
+    /// How many extensions of the basic grammar the file used, which is what
+    /// the mixed form wants two of. How the arrays were written is not one of
+    /// them: a file of nothing but arrays `joblib.dump` wrote holds one
+    /// family's worth of data however it reached the file.
+    pub(super) fn count(self) -> usize {
         EVERY.iter().filter(|(extension, _)| *extension != Extension::Joblib && self.has(*extension)).count()
     }
 

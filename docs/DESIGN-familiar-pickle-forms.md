@@ -316,15 +316,20 @@ What the library forms read, and what they do not:
   up to a thousand a batch, and nothing else. An array of objects can hold
   whatever was pickled into it, and only what a form has written down is read.
 
-### Families compose: the mixed form
+### Extensions compose: the mixed form
+
+Every form reads the basic grammar. A form for a library reads that and one
+thing more, and what a file used beyond the basic grammar is its **extensions**:
+the standard library's classes, NumPy's arrays, pandas, scikit-learn, scipy,
+torch, and the builtins written as calls. The `form extensions` row names them.
 
 A real pickle mixes libraries. A saved model comes with the day it was fitted
 and the score it got; a frame comes with a note beside it; a dictionary of
 arrays is an `OrderedDict` because the order mattered. Every one of those was a
-non-match while a form belonged to one family, because each family's form
-requires the file to have used its own productions and refuses everything
-else's: a date beside an array is refused by the NumPy form at the date and by
-the standard library's form at the array.
+non-match while a form allowed one extension, because each form requires the
+file to have used its own productions and refuses everything else's: a date
+beside an array is refused by the NumPy form at the date and by the standard
+library's form at the array.
 
 So there is one more form per protocol range, `mixed-values-p4-p5-v1` and its
 three lower names, whose class prefixes, named globals and enumerated calls are
@@ -354,15 +359,15 @@ than hopeful:
 
 **What the form requires.** A form that allows a production requires the file to
 use it, and the mixture is what this one is for, so it requires the file to have
-used **two or more** families of values. That is what keeps every existing
-verdict: the widest thing the union allows that no single form does is an array
-of pickled objects, which pandas needs for an index of column names, and a file
-of nothing but one of those is one family and stays a non-match. It is also why
+used **two or more** extensions. That is what keeps every existing verdict: the
+widest thing the union allows that no single form does is an array of pickled
+objects, which pandas needs for an index of column names, and a file of nothing
+but one of those is one extension and stays a non-match. It is also why
 the name is true of the file rather than true only because the form was tried
 last.
 
-**It is tried last**, after every single-family form at its protocol range, so a
-file of one family keeps the name it already had. A list of two pandas frames
+**It is tried last**, after every single-extension form at its protocol range,
+so a file of one extension keeps the name it already had. A list of two pandas frames
 uses the builtins, NumPy and pandas productions and would satisfy the mixed
 form's requirement; it matches `pandas-frame-p4-p5-v1` because that form was
 tried first and is the narrower claim.
@@ -377,10 +382,11 @@ and one holding arrays or scikit-learn estimators alone keeps its own name.
 then `form extensions`: the basic grammar is the form, and these are what the
 file used beside it. A file the basic grammar read on its own says `none`.
 What the row names is which of them the file turned out to hold, in a fixed
-order, always opening with `basic`, which is the grammar every form reads and
-every file is read against. `basic, stdlib, numpy` for a date beside an array;
-`basic, builtins, stdlib, numpy, pandas` for a frame with a note and a date,
-since pandas places a block by writing a `slice`. It is on every matched file
+order. The basic grammar is not among them: every form reads it, so it is the
+form itself rather than an extension of it, and the `form` row above already
+says which form that is. `stdlib, numpy` for a date beside an array;
+`builtins, stdlib, numpy, pandas` for a frame with a note and a date, since
+pandas places a block by writing a `slice`. It is on every matched file
 and not only a mixed one, for the reason the `pickler` row is: the form names a
 grammar and this names what the file used, and a reader comparing two files
 wants to see the same rows in both. It is worked out from the match and has no

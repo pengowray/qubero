@@ -406,7 +406,7 @@ impl<'a> Cursor<'a> {
             // name. Two is the count whatever the pair is, so the widest
             // production the union allows, an array of pickled objects, still
             // needs something from a second family beside it.
-            Family::Mixed => extensions.families() >= 2,
+            Family::Mixed => extensions.count() >= 2,
         };
         if !needed {
             return None;

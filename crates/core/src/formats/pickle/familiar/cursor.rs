@@ -57,7 +57,7 @@ pub(super) struct Cursor<'a> {
     /// library form read what it is for.
     pub(super) instances: usize,
     /// Which library each of those classes came from, which the mixed form
-    /// counts and the `families` row names. The three productions that name
+    /// counts and the `form extensions` row names. The three productions that name
     /// no class are not here: each keeps a count of itself and the bit is
     /// read off that at the end of the match.
     pub(super) extensions: Extensions,

@@ -287,12 +287,12 @@ still not in it.
 1. **Done on 2026-09-19.** See the two paragraphs above.
 2. **Done on 2026-09-19, and not the way this expected.** A bundle holding a
    standard library value, a frame or a sparse matrix wanted no joblib row of
-   its own. Families compose now: the mixed form is the union of every family's
+   its own. Extensions compose now: the mixed form is the union of every one's
    tables with the joblib wrapper allowed rather than required, so
    `joblib.dump({"trained_at": datetime.now(), "weights": arr}, path)`,
    `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` all read as
    `mixed-values-p4-p5-v1`, and the two joblib rows keep the two mixtures they
-   were written for. See "Families compose: the mixed form" in
+   were written for. See "Extensions compose: the mixed form" in
    `DESIGN-familiar-pickle-forms.md`. A frame with named columns reads too
    since the nested pickle landed later the same day.
 3. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
