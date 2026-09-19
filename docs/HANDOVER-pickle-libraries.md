@@ -832,8 +832,10 @@ read once nothing was replaced. It would not. GraalPy hands back one object
 for two equal strings, so the second `_codecs.encode` of the same packed date
 is a `BINGET`, and `encoded_text` read that reference as a counted text and
 held its run to being UTF-8. At protocol 0 the run is a line, and a line is
-not always the text it stands for. `familiar::named` decides which, by the
-protocol and the run, and both the recogniser and the reading ask it. The
+not always the text it stands for. `lines::is_named_text` is the one rule
+that says which, by the protocol and the run: the recogniser asks it before it
+builds the value, and `familiar::named` asks it again when the reading wants
+the bytes. The
 matrix now reads with no exceptions and `UNREAD` in `pickle_real.rs` is empty.
 
 **What was left alone, and why.**

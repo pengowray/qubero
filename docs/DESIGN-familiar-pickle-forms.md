@@ -587,10 +587,10 @@ stack; what changes is that every value is an opcode and a line.
 - **A text named where the file wrote it may name a line.** GraalPy hands back
   one object for two equal strings, so the second `_codecs.encode` of the same
   packed run is a `BINGET`. At protocol 0 the run it names is a line, and a
-  line is not always the text it stands for, so `familiar::named` decides
-  which by the protocol and the run and both the recogniser and the reading
-  ask it. Two dates of the same day in one file used to be the one thing in
-  the matrix no form read.
+  line is not always the text it stands for, so `lines::is_named_text` is the
+  one rule that says which, by the protocol and the run, and the recogniser
+  and the reading both ask it. Two dates of the same day in one file used to
+  be the one thing in the matrix no form read.
 
 ### What stays a non-match, and why
 
