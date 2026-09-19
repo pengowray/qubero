@@ -105,6 +105,85 @@ fn an_unaligned_file_inside_zlib_is_the_same_file() {
     assert_eq!(space.bytes(), plain.as_slice());
 }
 
+/// What joblib wrote before 0.10: the pickle names a `.npy` file per array,
+/// and the numbers are in those files and nowhere in this one.
+///
+/// The main file is an ordinary pickle by every test there is -- the opcodes
+/// run to the end of it -- so it is not recognised as a joblib file and does
+/// not need to be. What says it is one is the form it matches.
+#[test]
+fn a_joblib_0_9_pickle_names_the_npy_file_each_array_is_in() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // The folder carries the version, because each pickle names its own
+    // `.npy` by name and renaming either would leave it naming a file that is
+    // not there.
+    let dir = dir.join("v0.9-npy-files");
+    let cases: &[(&str, &[&str])] = &[
+        ("joblib-array-float64.joblib", &["joblib-array-float64.joblib_01.npy"]),
+        ("joblib-dict-of-arrays.joblib", &["joblib-dict-of-arrays.joblib_01.npy", "joblib-dict-of-arrays.joblib_02.npy"]),
+    ];
+    for (name, files) in cases {
+        let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{name}: no form"));
+        assert_eq!(found.form, "joblib-npy-files-p2-p3-v1", "{name}");
+        // The form is what says a pickle was written by joblib: the opcodes
+        // run to the end of the file, so no probe can tell it from any other
+        // pickle and the familiar reading is what names it.
+        let window = &bytes[..bytes.len().min(0x9000)];
+        assert_eq!(formats::sniff(window, bytes.len() as u64), Some("picklefpf"), "{name}");
+
+        // Each wrapper says which file, and the file it says is beside it.
+        let (doc, mut ev) = open(&bytes, "picklefpf");
+        let mut rows = Vec::new();
+        walk(&doc, &mut ev, &[], &mut rows);
+        let named: Vec<String> = rows
+            .iter()
+            // The root node is called `file` as well, so the row wanted is
+            // the one inside a wrapper rather than the whole document.
+            .filter(|(n, _, at)| n == "file" && !at.is_empty())
+            .map(|(_, _, at)| match ev.node(&doc, at).unwrap().value {
+                Value::Str(s) => s,
+                other => panic!("{name}: {other:?}"),
+            })
+            .collect();
+        assert_eq!(named, *files, "{name}");
+        // And each of those is an ordinary `.npy` the existing template reads.
+        for file in *files {
+            let held = std::fs::read(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+            assert_eq!(formats::sniff(&held, held.len() as u64), Some("npy"), "{file}");
+        }
+    }
+}
+
+/// The numbers of an array joblib 0.9 wrote are in the `.npy` beside the
+/// pickle, and they are the same numbers a later release wrote inline.
+#[test]
+fn the_npy_beside_a_joblib_0_9_pickle_holds_the_numbers() {
+    let Some(dir) = qubero_samples::dir("joblib") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(dir.join("v0.9-npy-files/joblib-array-float64.joblib_01.npy")).unwrap();
+    let (doc, mut ev) = open(&bytes, "npy");
+    let mut rows = Vec::new();
+    walk(&doc, &mut ev, &[], &mut rows);
+    // Four rows of six, which the template lays out as rows of values.
+    let at = rows.iter().find(|(n, t, _)| n == "data" && t.ends_with("[][]")).expect("the numbers");
+    let held: Vec<String> = (0..4)
+        .flat_map(|r| {
+            let mut row = at.2.clone();
+            row.push(r);
+            cells(&doc, &mut ev, &row)
+        })
+        .collect();
+    // `arange(24, float64).reshape(4, 6)`, which is what every other
+    // `array-float64` in this folder holds.
+    assert_eq!(held, (0..24u64).map(|n| n.to_string()).collect::<Vec<_>>());
+}
+
 fn open(bytes: &[u8], template: &str) -> (Document<MemSource>, Evaluator) {
     (Document::new(MemSource(bytes.to_vec())), Evaluator::new(formats::builtin(template).unwrap()))
 }

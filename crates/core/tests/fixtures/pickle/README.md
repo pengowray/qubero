@@ -48,6 +48,16 @@ eight empty `OrderedDict`s, `training`, `in_features` and `out_features`.
 Protocol: 2. It is here for the class source a legacy save carries and for the
 backend call torch 1.1 dropped.
 
+`joblib-v0.9-npy-files.joblib` is `joblib-dict-of-arrays.joblib` from the
+container matrix run of joblib 0.9.4, NumPy 1.19 and Python 3.6.
+
+Expected object: `{"name": "bundle", "weights": arange(24, float64).reshape(4,
+6), "bias": zeros(4, float32), "labels": ["a", "b", "c"], "steps": 7}`.
+Protocol: 3. Before 0.10 joblib wrote each array as a `.npy` file beside the
+pickle, so this file holds two wrappers naming
+`joblib-dict-of-arrays.joblib_01.npy` and `_02.npy` and none of the numbers.
+The two `.npy` files are in the collection under `joblib/v0.9-npy-files/`.
+
 The Rust tests inspect the committed bytes directly. Python is not required.
 These fixtures establish observed instruction forms, not broad NumPy, joblib
 or producer-version compatibility.

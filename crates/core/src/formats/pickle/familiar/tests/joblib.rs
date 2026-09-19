@@ -323,3 +323,47 @@ fn a_file_holding_both_kinds_of_run_still_names_every_byte() {
     assert_eq!(seen.iter().filter(|r| r.name == "protocol").count(), 3);
     tiles(&seen);
 }
+
+/// What joblib wrote before 0.10: a wrapper naming a `.npy` file beside the
+/// pickle, and no numbers in the stream at all.
+const NPY_FILES: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/joblib-v0.9-npy-files.joblib");
+
+/// The wrapper says which file, and that is the whole of what the pickle
+/// knows about the array: no shape, no dtype, and no run of bytes after it.
+#[test]
+fn an_array_in_a_file_beside_the_pickle_is_read_as_the_name_of_that_file() {
+    let found = recognise(NPY_FILES).unwrap();
+    assert_eq!(found.form, "joblib-npy-files-p2-p3-v1");
+    assert_eq!(found.extensions(), "numpy, joblib");
+    let seen = dump(NPY_FILES);
+    // The document's own node is called `file` too, so the rows wanted are
+    // the ones named inside a wrapper's run of instructions.
+    let named: Vec<&V> = seen.iter().filter(|r| r.name == "file" && r.depth > 1).map(|r| &r.value).collect();
+    assert_eq!(named, vec![&V::Str("joblib-dict-of-arrays.joblib_01.npy".into()), &V::Str("joblib-dict-of-arrays.joblib_02.npy".into())]);
+    assert_eq!(named_row(&seen, "wrapper class").value, V::Str("NDArrayWrapper".into()));
+    assert_eq!(named_row(&seen, "array class").value, V::Str("ndarray".into()));
+    // Nothing follows a wrapper: the stream carries straight on, so every
+    // byte of the file is an opcode.
+    assert!(seen.iter().all(|r| r.name != "padding" && r.name != "numbers"));
+    tiles(&seen);
+}
+
+/// The newer wrapper and this one are two classes in the same module, and a
+/// file may use one or the other and never both: the two forms are named
+/// apart and each requires its own.
+#[test]
+fn the_two_wrappers_are_not_read_under_one_another() {
+    // `NDArrayWrapper` becomes `NumpyArrayWrapper`, which is the class the
+    // other form reads and whose state this file does not hold.
+    let mut other = NPY_FILES.to_vec();
+    replace(&mut other, b"NDArrayWrapper\n", b"NumpyArrayWrapper\n");
+    assert!(recognise(&other).is_none());
+}
+
+/// A state key the form has not seen is a non-match, not a key read past.
+#[test]
+fn a_wrapper_state_key_that_is_not_the_three_is_refused() {
+    let mut other = NPY_FILES.to_vec();
+    replace(&mut other, b"filename", b"fileNAME");
+    assert!(recognise(&other).is_none());
+}

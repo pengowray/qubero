@@ -61,6 +61,10 @@ pub(super) struct Cursor<'a> {
     /// How many arrays arrived wrapped the way `joblib.dump` writes one, with
     /// their bytes in the file after the wrapper rather than inside it.
     pub(super) wrappers: usize,
+    /// How many of those named a `.npy` file beside the pickle rather than
+    /// holding their numbers here, which is how joblib wrote an array before
+    /// 0.10 and what says a form written for that layout read one.
+    pub(super) besides: usize,
     /// How many torch tensors the file rebuilt, which is what says a torch
     /// form read what it is for.
     pub(super) tensors: usize,
@@ -120,6 +124,7 @@ pub(super) struct Save {
     pub(super) instances: usize,
     pub(super) extensions: Extensions,
     pub(super) wrappers: usize,
+    pub(super) besides: usize,
     pub(super) tensors: usize,
     pub(super) breaks: usize,
     pub(super) nesting: usize,
@@ -210,6 +215,7 @@ impl<'a> Cursor<'a> {
             instances: self.instances,
             extensions: self.extensions,
             wrappers: self.wrappers,
+            besides: self.besides,
             tensors: self.tensors,
             breaks: self.breaks.len(),
             nesting: self.nesting,
@@ -288,6 +294,7 @@ impl<'a> Cursor<'a> {
         self.instances = s.instances;
         self.extensions = s.extensions;
         self.wrappers = s.wrappers;
+        self.besides = s.besides;
         self.tensors = s.tensors;
         self.breaks.truncate(s.breaks);
         self.nesting = s.nesting;

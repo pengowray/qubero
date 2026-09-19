@@ -628,6 +628,10 @@ pub enum Shape {
     /// a STOP of its own. `joblib.dump` writes one where an array's numbers
     /// would go when the array holds pickled objects rather than numbers.
     Nested,
+    /// An array whose numbers are in a `.npy` file beside the pickle, which is
+    /// how `joblib.dump` wrote one before 0.10. All the pickle holds is the
+    /// name of that file.
+    ArrayFile,
 }
 
 impl Shape {
@@ -674,6 +678,7 @@ impl Shape {
             Shape::Size => "Size",
             Shape::SparseTensor => "sparse tensor",
             Shape::Nested => "nested pickle",
+            Shape::ArrayFile => "array in another file",
         }
     }
 }

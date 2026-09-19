@@ -214,6 +214,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         instances: 0,
         extensions: Extensions::default(),
         wrappers: 0,
+        besides: 0,
         tensors: 0,
         breaks: Vec::new(),
         nesting: 0,
@@ -376,13 +377,17 @@ impl<'a> Cursor<'a> {
         // and the three productions that name no class, each of which already
         // keeps a count of itself.
         let mut extensions = self.extensions;
-        extensions.set(Extension::Numpy, self.arrays > 0);
+        // An array whose numbers are in a `.npy` beside the pickle is still
+        // NumPy's, so it counts the same way one written here does.
+        extensions.set(Extension::Numpy, self.arrays + self.besides > 0);
         extensions.set(Extension::Builtins, self.objects > 0);
         extensions.set(Extension::Joblib, self.wrappers > 0);
         let plain = self.arrays == 0 && self.objects == 0 && self.instances == 0;
         let needed = match self.allow.family {
             Family::Basic => plain,
-            Family::Numpy => self.arrays > 0 && self.objects == 0 && self.instances == 0,
+            // An array is an array whether its numbers are in this file or in
+            // a `.npy` beside it, so both count towards the family.
+            Family::Numpy => self.arrays + self.besides > 0 && self.objects == 0 && self.instances == 0,
             Family::Builtins => self.arrays == 0 && self.objects > 0 && self.instances == 0,
             // A library form is the one the file's classes came from, and it
             // has to have read at least one of them.
@@ -412,6 +417,12 @@ impl<'a> Cursor<'a> {
         // hold one, the way every other production a form allows is one the
         // file has to use. The mixed form only permits it.
         if self.allow.joblib == Wrapped::Required && self.wrappers == 0 {
+            return None;
+        }
+        // And a form written for the layout joblib wrote before 0.10 requires
+        // one of those, so a file of arrays written either way is read under
+        // the row for the way it was written.
+        if self.allow.beside == Wrapped::Required && self.besides == 0 {
             return None;
         }
         Some(Match {

@@ -2033,6 +2033,10 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         ("v0.11-dict-of-arrays.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
         ("v1.1-dict-of-arrays.joblib", Some("joblib-arrays-p2-p3-v1"), "joblib"),
         ("v1.1-dict-of-arrays-zlib.joblib", None, "zlib"),
+        // What joblib wrote before 0.10 is in `v0.9-npy-files/`, which this
+        // walk does not descend into: those pickles name their own `.npy` by
+        // name, so the folder carries the version and the files keep theirs.
+        // `joblib_versions.rs` reads them.
     ];
     let mut seen = Vec::new();
     for path in joblibs(&dir) {

@@ -425,6 +425,14 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
                 kids.extend(held(state));
                 (notes, kids)
             }
+            // An array kept in a file beside the pickle. The wrapper is one
+            // run of instructions and nothing else, so the run is the node
+            // and the file it names is a row inside it: the value's own items
+            // are what the summary line reads and are not rows again.
+            Kind::Made { what: Shape::ArrayFile, .. } => {
+                let kids = call_of(found, v).map(|call| (Label::Field(call.name), Part::Call(call, v)));
+                (Vec::new(), kids.into_iter().collect())
+            }
             // What a call made, with the arguments it was written with: named
             // where Python names them and numbered where it does not. The
             // `class` row is there for a call whose callable is a value of the

@@ -601,6 +601,16 @@ impl Cursor<'_> {
                     None => self.restore(here),
                 }
             }
+            // The wrapper joblib wrote before 0.10, whose array is a `.npy`
+            // file beside this one. It names a second class in the same
+            // module, so it fails at the same word for everything else.
+            if self.allow.beside != super::forms::Wrapped::Refused {
+                let here = self.save();
+                match self.joblib_npy_file() {
+                    Some(value) => return Some(Slot { value, deep: 1, fill: Fill::Shut }),
+                    None => self.restore(here),
+                }
+            }
             // A tensor, which names `torch._utils` first and so fails at its
             // first word when the value is anything else.
             if self.allow.torch {

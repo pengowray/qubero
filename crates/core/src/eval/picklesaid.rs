@@ -120,6 +120,13 @@ impl Evaluator {
             Kind::Tensor(t) => Some(format!("{} {} {}", t.dtype.word(), if t.parameter { PARAMETER_WORD } else { TENSOR_WORD }, super::pickleparts::extent(&t.size))),
             Kind::Class { path, .. } => Some(path.clone()),
             Kind::Instance { class, .. } => path_of(class),
+            // An array whose numbers are not here at all. What the reader
+            // wants on the one line is the file to open for them, the way a
+            // torch tensor says the archive entry its numbers are in.
+            Kind::Made { what: crate::formats::pickle::familiar::Shape::ArrayFile, items, .. } => match items.first().map(|v| &v.kind) {
+                Some(Kind::Text { at, len } | Kind::Ref(Names::Text { at, len })) => Some(format!("array in {}", read(*at, *len, true)?)),
+                _ => Some(crate::formats::pickle::familiar::Shape::ArrayFile.name().into()),
+            },
             // A call that carries its callable reads as it; one that folded
             // it away reads as the kind of thing it made.
             Kind::Made { callable: Some(callable), .. } => path_of(callable),

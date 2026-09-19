@@ -93,6 +93,12 @@ pub(super) const JOBLIB: &str = "joblib-arrays-p4-p5-v1";
 pub(super) const JOBLIB23: &str = "joblib-arrays-p2-p3-v1";
 pub(super) const JOBLIB_SKLEARN: &str = "joblib-sklearn-p4-p5-v1";
 pub(super) const JOBLIB_SKLEARN23: &str = "joblib-sklearn-p2-p3-v1";
+/// What `joblib.dump` wrote before 0.10, which is a different layout and so a
+/// name of its own: the arrays are `.npy` files beside the pickle, one apiece,
+/// and the pickle holds a wrapper naming each. Nothing of an array is in the
+/// file this names, so a reader opens the `.npy` beside it to see the numbers.
+pub(super) const JOBLIB_NPY: &str = "joblib-npy-files-p4-p5-v1";
+pub(super) const JOBLIB_NPY23: &str = "joblib-npy-files-p2-p3-v1";
 /// What `torch.save` writes: tensors, and whatever plain data was saved
 /// beside them. See [`torch`](super::torch).
 ///

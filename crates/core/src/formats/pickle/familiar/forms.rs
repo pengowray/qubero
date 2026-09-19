@@ -80,6 +80,10 @@ pub(super) struct Allow {
     /// in an object whose state measures the run of bytes after it, and
     /// whether the file has to hold one.
     pub(super) joblib: Wrapped,
+    /// The same question for the wrapper joblib wrote before 0.10, which
+    /// names a `.npy` file beside the pickle and holds nothing of the numbers
+    /// itself.
+    pub(super) beside: Wrapped,
     pub(super) builtins: bool,
     /// Whether this form reads the calls `torch.save` writes for a tensor,
     /// which carry a persistent id naming numbers kept outside the pickle.
@@ -383,6 +387,7 @@ struct Declared {
     family: Family,
     numpy: bool,
     joblib: Wrapped,
+    beside: Wrapped,
     builtins: bool,
     torch: bool,
     classes: &'static [&'static str],
@@ -411,6 +416,7 @@ const DECLARED: &[Declared] = &[
         family: Family::Basic,
         numpy: false,
         joblib: Wrapped::Refused,
+        beside: Wrapped::Refused,
         builtins: false,
         torch: false,
         classes: NO_CLASSES,
@@ -456,6 +462,7 @@ const DECLARED: &[Declared] = &[
         calls: PANDAS_CALLS,
         object_arrays: true,
         joblib: Wrapped::Refused,
+        beside: Wrapped::Refused,
         torch: false,
     },
     // The standard library's own classes. Its builtins are the ones the
@@ -483,6 +490,17 @@ const DECLARED: &[Declared] = &[
         numpy: true,
         joblib: Wrapped::Required,
         object_arrays: true,
+        ..PLAIN
+    },
+    // What joblib wrote before 0.10, which is the same idea with the numbers
+    // in another file: one `.npy` beside the pickle per array, and a wrapper
+    // in the pickle naming each. The layout differs, so the name does, and a
+    // file of either kind is read under one row and never the other.
+    Declared {
+        ids: [JOBLIB_NPY, JOBLIB_NPY23, NOT_WRITTEN, NOT_WRITTEN],
+        family: Family::Numpy,
+        numpy: true,
+        beside: Wrapped::Required,
         ..PLAIN
     },
     // What `torch.save` writes. A tensor's storage class is named inside the
@@ -526,6 +544,7 @@ const PLAIN: Declared = Declared {
     family: Family::Basic,
     numpy: false,
     joblib: Wrapped::Refused,
+    beside: Wrapped::Refused,
     builtins: false,
     torch: false,
     classes: NO_CLASSES,
@@ -590,6 +609,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                     family: d.family,
                     numpy: d.numpy,
                     joblib: d.joblib,
+                    beside: d.beside,
                     builtins: d.builtins,
                     torch: d.torch,
                     classes: d.classes,
@@ -609,6 +629,11 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
             family: Family::Mixed,
             numpy: true,
             joblib: Wrapped::Allowed,
+            // Permitted rather than required, the way the wrapper above it
+            // is: a file that holds one and a value of another family is a
+            // mixture, and one that holds nothing else is read under the row
+            // written for that layout.
+            beside: Wrapped::Allowed,
             builtins: true,
             torch: true,
             classes: &all.classes,

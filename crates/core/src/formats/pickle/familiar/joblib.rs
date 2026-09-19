@@ -20,6 +20,14 @@ use super::{Dtype, Kind, Pickler, Shape, Storage, Value, JOBLIB_MODULE as MODULE
 /// The class joblib names for every array it writes, in the module
 /// [`JOBLIB_MODULE`](super::JOBLIB_MODULE).
 const WRAPPER: &str = "NumpyArrayWrapper";
+/// The class joblib 0.9 and older named instead, whose array is not in this
+/// file at all: it is a `.npy` file beside the pickle, one per array, and the
+/// wrapper's whole job is to say which. `ZNDArrayWrapper` is the same class
+/// for a compressed file and is not read: joblib wrote those inside its own
+/// `ZF` container, which nothing here opens.
+const FILE_WRAPPER: &str = "NDArrayWrapper";
+/// The name of that file, which is the only place the numbers are.
+const FILENAME_KEY: &str = "filename";
 /// The class of the array the wrapper stands for. `numpy.matrix` and
 /// `numpy.memmap` reach the same writer and would be named here; no file in
 /// the corpus holds one, so only the class every file names is read.
@@ -167,6 +175,61 @@ impl Cursor<'_> {
             at: start,
             len: end - start,
             kind: Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
+        })
+    }
+
+    /// The wrapper joblib 0.9 and older wrote, whose array is in a `.npy`
+    /// file beside the pickle.
+    ///
+    /// Fixed instruction for instruction, the same way the newer wrapper is:
+    /// the class named exactly, `cls.__new__(cls)` with no arguments, and a
+    /// state dictionary whose three keys are these three in the order
+    /// `__init__` sets them. Nothing follows it in the stream, because nothing
+    /// of the array is in this file: the pickle carries straight on with
+    /// whatever came next.
+    ///
+    /// What comes out says where the numbers are and no more than that. The
+    /// wrapper carries no shape and no dtype, so the file named is the whole
+    /// of what this pickle knows about the array, and that file is an ordinary
+    /// `.npy` the reader opens on its own.
+    pub(super) fn joblib_npy_file(&mut self) -> Option<Value> {
+        // NEWOBJ arrived at protocol 2, and joblib 0.9 ran on interpreters
+        // that wrote protocol 0 and 1 as well. What it wrote there has not
+        // been measured, so the family has no name below protocol 2.
+        if self.proto < 2 {
+            return None;
+        }
+        let start = self.at;
+        self.global(&[MODULE], FILE_WRAPPER, "wrapper module", "wrapper class")?;
+        self.empty_tuple()?;
+        self.exact(&[0x81])?;
+        self.memoize(Bound::Made { what: Shape::Object, at: start, hashable: false })?;
+        let dict_at = self.at;
+        self.empty_dict()?;
+        self.memoize(Bound::Made { what: Shape::Dict, at: dict_at, hashable: false })?;
+        self.atoms(&[b"("])?;
+
+        self.key(FILENAME_KEY)?;
+        let filename = self.text()?;
+        if let Kind::Text { at, len } = filename.kind {
+            self.says("file", at, len);
+        }
+        self.key(SUBCLASS_KEY)?;
+        self.global(&["numpy"], SUBCLASS, "array module", "array class")?;
+        self.key(MMAP_KEY)?;
+        // Whether the reader may memory-map that file. It says nothing about
+        // where the numbers are, and both ways round are read.
+        self.read_flag()?;
+        self.atoms(&[b"u"])?;
+        self.exact(b"b")?;
+
+        self.wrappers += 1;
+        self.besides += 1;
+        self.finish_call("wrapper", start, self.at);
+        Some(Value {
+            at: start,
+            len: self.at - start,
+            kind: Kind::Made { what: Shape::ArrayFile, names: &["file"], callable: None, items: vec![filename], state: None, attrs: None },
         })
     }
 
