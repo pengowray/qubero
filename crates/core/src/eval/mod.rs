@@ -2674,6 +2674,18 @@ impl Evaluator {
         (t, false)
     }
 
+    /// The bytes of the address space an offset counts in, which is the
+    /// numbering [`NodeInfo::space`] and a [`FrameCell`]'s address use. 0 is
+    /// the file, whose bytes the caller already has.
+    ///
+    /// Not the same numbering as [`Evaluator::space`]: that one is the
+    /// readings opened as documents of their own, and this is the buffers the
+    /// addresses in this reading belong to. Nothing for a space that was never
+    /// opened, and for one joined from parts, which holds no whole buffer.
+    pub fn space_bytes(&self, space: u32) -> Option<&[u8]> {
+        self.spaces.buf(space).map(|b| b.as_slice())
+    }
+
     /// A space this reading has opened.
     pub fn space(&self, id: SpaceId) -> Option<&Space> {
         self.open.get(id.checked_sub(1)? as usize)?.as_deref()
