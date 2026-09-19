@@ -513,6 +513,11 @@ const DECLARED: &[Declared] = &[
         extension: Some(Extension::Sklearn),
         names: super::numpy::TYPE_NAMES,
         calls: SKLEARN_CALLS,
+        // An estimator made of other estimators holds them in an array of
+        // objects: `GradientBoostingClassifier.estimators_` is one per stage.
+        // The values in it are what this form allows anywhere else, since
+        // they are read against the same stack.
+        object_arrays: true,
         ..PLAIN
     },
     Declared {
