@@ -515,3 +515,16 @@ fn a_float_a_line_spells_reads_as_the_number_over_its_line() {
     let lines: Vec<u64> = seen.iter().filter(|r| r.name == "line").map(|r| r.len).collect();
     assert_eq!(lines, [3, 5, 10]);
 }
+
+/// A NumPy scalar at protocol 0 hands its bytes to `_codecs.encode`, and the
+/// names of that call are instructions after the scalar call rather than
+/// names inside it: the scalar call once claimed them past its own end, and
+/// their bytes were counted under it and under the GLOBAL as well.
+#[test]
+fn a_protocol_0_scalar_call_ends_before_the_encode_call() {
+    // pickle.dumps(numpy.float64(2.5), 0) from Python 3.7 and NumPy 1.21
+    let seen = dump(b"cnumpy.core.multiarray\nscalar\np0\n(cnumpy\ndtype\np1\n(Vf8\np2\nI00\nI01\ntp3\nRp4\n(I3\nV<\np5\nNNNI-1\nI-1\nI0\ntp6\nbc_codecs\nencode\np7\n(V\\u0000\\u0000\\u0000\\u0000\\u0000\\u0000\x04@\np8\nVlatin1\np9\ntp10\nRp11\ntp12\nRp13\n.");
+    tiles(&seen);
+    let call = named_row(&seen, "numpy scalar call");
+    assert!(seen.iter().filter(|r| r.name == "callable").all(|r| r.at + r.len <= call.at + call.len), "{seen:#?}");
+}

@@ -47,17 +47,7 @@ impl Cursor<'_> {
         // Python 2 had a type for a run of bytes, its `str`, so a pickler
         // there writes one out and the bytes are the bytes. The detour through
         // `_codecs` is Python 3 writing at a protocol with no type for them.
-        if self.proto == 0 {
-            let here = self.save();
-            return match self.encode_call() {
-                Some(held) => Some(held),
-                None => {
-                    self.restore(here);
-                    Some((self.empty_call()?, 0, Storage::Raw))
-                }
-            };
-        }
-        if self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
+        if self.proto >= 1 && self.proto <= 2 && matches!(self.peek(), Some(b'U') | Some(b'T')) {
             let code = self.byte()?;
             let (at, len) = self.counted(code, b'U', b'T', NO_OPCODE)?;
             return Some((at, len, Storage::Raw));
