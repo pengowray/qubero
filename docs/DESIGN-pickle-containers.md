@@ -389,6 +389,91 @@ it, so a transposed view reads down the storage and two windows onto one
 storage read as the two tensors they are. A mapping of nothing but tensors
 opens as a summary of `name, dtype, shape, values`, one row a tensor.
 
+## torch.save: the kinds torch 2.14 writes, on 2026-09-19
+
+The section above was written against what the earlier samples held. A matrix
+run of torch 2.14 and joblib 1.6 (`tools/make_torch_joblib_matrix.py` in the
+collection) wrote forty files, and eleven of them matched nothing. All eleven
+read now, and thirteen are in the collection under `torch/`.
+
+**`_rebuild_tensor_v3`.** The legacy storage classes were frozen, so every
+element type torch has added since is written another way: the persistent id
+names `torch.storage.UntypedStorage`, whose count is **bytes** rather than
+elements, and the dtype arrives as the call's seventh argument, a global the
+file names and never calls. `Cursor::rebuilt_tensor` reads either call, and
+`Cursor::tensor_made` puts the count back in elements: a byte length that is
+not whole elements is a non-match. The types that arrive this way are
+`float8_e4m3fn`, `float8_e5m2`, `uint16`, `uint32` and `uint64`.
+
+**The dtype names are the `names` column.** `torch.float32` is one object
+rather than a class to construct, and `__reduce__` returns its name, so pickle
+writes a bare `GLOBAL torch float32`. Twenty of them are enumerated in
+`torch::DTYPE_NAMES`, which is the "may name, never call" mechanism the
+standard library's work added. `torch` itself is still not a module a class
+may be named from.
+
+**Complex and quantised keep their storage classes.** `ComplexFloatStorage`,
+`ComplexDoubleStorage`, `QInt8Storage`, `QUInt8Storage` and `QInt32Storage` are
+five more rows in `STORAGES`. A complex element is a pair of floats, so the
+table reads both and shows one cell in Python's own spelling for a complex
+literal: `1+0j`.
+
+**`_rebuild_qtensor`** takes the same first four arguments as a tensor and then
+`(torch.per_tensor_affine, scale, zero point)`. The stored integers stay the
+stored integers: the table is what the file holds, and the scale and the zero
+point are two rows beside it. Nothing is dequantised, because a reader looking
+at a quantised checkpoint is looking at those integers and would not be told
+that the file had been rewritten on the way out. `per_channel_affine` hands
+over two tensors and an axis instead and is a non-match; no sample holds one.
+
+**`_rebuild_sparse_tensor(layout, data)`** is two tensors and the shape they
+stand for. The layout is `torch.serialization._get_layout` over the layout's
+own name, and only `torch.sparse_coo` is allowed: the other layouts hand over a
+different tuple, which has not been measured. The indices and the values are
+ordinary tensors and each opens as its own table. Nothing is densified.
+
+**`torch.Size` and `torch.device`** are two more rows in the calls table: a
+tuple subclass called with its tuple, and the device type with an optional
+index. A file holding nothing but a `Size`, a device and a dtype has no tensor
+in it and is still a torch file, so `Family::Torch` now requires the torch
+**extension** rather than a tensor, and `Cursor::torch_named` notes the
+extension wherever a global under `torch` is named. `collections.OrderedDict`
+is deliberately outside that prefix: a state dict is one of those, and a state
+dict is not a mixture of torch and the standard library.
+
+**A whole module pickled as an object.** `torch.save(torch.nn.Linear(4, 3))`
+saves the module rather than its state, which torch's documentation advises
+against and which people write anyway. The pickle names
+`torch.nn.modules.linear.Linear`, makes it with `EMPTY_TUPLE NEWOBJ`, and
+gives it a state dictionary of `training`, `_parameters`, `_buffers`,
+`_non_persistent_buffers_set`, eight `OrderedDict`s of hooks, `_modules`,
+`in_features` and `out_features`.
+
+**The decision, and why.** It is read, as a plain object of a class under
+`torch.nn` and nothing wider. The reason is that its state is only what the
+forms already read: flags, dictionaries, an empty set, empty `OrderedDict`s
+and the parameters themselves. Nothing about the class is run, nothing is
+constructed from values, and the prefix is `torch.nn` rather than `torch`, so
+a class from anywhere else under torch is still a non-match. What that costs
+is that `Family::Torch` no longer requires `instances == 0`; what it buys is
+that the file people actually have on disk opens as its weights instead of as
+an opcode listing. A module whose state holds anything the forms do not read
+is a non-match, which is the ordinary rule and not a special case.
+
+**What is still refused**, and what each would need:
+
+- `numpy.matrix` in a joblib file (`joblib-matrix.joblib` in the matrix run).
+  A NumPy class named outside the NumPy productions' own fixed runs, which no
+  form allows. It needs a decision about whether NumPy's array subclasses are
+  named at all.
+- `joblib-sklearn-string-labels.joblib` from sklearn 1.9.1, which reads as far
+  as `0x1be`. Not looked at this round; it is a scikit-learn shape rather than
+  a torch one.
+- `_rebuild_meta_tensor_no_storage`, `_rebuild_device_tensor_from_numpy`,
+  `_rebuild_wrapper_subclass`, `_rebuild_tensor` (no `_v2`), the four-bit and
+  two-bit quantised storages, and the sparse layouts other than COO. No sample
+  holds any of them.
+
 ## torch.save: the legacy file, on 2026-09-19
 
 The format before torch 1.6, and what `_use_new_zipfile_serialization=False`
@@ -466,19 +551,17 @@ matrix was made.
 **What is left for torch**, in the order it is worth doing:
 
 1. **Done on 2026-09-19.** See the section above.
-2. **The calls no sample holds.** `_rebuild_tensor_v3` with
-   `torch.storage.UntypedStorage` and a dtype argument, which is how the
-   float8 types are written; the complex and quantised storage classes;
-   `_rebuild_sparse_tensor`, `_rebuild_meta_tensor_no_storage`,
-   `_rebuild_device_tensor_from_numpy` and `_rebuild_wrapper_subclass`. Each
-   is a row in `STORAGES` or in the calls table and a sample beside it.
-3. **`torch.Size`, `torch.device` and `torch.dtype` as values.** The optimizer
-   state in the corpus holds none: Adam's state is tensors and counts. A
-   sample that has one would say what shape each is written in.
-4. **Older torch.** The forms are written for what 2.14 writes. torch 1.x
+2. **Done on 2026-09-19**, in the section on what torch 2.14 writes:
+   `_rebuild_tensor_v3`, the complex and quantised storage classes,
+   `_rebuild_qtensor`, `_rebuild_sparse_tensor`, `torch.Size`, `torch.device`,
+   the dtypes as named globals, and a whole module pickled as an object.
+   `_rebuild_meta_tensor_no_storage`, `_rebuild_device_tensor_from_numpy`,
+   `_rebuild_wrapper_subclass` and `_rebuild_tensor` (no `_v2`) are still
+   refused; no sample holds one.
+3. **Older torch.** The forms are written for what 2.14 writes. torch 1.x
    ZIPs and 0.4 to 1.5 legacy files want containers, the way the pickle matrix
-   was made.
-5. **A tensor's numbers as a field rather than a table.** See below.
+   was made. Those runs land in sibling folders of the 2.14 one.
+4. **A tensor's numbers as a field rather than a table.** See below.
 
 **What a proper IR answer would need**, now that the shape of it is known. The
 gap is a field in one ZIP entry placed by another entry's contents: the
@@ -502,8 +585,10 @@ repository, a frame with named columns and a text column, and a
 `LogisticRegression` fitted on labels that are strings, whose `classes_` is
 an object array and so a nested pickle.
 
-The `torch/` samples are in the collection since 2026-09-19, thirteen of them,
-three of which are legacy files. A legacy file is **not byte-reproducible**: a
+The `torch/` samples are in the collection since 2026-09-19, twenty-six of
+them, three of which are legacy files: the original thirteen, and thirteen
+more from the torch 2.14 matrix run, which are the kinds the form refused
+until the same day. A legacy file is **not byte-reproducible**: a
 storage's key is the address its buffer happened to be at, so every run of the
 generator writes different keys. Check `git status` after running it and
 commit the bytes you tested against.

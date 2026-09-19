@@ -85,6 +85,10 @@ pub(super) const STORAGE_OFFSET_FIELD: &str = "storage offset";
 pub(super) const STORAGE_FIELD: &str = "storage";
 pub(super) const LOCATION_FIELD: &str = "location";
 pub(super) const REQUIRES_GRAD_FIELD: &str = "requires grad";
+/// What a quantised tensor's stored whole numbers stand for. Said only of one,
+/// because every other tensor's numbers are what they say.
+pub(super) const SCALE_FIELD: &str = "scale";
+pub(super) const ZERO_POINT_FIELD: &str = "zero point";
 /// What a tensor is, for the row that says so, when the reader wants the word
 /// rather than the shape. The entry row over it says both.
 pub(super) const IS_FIELD: &str = "is";

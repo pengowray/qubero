@@ -65,7 +65,7 @@ impl Extensions {
         }
     }
 
-    fn has(self, extension: Extension) -> bool {
+    pub(super) fn has(self, extension: Extension) -> bool {
         self.0 & (1 << extension as u8) != 0
     }
 

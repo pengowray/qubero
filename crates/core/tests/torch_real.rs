@@ -60,6 +60,21 @@ fn every_archive_reads_as_the_tensors_it_holds() {
         ("state-dict-zip.pt", "torch-tensors-p2-p3-v1"),
         ("state-dict-zip-protocol4.pt", "torch-tensors-p4-p5-v1"),
         ("tensor-float64-zip.pt", "torch-tensors-p2-p3-v1"),
+        // What torch 2.14 writes that the older storage classes have no name
+        // for, and the kinds the form refused until 2026-09-19.
+        ("dtype-complex64-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-complex128-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-float8-e4m3fn-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-float8-e5m2-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-uint16-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-uint32-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("dtype-uint64-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("quantized-int8-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("sparse-coo-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("size-device-dtype-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("whole-module-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("module-state-dict-zip.pt", "torch-tensors-p2-p3-v1"),
+        ("checkpoint-sgd-momentum-zip.pt", "torch-tensors-p2-p3-v1"),
     ];
     for (name, form) in want {
         let (doc, mut ev) = open(&dir, name);
@@ -143,6 +158,157 @@ fn every_dtype_reads_as_the_numbers_it_is() {
             assert_eq!(one, 1.0, "{word}");
         }
     }
+}
+
+/// The dtypes torch 2.14 writes that the legacy storage classes have no name
+/// for, each a tensor of `ones(4)`.
+///
+/// Two ways of writing a tensor meet here. A complex tensor keeps a storage
+/// class of its own, so it arrives through `_rebuild_tensor_v2` like every
+/// older type; the eight-bit floats and the wide unsigned integers arrive
+/// through `_rebuild_tensor_v3`, which names an untyped storage and hands the
+/// dtype over as an argument. The claim is the same for both: the dtype in
+/// plain words, and four ones read out of the entry.
+#[test]
+fn the_dtypes_without_a_storage_class_read_as_the_numbers_they_are() {
+    let Some(dir) = folder() else { return };
+    let want: &[(&str, &str)] = &[
+        ("dtype-complex64-zip.pt", "complex64"),
+        ("dtype-complex128-zip.pt", "complex128"),
+        ("dtype-float8-e4m3fn-zip.pt", "float8_e4m3fn"),
+        ("dtype-float8-e5m2-zip.pt", "float8_e5m2"),
+        ("dtype-uint16-zip.pt", "uint16"),
+        ("dtype-uint32-zip.pt", "uint32"),
+        ("dtype-uint64-zip.pt", "uint64"),
+    ];
+    for (name, word) in want {
+        let (doc, mut ev) = open(&dir, name);
+        let held = pickle_at(&doc, &mut ev);
+        assert_eq!(row(&doc, &mut ev, &held, "header/form"), Value::Str("torch-tensors-p2-p3-v1".into()), "{name}");
+        let at = under(&doc, &mut ev, &held, "data");
+        assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str((*word).to_string()), "{name}");
+        assert_eq!(row(&doc, &mut ev, &at, "numbers"), Value::Str("4 values in data/0".into()), "{name}");
+        let cells = ev.pickle_cells(&doc, &at, 0, 4).unwrap();
+        let held: Vec<Value> = cells.into_iter().flatten().flatten().collect();
+        // A complex number is one cell holding a pair, in Python's own
+        // spelling for a complex literal.
+        let ones: Vec<Value> = match word.starts_with("complex") {
+            true => (0..4).map(|_| Value::Str("1+0j".into())).collect(),
+            false => (0..4).map(|_| Value::Float(1.0)).collect(),
+        };
+        let held: Vec<Value> = held
+            .into_iter()
+            .map(|v| match v {
+                Value::UInt(n) => Value::Float(n as f64),
+                Value::Int(n) => Value::Float(n as f64),
+                other => other,
+            })
+            .collect();
+        assert_eq!(held, ones, "{name}");
+    }
+}
+
+/// A quantised tensor reads as the whole numbers it stores, with what they
+/// stand for beside them.
+///
+/// `quantize_per_tensor(arange(4).float(), 0.5, 0, qint8)` is the integers 0,
+/// 2, 4 and 6: the real value divided by the scale. Nothing is dequantised on
+/// the way out, so the table is those integers and the scale is a row.
+#[test]
+fn a_quantised_tensor_reads_as_its_stored_integers() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "quantized-int8-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    let at = under(&doc, &mut ev, &held, "data");
+    assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str("qint8".into()));
+    assert_eq!(row(&doc, &mut ev, &at, "scale"), Value::Str("0.5".into()));
+    assert_eq!(row(&doc, &mut ev, &at, "zero point"), Value::Str("0".into()));
+    assert_eq!(numbers(&ev.pickle_cells(&doc, &at, 0, 4).unwrap()).concat(), vec![0.0, 2.0, 4.0, 6.0]);
+}
+
+/// A sparse tensor reads as the two tensors it is made of.
+///
+/// `eye(3).to_sparse()` keeps the three ones and the row and column each sits
+/// at. Nothing is densified: the indices are one tensor and the values
+/// another, and both open as their own table.
+#[test]
+fn a_sparse_tensor_reads_as_its_indices_and_its_values() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "sparse-coo-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    let data = under(&doc, &mut ev, &held, "data/data");
+    let indices = under(&doc, &mut ev, &data, "[0]");
+    assert_eq!(row(&doc, &mut ev, &indices, "dtype"), Value::Str("int64".into()));
+    assert_eq!(row(&doc, &mut ev, &indices, "shape"), Value::Str("2 x 3".into()));
+    let cells = numbers(&ev.pickle_cells(&doc, &indices, 0, 2).unwrap());
+    assert_eq!(cells, vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]]);
+    let values = under(&doc, &mut ev, &data, "[1]");
+    assert_eq!(row(&doc, &mut ev, &values, "dtype"), Value::Str("float32".into()));
+    assert_eq!(numbers(&ev.pickle_cells(&doc, &values, 0, 3).unwrap()).concat(), vec![1.0, 1.0, 1.0]);
+}
+
+/// A shape, a device and a dtype saved as values, which is a torch file with
+/// no tensor in it at all.
+#[test]
+fn a_size_a_device_and_a_dtype_read_as_the_values_they_are() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "size-device-dtype-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    assert_eq!(row(&doc, &mut ev, &held, "header/form"), Value::Str("torch-tensors-p2-p3-v1".into()));
+    let at = under(&doc, &mut ev, &held, "data");
+    assert_eq!(row(&doc, &mut ev, &at, "size"), Value::Str("torch.Size".into()));
+    assert_eq!(row(&doc, &mut ev, &at, "device"), Value::Str("torch.device".into()));
+    assert_eq!(row(&doc, &mut ev, &at, "dtype"), Value::Str("torch.float32".into()));
+}
+
+/// A whole `nn.Module` pickled as an object, which is what the documentation
+/// advises against and what people save anyway.
+///
+/// It is read as a plain object of a class under `torch.nn`, because its state
+/// is only what the forms already read: flags, dictionaries, empty
+/// `OrderedDict`s of hooks, and the parameters themselves. Nothing about the
+/// class is run, and no wider prefix is named.
+#[test]
+fn a_whole_module_reads_as_an_object_of_a_class_under_torch_nn() {
+    let Some(dir) = folder() else { return };
+    let (doc, mut ev) = open(&dir, "whole-module-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    assert_eq!(row(&doc, &mut ev, &held, "header/form"), Value::Str("torch-tensors-p2-p3-v1".into()));
+    let at = under(&doc, &mut ev, &held, "data");
+    assert_eq!(row(&doc, &mut ev, &at, "class"), Value::Str("torch.nn.modules.linear.Linear".into()));
+    let weight = under(&doc, &mut ev, &held, "data/_parameters/value/weight/value");
+    assert_eq!(row(&doc, &mut ev, &weight, "is"), Value::Str("parameter".into()));
+    assert_eq!(row(&doc, &mut ev, &weight, "shape"), Value::Str("3 x 4".into()));
+}
+
+/// A real module's state dict and a real checkpoint, which is what torch
+/// files in the wild are.
+#[test]
+fn a_real_state_dict_and_checkpoint_open_as_their_tensors() {
+    let Some(dir) = folder() else { return };
+    // `nn.Sequential(Linear(4, 3), BatchNorm1d(3))`, whose state dict holds
+    // the weights, the batch norm's running statistics and its batch count.
+    let (doc, mut ev) = open(&dir, "module-state-dict-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    let at = under(&doc, &mut ev, &held, "data");
+    let shape = ev.table_shape(&doc, &at).unwrap().unwrap();
+    assert_eq!(shape.names, vec!["name", "dtype", "shape", "values"]);
+    let said: Vec<String> = ev.pickle_cells(&doc, &at, 0, 1).unwrap()[0]
+        .iter()
+        .map(|cell| match cell {
+            Some(Value::Str(s)) => s.clone(),
+            Some(Value::UInt(n)) => n.to_string(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(said, vec!["0.weight", "float32", "3 x 4", "12"]);
+    // An SGD-with-momentum checkpoint: the epoch and the note beside the
+    // model's weights and the optimizer's own state.
+    let (doc, mut ev) = open(&dir, "checkpoint-sgd-momentum-zip.pt");
+    let held = pickle_at(&doc, &mut ev);
+    assert_eq!(row(&doc, &mut ev, &held, "data/epoch"), Value::Str("3".into()));
+    let model = under(&doc, &mut ev, &held, "data/model/value");
+    assert!(ev.table_shape(&doc, &model).unwrap().is_some());
 }
 
 /// A module's own weights, which torch wraps in `_rebuild_parameter`.

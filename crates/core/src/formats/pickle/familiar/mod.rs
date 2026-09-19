@@ -28,7 +28,7 @@ mod packs;
 mod picklers;
 mod python2;
 mod stdlib;
-mod torch;
+pub mod torch;
 mod values;
 #[cfg(test)]
 mod tests;
@@ -396,11 +396,16 @@ impl<'a> Cursor<'a> {
             // A library form is the one the file's classes came from, and it
             // has to have read at least one of them.
             Family::Library => self.instances > 0,
-            // A torch file is tensors and whatever plain data was saved
-            // beside them, the way a joblib file is arrays and plain data. A
-            // value of any other family in it, a date or a NumPy array, makes
-            // it a mixture and it is read under the mixed form.
-            Family::Torch => self.tensors > 0 && self.arrays == 0 && self.objects == 0 && self.instances == 0,
+            // A torch file is torch's own values and whatever plain data was
+            // saved beside them, the way a joblib file is arrays and plain
+            // data. A value of any other family in it, a date or a NumPy
+            // array, makes it a mixture and it is read under the mixed form.
+            //
+            // What it requires is the extension rather than a tensor: a file
+            // holding a `torch.Size`, a device and a dtype and no tensor at
+            // all is still a torch file. Objects are allowed because a whole
+            // `nn.Module` pickled as one is what the class prefix is for.
+            Family::Torch => extensions.has(Extension::Torch) && self.arrays == 0 && self.objects == 0,
             // The mixed form reads every family at once, so what it requires
             // is the mixture: a file of one family is read under the form for
             // that family, which was tried before this one and says so in its

@@ -289,6 +289,19 @@ pub struct Tensor {
     /// Whether `_rebuild_parameter` wrapped it, which is what a module's
     /// weights are.
     pub parameter: bool,
+    /// What a quantised tensor's whole numbers stand for. Nothing for every
+    /// other tensor, whose numbers are what they say.
+    pub quantizer: Option<Quantizer>,
+}
+
+/// How a quantised tensor's stored integers map to real numbers:
+/// `(stored - zero point) * scale`. Read out of the call and shown beside the
+/// numbers rather than applied to them, so what a table shows is what the file
+/// holds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Quantizer {
+    pub scale: f64,
+    pub zero_point: i128,
 }
 
 /// What one element of a tensor is.
@@ -303,12 +316,28 @@ pub enum TensorType {
     BFloat16,
     Float32,
     Float64,
+    /// A pair of floats, the real part and then the imaginary one.
+    Complex64,
+    Complex128,
+    /// The two eight-bit floats torch writes, told apart by how many bits of
+    /// the byte are the exponent. `fn` is torch's own suffix and says the
+    /// format has no infinities.
+    Float8E4M3FN,
+    Float8E5M2,
     Int8,
     UInt8,
     Int16,
     Int32,
     Int64,
+    UInt16,
+    UInt32,
+    UInt64,
     Bool,
+    /// A quantised element, which is a whole number that stands for a real
+    /// one through the scale and the zero point the tensor carries.
+    QInt8,
+    QUInt8,
+    QInt32,
 }
 
 impl TensorType {
@@ -320,22 +349,42 @@ impl TensorType {
             TensorType::BFloat16 => "bfloat16",
             TensorType::Float32 => "float32",
             TensorType::Float64 => "float64",
+            TensorType::Complex64 => "complex64",
+            TensorType::Complex128 => "complex128",
+            TensorType::Float8E4M3FN => "float8_e4m3fn",
+            TensorType::Float8E5M2 => "float8_e5m2",
             TensorType::Int8 => "int8",
             TensorType::UInt8 => "uint8",
             TensorType::Int16 => "int16",
             TensorType::Int32 => "int32",
             TensorType::Int64 => "int64",
+            TensorType::UInt16 => "uint16",
+            TensorType::UInt32 => "uint32",
+            TensorType::UInt64 => "uint64",
             TensorType::Bool => "bool",
+            TensorType::QInt8 => "qint8",
+            TensorType::QUInt8 => "quint8",
+            TensorType::QInt32 => "qint32",
         }
+    }
+
+    /// Whether one element is a pair of numbers rather than one, which is what
+    /// a complex tensor holds and the only kind a table shows two readings of.
+    pub fn complex(self) -> bool {
+        matches!(self, TensorType::Complex64 | TensorType::Complex128)
     }
 
     /// How many bytes one element takes.
     pub fn width(self) -> u64 {
         match self {
             TensorType::Int8 | TensorType::UInt8 | TensorType::Bool => 1,
-            TensorType::Float16 | TensorType::BFloat16 | TensorType::Int16 => 2,
-            TensorType::Float32 | TensorType::Int32 => 4,
-            TensorType::Float64 | TensorType::Int64 => 8,
+            TensorType::Float8E4M3FN | TensorType::Float8E5M2 => 1,
+            TensorType::QInt8 | TensorType::QUInt8 => 1,
+            TensorType::Float16 | TensorType::BFloat16 | TensorType::Int16 | TensorType::UInt16 => 2,
+            TensorType::Float32 | TensorType::Int32 | TensorType::UInt32 | TensorType::QInt32 => 4,
+            TensorType::Float64 | TensorType::Int64 | TensorType::UInt64 => 8,
+            TensorType::Complex64 => 8,
+            TensorType::Complex128 => 16,
         }
     }
 }
@@ -558,6 +607,12 @@ pub enum Shape {
     DType,
     /// A torch tensor: a window onto a storage kept somewhere else.
     Tensor,
+    /// `torch.Size`, which is the shape of a tensor written as a value of its
+    /// own. A tuple subclass, so it is a call of the class over a tuple.
+    Size,
+    /// A sparse tensor, which is two tensors and the shape they stand for:
+    /// where the values are and what they are.
+    SparseTensor,
     /// A whole pickle written inside another one, with a protocol, a memo and
     /// a STOP of its own. `joblib.dump` writes one where an array's numbers
     /// would go when the array holds pickled objects rather than numbers.
@@ -605,6 +660,8 @@ impl Shape {
             Shape::Block => "block",
             Shape::DType => "dtype",
             Shape::Tensor => "tensor",
+            Shape::Size => "Size",
+            Shape::SparseTensor => "sparse tensor",
             Shape::Nested => "nested pickle",
         }
     }

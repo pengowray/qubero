@@ -65,6 +65,14 @@ fn fits(c: &Cursor, call: &Reduce, held: &[Value]) -> bool {
 }
 
 impl Cursor<'_> {
+    /// Note that a global named from this module is torch's own, which is
+    /// what says the file used torch where no class of torch's was built.
+    fn torch_named(&mut self, module: &str) {
+        if self.allow.torch && covers(super::forms::TORCH_PACKAGE, module) {
+            self.extensions.add(super::packs::Extension::Torch);
+        }
+    }
+
     /// Whether a module is one the form in hand may name a class from.
     ///
     /// The package itself or anything under it, and nothing that merely starts
@@ -164,6 +172,7 @@ impl Cursor<'_> {
             return None;
         }
         self.memoize(Bound::Global(path.clone()))?;
+        self.torch_named(module);
         Some(self.span(start, Kind::Class { path, parts: Vec::new() }))
     }
 
@@ -199,12 +208,13 @@ impl Cursor<'_> {
             return None;
         }
         self.memoize(Bound::Global(path.clone()))?;
+        self.torch_named(&module_text);
         Some(Kind::Class { path, parts: vec![module, name] })
     }
 
     /// The text a value is, whether the file spelled it here or named the slot
     /// it spelled it in. Anything else is not a module or a class name.
-    fn text_of(&self, value: &Value) -> Option<&str> {
+    pub(super) fn text_of(&self, value: &Value) -> Option<&str> {
         let (at, len) = match value.kind {
             Kind::Text { at, len } => (at, len),
             Kind::Ref(super::Names::Text { at, len }) => (at, len),
@@ -349,6 +359,7 @@ impl Cursor<'_> {
             self.instances += 1;
             self.from_pack(module);
         }
+        self.torch_named(module);
         // What the result holds beyond its arguments. A path has as many parts
         // as it has, so the whole tuple is the one argument; a `Counter` is
         // called with the mapping it holds, which is the counter itself; and

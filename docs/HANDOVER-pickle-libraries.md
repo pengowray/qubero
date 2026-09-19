@@ -476,6 +476,30 @@ before it stopped, which is where the next production goes.
    Protocols 0 and 1 are not in scope; `DESIGN-familiar-pickle-forms.md` says
    what they would need under "What protocols 0 and 1 would need".
 
+## The torch kinds the current release writes: landed on 2026-09-19
+
+`DESIGN-pickle-containers.md`, under "torch.save: the kinds torch 2.14 writes",
+has the whole of it: `_rebuild_tensor_v3` with an untyped storage and the dtype
+as an argument, the complex and quantised storage classes, `_rebuild_qtensor`,
+`_rebuild_sparse_tensor`, `torch.Size`, `torch.device`, the dtypes as globals
+the form names and never calls, and a whole `nn.Module` pickled as an object of
+a class under `torch.nn`.
+
+Two things that belong to this file rather than that one, because they are
+about how a form is declared:
+
+- **A family may require an extension rather than a count.** `Family::Torch`
+  asked for `tensors > 0`, which is not what a torch file is: a saved
+  `torch.Size`, device and dtype is one and has no tensor in it. It asks for
+  the torch extension now, and `Cursor::torch_named` sets that bit wherever a
+  global under `torch` is named. `collections` is outside that prefix on
+  purpose, or a state dict would read as a mixture of torch and the standard
+  library.
+- **The torch row has a class prefix now**, `torch.nn`, and `Family::Torch` no
+  longer requires `instances == 0`. That is what lets a whole module read, and
+  it is the narrowest prefix that does: a class from anywhere else under torch
+  is still a non-match.
+
 ## An array of objects holds more than leaves: landed on 2026-09-19
 
 A pandas column of objects holds whatever Python was holding: dates, lists,

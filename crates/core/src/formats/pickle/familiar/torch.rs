@@ -1,4 +1,6 @@
-//! The torch productions: a tensor, and the parameter that wraps one.
+//! The torch productions: a tensor, the parameter that wraps one, the
+//! quantised tensor whose numbers stand for real ones, and the element types a
+//! file names by name.
 //!
 //! `torch.save` keeps a tensor's numbers out of the pickle. What the pickle
 //! holds is a call to one rebuilding function with a persistent id in its
@@ -27,23 +29,51 @@
 //!   OrderedDict()  backward hooks, always empty in a saved file
 //! TUPLE REDUCE
 //! ```
+//!
+//! `_rebuild_tensor_v3` is the same run with `torch.storage UntypedStorage` in
+//! place of the storage class, a count of bytes rather than elements, and a
+//! `GLOBAL torch <dtype>` after the hooks. `_rebuild_qtensor` is the same run
+//! with `(torch.per_tensor_affine, scale, zero point)` where the flag would
+//! be. `torch.Size`, `torch.device` and the sparse tensor are ordinary calls
+//! of enumerated callables and are in the table in [`forms`](super::forms).
 
 use super::cursor::Cursor;
 use super::memo::Bound;
 use super::packs::Extension;
-use super::{Kind, Names, Shape, Tensor, TensorType, Value};
+use super::{Kind, Names, Quantizer, Shape, Tensor, TensorType, Value};
 
-/// The module the two rebuilding functions are in.
+/// The module every rebuilding function is in.
 const UTILS: &[&str] = &["torch._utils"];
-/// The one call that rebuilds a tensor, and the one that wraps a tensor in the
+/// The calls that rebuild a tensor, and the one that wraps a tensor in the
 /// parameter a module's weights are.
 ///
-/// `_rebuild_tensor` (no `_v2`), `_rebuild_tensor_v3`, the sparse, nested,
-/// meta and device rebuilders and `_rebuild_wrapper_subclass` are all real
-/// calls torch writes, and none is here: no file in the collection holds one,
-/// and a call this reader has not measured is a non-match rather than a guess.
+/// `_rebuild_tensor_v2` carries the element type in the storage class it
+/// names. `_rebuild_tensor_v3` names `torch.storage.UntypedStorage` instead
+/// and hands the dtype over as a seventh argument, which is how torch writes
+/// every type it added after the legacy storage classes were frozen: the
+/// eight-bit floats and the wide unsigned integers.
+///
+/// `_rebuild_tensor` (no `_v2`), the nested, meta and device rebuilders and
+/// `_rebuild_wrapper_subclass` are all real calls torch writes, and none is
+/// here: no file in the collection holds one, and a call this reader has not
+/// measured is a non-match rather than a guess.
 const REBUILD_TENSOR: &str = "_rebuild_tensor_v2";
+const REBUILD_TENSOR_V3: &str = "_rebuild_tensor_v3";
+/// `_rebuild_qtensor(storage, offset, size, stride, quantizer, requires_grad,
+/// hooks)`, which is the same tensor with the numbers standing for real ones
+/// through a scale and a zero point.
+const REBUILD_QTENSOR: &str = "_rebuild_qtensor";
 const REBUILD_PARAMETER: &str = "_rebuild_parameter";
+
+/// The storage `_rebuild_tensor_v3` names, which says only how many bytes
+/// there are: the element type arrives as the call's last argument.
+const STORAGE_MODULE: &[&str] = &["torch.storage"];
+const UNTYPED_STORAGE: &str = "UntypedStorage";
+
+/// The scheme a quantised tensor names, which is the only one whose arguments
+/// this reader has measured. `per_channel_affine` hands over two tensors and
+/// an axis instead, and no sample holds one.
+const PER_TENSOR_AFFINE: &str = "per_tensor_affine";
 
 /// The word the persistent id opens with, which is what says the tuple is a
 /// storage rather than the `('module', ...)` a legacy file writes for a class
@@ -58,10 +88,8 @@ const ORDERED_DICT: &str = "OrderedDict";
 /// One storage class, and what one of its elements is.
 ///
 /// Every class here is one a sample in the collection names. The ones left out
-/// on purpose: `torch.storage.UntypedStorage`, which arrives with
-/// `_rebuild_tensor_v3` and carries its dtype as a separate argument;
-/// `ComplexFloatStorage` and `ComplexDoubleStorage`; and the quantised
-/// storages. Each would be a row here and a sample beside it.
+/// on purpose are the quantised four-bit and two-bit storages, which no sample
+/// holds; each would be a row here and a sample beside it.
 pub struct Storage {
     pub class: &'static str,
     pub dtype: TensorType,
@@ -73,16 +101,99 @@ pub const STORAGES: &[Storage] = &[
     Storage { class: "DoubleStorage", dtype: TensorType::Float64 },
     Storage { class: "HalfStorage", dtype: TensorType::Float16 },
     Storage { class: "BFloat16Storage", dtype: TensorType::BFloat16 },
+    Storage { class: "ComplexFloatStorage", dtype: TensorType::Complex64 },
+    Storage { class: "ComplexDoubleStorage", dtype: TensorType::Complex128 },
     Storage { class: "LongStorage", dtype: TensorType::Int64 },
     Storage { class: "IntStorage", dtype: TensorType::Int32 },
     Storage { class: "ShortStorage", dtype: TensorType::Int16 },
     Storage { class: "CharStorage", dtype: TensorType::Int8 },
     Storage { class: "ByteStorage", dtype: TensorType::UInt8 },
     Storage { class: "BoolStorage", dtype: TensorType::Bool },
+    Storage { class: "QInt8Storage", dtype: TensorType::QInt8 },
+    Storage { class: "QUInt8Storage", dtype: TensorType::QUInt8 },
+    Storage { class: "QInt32Storage", dtype: TensorType::QInt32 },
+];
+
+/// Every element type a file may name by its own name, which is what
+/// `_rebuild_tensor_v3` is handed and what a `torch.dtype` saved as a value
+/// is.
+///
+/// A dtype is a global the form names and never calls: `torch.float32` is one
+/// object rather than a class to construct, and pickle writes it as a GLOBAL.
+/// So the list is the whole of what may be named, in torch's own spelling.
+/// The aliases (`torch.float`, `torch.long`) are the same objects as the names
+/// here and pickle writes the canonical name for each, so naming one is naming
+/// a row of this table.
+pub const DTYPES: &[Storage] = &[
+    Storage { class: "float16", dtype: TensorType::Float16 },
+    Storage { class: "bfloat16", dtype: TensorType::BFloat16 },
+    Storage { class: "float32", dtype: TensorType::Float32 },
+    Storage { class: "float64", dtype: TensorType::Float64 },
+    Storage { class: "complex64", dtype: TensorType::Complex64 },
+    Storage { class: "complex128", dtype: TensorType::Complex128 },
+    Storage { class: "float8_e4m3fn", dtype: TensorType::Float8E4M3FN },
+    Storage { class: "float8_e5m2", dtype: TensorType::Float8E5M2 },
+    Storage { class: "int8", dtype: TensorType::Int8 },
+    Storage { class: "uint8", dtype: TensorType::UInt8 },
+    Storage { class: "int16", dtype: TensorType::Int16 },
+    Storage { class: "int32", dtype: TensorType::Int32 },
+    Storage { class: "int64", dtype: TensorType::Int64 },
+    Storage { class: "uint16", dtype: TensorType::UInt16 },
+    Storage { class: "uint32", dtype: TensorType::UInt32 },
+    Storage { class: "uint64", dtype: TensorType::UInt64 },
+    Storage { class: "bool", dtype: TensorType::Bool },
+    Storage { class: "qint8", dtype: TensorType::QInt8 },
+    Storage { class: "quint8", dtype: TensorType::QUInt8 },
+    Storage { class: "qint32", dtype: TensorType::QInt32 },
+];
+
+/// The same names as whole dotted paths, which is what a form's `names` column
+/// is: the globals it may name and never calls.
+///
+/// Written out rather than made up from the table above, because a form's
+/// tables are what a reader compares against and a const table cannot be
+/// built at run time. `a_dtype_is_named_in_both_tables` holds the two to each
+/// other.
+pub const DTYPE_NAMES: &[&str] = &[
+    "torch.float16",
+    "torch.bfloat16",
+    "torch.float32",
+    "torch.float64",
+    "torch.complex64",
+    "torch.complex128",
+    "torch.float8_e4m3fn",
+    "torch.float8_e5m2",
+    "torch.int8",
+    "torch.uint8",
+    "torch.int16",
+    "torch.int32",
+    "torch.int64",
+    "torch.uint16",
+    "torch.uint32",
+    "torch.uint64",
+    "torch.bool",
+    "torch.qint8",
+    "torch.quint8",
+    "torch.qint32",
 ];
 
 /// The module every one of them is named from.
 const TORCH: &[&str] = &["torch"];
+
+/// What a persistent id said: which storage class, what one element is where
+/// the class says, where the numbers are and how long the storage is.
+struct Persistent {
+    storage_class: &'static str,
+    /// Nothing for an untyped storage, whose element type is the call's last
+    /// argument rather than the storage class.
+    dtype: Option<TensorType>,
+    key: (usize, usize),
+    location: (usize, usize),
+    count: u64,
+    /// Whether `count` is bytes rather than elements, which is what an
+    /// untyped storage counts in.
+    bytes: bool,
+}
 
 /// The most dimensions a tensor may declare. Torch's own limit is 64 for most
 /// operations; the shape is checked against the storage either way, so this
@@ -95,7 +206,7 @@ impl Cursor<'_> {
     /// value in hand is something else.
     pub(super) fn torch_value(&mut self) -> Option<Value> {
         let start = self.at;
-        for production in [Cursor::rebuilt_tensor, Cursor::rebuilt_parameter] {
+        for production in [Cursor::rebuilt_tensor, Cursor::rebuilt_qtensor, Cursor::rebuilt_parameter] {
             let here = self.save();
             match production(self, start) {
                 Some(value) => return Some(value),
@@ -106,11 +217,21 @@ impl Cursor<'_> {
     }
 
     /// `torch._utils._rebuild_tensor_v2(persistent id, offset, size, stride,
-    /// requires_grad, OrderedDict())`.
+    /// requires_grad, OrderedDict())`, and the `_v3` that ends with the dtype.
     fn rebuilt_tensor(&mut self, start: usize) -> Option<Value> {
-        self.global(UTILS, REBUILD_TENSOR, "rebuild module", "rebuild call")?;
+        let third = {
+            let here = self.save();
+            match self.global(UTILS, REBUILD_TENSOR, "rebuild module", "rebuild call") {
+                Some(_) => false,
+                None => {
+                    self.restore(here);
+                    self.global(UTILS, REBUILD_TENSOR_V3, "rebuild module", "rebuild call")?;
+                    true
+                }
+            }
+        };
         self.atoms(&[b"("])?;
-        let (storage_class, dtype, key, location, count) = self.persistent_id()?;
+        let held = self.persistent_id(third)?;
         let offset = self.elements()?;
         let size = self.extents()?;
         let stride = self.extents()?;
@@ -119,11 +240,81 @@ impl Cursor<'_> {
         }
         let requires_grad = self.read_flag()?;
         self.empty_hooks()?;
+        // `_rebuild_tensor_v3` names an untyped storage, so the element type
+        // comes after the hooks as a dtype of torch's own. `_v2` carries it in
+        // the storage class and writes nothing here.
+        let dtype = match third {
+            true => self.dtype_named()?,
+            false => held.dtype?,
+        };
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
-        let tensor = Tensor { dtype, storage_class, key, location, count, offset, size, stride, requires_grad, parameter: false };
+        self.tensor_made(start, held, dtype, offset, size, stride, requires_grad, None)
+    }
+
+    /// `torch._utils._rebuild_qtensor(persistent id, offset, size, stride,
+    /// (torch.per_tensor_affine, scale, zero point), requires_grad,
+    /// OrderedDict())`.
+    ///
+    /// The numbers stay the whole numbers the file holds. What the scheme says
+    /// they stand for is read and shown beside them, because a reader looking
+    /// at a quantised checkpoint is looking at the stored integers and would
+    /// not be told that the file had been rewritten on the way out.
+    fn rebuilt_qtensor(&mut self, start: usize) -> Option<Value> {
+        self.global(UTILS, REBUILD_QTENSOR, "rebuild module", "rebuild call")?;
+        self.atoms(&[b"("])?;
+        let held = self.persistent_id(false)?;
+        let offset = self.elements()?;
+        let size = self.extents()?;
+        let stride = self.extents()?;
+        if size.len() != stride.len() || size.len() > MAX_DIMENSIONS {
+            return None;
+        }
+        self.open_tuple()?;
+        self.global(TORCH, PER_TENSOR_AFFINE, "scheme module", "scheme")?;
+        let Kind::Float { value: scale, .. } = self.binfloat()?.kind else { return None };
+        let Kind::Int { value: zero_point, .. } = self.integer()?.kind else { return None };
+        self.close_tuple(3)?;
+        self.memoize(Bound::Opaque)?;
+        let requires_grad = self.read_flag()?;
+        self.empty_hooks()?;
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
+        let dtype = held.dtype?;
+        self.tensor_made(start, held, dtype, offset, size, stride, requires_grad, Some(Quantizer { scale, zero_point }))
+    }
+
+    /// The tensor the call just read made, checked against the storage it
+    /// named and counted as one of the file's.
+    #[allow(clippy::too_many_arguments)]
+    fn tensor_made(
+        &mut self,
+        start: usize,
+        held: Persistent,
+        dtype: TensorType,
+        offset: u64,
+        size: Vec<u64>,
+        stride: Vec<u64>,
+        requires_grad: bool,
+        quantizer: Option<Quantizer>,
+    ) -> Option<Value> {
+        // An untyped storage counts bytes where a typed one counts elements,
+        // so the count is put in the same units as everything else here: a
+        // length of bytes that is not whole elements is a non-match.
+        let count = match held.bytes {
+            true => match held.count % dtype.width() {
+                0 => held.count / dtype.width(),
+                _ => return None,
+            },
+            false => held.count,
+        };
+        let Persistent { storage_class, key, location, .. } = held;
+        let tensor =
+            Tensor { dtype, storage_class, key, location, count, offset, size, stride, requires_grad, parameter: false, quantizer };
         // A view has to fit in the storage the persistent id named. A tensor
         // reaching past the end of its own storage is not something torch
         // wrote, and reading one would read whatever is next in the file.
@@ -134,6 +325,19 @@ impl Cursor<'_> {
         self.tensors += 1;
         self.extensions.add(Extension::Torch);
         Some(self.span(start, Kind::Tensor(tensor)))
+    }
+
+    /// One of the enumerated dtypes, named `torch.<name>`: a global the form
+    /// names and never calls.
+    fn dtype_named(&mut self) -> Option<TensorType> {
+        for held in DTYPES {
+            let here = self.save();
+            if self.global(TORCH, held.class, "dtype module", "dtype").is_some() {
+                return Some(held.dtype);
+            }
+            self.restore(here);
+        }
+        None
     }
 
     /// `torch._utils._rebuild_parameter(tensor, requires_grad,
@@ -170,13 +374,18 @@ impl Cursor<'_> {
     /// where the numbers are: the word `storage`, the storage class, the key
     /// that names the run, the device it was on, how many elements it holds,
     /// and, in a legacy file, a sixth part that is always `None`.
-    #[allow(clippy::type_complexity)]
-    fn persistent_id(&mut self) -> Option<(&'static str, TensorType, (usize, usize), (usize, usize), u64)> {
+    fn persistent_id(&mut self, untyped: bool) -> Option<Persistent> {
         self.atoms(&[b"("])?;
         if let Some((at, len)) = self.word_or_reference(STORAGE_WORD)? {
             self.says("persistent id kind", at, len);
         }
-        let held = self.storage_class()?;
+        let held = match untyped {
+            true => {
+                self.global(STORAGE_MODULE, UNTYPED_STORAGE, "storage module", "storage class")?;
+                &Storage { class: UNTYPED_STORAGE, dtype: TensorType::UInt8 }
+            }
+            false => self.storage_class()?,
+        };
         let key = self.text_run_or_reference("storage key")?;
         let location = self.text_run_or_reference("location")?;
         let count = self.elements()?;
@@ -194,7 +403,14 @@ impl Cursor<'_> {
         // have fetched. Nothing is fetched here: the tuple is read and folded
         // away, and this opcode is the whole of what it means.
         self.exact(b"Q")?;
-        Some((held.class, held.dtype, key, location, count))
+        Some(Persistent {
+            storage_class: held.class,
+            dtype: (!untyped).then_some(held.dtype),
+            key,
+            location,
+            count,
+            bytes: untyped,
+        })
     }
 
     /// One of the enumerated storage classes, named `torch.<class>`.

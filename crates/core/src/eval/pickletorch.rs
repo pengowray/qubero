@@ -19,7 +19,7 @@
 //! `data/<key>` to a run, is done here. See `docs/DESIGN-pickle-containers.md`
 //! for what closing it properly would need.
 
-use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, DTYPE_FIELD, IS_FIELD, REQUIRES_GRAD_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD};
+use super::pickleparts::{call_of, extent, said_flag, Label, Part, Says, DTYPE_FIELD, IS_FIELD, REQUIRES_GRAD_FIELD, SCALE_FIELD, SHAPE_FIELD, STORAGE_OFFSET_FIELD, STRIDE_FIELD, ZERO_POINT_FIELD};
 use crate::formats::pickle::familiar::Match;
 use std::sync::Arc;
 
@@ -125,6 +125,21 @@ pub(crate) fn element_ty(dtype: TensorType, endian: Endian) -> Ty {
         TensorType::Int16 => Ty::Int { bits: 16, endian },
         TensorType::Int32 => Ty::Int { bits: 32, endian },
         TensorType::Int64 => Ty::Int { bits: 64, endian },
+        // A complex number is a pair of floats, and the table reads both: the
+        // type here is one of the two, and the cell puts them together.
+        TensorType::Complex64 => Ty::F32(endian),
+        TensorType::Complex128 => Ty::F64(endian),
+        TensorType::Float8E4M3FN => Ty::F8 { e4m3: true },
+        TensorType::Float8E5M2 => Ty::F8 { e4m3: false },
+        TensorType::UInt16 => Ty::UInt { bits: 16, endian },
+        TensorType::UInt32 => Ty::UInt { bits: 32, endian },
+        TensorType::UInt64 => Ty::UInt { bits: 64, endian },
+        // A quantised element is the whole number the file holds. What the
+        // scale and the zero point say it stands for is a row beside it, not
+        // a number written in its place.
+        TensorType::QInt8 => Ty::Int { bits: 8, endian },
+        TensorType::QInt32 => Ty::Int { bits: 32, endian },
+        TensorType::QUInt8 => Ty::UInt { bits: 8, endian },
         // A boolean is a byte holding 0 or 1, which is how NumPy's `|b1`
         // reads too.
         TensorType::UInt8 | TensorType::Bool => Ty::UInt { bits: 8, endian },
@@ -434,9 +449,21 @@ impl Evaluator {
             return Ok(None);
         }
         let offset = (start + at) * 8;
-        let size = width * 8;
+        // A complex number is a pair: the real part and then the imaginary
+        // one, each the width the type in hand reads. One cell, because one
+        // element of the tensor is one number in Python's own spelling.
+        let size = match tensor.dtype.complex() {
+            true => width * 4,
+            false => width * 8,
+        };
         let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
-        Ok(Some(self.primitive_value(doc, &[], &one, ty, size)?))
+        let real = self.primitive_value(doc, &[], &one, ty, size)?;
+        if !tensor.dtype.complex() {
+            return Ok(Some(real));
+        }
+        let next = Resolved { offset: offset + size, cursor: offset + size, limit: offset + size * 2, size: Some(size), ..r.clone() };
+        let imaginary = self.primitive_value(doc, &[], &next, ty, size)?;
+        Ok(Some(Value::Str(complex_said(&real, &imaginary))))
     }
 
     /// Which way round the numbers are, which the archive says in a record of
@@ -458,6 +485,20 @@ impl Evaluator {
             b"big" => Endian::Big,
             _ => Endian::Little,
         })
+    }
+}
+
+/// One complex number, in the spelling Python writes a complex literal in:
+/// the real part, the sign of the imaginary part, and `j`.
+fn complex_said(real: &Value, imaginary: &Value) -> String {
+    let said = |v: &Value| match v {
+        Value::Float(f) => f.to_string(),
+        other => format!("{other:?}"),
+    };
+    let held = said(imaginary);
+    match held.starts_with('-') {
+        true => format!("{}{held}j", said(real)),
+        false => format!("{}+{held}j", said(real)),
     }
 }
 
@@ -516,6 +557,14 @@ pub(super) fn tensor_parts<'a>(
                 .map(|says| (Label::Field(says.name()), Part::Summary { of: v, says })),
         );
         notes.push((Label::Field(REQUIRES_GRAD_FIELD), Part::Note(said_flag(t.requires_grad))));
+        // What a quantised tensor's whole numbers stand for. The numbers
+        // themselves stay what the file holds: a reader looking at a
+        // quantised checkpoint is looking at the stored integers, and would
+        // not be told that the file had been rewritten on the way out.
+        if let Some(q) = t.quantizer {
+            notes.push((Label::Field(SCALE_FIELD), Part::Note(q.scale.to_string())));
+            notes.push((Label::Field(ZERO_POINT_FIELD), Part::Note(q.zero_point.to_string())));
+        }
         notes.extend(
             [Says::Numbers, Says::StoredAt]
                 .into_iter()

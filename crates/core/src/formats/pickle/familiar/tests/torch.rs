@@ -111,10 +111,23 @@ fn a_tensor_says_what_it_is_and_where_its_numbers_are() {
 /// the letters mean.
 #[test]
 fn a_storage_class_no_sample_names_is_refused() {
-    // `ComplexFloatStorage` is one torch really writes and this reader has no
-    // sample of. The edit takes a class of exactly the same width instead, so
-    // that every other offset in the file stays where it was.
+    // A class of exactly the same width as the one the file names, so that
+    // every other offset stays where it was and nothing but the name changes.
     assert!(recognise(&edited(b"ctorch\nFloatStorage\n", b"ctorch\nFloatStorafe\n")).is_none());
+}
+
+/// The dtypes are written down twice and the two lists say the same thing.
+///
+/// [`DTYPES`](crate::formats::pickle::familiar::torch::DTYPES) maps the name
+/// torch writes to what one element is, and `DTYPE_NAMES` is the same names as
+/// the whole dotted paths a form's `names` column holds. The second cannot be
+/// made from the first, because a form's tables are const, so this holds them
+/// to each other.
+#[test]
+fn a_dtype_is_named_in_both_tables() {
+    use crate::formats::pickle::familiar::torch::{DTYPES, DTYPE_NAMES};
+    let made: Vec<String> = DTYPES.iter().map(|d| format!("torch.{}", d.class)).collect();
+    assert_eq!(made, DTYPE_NAMES);
 }
 
 /// A persistent id of any other shape is a non-match, whatever it holds.
