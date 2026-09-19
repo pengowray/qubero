@@ -15,6 +15,11 @@ use super::cursor::Cursor;
 use super::memo::Bound;
 use super::{Kind, Names, Shape, Storage, Value, LATIN1, NO_OPCODE, SPELLED};
 
+/// The same encoding under the name its other callers write it by. A codec is
+/// handed `latin1` and a class is handed `latin-1`; each call is written the
+/// way its own caller wrote it.
+const HYPHENATED: &str = "latin-1";
+
 impl Cursor<'_> {
     /// `_codecs.encode(text, 'latin1')`, or `bytes()` for an empty one.
     pub(super) fn spelled_bytes(&mut self) -> Option<Value> {
@@ -28,7 +33,13 @@ impl Cursor<'_> {
             Some(value) => Some(value),
             None => {
                 self.restore(here);
-                self.empty_bytes(start)
+                match self.spelled_call(start) {
+                    Some(value) => Some(value),
+                    None => {
+                        self.restore(here);
+                        self.empty_bytes(start)
+                    }
+                }
             }
         };
         if made.is_some() {
@@ -81,7 +92,7 @@ impl Cursor<'_> {
     fn encode_call(&mut self) -> Option<(usize, usize, Storage)> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
         self.open_tuple()?;
-        let (at, len, storage) = match self.text()?.kind {
+        let (at, len, storage) = match self.encoded_text()?.kind {
             // The run in the file is the latin-1 text, which is what the
             // caller reads the bytes out of.
             Kind::Text { at, len } => {
@@ -110,7 +121,7 @@ impl Cursor<'_> {
     fn encoded(&mut self, start: usize) -> Option<Value> {
         self.global(&["_codecs"], "encode", "module", "callable")?;
         self.open_tuple()?;
-        let text = self.text()?;
+        let text = self.encoded_text()?;
         if let Kind::Text { at, len } = text.kind {
             self.latin1(at, len)?;
         }
@@ -120,6 +131,29 @@ impl Cursor<'_> {
         self.exact(b"R")?;
         // Python hashes a byte string, so a name for one may stand where a
         // dictionary key belongs.
+        self.memoize(Bound::Made { what: Shape::Bytes, at: start, hashable: true })?;
+        Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None, attrs: None }))
+    }
+
+    /// `bytes(text, 'latin-1')`, which is what IronPython 2.7 writes for a
+    /// `str` where CPython 2 writes the bytes themselves.
+    ///
+    /// The same detour as `_codecs.encode`, through the class rather than
+    /// through the codec, and with the encoding spelled the way the class's
+    /// own caller spells it. IronPython's `str` is a .NET string, so its
+    /// `__reduce__` hands over the characters and the encoding that turns
+    /// them back into bytes; both of its picklers write it.
+    fn spelled_call(&mut self, start: usize) -> Option<Value> {
+        if self.proto > 2 {
+            return None;
+        }
+        self.global(&["__builtin__"], "bytes", "module", "class")?;
+        self.open_tuple()?;
+        let text = self.latin1_text()?;
+        let encoding = self.exact_word(HYPHENATED, true)?;
+        self.close_tuple(2)?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Bytes, at: start, hashable: true })?;
         Some(self.span(start, Kind::Made { what: Shape::Bytes, names: SPELLED, callable: None, items: vec![text, encoding], state: None, attrs: None }))
     }
@@ -151,10 +185,41 @@ impl Cursor<'_> {
         held.chars().all(|c| u32::from(c) < 0x100).then_some(())
     }
 
+    /// The text the call was handed, spelled here or named where an equal
+    /// text was spelled before.
+    ///
+    /// CPython files a text under the address of the object, so two equal
+    /// runs are two slots and the second is spelled out again. GraalPy hands
+    /// back one object for both, so the second is a reference. That is the
+    /// runtime's own string table and not its pickler: a reference comes back
+    /// as the run it names, and the bytes are read there.
+    fn encoded_text(&mut self) -> Option<Value> {
+        self.gate()?;
+        if !self.at_reference() {
+            return self.text();
+        }
+        let start = self.at;
+        let here = self.save();
+        match self.reference().cloned() {
+            Some(Bound::Text { at, len }) => Some(self.span(start, Kind::Text { at, len })),
+            _ => {
+                self.restore(here);
+                None
+            }
+        }
+    }
+
     /// A whole text that spells a run of bytes in latin-1, wherever a fixed run
     /// is handed one: the bytes of a `bytearray` reach Python 2 this way.
     pub(super) fn latin1_text(&mut self) -> Option<Value> {
-        let value = self.text()?;
+        // CPython 2 hands `bytearray` the characters as text; IronPython 2.7
+        // hands over its `str`, which is the same characters as one byte each
+        // and needs no check that they fit in one.
+        let value = match (self.proto, self.peek()?) {
+            (0..=2, b'U' | b'T') => return self.py2_string(),
+            (0, b'S') => return self.string_line(),
+            _ => self.text()?,
+        };
         match value.kind {
             Kind::Text { at, len } => self.latin1(at, len)?,
             // A protocol 0 line that spells its characters rather than being

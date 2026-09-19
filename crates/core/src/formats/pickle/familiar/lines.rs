@@ -140,6 +140,9 @@ fn is_real(said: &str) -> bool {
     if matches!(said, "inf" | "-inf" | "nan") {
         return true;
     }
+    if java_real(said) {
+        return true;
+    }
     let body = said.strip_prefix('-').unwrap_or(said);
     let (mantissa, exponent) = match body.split_once('e') {
         Some((m, e)) => (m, Some(e)),
@@ -165,6 +168,36 @@ fn is_real(said: &str) -> bool {
         None => true,
         Some(fraction) => !fraction.is_empty() && fraction.bytes().all(|b| b.is_ascii_digit()),
     }
+}
+
+/// Whether this is a float spelled the way Java's `Double.toString` spells
+/// one, which is what GraalPy's `_pickle` writes at protocol 0.
+///
+/// Java writes a mantissa that always carries a point with a digit each side,
+/// an upper-case `E` in front of an exponent written with no plus and no
+/// padding, and the three names `Infinity`, `-Infinity` and `NaN`. Python's
+/// `repr` writes none of that, so the two spellings never overlap on a number
+/// with an exponent or a special value, and a small whole number such as
+/// `1.0` is the same run either way.
+///
+/// This one is the pickler and not the runtime: GraalPy's `pickle.py` writes
+/// `repr` like every other copy of it, so a file with a line like this came
+/// from the `_pickle` beside it.
+fn java_real(said: &str) -> bool {
+    if matches!(said, "Infinity" | "-Infinity" | "NaN") {
+        return true;
+    }
+    let body = said.strip_prefix('-').unwrap_or(said);
+    let (mantissa, exponent) = match body.split_once('E') {
+        Some((m, e)) => (m, e),
+        None => return false,
+    };
+    let digits = exponent.strip_prefix('-').unwrap_or(exponent);
+    if !is_whole(digits) || digits.starts_with('-') {
+        return false;
+    }
+    let Some((whole, fraction)) = mantissa.split_once('.') else { return false };
+    is_whole(whole) && !fraction.is_empty() && fraction.bytes().all(|b| b.is_ascii_digit())
 }
 
 impl Cursor<'_> {
@@ -270,6 +303,9 @@ impl Cursor<'_> {
         let said = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
         if !is_real(said) {
             return None;
+        }
+        if java_real(said) {
+            self.wrote(super::Pickler::Graal)?;
         }
         let value = said.parse::<f64>().ok()?;
         Some(self.span(start, Kind::Float { value, at, len, spelled: true }))

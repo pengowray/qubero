@@ -371,8 +371,14 @@ impl Cursor<'_> {
                 (*m).to_string()
             })
         })?;
-        let (at, len) = self.word(name)?;
-        self.says(name_says, at, len);
+        // The callable's name is spelled here or named where the same word
+        // was spelled before. CPython files a text under the address of the
+        // object, so two equal words are two slots and the second is spelled
+        // out; GraalPy hands back one object for both, so the second is a
+        // reference. That is the runtime and not its pickler.
+        if let Some((at, len)) = self.word_or_reference(name)? {
+            self.says(name_says, at, len);
+        }
         self.exact(&[0x93])?;
         let full = format!("{module}.{name}");
         self.memoize(Bound::Global(full.clone()))?;
