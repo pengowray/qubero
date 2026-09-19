@@ -703,10 +703,10 @@ would leave the numbers counted nowhere.
   is the right bytes and is counted where the storage is, but nothing in the
   tree says the two are the same run. A reference row the reader can follow
   is what that wants, and `Says` has no arm for it yet.
-- **The computed-cells path is still there for every tensor.** Only a strided
-  view is offered it now (`pickle_table` answers nothing for a tensor with a
-  run), but `Evaluator::pickle_cells` still answers for any of them, which is
-  what `cells_real.rs` asks of it.
+- **The computed-cells path is still there for every tensor.** Only a tensor
+  that is not contiguous is offered it now, since `pickle_table` answers
+  nothing for one with a run, but `Evaluator::pickle_cells` still answers for
+  any of them, which is what `cells_real.rs` asks of it.
 
 ## What each era wrote, on 2026-09-19
 
