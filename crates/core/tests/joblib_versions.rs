@@ -120,7 +120,9 @@ fn a_joblib_0_9_compressed_file_is_its_own_container() {
     assert_eq!(formats::sniff(window, bytes.len() as u64), Some("joblibzfile"));
     let (doc, mut ev) = open(&bytes, "joblibzfile");
     // The header says how long the pickle is, as `hex()` spells it.
-    assert_eq!(ev.node(&doc, &[1]).unwrap().value, Value::Str("0x226              ".into()));
+    let length = ev.node(&doc, &[1]).unwrap();
+    assert_eq!(length.name, "unpacked size");
+    assert_eq!(length.value, Value::Str("0x226              ".into()));
     let run = decoded(&doc, &mut ev).expect("a compressed run");
     let id = ev.open_space(&doc, 0, &run).unwrap().expect("the stream opens");
     let space = ev.space(id).unwrap();
@@ -167,6 +169,11 @@ fn a_joblib_0_9_pickle_names_the_npy_file_each_array_is_in() {
     let cases: &[(&str, &[&str])] = &[
         ("joblib-array-float64.joblib", &["joblib-array-float64.joblib_01.npy"]),
         ("joblib-dict-of-arrays.joblib", &["joblib-dict-of-arrays.joblib_01.npy", "joblib-dict-of-arrays.joblib_02.npy"]),
+        // A `numpy.matrix`, which the wrapper names the same way it names an
+        // ndarray: the class is in the `.npy` beside it and not in the
+        // pickle, so this file says nothing about which of NumPy's array
+        // classes it is.
+        ("joblib-matrix.joblib", &["joblib-matrix.joblib_01.npy"]),
     ];
     for (name, files) in cases {
         let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
