@@ -300,3 +300,26 @@ fn the_nested_pickle_names_only_what_the_form_names() {
     // And no wrapper of joblib's own: `pickle.dump` writes none.
     assert!(recognise(&edited_objects(b"\x8c\x0c_reconstruct", b"\x8c\x0c_reconstrucT")).is_none());
 }
+
+/// A frame with named columns and a text column, dumped by joblib: two arrays
+/// of numbers written as runs of bytes and two object arrays written as
+/// pickles of their own, in the one stream.
+const FRAME: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/joblib-frame-named-columns.joblib");
+
+/// A file holding both kinds of run, one after the other. The opcode walk
+/// stops and starts again at each of them, and the two kinds interleave, so
+/// this is where the segments could be got wrong and nowhere else.
+#[test]
+fn a_file_holding_both_kinds_of_run_still_names_every_byte() {
+    let found = recognise(FRAME).unwrap();
+    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    let seen = dump(FRAME);
+    // pandas gathers the columns of one dtype into one block, so the two
+    // number columns are two raw runs, and the column names and the text
+    // column are a nested pickle each.
+    assert_eq!(seen.iter().filter(|r| r.name == "padding").count(), 2);
+    assert_eq!(seen.iter().filter(|r| r.name == "nested pickle").count(), 2);
+    // The file's own protocol row and one for each nested pickle.
+    assert_eq!(seen.iter().filter(|r| r.name == "protocol").count(), 3);
+    tiles(&seen);
+}
