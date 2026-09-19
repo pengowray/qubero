@@ -45,11 +45,10 @@ impl Cursor<'_> {
             if what == Shape::ByteArray && self.proto > 4 {
                 continue;
             }
-            // The two-argument spelling is Python 2's, and Python 2 stopped at
-            // protocol 2.
-            if names == SPELLED && self.proto > 2 {
-                continue;
-            }
+            // The two-argument spelling is Python 2's, and IronPython 3 writes
+            // it at every protocol it has: its `bytearray` is a managed class
+            // whose `__reduce__` hands the constructor the latin-1 text and
+            // the encoding however new the protocol is.
             let name = match (old, what) {
                 (true, Shape::Range) => "xrange",
                 _ => name,

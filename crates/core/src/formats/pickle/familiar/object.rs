@@ -32,6 +32,27 @@ fn path_of(value: &Value) -> Option<&str> {
 ///
 /// A path names one word for however many parts it has; every other call names
 /// one word per argument.
+/// The two modules the standard library puts a class in and an interpreter may
+/// name the other way round.
+///
+/// `collections` and `datetime` are Python modules with an accelerator under
+/// them, and the class a pickle names is the accelerator's. CPython hides
+/// that: `deque.__module__` reads `collections` whichever one made the class.
+/// GraalPy and IronPython do not hide it and write `_collections` and
+/// `_datetime`, which is the runtime showing through and not its pickler.
+const ACCELERATORS: &[(&str, &str)] = &[("_collections", "collections"), ("_datetime", "datetime")];
+
+/// Whether a row of the calls table is about the callable this file named,
+/// with the accelerator spelt the way the standard library spells it.
+fn names_call(listed: &str, named: &str) -> bool {
+    if listed == named {
+        return true;
+    }
+    let Some((module, name)) = named.rsplit_once('.') else { return false };
+    let Some((_, plain)) = ACCELERATORS.iter().find(|(spelt, _)| *spelt == module) else { return false };
+    listed.rsplit_once('.') == Some((plain, name))
+}
+
 fn fits(c: &Cursor, call: &Reduce, held: &[Value]) -> bool {
     let arity = match call.args {
         Args::Many => held.len(),
@@ -298,7 +319,7 @@ impl Cursor<'_> {
         // releases in the corpus.
         let call = {
             let c = &*self;
-            c.calls().find(|call| call.path == path && call.via == via && fits(c, call, &held))?
+            c.calls().find(|call| names_call(call.path, path) && call.via == via && fits(c, call, &held))?
         };
         // A set and a frozenset are containers, not objects. Below protocol 4
         // a pickler builds one by calling the class with the list of members,

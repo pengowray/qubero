@@ -67,6 +67,11 @@ const PACKED: &[&str] = &["packed"];
 const PACKED_ZONE: &[&str] = &["packed", "tzinfo"];
 /// The three numbers a `timedelta` is, in the order Python writes them.
 const SPAN: &[&str] = &["days", "seconds", "microseconds"];
+/// The fields IronPython hands the three date classes, which are the
+/// constructor's own parameters in the constructor's own order.
+const YMD: &[&str] = &["year", "month", "day"];
+const HMS_ZONE: &[&str] = &["hour", "minute", "second", "microsecond", "tzinfo"];
+const YMD_HMS_ZONE: &[&str] = &["year", "month", "day", "hour", "minute", "second", "microsecond", "tzinfo"];
 const OFFSET: &[&str] = &["offset"];
 const NAMED_OFFSET: &[&str] = &["offset", "name"];
 /// A `Decimal` and the one-argument `Fraction` are each written as the text
@@ -109,6 +114,20 @@ pub(super) const STDLIB_CALLS: &[Reduce] = &[
     dated("datetime.date", Shape::Date, PACKED, DATE_BYTES),
     dated("datetime.time", Shape::Time, PACKED, TIME_BYTES),
     dated("datetime.time", Shape::Time, PACKED_ZONE, TIME_BYTES),
+    // And the same three as IronPython writes them. Its `datetime` is a
+    // managed class whose `__reduce__` hands the constructor the fields
+    // themselves rather than the run of bytes `_getstate` packs them into, so
+    // the numbers are in the file as numbers. That is the class, not the
+    // pickler: both of IronPython 2.7's picklers write it this way.
+    Reduce { path: "datetime.date", names: YMD, what: Shape::Date, shape: |_c, args| is_ymd(args), ..PLAIN },
+    Reduce { path: "datetime.time", names: HMS_ZONE, what: Shape::Time, shape: |_c, args| is_hms(&args[..4]).and(zone(&args[4])), ..PLAIN },
+    Reduce {
+        path: "datetime.datetime",
+        names: YMD_HMS_ZONE,
+        what: Shape::DateTime,
+        shape: |_c, args| is_ymd(&args[..3]).and(is_hms(&args[3..7])).and(zone(&args[7])),
+        ..PLAIN
+    },
     Reduce { path: "datetime.timedelta", names: SPAN, what: Shape::TimeDelta, shape: |_c, args| whole(args), ..PLAIN },
     Reduce { path: "datetime.timezone", names: OFFSET, what: Shape::TimeZone, shape: |_c, args| span(&args[0]), ..PLAIN },
     Reduce {
@@ -217,6 +236,34 @@ const fn fills(
 /// the two-argument `Fraction` are made of.
 fn whole(args: &[Value]) -> Option<()> {
     args.iter().all(|a| matches!(a.kind, Kind::Int { .. })).then_some(())
+}
+
+/// The number an argument spells, for the date classes IronPython hands their
+/// fields rather than their packed bytes.
+fn number(value: &Value) -> Option<i128> {
+    match value.kind {
+        Kind::Int { value, .. } => Some(value),
+        _ => None,
+    }
+}
+
+/// A year, a month and a day a calendar has, written as three numbers.
+fn is_ymd(args: &[Value]) -> Option<()> {
+    let [year, month, day] = [number(&args[0])?, number(&args[1])?, number(&args[2])?];
+    fits_date(u16::try_from(year).ok()?, u8::try_from(month).ok()?, u8::try_from(day).ok()?)
+}
+
+/// An hour, a minute, a second and a microsecond a clock has, written as four
+/// numbers. There is no fold bit here: a field is a field.
+fn is_hms(args: &[Value]) -> Option<()> {
+    let [hour, minute, second, micro] = [number(&args[0])?, number(&args[1])?, number(&args[2])?, number(&args[3])?];
+    ((0..24).contains(&hour) && (0..60).contains(&minute) && (0..60).contains(&second) && (0..1_000_000).contains(&micro)).then_some(())
+}
+
+/// Whether this is the zone an aware value carries, or the nothing a naive one
+/// carries in its place.
+fn zone(value: &Value) -> Option<()> {
+    matches!(value.kind, Kind::None | Kind::Made { what: Shape::TimeZone, .. }).then_some(())
 }
 
 /// Whether this is the `timedelta` a `timezone` is the offset of.
