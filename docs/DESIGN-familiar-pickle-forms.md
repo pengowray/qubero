@@ -650,8 +650,8 @@ table chunks one, with the entries the mask hides shown empty. Such a cell
 keeps the address of the bytes it would have read: the number is in the file
 and the array says not to count it, which is a different nothing from a value
 the file does not hold, so a reader can still click through to those bytes and
-the hover says `Masked: the array does not count this value.` The data and the
-mask each also have their own ordinary table, under their own rows.
+the cell's hover says `Masked`, with or without the address columns. The data
+and the mask each also have their own ordinary table, under their own rows.
 
 Three things are worth knowing about what NumPy writes:
 
