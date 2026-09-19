@@ -6,6 +6,7 @@
 use super::cursor::{Cursor, Framing};
 use super::values::{decimal, hashable, minimal, two_complement};
 use super::memo::Bound;
+use super::picklers::WIDE_BATCH;
 use super::{Kind, Pickler, Shape, Value, MAX_BATCH, MAX_DEPTH, MAX_VALUES};
 
 /// A MARK, and what it holds back: where the opcode itself is, so that a
@@ -182,8 +183,15 @@ impl Cursor<'_> {
                     let what = if code == b't' { Shape::Tuple } else { Shape::FrozenSet };
                     // Protocol 0 writes an empty tuple as a bare MARK and
                     // TUPLE and files nothing: it is a singleton, as the
-                    // opcode for it above protocol 0 is.
-                    if !(self.proto == 0 && items.is_empty()) {
+                    // opcode for it above protocol 0 is. Jython's `cPickle` is
+                    // the one that files it, because `save_tuple` there takes
+                    // the same path for an empty tuple as for any other and
+                    // ends it with a `put`.
+                    let singleton = self.proto == 0 && items.is_empty();
+                    if !singleton || self.peek() == Some(b'p') {
+                        if singleton {
+                            self.wrote(Pickler::Jython)?;
+                        }
                         self.memoize(Bound::Made { what, at: mark.at, hashable: holds })?;
                     }
                     let make = if code == b't' { Kind::Tuple } else { Kind::FrozenSet };
@@ -283,7 +291,7 @@ impl Cursor<'_> {
     /// container that ends on a full batch is that pickler's spelling.
     fn shut(&mut self, items: &[Slot]) -> Option<()> {
         for slot in items {
-            if slot.fill == Fill::Batched(MAX_BATCH) && !matches!(inside(&slot.value.kind), Kind::List(_)) {
+            if matches!(slot.fill, Fill::Batched(n) if self.batch_full(n)) && !matches!(inside(&slot.value.kind), Kind::List(_)) {
                 self.tail(false, Pickler::Python)?;
             }
         }
@@ -355,7 +363,7 @@ impl Cursor<'_> {
         }
         match into.fill {
             Fill::Open => {}
-            Fill::Batched(MAX_BATCH) => self.tail(list_like, Pickler::Python)?,
+            Fill::Batched(n) if self.batch_full(n) => self.tail(list_like, Pickler::Python)?,
             _ => return None,
         }
         // APPEND fills a list and SETITEM a dictionary, and neither fills the
@@ -435,19 +443,35 @@ impl Cursor<'_> {
             }
             _ => return None,
         };
-        // A first batch is as long as the container, up to a thousand. A list
+        // A first batch is as long as the container, up to one batch. A list
         // or a dictionary holding one thing is written with APPEND or SETITEM
-        // instead, so a first batch of one is only ever a set's. A later
-        // batch may be empty, which is what a dictionary or a set whose
-        // length is a multiple of a thousand ends with; a list's never is.
-        let least = if code == 0x90 { 1 } else { 2 };
+        // instead, so a first batch of one is only ever a set's, or Jython's,
+        // whose lists take no APPEND at all. A later batch may be empty, which
+        // is what a dictionary or a set whose length is a multiple of a batch
+        // ends with; a list's never is.
+        // A dictionary of one entry is written with SETITEM by every pickler
+        // there is; a set has no shorthand at all; and a list of one is
+        // written with APPEND by every pickler but Jython's, which exists
+        // only at the protocols Jython writes.
+        let least = match code {
+            b'u' => 2,
+            b'e' if self.proto > 2 => 2,
+            _ => 1,
+        };
         let fits = match into.fill {
-            Fill::Open => (least..=MAX_BATCH).contains(&entries),
-            Fill::Batched(before) => before == MAX_BATCH && entries <= MAX_BATCH && (entries > 0 || code != b'e'),
+            Fill::Open => (least..=self.batch_cap()).contains(&entries),
+            Fill::Batched(before) => self.batch_fixed(before).is_some() && entries <= self.batch_len() && (entries > 0 || code != b'e'),
             Fill::Shut => false,
         };
         if !fits {
             return None;
+        }
+        // Jython's `cPickle` writes a MARK and an APPENDS however short a list
+        // is, and it batches at 1,024 rather than at a thousand. Either one is
+        // the whole tell.
+        if matches!(into.fill, Fill::Open) && ((code == b'e' && entries == 1) || entries > MAX_BATCH) {
+            self.wrote(Pickler::Jython)?;
+            self.batch = Some(WIDE_BATCH);
         }
         // A batch after a full one is the tail, and says which pickler wrote
         // it. An empty one, or one holding the single item a list or a
@@ -608,8 +632,13 @@ impl Cursor<'_> {
                     return None;
                 }
                 match two_complement(run) {
-                    // Anything a four-byte integer holds is written as one.
-                    Some(value) if i32::try_from(value).is_ok() => return None,
+                    // Anything a four-byte integer holds is written as one,
+                    // from protocol 3 up. At protocol 2 a `long` is a type
+                    // rather than a width: Python 2 wrote every one of them
+                    // here whatever its size, and which numbers were `long`
+                    // depended on how wide the interpreter's `int` was. So a
+                    // small number here is ordinary and says nothing.
+                    Some(value) if self.proto > 2 && i32::try_from(value).is_ok() => return None,
                     Some(value) => Kind::Int { value, at, len, spelled: false },
                     // Past sixteen bytes there is no integer type to read the
                     // run as, so the number is its digits and the run is a row
@@ -651,7 +680,10 @@ impl Cursor<'_> {
                     return None;
                 }
                 match digits.parse::<i128>() {
-                    Ok(value) if i32::try_from(value).is_ok() => return None,
+                    // Python 3 writes this line only for a number no BININT
+                    // holds; Python 2 wrote it for every `long`, and on an
+                    // interpreter whose `int` was four bytes wide that
+                    // included small ones. Both are read.
                     Ok(value) => Kind::Int { value, at, len: len - 1, spelled: true },
                     // More digits than the reader's integer type holds, which
                     // is the same number `LONG1` writes in seventeen bytes or

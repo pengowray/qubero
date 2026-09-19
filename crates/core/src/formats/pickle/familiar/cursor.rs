@@ -34,6 +34,10 @@ pub(super) struct Cursor<'a> {
     /// is one; every other pickler's dictionaries and lists agree and are held
     /// to [`Cursor::pickler`].
     pub(super) dicts: Pickler,
+    /// How many entries one batch of this file's containers holds, once a
+    /// batch with more behind it has said. Every pickler writes a thousand
+    /// but Jython's `cPickle`, which writes 1,024.
+    pub(super) batch: Option<usize>,
     pub(super) framing: Framing,
     /// Which pickler the spellings seen so far belong to. The two are told
     /// apart only at a batch edge and at the memo mark after a bytearray, so
@@ -102,6 +106,7 @@ pub(super) struct Save {
     pub(super) memo_base: Option<usize>,
     pub(super) skipped: usize,
     pub(super) dicts: Pickler,
+    pub(super) batch: Option<usize>,
     pub(super) says: usize,
     pub(super) calls: usize,
     pub(super) payloads: usize,
@@ -198,6 +203,7 @@ impl<'a> Cursor<'a> {
             memo_base: self.memo_base,
             skipped: self.skipped,
             dicts: self.dicts,
+            batch: self.batch,
             says: self.says.len(),
             calls: self.calls.len(),
             payloads: self.payloads.len(),
@@ -216,16 +222,54 @@ impl<'a> Cursor<'a> {
 
     /// What the spelling just read says about which pickler wrote the file.
     ///
-    /// Both spellings are real, and a file is written by one pickler, so the
-    /// first one seen fixes the reading: a file that shows the C pickler at
-    /// one batch edge and `pickle.py` at another was written by neither.
+    /// Every spelling is some pickler's, and a file is written by one pickler,
+    /// so each reading sharpens the one before it: a memo numbered from one
+    /// says `cPickle`, and a batch of 1,024 in the same file says which
+    /// `cPickle`. A reading that is not a case of what the file has already
+    /// shown, and does not take what it has shown as a case of itself, is a
+    /// file no single pickler wrote.
     pub(super) fn wrote(&mut self, which: Pickler) -> Option<()> {
-        match self.pickler {
-            Pickler::Undetermined => {
-                self.pickler = which;
+        self.pickler = super::picklers::refine(self.pickler, which)?;
+        Some(())
+    }
+
+    /// How long a batch this file's pickler writes, which is a thousand until
+    /// a longer one shows that it is Jython's.
+    pub(super) fn batch_len(&self) -> usize {
+        self.batch.unwrap_or(super::MAX_BATCH)
+    }
+
+    /// The longest batch this file may hold, which is Jython's 1,024 only at
+    /// the protocols Jython writes. Nothing above protocol 2 was written by
+    /// it, so a batch past a thousand there is a file no pickler wrote.
+    pub(super) fn batch_cap(&self) -> usize {
+        self.batch.unwrap_or(match self.proto <= 2 {
+            true => super::picklers::WIDE_BATCH,
+            false => super::MAX_BATCH,
+        })
+    }
+
+    /// Whether a batch this long was full, which is what says another batch or
+    /// a tail may follow it.
+    pub(super) fn batch_full(&self, entries: usize) -> bool {
+        entries == self.batch_len()
+    }
+
+    /// Say that a batch this long was followed by more, which fixes the length
+    /// every full batch in the file has to be.
+    pub(super) fn batch_fixed(&mut self, entries: usize) -> Option<()> {
+        match self.batch {
+            Some(length) => (length == entries).then_some(()),
+            None => {
+                if entries != super::MAX_BATCH && entries != self.batch_cap() {
+                    return None;
+                }
+                self.batch = Some(entries);
+                if entries == super::picklers::WIDE_BATCH {
+                    self.wrote(Pickler::Jython)?;
+                }
                 Some(())
             }
-            seen => (seen == which).then_some(()),
         }
     }
 
@@ -237,6 +281,7 @@ impl<'a> Cursor<'a> {
         self.memo_base = s.memo_base;
         self.skipped = s.skipped;
         self.dicts = s.dicts;
+        self.batch = s.batch;
         self.says.truncate(s.says);
         self.calls.truncate(s.calls);
         self.payloads.truncate(s.payloads);

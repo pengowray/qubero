@@ -24,6 +24,7 @@ mod memo;
 mod numpy;
 mod object;
 mod packs;
+mod picklers;
 mod stdlib;
 mod torch;
 mod values;
@@ -31,6 +32,7 @@ mod values;
 mod tests;
 
 pub use captured::*;
+pub use picklers::Pickler;
 
 use cursor::{Cursor, Framing};
 use forms::{forms, Allow, Family, Wrapped};
@@ -204,6 +206,7 @@ fn attempt(bytes: &[u8], form: &'static str, allow: Allow, left: &mut usize, rea
         skipped: 0,
         runs: Vec::new(),
         dicts: Pickler::Undetermined,
+        batch: None,
         framing: Framing::Unframed,
         pickler: Pickler::Undetermined,
         allow,

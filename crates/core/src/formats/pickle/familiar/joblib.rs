@@ -78,6 +78,7 @@ struct Outer {
     memo_base: Option<usize>,
     skipped: usize,
     dicts: Pickler,
+    batch: Option<usize>,
     framing: Framing,
     pickler: Pickler,
     joblib: Wrapped,
@@ -215,6 +216,7 @@ impl Cursor<'_> {
             memo_base: self.memo_base.take(),
             skipped: std::mem::take(&mut self.skipped),
             dicts: std::mem::replace(&mut self.dicts, Pickler::Undetermined),
+            batch: self.batch.take(),
             framing: std::mem::replace(&mut self.framing, Framing::Unframed),
             // The two picklers are told apart by the tail of a long container,
             // and these are two files: joblib writes the outer stream with

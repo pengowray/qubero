@@ -29,9 +29,15 @@ use super::{Kind, Value};
 ///
 /// So a backslash in the line is always the start of an escape, and a
 /// backslash that is not is a file no pickler wrote.
+///
+/// CPython's `raw-unicode-escape` writes its hexadecimal in lower case and
+/// Jython's writes it in upper, so the line is held to one case throughout
+/// rather than to either one. That is the interpreter's own text routine and
+/// not its pickler: both of Jython's picklers write the same line.
 fn unescape_text(line: &[u8]) -> Option<String> {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
+    let mut upper: Option<bool> = None;
     while let Some((first, tail)) = rest.split_first() {
         if *first != b'\\' {
             out.push(char::from(*first));
@@ -44,9 +50,17 @@ fn unescape_text(line: &[u8]) -> Option<String> {
             _ => return None,
         };
         let digits = std::str::from_utf8(tail.get(1..1 + wide)?).ok()?;
-        if !digits.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
-            // `raw-unicode-escape` writes its hexadecimal in lower case.
+        if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
+        }
+        let here = digits.bytes().any(|b| b.is_ascii_uppercase());
+        if digits.bytes().any(|b| b.is_ascii_lowercase()) && here {
+            return None;
+        }
+        match upper {
+            Some(before) if before != here && digits.bytes().any(|b| b.is_ascii_alphabetic()) => return None,
+            _ if digits.bytes().any(|b| b.is_ascii_alphabetic()) => upper = Some(here),
+            _ => {}
         }
         out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
         rest = tail.get(1 + wide..)?;

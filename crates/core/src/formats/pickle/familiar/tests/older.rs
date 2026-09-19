@@ -360,10 +360,15 @@ fn a_long_at_protocol_1_is_a_line_of_digits() {
     let bytes = line("1208925819614629174706176");
     let found = recognise(&bytes).unwrap();
     assert_eq!(found.value.kind, Kind::Int { value: 1_208_925_819_614_629_174_706_176, at: 1, len: 25, spelled: true });
-    // A number a four-byte BININT holds was written as one at protocol 1. It
-    // is still a protocol 0 file, where every integer is a line, so what is
-    // claimed is that none of these is read as protocol 1.
-    for wrong in ["5", "-1", "0000000000005", "+2147483648", "1e30"] {
+    // A small number is written here too. Python 3 writes this line only for
+    // a number no BININT holds, but Python 2 wrote it for every `long`, and
+    // on an interpreter whose `int` was four bytes wide that included small
+    // ones: `2 ** 31 - 1` is a `long` under Jython and under IronPython.
+    assert_eq!(recognise(&line("5")).map(|m| m.proto), Some(1));
+    // Spellings no pickler writes stay non-matches. Each is still a valid
+    // protocol 0 file, where every integer is a line, so what is claimed is
+    // that none of these is read as protocol 1.
+    for wrong in ["0000000000005", "+2147483648", "1e30"] {
         assert_ne!(recognise(&line(wrong)).map(|m| m.proto), Some(1), "{wrong} was read as a protocol 1 long");
     }
     // The trailing `L` is part of the spelling.
@@ -468,7 +473,9 @@ fn a_line_no_pickler_wrote_is_a_non_match() {
         // backslash, which `save_str` replaces before it writes the line.
         &b"Va\\nb\np0\n."[..],
         &b"Va\\b\np0\n."[..],
-        &b"Va\\u00E9b\np0\n."[..],
+        // Two escapes in one line, one in each case. CPython writes lower and
+        // Jython writes upper, and no interpreter writes both.
+        &b"Va\\u00e9b\\u00E9c\np0\n."[..],
         // A `STRING` line with no closing quote, with the wrong one, and with
         // an escape Python 2's `repr` does not write.
         &b"S'abc\np0\n."[..],

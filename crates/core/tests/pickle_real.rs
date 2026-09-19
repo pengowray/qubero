@@ -819,13 +819,14 @@ fn the_batch_edges_say_which_pickler_wrote_them() {
         eprintln!("{}", qubero_samples::missing());
         return;
     };
-    const C: &str = "_pickle (CPython's C pickler)";
-    const PY: &str = "pickle.py (the pure Python pickler, the only one PyPy 3 has)";
-    const EITHER: &str = "_pickle or pickle.py (they write this data identically)";
+    const C: &str = "_pickle (CPython's C pickler, or GraalPy's written in Java)";
+    const PY: &str = "pickle.py (the pure Python pickler), or one of IronPython's written in C#";
+    const EITHER: &str = "unnamed: nothing in this file is spelled two ways";
     // Python 2's third pickler, which is a different program from Python 3's
     // C one and is known by the slot it starts the memo at rather than by a
-    // batch edge. PyPy 2.7's copy of it numbers the same way.
-    const CPICKLE: &str = "cPickle (Python 2's C pickler, or PyPy 2.7's Python copy of it)";
+    // batch edge. PyPy 2.7's copy of it numbers the same way, and so does
+    // Jython's, which is written in Java.
+    const CPICKLE: &str = "cPickle (Python 2's C pickler, PyPy 2.7's Python copy of it, or Jython's written in Java)";
     // A file is kept under the oldest environment that wrote those bytes, so
     // every one of these is Python 3.4's copy, and each is also what every
     // later CPython wrote. `basic-list-1001.p4.pypickle.pickle` is byte for
