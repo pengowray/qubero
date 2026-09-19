@@ -102,12 +102,12 @@ One file, five parts in order: a pickle of the magic number
 small dict (`protocol_version`, `little_endian`, `type_sizes`), the data pickle
 (same tensor shape, persistent ids with a view tuple added), a pickle of the
 list of storage keys, then for each key an 8 byte element count and the raw
-bytes. So: a run of pickles then binary. `is_pickle` refuses it today because
-the first STOP is not the end of the file. Recognise it by its first pickle,
-which is always the same bytes, and read it as a structure of five pickles and a
-list of storages, each storage placed where it is. This one needs no archive and
-no cross-entry lookup: everything is in one space, so the numbers can be
-ordinary typed fields.
+bytes. So: a run of pickles then binary. `is_pickle` refuses it because the
+first STOP is not the end of the file. This one needs no archive and no
+cross-entry lookup: everything is in one space, so the numbers can be ordinary
+typed fields. **That is what landed on 2026-09-19**; read "torch.save: the
+legacy file" below rather than this paragraph, which was written from a first
+reading of the bytes.
 
 ## joblib.dump
 
@@ -389,18 +389,78 @@ it, so a transposed view reads down the storage and two windows onto one
 storage read as the two tensors they are. A mapping of nothing but tensors
 opens as a summary of `name, dtype, shape, values`, one row a tensor.
 
+## torch.save: the legacy file, on 2026-09-19
+
+The format before torch 1.6, and what `_use_new_zipfile_serialization=False`
+still writes. One file: five pickles one after another -- the magic number,
+the protocol version `1001`, the system info dictionary, the data pickle and
+the list of storage keys -- and then, for each key in that list, an eight-byte
+element count and the raw numbers.
+
+The code is `crates/core/src/formats/torchlegacy.rs` for the template and its
+schema builder, one probe in `recognise.rs`, `Descriptions::bytes` and
+`Descriptions::file_len` in `crates/core/src/eval/schema.rs`, and
+`Evaluator::legacy_storages` in `eval/pickletorch.rs`. The real files are
+three tests in `crates/core/tests/torch_real.rs`.
+
+**It is a `Ty::Schema` and not a `Deduce`.** The note above proposed a new
+`Deduce` answered by a small `Deducer`. A schema node is the better fit and
+needed one small addition rather than a new question: a builder could read
+fields the template had already placed and could not read bytes, and nothing
+places a field here until the pickles have been walked. So `Descriptions`
+gained `bytes(at, len)`, which reads through the evaluator the way a deduced
+run does -- a chunk that has not arrived says `Pending` rather than reading
+as noughts -- and counts towards how far the build reaches, so an edit inside
+the pickles builds the node again. `file_len` came with it, for holding the
+last storage to the end of the file.
+
+**What the builder does.** Reads the head, walks each pickle to its STOP with
+`pickle::opcodes`, and places each as `T::at(.., T::sized(.., T::pickle()))`
+over exactly its bytes. Then it reads the data pickle with the same Familiar
+Pickle Form the archive's `data.pkl` is read with and takes the storage class
+out of each tensor's persistent id, which is the one thing the storages
+themselves never say: a storage writes how many elements it holds and not how
+wide one is. The key list gives the order. Each storage is then an ordinary
+`i64` count and a typed run of numbers at its own offset, so the numbers have
+byte addresses, the hex view goes there and the reading is counted once.
+
+**Every byte or nothing.** The builder places the five pickles and the
+storages and then checks that they reach the end of the file exactly. A file
+that opens with torch's magic number and does not add up is a node saying so
+rather than fields at offsets nobody checked. A file whose system info says
+`little_endian: False` is refused the same way: the numbers would be the
+other way round everywhere, no machine torch runs on has been big-endian
+since the format was written, and refusing is the reading nobody has to
+check.
+
+**The tensors are the ZIP's tensors.** A legacy persistent id carries one more
+element than the archive's, a `None` where a view's metadata would go, and
+`familiar/torch.rs` already read that. What was missing was where the numbers
+are: `pickletorch.rs` walks a ZIP's central directory for the entry
+`data/<key>`, and a legacy file has no directory. So `archive()` falls back to
+the same layout walk and hands back the storages under the names the tensors
+look for, one `data.pkl` at the data pickle and one `data/<key>` per storage.
+Nothing else in the tensor reading knows which kind of file it is reading, and
+`state-dict-legacy.pt` opens as the same tables `state-dict-zip.pt` does, cell
+for cell.
+
+**Recognition is the first pickle**, which is the same fifteen bytes in every
+file torch has written this way: `80 02 8a 0a` and the magic number. The probe
+is asked before the pickle probes, because a legacy file opens as a pickle and
+is not one: its first STOP is fifteen bytes in and four more pickles follow
+it. `is_pickle` is untouched. A caller who passed `pickle_protocol=4` gets
+`80 04 95` instead and is not recognised; no sample in the collection is one,
+and widening the signature to a protocol nothing has been measured at would be
+guessing.
+
+**What is left for the legacy file**: a checkpoint saved at a protocol other
+than 2, a big-endian one, and the torch 0.4 to 1.5 releases that wrote the
+format before 2.14 did. Containers can make all three, the way the pickle
+matrix was made.
+
 **What is left for torch**, in the order it is worth doing:
 
-1. **The legacy file.** Not started. Recognition is easy -- the first pickle
-   is always the same fifteen bytes, `80 02 8a 0a` and the magic number -- and
-   the reading is not: the file is five pickles in a row and then the
-   storages, and the IR cannot size a field at a pickle's `STOP`. A new
-   `Deduce` answered by a small `Deducer` would give the five boundaries. The
-   storages are harder than they look: the legacy format writes an element
-   *count* and the element *size* comes from the storage class in the fourth
-   pickle, so the run cannot be typed without reading that pickle, which is
-   the same cross-reference the ZIP has. `torch/state-dict-legacy.pt` is in
-   the collection and in `samples_real`'s `KNOWN_FAILURES`.
+1. **Done on 2026-09-19.** See the section above.
 2. **The calls no sample holds.** `_rebuild_tensor_v3` with
    `torch.storage.UntypedStorage` and a dtype argument, which is how the
    float8 types are written; the complex and quantised storage classes;
@@ -437,7 +497,11 @@ repository, a frame with named columns and a text column, and a
 `LogisticRegression` fitted on labels that are strings, whose `classes_` is
 an object array and so a nested pickle.
 
-The `torch/` samples are in the collection since 2026-09-19, eleven of them.
+The `torch/` samples are in the collection since 2026-09-19, thirteen of them,
+three of which are legacy files. A legacy file is **not byte-reproducible**: a
+storage's key is the address its buffer happened to be at, so every run of the
+generator writes different keys. Check `git status` after running it and
+commit the bytes you tested against.
 The generator gained a module's parameters, a 0-d and an empty tensor, a real
 `model.state_dict()` beside an `optimizer.state_dict()`, and a storage longer
 than any sniff window. `pickle/proto2-torch-state-dict.pickle` is still a
@@ -461,5 +525,5 @@ before calling either form done.
 4. ~~`torchzip`: recognition by names, the archive beside its contents,
    tensors reading their numbers from the entry they name, the summary
    table.~~ Done.
-5. The legacy torch file. Not started; see "What is left for torch".
+5. ~~The legacy torch file.~~ Done on 2026-09-19.
 6. Older versions from containers. The samples are in the collection.

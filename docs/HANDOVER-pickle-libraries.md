@@ -178,9 +178,9 @@ design document.
 
 | File | What it holds | Lines |
 | --- | --- | --- |
-| `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 381 |
-| `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, and the run after it | 191 |
-| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage` | 462 |
+| `familiar/mod.rs` | how a match is made: the envelope, the budget, `recognise` | 424 |
+| `familiar/joblib.rs` | the array wrapper `joblib.dump` writes, the run after it, and the pickle it writes instead for an array of objects | 294 |
+| `familiar/captured.rs` | what a match is made of: `Value`, `Kind`, `Shape`, `Dtype`, `Storage`, `Tensor` | 648 |
 | `familiar/forms.rs` | the families, declared once each and read at every protocol, and the mixed form's union of them | 663 |
 | `familiar/packs.rs` | which families a file turned out to use, as the bits of one word | 95 |
 | `familiar/basic.rs` | the stack a pickle is read against | 657 |
@@ -188,13 +188,16 @@ design document.
 | `familiar/lines.rs` | protocol 0: the lines, and the two escapings | 256 |
 | `familiar/codecs.rs` | a byte string below protocol 3 | 177 |
 | `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 454, 334 |
-| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 426, 353, 110, 374 |
+| `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 455, 353, 116, 385 |
+| `familiar/torch.rs` | a tensor, and the persistent id that says where its numbers are | 261 |
 | `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 400 |
-| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 525 |
-| `eval/pickletree.rs` | placing and naming those, and the table shapes | 517 |
+| `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 711 |
+| `eval/pickletree.rs` | placing and naming those, and the table shapes | 556 |
 | `eval/picklesaid.rs` | what a value comes to in a few words | 116 |
 | `eval/picklestd.rs` | a date, an exact number, an id or a path as the text Python writes it in | 335 |
-| `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 393, 596 |
+| `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 428, 616 |
+| `eval/pickletorch.rs` | where a tensor's numbers are, in an archive or in a legacy file, and the cells read there | 481 |
+| `formats/torchzip.rs`, `torchlegacy.rs` | the two things `torch.save` writes: the archive, and the five pickles and their storages | 142, 289 |
 
 **Adding a family of forms is one file and one row.** Write the productions
 beside the ones they read like (`numpy.rs` is the model), add the callables it
