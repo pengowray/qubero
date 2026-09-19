@@ -108,6 +108,32 @@ fn a_matched_file_has_no_unmapped_bytes() {
     }
 }
 
+/// Two equal dates below protocol 3, the way GraalPy writes them: its runtime
+/// hands back one object for two equal texts, so the second date's packed text
+/// is a BINGET of the first's. The text it names sits under the first date and
+/// the second holds two bytes saying so. Held as the text itself, the row was
+/// placed back where the first date wrote it, every instruction from there to
+/// the BINGET was listed under the second date as well, and the whole-file
+/// totals counted more bytes than the file has.
+#[test]
+fn a_packed_text_named_out_of_the_memo_stays_inside_the_value_naming_it() {
+    let bytes = cat(&[
+        b"\x80\x02]q\x00(cdatetime\ndate\nq\x01c_codecs\nencode\nq\x02",
+        b"X\x05\x00\x00\x00\x07\xc3\xa4\x01\x02q\x03X\x06\x00\x00\x00latin1q\x04\x86q\x05Rq\x06\x85q\x07Rq\x08",
+        b"h\x01h\x02h\x03h\x04\x86q\x09Rq\x0a\x85q\x0bRq\x0ce.",
+    ]);
+    let seen = dump(&bytes);
+    assert_eq!(seen[0].len, bytes.len() as u64, "the root is the file");
+    tiles(&seen);
+    // Both read as the date they are, the second through the name.
+    let dates: Vec<&Row> = seen.iter().filter(|r| r.ty == "date").collect();
+    assert_eq!(dates.len(), 2);
+    assert!(dates.iter().all(|r| r.value == V::Str("2020-01-02".to_string())), "{dates:#?}");
+    // The second one's text is the BINGET, and says what it names.
+    let texts: Vec<&Row> = seen.iter().filter(|r| r.name == "text").collect();
+    assert_eq!(texts.iter().map(|r| (r.ty.as_str(), r.at, r.len)).collect::<Vec<_>>(), vec![("utf8[]", 46, 5), ("reference", 82, 2)]);
+}
+
 /// An array whose shape is 0 holds no numbers, and the row that says so is
 /// still a field of the file: it sits at the byte the payload would have
 /// started at, right after the SHORT_BINBYTES that wrote a length of zero,
