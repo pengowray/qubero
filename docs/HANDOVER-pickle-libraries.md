@@ -779,6 +779,104 @@ Two smaller things left where they are:
   change that would give such an array a table, and it is the next item under
   "What is left".
 
+## A decoded run as a space of its own: the spike, on 2026-09-19
+
+Two earlier passes put this off because the one thing nobody knew was whether
+a node the pickle tree *synthesises* can carry a decoded space at all: the
+tree makes its nodes up from the match rather than declaring them in a
+template, and `Ty::Decoded` is reached through the template. The spike was
+written to answer that and nothing else, and then reverted.
+
+**It works.** In `pickletree::place_pickle_child`, the `Part::Data` arm for a
+protocol 2 array was changed from
+
+```rust
+Storage::Latin1 => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Utf8),
+```
+
+to `T::decoded(E::lit((end - at) as i128), Codec::Latin1Text, numbers_ty(dtype, count_of(dimensions))?)`,
+and `numpy-2d-float32.p2.pickle` read as:
+
+```
+[1, 7] numbers : latin-1 text = Composite { count: 1 } (872 bits at c1)
+  [1, 7, 0] numbers : f32 le[] = Composite { count: 24 } (768 bits at 0)
+    [1, 7, 0, 0] [0] : f32 le = Float(0.0) (32 bits at 0)
+    [1, 7, 0, 1] [1] : f32 le = Float(1.0) (32 bits at 4)
+    ...
+```
+
+which is the whole of what the job is for: the numbers are ordinary typed
+fields at ordinary offsets in a space of their own, the run they came from is
+still at 0xc1 in the file, and nothing computed a cell.
+
+**What it cost, and what the earlier estimate got wrong.** Three arms, all in
+`codec.rs`: `Codec::as_str`, the `match` in `decode_traced`, and the list of
+codecs in `decode` that go through the traced path. The evaluator, the
+listing, the diagram and the graph match on `Ty::Decoded` and on `Packing`,
+never on `Codec`, so none of them needed touching. The decoder itself is ten
+lines: the run is UTF-8, every character has to be under 0x100, and each one
+is a byte. The trace is `frames::whole`, which is the truth here.
+
+**One thing to know before starting.** A bare `Ty::Decoded` fails with
+`latin-1 text has no length of its own`: `size.rs` has no arm for it because a
+decoded run is always wrapped in a `Ty::Sized` that says how long the packed
+side is. `Ty::decoded()` does that wrapping, and the pickle tree knows the
+length exactly, so this is one call rather than a problem.
+
+**Why the rest was not built in the same sitting.** The job lands whole or not
+at all, and the piece that makes it whole is the frame table, which is neither
+small nor local. What is left, in the order it has to happen:
+
+1. **A second codec for protocol 0.** `Codec::RawUnicodeEscapeLatin1` beside
+   `Codec::Latin1Text`, or one variant with a flag. The un-escaping is in
+   `familiar/lines.rs` and has to be lifted into a function the codec can call,
+   because the recogniser still needs the decoded *length* to check an array's
+   shape against its dtype (`Cursor::fits`). Note that a `Kind::Spelled` text
+   line decodes to text and an array's line decodes to bytes, so the pair is
+   escape-only and escape-then-latin-1 rather than one codec.
+2. **Delete the copy.** `Match::runs`, `Match::decoded`, `Cursor::decoded_at`
+   and `Cursor::replace_run` all go. The consumers are `pickleframe.rs:312`,
+   `picklestd.rs:352` and `:359`, `picklesaid.rs:47`, and two assertions in
+   `familiar/tests/older.rs`. `codecs.rs::encode_call` stops replacing the run
+   and hands back the line's own `at` and `len`.
+3. **The GraalPy file comes off the `UNREAD` list for free.** It fails today
+   because two dates hold the same packed run, GraalPy gives both the same
+   memo slot, and the second `_codecs.encode` names a line the first one
+   already decoded *and replaced*. Once nothing is replaced, the second
+   reference reads the same unchanged `Kind::Spelled` and the file reads.
+4. **The frame table, which is the hard piece.** `pickleframe::values_of`
+   returns `Numbers { held }` and `picklecells::number_at` reads either those
+   held bytes or the file. The replacement wants the decoded node's space, and
+   a space is opened by path: `open_space_at` takes the path of the
+   `Ty::Decoded` node, and the frame's cell reader does not have one. What it
+   needs is the inverse of `spot` in `pickletree.rs`, a
+   `locate(found, at) -> Vec<usize>` that descends `parts()` taking the child
+   whose `span` covers `at` until it reaches the `Part::Data`. Then `Numbers`
+   carries a space id instead of `held`, and `number_at`'s existing "read it
+   from the file" branch reads it from that space with `at: 0` instead. The
+   same helper answers `picklestd`.
+5. **The table shape.** `pickletree.rs` around line 205 returns
+   `Cells::Computed` for any storage that is not `Raw`; that goes, and the
+   ordinary columns path takes over. Check where `TableShape` attaches now
+   that the `Part::Data` node is a decoded node with the array one level
+   below it: `table.rs:103` routes only `Ty::Pickle` nodes to `pickle_table`.
+6. **The notes.** `says_array` drops `written as: latin-1 text` and
+   `latin-1 text, escaped`, because the decoded node's own type name says it.
+   `bytes an earlier array wrote` stays: that one is about where a run is, not
+   about how it was written.
+7. **Tiling.** `covers()` in `pickle_real.rs` walks children against a running
+   cursor, and a decoded node's child is at offset 0 of another space. Read
+   what `decoded_real.rs` does about that before assuming
+   `the_older_protocols_read_as_a_tree_with_no_bytes_left_over` survives.
+8. **The web app.** Nothing in `web/src` or `web/test` holds a table of codec
+   names, so the "Open unpacked" buttons in `listingdraw.ts` should need no
+   special case. Worth one grep before believing it.
+
+Gate it on a `pickle_forms` dump over `pickle/`, `pickle-matrix/`, `joblib/`
+and `torch/` before and after, with the diagnostic offset normalised away, and
+on `a_pickled_frame_opens_as_the_table_it_holds` and
+`an_array_reads_as_the_same_numbers_at_every_protocol` passing cell for cell.
+
 ## Not decided
 
 - The legacy torch file, which is a run of five pickles and then the
