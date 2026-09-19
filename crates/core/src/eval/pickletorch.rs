@@ -42,6 +42,7 @@ const NOT_CONTIGUOUS: &str = "not contiguous";
 /// What the `numbers` row says when the tensor's elements are a run and this
 /// file does not hold the entry they are in, which is a `data.pkl` opened on
 /// its own.
+#[inline(never)]
 pub(super) fn numbers_elsewhere(tensor: &Tensor, key: &str) -> String {
     format!("{} in {DATA_FOLDER}/{key}, {NOT_HERE}", counted(tensor.values()))
 }
@@ -99,6 +100,11 @@ pub(super) struct Held {
     /// How the data was packed. Only a stored entry can be read where it lies;
     /// torch has never written any other kind.
     pub(super) method: u16,
+    /// True when this came from the layout of a legacy checkpoint rather than
+    /// from an archive's directory, which says the storages of this space are
+    /// fields of the template already. See
+    /// [`Evaluator::storages_are_fields`].
+    pub(super) legacy: bool,
 }
 
 /// What the summary over a state dict says about each tensor, in the order a
@@ -238,6 +244,7 @@ impl Evaluator {
     ///
     /// Nothing when this file does not hold the entry, which is a `data.pkl`
     /// opened on its own: the caller writes the row that says so.
+    #[inline(never)]
     pub(super) fn tensor_numbers<S: Source>(
         &mut self,
         doc: &Document<S>,
@@ -248,10 +255,12 @@ impl Evaluator {
         let Some((at, len)) = self.tensor_run(doc, r, base, tensor)? else { return Ok(None) };
         let endian = self.byte_order(doc, r, base)?;
         let ty = T::array(element_run(tensor.dtype, endian), E::lit(tensor.values() as i128));
-        Ok(Some(Numbers { ty, at, len, aside: self.storages_are_fields() }))
+        let aside = self.storages_are_fields(doc, r.space)?;
+        Ok(Some(Numbers { ty, at, len, aside }))
     }
 
-    /// Whether this file's storages are fields of the template already.
+    /// Whether the storages this tensor reads from are fields of the template
+    /// already.
     ///
     /// A legacy checkpoint's are: `formats/torchlegacy.rs` places each one as
     /// an element count and a typed run of numbers, because everything is in
@@ -260,8 +269,17 @@ impl Evaluator {
     /// field describes, and the field is where they are counted. In an
     /// archive nothing else reads them as numbers: the entry's own reading is
     /// the one put aside, which is what `zip::records(true)` says.
-    fn storages_are_fields(&self) -> bool {
-        self.template.name == crate::formats::torchlegacy::TEMPLATE
+    ///
+    /// Both halves are asked. The template has to be the one that places
+    /// them, and the runs in hand have to be the ones its layout walk found:
+    /// a legacy file read as the contents of something else is the same
+    /// bytes with nothing placing them, and marking its tensors a second
+    /// reading would leave the numbers counted nowhere.
+    fn storages_are_fields<S: Source>(&mut self, doc: &Document<S>, space: u32) -> R<bool> {
+        if self.template.name != crate::formats::torchlegacy::TEMPLATE {
+            return Ok(false);
+        }
+        Ok(self.archive(doc, space)?.iter().any(|held| held.legacy))
     }
 
     /// The run this tensor's own values sit in: where its first element is and
@@ -356,8 +374,8 @@ impl Evaluator {
         let mut read = |at: u64, len: u64| self.read_in(doc, space, at * 8, len * 8);
         let Some(found) = crate::formats::torchlegacy::layout(&mut read, end)? else { return Ok(Vec::new()) };
         let (at, len) = found.data();
-        let mut out = vec![Held { name: PICKLE_ENTRY.to_string(), at, len, method: 0 }];
-        out.extend(found.storages.iter().map(|s| Held { name: format!("{DATA_FOLDER}/{}", s.key), at: s.at, len: s.len, method: 0 }));
+        let mut out = vec![Held { name: PICKLE_ENTRY.to_string(), at, len, method: 0, legacy: true }];
+        out.extend(found.storages.iter().map(|s| Held { name: format!("{DATA_FOLDER}/{}", s.key), at: s.at, len: s.len, method: 0, legacy: true }));
         Ok(out)
     }
 
@@ -433,7 +451,7 @@ impl Evaluator {
             if data_at.checked_add(packed).is_none_or(|to| to > end) {
                 continue;
             }
-            out.push(Held { name, at: data_at, len: packed, method: method as u16 });
+            out.push(Held { name, at: data_at, len: packed, method: method as u16, legacy: false });
         }
         Ok(out)
     }

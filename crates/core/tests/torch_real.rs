@@ -207,6 +207,14 @@ fn the_totals_add_up_with_the_numbers_placed_elsewhere() {
             out.unmapped_bits,
             out.reached_bits
         );
+        // And the numbers are counted once, which the inequality above would
+        // let through if the run were passed over for the wrong reason. The
+        // three tensors of the shared-storage file are 96, 48 and 96 bytes
+        // over one storage of 96, and float32 is nothing else in the file.
+        if name == "shared-storage-views-zip.pt" {
+            let held: u64 = out.totals.iter().filter(|t| t.type_name == "f32 le").map(|t| t.bits).sum();
+            assert_eq!(held, 96 * 8, "{name}: float32 bits");
+        }
     }
 }
 
