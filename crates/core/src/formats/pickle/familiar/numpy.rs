@@ -202,7 +202,7 @@ impl Cursor<'_> {
             let run = self.bytes.get(at..at.checked_add(len)?)?;
             let held = match storage {
                 // Two spellings deep, so the count is what comes off both.
-                Storage::Escaped => crate::codec::pytext::escaped_latin1_text(run).ok()?.0.len(),
+                Storage::Escaped => crate::codec::pytext::escaped_latin1_len(run)?,
                 // One byte a character, which is every byte of the run that is
                 // not the continuation of the one before it.
                 _ => storage.decoded(run),

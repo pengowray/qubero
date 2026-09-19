@@ -73,12 +73,19 @@ pub fn unescaped(line: &[u8]) -> Option<String> {
     Some(out)
 }
 
-/// How many characters a line spells, for a caller that wants the length and
-/// not the text. What the recogniser checks an array's shape against.
-pub fn unescaped_len(line: &[u8]) -> Option<usize> {
-    let mut n = 0usize;
-    unescape(line, |_, _| n += 1)?;
-    Some(n)
+/// How many bytes a protocol 0 line stands for, without decoding it.
+///
+/// What the recogniser checks an array's shape against, which is the one
+/// thing about such a run it has to know before a reader asks for the numbers.
+/// The same answer [`escaped_latin1_text`] would give, and nothing at all
+/// where that would refuse.
+pub fn escaped_latin1_len(line: &[u8]) -> Option<usize> {
+    let (mut n, mut wide) = (0usize, false);
+    unescape(line, |c, _| match u32::from(c) < 0x100 {
+        true => n += 1,
+        false => wide = true,
+    })?;
+    (!wide).then_some(n)
 }
 
 /// Text whose characters are each one byte of what it stands for.
@@ -248,7 +255,10 @@ mod tests {
     fn a_line_holding_no_escape_is_the_bytes_it_spells() {
         let (out, _) = escaped_latin1_text(b"\x07\xe4\x01\x02").unwrap();
         assert_eq!(out, b"\x07\xe4\x01\x02");
-        assert_eq!(unescaped_len(b"\x07\xe4\x01\x02"), Some(4));
+        assert_eq!(escaped_latin1_len(b"\x07\xe4\x01\x02"), Some(4));
+        assert_eq!(escaped_latin1_len(b"\\u000a[\xf5"), Some(3));
+        // A character latin-1 never held has no byte to be counted as.
+        assert_eq!(escaped_latin1_len(b"\\u0100"), None);
         assert_eq!(unescaped(b"a\\u005cb").as_deref(), Some("a\\b"));
     }
 }
