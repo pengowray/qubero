@@ -125,11 +125,11 @@ part null; a pending read answers pending like every other call.
   in windows; a shape with `columns = k` makes row `i` from elements
   `i*k .. i*k+k`. Pure enough to test under `node --test` with `TemplateNode`
   fixtures.
-- `tableview.ts`: the tab page. The header row, the columns and what they have
-  learnt about themselves, the rows as they are drawn, the selection, and the
-  copy. Row click picks the row; the file tab's cursor moving into the table
-  selects and scrolls to the row. Keyboard: arrows, page, home, end. Four
-  modules around it hold the halves that stand on their own:
+- `tableview.ts`: the tab page. Which way round the table is drawn, the rows as
+  they are drawn, the selection and the copy. Row click picks the row, or the
+  cell where the cells have addresses of their own; the file tab's cursor
+  moving into the table selects and scrolls to the row. Keyboard: arrows, page,
+  home, end. The parts that stand on their own are modules around it:
   - `tablebar.ts`: the bar. The title, the count, the facts (links), the
     row-meaning line, the rows-or-columns choice, the address checkbox, and
     the two buttons the view owns.
