@@ -875,8 +875,9 @@ matrix now reads with no exceptions and `UNREAD` in `pickle_real.rs` is empty.
 
 ## Older releases of torch and joblib: landed on 2026-09-19
 
-A second matrix run, nine container environments from torch 0.4.1 with joblib
-0.11 to torch 2.14 with joblib 1.6, plus joblib 0.9.4 on its own. What each
+A second matrix run, nine container environments: eight with both libraries,
+from torch 0.4.1 with joblib 0.11 to torch 2.14 with joblib 1.6, and one with
+joblib 0.9.4 alone. What each
 era wrote and where in the writer each difference lives is in
 `docs/DESIGN-pickle-containers.md` under "What each era wrote". Every file of
 that run reads now but two, which the same section names.
