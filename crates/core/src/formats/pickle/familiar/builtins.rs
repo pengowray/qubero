@@ -83,7 +83,13 @@ impl Cursor<'_> {
                     self.memoize(Bound::Opaque)?;
                 }
                 self.exact(b"R")?;
-                self.memoize(Bound::Opaque)?;
+                // What the call made, which a later part of the file may name:
+                // two pandas frames whose blocks sit in the same places share
+                // the slice that says so, and the second names it. The tuple
+                // of arguments above is only matched past and stays opaque. A
+                // name hashes as the thing spelled out does, which is every
+                // one of these but a bytearray.
+                self.memoize(Bound::Made { what, at: start, hashable: what != Shape::ByteArray })?;
                 Some(self.span(start, Kind::Made { what: what, names: names, callable: None, items: items, state: None }))
             })();
             if let Some(value) = made {

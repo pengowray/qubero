@@ -299,6 +299,18 @@ What the library forms read, and what they do not:
 - **A block placed by an array is a non-match.** pandas writes an array of
   column positions instead of a slice when a block's columns are not next to
   each other, and no file in the corpus does.
+- **A frame made from another names what the two share.** `assign` and a
+  shallow copy leave the second frame holding the first one's index, the
+  slices that place its blocks, and the array and dtype under a column of
+  text, and pickle writes a shared object once. So the second frame's
+  placement is a `BINGET` where the first wrote `builtins.slice`, and the
+  same for the axis and the array. The form takes a name for a slice where it
+  takes a slice, and the table follows each name to where the file wrote the
+  thing, which is in the first frame and nowhere under the second:
+  `made_at` in `eval/pickleparts.rs` looks from the top of the match, walking
+  only into values whose span holds the offset. Two frames built separately
+  share nothing and spell everything twice. The sample is
+  `mixed-frames-sharing-placements-p4.pickle` and `-p2`.
 - **An array of objects holds text, `None` and names for text**, in a list of
   up to a thousand a batch, and nothing else. An array of objects can hold
   whatever was pickled into it, and only what a form has written down is read.
@@ -483,8 +495,11 @@ stack; what changes is that every value is an opcode and a line.
 
 - **A name pointing at a slot no form could say anything about.** The memo
   still holds `Opaque` for the intermediate values inside a NumPy or builtins
-  call, and a `BINGET` naming one of those is a non-match as before. What a
-  form built itself may be named; what it only matched its way past may not.
+  call, such as the tuple of arguments it was handed, and a `BINGET` naming
+  one of those is a non-match as before. What a form built itself may be
+  named; what it only matched its way past may not. What a builtins call made
+  is something the form built, so a slice, a range, a complex and a bytearray
+  may be named again like any other value.
 - **A container written with `POP` or `POP_MARK`.** A tuple that holds itself
   cannot be built postfix, so CPython writes the elements, throws them away
   and names the tuple the recursion already made. No form accepts either

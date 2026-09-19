@@ -27,7 +27,7 @@ impl Evaluator {
     pub(super) fn frame_shape<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<TableShape>> {
         let (root, found) = self.pickle_doc(doc, path)?;
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return Ok(None) };
-        let Some(frame) = frame_of(object) else { return Ok(None) };
+        let Some(frame) = frame_of(&found, object) else { return Ok(None) };
         let r = self.memo[&root].clone();
         let base = r.offset;
         let Some(rows) = self.index_len(doc, &r, base, &found, frame.index)? else { return Ok(None) };
@@ -78,7 +78,7 @@ impl Evaluator {
             return self.array_cells(doc, &r, base, &found, array, from, to);
         }
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return fail("not a frame") };
-        let Some(frame) = frame_of(object) else { return fail("not a frame") };
+        let Some(frame) = frame_of(&found, object) else { return fail("not a frame") };
         let r = self.memo[&root].clone();
         let base = r.offset;
         let Some(rows) = self.index_len(doc, &r, base, &found, frame.index)? else { return fail("this frame does not say how many rows it has") };
@@ -429,7 +429,7 @@ impl Evaluator {
 
     /// What an index is and where its labels run from and to.
     fn index_summary<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, object: &Captured) -> R<String> {
-        let Some(frame) = frame_of(object) else { return Ok(String::new()) };
+        let Some(frame) = frame_of(&found, object) else { return Ok(String::new()) };
         let kind = index_kind(frame.index).unwrap_or("Index");
         if is_range(frame.index) {
             let Some(state) = index_state(frame.index) else { return Ok(kind.to_string()) };

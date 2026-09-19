@@ -127,7 +127,7 @@ impl Evaluator {
         // columns and the row count are read in
         // [`Evaluator::pickle_columns`].
         if let (_, Part::Value(v)) = &here {
-            if super::pickleframe::frame_of(v).is_some() {
+            if super::pickleframe::frame_of(found, v).is_some() {
                 return Some(crate::template::TableShape {
                     row_word: Some(ROW_WORD.into()),
                     cells: Some(Cells::Computed { rows: 0 }),
