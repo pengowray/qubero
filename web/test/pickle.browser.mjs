@@ -76,7 +76,7 @@ try {
     // that call was made with, and which of CPython's two picklers the file
     // shows, which for this one is neither in particular.
     for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray",
-                         "_pickle or pickle.py (they write this data identically)"]) {
+                         "any (every known pickler writes this data the same way)"]) {
       assert.ok(said.includes(shown), `the listing does not show ${shown}`);
     }
     await mkdir(out, { recursive: true });

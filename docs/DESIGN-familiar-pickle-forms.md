@@ -621,13 +621,16 @@ reads any of them, and the match says which the file shows. The row is
 `pickler` in the header of the familiar-form template, beside `message` and
 `form`, and since 2026-09-19 it says one of exactly seven things:
 
-- `unnamed: nothing in this file is spelled two ways`
-- `_pickle (CPython's C pickler, or GraalPy's written in Java)`
-- `pickle.py (the pure Python pickler), or one of IronPython's written in C#`
-- `cPickle (Python 2's C pickler, PyPy 2.7's Python copy of it, or Jython's written in Java)`
-- `cPickle (Jython's, written in Java)`
-- `cPickle (IronPython's, written in C#)`
-- `_pickle (GraalPy's, written in Java)`
+- `any (every known pickler writes this data the same way)`
+- `_pickle (CPython's in C, or GraalPy's in Java)`
+- `pickle.py (pure Python), or an IronPython pickler (C#)`
+- `cPickle (Python 2's in C, PyPy 2.7's in Python, or Jython's in Java)`
+- `cPickle (Jython's, in Java)`
+- `cPickle (IronPython's, in C#)`
+- `_pickle (GraalPy's, in Java)`
+
+One pattern throughout: the module's name, then whose it is and what it is
+written in.
 
 Seven programs write the pickles in the collection, and the seven statements
 above are not those seven programs: each is a spelling, and it names every
@@ -642,8 +645,9 @@ interpreters".
 The first four strings were widened on 2026-09-19 and the last three are new.
 The old wordings each claimed something the bytes do not say: `the only one
 PyPy 3 has` was already false of Python 2's own `pickle.py` files in the
-collection, and `they write this data identically` named CPython's two
-picklers for a file that may have come from any of the seven.
+collection, and `_pickle or pickle.py (they write this data identically)`
+named CPython's two picklers for a file that may have come from any of the
+seven.
 
 What does **not** reach this row is the interpreter. Jython spelling a
 protocol 0 escape in upper case, GraalPy naming `_collections`, IronPython
@@ -685,10 +689,10 @@ Python 2 has two picklers of its own, `pickle` and `cPickle`, and they are told
 apart by the memo rather than by a batch edge: `cPickle` numbers its first slot
 1 where every other pickler numbers it 0, and it leaves the mark out for a value
 nothing else in the program holds a reference to. So a file numbering from one
-is `cPickle`'s whether or not a long container is in it. The `pickler` row says
-`_pickle (CPython's C pickler)` for one, which names the wrong module: the
-module is `cPickle`, and PyPy 2.7's copy of it is written in Python. The
-wording is listed for replacement rather than changed here.
+is `cPickle`'s whether or not a long container is in it. Jython's numbers from
+one as well, so that on its own no longer names one program: the row says
+`cPickle (Python 2's in C, PyPy 2.7's in Python, or Jython's in Java)` and a
+second spelling narrows it.
 
 `cPickle` also does not spell its batch tails the way the other C pickler does.
 CPython's walks a list through an iterator, the way `pickle.py` does, and a

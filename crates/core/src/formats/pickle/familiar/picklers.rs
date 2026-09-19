@@ -60,13 +60,13 @@ impl Pickler {
     /// than the bytes can.
     pub fn name(self) -> &'static str {
         match self {
-            Pickler::Undetermined => "unnamed: nothing in this file is spelled two ways",
-            Pickler::C => "_pickle (CPython's C pickler, or GraalPy's written in Java)",
-            Pickler::Python => "pickle.py (the pure Python pickler), or one of IronPython's written in C#",
-            Pickler::CPickle => "cPickle (Python 2's C pickler, PyPy 2.7's Python copy of it, or Jython's written in Java)",
-            Pickler::Jython => "cPickle (Jython's, written in Java)",
-            Pickler::IronCPickle => "cPickle (IronPython's, written in C#)",
-            Pickler::Graal => "_pickle (GraalPy's, written in Java)",
+            Pickler::Undetermined => "any (every known pickler writes this data the same way)",
+            Pickler::C => "_pickle (CPython's in C, or GraalPy's in Java)",
+            Pickler::Python => "pickle.py (pure Python), or an IronPython pickler (C#)",
+            Pickler::CPickle => "cPickle (Python 2's in C, PyPy 2.7's in Python, or Jython's in Java)",
+            Pickler::Jython => "cPickle (Jython's, in Java)",
+            Pickler::IronCPickle => "cPickle (IronPython's, in C#)",
+            Pickler::Graal => "_pickle (GraalPy's, in Java)",
         }
     }
 
