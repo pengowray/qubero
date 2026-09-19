@@ -402,9 +402,6 @@ export type CellAt =
   /** Counted from a start and a step rather than written down, which is a
    *  `RangeIndex` label. */
   | { readonly kind: "counted" }
-  /** Said of the row rather than read out of it: the dtype and the shape
-   *  columns of a checkpoint's summary. */
-  | { readonly kind: "said" }
   /** Nowhere this reading can point at. */
   | { readonly kind: "nowhere" };
 

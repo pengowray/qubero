@@ -377,9 +377,9 @@ impl Evaluator {
     /// instructions that spell it, which is where a reader looking for
     /// `layer.weight` in the hex view would find it; the count of values is
     /// the numbers it counts, which is the tensor's own window in the file and
-    /// the one address a reader opens a checkpoint for. The dtype and the
-    /// shape are said by the instructions that rebuild the tensor rather than
-    /// written as a value, so those cells say so instead of pointing.
+    /// the one address a reader opens a checkpoint for. The dtype is
+    /// where the pickle names what one element is, the storage class or the
+    /// dtype an untyped storage's call names, and the shape is the size tuple.
     pub(super) fn tensor_rows<S: Source>(
         &mut self,
         doc: &Document<S>,
@@ -392,15 +392,16 @@ impl Evaluator {
         let mut out = Vec::new();
         for (key, tensor) in held.iter().skip(from as usize).take(to.saturating_sub(from) as usize) {
             let name = self.pickle_text(doc, r, base, key)?;
-            let spelled = CellAt::Bytes { space: r.space, offset_bits: base + key.at as u64 * 8, size_bits: key.len as u64 * 8 };
+            let run = |(at, len): (usize, usize)| CellAt::Bytes { space: r.space, offset_bits: base + at as u64 * 8, size_bits: len as u64 * 8 };
+            let spelled = run((key.at, key.len));
             let numbers = match self.tensor_run(doc, r, base, tensor)? {
                 Some((at, len)) => CellAt::Bytes { space: r.space, offset_bits: at * 8, size_bits: len * 8 },
                 None => CellAt::Nowhere,
             };
             out.push(vec![
                 FrameCell { value: name.map(Value::Str), at: spelled },
-                FrameCell { value: Some(Value::Str(tensor.dtype.word().to_string())), at: CellAt::Said },
-                FrameCell { value: Some(Value::Str(super::pickleparts::extent(&tensor.size))), at: CellAt::Said },
+                FrameCell { value: Some(Value::Str(tensor.dtype.word().to_string())), at: run(tensor.dtype_at) },
+                FrameCell { value: Some(Value::Str(super::pickleparts::extent(&tensor.size))), at: run(tensor.size_at) },
                 FrameCell { value: Some(Value::UInt(u128::from(tensor.values()))), at: numbers },
             ]);
         }

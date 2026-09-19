@@ -400,8 +400,13 @@ fn a_checkpoint_summary_points_at_the_name_and_at_the_numbers() {
     // The name, spelled where the cell says it is.
     let name = bytes_at(&ev, &bytes, &rows[0][0], "name");
     assert!(spells(&name, "layer.weight"), "{name:?}");
-    assert_eq!(rows[0][1].at, CellAt::Said, "dtype");
-    assert_eq!(rows[0][2].at, CellAt::Said, "shape");
+    // The dtype is where the pickle names what one element is, which for a
+    // typed storage is its class, and the shape is the size tuple: both are
+    // written in the pickle, so both cells point at what they were read from.
+    let class = bytes_at(&ev, &bytes, &rows[0][1], "dtype");
+    assert!(spells(&class, "FloatStorage"), "{class:?}");
+    let size = bytes_at(&ev, &bytes, &rows[0][2], "shape");
+    assert!(size.windows(4).any(|w| w == b"K\x03K\x04"), "the size tuple is BININT1 3, BININT1 4: {size:?}");
     // The numbers: the tensor's whole window, which for `layer.weight` is
     // twelve float32 at the entry's data.
     assert_eq!(placed_at(&rows[0][3]), [0, 0x380 * 8, 12 * 32]);

@@ -42,9 +42,6 @@ pub enum CellAt {
     /// Counted out rather than written down, which is a `RangeIndex` label: a
     /// start and a step, and no bytes anywhere holding the number.
     Counted,
-    /// Said of the row rather than read out of it, which is what the dtype and
-    /// the shape columns of a checkpoint's summary are.
-    Said,
     /// Nowhere this reading can point at: a run whose dtype it does not read,
     /// a value past the end of the bytes the file holds.
     Nowhere,

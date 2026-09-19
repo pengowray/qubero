@@ -686,23 +686,16 @@ export const TABLE = {
   sizePerCell: "per cell",
   /** A cell with no bytes behind it, in the address column: short enough for
    *  the column, with the whole reason on the cell's hover below. */
-  noBytes: (why: "counted" | "said" | "nowhere"): string =>
-    why === "counted" ? "computed" : why === "said" ? "not stored" : "unknown",
+  noBytes: (why: "counted" | "nowhere"): string => (why === "counted" ? "computed" : "unknown"),
   /**
    * The same on the cell's own hover, which is where there is room to say why.
    *
-   * Three different nothings, and a reader checking a value against the file
-   * needs to know which: a counted index label was worked out from a start and
-   * a step and was never written anywhere; a tensor's dtype and shape are
-   * stated by the instructions that rebuild it rather than stored as values;
-   * and the third is Qubero admitting it cannot say.
+   * Two cases. A counted index label was worked out from a start and a step
+   * and was never written anywhere. The other is a value whose place this
+   * reading could not work out, which says only that.
    */
-  noBytesWhy: (why: "counted" | "said" | "nowhere"): string =>
-    why === "counted"
-      ? "No bytes: computed from the index's start and step."
-      : why === "said"
-        ? "No bytes: stated by the pickle's instructions, not stored as a value."
-        : "No bytes: Qubero can't say where this value is.",
+  noBytesWhy: (why: "counted" | "nowhere"): string =>
+    why === "counted" ? "No bytes: computed from the index's start and step." : "No bytes: unknown location.",
   /** Where one cell's bytes are, on its hover, when the address columns are
    *  shown. `@+` in front of the address means it counts from the start of an
    *  unpacked stream rather than of the file; see `DECODED_PLUS_TITLE`. */

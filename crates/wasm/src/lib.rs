@@ -1107,8 +1107,6 @@ enum CellAtDto {
     Bytes { space: f64, offset_bits: f64, size_bits: f64 },
     /// Counted out rather than written down, which is a `RangeIndex` label.
     Counted,
-    /// Said of the row rather than read out of it.
-    Said,
     /// Nowhere this reading can point at.
     Nowhere,
 }
@@ -1120,7 +1118,6 @@ impl From<CellAt> for CellAtDto {
                 CellAtDto::Bytes { space: space as f64, offset_bits: offset_bits as f64, size_bits: size_bits as f64 }
             }
             CellAt::Counted => CellAtDto::Counted,
-            CellAt::Said => CellAtDto::Said,
             CellAt::Nowhere => CellAtDto::Nowhere,
         }
     }

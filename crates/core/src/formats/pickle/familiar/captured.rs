@@ -282,6 +282,10 @@ impl Dtype {
 #[derive(Debug, PartialEq)]
 pub struct Tensor {
     pub dtype: TensorType,
+    /// The run that says what one element is: the storage class the persistent
+    /// id named, or, for an untyped storage, the dtype the call names last.
+    /// Either may be two bytes naming where an earlier tensor spelled it.
+    pub dtype_at: (usize, usize),
     /// The class the persistent id named, spelled whole: `torch.FloatStorage`.
     /// The dtype above is the plain word for the same thing.
     pub storage_class: &'static str,
@@ -295,6 +299,8 @@ pub struct Tensor {
     /// How far into the storage this tensor's first element is, in elements.
     pub offset: u64,
     pub size: Vec<u64>,
+    /// The run the size tuple was written in.
+    pub size_at: (usize, usize),
     pub stride: Vec<u64>,
     pub requires_grad: bool,
     /// Whether `_rebuild_parameter` wrapped it, which is what a module's

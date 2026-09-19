@@ -78,7 +78,7 @@ export type RecordCell = {
   /** Why this cell has no bytes, when it has none and the reason is worth
    *  saying: a counted index label was never written down, and a fact the
    *  pickle states about a tensor is not stored as a value. */
-  readonly noBytes?: "counted" | "said" | "nowhere";
+  readonly noBytes?: "counted" | "nowhere";
 };
 
 /** Where one cell's bytes are. `space` is 0 for the tab's own bytes, which is

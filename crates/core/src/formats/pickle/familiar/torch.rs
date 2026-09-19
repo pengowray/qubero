@@ -198,6 +198,9 @@ struct Persistent {
     /// Nothing for an untyped storage, whose element type is the call's last
     /// argument rather than the storage class.
     dtype: Option<TensorType>,
+    /// The run the storage class was named in, which is where a typed
+    /// storage says what one element is.
+    class_at: (usize, usize),
     key: (usize, usize),
     location: (usize, usize),
     count: u64,
@@ -244,7 +247,9 @@ impl Cursor<'_> {
         self.atoms(&[b"("])?;
         let held = self.persistent_id(third)?;
         let offset = self.elements()?;
+        let size_from = self.at;
         let size = self.extents()?;
+        let size_at = (size_from, self.at - size_from);
         let stride = self.extents()?;
         if size.len() != stride.len() || size.len() > MAX_DIMENSIONS {
             return None;
@@ -254,15 +259,20 @@ impl Cursor<'_> {
         // `_rebuild_tensor_v3` names an untyped storage, so the element type
         // comes after the hooks as a dtype of torch's own. `_v2` carries it in
         // the storage class and writes nothing here.
+        let dtype_from = self.at;
         let dtype = match third {
             true => self.dtype_named()?,
             false => held.dtype?,
+        };
+        let dtype_at = match third {
+            true => (dtype_from, self.at - dtype_from),
+            false => held.class_at,
         };
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
-        self.tensor_made(start, held, dtype, offset, size, stride, requires_grad, None)
+        self.tensor_made(start, held, (dtype, dtype_at), offset, (size, size_at), stride, requires_grad, None)
     }
 
     /// `torch._utils._rebuild_qtensor(persistent id, offset, size, stride,
@@ -278,7 +288,9 @@ impl Cursor<'_> {
         self.atoms(&[b"("])?;
         let held = self.persistent_id(false)?;
         let offset = self.elements()?;
+        let size_from = self.at;
         let size = self.extents()?;
+        let size_at = (size_from, self.at - size_from);
         let stride = self.extents()?;
         if size.len() != stride.len() || size.len() > MAX_DIMENSIONS {
             return None;
@@ -295,8 +307,8 @@ impl Cursor<'_> {
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         self.memoize(Bound::Made { what: Shape::Tensor, at: start, hashable: false })?;
-        let dtype = held.dtype?;
-        self.tensor_made(start, held, dtype, offset, size, stride, requires_grad, Some(Quantizer { scale, zero_point }))
+        let dtype = (held.dtype?, held.class_at);
+        self.tensor_made(start, held, dtype, offset, (size, size_at), stride, requires_grad, Some(Quantizer { scale, zero_point }))
     }
 
     /// The tensor the call just read made, checked against the storage it
@@ -306,9 +318,9 @@ impl Cursor<'_> {
         &mut self,
         start: usize,
         held: Persistent,
-        dtype: TensorType,
+        (dtype, dtype_at): (TensorType, (usize, usize)),
         offset: u64,
-        size: Vec<u64>,
+        (size, size_at): (Vec<u64>, (usize, usize)),
         stride: Vec<u64>,
         requires_grad: bool,
         quantizer: Option<Quantizer>,
@@ -325,7 +337,7 @@ impl Cursor<'_> {
         };
         let Persistent { storage_class, key, location, .. } = held;
         let tensor =
-            Tensor { dtype, storage_class, key, location, count, offset, size, stride, requires_grad, parameter: false, quantizer };
+            Tensor { dtype, dtype_at, storage_class, key, location, count, offset, size, size_at, stride, requires_grad, parameter: false, quantizer };
         // A view has to fit in the storage the persistent id named. A tensor
         // reaching past the end of its own storage is not something torch
         // wrote, and reading one would read whatever is next in the file.
@@ -417,6 +429,7 @@ impl Cursor<'_> {
         if let Some((at, len)) = self.word_or_reference(STORAGE_WORD)? {
             self.says("persistent id kind", at, len);
         }
+        let class_from = self.at;
         let held = match untyped {
             true => {
                 self.global(STORAGE_MODULE, UNTYPED_STORAGE, "storage module", "storage class")?;
@@ -424,6 +437,7 @@ impl Cursor<'_> {
             }
             false => self.storage_class()?,
         };
+        let class_at = (class_from, self.at - class_from);
         let key = self.text_run_or_reference("storage key")?;
         let location = self.text_run_or_reference("location")?;
         let count = self.elements()?;
@@ -444,6 +458,7 @@ impl Cursor<'_> {
         Some(Persistent {
             storage_class: held.class,
             dtype: (!untyped).then_some(held.dtype),
+            class_at,
             key,
             location,
             count,

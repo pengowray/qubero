@@ -211,8 +211,8 @@ test("a row with no cell anywhere has no offset to show", () => {
       status: "ok",
       node: [
         [
-          { text: "float32", kind: "str", at: { kind: "said" } },
-          { text: "3 x 4", kind: "str", at: { kind: "said" } },
+          { text: "float32", kind: "str", at: { kind: "nowhere" } },
+          { text: "3 x 4", kind: "str", at: { kind: "nowhere" } },
         ],
       ],
     }),
@@ -220,5 +220,5 @@ test("a row with no cell anywhere has no offset to show", () => {
   const row = tablePlan(said, FRAME)?.row(0);
   assert.equal(row?.offsetBits, 0);
   assert.equal(row?.sizeBits, 0);
-  assert.equal(row?.cells[0]?.noBytes, "said");
+  assert.equal(row?.cells[0]?.noBytes, "nowhere");
 });
