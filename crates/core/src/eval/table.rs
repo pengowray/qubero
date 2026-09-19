@@ -100,7 +100,11 @@ impl Evaluator {
             // The numbers of a pickled array, or the rows of a pickled list of
             // records, whose columns are read out of the file here because the
             // cheap question below cannot read anything.
-            Some(Ty::Pickle(_)) => match self.pickle_table(path) {
+            //
+            // A `Decoded` parent is the same question one step down: an array
+            // whose numbers were spelled rather than written opens them as a
+            // space, and the numbers are what the table is over.
+            Some(Ty::Pickle(_) | Ty::Decoded { .. }) => match self.pickle_table(path) {
                 Some(shape) => Ok(self.pickle_columns(doc, path, shape)?.map(Arc::new)),
                 None => Ok(None),
             },

@@ -32,11 +32,8 @@ pub(super) const PROTOCOL_FIELD: &str = "protocol";
 /// `data` again: the object the file holds is already called that, and one
 /// name for two things is one thing a reader has to work out.
 pub(super) const NUMBERS_FIELD: &str = "numbers";
-/// What an array says about how its numbers reached the file, for an array
-/// whose numbers are not in it as numbers. Protocol 2 has no opcode for a byte
-/// string, so the values go out as the text they spell in latin-1, and the
-/// `numbers` row is that text. The table over the array is the numbers
-/// themselves, decoded when the form matched.
+/// What an array says about where its numbers are, for an array whose numbers
+/// are a run some earlier array wrote.
 pub(super) const WRITTEN_FIELD: &str = "written as";
 /// What a protocol 0 line's own run is called, under the value it spells. The
 /// row above says what the string is; this one is the bytes the file holds.
@@ -45,16 +42,12 @@ pub(super) const LINE_FIELD: &str = "line";
 /// it comes to. `line` where the file spelled the digits, which is what
 /// protocols 0 and 1 write, and this where it wrote two's-complement bytes.
 pub(super) const BYTES_FIELD: &str = "bytes";
-pub(super) const LATIN1_TEXT: &str = "latin-1 text";
 /// The same row for an array whose numbers are a run some earlier array
 /// wrote. Two arrays holding the same bytes are one byte string to Python, so
 /// the second names that run rather than spelling it again. The run is outside
 /// this array's own bytes, so it is said here and placed under the array that
 /// wrote it.
 pub(super) const EARLIER_RUN: &str = "bytes an earlier array wrote";
-/// The same at protocol 0, where that text is written as a line and escaped
-/// again to fit on one.
-pub(super) const ESCAPED_TEXT: &str = "latin-1 text, escaped";
 pub(super) const DTYPE_FIELD: &str = "dtype";
 pub(super) const SHAPE_FIELD: &str = "shape";
 pub(super) const ORDER_FIELD: &str = "order";
@@ -522,14 +515,16 @@ pub(super) fn says_array<'a>(dtype: &Dtype, dimensions: &[u64], fortran_order: b
         (Label::Field(SHAPE_FIELD), Part::Note(shape)),
         (Label::Field(ORDER_FIELD), Part::Note(order.to_string())),
     ];
-    // Said only where it is worth saying: an array whose numbers are in the
-    // file as numbers has nothing to explain, and a row on every array would
-    // be a row every reader learns to skip.
-    match (elsewhere, storage) {
-        (true, _) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(EARLIER_RUN.to_string()))),
-        (false, Storage::Raw) => {}
-        (false, Storage::Latin1) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(LATIN1_TEXT.to_string()))),
-        (false, Storage::Escaped) => rows.push((Label::Field(WRITTEN_FIELD), Part::Note(ESCAPED_TEXT.to_string()))),
+    // Where the numbers are, for the one array that does not hold its own:
+    // two arrays of the same bytes are one byte string to Python, so the
+    // second names the run the first wrote rather than spelling it again.
+    //
+    // How they were spelled is not said here. An array whose numbers were
+    // written as text opens them as a space, and the node holding the run says
+    // what it was decoded from, which is the same fact said once.
+    let _ = storage;
+    if elsewhere {
+        rows.push((Label::Field(WRITTEN_FIELD), Part::Note(EARLIER_RUN.to_string())));
     }
     rows
 }
@@ -600,6 +595,41 @@ pub(super) fn spot<'a>(found: &'a Match, path: &[usize]) -> Option<(Label, Part<
     }
     Some(here)
 }
+
+/// The path of the node holding the run of numbers at `at`, which is what
+/// [`spot`] would be given to land on it. The other way round from `spot`.
+///
+/// What a frame's cells need. An array whose numbers were spelled rather than
+/// written opens them as a space of its own, and a space is opened by the path
+/// of the node that opened it; a block of a frame knows where its run is and
+/// nothing about where it sits in the tree. So the tree is walked down to it,
+/// taking the one child whose bytes cover the run: the parts of a node tile
+/// it, so at most one of them can.
+///
+/// Nothing when no node's run starts there, which is the answer for a run the
+/// file wrote nowhere.
+pub(super) fn locate(found: &Match, at: usize) -> Option<Vec<usize>> {
+    let mut path = Vec::new();
+    let mut here = Part::Doc;
+    // The tree is as deep as the object is nested, and a pickle that nests
+    // deeper than this is one no reader is following anyway.
+    for _ in 0..MOST_NESTED {
+        if let Part::Data(v) = &here {
+            return matches!(&v.kind, Kind::Array { at: run, .. } if *run == at).then_some(path);
+        }
+        let (i, next) = parts(found, &here).into_iter().enumerate().find_map(|(i, (_, part))| {
+            let (from, to) = span(found, &part);
+            (from <= at && at < to).then_some((i, part))
+        })?;
+        path.push(i);
+        here = next;
+    }
+    None
+}
+
+/// How deep the walk down to a run of numbers goes before it gives up. A
+/// pickled frame is a dozen levels and a nested one a few more.
+const MOST_NESTED: usize = 256;
 
 /// How far the search for a named value will walk before giving up.
 ///

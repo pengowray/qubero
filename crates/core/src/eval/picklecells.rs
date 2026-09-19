@@ -51,7 +51,7 @@ impl Evaluator {
             }
             let _ = j;
             names.push(match frame.columns {
-                Some(axis) => self.label_at(doc, &r, base, &found, axis, c)?.unwrap_or_else(|| format!("column {c}")).into(),
+                Some(axis) => self.label_at(doc, &root, &r, base, &found, axis, c)?.unwrap_or_else(|| format!("column {c}")).into(),
                 None => self.series_name(doc, &r, base, object)?.unwrap_or_else(|| VALUE_COLUMN.into()).into(),
             });
             units.push(word_of(&held).into());
@@ -69,14 +69,6 @@ impl Evaluator {
     /// where the frame has no value.
     pub fn pickle_cells<S: Source>(&mut self, doc: &Document<S>, path: &[usize], from: u64, to: u64) -> R<Vec<Vec<Option<Value>>>> {
         let (root, found) = self.pickle_doc(doc, path)?;
-        // An array whose numbers the file did not write as bytes. There is no
-        // run under the node for the view to walk, so the cells are read here
-        // out of what the form decoded, in the order the numbers are stored.
-        if let Some((_, Part::Data(array))) = spot(&found, &path[root.len()..]) {
-            let r = self.memo[&root].clone();
-            let base = r.offset;
-            return self.array_cells(doc, &r, base, &found, array, from, to);
-        }
         let Some((_, Part::Value(object))) = spot(&found, &path[root.len()..]) else { return fail("not a frame") };
         // A tensor, whose values are in another entry of the archive and are
         // read there rather than anywhere under this node.
@@ -112,45 +104,9 @@ impl Evaluator {
         }
         let mut out = Vec::new();
         for row in from..to.min(rows) {
-            let mut cells = vec![self.index_label(doc, &r, base, &found, frame.index, row)?];
+            let mut cells = vec![self.index_label(doc, &root, &r, base, &found, frame.index, row)?];
             for (j, held) in &placed {
-                cells.push(self.one_value(doc, &r, base, &found, held, *j, row)?);
-            }
-            out.push(cells);
-        }
-        Ok(out)
-    }
-
-    /// The rows of a standalone array, read in storage order: as many values
-    /// to a row as the table's columns, which is what a table over the numbers
-    /// themselves shows at every other protocol.
-    #[allow(clippy::too_many_arguments)]
-    fn array_cells<S: Source>(
-        &mut self,
-        doc: &Document<S>,
-        r: &Resolved,
-        base: u64,
-        found: &Match,
-        array: &Captured,
-        from: u64,
-        to: u64,
-    ) -> R<Vec<Vec<Option<Value>>>> {
-        let Some(Values::Numbers(n)) = values_of(found, array) else { return fail("not an array of numbers") };
-        let count: u64 = n.dimensions.iter().product();
-        let columns = match (n.dimensions.len(), n.fortran_order) {
-            (0, _) => return fail("a single value is not a table"),
-            (1, _) => 1,
-            (_, true) => n.dimensions.first().copied().unwrap_or(1),
-            (_, false) => n.dimensions.last().copied().unwrap_or(1),
-        }
-        .max(1);
-        let rows = count / columns;
-        let mut out = Vec::new();
-        for row in from..to.min(rows) {
-            let mut cells = Vec::new();
-            for c in 0..columns {
-                let Some(elem) = row.checked_mul(columns).and_then(|at| at.checked_add(c)) else { break };
-                cells.push(self.number_at(doc, r, base, &n, elem)?);
+                cells.push(self.one_value(doc, &root, &r, base, &found, held, *j, row)?);
             }
             out.push(cells);
         }
@@ -247,7 +203,8 @@ impl Evaluator {
     }
 
     /// The label the index files row `row` under.
-    fn index_label<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, index: &Captured, row: u64) -> R<Option<Value>> {
+    #[allow(clippy::too_many_arguments)]
+    fn index_label<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, found: &Match, index: &Captured, row: u64) -> R<Option<Value>> {
         let Some(state) = index_state(index) else { return Ok(None) };
         if is_range(index) {
             let (start, _, step) = self.range_bounds(doc, r, base, state)?;
@@ -257,14 +214,16 @@ impl Evaluator {
         }
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
         let Some(held) = values_of(&found, values) else { return Ok(None) };
-        self.one_value(doc, r, base, found, &held, 0, row)
+        self.one_value(doc, root, r, base, found, &held, 0, row)
     }
 
     /// One value of a column, or nothing where the frame has none.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn one_value<S: Source>(
         &mut self,
         doc: &Document<S>,
+        root: &[usize],
         r: &Resolved,
         base: u64,
         found: &Match,
@@ -274,7 +233,7 @@ impl Evaluator {
     ) -> R<Option<Value>> {
         let Some(elem) = held.at(column, row) else { return Ok(None) };
         match held {
-            Values::Numbers(n) => self.number_at(doc, r, base, n, elem),
+            Values::Numbers(n) => self.number_at(doc, root, r, base, n, elem),
             Values::Texts(items) => {
                 let Some(item) = items.get(elem as usize) else { return Ok(None) };
                 if let Some(said) = self.pickle_text(doc, r, base, item)? {
@@ -287,7 +246,7 @@ impl Evaluator {
                 Ok(self.pickle_said(doc, found, r, base, item)?.map(Value::Str))
             }
             Values::Coded(codes, names) => {
-                let code = match self.number_at(doc, r, base, codes, elem)? {
+                let code = match self.number_at(doc, root, r, base, codes, elem)? {
                     Some(Value::Int(code)) => code,
                     Some(Value::UInt(code)) => i128::try_from(code).unwrap_or(NO_CATEGORY),
                     _ => return Ok(None),
@@ -306,18 +265,19 @@ impl Evaluator {
     /// A date is the one that is not read as its bytes: it is a count of the
     /// unit its dtype names, and a reader wants the date rather than the
     /// count, so it is read as a whole number and written out.
-    fn number_at<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<Value>> {
+    #[allow(clippy::too_many_arguments)]
+    fn number_at<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<Value>> {
         let spelling = match n.dtype {
             Dtype::Plain(spelling) => spelling,
             Dtype::Datetime { unit, .. } => {
-                let count = self.date_count(doc, r, base, n, elem)?;
+                let count = self.date_count(doc, root, r, base, n, elem)?;
                 return Ok(count.and_then(|count| iso_time(count, unit)).map(Value::Str));
             }
             _ => return Ok(None),
         };
         let Some((ty, width)) = shapes::element(spelling) else { return Ok(None) };
-        let read = match n.held {
-            Some(held) => self.held_value(r, held, elem, &ty, width)?,
+        let read = match &n.spelled {
+            Some(at) => self.space_value(doc, root, at, elem, &ty, width)?,
             None => {
                 let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
                 let offset = base + at * 8;
@@ -334,13 +294,14 @@ impl Evaluator {
     }
 
     /// One value of a run of dates, as the whole number it is written as.
-    fn date_count<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<i64>> {
+    #[allow(clippy::too_many_arguments)]
+    fn date_count<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, n: &Numbers, elem: u64) -> R<Option<i64>> {
         let Dtype::Datetime { spelling, .. } = n.dtype else { return Ok(None) };
         let Some((_, width)) = shapes::element(spelling) else { return Ok(None) };
         let endian = if spelling.starts_with('>') { Endian::Big } else { Endian::Little };
         let ty = Ty::Int { bits: 64, endian };
-        let read = match n.held {
-            Some(held) => self.held_value(r, held, elem, &ty, width)?,
+        let read = match &n.spelled {
+            Some(at) => self.space_value(doc, root, at, elem, &ty, width)?,
             None => {
                 let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok(None) };
                 let offset = base + at * 8;
@@ -357,24 +318,37 @@ impl Evaluator {
 
     /// One value out of a run the file did not write as bytes.
     ///
-    /// Protocol 2 writes an array's numbers as the latin-1 text they spell, so
-    /// they are nowhere in the file. The form decodes each such run once as it
-    /// reads it, and a value of one is read out of those bytes by the same
-    /// machinery every other field uses, over a document of the run rather
-    /// than of the file.
-    fn held_value(&mut self, r: &Resolved, held: &Arc<Vec<u8>>, elem: u64, ty: &Ty, width: u64) -> R<Option<Value>> {
+    /// Protocol 2 writes an array's numbers as the latin-1 text they spell and
+    /// protocol 0 escapes that again, so at neither protocol are they in the
+    /// file. The node at `at` opens them as a space, and a value is read out
+    /// of that space by the same machinery every other field uses, at the
+    /// offset it sits at there. Nothing is copied: the space holds the bytes
+    /// once, and every cell of every row reads the same buffer.
+    ///
+    /// `at` is counted from the pickle field, so the node's own path is that
+    /// under the pickle's root.
+    #[allow(clippy::too_many_arguments)]
+    fn space_value<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: &[usize], elem: u64, ty: &Ty, width: u64) -> R<Option<Value>> {
+        let path = [root, at].concat();
+        self.resolve(doc, &path)?;
+        let super::space::Opened::Space(id) = self.open_space_at(doc, &path)? else {
+            return fail("this array's numbers did not open");
+        };
+        let Some(held) = self.spaces.buf(id).cloned() else { return fail("this array's numbers are no longer open") };
         let size = width * 8;
         let Some(offset) = elem.checked_mul(size) else { return Ok(None) };
         if offset.checked_add(size).is_none_or(|end| end > held.len() as u64 * 8) {
             return Ok(None);
         }
-        let run = Document::new(crate::source::ArcSource(held.clone()));
-        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), space: 0, ..r.clone() };
+        let run = Document::new(crate::source::ArcSource(held));
+        let r = self.memo[&path].clone();
+        let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), space: 0, ..r };
         Ok(Some(self.primitive_value(&run, &[], &one, ty, size)?))
     }
 
     /// The label at position `c` of the axis that names a frame's columns.
-    fn label_at<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, axis: &Captured, c: u64) -> R<Option<String>> {
+    #[allow(clippy::too_many_arguments)]
+    fn label_at<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, found: &Match, axis: &Captured, c: u64) -> R<Option<String>> {
         if is_range(axis) {
             let Some(state) = index_state(axis) else { return Ok(None) };
             let (start, _, step) = self.range_bounds(doc, r, base, state)?;
@@ -384,7 +358,7 @@ impl Evaluator {
         let Some(state) = index_state(axis) else { return Ok(None) };
         let Some(values) = self.index_values(doc, r, base, state)? else { return Ok(None) };
         let Some(held) = values_of(&found, values) else { return Ok(None) };
-        Ok(match self.one_value(doc, r, base, found, &held, 0, c)? {
+        Ok(match self.one_value(doc, root, r, base, found, &held, 0, c)? {
             Some(Value::Str(said)) => Some(said),
             Some(Value::Int(n)) => Some(n.to_string()),
             Some(Value::UInt(n)) => Some(n.to_string()),
@@ -457,7 +431,7 @@ impl Evaluator {
                             .collect::<Vec<_>>()
                             .join(", "),
                     ),
-                    _ => self.index_summary(doc, &r, base, found, object)?,
+                    _ => self.index_summary(doc, root, &r, base, found, object)?,
                 })
             }
             Says::Shape | Says::Stored | Says::Format => self.sparse_summary(doc, &r, base, found, object, says),
@@ -471,7 +445,8 @@ impl Evaluator {
     }
 
     /// What an index is and where its labels run from and to.
-    fn index_summary<S: Source>(&mut self, doc: &Document<S>, r: &Resolved, base: u64, found: &Match, object: &Captured) -> R<String> {
+    #[allow(clippy::too_many_arguments)]
+    fn index_summary<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, found: &Match, object: &Captured) -> R<String> {
         let Some(frame) = frame_of(&found, object) else { return Ok(String::new()) };
         let kind = index_kind(frame.index).unwrap_or("Index");
         if is_range(frame.index) {
@@ -487,8 +462,8 @@ impl Evaluator {
         }
         // The first and the last label, which is what a reader wants of an
         // index of dates and is still true of one of names.
-        let first = self.index_label(doc, r, base, found, frame.index, 0)?;
-        let last = self.index_label(doc, r, base, found, frame.index, rows - 1)?;
+        let first = self.index_label(doc, root, r, base, found, frame.index, 0)?;
+        let last = self.index_label(doc, root, r, base, found, frame.index, rows - 1)?;
         Ok(match (label_text(&first), label_text(&last)) {
             (Some(first), Some(last)) if rows > 1 => format!("{kind} {first} to {last}"),
             (Some(first), _) => format!("{kind} {first}"),

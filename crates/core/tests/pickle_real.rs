@@ -1093,6 +1093,10 @@ struct Row {
     at: u64,
     len: u64,
     value: Value,
+    /// Which address space the row's bytes are in. 0 is the file; a run the
+    /// file spelled rather than wrote opens a space of its own, and what is
+    /// inside it counts from that space's own start.
+    space: u32,
 }
 
 /// Every row the template shows for this file, in file order.
@@ -1114,6 +1118,7 @@ fn walk_rows(doc: &Document<MemSource>, ev: &mut Evaluator, path: &[usize], dept
         at: node.offset_bits / 8,
         len: node.size_bits / 8,
         value: node.value.clone(),
+        space: node.space,
     });
     // A run of numbers is counted rather than walked: it is a value, not a
     // part of the file's shape.
@@ -1228,10 +1233,13 @@ fn the_older_protocols_read_as_a_tree_with_no_bytes_left_over() {
 /// the numbers of an array whose shape is 0.
 fn covers(rows: &[Row], what: &str) {
     for (i, row) in rows.iter().enumerate() {
+        // A child in another space is not part of this row's tiling: what a
+        // decoded run holds starts at byte 0 of the space it opened, which is
+        // no address in the file at all.
         let kids: Vec<&Row> = rows[i + 1..]
             .iter()
             .take_while(|r| r.depth > row.depth)
-            .filter(|r| r.depth == row.depth + 1)
+            .filter(|r| r.depth == row.depth + 1 && r.space == row.space)
             .collect();
         if kids.is_empty() {
             continue;
@@ -1548,6 +1556,83 @@ fn an_array_reads_as_the_same_numbers_at_every_protocol() {
     assert!(checked >= 34, "only {checked} arrays read as their numbers");
 }
 
+/// An array's numbers open as a space of their own, and every value has an
+/// address in it.
+///
+/// Protocol 2 writes an array's numbers as the latin-1 text they spell, and
+/// protocol 0 escapes that text again to fit it on a line, so at neither
+/// protocol are the numbers in the file as numbers. The run opens the way
+/// every other packed run in a file opens: as a space, with the values as
+/// ordinary typed fields at ordinary offsets in it. What this asserts is that
+/// those offsets are real, which is what "Show byte addresses" over the table
+/// shows a reader, and that the space still says which bytes of the file it
+/// came out of.
+#[test]
+fn a_spelled_array_opens_its_numbers_as_a_space() {
+    let Some(root) = qubero_samples::dir("pickle-matrix") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let dir = root.join("py3.6-numpy1.19-pandas1.1-sklearn0.24");
+    // 24 floats 0 to 23, four rows of six, at the two protocols that spell
+    // them rather than writing them.
+    for (name, codec) in
+        [("numpy-2d-float32.p2.pickle", "latin-1 text"), ("numpy-2d-float32.p0.pickle", "latin-1 text, escaped")]
+    {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else { panic!("{name} is not in the collection") };
+        let rows = familiar_rows(bytes.clone());
+        // The run the file holds, which is text and is in the file where the
+        // pickler wrote it.
+        let run = rows
+            .iter()
+            .find(|r| r.name == "numbers" && r.ty == codec)
+            .unwrap_or_else(|| panic!("{name}: no run of numbers"));
+        assert_eq!(run.space, 0, "{name}: the run is not in the file");
+
+        let doc = Document::new(MemSource(bytes.clone()));
+        let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+        // The numbers themselves, one step under it and in a space of their
+        // own, starting at the front of it.
+        let numbers = [run.path.as_slice(), &[0]].concat();
+        let node = ev.node(&doc, &numbers).unwrap();
+        assert_eq!(node.type_name, "f32 le[]", "{name}");
+        assert_ne!(node.space, 0, "{name}: the numbers are not in a space of their own");
+        assert_eq!(node.offset_bits, 0, "{name}");
+        assert_eq!(node.child_count, 24, "{name}");
+        // A value's address is where that value sits in the decoded bytes.
+        for i in [0usize, 7, 23] {
+            let cell = ev.node(&doc, &[numbers.as_slice(), &[i]].concat()).unwrap();
+            assert_eq!(cell.offset_bits, i as u64 * 32, "{name}: value {i}");
+            assert_eq!(cell.size_bits, 32, "{name}: value {i}");
+            assert_eq!(cell.space, node.space, "{name}: value {i}");
+            assert_eq!(cell.value, Value::Float(i as f64), "{name}: value {i}");
+        }
+        // The table hangs on the numbers rather than on the run, and its cells
+        // are those fields rather than anything the core works out.
+        let shape = ev.table_shape(&doc, &numbers).unwrap().unwrap_or_else(|| panic!("{name}: no table"));
+        assert_eq!(shape.columns, Some(6), "{name}");
+        assert_eq!(shape.row_word.as_deref(), Some("row"), "{name}");
+        assert_eq!(shape.cells, None, "{name}: the cells are fields, not worked out");
+        assert!(ev.table_shape(&doc, &run.path).unwrap().is_none(), "{name}: the run itself is no table");
+
+        // And the space says which bytes of the file it came out of.
+        let id = ev
+            .open_space(&doc, 0, &run.path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name}: the run does not open"));
+        let space = ev.space(id).unwrap();
+        assert_eq!(space.codec.as_str(), codec, "{name}");
+        assert_eq!(space.len_bytes(), 96, "{name}");
+        space.trace().check_tiles().unwrap_or_else(|e| panic!("{name}: {e}"));
+        let at = space.run().unwrap().run_offset_bits;
+        assert_eq!(at, run.at * 8, "{name}: the run is not where the file wrote it");
+        let first = space.map_out(0).unwrap();
+        assert!(first.in_bits.end <= run.len * 8, "{name}: the first byte came from outside the run");
+        assert!(space.map_in(at).is_some(), "{name}: the run's first bit made nothing");
+        assert!(space.map_in(at - 8).is_none(), "{name}: a bit in front of the run is not this space's");
+    }
+}
+
 /// The numbers of the one array in a file, in storage order, read the way the
 /// interface reads them: as a table where the core says the cells are its to
 /// work out, and as the node's own values where they sit in the file.
@@ -1555,7 +1640,14 @@ fn array_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
     let doc = Document::new(MemSource(bytes.to_vec()));
     let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
     let rows = familiar_rows(bytes.to_vec());
-    let row = rows.iter().find(|r| r.name == "numbers").unwrap_or_else(|| panic!("{where_}: no numbers row"));
+    // The run of numbers, which below protocol 3 is a step under the node the
+    // match placed: that node is the text the numbers were spelled as, and its
+    // one child is the numbers themselves. Both are called `numbers`, so the
+    // type is what tells them apart.
+    let row = rows
+        .iter()
+        .find(|r| r.name == "numbers" && r.ty.ends_with("[]"))
+        .unwrap_or_else(|| panic!("{where_}: no numbers row"));
     let shape = ev.table_shape(&doc, &row.path).unwrap();
     if let Some(qubero_core::template::Cells::Computed { rows: count }) = shape.as_ref().and_then(|s| s.cells.clone()) {
         let read = ev.pickle_cells(&doc, &row.path, 0, count).unwrap();
@@ -1990,7 +2082,14 @@ fn joblib_numbers(bytes: &[u8], where_: &str) -> Vec<String> {
     let mut ev = Evaluator::new(formats::builtin("joblib").unwrap());
     let mut rows = Vec::new();
     walk_rows(&doc, &mut ev, &[], 0, &mut rows);
-    let row = rows.iter().find(|r| r.name == "numbers").unwrap_or_else(|| panic!("{where_}: no numbers row"));
+    // The run of numbers, which below protocol 3 is a step under the node the
+    // match placed: that node is the text the numbers were spelled as, and its
+    // one child is the numbers themselves. Both are called `numbers`, so the
+    // type is what tells them apart.
+    let row = rows
+        .iter()
+        .find(|r| r.name == "numbers" && r.ty.ends_with("[]"))
+        .unwrap_or_else(|| panic!("{where_}: no numbers row"));
     let node = ev.node(&doc, &row.path).unwrap();
     (0..node.child_count as usize)
         .map(|i| {

@@ -26,6 +26,7 @@ use std::sync::Arc;
 use super::*;
 use crate::formats::pickle::familiar::{self, Dtype, Kind, Match, Names, Storage, Value};
 use crate::formats::pickle::shapes;
+use crate::codec::Codec;
 use crate::template::{Cells, Encoding, Endian::*, Expr as E, PickleShape as Shape, StrLen, Ty as T};
 
 use super::pickleparts::*;
@@ -118,9 +119,20 @@ impl Evaluator {
     /// first in Fortran order, which is what a row of it is either way. One
     /// dimension is one value a row. No dimensions is one value and no table.
     pub(super) fn pickle_table(&self, path: &[usize]) -> Option<crate::template::TableShape> {
+        // An array whose numbers were spelled rather than written opens them
+        // as a space, so the run of numbers is one step below the node the
+        // match placed. The shape belongs on the numbers and not on the run:
+        // the run holds one thing, and a table over it would be one row.
+        let (path, inside) = match path.split_last() {
+            Some((0, above)) if matches!(self.memo.get(above).map(|r| &r.ty), Some(Ty::Decoded { .. })) => (above, true),
+            _ => (path, false),
+        };
         let k = (0..=path.len()).rev().find(|k| matches!(self.memo.get(&path[..*k]).map(|r| &r.ty), Some(Ty::Pickle(Shape::Doc))))?;
         let found = self.memo.pickle(&path[..k])?;
         let here = spot(found, &path[k..])?;
+        if inside && !matches!(here, (_, Part::Data(_))) {
+            return None;
+        }
         // A pandas frame or series, whose cells are spread across blocks and
         // worked out rather than read. Recognised without touching the file,
         // because this is asked of every node on its way to the screen; the
@@ -193,26 +205,19 @@ impl Evaluator {
         }
         let (_, Part::Data(v)) = here else { return None };
         let Kind::Array { dimensions, fortran_order, storage, .. } = &v.kind else { return None };
+        // A run that was spelled rather than written says this one step down,
+        // and a run the file holds as numbers says it here. Asking the other
+        // way round would put a table over a node whose children are not the
+        // numbers.
+        if inside != (*storage != Storage::Raw) {
+            return None;
+        }
         let inner = match (dimensions.len(), fortran_order) {
             (0, _) => return None,
             (1, _) => None,
             (_, true) => dimensions.first().copied(),
             (_, false) => dimensions.last().copied(),
         };
-        // A protocol 2 array's numbers are nowhere in the file, so there is no
-        // run under the node for a table to walk and the core reads the cells
-        // instead, out of the run it decoded when the form matched.
-        if *storage != Storage::Raw {
-            let columns = inner.filter(|n| *n > 0).unwrap_or(1);
-            let count: u64 = dimensions.iter().product();
-            // No names: an array's columns are places along an axis, and the
-            // table heads them the way it heads every other run of numbers.
-            return Some(crate::template::TableShape {
-                row_word: inner.map(|_| "row".into()),
-                cells: Some(Cells::Computed { rows: count / columns.max(1) }),
-                ..Default::default()
-            });
-        }
         Some(crate::template::TableShape {
             columns: inner.filter(|n| *n > 0).map(|n| E::lit(n as i128)),
             // Several numbers to a row is a row. One to a row is a value,
@@ -235,16 +240,12 @@ impl Evaluator {
         shape: crate::template::TableShape,
     ) -> R<Option<crate::template::TableShape>> {
         // A frame's columns, its row count and what one value of each column
-        // is are all read at once, because none of them is in the node. An
-        // array whose cells the core reads has said all of that already: its
-        // columns are places along an axis rather than names in the file.
+        // is are all read at once, because none of them is in the node.
         if matches!(shape.cells, Some(Cells::Computed { .. })) {
             let (root, found) = self.pickle_doc(doc, path)?;
-            // An array whose cells the core reads, and a tensor, have both
-            // said all of it already: their columns are places along an axis
-            // rather than names written in the file.
+            // A tensor has said all of it already: its columns are places
+            // along an axis rather than names written in the file.
             match spot(&found, &path[root.len()..]) {
-                Some((_, Part::Data(_))) => return Ok(Some(shape)),
                 Some((_, Part::Value(v))) if super::pickletorch::tensor_of(v).is_some() => return Ok(Some(shape)),
                 // A state dict's summary names its own columns, so there is
                 // nothing under it to read them from.
@@ -477,19 +478,20 @@ impl Evaluator {
             Part::Protocol(_) => Ok(Some(self.pickle_place(&pr, name, T::u8(), base, at, end - at, false))),
             Part::Data(v) => {
                 let Kind::Array { dtype, dimensions, storage, .. } = &v.kind else { return fail("no such value") };
+                let Some(numbers) = numbers_ty(dtype, count_of(dimensions)) else { return fail("this dtype has no type") };
                 // Below protocol 3 the run is the latin-1 spelling of the
-                // numbers rather than the numbers, so it reads as the text it
-                // is. Nothing here decodes it: a row that showed numbers
-                // would be showing bytes the file does not hold.
+                // numbers rather than the numbers, so the numbers are nowhere
+                // in the file. The run opens as a space of its own and they
+                // are ordinary fields of it, at ordinary offsets, which is
+                // what every other stream in a file gets. The run itself stays
+                // exactly where it is and exactly as long as it is.
                 let ty = match storage {
-                    Storage::Latin1 => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Utf8),
-                    // A protocol 0 line is text of an encoding nobody
-                    // declared: it is what the escaping made of the numbers.
-                    Storage::Escaped => T::text(StrLen::Fixed(E::lit((end - at) as i128)), Encoding::Unknown),
-                    Storage::Raw => match numbers_ty(dtype, count_of(dimensions)) {
-                        Some(ty) => ty,
-                        None => return fail("this dtype has no type"),
-                    },
+                    Storage::Latin1 => T::decoded(E::lit((end - at) as i128), Codec::Latin1Text, numbers),
+                    // A protocol 0 line is the same text with the escaping
+                    // that protocol writes over the top of it, so the space
+                    // opens through both layers at once.
+                    Storage::Escaped => T::decoded(E::lit((end - at) as i128), Codec::EscapedLatin1Text, numbers),
+                    Storage::Raw => numbers,
                 };
                 Ok(Some(self.pickle_place(&pr, name, ty, base, at, end - at, false)))
             }

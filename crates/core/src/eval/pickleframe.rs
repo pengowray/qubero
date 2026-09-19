@@ -55,11 +55,16 @@ pub(super) struct Numbers<'a> {
     pub(super) dtype: &'a Dtype,
     pub(super) dimensions: &'a [u64],
     pub(super) fortran_order: bool,
-    /// The numbers themselves, for a run the file did not write as bytes.
-    /// Protocol 2 writes them as the latin-1 text they spell, so they are
-    /// nowhere in the file and the match carries them, decoded once. Nothing
-    /// at protocol 3 and up, where `at` is where they are.
-    pub(super) held: Option<&'a std::sync::Arc<Vec<u8>>>,
+    /// The path of the node that opens the numbers as a space, for a run the
+    /// file did not write as bytes. Protocol 2 writes them as the latin-1 text
+    /// they spell and protocol 0 escapes that again, so at neither protocol
+    /// are they in the file: they are byte 0 onwards of the space that node
+    /// opens, and a cell is read there. Nothing at protocol 3 and up, where
+    /// `at` is where they are in the file.
+    ///
+    /// Counted from the pickle field, as [`spot`](super::pickleparts::spot)
+    /// counts a path.
+    pub(super) spelled: Option<Vec<usize>>,
 }
 
 /// The code a categorical writes where it has no value.
@@ -304,14 +309,16 @@ pub(super) fn values_of<'a>(found: &'a Match, value: &'a Captured) -> Option<Val
         // from one frame to another is a new wrapper round the same array, so
         // the second frame names the array the first one spelled out.
         Kind::Ref(Names::Made { what, at, .. }) => values_of(found, made_at(found, *what, *at)?),
-        // An array whose numbers the file wrote as something else carries
-        // them beside the match, decoded once when it was read.
+        // An array whose numbers the file wrote as something else reads them
+        // through the space the run opens, so what is kept here is the way to
+        // that node. No such node, no table: a run of latin-1 text read as
+        // numbers would be numbers the file does not hold.
         Kind::Array { at, dtype, dimensions, fortran_order, storage, .. } => {
-            let held = match storage {
+            let spelled = match storage {
                 Storage::Raw => None,
-                Storage::Latin1 | Storage::Escaped => Some(found.decoded(*at)?),
+                Storage::Latin1 | Storage::Escaped => Some(super::pickleparts::locate(found, *at)?),
             };
-            Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order, held }))
+            Some(Values::Numbers(Numbers { at: *at, dtype, dimensions, fortran_order: *fortran_order, spelled }))
         }
         Kind::Objects { items, .. } => Some(Values::Texts(items)),
         // `__pyx_unpickle_NDArrayBacked(cls, checksum, None)` and a BUILD that
