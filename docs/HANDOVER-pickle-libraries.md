@@ -197,8 +197,10 @@ scikit-learn breadth sweep are `familiar/sklearn.rs`, which holds
 | `eval/pickletree.rs` | placing and naming those, and the table shapes | 556 |
 | `eval/picklesaid.rs` | what a value comes to in a few words | 116 |
 | `eval/picklestd.rs` | a date, an exact number, an id or a path as the text Python writes it in | 335 |
-| `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 428, 616 |
-| `eval/pickletorch.rs` | where a tensor's numbers are, in an archive or in a legacy file, and the cells read there | 481 |
+| `eval/pickleframe.rs`, `picklecells.rs` | a frame read as a table, and its cells | 428, 477 |
+| `eval/picklesummary.rs` | what a summary row of a frame, an index or a sparse matrix says | 232 |
+| `eval/pickletorch.rs` | where a tensor's numbers are, in an archive or in a legacy file, and the cells read there | 603 |
+| `formats/zipdirectory.rs` | an archive's central directory, read from the end: each entry's name and the run its data is | 337 |
 | `formats/torchzip.rs`, `torchlegacy.rs` | the two things `torch.save` writes: the archive, and the five pickles and their storages | 142, 289 |
 
 **Adding a family of forms is one file and one row.** Write the productions
@@ -1081,3 +1083,36 @@ spaces, and a zlib stream has to begin exactly where that field ends.
 `a_joblib_0_9_compressed_file_is_its_own_container` and
 `a_joblib_0_9_object_array_has_no_wrapper` in `joblib_versions.rs` are the
 claims.
+
+## Two splits, on 2026-09-20
+
+Neither changes what anything reads: `cargo run --example pickle_forms` over
+`pickle-matrix/`, `pickle/`, `joblib/` and `torch/` is byte for byte what it
+was, and `torch_real`, `torch_versions`, `cells_real` and `pickle_real` are
+unchanged.
+
+**`crates/core/src/formats/zipdirectory.rs`** is the ZIP central directory
+read from the end of a file: each entry's name and the run its data is. It was
+about 180 lines inside `eval/pickletorch.rs`, which is a file about tensors,
+and it is 603 lines there now rather than 730. Reads go through a
+`&mut dyn FnMut(u64, u64) -> R<Vec<u8>>` the way `torchlegacy::layout` does, so
+the evaluator hands one that may answer `Pending` and the module itself is
+testable against bytes in hand. Five unit tests, including the one the move was
+for: torch 1.5 writes the ZIP64 records between the directory and the end
+record although every number fits without them, so the end record's own offset
+field is what says where the directory is.
+
+**`zip_directory_names` in `recognise.rs` was left where it is**, and the
+reason is written above it. It answers a different question: a sniffer has a
+window rather than a file, wants the names only, and wants nothing at all when
+the directory is not in the window. The shared reader resolves each entry's
+*data*, which only the local header says, so it reads one header per entry and
+passes over an entry whose header it cannot reach -- which in a sniffer would
+silently drop the very names it is deciding on. The one thing the two used to
+disagree about is where the directory begins, and both read it out of the end
+record's own field now.
+
+**`crates/core/src/eval/picklesummary.rs`** is `pickle_summary`,
+`index_summary`, `sparse_summary` and `iso_time`, out of `picklecells.rs` and
+beside `picklesaid.rs`. Every one of them ends in a string a reader sees;
+`picklecells.rs` is 477 lines now rather than 690 and is about bytes.
