@@ -21,6 +21,12 @@ use qubero_core::source::MemSource;
 
 /// Every archive in `torch/` is recognised as one, by its front and by its
 /// central directory alike.
+///
+/// The one exception is what torch 1.5 wrote. Every entry's local header sets
+/// the streaming flag and says nought for both sizes, so a walk of the front
+/// gets no further than the first record, and 1.5 put `version` there rather
+/// than `data.pkl`. That file is recognised from its central directory alone,
+/// which is the question the editor asks of every archive.
 #[test]
 fn a_torch_archive_is_told_from_an_ordinary_zip() {
     let Some(dir) = folder() else { return };
@@ -34,7 +40,9 @@ fn a_torch_archive_is_told_from_an_ordinary_zip() {
         if name.ends_with("legacy.pt") {
             continue;
         }
-        assert_eq!(formats::sniff(head, bytes.len() as u64), Some("torchzip"), "{name}: the front of it");
+        if !name.starts_with("v1.5-") {
+            assert_eq!(formats::sniff(head, bytes.len() as u64), Some("torchzip"), "{name}: the front of it");
+        }
         // And again from the end, which is the path a checkpoint too large to
         // sniff whole takes: the central directory names every entry.
         let tail = &bytes[bytes.len().saturating_sub(formats::SNIFF_TAIL_WINDOW)..];

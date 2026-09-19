@@ -51,6 +51,10 @@ pub(crate) const MAGIC_P4: &[u8] = b"\x80\x04\x95\x0d\x00\x00\x00\x00\x00\x00\x0
 /// the opener nothing has been measured at is not here.
 const MAGICS: [&[u8]; 2] = [MAGIC, MAGIC_P4];
 
+/// The longest of them, which is how many bytes a reader needs in hand before
+/// [`is_torch_legacy`] can say no to a file that is not one.
+pub(crate) const MAGIC_MOST: usize = MAGIC_P4.len();
+
 /// How many pickles come before the numbers, and what each of them is.
 const PICKLES: [&str; 5] = ["magic number", "protocol version", "system info", "data", "storage keys"];
 /// Which of them is the data pickle, whose persistent ids say what each

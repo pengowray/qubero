@@ -247,16 +247,17 @@ impl Evaluator {
     /// The runs a legacy checkpoint's storages sit in, named the way an
     /// archive's entries are, or nothing at all for any other file.
     ///
-    /// The first fifteen bytes are checked before anything else is read: they
-    /// are the same in every file torch has written this way, and every other
-    /// file gets no further than that.
+    /// The first pickle is checked before anything else is read: it is the
+    /// same run of bytes in every file torch has written this way, one
+    /// spelling per protocol the caller may ask for, and every other file gets
+    /// no further than that.
     fn legacy_storages<S: Source>(&mut self, doc: &Document<S>, space: u32, end: u64) -> R<Vec<Held>> {
-        let magic = crate::formats::torchlegacy::MAGIC;
-        if end < magic.len() as u64 {
+        let want = crate::formats::torchlegacy::MAGIC_MOST as u64;
+        if end < want {
             return Ok(Vec::new());
         }
-        let opener = self.read_in(doc, space, 0, magic.len() as u64 * 8)?;
-        if opener != magic {
+        let opener = self.read_in(doc, space, 0, want * 8)?;
+        if !crate::formats::torchlegacy::is_torch_legacy(&opener) {
             return Ok(Vec::new());
         }
         // Read through the evaluator, the way everything else here reads, so
