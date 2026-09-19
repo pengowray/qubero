@@ -848,9 +848,9 @@ matrix now reads with no exceptions and `UNREAD` in `pickle_real.rs` is empty.
   text argument of a general `_codecs.encode`, the same one a `bytes` value
   and a `bytearray` are written with. Opening it for dates alone would make a
   date's run a space while an identical byte string beside it stayed text. A
-  date has no field structure at any protocol either -- at protocol 4 the run
-  is a `packed` row of bytes with the date worked out on the row above -- so
-  the space would open onto bytes, not onto a year and a month. The change
+  date has no field structure at any protocol either: at protocol 4 the run is
+  a `packed` row of bytes with the date worked out on the row above, so the
+  space would open onto bytes, not onto a year and a month. The change
   worth making is the general one: a byte string below protocol 3 opens as the
   bytes it spells, whatever holds it. That wants the `text` argument of a
   `Shape::Bytes` call placed as a decoded node, an inner type per holder, and
