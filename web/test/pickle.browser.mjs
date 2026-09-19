@@ -75,7 +75,7 @@ try {
     // dictionary key, what the array is, the call that rebuilt it, the names
     // that call was made with, and which of CPython's two picklers the file
     // shows, which for this one is neither in particular.
-    for (const shown of ["weights", "<f4", "4 x 6", "ndarray reconstruct call", "numpy._core.multiarray",
+    for (const shown of ["weights", "<f4", "4 x 6", "array reconstruct call", "numpy._core.multiarray",
                          "any (every known pickler writes this data the same way)"]) {
       assert.ok(said.includes(shown), `the listing does not show ${shown}`);
     }

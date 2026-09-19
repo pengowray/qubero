@@ -28,10 +28,6 @@ const WRAPPER: &str = "NumpyArrayWrapper";
 const FILE_WRAPPER: &str = "NDArrayWrapper";
 /// The name of that file, which is the only place the numbers are.
 const FILENAME_KEY: &str = "filename";
-/// The class of the array the wrapper stands for. `numpy.matrix` and
-/// `numpy.memmap` reach the same writer and would be named here; no file in
-/// the corpus holds one, so only the class every file names is read.
-const SUBCLASS: &str = "ndarray";
 
 /// The attributes the wrapper's state holds, in the order `__init__` sets
 /// them, which is the order a `__dict__` is written in. The last is missing
@@ -119,7 +115,7 @@ impl Cursor<'_> {
         self.atoms(&[b"("])?;
 
         self.key(SUBCLASS_KEY)?;
-        self.global(&["numpy"], SUBCLASS, "array module", "array class")?;
+        let class = self.array_class("array module", "array class")?;
         self.key(SHAPE_KEY)?;
         let dimensions = self.dimensions()?;
         self.key(ORDER_KEY)?;
@@ -145,7 +141,7 @@ impl Cursor<'_> {
         // of it either: the branch that writes the padding is the other one.
         if dtype == Dtype::Objects {
             self.finish_call("wrapper", start, wrapper_ends);
-            return self.nested_array(start, dimensions, fortran_order);
+            return self.nested_array(start, dimensions, fortran_order, class);
         }
         let pad_at = self.at;
         if let Some(align) = alignment {
@@ -174,7 +170,7 @@ impl Cursor<'_> {
         Some(Value {
             at: start,
             len: end - start,
-            kind: Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
+            kind: Kind::Array { at: data_at, len, dtype, dimensions, fortran_order, storage: Storage::Raw, class },
         })
     }
 
@@ -215,7 +211,7 @@ impl Cursor<'_> {
             self.says("file", at, len);
         }
         self.key(SUBCLASS_KEY)?;
-        self.global(&["numpy"], SUBCLASS, "array module", "array class")?;
+        self.array_class("array module", "array class")?;
         self.key(MMAP_KEY)?;
         // Whether the reader may memory-map that file. It says nothing about
         // where the numbers are, and both ways round are read.
@@ -240,15 +236,15 @@ impl Cursor<'_> {
     /// class the file named to the nested pickle's STOP, so a reader of the
     /// tree finds the same array a plain pickle of one holds. The wrapper and
     /// the pickle after it are how it was written and are rows inside it.
-    fn nested_array(&mut self, start: usize, dimensions: Vec<u64>, fortran_order: bool) -> Option<Value> {
+    fn nested_array(&mut self, start: usize, dimensions: Vec<u64>, fortran_order: bool, class: Shape) -> Option<Value> {
         let at = self.at;
         let inner = self.nested_pickle()?;
         let end = self.at;
         // Exactly one pickle and nothing else: the value it holds has to be
         // the array, and the array has to be the one the wrapper described.
         // A file whose two halves disagree is one nothing wrote.
-        let Kind::Objects { dimensions: held, fortran_order: order, items, .. } = inner.kind else { return None };
-        if held != dimensions || order != fortran_order {
+        let Kind::Objects { dimensions: held, fortran_order: order, items, class: held_class, .. } = inner.kind else { return None };
+        if held != dimensions || order != fortran_order || held_class != class {
             return None;
         }
         // A new frame begins after the nested pickle, and that header belongs
@@ -260,7 +256,7 @@ impl Cursor<'_> {
         self.gate()?;
         self.breaks.push(Break::Nested { at, end });
         self.wrappers += 1;
-        Some(Value { at: start, len: end - start, kind: Kind::Objects { dimensions, fortran_order, items, nested: Some(at) } })
+        Some(Value { at: start, len: end - start, kind: Kind::Objects { dimensions, fortran_order, items, nested: Some(at), class } })
     }
 
     /// A whole pickle inside the stream: its own PROTO, its own framing, its

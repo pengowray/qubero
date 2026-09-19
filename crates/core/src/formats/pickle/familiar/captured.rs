@@ -102,6 +102,10 @@ pub enum Kind {
         /// How the numbers at `at`/`len` are written, which protocol 2 leaves
         /// no way of writing directly.
         storage: Storage,
+        /// Which of NumPy's own array classes the reconstructor was handed.
+        /// [`Shape::Array`] for `numpy.ndarray`, which is nearly every array;
+        /// see [`numpy::ARRAY_CLASSES`](super::numpy::ARRAY_CLASSES).
+        class: Shape,
     },
     /// A class or a callable the file named by STACK_GLOBAL, from a module a
     /// form allows. `parts` is the module word and the name word when the file
@@ -129,6 +133,22 @@ pub enum Kind {
         /// when the array has no numbers to write. Nothing for an array
         /// written inside the one stream, which is every other file.
         nested: Option<usize>,
+        /// Which of NumPy's own array classes this is, as on [`Kind::Array`].
+        class: Shape,
+    },
+    /// A `numpy.ma.MaskedArray`: the numbers, a mask of which of them count,
+    /// and the value a masked one reads as.
+    ///
+    /// Two arrays and not one array with a note. The mask is a run of the
+    /// file, one byte an entry, with an address of its own and a table of its
+    /// own, and the whole point of a masked array is which entries it hides.
+    Masked {
+        data: Box<Value>,
+        mask: Box<Value>,
+        /// What a masked entry stands for, which is `Kind::None` where the
+        /// array kept whatever NumPy's default for its dtype is: the pickle
+        /// does not say what that default came to.
+        fill: Box<Value>,
     },
     /// A NumPy dtype standing on its own rather than describing an array,
     /// which is what pandas hands a datetime column beside its numbers.
@@ -639,6 +659,15 @@ pub enum Shape {
     /// A typed run of numbers, with the dtype, shape and storage order that
     /// say how to read it.
     Array,
+    /// `numpy.matrix`, which is an array held to two dimensions. Everything
+    /// else about it is an array's, down to the reconstructor that rebuilt it.
+    Matrix,
+    /// `numpy.memmap`, which is an array a reader may keep in a file rather
+    /// than in memory. What it was pickled with is the numbers themselves.
+    MemMap,
+    /// `numpy.ma.MaskedArray`, which is an array, a mask of which of its
+    /// entries count, and the value a masked entry reads as.
+    MaskedArray,
     /// A run of instructions the form matched as one act. See [`Call`].
     Call,
     Slice,
@@ -709,6 +738,10 @@ impl Shape {
             Shape::Set => "set",
             Shape::Ref => "reference",
             Shape::Array => "array",
+            // NumPy's own names for its own array classes.
+            Shape::Matrix => "matrix",
+            Shape::MemMap => "memmap",
+            Shape::MaskedArray => "masked array",
             Shape::Call => "call",
             Shape::Slice => "slice",
             Shape::Range => "range",

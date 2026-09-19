@@ -8,6 +8,32 @@ use super::memo::Bound;
 use super::{Dtype, Kind, Shape, Storage, Value, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
 
+/// The array classes the reconstructor may be handed, each with the module it
+/// is spelled from and what the node it makes is called.
+///
+/// NumPy's own, enumerated, and nothing else. `_reconstruct` is handed
+/// `self.__class__`, so a class anyone defined can reach this argument; what
+/// a class from outside NumPy does to an array when it is rebuilt is that
+/// class's business, and a reader shown the numbers would be shown something
+/// the file does not say. These three are NumPy's, they add nothing to how the
+/// numbers are read, and each is a plain array with its own name on it:
+/// `numpy.matrix` is two dimensions, and `numpy.memmap` is an array a reader
+/// may keep in a file, pickled with its numbers like any other.
+///
+/// `numpy.rec.recarray` is not here. Its dtype is `numpy.dtype(numpy.record)`,
+/// a class where every other dtype is letters, so it needs a dtype production
+/// of its own; no file in the collection holds one.
+/// How a mask's dtype is spelled, which is one boolean an entry however wide
+/// the numbers under it are. `make_mask_descr` in `numpy/ma/core.py` is what
+/// makes it, and for a plain dtype it comes to this.
+const MASK_DTYPE: &str = "|b1";
+
+pub(super) const ARRAY_CLASSES: &[(&str, &str, Shape)] = &[
+    ("numpy", "ndarray", Shape::Array),
+    ("numpy", "matrix", Shape::Matrix),
+    ("numpy", "memmap", Shape::MemMap),
+];
+
 /// The NumPy globals a form may name and never calls, by their whole dotted
 /// path.
 ///
@@ -260,7 +286,7 @@ impl Cursor<'_> {
     /// names and fixed instruction for instruction around it.
     pub(super) fn numpy(&mut self) -> Option<Value> {
         let start = self.at;
-        for production in [Cursor::reconstructed, Cursor::frombuffer, Cursor::scalar, Cursor::dtype_value] {
+        for production in [Cursor::reconstructed, Cursor::mareconstructed, Cursor::frombuffer, Cursor::scalar, Cursor::dtype_value] {
             let here = self.save();
             match production(self, start) {
                 Some(value) => return Some(value),
@@ -332,7 +358,7 @@ impl Cursor<'_> {
         self.reads(at, payload, Storage::Raw);
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions, fortran_order, storage: Storage::Raw },
+            Kind::Array { at, len, dtype, dimensions, fortran_order, storage: Storage::Raw, class: Shape::Array },
         ))
     }
 
@@ -358,7 +384,7 @@ impl Cursor<'_> {
         const MODULES: &[&str] = &["numpy._core.multiarray", "numpy.core.multiarray"];
         self.global(MODULES, "_reconstruct", "module", "callable")?;
         self.open_tuple()?;
-        self.global(&["numpy"], "ndarray", "class module", "class")?;
+        let class = self.array_class("class module", "class")?;
         // The placeholder the reconstructor is given: shape (0,) and a dtype
         // letter, both replaced by the BUILD that follows.
         self.open_tuple()?;
@@ -403,7 +429,7 @@ impl Cursor<'_> {
         // The array itself, which a later part of the file may name: a pandas
         // block manager writes its values once and names them again in the
         // dictionary it versions its state with.
-        self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: false })?;
+        self.memoize(Bound::Made { what: class, at: start, hashable: false })?;
         self.atoms(&[b"("])?;
         self.number(1)?;
         let dimensions = self.dimensions()?;
@@ -417,16 +443,16 @@ impl Cursor<'_> {
             // The run is closed before the values are read, not after. A value
             // may be an array or a date, which is a run of its own, and the
             // names spelled inside this one belong to this one.
-            self.finish_call("ndarray reconstruct call", start, call_ends);
+            self.finish_call("array reconstruct call", start, call_ends);
             let items = self.filled_list(count_of(&dimensions)?)?;
             self.exact(b"t")?;
             self.memoize(Bound::Opaque)?;
             self.exact(b"b")?;
             self.arrays += 1;
-            return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items, nested: None }));
+            return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items, nested: None, class }));
         }
         let Numbers { at, len, payload, storage, named } = self.numbers(&dtype, &dimensions)?;
-        self.finish_call("ndarray reconstruct call", start, call_ends);
+        self.finish_call("array reconstruct call", start, call_ends);
         if !named {
             self.memoize(Bound::Bytes { at, len })?;
             self.reads(at, payload, storage);
@@ -437,8 +463,104 @@ impl Cursor<'_> {
         self.arrays += 1;
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions, fortran_order, storage },
+            Kind::Array { at, len, dtype, dimensions, fortran_order, storage, class },
         ))
+    }
+
+    /// `numpy.ma.core._mareconstruct(MaskedArray, ndarray, (0,), 'b')` and the
+    /// BUILD that hands the result everything it holds.
+    ///
+    /// The state is the five things an ordinary array's BUILD is handed and
+    /// two more: the mask, which is one byte an entry, and the value a masked
+    /// entry stands for. `__getstate__` in `numpy/ma/core.py` is
+    /// `data_state + (getmaskarray(self).tobytes(cf), self._fill_value)`, so
+    /// the mask is always written out in full even for an array with nothing
+    /// masked in it, and the fill is `None` wherever the array kept NumPy's
+    /// default for its dtype.
+    ///
+    /// The shape, the storage order and the numbers come out as the data
+    /// array, and the same shape and order with a boolean dtype come out as
+    /// the mask array, so both open as ordinary arrays with tables of their
+    /// own. A structured dtype is refused: `make_mask_descr` gives such an
+    /// array a mask of one boolean per column rather than per entry, and no
+    /// file in the collection holds one.
+    fn mareconstructed(&mut self, start: usize) -> Option<Value> {
+        self.global(&["numpy.ma.core"], "_mareconstruct", "module", "callable")?;
+        self.atoms(&[b"("])?;
+        // The class being rebuilt and the class its data is an array of.
+        self.global(&["numpy.ma", "numpy.ma.core"], "MaskedArray", "class module", "class")?;
+        self.array_class("base class module", "base class")?;
+        // The placeholder the reconstructor is given: shape (0,) and a dtype
+        // letter, both replaced by the BUILD that follows. The letter is a
+        // text here where an ordinary array writes a byte string.
+        self.open_tuple()?;
+        self.number(0)?;
+        self.close_tuple(1)?;
+        self.memoize(Bound::Opaque)?;
+        self.exact_word("b", false)?;
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"R")?;
+        self.memoize(Bound::Made { what: Shape::MaskedArray, at: start, hashable: false })?;
+        self.atoms(&[b"("])?;
+        self.number(1)?;
+        let dimensions = self.dimensions()?;
+        let dtype = self.dtype()?;
+        if matches!(dtype, Dtype::Record { .. } | Dtype::Objects) {
+            return None;
+        }
+        let fortran_order = self.read_flag()?;
+        // The run of instructions is closed before the two runs are read, so
+        // that the call the fill value may be rebuilt by is a call inside
+        // this one rather than the one a reader of the tree finds first.
+        self.finish_call("masked array reconstruct call", start, self.at);
+        let data = self.masked_run(&dtype, &dimensions, fortran_order)?;
+        let mask = self.masked_run(&Dtype::Plain(MASK_DTYPE.to_string()), &dimensions, fortran_order)?;
+        // What a masked entry stands for: nothing where the array kept
+        // NumPy's default, and otherwise one number of the array's own kind,
+        // which NumPy writes as an array of no dimensions.
+        let fill_at = self.at;
+        let fill = match self.peek()? {
+            b'N' => {
+                self.byte()?;
+                self.span(fill_at, Kind::None)
+            }
+            _ => self.numpy()?,
+        };
+        self.exact(b"t")?;
+        self.memoize(Bound::Opaque)?;
+        self.exact(b"b")?;
+        Some(self.span(start, Kind::Masked { data: Box::new(data), mask: Box::new(mask), fill: Box::new(fill) }))
+    }
+
+    /// One of the two runs a masked array's state holds, read as the array it
+    /// is: the numbers, or the mask over them.
+    ///
+    /// The shape, the dtype and the storage order are the state's and are
+    /// shared, so each run carries a copy of them rather than a row of its
+    /// own. The value spans the run and the opcode that measured it, which is
+    /// what makes it a node of the tree at the place the file wrote it.
+    fn masked_run(&mut self, dtype: &Dtype, dimensions: &[u64], fortran_order: bool) -> Option<Value> {
+        let from = self.at;
+        let Numbers { at, len, payload, storage, named } = self.numbers(dtype, dimensions)?;
+        if !named {
+            self.memoize(Bound::Bytes { at, len })?;
+            self.reads(at, payload, storage);
+        }
+        self.arrays += 1;
+        Some(Value {
+            at: from,
+            len: self.at - from,
+            kind: Kind::Array {
+                at,
+                len,
+                dtype: dtype.clone(),
+                dimensions: dimensions.to_vec(),
+                fortran_order,
+                storage,
+                class: Shape::Array,
+            },
+        })
     }
 
     /// Tell the opcode listing that this run of bytes is an array's numbers,
@@ -476,7 +598,20 @@ impl Cursor<'_> {
         self.arrays += 1;
         Some(self.span(
             start,
-            Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false, storage },
+            Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false, storage, class: Shape::Array },
         ))
+    }
+
+    /// The array class the reconstructor is handed, which is one of NumPy's
+    /// own and no other. See [`ARRAY_CLASSES`].
+    pub(super) fn array_class(&mut self, module_says: &'static str, name_says: &'static str) -> Option<Shape> {
+        let here = self.save();
+        for (module, name, shape) in ARRAY_CLASSES {
+            if self.global(&[module], name, module_says, name_says).is_some() {
+                return Some(*shape);
+            }
+            self.restore(here);
+        }
+        None
     }
 }

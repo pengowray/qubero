@@ -128,6 +128,8 @@ section says what its neighbour does differently.
   and external-buffer dtypes/layouts fall back; an `O8` array is read by the
   pandas form and by the two joblib ones, and by no other, which is where one
   turns up. See "An array of pickled objects" below.
+  The class `_reconstruct` is handed is one of NumPy's own, enumerated, and a
+  masked array is a production of its own: see the two sections below.
 - `builtins-values-p4-p5-v3`: the basic productions plus the four builtins a
   pickle writes as a call rather than as a literal, with at least one present.
   `builtins.slice` of three integers or Nones, `builtins.range` of three
@@ -600,6 +602,60 @@ stack; what changes is that every value is an opcode and a line.
   says which, by the protocol and the run, and the recogniser and the reading
   both ask it. Two dates of the same day in one file used to be the one thing
   in the matrix no form read.
+
+### NumPy's own array classes
+
+`_reconstruct` is handed `self.__class__`, so the class written in it is the
+array's own and a class anyone defined can reach that argument. Three of
+NumPy's are read and nothing else is, each by its whole dotted path:
+`numpy.ndarray`, which is nearly every array; `numpy.matrix`, which is an
+array held to two dimensions; and `numpy.memmap`, which is an array a reader
+may keep in a file and which `__reduce__` pickles with its numbers like any
+other. None of the three changes how the numbers are read, so all three are
+the same array with a different word on the node: a matrix says `matrix` where
+an ndarray says `array`, and the dtype, the shape, the order and the table are
+what they were. The joblib wrapper's `subclass` key reads the same list.
+
+A class from outside NumPy is a non-match. What such a class does to an array
+when it is rebuilt is that class's business, and a reader shown the numbers
+under its name would be shown something the file does not say.
+
+`numpy.rec.recarray` is not on the list. Its dtype is
+`numpy.dtype(numpy.record, False, True)`, a class where every other dtype is
+letters, so it wants a dtype production of its own; the class also moved from
+`numpy` to `numpy.rec` between NumPy 1 and 2. No file in the collection holds
+one.
+
+### A masked array is two arrays and a fill value
+
+`numpy.ma.MaskedArray` is rebuilt by
+`numpy.ma.core._mareconstruct(MaskedArray, ndarray, (0,), 'b')`, where the
+last argument is a text and not the byte string an ordinary array's
+placeholder is. The BUILD after it is handed a seven-part tuple:
+`__getstate__` in `numpy/ma/core.py` is
+`data_state + (getmaskarray(self).tobytes(cf), self._fill_value)`, so the
+first five parts are an ordinary array's version, shape, dtype, storage order
+and numbers, and the two after them are the mask and the fill.
+
+The node is typed `masked array` and holds four rows: the run of instructions
+that rebuilt it, `data`, `mask` and `fill value`. `data` and `mask` are each
+an array in their own right, with the state's shape and order and with the
+state's dtype on one and `|b1` on the other, which is what `make_mask_descr`
+gives a plain dtype. So each has its own run, its own address and its own
+table, and at protocols 0 to 2 each opens its numbers as a space of its own
+the way every other array does.
+
+Three things are worth knowing about what NumPy writes:
+
+- **The mask is always written out.** `getmaskarray` makes one for an array
+  whose own mask is the `nomask` singleton, so a file holding a masked array
+  with nothing hidden still holds a run of noughts as long as the numbers are.
+- **The fill value is `None` or an array of no dimensions.** `None` is what an
+  array that kept NumPy's default for its dtype writes, and the pickle does
+  not say what that default came to.
+- **A structured dtype is refused.** `make_mask_descr` gives such an array a
+  mask of one boolean per column rather than one per entry, and no file in the
+  collection holds one.
 
 ### What stays a non-match, and why
 

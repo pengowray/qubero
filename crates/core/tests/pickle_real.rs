@@ -809,10 +809,31 @@ fn the_forms_match_these_samples_and_no_others() {
         // sparse matrix keeps that matrix, which is scipy's.
         ("sklearn-column-transformer.pickle", Some("mixed-values-p4-p5-v1")),
         ("sklearn-k-neighbors-classifier-sparse-input.pickle", Some("mixed-values-p4-p5-v1")),
+        // NumPy's own array classes, each of which reaches the reconstructor
+        // an ndarray reaches and names itself in it. A matrix is an array
+        // held to two dimensions; a memmap is an array a reader may keep in
+        // a file, and what it is pickled with is the numbers themselves.
+        ("proto4-numpy-matrix.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-matrix.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-memmap.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-memmap.pickle", Some("numpy-array-p2-p3-v1")),
         // `cv_results_` is a dictionary of `numpy.ma.MaskedArray`, which is
-        // an array and a mask of which of its entries count, rebuilt by
-        // `numpy.ma.core._mareconstruct`. No form reads that yet.
-        ("unfamiliar-sklearn-grid-search-cv.pickle", None),
+        // an array, a mask of which of its entries count and the value a
+        // masked entry stands for, rebuilt by `numpy.ma.core._mareconstruct`.
+        ("sklearn-grid-search-cv.pickle", Some("sklearn-estimator-p4-p5-v1")),
+        // The masked array on its own, which is NumPy's and nothing else's.
+        // Two of four entries hidden, the same over two dimensions, one with
+        // nothing hidden, whose mask `__getstate__` writes out in full
+        // anyway, and one with a fill value the array was given rather than
+        // NumPy's default for its dtype.
+        ("proto4-numpy-masked-array.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-masked-array.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-masked-2d.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-masked-2d.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-masked-unmasked.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-masked-unmasked.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-masked-fill-value.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto2-numpy-masked-fill-value.pickle", Some("numpy-array-p2-p3-v1")),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -1344,7 +1365,7 @@ fn a_matched_array_reads_as_its_numbers_under_the_familiar_template() {
     assert_eq!(row(&rows, "shape").value, Value::Str("4 x 6".into()));
     assert_eq!(row(&rows, "order").value, Value::Str("C".into()));
     // The call, with the names the form matched inside it.
-    assert_eq!(row(&rows, "ndarray reconstruct call").ty, "call");
+    assert_eq!(row(&rows, "array reconstruct call").ty, "call");
     assert_eq!(row(&rows, "module").value, Value::Str("numpy._core.multiarray".into()));
     assert_eq!(row(&rows, "callable").value, Value::Str("_reconstruct".into()));
     assert_eq!(row(&rows, "class module").value, Value::Str("numpy".into()));

@@ -766,10 +766,11 @@ beside it opens under the `npy` template with no new mechanism at all.
 
 **What still does not read**, and why:
 
-- `numpy.matrix` in a joblib file, from every release 0.11 to 1.6. The
-  wrapper's `subclass` reads `numpy.ndarray` and no other class, because
-  whether NumPy's array subclasses are named at all is a decision nobody has
-  made. `joblib/does-not-read/v1.6-numpy-matrix.joblib`.
+`numpy.matrix` in a joblib file used to be here. The wrapper's `subclass` now
+reads any of NumPy's own array classes, so `joblib/v1.6-numpy-matrix.joblib`
+reads as `joblib-arrays-p4-p5-v1` with `matrix` on the node. See "NumPy's own
+array classes" in `DESIGN-familiar-pickle-forms.md`.
+
 - A plain pickle of a NumPy object array, which is what joblib 0.9 wrote for
   one: it has no wrapper, so no joblib form reads it, and the NumPy forms have
   `object_arrays` off. Widening them would move the verdict of every

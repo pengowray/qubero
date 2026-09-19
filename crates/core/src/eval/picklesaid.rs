@@ -114,6 +114,15 @@ impl Evaluator {
             Kind::Array { dtype: Dtype::Record { .. }, dimensions, .. } => Some(format!("record array {}", across(dimensions))),
             Kind::Array { dtype, dimensions, .. } => Some(format!("{} array {}", super::pickleframe::dtype_word(dtype), across(dimensions))),
             Kind::Objects { dimensions, .. } => Some(format!("object array {}", across(dimensions))),
+            // A masked array reads as the numbers under it do, with the word
+            // that says some of them are hidden. Which ones is the table's to
+            // show; a line meant to be read at a glance does not count them.
+            Kind::Masked { data, .. } => match &data.kind {
+                Kind::Array { dtype, dimensions, .. } => {
+                    Some(format!("{} masked array {}", super::pickleframe::dtype_word(dtype), across(dimensions)))
+                }
+                _ => None,
+            },
             // What a reader opens a checkpoint to see, in the order they will
             // ask it: what one value is, whether it is a weight, and how many
             // of them there are.

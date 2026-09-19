@@ -194,8 +194,16 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // joblib name is not the narrowest true one and the mixed form is.
         ("sklearn-column-transformer.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
         ("sklearn-k-neighbors-classifier-sparse-input.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
-        // The one that does not read is under `does-not-read`, which this
-        // walk does not descend into. See the README there.
+        // A `numpy.matrix`, which reaches the same wrapper every array does
+        // and names `numpy.matrix` in its `subclass` where every other file
+        // names `numpy.ndarray`. One of NumPy's own array classes, so it is
+        // read, and the node says which class it is.
+        ("v1.6-numpy-matrix.joblib", Some("joblib-arrays-p4-p5-v1"), "joblib"),
+        // A fitted `GridSearchCV`, whose `cv_results_` is a dictionary of
+        // masked arrays. Those are NumPy's, and the wrapped arrays beside
+        // them are joblib's, so the narrowest true name is still the joblib
+        // one.
+        ("sklearn-grid-search-cv.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
         // The compressors, each of which holds one of the files above.
         ("dict-of-arrays-zlib.joblib", None, "zlib"),
         ("dict-of-arrays-compress-true.joblib", None, "zlib"),

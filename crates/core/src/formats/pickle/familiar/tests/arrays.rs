@@ -446,3 +446,104 @@ fn a_changed_instruction_leaves_no_match() {
     mismatched[at + 1] = 4;
     assert!(recognise(&framed(&mismatched)).is_none(), "a length past the shape it declared");
 }
+
+/// The reconstructor is handed `self.__class__`, so the class named in it is
+/// the array's own. NumPy's are enumerated and read, each with its own name on
+/// the node; anyone else's is a non-match, because what such a class does to an
+/// array when it is rebuilt is that class's business and no enumeration covers
+/// it.
+#[test]
+fn numpy_s_own_array_classes_are_read_and_anyone_else_s_is_not() {
+    let body = one_array(0, "f8", b'<', b"K\x02\x85\x94", &[0; 16]);
+    let at = body.windows(10).position(|w| w == b"\x8c\x07ndarray\x94").unwrap();
+    let named = |name: &str| {
+        let mut changed = body.clone();
+        changed.splice(at..at + 10, word(name));
+        changed.push(b'.');
+        framed(&changed)
+    };
+    for (name, shape) in [("ndarray", Shape::Array), ("matrix", Shape::Matrix), ("memmap", Shape::MemMap)] {
+        let whole = named(name);
+        let found = recognise(&whole).unwrap_or_else(|| panic!("{name}: read as far as {:#x}", furthest(&whole)));
+        let Kind::Array { class, dimensions, .. } = &found.value.kind else { panic!("an array expected") };
+        assert_eq!((*class, dimensions.as_slice()), (shape, &[2][..]), "{name}");
+        // The node says which class it is where every other array says
+        // `array`, and everything else about it is an array's.
+        assert_eq!(named_row(&dump(&whole), "data").ty, shape.name(), "{name}");
+    }
+    // A NumPy array class that needs a dtype production of its own, one of
+    // NumPy's classes that is not an array at all, and a name close enough to
+    // be a typo.
+    for name in ["recarray", "dtype", "ndarray_"] {
+        assert!(recognise(&named(name)).is_none(), "{name} was read as an array");
+    }
+}
+
+/// One masked array written out in full: the reconstructor, the class and the
+/// class its data is an array of, the placeholder shape and dtype letter, and
+/// the BUILD whose state is an ordinary array's five things, the mask and the
+/// fill value.
+///
+/// Counting the memo marks out: 6 is the word `numpy`, which the dtype names
+/// again, and 12 is what the call made.
+fn masked(data: &[u8], mask: &[u8], fill: &[u8]) -> Vec<u8> {
+    framed(&cat(&[
+        &word("numpy.ma.core"),
+        &word("_mareconstruct"),
+        b"\x93\x94(",
+        &word("numpy.ma"),
+        &word("MaskedArray"),
+        b"\x93\x94",
+        &word("numpy"),
+        &word("ndarray"),
+        b"\x93\x94",
+        b"K\x00\x85\x94",
+        &word("b"),
+        b"t\x94R\x94",
+        b"(K\x01K\x04\x85\x94",
+        &dtype_state(&word("numpy"), "f8", b'<'),
+        b"\x89",
+        &blob(data),
+        &blob(mask),
+        fill,
+        b"t\x94b.",
+    ]))
+}
+
+/// A `numpy.ma.MaskedArray`, which is `_mareconstruct` and a BUILD whose
+/// state holds two runs: the numbers, and one byte an entry saying which of
+/// them count. Both are read as the arrays they are.
+#[test]
+fn a_masked_array_is_the_numbers_the_mask_and_the_fill_value() {
+    let numbers = &[0u8; 32];
+    let whole = masked(numbers, b"\x00\x01\x00\x01", b"N");
+    let found = recognise(&whole).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&whole)));
+    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    let Kind::Masked { data, mask, fill } = &found.value.kind else { panic!("a masked array expected") };
+    let run = |v: &Value| match &v.kind {
+        Kind::Array { at, len, dtype, dimensions, .. } => (*at, *len, spelling(dtype).to_string(), dimensions.clone()),
+        other => panic!("an array expected, not {other:?}"),
+    };
+    assert_eq!(run(data), (170, 32, "<f8".to_string(), vec![4]));
+    assert_eq!(run(mask), (205, 4, "|b1".to_string(), vec![4]));
+    // Nothing where the array kept NumPy's default for its dtype.
+    assert_eq!(fill.kind, Kind::None);
+    let seen = dump(&whole);
+    tiles(&seen);
+    assert_eq!(named_row(&seen, "data").ty, "masked array");
+    assert_eq!(named_row(&seen, "mask").ty, "array");
+    assert_eq!(named_row(&seen, "fill value").ty, "null");
+
+    // A fill value the array was given, which NumPy writes as an array of no
+    // dimensions.
+    let given = cat(&[&word("numpy._core.multiarray"), &word("_reconstruct"), b"\x93\x94", &word("numpy"), &word("ndarray"), b"\x93\x94K\x00\x85\x94", &blob(b"b"), b"\x87\x94R\x94(K\x01)", &dtype_state(&word("numpy"), "f8", b'<'), b"\x89", &blob(&[0; 8]), b"t\x94b"]);
+    let whole = masked(numbers, b"\x00\x01\x00\x01", &given);
+    let found = recognise(&whole).unwrap_or_else(|| panic!("a given fill value: read as far as {:#x}", furthest(&whole)));
+    let Kind::Masked { fill, .. } = &found.value.kind else { panic!("a masked array expected") };
+    assert!(matches!(fill.kind, Kind::Array { dimensions: ref d, .. } if d.is_empty()));
+
+    // A mask that is not one byte an entry, and a run of numbers that is not
+    // the shape the state declared.
+    assert!(recognise(&masked(numbers, b"\x00\x01\x00", b"N")).is_none(), "a mask short of one byte an entry");
+    assert!(recognise(&masked(&[0; 24], b"\x00\x01\x00\x01", b"N")).is_none(), "numbers short of the shape");
+}

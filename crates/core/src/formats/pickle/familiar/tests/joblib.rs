@@ -30,7 +30,7 @@ fn an_array_joblib_wrote_is_the_array_a_plain_pickle_would_hold() {
     let found = recognise(SMALL).unwrap();
     assert_eq!(found.form, "joblib-arrays-p4-p5-v1");
     assert_eq!(found.proto, 4);
-    let Kind::Array { at, len, dtype, dimensions, fortran_order, storage } = &found.value.kind else { panic!("array") };
+    let Kind::Array { at, len, dtype, dimensions, fortran_order, storage, .. } = &found.value.kind else { panic!("array") };
     assert_eq!((spelling(dtype), dimensions.as_slice(), *fortran_order), ("<f8", &[2, 3][..], false));
     // The numbers are where joblib put them, which is past the padding and
     // nowhere the file states.
@@ -192,7 +192,7 @@ fn an_array_of_objects_is_the_array_the_pickle_after_the_wrapper_holds() {
     // writers, each naming its own.
     assert_eq!(found.proto, 4);
     assert_eq!(OBJECTS[NESTED_AT..NESTED_AT + 2], [0x80, 5]);
-    let Kind::Objects { dimensions, fortran_order, items, nested } = &found.value.kind else { panic!("object array") };
+    let Kind::Objects { dimensions, fortran_order, items, nested, .. } = &found.value.kind else { panic!("object array") };
     assert_eq!((dimensions.as_slice(), *fortran_order, *nested), (&[3][..], false, Some(NESTED_AT)));
     // The value covers the wrapper and the pickle after it, and the outer
     // STOP is the one byte left.

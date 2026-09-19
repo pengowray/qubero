@@ -110,8 +110,10 @@ pub(super) fn hashable(value: &Value) -> bool {
             Names::Made { hashable, .. } => *hashable,
         },
         Kind::Tuple(items) | Kind::FrozenSet(items) => items.iter().all(hashable),
-        // A NumPy scalar hashes; an array does not.
+        // A NumPy scalar hashes; an array does not, and neither does a
+        // masked array, which is an array however few entries it has.
         Kind::Array { dimensions, .. } => dimensions.is_empty(),
+        Kind::Masked { .. } => false,
         // A torch tensor hashes by identity, so Python could have written one
         // as a dictionary key. Refused until a file does: a key is what names
         // an entry on screen, and a tensor has no name to be.

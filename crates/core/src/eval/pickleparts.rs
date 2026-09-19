@@ -48,6 +48,10 @@ pub(super) const BYTES_FIELD: &str = "bytes";
 /// this array's own bytes, so it is said here and placed under the array that
 /// wrote it.
 pub(super) const EARLIER_RUN: &str = "bytes an earlier array wrote";
+/// A masked array's mask, and what a masked entry stands for. NumPy's own
+/// words: `mask` is the attribute, and `fill_value` is the property.
+pub(super) const MASK_FIELD: &str = "mask";
+pub(super) const FILL_FIELD: &str = "fill value";
 pub(super) const DTYPE_FIELD: &str = "dtype";
 pub(super) const SHAPE_FIELD: &str = "shape";
 pub(super) const ORDER_FIELD: &str = "order";
@@ -463,8 +467,18 @@ pub(super) fn parts<'a>(found: &'a Match, here: &Part<'a>) -> Vec<(Label, Part<'
             // rows saying where its numbers are rather than a value to read
             // where it sits. Both are in files of their own, beside the
             // readers that follow those rows.
-            Kind::Objects { dimensions, fortran_order, items, nested } => {
+            Kind::Objects { dimensions, fortran_order, items, nested, .. } => {
                 super::pickleobjects::object_array(found, v, dimensions, *fortran_order, items, nested)
+            }
+            // A masked array: the run of instructions that rebuilt it, the
+            // numbers and the mask as the two arrays they are, and the value
+            // a masked entry stands for.
+            Kind::Masked { data, mask, fill } => {
+                let mut kids: Vec<(Label, Part)> = call_of(found, v).map(|c| (Label::Field(c.name), Part::Call(c, v))).into_iter().collect();
+                kids.push((Label::Field(DATA_FIELD), Part::Value(data)));
+                kids.push((Label::Field(MASK_FIELD), Part::Value(mask)));
+                kids.push((Label::Field(FILL_FIELD), Part::Value(fill)));
+                (Vec::new(), kids)
             }
             Kind::Tensor(t) => super::pickletorch::tensor_parts(found, v, t),
             Kind::Array { dtype, dimensions, fortran_order, storage, .. } => {
@@ -677,7 +691,8 @@ pub(super) fn made_at(found: &Match, what: Shape, at: usize) -> Option<&Value> {
         let is_it = match &value.kind {
             Kind::Made { what: made, .. } => *made == what,
             Kind::Instance { .. } => what == Shape::Object,
-            Kind::Array { .. } | Kind::Objects { .. } => what == Shape::Array,
+            Kind::Array { class, .. } | Kind::Objects { class, .. } => what == *class,
+            Kind::Masked { .. } => what == Shape::MaskedArray,
             _ => false,
         };
         if value.at == at && is_it {
@@ -691,6 +706,7 @@ pub(super) fn made_at(found: &Match, what: Shape, at: usize) -> Option<&Value> {
             }
             Kind::Dict(entries) => left.extend(entries.iter().flat_map(|(k, v)| [k, v]).filter(spans)),
             Kind::Instance { state, .. } => left.extend(state.as_deref().filter(spans)),
+            Kind::Masked { data, mask, fill } => left.extend([&**data, &**mask, &**fill].into_iter().filter(|v| spans(&v))),
             Kind::Made { items, state, .. } => {
                 left.extend(items.iter().filter(spans));
                 left.extend(state.as_deref().filter(spans));
@@ -723,7 +739,10 @@ pub(super) fn shape_of(part: &Part) -> Option<Shape> {
             // which is what the row above the `line` row is worth.
             Kind::Spelled { bytes: true, .. } => Shape::Bytes,
             Kind::Spelled { .. } => Shape::Text,
-            Kind::Array { .. } | Kind::Objects { .. } => Shape::Array,
+            // NumPy's own array classes read as arrays and say which class
+            // they were rebuilt as.
+            Kind::Array { class, .. } | Kind::Objects { class, .. } => *class,
+            Kind::Masked { .. } => Shape::MaskedArray,
             Kind::Made { what, .. } => *what,
             Kind::Class { .. } => Shape::Class,
             Kind::DType(_) => Shape::DType,

@@ -993,3 +993,56 @@ still the one reading of a run a reference names.
 day. `kinds_real` is worth adding to the merge gate: it is the only test that
 would have caught this, it walks every file in the collection and it takes
 about nine minutes.
+
+## NumPy's own array classes and masked arrays: landed on 2026-09-20
+
+Two things NumPy writes that no form read. `DESIGN-familiar-pickle-forms.md`
+has the whole of both, under "NumPy's own array classes" and "A masked array
+is two arrays and a fill value"; what belongs here is what moved.
+
+**The array class is enumerated now.** `_reconstruct` is handed
+`self.__class__`, and the production named `numpy.ndarray` and no other.
+`numpy::ARRAY_CLASSES` is the list: `numpy.ndarray`, `numpy.matrix` and
+`numpy.memmap`, each by its whole dotted path and each with the word the node
+goes by. `Kind::Array` and `Kind::Objects` carry it, `shape_of` returns it,
+and the memo files a value under the class it is, so a reference to a matrix
+says `matrix at 0x...`. The joblib wrapper's `subclass` key reads the same
+list, which is what `joblib/v1.6-numpy-matrix.joblib` needed.
+
+`numpy.memmap` was guessed to reduce to a plain ndarray. It does not:
+`__reduce__` is `ndarray`'s and writes `self.__class__`, so NumPy 2.5 writes
+`_reconstruct(numpy.memmap, (0,), b'b')` with the numbers in the pickle and
+nothing about the file it was mapped from. Measured, not read off the note.
+
+`numpy.rec.recarray` is left, and the reason is in the design document: its
+dtype is a class where every other dtype is letters.
+
+**A masked array is a production of its own**, `Cursor::mareconstructed` in
+`numpy.rs`, tried where `reconstructed` is tried, so every form that reads
+arrays reads masked ones. `Kind::Masked` holds the data, the mask and the fill
+as three values; the first two are `Kind::Array`s over their own runs, so the
+tree, the spaces at protocols 0 to 2, the addresses and the per-array tables
+all come from the machinery that was already there.
+
+**What moved.** `pickle/unfamiliar-sklearn-grid-search-cv.pickle` is
+`pickle/sklearn-grid-search-cv.pickle` and matches `sklearn-estimator-p4-p5-v1`;
+`joblib/does-not-read/sklearn-grid-search-cv.joblib` is
+`joblib/sklearn-grid-search-cv.joblib` and matches `joblib-sklearn-p4-p5-v1`;
+`joblib/does-not-read/v1.6-numpy-matrix.joblib` is `joblib/v1.6-numpy-matrix.joblib`
+and matches `joblib-arrays-p4-p5-v1`. `joblib/does-not-read/` is gone, because
+nothing in `joblib/` is refused any more. Twelve new samples in `pickle/`,
+written by `tools/make_numpy_subclass_samples.py`: a matrix, a memmap and four
+masked arrays, each at protocol 4 and at protocol 2. No other verdict in
+`pickle/`, `pickle-matrix/`, `joblib/` or `torch/` moved.
+
+**One row name changed**: `ndarray reconstruct call` is
+`array reconstruct call`, because the call rebuilds whichever of the three
+classes the file named.
+
+**What a masked array's table still does not do** is blank the masked cells.
+The data and the mask each have a table of their own, which is the run each of
+them is; a table over the masked array itself, with a masked entry drawn the
+way a frame draws a cell the file has no value for (`FrameCell { value: None }`,
+which reaches the interface as `kind: "absent"` and an empty cell that still
+carries its address), is `Cells::Computed` over the masked node and a reader
+beside `Evaluator::pickle_cells`. That is the next thing here.

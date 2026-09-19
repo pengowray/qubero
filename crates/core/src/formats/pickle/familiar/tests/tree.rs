@@ -237,7 +237,7 @@ fn a_matched_array_carries_its_dtype_shape_and_order() {
     assert_eq!(named_row(&seen, "shape").value, V::Str("4 x 6".into()));
     assert_eq!(named_row(&seen, "order").value, V::Str("C".into()));
     // The call, and the names it was made with.
-    let call = named_row(&seen, "ndarray reconstruct call");
+    let call = named_row(&seen, "array reconstruct call");
     assert_eq!(call.ty, "call");
     assert_eq!(named_row(&seen, "module").value, V::Str("numpy._core.multiarray".into()));
     assert_eq!(named_row(&seen, "callable").value, V::Str("_reconstruct".into()));
