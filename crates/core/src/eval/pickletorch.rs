@@ -114,7 +114,7 @@ pub(super) fn tensor_of(value: &Captured) -> Option<&Tensor> {
 /// Byte order is the machine that saved the file, which the archive's
 /// `byteorder` record names. Every sample says `little`; a big-endian save is
 /// read the same way and is untested.
-fn element_ty(dtype: TensorType, endian: Endian) -> Ty {
+pub(crate) fn element_ty(dtype: TensorType, endian: Endian) -> Ty {
     match dtype {
         TensorType::Float16 => Ty::F16(endian),
         TensorType::BFloat16 => Ty::BF16(endian),

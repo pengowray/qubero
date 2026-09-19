@@ -56,6 +56,20 @@ pub trait Descriptions {
     fn int(&mut self, path: &[usize]) -> R<Option<i128>> {
         Ok(self.node(path)?.value.as_int())
     }
+    /// `len` bytes of the file from `at`, for a build whose descriptions are
+    /// not fields of the template.
+    ///
+    /// A ZIP says where its entries are in records the template already
+    /// places, so a builder over one asks for those fields by name. A format
+    /// that says where its parts are in a language of its own does not: the
+    /// five pickles of a legacy torch checkpoint are found by walking their
+    /// opcodes, and there is nothing to walk until the bytes are in hand.
+    /// What is read counts towards how far the build reaches, so an edit
+    /// inside it builds the node again.
+    fn bytes(&mut self, at: u64, len: u64) -> R<Vec<u8>>;
+    /// How long the whole file is, for a build that has to hold what it
+    /// places to the end of it.
+    fn file_len(&self) -> u64;
 }
 
 /// What the builds have come to, and which are under way.
@@ -178,6 +192,21 @@ impl<S: Source> Descriptions for Reader<'_, S> {
     fn text(&mut self, path: &[usize]) -> R<String> {
         self.note(path)?;
         self.ev.text_of(self.doc, path)
+    }
+
+    /// Through the evaluator's own read, the way a deduced run is read, so
+    /// that a chunk the file has not handed over yet says `Pending` rather
+    /// than reading as a run of noughts.
+    fn bytes(&mut self, at: u64, len: u64) -> R<Vec<u8>> {
+        let end = at.saturating_add(len).min(self.doc.len_bits() / 8);
+        let want = end.saturating_sub(at);
+        let out = self.ev.read_in(self.doc, 0, at * 8, want * 8)?;
+        self.reach = self.reach.max(end * 8);
+        Ok(out)
+    }
+
+    fn file_len(&self) -> u64 {
+        self.doc.len_bits() / 8
     }
 }
 

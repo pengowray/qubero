@@ -194,6 +194,7 @@ mod xar;
 mod xz;
 mod wav;
 mod whisper;
+pub(crate) mod torchlegacy;
 pub(crate) mod torchzip;
 mod zip;
 mod zlib;
@@ -330,6 +331,7 @@ pub use xar::xar;
 pub use xz::xz;
 pub use wav::wav;
 pub use whisper::whisper;
+pub use torchlegacy::torch_legacy;
 pub use torchzip::torch_zip;
 pub use zip::{zarrzip, zip};
 pub use zlib::zlib;
@@ -421,6 +423,7 @@ const BUILTIN: &[(&str, fn(&str) -> Template)] = &[
     ("omezarr", |_| omezarr()),
     ("zarrzip", |_| zarrzip()),
     ("torchzip", |_| torch_zip()),
+    ("torchlegacy", |_| torch_legacy()),
     ("bmp", |_| bmp()),
     ("pcx", |_| pcx()),
     ("dbf", |_| dbf()),

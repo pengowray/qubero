@@ -115,6 +115,7 @@ const TEMPLATE_EXT: Record<string, readonly string[]> = {
   // is what training frameworks write, and `.bin` is what a model hub serves
   // one as.
   torchzip: ["pt", "pth", "ckpt", "bin", "zip"],
+  torchlegacy: ["pt", "pth", "ckpt", "bin"],
   adioszip: ["zip"],
   "7z": ["7z"],
   rar4: ["rar"],

@@ -356,6 +356,11 @@ const PROBES: &[Probe] = &[
     // whose parse covers the whole file. Nothing marks the front of one, so
     // what recognises it is reading all of it.
     Probe::Is("bencode", bencode::is_bencode),
+    // A checkpoint `torch.save` wrote before torch 1.6, whose first pickle is
+    // the same fifteen bytes in every one of them. Asked before the pickle
+    // probes because it opens as a pickle and is not one: the first STOP is
+    // fifteen bytes in and four more pickles and the numbers follow it.
+    Probe::Is("torchlegacy", |h, _| torchlegacy::is_torch_legacy(h)),
     // A file `joblib.dump` wrote, which is a pickle with each array's numbers
     // written into the stream after the object that describes them. Asked
     // before the two pickle probes because neither of them can say yes to one:

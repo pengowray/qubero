@@ -37,6 +37,7 @@ mod pickleparts;
 mod picklesaid;
 mod picklestd;
 mod pickletorch;
+pub(crate) use pickletorch::element_ty;
 mod pickletree;
 mod placed;
 mod problem;

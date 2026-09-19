@@ -78,6 +78,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   xm: "FastTracker XM",
   zarrzip: "Zarr ZipStore",
   torchzip: "PyTorch checkpoint (ZIP)",
+  torchlegacy: "PyTorch checkpoint (legacy)",
   eps: "Encapsulated PostScript",
   rtf: "Rich Text Format",
   elf: "ELF",

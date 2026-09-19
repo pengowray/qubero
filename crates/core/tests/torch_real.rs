@@ -314,3 +314,74 @@ fn files(dir: &PathBuf) -> Vec<PathBuf> {
     out.sort();
     out
 }
+
+/// The legacy file, which is not an archive: five pickles in a row and then
+/// the storages. It is recognised by its first pickle, which is the same
+/// fifteen bytes in every file torch has written this way, and read as fields
+/// at the offsets a walk of those pickles works out.
+#[test]
+fn a_legacy_checkpoint_reads_as_five_pickles_and_its_storages() {
+    let Some(dir) = folder() else { return };
+    let bytes = std::fs::read(dir.join("state-dict-legacy.pt")).unwrap();
+    let head = &bytes[..bytes.len().min(0x9000)];
+    assert_eq!(formats::sniff(head, bytes.len() as u64), Some("torchlegacy"));
+    let (doc, mut ev) = legacy(&dir, "state-dict-legacy.pt");
+    let placed = placements(&doc, &mut ev);
+    let names: Vec<&str> = placed.iter().map(|(n, ..)| n.as_str()).collect();
+    assert_eq!(&names[..5], ["magic", "protocol version", "system info", "data", "storage keys"]);
+    // Three storages, one per tensor, named by the key the data pickle gave
+    // each of them.
+    assert_eq!(names.len(), 5 + 3 * 2);
+    // Every byte of the file is one of those fields: the five pickles, and
+    // then a count and a run of numbers per storage.
+    let mut want = 0;
+    for (name, at, end) in &placed {
+        assert_eq!(*at, want, "{name} leaves bytes over at {want:#x}");
+        want = *end;
+    }
+    assert_eq!(want, bytes.len() as u64, "bytes left over at {want:#x}");
+    // A storage says how many elements it holds and never how wide one is.
+    // What says that is the storage class in the persistent id of whichever
+    // tensor names the key, so the run is typed by reading the data pickle.
+    // The generator saved three float32 zeroes, one int64 and twelve
+    // float32 counts, in the order sorted keys put them.
+    let root = ev.node(&doc, &[]).unwrap();
+    let mut held = Vec::new();
+    for i in 5..root.child_count as usize {
+        let count = ev.node(&doc, &[i, 0, 0]).unwrap();
+        let numbers = ev.node(&doc, &[i, 1, 0]).unwrap();
+        held.push((count.value.clone(), numbers.type_name.clone(), numbers.child_count));
+    }
+    assert_eq!(held[0], (Value::Int(3), "f32 le[]".to_string(), 3));
+    assert_eq!(held[1], (Value::Int(1), "i64 le[]".to_string(), 1));
+    assert_eq!(held[2], (Value::Int(12), "f32 le[]".to_string(), 12));
+}
+
+/// A legacy checkpoint opened under its own template.
+fn legacy(dir: &PathBuf, name: &str) -> (Document<MemSource>, Evaluator) {
+    let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+    (Document::new(MemSource(bytes)), Evaluator::new(formats::builtin("torchlegacy").unwrap()))
+}
+
+/// Every run of the file the template placed, in file order: the name it goes
+/// by and the bytes it covers.
+///
+/// A field placed at an offset covers no bytes itself and holds the thing it
+/// placed, so the run is the child's.
+fn placements(doc: &Document<MemSource>, ev: &mut Evaluator) -> Vec<(String, u64, u64)> {
+    let mut out = Vec::new();
+    let root = ev.node(doc, &[]).unwrap();
+    for i in 0..root.child_count as usize {
+        let node = ev.node(doc, &[i]).unwrap();
+        // A storage is a structure of two placed fields; a pickle is one.
+        let paths: Vec<Vec<usize>> = match node.type_name.starts_with("at ") {
+            true => vec![vec![i, 0]],
+            false => (0..node.child_count as usize).map(|j| vec![i, j, 0]).collect(),
+        };
+        for path in paths {
+            let held = ev.node(doc, &path).unwrap();
+            out.push((held.name.clone(), held.offset_bits / 8, (held.offset_bits + held.size_bits) / 8));
+        }
+    }
+    out
+}

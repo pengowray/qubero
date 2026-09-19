@@ -27,12 +27,6 @@ const KNOWN_FAILURES: &[&str] = &[
     // nothing has been written for any Lotus worksheet yet. It stays in the
     // collection as the sample to write one against.
     "wk3/sheetjs-lotus-wk3.wk3",
-    // A `torch.save` file in the format before torch 1.6: five pickles in a
-    // row and then the storages. Nothing recognises it, because `is_pickle`
-    // refuses a file whose first STOP is not the end of it and no template
-    // has been written for the run of five. `docs/DESIGN-pickle-containers.md`
-    // says what one would need.
-    "torch/state-dict-legacy.pt",
 ];
 
 /// Extensions of files that sit among the samples and say something about
