@@ -406,10 +406,10 @@ impl Evaluator {
                 None => CellAt::Nowhere,
             };
             out.push(vec![
-                FrameCell { value: name.map(Value::Str), at: spelled },
-                FrameCell { value: Some(Value::Str(tensor.dtype.word().to_string())), at: run(tensor.dtype_at) },
-                FrameCell { value: Some(Value::Str(super::pickleparts::extent(&tensor.size))), at: run(tensor.size_at) },
-                FrameCell { value: Some(Value::UInt(u128::from(tensor.values()))), at: numbers },
+                FrameCell::at(name.map(Value::Str), spelled),
+                FrameCell::at(Some(Value::Str(tensor.dtype.word().to_string())), run(tensor.dtype_at)),
+                FrameCell::at(Some(Value::Str(super::pickleparts::extent(&tensor.size))), run(tensor.size_at)),
+                FrameCell::at(Some(Value::UInt(u128::from(tensor.values()))), numbers),
             ]);
         }
         Ok(out)
@@ -487,11 +487,11 @@ impl Evaluator {
         let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
         let real = self.primitive_value(doc, &[], &one, ty, size)?;
         if !tensor.dtype.complex() {
-            return Ok(FrameCell { value: Some(real), at: cell });
+            return Ok(FrameCell::at(Some(real), cell));
         }
         let next = Resolved { offset: offset + size, cursor: offset + size, limit: offset + size * 2, size: Some(size), ..r.clone() };
         let imaginary = self.primitive_value(doc, &[], &next, ty, size)?;
-        Ok(FrameCell { value: Some(Value::Str(complex_said(&real, &imaginary))), at: cell })
+        Ok(FrameCell::at(Some(Value::Str(complex_said(&real, &imaginary))), cell))
     }
 
     /// Which way round the numbers are, which the archive says in a record of

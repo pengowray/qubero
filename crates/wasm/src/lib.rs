@@ -1090,11 +1090,16 @@ enum CellsDto {
 /// `at` is where the cell's own bytes are. A row of one of these tables is not
 /// a run of the file: a frame's row is one value out of each of several
 /// blocks, so the address belongs to the cell and not to the row.
+///
+/// `masked` is the other nothing: a masked array's mask hides this entry, so
+/// the cell shows nothing although the number is in the file at the address it
+/// carries. Two different facts, so two fields rather than a third `kind`.
 #[derive(Serialize)]
 struct FrameCellDto {
     text: String,
     kind: &'static str,
     at: CellAtDto,
+    masked: bool,
 }
 
 /// Where a cell's bytes are, or why it has none. See
@@ -4239,11 +4244,12 @@ impl Editor {
                             row.into_iter()
                                 .map(|cell| {
                                     let at = CellAtDto::from(cell.at);
+                                    let masked = cell.masked;
                                     match cell.value {
-                                        None => FrameCellDto { text: String::new(), kind: "absent", at },
+                                        None => FrameCellDto { text: String::new(), kind: "absent", at, masked },
                                         Some(v) => {
                                             let (kind, text, _) = shown(&v);
-                                            FrameCellDto { text, kind, at }
+                                            FrameCellDto { text, kind, at, masked }
                                         }
                                     }
                                 })

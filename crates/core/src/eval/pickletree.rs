@@ -200,6 +200,24 @@ impl Evaluator {
                 });
             }
         }
+        // A masked array, whose table is the run of numbers laid out the way
+        // an array's own table lays one out, with the entries the mask hides
+        // shown empty. Worked out a cell at a time because two runs go into
+        // one cell: see [`Evaluator::masked_cells`].
+        if let (_, Part::Value(v)) = &here {
+            if let Some((data, _)) = super::picklecells::masked_of(v) {
+                let Kind::Array { dimensions, fortran_order, .. } = &data.kind else { return None };
+                let Some((rows, columns)) = super::picklecells::masked_shape(dimensions, *fortran_order) else { return None };
+                return Some(crate::template::TableShape {
+                    // Several numbers to a row is a row. One to a row is a
+                    // value, which is what the table calls it when it is
+                    // told nothing.
+                    row_word: (columns > 1).then(|| ROW_WORD.into()),
+                    cells: Some(Cells::Computed { rows }),
+                    ..Default::default()
+                });
+            }
+        }
         // A list of dictionaries, which is how rows are pickled when nobody
         // reached for pandas. Its columns are the keys, which are written in
         // the file beside the values, so the shape says where a cell is rather
@@ -272,6 +290,9 @@ impl Evaluator {
                 // A state dict's summary names its own columns, so there is
                 // nothing under it to read them from.
                 Some((_, Part::Value(v))) if super::pickletorch::tensor_table(v).is_some() => return Ok(Some(shape)),
+                // A masked array's columns are places along an axis too, and
+                // its row count is its shape.
+                Some((_, Part::Value(v))) if super::picklecells::masked_of(v).is_some() => return Ok(Some(shape)),
                 _ => {}
             }
             return self.frame_shape(doc, path);

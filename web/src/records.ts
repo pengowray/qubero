@@ -79,6 +79,10 @@ export type RecordCell = {
    *  saying: a counted index label was never written down, and a fact the
    *  pickle states about a tensor is not stored as a value. */
   readonly noBytes?: "counted" | "nowhere";
+  /** Set for an entry a masked array's mask hides. Not a `noBytes` reason:
+   *  the cell has bytes, and the number in them is readable at the address it
+   *  carries. What it has not got is a value the array counts. */
+  readonly masked?: boolean;
 };
 
 /** Where one cell's bytes are. `space` is 0 for the tab's own bytes, which is

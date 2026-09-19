@@ -645,6 +645,14 @@ gives a plain dtype. So each has its own run, its own address and its own
 table, and at protocols 0 to 2 each opens its numbers as a space of its own
 the way every other array does.
 
+The node's own table is the numbers, chunked into rows the way an array's
+table chunks one, with the entries the mask hides shown empty. Such a cell
+keeps the address of the bytes it would have read: the number is in the file
+and the array says not to count it, which is a different nothing from a value
+the file does not hold, so a reader can still click through to those bytes and
+the hover says `Masked: the array does not count this value.` The data and the
+mask each also have their own ordinary table, under their own rows.
+
 Three things are worth knowing about what NumPy writes:
 
 - **The mask is always written out.** `getmaskarray` makes one for an array

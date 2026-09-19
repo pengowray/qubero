@@ -7,7 +7,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { CellAt, Doc, FrameCell, TableShape, TemplateNode } from "../src/doc.ts";
-import { isTable, tablePlan } from "../src/tableplan.ts";
+import { computedCell, isTable, tablePlan } from "../src/tableplan.ts";
+import { whereLines } from "../src/tableaddress.ts";
+import { TABLE } from "../src/strings.ts";
 
 function node(o: Partial<TemplateNode> & { name: string }): TemplateNode {
   return {
@@ -76,11 +78,11 @@ function doc(rows: number, asked: [number, number][]): Doc {
         out.push([
           // A counted index, and then two columns in two blocks: the second
           // block is a thousand bits further on, so the row is not a run.
-          { text: String(i), kind: "int", at: { kind: "counted" } },
-          { text: String(i * 2), kind: "int", at: bytesAt(i * 64, 64) },
+          { text: String(i), kind: "int", at: { kind: "counted" }, masked: false },
+          { text: String(i * 2), kind: "int", at: bytesAt(i * 64, 64), masked: false },
           i % 3 === 0
-            ? { text: "", kind: "absent", at: bytesAt(1000 + i * 64, 64) }
-            : { text: `${i}.5`, kind: "float", at: bytesAt(1000 + i * 64, 64) },
+            ? { text: "", kind: "absent", at: bytesAt(1000 + i * 64, 64), masked: false }
+            : { text: `${i}.5`, kind: "float", at: bytesAt(1000 + i * 64, 64), masked: false },
         ]);
       }
       return { status: "ok", node: out };
@@ -154,6 +156,7 @@ function unnamed(rows: number, wide: number): Doc {
             text: String(i * wide + c),
             kind: "int" as const,
             at: bytesAt((i * wide + c) * 32, 32),
+            masked: false,
           })),
         );
       }
@@ -221,4 +224,23 @@ test("a row with no cell anywhere has no offset to show", () => {
   assert.equal(row?.offsetBits, 0);
   assert.equal(row?.sizeBits, 0);
   assert.equal(row?.cells[0]?.noBytes, "nowhere");
+});
+
+// A masked array's hidden entry is the other nothing: the cell shows no value
+// although the bytes are there, so it keeps its address and the hover says
+// which nothing it is. A cell with no bytes at all still says that instead.
+test("a masked cell keeps its address and says it is masked", () => {
+  const hidden = computedCell({ text: "", kind: "absent", at: bytesAt(64, 64), masked: true });
+  assert.equal(hidden.masked, true);
+  assert.deepEqual(hidden.at, { space: 0, offsetBits: 64, sizeBits: 64 });
+  assert.equal(hidden.noBytes, undefined);
+  assert.deepEqual(whereLines(hidden), [TABLE.maskedCell, TABLE.cellAt("@0x8", "8 bytes")]);
+
+  const shown = computedCell({ text: "1.5", kind: "float", at: bytesAt(128, 64), masked: false });
+  assert.equal(shown.masked, undefined);
+  assert.deepEqual(whereLines(shown), [TABLE.cellAt("@0x10", "8 bytes")]);
+
+  // And the reason a cell has no bytes at all is still the only line.
+  const counted = computedCell({ text: "0", kind: "int", at: { kind: "counted" }, masked: false });
+  assert.deepEqual(whereLines(counted), [TABLE.noBytesWhy("counted")]);
 });

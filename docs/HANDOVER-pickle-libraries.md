@@ -1041,13 +1041,29 @@ masked arrays, each at protocol 4 and at protocol 2. No other verdict in
 `array reconstruct call`, because the call rebuilds whichever of the three
 classes the file named.
 
-**What a masked array's table still does not do** is blank the masked cells.
-The data and the mask each have a table of their own, which is the run each of
-them is; a table over the masked array itself, with a masked entry drawn the
-way a frame draws a cell the file has no value for (`FrameCell { value: None }`,
-which reaches the interface as `kind: "absent"` and an empty cell that still
-carries its address), is `Cells::Computed` over the masked node and a reader
-beside `Evaluator::pickle_cells`. That is the next thing here.
+**The masked array's table landed on 2026-09-20**, a day after the rest of
+this. `Evaluator::pickle_table` gives the masked node `Cells::Computed { rows }`
+and `Evaluator::masked_cells` in `picklecells.rs` reads it: the run chunked
+into rows the way an array's own table chunks one, each value through
+`Evaluator::number_at` so a protocol 0 or 2 array reads through the space its
+numbers opened, and the mask through `Evaluator::mask_at` over the `|b1` run
+beside it.
+
+A masked cell is `FrameCell { value: None, at: CellAt::Bytes { .. }, masked: true }`.
+It shows empty and **keeps its address**, because the number is in the file and
+the array only says not to count it: a reader who wants the stored number
+clicks the cell and the hex view selects those bytes. That is a different fact
+from a cell the file has no value for, so it is a field of its own rather than
+a third `kind`, and the interface says which: the hover reads
+`Masked: the array does not count this value.` above the address line. A mask
+this reading cannot read leaves every cell showing its number, rather than
+blanking a table on a doubt.
+
+`a_masked_array_s_hidden_cells_are_empty_and_still_say_where_they_are` in
+`cells_real.rs` checks the four samples cell for cell at both protocols, and
+`a_fitted_search_s_masked_arrays_read_as_their_numbers` does the same over
+every masked array in `pickle/sklearn-grid-search-cv.pickle`, which is what the
+production was written for.
 
 ## joblib 0.9's last two pieces: landed on 2026-09-20
 

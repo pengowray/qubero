@@ -667,11 +667,12 @@ function cellShapeOf(doc: Doc, node: TemplateNode): TableShape | null {
 /** One cell of a computed table as the view draws it: the core's value, and
  *  either where its bytes are or why it has none. */
 export function computedCell(cell: FrameCell): RecordCell {
+  const masked = cell.masked ? { masked: true as const } : {};
   if (cell.at.kind === "bytes") {
     const at = { space: cell.at.space, offsetBits: cell.at.offset_bits, sizeBits: cell.at.size_bits };
-    return { text: cell.text, kind: cell.kind, at };
+    return { text: cell.text, kind: cell.kind, at, ...masked };
   }
-  return { text: cell.text, kind: cell.kind, noBytes: cell.at.kind };
+  return { text: cell.text, kind: cell.kind, noBytes: cell.at.kind, ...masked };
 }
 
 /** Where a row of such a table is, from where its cells are.

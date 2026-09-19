@@ -386,6 +386,10 @@ export type FrameCell = {
   readonly text: string;
   readonly kind: string;
   readonly at: CellAt;
+  /** True for an entry a masked array's mask hides. The other nothing: the
+   *  number is in the file at the address this cell carries, and the array
+   *  says not to count it. */
+  readonly masked: boolean;
 };
 
 /** Where a computed cell's bytes are, or why it has none. */

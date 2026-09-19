@@ -83,10 +83,14 @@ export function drawAddress(row: TableRow): HTMLElement[] {
  *  front of it counts from. The listing puts those words on the `+` itself;
  *  a hover cannot carry a hover, so it says them outright. */
 export function whereLines(cell: RecordCell): string[] {
+  // A masked entry is shown empty, and a reader hovering an empty cell is
+  // asking why. Said before the address, because it is what the cell is: the
+  // address under it is the number the array is not counting.
+  const why = cell.masked === true ? [TABLE.maskedCell] : [];
   const at = cell.at;
-  if (at === undefined) return cell.noBytes === undefined ? [] : [TABLE.noBytesWhy(cell.noBytes)];
+  if (at === undefined) return cell.noBytes === undefined ? why : [...why, TABLE.noBytesWhy(cell.noBytes)];
   const said = TABLE.cellAt(formatAddress(at.offsetBits, at.space), bitSizeText(at.sizeBits));
-  return at.space === 0 ? [said] : [said, DECODED_PLUS_TITLE];
+  return at.space === 0 ? [...why, said] : [...why, said, DECODED_PLUS_TITLE];
 }
 
 /**

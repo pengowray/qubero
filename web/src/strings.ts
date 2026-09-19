@@ -703,6 +703,10 @@ export const TABLE = {
    *  shown. `@+` in front of the address means it counts from the start of an
    *  unpacked stream rather than of the file; see `DECODED_PLUS_TITLE`. */
   cellAt: (address: string, size: string): string => `${address} · ${size}`,
+  /** The first line on the hover of a cell a masked array hides. The array's
+   *  own word, and the address line under it is the number it is not
+   *  counting. */
+  maskedCell: "Masked: the array does not count this value.",
   /** The tab is open on a field the file no longer has: the template changed
    *  under it, or the bytes it read did. Said rather than left blank, since an
    *  empty tab reads as something broken. */

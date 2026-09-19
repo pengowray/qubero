@@ -29,6 +29,12 @@ pub struct FrameCell {
     /// NaN, a `None`, a categorical code of -1.
     pub value: Option<Value>,
     pub at: CellAt,
+    /// True for an entry a masked array's mask hides. Such a cell has no
+    /// value to show and its bytes all the same: the number is in the file,
+    /// the array simply says not to count it. So it is neither an absent cell
+    /// nor a reason to have no address, and the reader is told which of the
+    /// two nothings it is looking at.
+    pub masked: bool,
 }
 
 /// Where a computed cell's bytes are, for the three reasons a cell may have
@@ -50,12 +56,17 @@ pub enum CellAt {
 impl FrameCell {
     /// A cell with a value and a run of bytes behind it.
     pub(super) fn at(value: Option<Value>, at: CellAt) -> Self {
-        FrameCell { value, at }
+        FrameCell { value, at, masked: false }
     }
 
     /// A cell this reading could not place.
     pub(super) fn nowhere() -> Self {
-        FrameCell { value: None, at: CellAt::Nowhere }
+        FrameCell { value: None, at: CellAt::Nowhere, masked: false }
+    }
+
+    /// An entry a mask hides: no value, and the bytes it would have read.
+    pub(super) fn masked(at: CellAt) -> Self {
+        FrameCell { value: None, at, masked: true }
     }
 }
 
@@ -126,6 +137,12 @@ impl Evaluator {
             let base = r.offset;
             return self.tensor_rows(doc, &r, base, &held, from, to);
         }
+        // A masked array, which is two runs read into one cell.
+        if masked_of(object).is_some() {
+            let r = self.memo[&root].clone();
+            let base = r.offset;
+            return self.masked_cells(doc, &root, &r, base, &found, object, from, to);
+        }
         let Some(frame) = frame_of(&found, object) else { return fail("not a frame") };
         let r = self.memo[&root].clone();
         let base = r.offset;
@@ -153,6 +170,74 @@ impl Evaluator {
             out.push(cells);
         }
         Ok(out)
+    }
+
+    /// The cells of a masked array: the numbers, with the entries the mask
+    /// hides shown empty.
+    ///
+    /// Two runs go into one cell, so the table is worked out here rather than
+    /// laid out as a run of fields. Everything else is an array's own table:
+    /// the run is chunked into rows the way [`Evaluator::pickle_table`] chunks
+    /// one, and a value is read through
+    /// [`Evaluator::number_at`], so a protocol 0 or 2 array reads through the
+    /// space its numbers opened and every cell carries the address of the
+    /// bytes it came from.
+    ///
+    /// A masked cell keeps that address. The number is in the file; the array
+    /// says not to count it, which is a different thing from a value the file
+    /// does not hold, and a reader who wants the stored number can still reach
+    /// it. A mask this reading cannot read leaves every cell showing its
+    /// number rather than blanking the table on a doubt.
+    #[allow(clippy::too_many_arguments)]
+    fn masked_cells<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        r: &Resolved,
+        base: u64,
+        found: &Match,
+        object: &Captured,
+        from: u64,
+        to: u64,
+    ) -> R<Vec<Vec<FrameCell>>> {
+        let Some((data, mask)) = masked_of(object) else { return fail("not a masked array") };
+        let Kind::Array { dimensions, fortran_order, .. } = &data.kind else { return fail("this masked array holds no numbers") };
+        let Some((rows, columns)) = masked_shape(dimensions, *fortran_order) else { return fail("this masked array has no table") };
+        let Some(Values::Numbers(numbers)) = values_of(found, data) else { return fail("these numbers do not read") };
+        let hides = match values_of(found, mask) {
+            Some(Values::Numbers(held)) => Some(held),
+            _ => None,
+        };
+        let mut out = Vec::new();
+        for row in from..to.min(rows) {
+            let mut cells = Vec::new();
+            for column in 0..columns {
+                let Some(elem) = row.checked_mul(columns).and_then(|at| at.checked_add(column)) else {
+                    cells.push(FrameCell::nowhere());
+                    continue;
+                };
+                let cell = self.number_at(doc, root, r, base, &numbers, elem)?;
+                let hidden = match &hides {
+                    Some(held) => self.mask_at(doc, root, r, base, held, elem)?,
+                    None => false,
+                };
+                cells.push(match hidden {
+                    true => FrameCell::masked(cell.at),
+                    false => cell,
+                });
+            }
+            out.push(cells);
+        }
+        Ok(out)
+    }
+
+    /// Whether the mask hides entry `elem`, which is one byte of the mask's
+    /// own run. Anything this cannot read is not a mask saying yes.
+    fn mask_at<S: Source>(&mut self, doc: &Document<S>, root: &[usize], r: &Resolved, base: u64, mask: &Numbers, elem: u64) -> R<bool> {
+        let Dtype::Plain(spelling) = mask.dtype else { return Ok(false) };
+        let Some((ty, width)) = shapes::element(spelling) else { return Ok(false) };
+        let (read, _) = self.element_at(doc, root, r, base, mask, elem, &ty, width)?;
+        Ok(matches!(read, Some(Value::UInt(n)) if n != 0) || matches!(read, Some(Value::Int(n)) if n != 0))
     }
 
     /// How many labels an index has.
@@ -474,4 +559,30 @@ pub(super) fn is_sparse(object: &Captured) -> bool {
 }
 
 impl Evaluator {
+}
+
+/// The numbers and the mask of a masked array, which are the two runs a cell
+/// of its table is read from.
+pub(super) fn masked_of(object: &Captured) -> Option<(&Captured, &Captured)> {
+    let Kind::Masked { data, mask, .. } = &object.kind else { return None };
+    Some((data, mask))
+}
+
+/// How many rows a masked array's table has and how wide one is.
+///
+/// The same chunking an array's own table gets: one value a row for a shape of
+/// one dimension, and otherwise as many columns as the axis the run moves
+/// along fastest. Nothing for an array of no dimensions, which is one value
+/// and not a table, and nothing for one of no values.
+pub(super) fn masked_shape(dimensions: &[u64], fortran_order: bool) -> Option<(u64, u64)> {
+    if dimensions.is_empty() || dimensions.contains(&0) {
+        return None;
+    }
+    let count: u64 = dimensions.iter().product();
+    let columns = match (dimensions.len(), fortran_order) {
+        (1, _) => 1,
+        (_, true) => *dimensions.first()?,
+        (_, false) => *dimensions.last()?,
+    };
+    Some((count / columns.max(1), columns))
 }

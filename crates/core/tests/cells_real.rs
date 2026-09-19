@@ -186,6 +186,132 @@ fn a_spelled_frame_s_numbers_are_addressed_in_the_space_that_holds_them() {
     }
 }
 
+/// A masked array's table: the numbers, with the entries the mask hides shown
+/// empty and still carrying the address of the bytes they came from.
+///
+/// The four samples in `pickle/` are the four things a mask can be: two of
+/// four hidden, the same over two dimensions, nothing hidden, and an int array
+/// with a fill value of its own. Each is written at protocol 4, where the
+/// numbers are bytes of the file, and at protocol 2, where they are the
+/// latin-1 text that spells them and every cell's address is a run of the
+/// space that text opens.
+#[test]
+fn a_masked_array_s_hidden_cells_are_empty_and_still_say_where_they_are() {
+    let Some(dir) = qubero_samples::dir("pickle") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // The file, how the table comes out row by row, and how wide the values
+    // are. `None` is an entry the mask hides.
+    let want: &[(&str, &[&[Option<f64>]], u64)] = &[
+        ("numpy-masked-array", &[&[Some(1.0)], &[None], &[Some(3.0)], &[None]], 64),
+        ("numpy-masked-2d", &[&[Some(0.0), Some(1.0), None], &[None, Some(4.0), Some(5.0)]], 64),
+        ("numpy-masked-unmasked", &[&[Some(1.5)], &[Some(2.5)], &[Some(3.5)]], 64),
+        ("numpy-masked-fill-value", &[&[None], &[Some(2.0)], &[Some(3.0)], &[None]], 32),
+    ];
+    for protocol in ["proto4", "proto2"] {
+        for (stem, rows, width) in want {
+            let where_ = format!("{protocol}-{stem}");
+            let bytes = std::fs::read(dir.join(format!("{where_}.pickle"))).unwrap_or_else(|e| panic!("{where_}: {e}"));
+            let doc = Document::new(MemSource(bytes.clone()));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
+            assert!(shape.cells.is_some(), "{where_}: the cells are worked out");
+            let held = ev.pickle_cells(&doc, &[1], 0, rows.len() as u64 + 1).unwrap();
+            assert_eq!(held.len(), rows.len(), "{where_}: rows");
+            for (i, (row, said)) in held.iter().zip(rows.iter()).enumerate() {
+                assert_eq!(row.len(), said.len(), "{where_} row {i}: columns");
+                for (j, (cell, want)) in row.iter().zip(said.iter()).enumerate() {
+                    // Masked or not, the cell says where its bytes are, and
+                    // the number stored under it is still readable there.
+                    let (space, _, size) = placed(cell);
+                    assert_eq!(size, *width, "{where_} row {i} column {j}");
+                    let run = bytes_at(&ev, &bytes, cell, &where_);
+                    let stored = match width {
+                        64 => f64_at(&run),
+                        _ => i32::from_le_bytes(run[..].try_into().unwrap()) as f64,
+                    };
+                    match want {
+                        Some(number) => {
+                            assert!(!cell.masked, "{where_} row {i} column {j}: not masked");
+                            assert_eq!(text_of(cell), number.to_string(), "{where_} row {i} column {j}");
+                            assert_eq!(stored, *number, "{where_} row {i} column {j}: the bytes the cell names");
+                        }
+                        None => {
+                            assert!(cell.masked, "{where_} row {i} column {j}: masked");
+                            assert_eq!(cell.value, None, "{where_} row {i} column {j}: a masked cell shows nothing");
+                            assert!(stored.is_finite(), "{where_} row {i} column {j}: the stored number is still there");
+                        }
+                    }
+                    // Protocol 2 writes no numbers at all: they are the
+                    // latin-1 text that spells them, and the address is a run
+                    // of the space that text opened.
+                    match protocol {
+                        "proto2" => assert_ne!(space, 0, "{where_} row {i} column {j}"),
+                        _ => assert_eq!(space, 0, "{where_} row {i} column {j}"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The masked arrays a real file holds. `GridSearchCV.cv_results_` is a
+/// dictionary of them, one per thing the search recorded, and they are the
+/// reason the production was written.
+#[test]
+fn a_fitted_search_s_masked_arrays_read_as_their_numbers() {
+    let Some(dir) = qubero_samples::dir("pickle") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let bytes = std::fs::read(dir.join("sklearn-grid-search-cv.pickle")).unwrap();
+    let doc = Document::new(MemSource(bytes.clone()));
+    let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+    let found = typed(&doc, &mut ev, &[], "masked array", 0);
+    assert!(!found.is_empty(), "no masked array in a search whose cv_results_ is made of them");
+    for at in &found {
+        let shape = ev.table_shape(&doc, at).unwrap().unwrap_or_else(|| panic!("{at:?}: no table"));
+        let rows = shape.cells.as_ref().map(|c| match c {
+            qubero_core::template::Cells::Computed { rows } => *rows,
+            other => panic!("{at:?}: {other:?}"),
+        });
+        let rows = rows.unwrap_or_else(|| panic!("{at:?}: the cells are not worked out"));
+        assert!(rows > 0, "{at:?}: no rows");
+        let held = ev.pickle_cells(&doc, at, 0, rows).unwrap();
+        assert_eq!(held.len() as u64, rows, "{at:?}");
+        for (i, row) in held.iter().enumerate() {
+            for (j, cell) in row.iter().enumerate() {
+                // Whether the mask hides it or not, every cell of this file
+                // says where its bytes are, in the file itself: the search was
+                // pickled at a protocol with an opcode for a run of bytes.
+                let (space, _, size) = placed(cell);
+                assert_eq!(space, 0, "{at:?} row {i} column {j}");
+                assert_eq!(bytes_at(&ev, &bytes, cell, "grid search").len() as u64, size / 8, "{at:?} row {i} column {j}");
+                assert_eq!(cell.value.is_none(), cell.masked, "{at:?} row {i} column {j}: a cell shows nothing exactly when it is masked");
+            }
+        }
+    }
+}
+
+/// Every node of this type, by path, as far down as the walk goes.
+fn typed(doc: &Document<MemSource>, ev: &mut Evaluator, at: &[usize], want: &str, depth: usize) -> Vec<Vec<usize>> {
+    if depth > 24 {
+        return Vec::new();
+    }
+    let Ok(node) = ev.node(doc, at) else { return Vec::new() };
+    if node.type_name == want {
+        return vec![at.to_vec()];
+    }
+    let mut out = Vec::new();
+    for i in 0..node.child_count as usize {
+        let mut next = at.to_vec();
+        next.push(i);
+        out.extend(typed(doc, ev, &next, want, depth + 1));
+    }
+    out
+}
+
 /// A categorical cell is a code in one run naming a category in another, and
 /// the address it carries is the code's: that byte is what this row holds.
 #[test]
