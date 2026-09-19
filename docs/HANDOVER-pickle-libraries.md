@@ -333,7 +333,109 @@ of their files is in the collection yet, and none would match today.
   new `failed` map in `versions.json` rather than in the folder, so there is
   nothing to match and nothing to refuse.
 
-What is left, in the order it is worth doing:
+## Four more interpreters: their grammars landed on 2026-09-19
+
+Every `basic-*` and `stdlib-*` file the four wrote is read now, 898 of 899,
+and the one that is not is named at the end of this section. The samples are
+**not in the collection yet**: `tools/collect_pickle_matrix.py`, the matrix
+test and `age()` are the work left, and they are written out under "What is
+left" below.
+
+| Environment | Files | Matched before | Matched after |
+| --- | --- | --- | --- |
+| Jython 2.7.4 | 180 | 158 | 180 |
+| IronPython 2.7.12 | 176 | 82 | 176 |
+| IronPython 3.4.2 | 160 | 118 | 160 |
+| GraalPy 24 (Python 3.11) | 383 | 315 | 382 |
+
+**Two axes, and they must not be confused.** Most of what tells these files
+apart is the runtime, not its pickler, and both of an interpreter's picklers
+write it: an accelerator module named `_collections` or `_datetime`, a
+`datetime` handed its fields instead of its packed bytes, a `bytearray` or a
+`bytes` handed latin-1 text at a protocol that has an opcode for bytes, an
+escape spelled in upper case, one memo slot standing for two equal strings.
+None of those may move the `pickler` row, and none of them does. What does
+move it is a pickler's own behaviour: how it numbers the memo, how long a
+batch it writes, how it ends a container. `familiar/picklers.rs` holds that
+side on its own, as seven statements with a sharpening relation between them.
+
+**Jython's `cPickle`**, `src/org/python/modules/cPickle.java`:
+
+- `BATCHSIZE` is 1024, not a thousand. `Cursor::batch` is the length this
+  file's pickler writes, fixed by the first full batch with another behind it,
+  and a batch past a thousand is Jython's and is read only at protocols 0 to 2.
+- `batch_appends` writes MARK and APPENDS however short a list is, so a list of
+  one item has no APPEND. That is the tell most of its files show.
+- `batch_setitems` writes SETITEM for a single entry left over and nothing at
+  all for none, so its dictionaries end the way `pickle.py` ends one and a
+  dictionary of exactly 1,024 has no empty batch behind it. Nothing in the
+  corpus is 1,024 long; this is read off the source rather than measured.
+- `save_tuple` takes the same path for an empty tuple as for any other and
+  ends it with a `put`, so at protocol 0 the empty tuple is filed in the memo.
+  CPython 2's `cPickle` and PyPy 2.7's copy both leave it out, which is what
+  separates the three.
+- `putMemo` returns `memo.size() + 1`, so the memo numbers from 1, and `put`
+  has no reference count to check, so nothing is left out.
+- `PyUnicode_EncodeRawUnicodeEscape` writes upper-case hexadecimal where
+  CPython writes lower. A protocol 0 `UNICODE` line is held to one case
+  throughout rather than to either.
+
+**IronPython 2.7's `cPickle`**, `Src/IronPython.Modules/cPickle.cs`:
+
+- `MemoizeNew` is called when the pickler starts saving an object and
+  `WritePut` when it has finished, so the slot an object takes is numbered
+  before the slots its callable and arguments take and its mark is written
+  after theirs. The memo is therefore not filled in order. `Bound::Reserved`
+  is a slot the file numbered past, `Memo::bind_at` fills one in later, and
+  `Cursor::numbering` asks at the end of the file which of the two picklers
+  that leave a gap wrote it: left empty it is a `cPickle` numbering from 1,
+  filled out of turn it is this one. The gap is bounded by `MAX_DEPTH`, so one
+  opcode cannot cost the reader a table.
+- `_batchSize` is a thousand and its container tails are `pickle.py`'s.
+- Its `str` is a .NET string, so `str.__reduce__` writes
+  `__builtin__.bytes(text, 'latin-1')` where CPython 2 writes the bytes. That
+  is the runtime, not the pickler, and it is read beside `_codecs.encode`.
+- Its `datetime`, `date` and `time` are managed classes whose `__reduce__`
+  hands the constructor its fields.
+
+**IronPython 3.4** has one pickler, its `_pickle` in C#, and `versions.json`
+lists no `.pypickle` files. It names `_datetime` and `_collections`, writes the
+same field-by-field date classes, writes `bytearray(text, 'latin-1')` at
+protocol 3 and 4 where CPython writes a byte string, and drops a `deque`'s
+`maxlen`. Its container tails are `pickle.py`'s, so **it has no tell of its
+own** and its files carry the broader statement.
+
+**GraalPy's `_pickle`**, written in Java, spells a protocol 0 float the way
+`Double.toString` does: `1.0E308`, `Infinity`, `NaN`. Its `pickle.py` writes
+`repr` like every other copy, so that line is the pickler and it is the one
+GraalPy tell. Everything else of GraalPy's is the runtime: `_collections`, and
+one memo slot standing for two equal strings, which reaches the file as a
+reference where CPython spells the run again.
+
+**The one file that does not read**, and why:
+`graalpy3.11/stdlib-datetime.p0.pypickle.pickle`. Two dates hold the same
+packed run; GraalPy gives both the same slot, so the second date's
+`_codecs.encode` names the escaped protocol 0 line the first one already
+decoded. The form decodes such a line once and keeps the bytes beside the
+match, and reading the same run a second time would decode what it had already
+replaced. The fix is for a decoded run to carry both readings, which is the
+same change as "an array's decoded numbers as a space of their own" below.
+
+## What is left
+
+1. **The collection and the tests.** `age()` in
+   `tools/collect_pickle_matrix.py` has to sort CPython before every other
+   implementation of the same version, or a file both wrote is kept under
+   `ironpython2.7/` because `i` sorts before `p`. Then
+   `collect_pickle_matrix.py` over the matrix run, `build_index.py`, the
+   `sources.tsv` rows, and the matrix test in `crates/core/tests/pickle_real.rs`,
+   which panics on an environment folder it has no rule for.
+2. **A `pickler` row that can say IronPython 3.4.** Nothing that pickler
+   writes is its own. The bytes do show the interpreter, through `_datetime`
+   and the field-by-field dates, and IronPython 3.4 has one pickler, so the
+   inference is available; it crosses the two axes above, and it is not made.
+
+What is left from the earlier pass, in the order it is worth doing:
 
 1. **An array's decoded numbers as a space of their own**, replacing the copy
    kept beside the match. See above. Protocol 0 doubles the reason: its arrays

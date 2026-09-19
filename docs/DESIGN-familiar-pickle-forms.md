@@ -619,12 +619,38 @@ wherever it imports; `pickle.py` is the pure Python one beside it, reachable as
 Python copy of it under the same name. All of them are ordinary, so a form
 reads any of them, and the match says which the file shows. The row is
 `pickler` in the header of the familiar-form template, beside `message` and
-`form`, and it says one of exactly four things:
+`form`, and since 2026-09-19 it says one of exactly seven things:
 
-- `_pickle (CPython's C pickler)`
-- `pickle.py (the pure Python pickler, the only one PyPy 3 has)`
-- `cPickle (Python 2's C pickler, or PyPy 2.7's Python copy of it)`
-- `_pickle or pickle.py (they write this data identically)`
+- `unnamed: nothing in this file is spelled two ways`
+- `_pickle (CPython's C pickler, or GraalPy's written in Java)`
+- `pickle.py (the pure Python pickler), or one of IronPython's written in C#`
+- `cPickle (Python 2's C pickler, PyPy 2.7's Python copy of it, or Jython's written in Java)`
+- `cPickle (Jython's, written in Java)`
+- `cPickle (IronPython's, written in C#)`
+- `_pickle (GraalPy's, written in Java)`
+
+Seven programs write the pickles in the collection, and the seven statements
+above are not those seven programs: each is a spelling, and it names every
+program that writes it. A reading sharpens rather than switching, which is
+what `picklers.rs` holds: a memo numbered from 1 was written by one of the
+three `cPickle`s, and a batch of 1,024 in the same file narrows that to
+Jython's. Two readings neither of which is a case of the other are a file no
+single pickler wrote, and a non-match. `HANDOVER-pickle-libraries.md` has each
+tell and where in that pickler's source it lives, under "Four more
+interpreters".
+
+The first four strings were widened on 2026-09-19 and the last three are new.
+The old wordings each claimed something the bytes do not say: `the only one
+PyPy 3 has` was already false of Python 2's own `pickle.py` files in the
+collection, and `they write this data identically` named CPython's two
+picklers for a file that may have come from any of the seven.
+
+What does **not** reach this row is the interpreter. Jython spelling a
+protocol 0 escape in upper case, GraalPy naming `_collections`, IronPython
+handing `datetime` its fields rather than its packed bytes: each of those is
+the runtime's own classes and text routines, and both of that interpreter's
+picklers write it. Those are read as alternative spellings, the way
+`numpy._core` is read beside `numpy.core`.
 
 The last is most files: the two Python 3 picklers agree everywhere but the
 tail of a container longer than a batch and the memo mark after a bytearray,
