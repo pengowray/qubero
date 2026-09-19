@@ -680,19 +680,23 @@ export const TABLE = {
    *  empty tab reads as something broken. */
   gone: "These rows are no longer in the file",
   /**
-   * The checkbox that draws the table the other way round: a column for each
-   * row, a row for each column. It names the rows by the format's word, as
-   * the button that opened the table did, so the reader can see which of the
-   * two things on screen is about to move: `Show samples as columns`.
+   * The choice that draws the table one way round or the other, as a label
+   * and its two answers: `Samples in: (o) rows ( ) columns`. It names the rows
+   * by the format's word, as the button that opened the table did, so the
+   * reader knows which of the two things on screen the choice is about.
    *
-   * A checkbox and not a button, because which way round the table is drawn
-   * is a state the reader needs to be able to see. Some tables arrive turned,
-   * and a button reading `Swap rows and columns` looks the same either way.
+   * Two answers side by side and not a checkbox or a button, because which way
+   * round the table is drawn is a state the reader needs to see, and some
+   * tables arrive turned. `Show samples as columns`, ticked or not, left the
+   * other state to be worked out; a button reading `Swap rows and columns`
+   * looks the same either way. Here the state is the answer that is filled in,
+   * and the other answer is what a click gets.
    */
-  turn: (rowWord: string): string => `Show ${plural(rowWord)} as columns`,
-  turnTitle: (rowWord: string): string =>
-    `Swap rows and columns, so each ${rowWord} is a column. Only changes how the table is shown.`,
-  /** Why the checkbox cannot be ticked, on a table too long to turn. */
+  arrange: (rowWord: string): string => `${heading(plural(rowWord))} in:`,
+  arrangeRows: "rows",
+  arrangeColumns: "columns",
+  arrangeTitle: (rowWord: string): string => `One ${rowWord} per row, or one ${rowWord} per column. (Display only)`,
+  /** Why `columns` cannot be chosen, on a table too long to turn. */
   turnTooMany: (rowWord: string, limit: number): string =>
     `Too many ${plural(rowWord)} to show as columns. The limit is ${limit.toLocaleString()}.`,
   /** The sentence saying what a row is, for a table drawn turned, where it is
@@ -742,14 +746,18 @@ export const TABLE = {
    * spreadsheet import expects a table, and the way it stays however the
    * table happens to be drawn.
    */
-  exportLayout: "Layout",
-  exportByRow: (rowWord: string): string => `One ${rowWord} per row`,
-  exportAsShown: (rowWord: string): string => `One ${rowWord} per column, as shown`,
+  /** Asked in the words the bar asks it in, `Samples in: rows / columns`, so
+   *  the two are seen to be the same question with separate answers. The
+   *  answer that matches the table on screen says so: the file does not
+   *  follow the screen unless the reader picks that one. */
+  exportLayout: (rowWord: string): string => `${heading(plural(rowWord))} in`,
+  exportByRow: "rows",
+  exportAsShown: "columns, as on screen",
   exportJsonLayout: (rowWord: string): string => `JSON is always written as one object per ${rowWord}`,
   /** How big the file will be, said before the reader commits to it. */
   exportSize: (rows: number, columns: number): string =>
     `Writes ${countText(rows, "row")} of ${countText(columns, "column")}, under one heading row.`,
-  exportSizeShown: (rows: number, columns: number): string => `Writes ${countText(rows, "row")} of ${countText(columns, "column")}, as shown.`,
+  exportSizeShown: (rows: number, columns: number): string => `Writes ${countText(rows, "row")} of ${countText(columns, "column")}, as on screen.`,
   exportSizeJson: (rows: number, rowWord: string): string => `Writes ${countText(rows, "object")}, one per ${rowWord}.`,
   exportSave: "Save file",
   exportProgress: (done: number, total: number): string => `Exporting row ${done.toLocaleString()} of ${total.toLocaleString()}...`,

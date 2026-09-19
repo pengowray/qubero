@@ -90,8 +90,8 @@ export class TableExportPanel {
     const formats = FORMATS.map((f) => el("label", { className: "tbl-export-choice" }, this.radio("format", f, f === format), FORMAT_FACTS[f].label));
     const byRow = this.radio("layout", "row", true);
     this.asShownBox = this.radio("layout", "shown", false);
-    this.asShownLabel = el("label", { className: "tbl-export-choice" }, this.asShownBox, TABLE.exportAsShown(source.rowWord));
-    this.layout = this.group(TABLE.exportLayout, el("label", { className: "tbl-export-choice" }, byRow, TABLE.exportByRow(source.rowWord)), this.asShownLabel);
+    this.asShownLabel = el("label", { className: "tbl-export-choice" }, this.asShownBox, TABLE.exportAsShown);
+    this.layout = this.group(TABLE.exportLayout(source.rowWord), el("label", { className: "tbl-export-choice" }, byRow, TABLE.exportByRow), this.asShownLabel);
     this.size = el("p", { className: "tbl-export-size" });
     this.form = el(
       "form",

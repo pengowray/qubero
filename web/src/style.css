@@ -4020,6 +4020,13 @@ button.insp-xrow-where:hover {
   color: var(--muted);
   cursor: pointer;
 }
+/* One question and its two answers, kept together as the bar wraps. */
+.tbl-arrange {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
 .tbl-check.is-off {
   opacity: 0.6;
   cursor: default;

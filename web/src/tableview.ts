@@ -76,6 +76,9 @@ const TURNED_KEY = "qubero.table.turned";
  *  nothing to say what the rest was. */
 const AT_WIDTH = 9;
 const SIZE_WIDTH = 8;
+/** How many views have made a rows-or-columns choice, for naming each one's
+ *  radio buttons apart. */
+let arrangeGroups = 0;
 /** What in the view is cut short with an ellipsis when it does not fit, and so
  *  needs its full text somewhere. */
 const CUT_SHORT = ".tbl-th, .tbl-cell";
@@ -244,11 +247,7 @@ export class TableView {
     }
     if (this.rate !== null) bar.append(this.meaning);
     this.sayMeaning();
-    const turn = el("input", { type: "checkbox", checked: this.turned, disabled: !canTurn(this.plan.count) });
-    turn.addEventListener("change", () => this.turn(turn.checked));
-    const turnLabel = el("label", { className: "tbl-check" }, turn, TABLE.turn(this.plan.rowWord));
-    turnLabel.title = turn.disabled ? TABLE.turnTooMany(this.plan.rowWord, TURN_MAX) : TABLE.turnTitle(this.plan.rowWord);
-    turnLabel.classList.toggle("is-off", turn.disabled);
+    const arrange = this.arrangeChoice();
     const box = el("input", { type: "checkbox", className: "tbl-addr-box", checked: this.addresses });
     box.addEventListener("change", () => {
       this.addresses = box.checked;
@@ -256,8 +255,38 @@ export class TableView {
       this.layAgain();
     });
     // The controls sit together at the far end, away from the facts.
-    bar.append(el("div", { className: "tbl-controls" }, turnLabel, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton, this.exporter.el));
+    bar.append(el("div", { className: "tbl-controls" }, arrange, el("label", { className: "tbl-check" }, box, TABLE.addresses), this.copyButton, this.exporter.el));
     return bar;
+  }
+
+  /**
+   * Which way round the table is drawn, as a label and its two answers:
+   * `Samples in: (o) rows ( ) columns`. The answer filled in is the state, so a
+   * table that arrived turned says so without the reader working it out. A
+   * table too long to turn has `columns` greyed, with the reason on hover.
+   */
+  private arrangeChoice(): HTMLElement {
+    // Several tables can be open in one page, and radio buttons that share a
+    // name are one group wherever they are, so each view's name is its own.
+    const name = `tbl-arrange-${++arrangeGroups}`;
+    const can = canTurn(this.plan.count);
+    const choice = (turned: boolean, text: string): HTMLElement => {
+      const box = el("input", { type: "radio", name, checked: this.turned === turned, disabled: turned && !can });
+      box.addEventListener("change", () => {
+        if (box.checked) this.turn(turned);
+      });
+      const label = el("label", { className: "tbl-check" }, box, text);
+      if (box.disabled) {
+        label.classList.add("is-off");
+        label.title = TABLE.turnTooMany(this.plan.rowWord, TURN_MAX);
+      }
+      return label;
+    };
+    const group = el("span", { className: "tbl-arrange" }, el("span", { className: "tbl-arrange-word", textContent: TABLE.arrange(this.plan.rowWord) }), choice(false, TABLE.arrangeRows), choice(true, TABLE.arrangeColumns));
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-label", TABLE.arrange(this.plan.rowWord));
+    group.title = TABLE.arrangeTitle(this.plan.rowWord);
+    return group;
   }
 
   /** Rows a second, or null for a table whose rows are not spaced in time. */

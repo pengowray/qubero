@@ -147,7 +147,7 @@ part null; a pending read answers pending like every other call.
 A table means one thing: a row is a record, a column is a field. The plan
 answers in records, and every copy and export is made from that by
 `tabletext.ts`. Which way round the view DRAWS it is a separate state, `turned`,
-with a checkbox in the bar, `Show {rows} as columns`.
+with a choice in the bar, `{Rows} in: rows / columns`.
 
 - **Default.** `turnsByDefault`: the table can be turned (at most `TURN_MAX`,
   1,000, records, since a turned row needs every record read), its columns are
@@ -162,7 +162,7 @@ with a checkbox in the bar, `Show {rows} as columns`.
   copy uses. A click goes to the clicked cell's own bytes (`TableRow.spans`),
   or to the whole record where the plan has no spans.
 - **What does not.** Export writes a record to a row unless the reader picks
-  `One {row} per column, as shown`; JSON is always one object per record. Copy
+  `columns, as on screen`; JSON is always one object per record. Copy
   is of the rows on screen and so follows the view.
 - **Headings.** Columns that are all `[n]` are headed `n` (`plainIndexes`);
   one named column among them keeps the brackets on all. Rows the format names
@@ -192,15 +192,15 @@ with a checkbox in the bar, `Show {rows} as columns`.
 | Address columns (data lens) | `Stored at`, `Size` |
 | Address checkbox | `Show byte addresses` |
 | Row name column | `name` |
-| Turn checkbox | `Show {rows} as columns`; hover `Swap rows and columns, so each {row} is a column. Only changes how the table is shown.` |
-| Turn checkbox, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
+| Rows-or-columns choice | `{Rows} in:` `rows` / `columns` (radio pair); hover `One {row} per row, or one {row} per column. (Display only)` |
+| `columns` greyed, too many records | hover `Too many {rows} to show as columns. The limit is 1,000.` |
 | Column meaning, turned | `Each column is one {row} of each {column word}, 1/{rate} s apart.` |
 | Copy button, nothing selected (disabled) | `Copy selected rows`; hover `Select rows to copy them as tab-separated text` |
 | Copy button, rows selected | `Copy selected row`, `Copy {n} selected rows`; hover `Copy the selected rows to the clipboard as tab-separated text, with their headings (Ctrl+C)` |
 | Copy notice | `Copied {n} rows as tab-separated text.` |
 | Export button | `Export...`; while saving `Stop export` |
-| Export form | `Export`: `Whole table`, `Selected rows only ({n})`; `Format`: `CSV`, `TSV`, `JSON`; `Layout` (turned only): `One {row} per row`, `One {row} per column, as shown`; `Save file` |
-| Export size | `Writes {n} rows of {m} columns, under one heading row.` / `..., as shown.` / `Writes {n} objects, one per {row}.` |
+| Export form | `Export`: `Whole table`, `Selected rows only ({n})`; `Format`: `CSV`, `TSV`, `JSON`; `{Rows} in` (turned only): `rows`, `columns, as on screen`; `Save file` |
+| Export size | `Writes {n} rows of {m} columns, under one heading row.` / `..., as on screen.` / `Writes {n} objects, one per {row}.` |
 | Export notices | `Exporting row {n} of {total}...`, `Exported {n} rows as {format}.`, `Export stopped.`, `Couldn't export: {message}` |
 | Copy refused, too many | `Selection too large to copy: {n} rows, limit 100,000.` |
 | Copy refused, still reading | `Rows are still loading. Try again in a moment.` |
