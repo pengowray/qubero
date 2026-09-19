@@ -303,6 +303,79 @@ What the library forms read, and what they do not:
   up to a thousand a batch, and nothing else. An array of objects can hold
   whatever was pickled into it, and only what a form has written down is read.
 
+### Families compose: the mixed form
+
+A real pickle mixes libraries. A saved model comes with the day it was fitted
+and the score it got; a frame comes with a note beside it; a dictionary of
+arrays is an `OrderedDict` because the order mattered. Every one of those was a
+non-match while a form belonged to one family, because each family's form
+requires the file to have used its own productions and refuses everything
+else's: a date beside an array is refused by the NumPy form at the date and by
+the standard library's form at the array.
+
+So there is one more form per protocol range, `mixed-values-p4-p5-v1` and its
+three lower names, whose class prefixes, named globals and enumerated calls are
+the **union** of every family's. It is built from the same `DECLARED` table the
+families are declared in, in `familiar/forms.rs`, so a family added there is in
+the union with no second edit.
+
+**The safety line does not move.** A union of enumerated sets is an enumerated
+set. Every production is exactly as strict under this form as it is alone: the
+same argument shape for each callable, the same fixed runs, the same refusal of
+a `REDUCE` of any global a form did not name. Three things make that true rather
+than hopeful:
+
+- **No two families name the same callable.** The paths in the table above are
+  distinct across families, so no callable's argument shape is the union of two
+  shapes. Where one family names a callable twice, as `datetime.datetime` is
+  named aware and naive, both rows were already tried in turn and still are.
+- **The class prefixes are disjoint**: `sklearn`, `scipy.sparse`, `pandas` and
+  the eight standard library modules. NumPy's classes are still on no list at
+  all, here least of all: they are named only inside the NumPy productions' own
+  fixed runs, which reach `Cursor::global` with the modules written out and
+  never consult the form's class list.
+- **`builtins` and `__builtin__` are still not packages a class may come from.**
+  They are reachable as the named globals a `defaultdict` may be handed as its
+  factory, which is a short list of builtin types the reader never calls, and as
+  the set and frozenset calls the protocol adds below 4.
+
+**What the form requires.** A form that allows a production requires the file to
+use it, and the mixture is what this one is for, so it requires the file to have
+used **two or more** families of values. That is what keeps every existing
+verdict: the widest thing the union allows that no single form does is an array
+of pickled objects, which pandas needs for an index of column names, and a file
+of nothing but one of those is one family and stays a non-match. It is also why
+the name is true of the file rather than true only because the form was tried
+last.
+
+**It is tried last**, after every single-family form at its protocol range, so a
+file of one family keeps the name it already had. A list of two pandas frames
+uses the builtins, NumPy and pandas productions and would satisfy the mixed
+form's requirement; it matches `pandas-frame-p4-p5-v1` because that form was
+tried first and is the narrower claim.
+
+**joblib is allowed and not required.** The two joblib forms are *for* what
+`joblib.dump` writes and hold the file to having a wrapper in it. The mixed form
+only permits the wrapper, since something else is what made the file mixed. So a
+joblib file holding dates, a pandas frame or a scipy sparse matrix is read here,
+and one holding arrays or scikit-learn estimators alone keeps its own name.
+
+**The `families` row.** The header of a matched file now says `form` and then
+`families`: which families of values the file turned out to hold, in a fixed
+order, always opening with `basic`, which is the grammar every form reads and
+every file is read against. `basic, stdlib, numpy` for a date beside an array;
+`basic, builtins, stdlib, numpy, pandas` for a frame with a note and a date,
+since pandas places a block by writing a `slice`. It is on every matched file
+and not only a mixed one, for the reason the `pickler` row is: the form names a
+grammar and this names what the file used, and a reader comparing two files
+wants to see the same rows in both. It is worked out from the match and has no
+bytes of its own.
+
+Everything downstream reads a mixed file where the values sit rather than at the
+root. A frame inside a dictionary offers the same table and the same summary
+rows it offers at the root, because both are asked of the node rather than of
+the file; the same goes for an array beside a date and for a list of records.
+
 ### Protocols 2 and 3
 
 Protocol 3 is what `pickle.dump` wrote by default from Python 3.0 to 3.7, and

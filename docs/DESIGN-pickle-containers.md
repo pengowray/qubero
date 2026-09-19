@@ -252,18 +252,20 @@ with other settings still opens by its extension or by naming the template.
    in `does-not-read`. It wants a whole stream read with a memo, a framing and
    a protocol of its own, and it wants the array-of-objects production widened
    past text and `None`.
-2. **A bundle holding a standard library value.** The two joblib rows carry no
-   `STDLIB_CALLS`, so `joblib.dump({"trained_at": datetime.now(), "weights":
-   arr}, path)` matches no form, and that is an ordinary thing to save. One
-   more `Declared` row reusing `stdlib::STDLIB_CALLS` and its modules, or the
-   stdlib calls added to the arrays row, which is the same question the plain
-   families answer by having a row each.
+2. **Done on 2026-09-19, and not the way this expected.** A bundle holding a
+   standard library value, a frame or a sparse matrix wanted no joblib row of
+   its own. Families compose now: the mixed form is the union of every family's
+   tables with the joblib wrapper allowed rather than required, so
+   `joblib.dump({"trained_at": datetime.now(), "weights": arr}, path)`,
+   `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` all read as
+   `mixed-values-p4-p5-v1`, and the two joblib rows keep the two mixtures they
+   were written for. See "Families compose: the mixed form" in
+   `DESIGN-familiar-pickle-forms.md`. A frame with named columns still does not
+   read, for the reason in 1: its column names are an object array, so joblib
+   nests a pickle for them.
 3. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
    named beside `ndarray`. No file in the corpus holds one.
-4. A frame or a sparse matrix dumped this way, which is one more `Declared` row
-   each, reusing that family's `classes` and `calls` the way the scikit-learn
-   row is reused here.
-5. Older joblib. The form is written for the layout 1.2 and later write, with
+4. Older joblib. The form is written for the layout 1.2 and later write, with
    the missing-alignment-key variant named; 0.9 and earlier wrote `.npy` files
    beside the pickle, which is a different format. Containers, the way the
    pickle matrix was made.

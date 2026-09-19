@@ -91,9 +91,10 @@ pub(super) const STDLIB0: &str = "stdlib-values-p0-v1";
 /// Two rows rather than one, because a joblib file is a file of whatever was
 /// dumped into it: arrays and plain data in one, scikit-learn's estimators in
 /// the other. Neither is a copy of the family it extends: the second names the
-/// same classes and the same calls the plain scikit-learn row does. A frame or
-/// a sparse matrix dumped this way would be one more row each, and no file in
-/// the corpus is one.
+/// same classes and the same calls the plain scikit-learn row does. Anything
+/// else dumped this way, a frame or a sparse matrix or a date beside an array,
+/// is a mixture and is read under [`MIXED`], which permits the wrapper rather
+/// than requiring it.
 ///
 /// Only at protocols 2 and up. joblib builds the wrapper with NEWOBJ, which
 /// arrived at protocol 2, so the two lower ranges have no name here at all.
