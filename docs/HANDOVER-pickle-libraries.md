@@ -872,3 +872,44 @@ matrix now reads with no exceptions and `UNREAD` in `pickle_real.rs` is empty.
   OrderedDict, "note": str}` is `torch-tensors-p2-p3-v1`. A checkpoint holding
   a date or a NumPy array beside its weights is two families and falls to the
   mixed form, which is where that guess was right.
+
+## Older releases of torch and joblib: landed on 2026-09-19
+
+A second matrix run, nine container environments from torch 0.4.1 with joblib
+0.11 to torch 2.14 with joblib 1.6, plus joblib 0.9.4 on its own. What each
+era wrote and where in the writer each difference lives is in
+`docs/DESIGN-pickle-containers.md` under "What each era wrote". Every file of
+that run reads now but two, which the same section names.
+
+**How the families were widened**, which is the recipe above with four things
+more.
+
+- **An older spelling is a new enumerated row, never a looser one.** torch 0.4
+  wrote a parameter as `Parameter(tensor, requires_grad)` and torch 1.0 wrote
+  `_rebuild_parameter(tensor, requires_grad, OrderedDict())`; both are
+  productions of their own in `familiar/torch.rs` and each matches its own run
+  exactly. The one place a production was widened rather than added is the
+  backward hooks, which are `None` or an empty `OrderedDict()` and nothing
+  else.
+- **A `NEWOBJ` with arguments may close an enumerated call.** `Via::NewObj`
+  beside `Via::Global` and `Via::Partial`, and `new_object` looks for a row of
+  that kind before it falls through to `cls.__new__(cls)`. The tail of
+  `reduced` became `call_made` so the two opcodes make the same value.
+- **A persistent id may name a class.** A legacy `torch.save` of a whole
+  module writes `('module', cls, source_file, source)`, and what comes out is
+  the class, with the source text as a row inside the run. It opens with a
+  MARK rather than with a name, so it is tried in `basic.rs`'s opcode loop
+  rather than among the productions `push` reaches.
+- **A form may read an array that is not in the file.** joblib before 0.10
+  wrote each array as a `.npy` beside the pickle, so `Shape::ArrayFile` is a
+  value whose one row is the file to open, `Allow` and `Declared` gained a
+  `beside: Wrapped` column beside `joblib: Wrapped`, and the two layouts are
+  named apart: `joblib-npy-files-*` against `joblib-arrays-*`.
+
+One fix outside the forms, and it is the one that would have gone unnoticed:
+`zip_directory_names` in `recognise.rs` found the central directory by
+subtracting its length from the end record. torch 1.5 writes the ZIP64 end
+records in between, so the walk started inside the last entry and the archive
+read as a plain ZIP. The end record's own offset field says where the
+directory is, and that is what is read now. `eval/pickletorch.rs` already did
+it the right way.

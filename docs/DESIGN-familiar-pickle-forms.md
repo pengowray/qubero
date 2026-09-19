@@ -212,7 +212,13 @@ so the line is written here and held in `familiar/object.rs`.
   `cls.__new__(cls)`, or by the `EMPTY_TUPLE EMPTY_DICT NEWOBJ_EX` Python 3.4
   writes for the same thing. A `NEWOBJ` handed arguments, or a `NEWOBJ_EX`
   handed arguments of either kind, is a class being told to construct itself
-  out of values, and what those mean belongs to the class.
+  out of values, and what those mean belongs to the class. The one way a
+  `NEWOBJ` with arguments is read is as one of the enumerated calls, closed by
+  that opcode rather than by `REDUCE`, which is the `Via::NewObj` column of the
+  calls table: a class with no `__reduce__` of its own that does take arguments
+  is written that way, and `torch.Size` was one until torch 1.13. The row names
+  the path and checks the arguments, so it is the same enumerated set as every
+  other call and not a wider door into NEWOBJ.
 - **A global a form names and never calls is enumerated by its whole dotted
   path**, which is the `names` column of a form's row. `builtins` is not a
   package any class at all may be named from, so the eight classes a
@@ -241,7 +247,7 @@ The list, as implemented:
 | `stdlib-values-p4-p5-v1` | `datetime.datetime` / `date` / `time` / `timedelta` / `timezone`, `decimal.Decimal`, `fractions.Fraction`, `pathlib.PurePosixPath` / `PureWindowsPath` under `pathlib` and `pathlib._local`, `collections.Counter` / `OrderedDict` / `defaultdict` / `deque` |
 | `sklearn-estimator-p4-p5-v1` | the NumPy ones, and, all of them in `familiar/sklearn.rs`: `sklearn.tree._tree.Tree` of a number, an array and a number; `newObj` of one class, under `sklearn.neighbors._kd_tree`, `sklearn.neighbors._ball_tree` and `sklearn.metrics._dist_metrics`, which is `cls.__new__(cls)` written as a function because a Cython class has no `__new__` a pickle can reach; the ten `sklearn._loss._loss.Cy*` losses and the five `sklearn.linear_model._sgd_fast` ones, each of nothing or of the one float it was configured with; and what `random_state` holds after a fit, which is NumPy's: `numpy.random._pickle.__bit_generator_ctor` of a class or its name, `__randomstate_ctor` and `__generator_ctor` of what that made, and `numpy.random.bit_generator.__pyx_unpickle_SeedSequence` of a class, a checksum and None. The globals it may name and never calls are the twenty-seven NumPy scalar types, the five bit generators and the seed sequence, which are `numpy::TYPE_NAMES` |
 | `scipy-sparse-p4-p5-v1` | the NumPy ones |
-| `torch-tensors-p4-p5-v1` | `collections.OrderedDict`, `torch.Size` of a tuple, `torch.device` of a word and an optional index, `torch.serialization._get_layout` of `torch.sparse_coo`, `torch._utils._rebuild_sparse_tensor` of a layout and two tensors. The calls that rebuild a tensor are matched inside their own fixed runs in `familiar/torch.rs`, not through this list. The classes it may name are those under `torch.nn`, which is a whole module saved as an object; the dtypes it may name and never calls are the twenty in `torch::DTYPE_NAMES`. |
+| `torch-tensors-p4-p5-v1` | `collections.OrderedDict`, `torch.Size` of a tuple, `torch.device` of a word and an optional index, `torch.serialization._get_layout` of `torch.sparse_coo`, `torch._utils._rebuild_sparse_tensor` of a layout and two tensors, and `torch.nn.backends.thnn._get_thnn_function_backend` of nothing, which is the backend torch 1.0 and older gave every module. The calls that rebuild a tensor are matched inside their own fixed runs in `familiar/torch.rs`, not through this list, and so is `torch.nn.parameter.Parameter` of a tensor and a flag, which is how torch 0.4 wrote a parameter. The classes it may name are those under `torch.nn`, which is a whole module saved as an object; the dtypes it may name and never calls are the twenty in `torch::DTYPE_NAMES`. |
 | `pandas-frame-p4-p5-v1` | the NumPy ones, `builtins.slice`, `pandas.core.internals.managers.BlockManager` of a tuple of blocks and a list of axes, `pandas._libs.internals._unpickle_block` of values, a slice and a number, `pandas.core.indexes.base._new_Index` and `pandas.core.indexes.datetimes._new_DatetimeIndex` of a class and a dictionary, `pandas._libs.arrays.__pyx_unpickle_NDArrayBacked` of a class, a number and None, `pandas.StringDtype` / `pandas.core.arrays.string_.StringDtype` of a word and a float, `pandas._libs.tslibs.offsets.Day` of a number and a flag, `functools.partial` of the one global below, and `pandas.core.internals.blocks.new_block` through that partial |
 
 **The one exception, written down beside the rule it is an exception to.**

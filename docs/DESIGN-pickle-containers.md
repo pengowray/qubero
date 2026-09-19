@@ -297,10 +297,9 @@ still not in it.
    since the nested pickle landed later the same day.
 3. `numpy.matrix` and `numpy.memmap`, which reach the same writer and would be
    named beside `ndarray`. No file in the corpus holds one.
-4. Older joblib. The form is written for the layout 1.2 and later write, with
-   the missing-alignment-key variant named; 0.9 and earlier wrote `.npy` files
-   beside the pickle, which is a different format. Containers, the way the
-   pickle matrix was made.
+4. **Done on 2026-09-19.** See "What each era wrote". The missing-alignment-key
+   variant is tested against joblib 0.11, 0.14 and 1.1, and 0.9's `.npy`-beside
+   layout is a form of its own.
 
 ## torch.save: what landed, on 2026-09-19
 
@@ -543,10 +542,9 @@ it. `is_pickle` is untouched. A caller who passed `pickle_protocol=4` gets
 and widening the signature to a protocol nothing has been measured at would be
 guessing.
 
-**What is left for the legacy file**: a checkpoint saved at a protocol other
-than 2, a big-endian one, and the torch 0.4 to 1.5 releases that wrote the
-format before 2.14 did. Containers can make all three, the way the pickle
-matrix was made.
+**What is left for the legacy file**: a big-endian one, which is refused on
+purpose. Protocol 4 and the torch 0.4 to 1.5 releases landed on 2026-09-19:
+see "What each era wrote".
 
 **What is left for torch**, in the order it is worth doing:
 
@@ -558,9 +556,8 @@ matrix was made.
    `_rebuild_meta_tensor_no_storage`, `_rebuild_device_tensor_from_numpy`,
    `_rebuild_wrapper_subclass` and `_rebuild_tensor` (no `_v2`) are still
    refused; no sample holds one.
-3. **Older torch.** The forms are written for what 2.14 writes. torch 1.x
-   ZIPs and 0.4 to 1.5 legacy files want containers, the way the pickle matrix
-   was made. Those runs land in sibling folders of the 2.14 one.
+3. **Done on 2026-09-19.** See "What each era wrote": torch 0.4 to 2.1, ZIPs
+   and legacy files alike.
 4. **A tensor's numbers as a field rather than a table.** See below.
 
 **What a proper IR answer would need**, now that the shape of it is known. The
@@ -575,6 +572,76 @@ a tensor would be an ordinary field: hex view, selection, byte addresses per
 cell, and the reading counted once. Without the second, a non-contiguous view
 would still need computed cells. zarr-in-zip wants the first of them too,
 which is the argument for doing it rather than widening `pickletorch.rs`.
+
+## What each era wrote, on 2026-09-19
+
+Nine container environments, from torch 0.4.1 with joblib 0.11 to torch 2.14
+with joblib 1.6, and joblib 0.9.4 on its own
+(`/home/pengo/qubero-container-matrix/`, made by
+`tools/make_torch_joblib_matrix.py` and `tools/run_torch_joblib_matrix.sh` in
+the collection). Every file in it reads now except the two named at the end.
+
+**torch, by release.** Each row is what that release wrote that the one above
+it did not.
+
+| Release | What is different |
+| --- | --- |
+| 0.4.1 | `_rebuild_tensor_v2`'s sixth argument is the tensor's own `_backward_hooks`, which is `None` until a hook is registered. A parameter is `torch.nn.parameter.Parameter(tensor, requires_grad)`, the class called with its tensor. `torch.Size` is closed by NEWOBJ. A module saved whole names its class through the persistent id `('module', cls, source_file, source)` and its state holds `_backend`. |
+| 1.0.1 | The hooks become an empty `OrderedDict()`: see the note "Don't serialize hooks" in `torch/tensor.py`. A parameter becomes `_rebuild_parameter(tensor, requires_grad, OrderedDict())`. |
+| 1.5.1 | The last release that writes the legacy file by default, and the first that can write the ZIP with `_use_new_zipfile_serialization=True`. `_backend` is gone from a module's state. That archive writes `version` before `data.pkl` and puts the ZIP64 end records between the central directory and the ordinary end record. |
+| 1.8.1 | The archive's folder is `archive/` rather than the file's own name. |
+| 1.13.1 | Storage keys are `0, 1, 2` rather than the addresses the buffers were at. `torch.Size` gains a `__reduce__` and is closed by REDUCE. |
+| 2.1.2 | `byteorder` and `.data/serialization_id` join the archive. |
+| 2.14 | `.format_version` and `.storage_alignment` join it, and the dtypes with no storage class arrive through `_rebuild_tensor_v3`. |
+
+Where each difference lives in the writer: `torch/tensor.py`'s
+`__reduce_ex__` and `torch/nn/parameter.py`'s for the first two rows,
+`torch/serialization.py`'s `persistent_id` and `_save`/`_legacy_save` for the
+rest.
+
+What the reading needed for all of it: the `None` hooks and the
+`Parameter(...)` call in `familiar/torch.rs`, a `Via::NewObj` row for the
+older `torch.Size`, the module persistent id and one `Reduce` row for
+`torch.nn.backends.thnn._get_thnn_function_backend`, `MAGIC_P4` in
+`torchlegacy.rs` for a legacy file saved at protocol 4, and one fix in
+`recognise.rs`: `zip_directory_names` worked out where the central directory
+begins by subtracting its length from the end record, which is wrong for any
+archive with something between the two, and torch 1.5 writes exactly that.
+The end record's own offset field is used now.
+
+**joblib, by release.**
+
+| Release | What is different |
+| --- | --- |
+| 0.9.4 | Each array is a `.npy` file beside the pickle, one apiece, and the pickle holds a `joblib.numpy_pickle.NDArrayWrapper` naming it: `filename`, `subclass`, `allow_mmap` and nothing else. The main file is an ordinary pickle by every test there is. |
+| 0.11 to 1.1 | The array is written into the stream after the wrapper, with no `numpy_array_alignment_bytes` key and no padding byte, so the numbers begin at the BUILD. The form already read this variant and no file had tested it. |
+| 1.2 and after | The alignment key, the padding count and the padding. |
+
+The protocol is the interpreter's, not joblib's: Python 3.6 and 3.7 write 3
+and 3.8 and after write 4, so the same joblib release is read under the p2-p3
+form or the p4-p5 one depending on what ran it.
+
+The 0.9 layout is a form of its own, `joblib-npy-files-p2-p3-v1` and
+`joblib-npy-files-p4-p5-v1`, because the numbers are somewhere else: the value
+is a `Shape::ArrayFile` whose one row is the file to open, the way a torch
+tensor in a bare `data.pkl` says which archive entry its numbers are in. What
+a reader sees over one is `array in bundle.joblib_01.npy`, and the `.npy`
+beside it opens under the `npy` template with no new mechanism at all.
+
+**What still does not read**, and why:
+
+- `numpy.matrix` in a joblib file, from every release 0.11 to 1.6. The
+  wrapper's `subclass` reads `numpy.ndarray` and no other class, because
+  whether NumPy's array subclasses are named at all is a decision nobody has
+  made. `joblib/does-not-read/v1.6-numpy-matrix.joblib`.
+- A plain pickle of a NumPy object array, which is what joblib 0.9 wrote for
+  one: it has no wrapper, so no joblib form reads it, and the NumPy forms have
+  `object_arrays` off. Widening them would move the verdict of every
+  `mixed-array-of-tuples` file in the collection, so it wants its own pass.
+- joblib 0.9's compressed file, which is not zlib but joblib's own `ZF`
+  container: `ZF0x226` and a length, then the stream. A thirteen-byte header
+  over a codec that already exists, the way `formats/lzma.rs` is, and no
+  sample of it is in the collection yet.
 
 ## Samples, and when they go into the collection
 
@@ -599,10 +666,11 @@ than any sniff window. `pickle/proto2-torch-state-dict.pickle` is still a
 class as a plain string where torch's `persistent_id` hands the pickler the
 class itself, so it claimed to be what torch writes and was not.
 
-Older writers matter as much here as they did for pickle: torch 1.x ZIPs, torch
-0.4 to 1.5 legacy files, joblib 0.9 to 1.x. Containers can make them the way the
-pickle matrix was made (`pip install torch==1.13.1+cpu` and so on); do that
-before calling either form done.
+Older writers mattered as much here as they did for pickle, and the container
+matrix covers them since 2026-09-19: thirteen `torch/v*.pt` from releases 0.4
+to 2.1, six `joblib/v*.joblib` from 0.11 and 1.1, and `joblib/v0.9-npy-files/`,
+which keeps the generator's own file names because each pickle in it names its
+`.npy` by name.
 
 ## Order of work
 
@@ -616,4 +684,5 @@ before calling either form done.
    tensors reading their numbers from the entry they name, the summary
    table.~~ Done.
 5. ~~The legacy torch file.~~ Done on 2026-09-19.
-6. Older versions from containers. The samples are in the collection.
+6. ~~Older versions from containers.~~ Done on 2026-09-19. The samples are in
+   the collection.
