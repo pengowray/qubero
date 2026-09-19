@@ -282,6 +282,31 @@ fn a_later_array_may_name_what_an_earlier_one_wrote() {
     assert!(recognise(&framed(&again)).is_some());
     let again = two_arrays(&dtype_state(&get(9), "i1", b'|'));
     assert!(recognise(&framed(&again)).is_none(), "slot 9 holds a byte string, not a module name");
+    // And the numbers themselves. Two arrays holding the same bytes are one
+    // byte string to Python, so the second names the run the first wrote and
+    // has no mark of its own after it. A fitted `SVC` writes its two empty
+    // probability arrays that way. The first array's run is slot 20, which is
+    // the byte order at 18 and the dtype's own last mark at 19.
+    let mut shared_run = two_arrays(&get(17));
+    replace(&mut shared_run, b"(K\x01K\x03\x85\x94", b"(K\x01K\x02\x85\x94");
+    replace(&mut shared_run, &blob(&[1, 2, 3]), &get(20));
+    let found = recognise(&framed(&shared_run)).unwrap();
+    let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
+    let runs: Vec<(usize, usize)> = entries
+        .iter()
+        .map(|(_, v)| match &v.kind {
+            Kind::Array { at, len, .. } => (*at, *len),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(runs[0], runs[1], "both arrays read the one run the file wrote");
+    // Only a slot holding a run of bytes. Slot 17 is the finished dtype and
+    // slot 1 a key, and an array's numbers are neither.
+    for slot in [17u8, 1] {
+        let mut wrong = shared_run.clone();
+        replace(&mut wrong, &get(20), &get(slot));
+        assert!(recognise(&framed(&wrong)).is_none(), "accepted an array's numbers at slot {slot}");
+    }
 }
 
 /// A reference is only ever to a slot the form itself filled with the

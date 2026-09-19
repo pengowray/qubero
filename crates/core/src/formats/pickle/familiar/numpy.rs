@@ -49,6 +49,18 @@ pub(super) const TYPE_NAMES: &[&str] = &[
     "numpy.timedelta64",
 ];
 
+/// Where an array's numbers are, how to read the run they sit in, and whether
+/// the run was written here or named where the file wrote it before.
+struct Numbers {
+    at: usize,
+    len: usize,
+    payload: Payload,
+    storage: Storage,
+    /// Whether the run was named out of the memo. Such a run carries no mark
+    /// of its own after it and was already described where it was written.
+    named: bool,
+}
+
 /// How many values a shape holds, which is what a list of objects has to come
 /// to. Zero when any dimension is.
 fn count_of(dimensions: &[u64]) -> Option<u64> {
@@ -120,13 +132,13 @@ impl Cursor<'_> {
     /// says which it is. The memo mark the run is filed under is written by
     /// the caller either way: it is the byte string's slot at protocol 3 and
     /// the REDUCE's at protocol 2, and both hold the same byte string.
-    fn numbers(&mut self, dtype: &Dtype, dimensions: &[u64]) -> Option<(usize, usize, Payload, Storage)> {
+    fn numbers(&mut self, dtype: &Dtype, dimensions: &[u64]) -> Option<Numbers> {
         self.gate()?;
         if self.proto < 3 {
             let (at, len, storage) = self.bytes_run()?;
             if storage == Storage::Raw {
                 let payload = self.fits(dtype, dimensions, len)?;
-                return Some((at, len, payload, storage));
+                return Some(Numbers { at, len, payload, storage, named: false });
             }
             if storage == Storage::Escaped {
                 // Two layers deep and already read: the line's escaping came
@@ -134,19 +146,33 @@ impl Cursor<'_> {
                 // call, so what is beside the match is the numbers.
                 let held = self.decoded_at(at)?;
                 let payload = self.fits(dtype, dimensions, held.len())?;
-                return Some((at, len, payload, storage));
+                return Some(Numbers { at, len, payload, storage, named: false });
             }
             // Read once here rather than per cell: the numbers are nowhere in
             // the file, and everything that wants them wants all of them.
             let held = storage.read(self.bytes.get(at..at + len)?)?;
             let payload = self.fits(dtype, dimensions, held.len())?;
             self.runs.push((at, std::sync::Arc::new(held)));
-            return Some((at, len, payload, storage));
+            return Some(Numbers { at, len, payload, storage, named: false });
+        }
+        // Two arrays holding the same bytes are one byte string to Python, so
+        // the second names the run the first wrote. A fitted `SVC` writes two
+        // empty arrays that way. Only where the run is the bytes: below
+        // protocol 3 it is the latin-1 text that spells them, and a second
+        // reading of that run is what a space of its own would give it.
+        if self.at_reference() {
+            let here = self.save();
+            if let Some(Bound::Bytes { at, len }) = self.reference().cloned() {
+                let payload = self.fits(dtype, dimensions, len)?;
+                return Some(Numbers { at, len, payload, storage: Storage::Raw, named: true });
+            }
+            self.restore(here);
+            return None;
         }
         let code = self.byte()?;
         let (at, len) = self.counted(code, b'C', b'B', if self.proto >= 4 { 0x8e } else { NO_OPCODE })?;
         let payload = self.fits(dtype, dimensions, len)?;
-        Some((at, len, payload, Storage::Raw))
+        Some(Numbers { at, len, payload, storage: Storage::Raw, named: false })
     }
 
     /// Whether this many bytes is what the dtype and the shape come to.
@@ -344,14 +370,16 @@ impl Cursor<'_> {
             self.arrays += 1;
             return Some(self.span(start, Kind::Objects { dimensions, fortran_order, items, nested: None }));
         }
-        let (at, len, payload, storage) = self.numbers(&dtype, &dimensions)?;
+        let Numbers { at, len, payload, storage, named } = self.numbers(&dtype, &dimensions)?;
         self.finish_call("ndarray reconstruct call", start, call_ends);
-        self.memoize(Bound::Bytes { at, len })?;
+        if !named {
+            self.memoize(Bound::Bytes { at, len })?;
+            self.reads(at, payload, storage);
+        }
         self.exact(b"t")?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"b")?;
         self.arrays += 1;
-        self.reads(at, payload, storage);
         Some(self.span(
             start,
             Kind::Array { at, len, dtype, dimensions, fortran_order, storage },
@@ -379,16 +407,18 @@ impl Cursor<'_> {
         self.open_tuple()?;
         let dtype = self.dtype()?;
         let call_ends = self.at;
-        let (at, len, payload, storage) = self.numbers(&dtype, &[1])?;
+        let Numbers { at, len, payload, storage, named } = self.numbers(&dtype, &[1])?;
         self.finish_call("numpy scalar call", start, call_ends);
-        self.memoize(Bound::Bytes { at, len })?;
+        if !named {
+            self.memoize(Bound::Bytes { at, len })?;
+            self.reads(at, payload, storage);
+        }
         self.close_tuple(2)?;
         self.memoize(Bound::Opaque)?;
         self.exact(b"R")?;
         // A scalar is one number, and Python hashes it.
         self.memoize(Bound::Made { what: Shape::Array, at: start, hashable: true })?;
         self.arrays += 1;
-        self.reads(at, payload, storage);
         Some(self.span(
             start,
             Kind::Array { at, len, dtype, dimensions: Vec::new(), fortran_order: false, storage },
