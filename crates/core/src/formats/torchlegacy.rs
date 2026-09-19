@@ -56,6 +56,10 @@ const NUMBERS_FIELD: &str = "numbers";
 /// What the key in the third pickle's dictionary is called, which says which
 /// way round the numbers were written.
 const ENDIAN_KEY: &str = "little_endian";
+/// Which way round every number in the file is. The format was only ever
+/// written by little-endian machines, and [`layout`] refuses a file whose
+/// system info says otherwise rather than reading it the wrong way round.
+const ENDIAN: Endian = Endian::Little;
 /// The most storages the builder will place. Far past any checkpoint saved
 /// this way: the format predates torch 1.6 and the models of that era have a
 /// few hundred tensors.
@@ -63,7 +67,7 @@ const MOST_STORAGES: usize = 1 << 16;
 /// How much of the file the builder reads to find the pickles. Everything
 /// before the numbers, which is five pickles and the names in them; a
 /// checkpoint of gigabytes still has only a few hundred kilobytes of that.
-const MOST_HEAD: u64 = 4 << 20;
+pub(crate) const MOST_HEAD: u64 = 4 << 20;
 
 /// Whether these leading bytes are a legacy checkpoint.
 ///
@@ -86,14 +90,20 @@ pub(crate) struct Storage {
     pub(crate) len: u64,
 }
 
-/// What the file is made of: where each pickle is, which way round the numbers
-/// were written, and the storages after them.
+/// What the file is made of: where each pickle is, and the storages after
+/// them.
 #[derive(Debug, Clone)]
 pub(crate) struct Layout {
     /// Where each of the five pickles starts and how long it is.
     pub(crate) pickles: Vec<(u64, u64)>,
-    pub(crate) endian: Endian,
     pub(crate) storages: Vec<Storage>,
+}
+
+impl Layout {
+    /// The data pickle, whose tensors name the storages.
+    pub(crate) fn data(&self) -> (u64, u64) {
+        self.pickles[DATA]
+    }
 }
 
 /// Where the pickle starting at `at` ends, which is its STOP.
@@ -161,10 +171,15 @@ fn storage_keys(bytes: &[u8], at: u64, len: u64) -> Option<Vec<String>> {
         .collect()
 }
 
-/// Which way round the numbers were written, which the third pickle says.
-/// Nothing when that pickle is not the dictionary torch writes, in which case
-/// the reading falls back to the byte order every sample has.
-fn declared_endian(bytes: &[u8], at: u64, len: u64) -> Option<Endian> {
+/// Whether the third pickle says the machine that saved the file was
+/// little-endian, which every sample says and every machine torch runs on has
+/// been since the format was written.
+///
+/// A file saying otherwise is refused rather than read: the numbers would be
+/// the other way round everywhere, and the tensor table reads them little-
+/// endian the way it does for an archive. A big-endian legacy save is the
+/// gap, and refusing it is the reading nobody has to check.
+fn saved_little_endian(bytes: &[u8], at: u64, len: u64) -> Option<bool> {
     let held = window(bytes, at, len)?;
     let found = familiar::recognise(held)?;
     let Kind::Dict(entries) = &found.value.kind else { return None };
@@ -174,7 +189,7 @@ fn declared_endian(bytes: &[u8], at: u64, len: u64) -> Option<Endian> {
             continue;
         }
         let Kind::Bool(little) = value.kind else { return None };
-        return Some(if little { Endian::Little } else { Endian::Big });
+        return Some(little);
     }
     None
 }
@@ -201,7 +216,9 @@ pub(crate) fn layout(bytes: &[u8], file_len: u64) -> Option<Layout> {
         pickles.push((at, end - at));
         at = end;
     }
-    let endian = declared_endian(bytes, pickles[2].0, pickles[2].1).unwrap_or(Endian::Little);
+    if !saved_little_endian(bytes, pickles[2].0, pickles[2].1)? {
+        return None;
+    }
     let dtypes = tensors_by_key(bytes, pickles[DATA].0, pickles[DATA].1)?;
     let keys = storage_keys(bytes, pickles[KEYS].0, pickles[KEYS].1)?;
     let mut storages = Vec::new();
@@ -219,7 +236,7 @@ pub(crate) fn layout(bytes: &[u8], file_len: u64) -> Option<Layout> {
     // Every byte of the file is a pickle, a count or a run of numbers. One
     // left over is a file laid out some other way, and reading it as this one
     // would be placing fields at offsets nothing checked.
-    (at == file_len).then_some(Layout { pickles, endian, storages })
+    (at == file_len).then_some(Layout { pickles, storages })
 }
 
 /// A legacy `torch.save` file: the five pickles, and the storages after them.
@@ -244,12 +261,12 @@ impl SchemaBuilder for Checkpoint {
             fields.push(((*name).to_string(), T::at(E::lit(*at as i128), T::sized(E::lit(*len as i128), T::pickle()))));
         }
         for storage in &found.storages {
-            let elem = crate::eval::element_ty(storage.dtype, found.endian);
+            let elem = crate::eval::element_ty(storage.dtype, ENDIAN);
             let count = E::lit((storage.len / storage.dtype.width()) as i128);
             let held = T::structure(
                 STORAGE_NAME,
                 vec![
-                    (COUNT_FIELD, T::at(E::lit(storage.count_at as i128), T::Int { bits: 64, endian: found.endian })),
+                    (COUNT_FIELD, T::at(E::lit(storage.count_at as i128), T::Int { bits: 64, endian: ENDIAN })),
                     (NUMBERS_FIELD, T::at(E::lit(storage.at as i128), T::array(elem, count))),
                 ],
             );

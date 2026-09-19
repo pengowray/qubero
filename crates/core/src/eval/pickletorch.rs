@@ -214,9 +214,41 @@ impl Evaluator {
             0 => doc.len_bytes(),
             _ => self.spaces.buf(space).map_or(0, |b| b.len() as u64),
         };
-        let held = Arc::new(self.directory(doc, space, end)?);
+        let mut found = self.directory(doc, space, end)?;
+        // A legacy checkpoint is no archive at all, and the numbers are still
+        // somewhere else in the same space: five pickles along, after the one
+        // that named them. The key that names a storage is the same key, so
+        // the runs are handed back under the names the tensors look for and
+        // nothing else here has to know which kind of file it is reading.
+        if found.is_empty() {
+            found = self.legacy_storages(doc, space, end)?;
+        }
+        let held = Arc::new(found);
         self.memo.remember_archive(space, held.clone());
         Ok(held)
+    }
+
+    /// The runs a legacy checkpoint's storages sit in, named the way an
+    /// archive's entries are, or nothing at all for any other file.
+    ///
+    /// The first fifteen bytes are checked before anything else is read: they
+    /// are the same in every file torch has written this way, and every other
+    /// file gets no further than that.
+    fn legacy_storages<S: Source>(&mut self, doc: &Document<S>, space: u32, end: u64) -> R<Vec<Held>> {
+        let magic = crate::formats::torchlegacy::MAGIC;
+        if end < magic.len() as u64 {
+            return Ok(Vec::new());
+        }
+        let opener = self.read_in(doc, space, 0, magic.len() as u64 * 8)?;
+        if opener != magic {
+            return Ok(Vec::new());
+        }
+        let head = self.read_in(doc, space, 0, end.min(crate::formats::torchlegacy::MOST_HEAD) * 8)?;
+        let Some(found) = crate::formats::torchlegacy::layout(&head, end) else { return Ok(Vec::new()) };
+        let (at, len) = found.data();
+        let mut out = vec![Held { name: PICKLE_ENTRY.to_string(), at, len, method: 0 }];
+        out.extend(found.storages.iter().map(|s| Held { name: format!("{DATA_FOLDER}/{}", s.key), at: s.at, len: s.len, method: 0 }));
+        Ok(out)
     }
 
     /// The entries the central directory names, or nothing at all when this

@@ -385,3 +385,38 @@ fn placements(doc: &Document<MemSource>, ev: &mut Evaluator) -> Vec<(String, u64
     }
     out
 }
+
+/// A legacy checkpoint's tensors open as the same tables the archive's do.
+///
+/// The same state dict saved both ways: one as a ZIP with a storage per entry,
+/// one as five pickles and the numbers after them. Nothing of that reaches the
+/// reader, so the two files open as the same tensors, cell for cell.
+#[test]
+fn a_legacy_tensor_opens_as_the_table_the_archive_holds() {
+    let Some(dir) = folder() else { return };
+    let (zip_doc, mut zip_ev) = open(&dir, "state-dict-zip.pt");
+    let (old_doc, mut old_ev) = legacy(&dir, "state-dict-legacy.pt");
+    for name in ["layer.weight", "layer.bias", "steps"] {
+        let new_at = tensor_at(&zip_doc, &mut zip_ev, name);
+        let old_at = legacy_tensor_at(&old_doc, &mut old_ev, name);
+        // Everything but the storage's name, which is an entry number in the
+        // archive and the address the storage happened to be at in the
+        // legacy file. Neither says anything about the tensor.
+        for said in ["dtype", "shape", "stride", "storage offset", "requires grad"] {
+            assert_eq!(row(&old_doc, &mut old_ev, &old_at, said), row(&zip_doc, &mut zip_ev, &new_at, said), "{name}: {said}");
+        }
+        let want = zip_ev.pickle_cells(&zip_doc, &new_at, 0, 64).unwrap();
+        let said = old_ev.pickle_cells(&old_doc, &old_at, 0, 64).unwrap();
+        assert_eq!(numbers(&said), numbers(&want), "{name}");
+        // And the row saying where the numbers are points into this file,
+        // which for a legacy checkpoint is the run after the fifth pickle.
+        let stored = row(&old_doc, &mut old_ev, &old_at, "stored at");
+        assert!(matches!(&stored, Value::Str(s) if s.contains("0x")), "{name}: {stored:?}");
+    }
+}
+
+/// The tensor one entry of a legacy checkpoint's data pickle holds.
+fn legacy_tensor_at(doc: &Document<MemSource>, ev: &mut Evaluator, name: &str) -> Vec<usize> {
+    let held = under(doc, ev, &[], "data/data");
+    under(doc, ev, &held, &format!("data/{name}/value"))
+}
