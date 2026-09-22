@@ -1289,8 +1289,8 @@ Next steps, in order:
    bytes it is and the reader is sent to the bytes rather than shown a copy of
    them. What is still open is navigation: the row names an offset and does
    not take the reader there.
-4. Done: the protocol 2 and 3 alternatives, as six more forms. What is left
-   below them is protocols 0 and 1; see "What protocols 0 and 1 would need".
+4. Done: the protocol 2 and 3 alternatives, and protocols 1 and 0 below them,
+   so every family is written at all four ranges.
 5. Done, for the shapes the corpus holds: `sklearn-estimator-p4-p5-v1`,
    `scipy-sparse-p4-p5-v1` and `pandas-frame-p4-p5-v1`. What is left is the
    datetime index, pandas 1.3, and the `DataFrame` table; see
@@ -1301,7 +1301,7 @@ Next steps, in order:
 The remaining sections describe the longer-term architecture and acceptance
 criteria; they are not claims that all listed coverage has shipped.
 
-Validation: the pickle unit tests include eighty FPF tests, eleven of which
+Validation: the pickle unit tests include a hundred and forty-two FPF tests, eleven of which
 read a fixture through the `picklefpf` template and check names, values and
 byte ranges, and the rest of which build their own bytes to exercise one set
 of alternatives each: what a later array may name out of the memo, what a
