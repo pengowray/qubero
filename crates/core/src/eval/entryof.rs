@@ -78,8 +78,15 @@ impl Evaluator {
             if !self.descend(doc, &mut named, &named_field)? {
                 continue;
             }
-            if self.text_of(doc, &named)? != want {
-                continue;
+            // A record whose name will not read is a record this is not
+            // looking for. A read that was interrupted is not an answer at
+            // all and is raised, so a chunk that has not arrived comes back
+            // rather than being passed over as a record of another name.
+            match self.text_of(doc, &named) {
+                Ok(said) if said == want => {}
+                Ok(_) => continue,
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => continue,
             }
             if !self.descend(doc, &mut last, &last_field)? {
                 continue;
