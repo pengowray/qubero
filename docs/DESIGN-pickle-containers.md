@@ -291,7 +291,7 @@ still not in it.
    tables with the joblib wrapper allowed rather than required, so
    `joblib.dump({"trained_at": datetime.now(), "weights": arr}, path)`,
    `joblib/pandas-frame.joblib` and `joblib/scipy-csr-matrix.joblib` all read as
-   `mixed-values-p4-p5-v1`, and the two joblib rows keep the two mixtures they
+   `mixed-values-p4-p5-v2`, and the two joblib rows keep the two mixtures they
    were written for. See "Extensions compose: the mixed form" in
    `DESIGN-familiar-pickle-forms.md`. A frame with named columns reads too
    since the nested pickle landed later the same day.

@@ -70,10 +70,14 @@ pub(super) const PANDAS0: &str = "pandas-frame-p0-v1";
 /// enumerated callable with the argument shape that callable is written with,
 /// and `uuid.UUID` is the plain object production. See
 /// [`stdlib`](super::stdlib).
-pub(super) const STDLIB: &str = "stdlib-values-p4-p5-v1";
-pub(super) const STDLIB23: &str = "stdlib-values-p2-p3-v1";
-pub(super) const STDLIB1: &str = "stdlib-values-p1-v1";
-pub(super) const STDLIB0: &str = "stdlib-values-p0-v1";
+///
+/// At v2 it reads an exception as well: one of the builtin exception classes,
+/// called with the arguments it was raised with. See
+/// [`exceptions`](super::exceptions).
+pub(super) const STDLIB: &str = "stdlib-values-p4-p5-v2";
+pub(super) const STDLIB23: &str = "stdlib-values-p2-p3-v2";
+pub(super) const STDLIB1: &str = "stdlib-values-p1-v2";
+pub(super) const STDLIB0: &str = "stdlib-values-p0-v2";
 
 /// What `joblib.dump` writes: the same families, with every array replaced by
 /// the wrapper joblib puts in front of the array's own bytes. See
@@ -119,9 +123,9 @@ pub(super) const NOT_WRITTEN: &str = "";
 /// wrapper allowed and not required. Tried after all of them, so a file of one
 /// family keeps the name it already had, and it requires the file to have used
 /// two families of values, so that the name it goes by is true of it.
-pub(super) const MIXED: &str = "mixed-values-p4-p5-v1";
-pub(super) const MIXED23: &str = "mixed-values-p2-p3-v1";
-pub(super) const MIXED1: &str = "mixed-values-p1-v1";
-pub(super) const MIXED0: &str = "mixed-values-p0-v1";
+pub(super) const MIXED: &str = "mixed-values-p4-p5-v2";
+pub(super) const MIXED23: &str = "mixed-values-p2-p3-v2";
+pub(super) const MIXED1: &str = "mixed-values-p1-v2";
+pub(super) const MIXED0: &str = "mixed-values-p0-v2";
 /// Its four names, in the order of [`RANGES`], as a family's row holds them.
 pub(super) const MIXED_IDS: [&str; 4] = [MIXED, MIXED23, MIXED1, MIXED0];

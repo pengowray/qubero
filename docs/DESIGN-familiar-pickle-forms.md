@@ -141,7 +141,7 @@ section says what its neighbour does differently.
   only below protocol 5, which gave the type an opcode. No other module,
   callable or argument type is accepted. `set` and `frozenset` moved to the
   basic form, where they belong: protocol 4 writes both as literals.
-- `stdlib-values-p4-p5-v1`: the standard library's own classes, which is what
+- `stdlib-values-p4-p5-v2`: the standard library's own classes, which is what
   a pickle of ordinary program state is full of. Each is a `REDUCE` of one
   enumerated callable with the exact argument shape that callable is written
   with, and the list is in `familiar/stdlib.rs`:
@@ -174,6 +174,27 @@ section says what its neighbour does differently.
     own is a non-match. The older releases wrote all three another way, handing
     the class everything it was to hold as one `iterable` argument, and both
     are read.
+  - `time.struct_time` of nine whole numbers and `os.stat_result` of ten, each
+    with a dictionary of the fields past the end of that run beside it, which
+    is what `structseq_reduce` writes. Which fields are in that dictionary is
+    the platform's: a `stat_result` carries `st_blocks` and `st_rdev` on Linux
+    and does not on Windows, so the keys are words and the values are numbers,
+    text or nothing. `time` and `os` are named for these two paths alone and
+    are not modules a class may be named from: `os` holds `system` as well.
+  - The builtin exception classes, each called with the arguments it was
+    raised with, which is what `BaseException.__reduce__` hands a pickler, and
+    with the instance dictionary after it when the exception carries one. The
+    whole hierarchy is enumerated in `familiar/exceptions.rs`, sixty-nine
+    names under `builtins` from protocol 3 up; below it `fix_imports` rewrites
+    the forty-seven names Python 2 had to `exceptions` and leaves the other
+    seven under `__builtin__`, and each spelling belongs to one side of
+    protocol 3. The rewriting is lossy and the file is read as what it says: a
+    `FileNotFoundError` written at protocol 2 says `exceptions.OSError`,
+    because that is the class a Python 2 reading it would have got. What an
+    exception was raised with is a message, so the arguments are numbers,
+    words, byte strings, the singletons, containers of those, and other
+    exceptions, which is what a group holds. An argument that is a class or an
+    object of one is a non-match.
   - `uuid.UUID`, which needs no call at all: it is the plain object production
     with a 128-bit `int` in its state.
   - The builtins the builtins form reads, since a file holding a date and a
@@ -246,7 +267,7 @@ The list, as implemented:
 | --- | --- |
 | every form with NumPy | `numpy._core.multiarray._reconstruct`, `numpy.core.multiarray._reconstruct`, `numpy._core.multiarray.scalar`, `numpy.core.multiarray.scalar`, `numpy._core.numeric._frombuffer`, `numpy.core.numeric._frombuffer`, `numpy.dtype` |
 | `builtins-values-p4-p5-v3` | `builtins.slice`, `builtins.range`, `builtins.complex`, `builtins.bytearray` |
-| `stdlib-values-p4-p5-v1` | `datetime.datetime` / `date` / `time` / `timedelta` / `timezone`, `decimal.Decimal`, `fractions.Fraction`, `pathlib.PurePosixPath` / `PureWindowsPath` under `pathlib` and `pathlib._local`, `collections.Counter` / `OrderedDict` / `defaultdict` / `deque` |
+| `stdlib-values-p4-p5-v2` | `datetime.datetime` / `date` / `time` / `timedelta` / `timezone`, `decimal.Decimal`, `fractions.Fraction`, `pathlib.PurePosixPath` / `PureWindowsPath` under `pathlib` and `pathlib._local`, `collections.Counter` / `OrderedDict` / `defaultdict` / `deque`, `time.struct_time`, `os.stat_result`, and the builtin exception classes in `familiar/exceptions.rs` under `builtins`, `exceptions` and `__builtin__` |
 | `sklearn-estimator-p4-p5-v1` | the NumPy ones, and, all of them in `familiar/sklearn.rs`: `sklearn.tree._tree.Tree` of a number, an array and a number; `newObj` of one class, under `sklearn.neighbors._kd_tree`, `sklearn.neighbors._ball_tree` and `sklearn.metrics._dist_metrics`, which is `cls.__new__(cls)` written as a function because a Cython class has no `__new__` a pickle can reach; the ten `sklearn._loss._loss.Cy*` losses and the five `sklearn.linear_model._sgd_fast` ones, each of nothing or of the one float it was configured with; and what `random_state` holds after a fit, which is NumPy's: `numpy.random._pickle.__bit_generator_ctor` of a class or its name, `__randomstate_ctor` and `__generator_ctor` of what that made, and `numpy.random.bit_generator.__pyx_unpickle_SeedSequence` of a class, a checksum and None. The globals it may name and never calls are the twenty-seven NumPy scalar types, the five bit generators and the seed sequence, which are `numpy::TYPE_NAMES` |
 | `scipy-sparse-p4-p5-v1` | the NumPy ones |
 | `torch-tensors-p4-p5-v1` | `collections.OrderedDict`, `torch.Size` of a tuple, `torch.device` of a word and an optional index, `torch.serialization._get_layout` of `torch.sparse_coo`, `torch._utils._rebuild_sparse_tensor` of a layout and two tensors, and `torch.nn.backends.thnn._get_thnn_function_backend` of nothing, which is the backend torch 1.0 and older gave every module. The calls that rebuild a tensor are matched inside their own fixed runs in `familiar/torch.rs`, not through this list, and so is `torch.nn.parameter.Parameter` of a tensor and a flag, which is how torch 0.4 wrote a parameter. The classes it may name are those under `torch.nn`, which is a whole module saved as an object; the dtypes it may name and never calls are the twenty in `torch::DTYPE_NAMES`. |
@@ -341,7 +362,7 @@ file to have used its own productions and refuses everything else's: a date
 beside an array is refused by the NumPy form at the date and by the standard
 library's form at the array.
 
-So there is one more form per protocol range, `mixed-values-p4-p5-v1` and its
+So there is one more form per protocol range, `mixed-values-p4-p5-v2` and its
 three lower names, whose class prefixes, named globals and enumerated calls are
 the **union** of every family's. It is built from the same `DECLARED` table the
 families are declared in, in `familiar/forms.rs`, so a family added there is in
@@ -1090,7 +1111,7 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, thirty-three files match today. The twelve `familiar-` files
+Of the sibling corpus, a hundred and three files match today. The twelve `familiar-` files
 and the three `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
@@ -1119,17 +1140,15 @@ one half or the other.
 | `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
 | `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
 | `familiar-huge-integer.pickle` | `basic-p4-p5-v5`: two to the two hundredth, which needs twenty-six bytes |
-| `proto4-datetime.pickle` | `stdlib-values-p4-p5-v1`: packed dates, times and spans |
+| `proto4-datetime.pickle` | `stdlib-values-p4-p5-v2`: packed dates, times and spans |
 | `unfamiliar-class-instance.pickle` | an instance of a class the file names |
 | `unfamiliar-optimized.pickle` | `pickletools.optimize` took the memo marks out |
 | `unfamiliar-lone-surrogate.pickle` | a string that is not UTF-8 |
-| `proto2-everything.pickle` | calls `exceptions.ValueError`, which no form names |
-| `proto3-everything.pickle` | the same, spelled `builtins.ValueError` |
-| `proto4-everything.pickle` | the same |
-| `proto5-everything.pickle` | the same |
-| `proto4-collections.pickle` | NEWOBJ of a namedtuple class the writing file defined; its OrderedDict, defaultdict, Counter and deque are read |
+| `proto*-everything.pickle` | `stdlib-values-*`: the dates, the exact numbers and the `ValueError`, at every protocol from 0 to 5 |
+| `proto4-exceptions.pickle` | `stdlib-values-p4-p5-v2`: six exceptions, one of them a group |
+| `proto4-structseq.pickle` | `stdlib-values-p4-p5-v2`: a `time.struct_time` and an `os.stat_result` |
+| `proto4-collections.pickle` | NEWOBJ of a namedtuple class the writing file defined, under `__main__`, which is exactly what the safety line refuses and must stay refused; its OrderedDict, defaultdict, Counter and deque are read |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
-| `proto0-everything.pickle`, `proto1-everything.pickle` | the same call the other `everything` files make |
 | `proto0-persistent-id.pickle`, `handmade-*` | persistent ids, and the opcodes CPython reads and never writes |
 | `proto2-memo-over-256.pickle` | `basic-p2-p3-v1` |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
@@ -1140,14 +1159,24 @@ one half or the other.
 | `proto5-pandas-dataframe`, `proto5-pandas-series`, `proto5-pandas-index-types` | `pandas-frame-p4-p5-v1` |
 | `proto2-torch-state-dict` | protocol 2, and persistent ids for the tensor storage |
 
-The `everything` files and `proto4-collections` are still held back by one
-thing between them, and it is a smaller thing than it was. Every `everything`
-file now reads as far as its `ValueError`, which is an exception rebuilt by
-`REDUCE` from the message it was raised with; `proto4-collections` reads its
-`OrderedDict`, `defaultdict`, `Counter` and `deque` and stops at a namedtuple
-class the writing file defined, handed values by `NEWOBJ`. A form that took
-either would be accepting a class it had not written down, which is the one
-thing the contract rules out.
+The six `everything` files read whole from 2026-09-23: the exception their
+`ValueError` is, is the last thing they held. What is left is
+`proto4-collections`, and it stays a non-match. It reads its `OrderedDict`,
+`defaultdict`, `Counter` and `deque` and stops at a namedtuple class the
+writing file defined, handed values by `NEWOBJ`. A class under `__main__`, or
+any module the forms do not enumerate, is exactly what the safety line refuses,
+and must stay refused: the file names a class this reader has no description
+of, and reading one would be reading any class at all.
+
+A namedtuple from a module the forms *do* enumerate is a different question,
+and two of those are read now. `time.struct_time` and `os.stat_result` are
+structseq rather than namedtuple, and the bytes are regular: the class, a
+tuple of the numbers it reads as a sequence, a dictionary of the fields past
+the end of that run, and `REDUCE`. `urllib.parse.ParseResult` is a real
+namedtuple and is not read: it is `NEWOBJ` of a tuple subclass, its module is
+spelled `urllib.parse` from protocol 3 and `urlparse` below it, and it has
+three siblings in the same module with the same shape. No file in the
+collection holds one.
 
 `crates/core/tests/pickle_real.rs` writes the whole matrix out file by file so
 that a form growing quietly is a failing test, and separately flips two bits of
@@ -1230,10 +1259,11 @@ Next steps, in order:
    safety line for a library object" above is the whole of the rule.
    `datetime`, `Decimal`, `Fraction`, `OrderedDict`, `defaultdict`, `Counter`,
    `deque`, `UUID` and the path classes each have the exact state they are
-   rebuilt from written down, in `familiar/stdlib.rs`. What is left is an
-   exception rebuilt from its message, which every `proto*-everything` sample
-   now stops at, and a namedtuple, which names a class defined by the file that
-   wrote it and which no list can hold.
+   rebuilt from written down, in `familiar/stdlib.rs`, and `time.struct_time`
+   and `os.stat_result` beside them. The exceptions landed on 2026-09-23, in
+   `familiar/exceptions.rs`: the whole builtin hierarchy, in the three module
+   spellings the protocols write it in. What is left is a namedtuple the
+   writing file defined, which no list can hold and which stays refused.
 3. Done: a name may point at a container. The `refers to` row says what it is
    and where the file wrote it, `list at 0x0b`, so the reference stays the two
    bytes it is and the reader is sent to the bytes rather than shown a copy of

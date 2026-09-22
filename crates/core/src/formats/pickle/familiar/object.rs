@@ -82,6 +82,14 @@ impl Cursor<'_> {
         covers(self.allow.classes, module)
     }
 
+    /// Note that a value of the standard library's own was read, for the ones
+    /// whose class is named by its whole path rather than from a module the
+    /// form whitelists: an exception, and the two structseq classes.
+    fn stdlib_used(&mut self) {
+        self.instances += 1;
+        self.extensions.add(super::packs::Extension::Stdlib);
+    }
+
     /// Which library this class came from, noted as the object is built, so
     /// that a file holding two libraries' values says so. Nothing for a module
     /// no family claims, which is every callable a form names without naming
@@ -105,6 +113,7 @@ impl Cursor<'_> {
                     && (self.whitelisted(module)
                         || path == BASE_CLASS
                         || self.allow.names.contains(&path)
+                        || (self.allow.exceptions && super::exceptions::names_exception(path))
                         || self.calls().any(|call| call.path == path))
             }
             None => false,
@@ -117,10 +126,14 @@ impl Cursor<'_> {
     /// by, which is what `fix_imports` is for: `__builtin__` there and
     /// `builtins` from protocol 3 up. Each spelling belongs to one side, and a
     /// file using the other side's is a file no pickler wrote.
+    ///
+    /// `exceptions` is the same rule for the same reason: Python 2 kept its
+    /// exception classes in a module of their own, and `fix_imports` writes
+    /// the names into it below protocol 3 and never above.
     pub(super) fn module_fits(&self, module: &str) -> bool {
         match module {
             "builtins" => self.proto >= 3,
-            "__builtin__" => self.proto < 3,
+            "__builtin__" | "exceptions" => self.proto < 3,
             _ => true,
         }
     }
@@ -335,6 +348,14 @@ impl Cursor<'_> {
         let path = path.as_str();
         let (tuple_at, tuple_len) = (args.at, args.len);
         let Kind::Tuple(held) = args.kind else { return None };
+        // An exception, which is one of a written-down list of classes called
+        // with the arguments it was raised with. It is here rather than in the
+        // calls table because the list is a hundred and twenty names across
+        // three module spellings and the argument shape is the same for all of
+        // them: the arguments are a message, however many words it is.
+        if via == Via::Global && self.allow.exceptions && super::exceptions::names_exception(path) {
+            return self.exception_made(at, callable, (tuple_at, tuple_len), held);
+        }
         // A callable written with more than one argument shape has a row each,
         // so every row of that name is asked rather than only the first: a
         // `datetime.datetime` carries a zone when it is aware and not when it
@@ -360,6 +381,23 @@ impl Cursor<'_> {
         self.call_made(call, callable, path, at, (tuple_at, tuple_len), held)
     }
 
+    /// An exception rebuilt from its class and its arguments, which is what
+    /// `BaseException.__reduce__` hands a pickler.
+    ///
+    /// The `BUILD` that may follow is the instance dictionary, and it is the
+    /// same BUILD every other call's result takes: [`Cursor::built`] puts it
+    /// in the state, so nothing here has to know about it.
+    fn exception_made(&mut self, at: usize, callable: Value, tuple: (usize, usize), held: Vec<Value>) -> Option<Kind> {
+        super::exceptions::plain(&held)?;
+        // An exception is not something Python hashes by value, so a name for
+        // one may not stand where a dictionary key belongs.
+        self.memoize(Bound::Made { what: Shape::Exception, at, hashable: false })?;
+        self.stdlib_used();
+        let items = vec![Value { at: tuple.0, len: tuple.1, kind: Kind::Tuple(held) }];
+        let names = super::exceptions::ARGS;
+        Some(Kind::Made { what: Shape::Exception, names, callable: Some(Box::new(callable)), items, state: None, attrs: None })
+    }
+
     /// What an enumerated call leaves behind, whichever opcode closed it.
     ///
     /// REDUCE and NEWOBJ both hand a callable its arguments and push the one
@@ -380,6 +418,12 @@ impl Cursor<'_> {
         if self.whitelisted(module) {
             self.instances += 1;
             self.from_pack(module);
+        } else if super::stdlib::OWN_CLASSES.contains(&path) {
+            // A class the standard library keeps in a module no class may be
+            // named from: `os` holds `system` as well as `stat_result`. The
+            // row names the whole path, so the family is counted off the row
+            // rather than off a module prefix.
+            self.stdlib_used();
         }
         self.torch_named(module);
         // What the result holds beyond its arguments. A path has as many parts

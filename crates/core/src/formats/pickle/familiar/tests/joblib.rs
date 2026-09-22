@@ -312,7 +312,7 @@ const FRAME: &[u8] = include_bytes!("../../../../../tests/fixtures/pickle/joblib
 #[test]
 fn a_file_holding_both_kinds_of_run_still_names_every_byte() {
     let found = recognise(FRAME).unwrap();
-    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.form, "mixed-values-p4-p5-v2");
     let seen = dump(FRAME);
     // pandas gathers the columns of one dtype into one block, so the two
     // number columns are two raw runs, and the column names and the text

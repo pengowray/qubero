@@ -35,7 +35,7 @@ const MOMENT: &[u8] = b"\x07\xe4\x01\x02\x03\x04\x05\n[\xf5";
 fn a_packed_datetime_is_read_and_a_run_that_is_not_one_is_not() {
     let made = |packed: &[u8]| only(&call("datetime", "datetime", &blob(packed), 1));
     let found = recognise(&made(MOMENT)).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&made(MOMENT))));
-    assert_eq!(found.form, "stdlib-values-p4-p5-v1");
+    assert_eq!(found.form, "stdlib-values-p4-p5-v2");
     let Kind::Made { what, names, items, .. } = &found.value.kind else { panic!("a call expected") };
     assert_eq!((*what, *names), (Shape::DateTime, &["packed"][..]));
     assert_eq!(items[0].kind, Kind::Bytes { at: 37, len: 10 });
@@ -87,7 +87,7 @@ fn the_fold_bit_is_protocol_4_s_and_is_not_the_month() {
         out.extend_from_slice(b"q\x01\x85q\x02Rq\x03.");
         out
     };
-    assert_eq!(recognise(&older(MOMENT)).unwrap().form, "stdlib-values-p2-p3-v1");
+    assert_eq!(recognise(&older(MOMENT)).unwrap().form, "stdlib-values-p2-p3-v2");
     assert!(recognise(&older(folded)).is_none(), "the fold bit is not written below protocol 4");
 }
 
@@ -114,7 +114,7 @@ fn a_date_naming_an_earlier_date_s_run_reads_it_and_counts_nothing() {
     body.extend_from_slice(b"q\x03X\x06\x00\x00\x00latin1q\x04\x86q\x05Rq\x06\x85q\x07Rq\x08");
     body.extend_from_slice(b"h\x01h\x02h\x03h\x04\x86q\tRq\n\x85q\x0bRq\x0ce.");
     let found = recognise(&body).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&body)));
-    assert_eq!(found.form, "stdlib-values-p2-p3-v1");
+    assert_eq!(found.form, "stdlib-values-p2-p3-v2");
     let seen = dump(&body);
     tiles(&seen);
     let days: Vec<&Row> = seen.iter().filter(|r| r.ty == "date").collect();
@@ -253,7 +253,7 @@ fn an_id_is_an_object_holding_one_wide_number() {
     // Sixteen bytes, which the reader's own integer type holds.
     let mut narrow = vec![0x8a, 16];
     narrow.extend_from_slice(&[0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12]);
-    assert_eq!(recognise(&made(&narrow)).unwrap().form, "stdlib-values-p4-p5-v1");
+    assert_eq!(recognise(&made(&narrow)).unwrap().form, "stdlib-values-p4-p5-v2");
     // Seventeen, which is every id whose top bit is set: the last byte is the
     // nought that says the number is not negative.
     let mut wide = vec![0x8a, 17];
@@ -267,7 +267,7 @@ fn an_id_is_an_object_holding_one_wide_number() {
     // Python 3.4 writes NEWOBJ_EX where every release after it writes NEWOBJ:
     // the same call, with an empty place for keyword arguments.
     let ex = framed(&cat(&[&word("uuid"), &word("UUID"), b"\x93\x94)}\x94\x92\x94}\x94", &word("int"), &narrow, b"sb."]));
-    assert_eq!(recognise(&ex).unwrap().form, "stdlib-values-p4-p5-v1");
+    assert_eq!(recognise(&ex).unwrap().form, "stdlib-values-p4-p5-v2");
     // Arguments of either kind are a class being told to construct itself out
     // of values, which is the class's business and not this reader's.
     let armed = framed(&cat(&[&word("uuid"), &word("UUID"), b"\x93\x94}\x94", &word("a"), b"K\x01s\x85\x94\x81\x94."]));
@@ -365,10 +365,44 @@ fn a_mixed_file_holding_an_unenumerated_call_is_still_refused() {
     // reads it and says which two.
     let plain = entries(b"");
     let found = recognise(&plain).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&plain)));
-    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.form, "mixed-values-p4-p5-v2");
     assert_eq!(found.extensions(), "stdlib, numpy");
     // One more entry, and the only thing that changed is a REDUCE of a class
     // `collections` has and the calls table does not.
     let extra = cat(&[&word("x"), &call("collections", "ChainMap", b"", 0)]);
     assert!(recognise(&entries(&extra)).is_none());
+}
+
+/// The two structseq classes, each a run of whole numbers as long as the class
+/// says and a dictionary of the fields past the end of that run.
+#[test]
+fn a_structseq_is_its_run_of_numbers_and_the_fields_past_the_end_of_it() {
+    // `time.gmtime(1700000000)`: nine numbers, and the zone beside them.
+    let nine = b"(M\xe7\x07K\x0bK\x0eK\x16K\rK\x14K\x01M>\x01K\x00t\x94";
+    let extra = cat(&[b"}\x94(", &word("tm_zone"), &word("GMT"), &word("tm_gmtoff"), b"K\x00u"]);
+    let made = |body: &[u8]| only(&call("time", "struct_time", body, 2));
+    let bytes = made(&cat(&[nine, &extra]));
+    let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
+    assert_eq!(found.form, "stdlib-values-p4-p5-v2");
+    let Kind::Made { what, names, items, .. } = &found.value.kind else { panic!("a call expected") };
+    assert_eq!((*what, *names, items.len()), (Shape::StructTime, &["fields", "extra fields"][..], 2));
+    assert!(matches!(&items[0].kind, Kind::Tuple(held) if held.len() == 9));
+    // The dictionary may be empty, and a field may be nothing at all.
+    assert!(recognise(&made(&cat(&[nine, b"}\x94"]))).is_some());
+    assert!(recognise(&made(&cat(&[nine, b"}\x94", &word("tm_gmtoff"), b"Ns"]))).is_some());
+    // The run is as long as the class says and holds whole numbers only.
+    let eight = b"(M\xe7\x07K\x0bK\x0eK\x16K\rK\x14K\x01M>\x01t\x94";
+    assert!(recognise(&made(&cat(&[eight, b"}\x94"]))).is_none());
+    let worded = cat(&[b"(M\xe7\x07K\x0bK\x0eK\x16K\rK\x14K\x01M>\x01", &word("x"), b"t\x94"]);
+    assert!(recognise(&made(&cat(&[&worded, b"}\x94"]))).is_none());
+    // `os.stat_result` is the same shape over ten numbers.
+    let ten = b"(M\xa4\x81M90K\x01K\x01K\x00K\x00K\x07K\x00K\x00K\x00t\x94";
+    let stat = only(&call("os", "stat_result", &cat(&[ten, b"}\x94", &word("st_blocks"), b"K\x08s"]), 2));
+    let found = recognise(&stat).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&stat)));
+    let Kind::Made { what, .. } = &found.value.kind else { panic!("a call expected") };
+    assert_eq!(*what, Shape::StatResult);
+    // `os` is not a module a class may be named from: the row names the whole
+    // path and nothing else under it is read.
+    assert!(recognise(&only(&call("os", "system", &word("rm -rf /"), 1))).is_none());
+    assert!(recognise(&only(&cat(&[&word("os"), &word("system"), b"\x93\x94"]))).is_none());
 }

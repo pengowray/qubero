@@ -7,6 +7,7 @@ use super::*;
 use crate::formats::pickle::shapes;
 
 mod arrays;
+mod exceptions;
 mod frames;
 mod grammar;
 mod joblib;

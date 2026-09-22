@@ -15,7 +15,15 @@ use crate::formats::pickle::familiar::{Kind, Match, Names, Shape, Value};
 pub(super) fn is_stdlib(what: Shape) -> bool {
     matches!(
         what,
-        Shape::DateTime | Shape::Date | Shape::Time | Shape::TimeDelta | Shape::TimeZone | Shape::Decimal | Shape::Fraction | Shape::Path
+        Shape::DateTime
+            | Shape::Date
+            | Shape::Time
+            | Shape::TimeDelta
+            | Shape::TimeZone
+            | Shape::Decimal
+            | Shape::Fraction
+            | Shape::Path
+            | Shape::Exception
     ) || is_container(what)
 }
 
@@ -32,6 +40,15 @@ fn class_of(value: &Value) -> Option<&str> {
         Kind::Class { path, .. } => Some(path),
         _ => None,
     }
+}
+
+/// The name of the class a call named, without its module: `ValueError` for
+/// the `builtins.ValueError` an exception names, which is the name Python
+/// writes in a traceback and in a `repr`.
+fn called_class(value: &Value) -> Option<&str> {
+    let Kind::Made { callable: Some(callable), .. } = &value.kind else { return None };
+    let Kind::Class { path, .. } = &callable.kind else { return None };
+    Some(path.rsplit_once('.').map_or(path.as_str(), |(_, name)| name))
 }
 
 /// Whether this object is a `uuid.UUID`, which is an ordinary object holding
@@ -306,6 +323,24 @@ impl Evaluator {
                 }
                 _ => self.pickle_text(doc, whole, base, items.first().unwrap_or(v))?,
             },
+            // An exception as Python's own `repr` writes it: the class it
+            // names, and the arguments it was raised with in brackets after
+            // it. A word is quoted the way `repr` quotes one and everything
+            // else reads as it reads anywhere else in the tree.
+            Shape::Exception => {
+                let Some(Kind::Tuple(args)) = items.first().map(|x| &x.kind) else { return Ok(None) };
+                let Some(class) = called_class(v) else { return Ok(None) };
+                let mut said = Vec::with_capacity(args.len());
+                for arg in args {
+                    let quoted = matches!(arg.kind, Kind::Text { .. } | Kind::Ref(Names::Text { .. }) | Kind::Spelled { bytes: false, .. });
+                    let Some(word) = self.pickle_said(doc, found, whole, base, arg)? else { return Ok(None) };
+                    said.push(match quoted {
+                        true => format!("'{word}'"),
+                        false => word,
+                    });
+                }
+                Some(format!("{class}({})", said.join(", ")))
+            }
             Shape::Path => {
                 let Some(Kind::Tuple(parts)) = items.first().map(|x| &x.kind) else { return Ok(None) };
                 let mut said = Vec::with_capacity(parts.len());

@@ -330,7 +330,7 @@ fn a_form_is_the_productions_it_allows() {
         b"\x93\x94K\x01K\x02K\x03\x87\x94R\x94u.",
     ]);
     let found = recognise(&framed(&both)).unwrap();
-    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.form, "mixed-values-p4-p5-v2");
     assert_eq!(found.extensions(), "builtins, numpy");
 }
 

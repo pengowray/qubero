@@ -19,6 +19,7 @@ mod codecs;
 mod cursor;
 mod lines;
 mod dtype;
+mod exceptions;
 mod formnames;
 mod forms;
 mod integer;

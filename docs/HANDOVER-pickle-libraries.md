@@ -222,14 +222,14 @@ every environment, and read the same day. The code is
 `crates/core/src/formats/pickle/familiar/stdlib.rs` for the calls and
 `crates/core/src/eval/picklestd.rs` for what each value reads as;
 `DESIGN-familiar-pickle-forms.md` has the whole of what the form takes, under
-`stdlib-values-p4-p5-v1` and its three neighbours.
+`stdlib-values-p4-p5-v2` and its three neighbours.
 
 | Form | What it reads | Matched in `pickle-matrix/` |
 | --- | --- | --- |
-| `stdlib-values-p4-p5-v1` | dates, spans, zones, exact numbers, ids, paths, counters, ordered and defaulting dictionaries, queues | 52 of 52 at protocol 4 and 5 |
-| `stdlib-values-p2-p3-v1` | the same | 91 of 91 |
-| `stdlib-values-p1-v1` | the same | 66 of 66 |
-| `stdlib-values-p0-v1` | the same | 78 of 78 |
+| `stdlib-values-p4-p5-v2` | dates, spans, zones, exact numbers, ids, paths, counters, ordered and defaulting dictionaries, queues | 52 of 52 at protocol 4 and 5 |
+| `stdlib-values-p2-p3-v2` | the same | 91 of 91 |
+| `stdlib-values-p1-v2` | the same | 66 of 66 |
+| `stdlib-values-p0-v2` | the same | 78 of 78 |
 
 Every file in `pickle-matrix/` matches a form: 992 of 992, at every protocol
 from 0 to 5 and from every pickler each environment has. The matrix was 664
@@ -576,7 +576,7 @@ at the date and by the standard library's at the array. Six ordinary files
 written with numpy 2.5, pandas 3.0 and scikit-learn 1.9 were the measurement,
 and five of the six read as nothing at all.
 
-There is now one more form per protocol range, `mixed-values-p4-p5-v1` and its
+There is now one more form per protocol range, `mixed-values-p4-p5-v2` and its
 three lower names, whose class prefixes, named globals and enumerated calls are
 the union of every family's. The union is gathered from `DECLARED` itself, so a
 family added there is in it with no second edit. `DESIGN-familiar-pickle-forms.md`
@@ -679,8 +679,8 @@ reason.
 | CountVectorizer | `sklearn-estimator-p4-p5-v1` | `sklearn-estimator-p4-p5-v1` |
 | Pipeline of a scaler and a model | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
 | MLPClassifier | `sklearn-estimator-p4-p5-v1` | `joblib-sklearn-p4-p5-v1` |
-| ColumnTransformer | `mixed-values-p4-p5-v1` | `mixed-values-p4-p5-v1` |
-| KNeighborsClassifier on a sparse matrix | `mixed-values-p4-p5-v1` | `mixed-values-p4-p5-v1` |
+| ColumnTransformer | `mixed-values-p4-p5-v2` | `mixed-values-p4-p5-v2` |
+| KNeighborsClassifier on a sparse matrix | `mixed-values-p4-p5-v2` | `mixed-values-p4-p5-v2` |
 | GridSearchCV | no form | no form |
 
 A `CountVectorizer` holds no array at all: its vocabulary is a dictionary of

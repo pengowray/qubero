@@ -85,6 +85,11 @@ pub(super) struct Allow {
     /// itself.
     pub(super) beside: Wrapped,
     pub(super) builtins: bool,
+    /// Whether this form reads a builtin exception rebuilt from the arguments
+    /// it was raised with. The classes are enumerated one by one in
+    /// [`exceptions`](super::exceptions) rather than reached by a module
+    /// prefix: `builtins` is not a package any class may be named from.
+    pub(super) exceptions: bool,
     /// Whether this form reads the calls `torch.save` writes for a tensor,
     /// which carry a persistent id naming numbers kept outside the pickle.
     pub(super) torch: bool,
@@ -389,6 +394,7 @@ struct Declared {
     joblib: Wrapped,
     beside: Wrapped,
     builtins: bool,
+    exceptions: bool,
     torch: bool,
     classes: &'static [&'static str],
     /// Which family the classes this row whitelists belong to, which is what
@@ -418,6 +424,7 @@ const DECLARED: &[Declared] = &[
         joblib: Wrapped::Refused,
         beside: Wrapped::Refused,
         builtins: false,
+        exceptions: false,
         torch: false,
         classes: NO_CLASSES,
         extension: None,
@@ -468,6 +475,7 @@ const DECLARED: &[Declared] = &[
         object_arrays: true,
         joblib: Wrapped::Refused,
         beside: Wrapped::Refused,
+        exceptions: false,
         torch: false,
     },
     // The standard library's own classes. Its builtins are the ones the
@@ -477,6 +485,7 @@ const DECLARED: &[Declared] = &[
         ids: [STDLIB, STDLIB23, STDLIB1, STDLIB0],
         family: Family::Library,
         builtins: true,
+        exceptions: true,
         classes: super::stdlib::STDLIB_MODULES,
         extension: Some(Extension::Stdlib),
         names: super::stdlib::FACTORIES,
@@ -551,6 +560,7 @@ const PLAIN: Declared = Declared {
     joblib: Wrapped::Refused,
     beside: Wrapped::Refused,
     builtins: false,
+    exceptions: false,
     torch: false,
     classes: NO_CLASSES,
     extension: None,
@@ -616,6 +626,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
                     joblib: d.joblib,
                     beside: d.beside,
                     builtins: d.builtins,
+                    exceptions: d.exceptions,
                     torch: d.torch,
                     classes: d.classes,
                     names: d.names,
@@ -640,6 +651,7 @@ pub(super) fn forms() -> Vec<(&'static str, Allow)> {
             // written for that layout.
             beside: Wrapped::Allowed,
             builtins: true,
+            exceptions: true,
             torch: true,
             classes: &all.classes,
             names: &all.names,

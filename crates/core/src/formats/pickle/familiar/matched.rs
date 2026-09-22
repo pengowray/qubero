@@ -74,6 +74,14 @@ pub enum Shape {
     DefaultDict,
     Deque,
     Path,
+    /// `time.struct_time` and `os.stat_result`, the two structseq classes the
+    /// standard library writes: a fixed run of whole numbers, and a dictionary
+    /// of the fields that run does not hold.
+    StructTime,
+    StatResult,
+    /// One of the builtin exception classes, rebuilt from the arguments it was
+    /// raised with. See [`exceptions`](super::exceptions).
+    Exception,
     /// One key and one value of a dictionary, kept as the pair it is written
     /// as: two keys spelled alike are two entries, not one.
     Entry,
@@ -159,6 +167,9 @@ impl Shape {
             Shape::DefaultDict => "defaultdict",
             Shape::Deque => "deque",
             Shape::Path => "path",
+            Shape::StructTime => "struct_time",
+            Shape::StatResult => "stat_result",
+            Shape::Exception => "exception",
             Shape::Entry => "entry",
             Shape::List => "list",
             Shape::Tuple => "tuple",

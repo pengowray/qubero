@@ -91,6 +91,25 @@ const CAPPED: &[&str] = &["iterable", "maxlen"];
 const FACTORY: &[&str] = &["factory"];
 /// Nothing at all, for a call whose result is its own contents.
 const NOTHING: &[&str] = &[];
+/// The two halves a structseq is rebuilt from: the run of numbers the class
+/// reads as a sequence, and the dictionary holding the fields past the end of
+/// that run. `structseq_reduce` writes both, so both are always there.
+const STRUCTSEQ: &[&str] = &["fields", "extra fields"];
+
+/// The classes the standard library keeps in a module no class may be named
+/// from, by their whole dotted path.
+///
+/// `time` and `os` are not in [`STDLIB_MODULES`] and must not be: a prefix
+/// there says any class under the module may be *named*, and `os` holds
+/// `system` as well as `stat_result`. The calls table names the whole path
+/// instead, and this is what says such a call is the standard library's own,
+/// so a file holding one is read under this form.
+pub(super) const OWN_CLASSES: &[&str] = &["time.struct_time", "os.stat_result"];
+
+/// How many numbers each structseq's run holds, which is the class's
+/// `n_sequence_fields`: `struct_time` is nine and `stat_result` is ten.
+const TIME_FIELDS: usize = 9;
+const STAT_FIELDS: usize = 10;
 
 /// How many bytes each of the three packed values is, which is what
 /// `Lib/datetime.py` `_getstate` writes.
@@ -141,6 +160,13 @@ pub(super) const STDLIB_CALLS: &[Reduce] = &[
     Reduce { path: "decimal.Decimal", names: LITERAL, what: Shape::Decimal, shape: |c, args| is_decimal(c, &args[0]), ..PLAIN },
     Reduce { path: "fractions.Fraction", names: RATIO, what: Shape::Fraction, shape: |_c, args| whole(args), ..PLAIN },
     Reduce { path: "fractions.Fraction", names: LITERAL, what: Shape::Fraction, shape: |c, args| is_ratio(c, &args[0]), ..PLAIN },
+    // The two structseq classes: the run of numbers the class reads as a
+    // sequence, and the dictionary of the fields past the end of that run. A
+    // `struct_time` carries the zone it was read in; a `stat_result` carries
+    // the times again as floats and as nanoseconds, and whatever else the
+    // platform's `stat` has.
+    Reduce { path: "time.struct_time", names: STRUCTSEQ, what: Shape::StructTime, shape: |c, args| structseq(c, args, TIME_FIELDS), ..PLAIN },
+    Reduce { path: "os.stat_result", names: STRUCTSEQ, what: Shape::StatResult, shape: |c, args| structseq(c, args, STAT_FIELDS), ..PLAIN },
     // A path is its parts, however many there are, and the empty path has
     // none. Every part is a word the file wrote.
     path_call("pathlib.PurePosixPath"),
@@ -230,6 +256,31 @@ const fn fills(
     shape: fn(&Cursor, &[Value]) -> Option<()>,
 ) -> Reduce {
     Reduce { path, what, names, args, shape, ..PLAIN }
+}
+
+/// Whether this is a structseq the way `structseq_reduce` writes one: the run
+/// of whole numbers the class reads as a sequence, as long as the class says,
+/// and a dictionary of the fields past the end of it.
+///
+/// Which fields that dictionary holds is the platform's: a `stat_result` on
+/// Linux carries `st_blocks` and `st_rdev` and on Windows does not. So the
+/// keys are words and the values are numbers, text or nothing, which is what
+/// a field of one of these is, and the names themselves are the file's to
+/// state.
+fn structseq(c: &Cursor, args: &[Value], fields: usize) -> Option<()> {
+    let Kind::Tuple(held) = &args[0].kind else { return None };
+    if held.len() != fields || !held.iter().all(|x| matches!(x.kind, Kind::Int { .. } | Kind::Wide { .. })) {
+        return None;
+    }
+    let Kind::Dict(entries) = &args[1].kind else { return None };
+    entries.iter().all(|(key, value)| c.text_value(key).is_some() && is_field(c, value)).then_some(())
+}
+
+/// What one field of a structseq is worth: a whole number, a float, a word or
+/// nothing. A `struct_time`'s `tm_zone` is the word, and its `tm_gmtoff` is
+/// nothing where the zone is unknown.
+fn is_field(c: &Cursor, value: &Value) -> bool {
+    matches!(value.kind, Kind::Int { .. } | Kind::Wide { .. } | Kind::Float { .. } | Kind::None) || c.text_value(value).is_some()
 }
 
 /// Whether every argument is a whole number, which is what a `timedelta` and

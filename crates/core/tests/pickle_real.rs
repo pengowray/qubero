@@ -582,6 +582,11 @@ fn pickles(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "pickle"))
+        // Syncthing leaves a copy of a file beside it when two machines wrote
+        // it, named with the word below. It is not a sample of the collection
+        // and the collection does not track it, so it is passed over rather
+        // than counted as a file nothing accounts for.
+        .filter(|p| !p.to_string_lossy().contains("sync-conflict"))
         .collect();
     out.sort();
     out
@@ -663,30 +668,39 @@ fn the_forms_match_these_samples_and_no_others() {
         // The rest, none of which any form accepts yet. The library files
         // need forms of their own, built from reviewed complete structures.
         //
-        // The `everything` files at every protocol, and `proto4-collections`,
-        // are held back by one thing between them: each calls a class the
-        // forms do not name. `datetime.datetime`, `decimal.Decimal`,
-        // `fractions.Fraction` and `ValueError` are rebuilt by REDUCE, and
-        // the namedtuple in `collections` by NEWOBJ of a class defined in the
-        // file that wrote it. A form that took those would be accepting any
-        // class at all, which is the one thing the contract rules out.
+        // `proto4-collections` is held back by a namedtuple class the writing
+        // file defined, handed values by NEWOBJ. A form that took it would be
+        // accepting a class under `__main__`, which is the one thing the
+        // contract rules out. Its `OrderedDict`, `defaultdict`, `Counter` and
+        // `deque` are read.
         ("handmade-python2-modules.pickle", None),
         ("handmade-python2-opcodes.pickle", None),
         ("handmade-wide-lengths.pickle", None),
-        ("proto0-everything.pickle", None),
+        ("proto0-everything.pickle", Some("stdlib-values-p0-v2")),
         ("proto0-persistent-id.pickle", None),
-        ("proto1-everything.pickle", None),
-        ("proto2-everything.pickle", None),
+        ("proto1-everything.pickle", Some("stdlib-values-p1-v2")),
+        ("proto2-everything.pickle", Some("stdlib-values-p2-p3-v2")),
         ("proto2-extension-registry.pickle", None),
         ("proto2-memo-over-256.pickle", Some("basic-p2-p3-v1")),
         ("proto2-torch-state-dict.pickle", Some("torch-tensors-p2-p3-v1")),
-        ("proto3-everything.pickle", None),
+        ("proto3-everything.pickle", Some("stdlib-values-p2-p3-v2")),
         ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v1")),
         ("proto4-collections.pickle", None),
         // Packed dates, times and spans, each a call of its class with the
         // run of bytes `_getstate` packed it into.
-        ("proto4-datetime.pickle", Some("stdlib-values-p4-p5-v1")),
-        ("proto4-everything.pickle", None),
+        ("proto4-datetime.pickle", Some("stdlib-values-p4-p5-v2")),
+        // A `ValueError` rebuilt from its message, beside the dates and the
+        // exact numbers: an exception is one of the builtin exception classes
+        // called with the arguments it was raised with.
+        ("proto4-everything.pickle", Some("stdlib-values-p4-p5-v2")),
+        // Six exceptions: raised with nothing, with a message, with the
+        // errno, strerror and file name an OSError carries, with an attribute
+        // of its own through a BUILD, with the tuple a SyntaxError holds, and
+        // a group holding two more.
+        ("proto4-exceptions.pickle", Some("stdlib-values-p4-p5-v2")),
+        // The two structseq classes: a run of whole numbers, and a dictionary
+        // of the fields past the end of that run.
+        ("proto4-structseq.pickle", Some("stdlib-values-p4-p5-v2")),
         ("proto4-newobj.pickle", None),
         // An array of objects, which is what `pickle.dumps` writes for one and
         // NumPy's own writing: the values are pickled after the array as the
@@ -704,7 +718,7 @@ fn the_forms_match_these_samples_and_no_others() {
         // `sklearn.tree._tree.Tree` rebuilt by REDUCE from a structured array
         // of nodes.
         ("proto4-sklearn-random-forest.pickle", Some("sklearn-estimator-p4-p5-v1")),
-        ("proto5-everything.pickle", None),
+        ("proto5-everything.pickle", Some("stdlib-values-p4-p5-v2")),
         ("proto5-out-of-band.pickle", None),
         // A frame and a series, each a block manager over blocks of columns
         // and the two axes.
@@ -723,22 +737,22 @@ fn the_forms_match_these_samples_and_no_others() {
         // data. No single-family form takes one of them: each requires the
         // file to have used its own production and nothing else's, and the
         // mixed form is the union of all of them.
-        ("mixed-date-and-array-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-date-and-array-p2.pickle", Some("mixed-values-p2-p3-v1")),
-        ("mixed-ordereddict-of-arrays-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-ordereddict-of-arrays-p2.pickle", Some("mixed-values-p2-p3-v1")),
-        ("mixed-model-and-metadata-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-model-and-metadata-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-date-and-array-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-date-and-array-p2.pickle", Some("mixed-values-p2-p3-v2")),
+        ("mixed-ordereddict-of-arrays-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-ordereddict-of-arrays-p2.pickle", Some("mixed-values-p2-p3-v2")),
+        ("mixed-model-and-metadata-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-model-and-metadata-p2.pickle", Some("mixed-values-p2-p3-v2")),
         // Two frames sharing their placements, which pandas writes as a block
         // placed by an array of positions rather than by a slice. No form
         // reads one; `HANDOVER-pickle-libraries.md` has it as the fourth
         // thing left to do, and the samples arrived before the production.
         ("mixed-frames-sharing-placements-p4.pickle", None),
         ("mixed-frames-sharing-placements-p2.pickle", None),
-        ("mixed-frame-and-notes-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-frame-and-notes-p2.pickle", Some("mixed-values-p2-p3-v1")),
-        ("mixed-decimal-and-array-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-decimal-and-array-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-frame-and-notes-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-frame-and-notes-p2.pickle", Some("mixed-values-p2-p3-v2")),
+        ("mixed-decimal-and-array-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-decimal-and-array-p2.pickle", Some("mixed-values-p2-p3-v2")),
         // One family all the way down, kept beside them: it keeps the name it
         // already had rather than being read as a mixture of one.
         ("mixed-list-of-frames-p4.pickle", Some("pandas-frame-p4-p5-v1")),
@@ -747,16 +761,16 @@ fn the_forms_match_these_samples_and_no_others() {
         // exact numbers uses the standard library's productions, so the frame
         // is a mixture; a column of lists is containers of plain values, which
         // every form already reads, so that frame keeps the pandas form.
-        ("mixed-frame-of-dates-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-frame-of-dates-p2.pickle", Some("mixed-values-p2-p3-v1")),
-        ("mixed-frame-of-decimals-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-frame-of-decimals-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-frame-of-dates-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-frame-of-dates-p2.pickle", Some("mixed-values-p2-p3-v2")),
+        ("mixed-frame-of-decimals-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-frame-of-decimals-p2.pickle", Some("mixed-values-p2-p3-v2")),
         ("mixed-frame-of-lists-p4.pickle", Some("pandas-frame-p4-p5-v1")),
         ("mixed-frame-of-lists-p2.pickle", Some("pandas-frame-p2-p3-v1")),
         // An array of objects holding tuples, beside a date so that the file
         // is a mixture: an array of objects alone is numpy and nothing else.
-        ("mixed-array-of-tuples-p4.pickle", Some("mixed-values-p4-p5-v1")),
-        ("mixed-array-of-tuples-p2.pickle", Some("mixed-values-p2-p3-v1")),
+        ("mixed-array-of-tuples-p4.pickle", Some("mixed-values-p4-p5-v2")),
+        ("mixed-array-of-tuples-p2.pickle", Some("mixed-values-p2-p3-v2")),
         // The same column of objects holding instances of a class no form
         // names, which is where the widening stops.
         ("unfamiliar-frame-of-instances-p4.pickle", None),
@@ -810,8 +824,8 @@ fn the_forms_match_these_samples_and_no_others() {
         // transformer places its columns with slices, which are the
         // language's own values, and a nearest-neighbour model fitted on a
         // sparse matrix keeps that matrix, which is scipy's.
-        ("sklearn-column-transformer.pickle", Some("mixed-values-p4-p5-v1")),
-        ("sklearn-k-neighbors-classifier-sparse-input.pickle", Some("mixed-values-p4-p5-v1")),
+        ("sklearn-column-transformer.pickle", Some("mixed-values-p4-p5-v2")),
+        ("sklearn-k-neighbors-classifier-sparse-input.pickle", Some("mixed-values-p4-p5-v2")),
         // NumPy's own array classes, each of which reaches the reconstructor
         // an ndarray reaches and names itself in it. A matrix is an array
         // held to two dimensions; a memmap is an array a reader may keep in
@@ -881,7 +895,7 @@ const FAMILIES: &[(&str, [Option<&str>; 4])] = &[
     ("scipy", [Some("scipy-sparse-p4-p5-v1"), Some("scipy-sparse-p2-p3-v1"), Some("scipy-sparse-p1-v1"), Some("scipy-sparse-p0-v1")]),
     // The standard library's own classes: dates, ordered and defaulting
     // dictionaries, counters, queues, exact numbers, ids and paths.
-    ("stdlib", [Some("stdlib-values-p4-p5-v1"), Some("stdlib-values-p2-p3-v1"), Some("stdlib-values-p1-v1"), Some("stdlib-values-p0-v1")]),
+    ("stdlib", [Some("stdlib-values-p4-p5-v2"), Some("stdlib-values-p2-p3-v2"), Some("stdlib-values-p1-v2"), Some("stdlib-values-p0-v2")]),
     // The two whose values are builtins and nothing else, which the builtins
     // form already reads and keeps reading. A file has to use a form's own
     // productions to be read under it, and neither of these names a class from
@@ -1258,7 +1272,13 @@ fn the_familiar_template_reads_a_matched_sample_and_refuses_the_rest() {
         assert_eq!(row(&rows, "message").value, Value::Str(formats::pickle::familiar::MESSAGE.to_string()), "{name}");
         assert_eq!(row(&rows, "form").value, Value::Str(form), "{name}");
         // The protocol the file declared, which is the byte after PROTO.
-        assert_eq!(row(&rows, "protocol").value, Value::UInt(u128::from(bytes[1])), "{name}");
+        // Protocols 0 and 1 have no opener to declare one, so the row is the
+        // protocol the form read the file under, said rather than read.
+        let protocol = &row(&rows, "protocol").value;
+        match bytes.first() {
+            Some(0x80) => assert_eq!(*protocol, Value::UInt(u128::from(bytes[1])), "{name}"),
+            _ => assert!(matches!(protocol, Value::Str(said) if said == "0" || said == "1"), "{name}: {protocol:?}"),
+        }
         covers(&rows, &name);
         checked += 1;
     }
@@ -1828,18 +1848,18 @@ fn a_mixed_file_reads_as_every_family_it_holds() {
     };
     // Each file, the form, and what the `form extensions` row says.
     let want: &[(&str, &str, &str)] = &[
-        ("mixed-date-and-array-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
-        ("mixed-date-and-array-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy"),
-        ("mixed-ordereddict-of-arrays-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
-        ("mixed-decimal-and-array-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
+        ("mixed-date-and-array-p4.pickle", "mixed-values-p4-p5-v2", "stdlib, numpy"),
+        ("mixed-date-and-array-p2.pickle", "mixed-values-p2-p3-v2", "stdlib, numpy"),
+        ("mixed-ordereddict-of-arrays-p4.pickle", "mixed-values-p4-p5-v2", "stdlib, numpy"),
+        ("mixed-decimal-and-array-p4.pickle", "mixed-values-p4-p5-v2", "stdlib, numpy"),
         // A fitted model with the day it was fitted: the estimator brings its
         // arrays with it, so three names rather than two.
-        ("mixed-model-and-metadata-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy, sklearn"),
-        ("mixed-model-and-metadata-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy, sklearn"),
+        ("mixed-model-and-metadata-p4.pickle", "mixed-values-p4-p5-v2", "stdlib, numpy, sklearn"),
+        ("mixed-model-and-metadata-p2.pickle", "mixed-values-p2-p3-v2", "stdlib, numpy, sklearn"),
         // pandas places a block by writing a `slice`, which is the builtins
         // production, so a frame brings that name with it too.
-        ("mixed-frame-and-notes-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
-        ("mixed-frame-and-notes-p2.pickle", "mixed-values-p2-p3-v1", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-and-notes-p4.pickle", "mixed-values-p4-p5-v2", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-and-notes-p2.pickle", "mixed-values-p2-p3-v2", "builtins, stdlib, numpy, pandas"),
         // One family, which keeps the name it already had. The row says so
         // too, which is why it is worth having on every file and not only on
         // a mixed one.
@@ -1848,17 +1868,17 @@ fn a_mixed_file_reads_as_every_family_it_holds() {
         // standard library's own production: the values in such a column are
         // read by the same grammar as the rest of the file, so a date in one
         // counts the way a date anywhere else does.
-        ("mixed-frame-of-dates-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
-        ("mixed-frame-of-dates-p2.pickle", "mixed-values-p2-p3-v1", "builtins, stdlib, numpy, pandas"),
-        ("mixed-frame-of-decimals-p4.pickle", "mixed-values-p4-p5-v1", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-of-dates-p4.pickle", "mixed-values-p4-p5-v2", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-of-dates-p2.pickle", "mixed-values-p2-p3-v2", "builtins, stdlib, numpy, pandas"),
+        ("mixed-frame-of-decimals-p4.pickle", "mixed-values-p4-p5-v2", "builtins, stdlib, numpy, pandas"),
         // A column of lists is containers of plain values, which every form
         // already reads, so the frame keeps the pandas form.
         ("mixed-frame-of-lists-p4.pickle", "pandas-frame-p4-p5-v1", "builtins, numpy, pandas"),
         ("mixed-frame-of-lists-p2.pickle", "pandas-frame-p2-p3-v1", "builtins, numpy, pandas"),
         // An array of objects holding tuples, beside a date. The array alone
         // is numpy and nothing else, and the mixed form wants two.
-        ("mixed-array-of-tuples-p4.pickle", "mixed-values-p4-p5-v1", "stdlib, numpy"),
-        ("mixed-array-of-tuples-p2.pickle", "mixed-values-p2-p3-v1", "stdlib, numpy"),
+        ("mixed-array-of-tuples-p4.pickle", "mixed-values-p4-p5-v2", "stdlib, numpy"),
+        ("mixed-array-of-tuples-p2.pickle", "mixed-values-p2-p3-v2", "stdlib, numpy"),
     ];
     for (name, form, extensions) in want {
         let bytes = std::fs::read(dir.join(name)).unwrap();

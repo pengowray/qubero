@@ -96,7 +96,7 @@ fn a_joblib_nested_pickle_holds_a_column_of_dates() {
     let name = "pandas-frame-of-dates.joblib";
     let bytes = std::fs::read(dir.join(name)).unwrap();
     let found = formats::pickle::familiar::recognise(&bytes).unwrap_or_else(|| panic!("{name} matched no form"));
-    assert_eq!(found.form, "mixed-values-p4-p5-v1");
+    assert_eq!(found.form, "mixed-values-p4-p5-v2");
     assert_eq!(found.extensions(), "builtins, stdlib, numpy, pandas, joblib");
     let doc = Document::new(MemSource(bytes));
     let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
@@ -149,15 +149,15 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // is the wrapper and one more family in the one stream, which is the
         // mixed form: the two rows above are the two mixtures joblib was
         // given a name of its own for, and these are the rest.
-        ("stdlib-and-arrays.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
-        ("pandas-frame.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("stdlib-and-arrays.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
+        ("pandas-frame.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
         // The same frame with named columns and a text column, which are two
         // object arrays and so two nested pickles.
-        ("pandas-frame-named-columns.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
-        ("scipy-csr-matrix.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("pandas-frame-named-columns.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
+        ("scipy-csr-matrix.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
         // A frame with a column of dates, so the nested pickle joblib writes
         // for that column holds dates rather than text.
-        ("pandas-frame-of-dates.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("pandas-frame-of-dates.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
         // The breadth sweep: the estimators people actually save, each dumped
         // the way scikit-learn's own documentation says to save a model.
         // `tools/make_sklearn_breadth_samples.py` in the collection writes
@@ -192,8 +192,8 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         ("sklearn-pipeline-scaler-and-model.joblib", Some("joblib-sklearn-p4-p5-v1"), "joblib"),
         // Two of them hold a second family beside scikit-learn's, so the
         // joblib name is not the narrowest true one and the mixed form is.
-        ("sklearn-column-transformer.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
-        ("sklearn-k-neighbors-classifier-sparse-input.joblib", Some("mixed-values-p4-p5-v1"), "joblib"),
+        ("sklearn-column-transformer.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
+        ("sklearn-k-neighbors-classifier-sparse-input.joblib", Some("mixed-values-p4-p5-v2"), "joblib"),
         // A `numpy.matrix`, which reaches the same wrapper every array does
         // and names `numpy.matrix` in its `subclass` where every other file
         // names `numpy.ndarray`. One of NumPy's own array classes, so it is

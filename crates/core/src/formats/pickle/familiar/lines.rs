@@ -257,7 +257,15 @@ impl Cursor<'_> {
     /// is the spelling.
     pub(super) fn number_line(&mut self) -> Option<Value> {
         let start = self.at;
-        let long = self.byte()? == b'L';
+        // The two opcodes protocol 0 writes a number with, and no others. The
+        // caller reaches this from every integer opcode there is, since the
+        // binary ones are what the protocols above write, and at protocol 0
+        // one of those is a byte no pickler put there.
+        let code = self.byte()?;
+        if !matches!(code, b'I' | b'L') {
+            return None;
+        }
+        let long = code == b'L';
         let (at, len) = self.line()?;
         let said = std::str::from_utf8(self.bytes.get(at..at + len)?).ok()?;
         // `True` and `False`, which had no opcode of their own below
