@@ -54,8 +54,9 @@ pub fn torch_zip() -> Template {
 pub(crate) struct Entry {
     pub(crate) name: String,
     pub(crate) method: i128,
-    /// Where the entry's data starts in the archive, and how long it is.
-    pub(crate) at: i128,
+    /// How long the entry's data is. Where it starts is not kept: the type is
+    /// placed by [`Expr::EntryOf`](crate::template::Expr::EntryOf) now, which
+    /// says the same thing in the IR rather than in a number.
     pub(crate) len: i128,
     record: Vec<usize>,
 }
@@ -88,14 +89,12 @@ fn entries(table: &mut dyn Descriptions) -> R<Vec<Entry>> {
         let name = table.text(&name)?.replace('\\', "/");
         let method = table.int(&method)?.unwrap_or(-1);
         let len = table.int(&size)?.unwrap_or(0);
-        let extra = table.node(&extra)?;
         // An entry whose header was read inside a stream is at no offset in
         // the archive, so nothing can be placed at it.
-        if extra.space != 0 {
+        if table.node(&extra)?.space != 0 {
             continue;
         }
-        let at = ((extra.offset_bits + extra.size_bits) / 8) as i128;
-        out.push(Entry { name, method, at, len, record });
+        out.push(Entry { name, method, len, record });
     }
     Ok(out)
 }
