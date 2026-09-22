@@ -727,7 +727,7 @@ export const TABLE = {
   arrange: (rowWord: string): string => `${heading(plural(rowWord))} in:`,
   arrangeRows: "rows",
   arrangeColumns: "columns",
-  arrangeTitle: (rowWord: string): string => `One ${rowWord} per row, or one ${rowWord} per column. (Display only)`,
+  arrangeTitle: (rowWord: string): string => `One ${rowWord} per row, or one ${rowWord} per column. Changes the display only.`,
   /** Why `columns` cannot be chosen, on a table too long to turn. */
   turnTooMany: (rowWord: string, limit: number): string =>
     `Too many ${plural(rowWord)} to show as columns. The limit is ${limit.toLocaleString()}.`,

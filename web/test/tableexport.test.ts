@@ -111,3 +111,13 @@ test("the file is named for where the table came from", () => {
   assert.equal(exportName("big_endian.tdms", "values", "csv"), "big_endian.tdms.values.csv");
   assert.equal(exportName("a.bin", "/'Measured Data'/'Phase'", "json"), "a.bin._'Measured Data'_'Phase'.json");
 });
+
+test("a file is the values, with no address columns however the table is shown", async () => {
+  // The reader has the address columns on screen. A file of the table is its
+  // values, so the columns that say where each row is stored are left out,
+  // and the size line agrees with what is written.
+  const shown = job({ lead: { named: false, rate: null, addresses: true } });
+  assert.equal(await written(shown), await written(job({})));
+  assert.deepEqual(exportSize(shown), exportSize(job({})));
+  assert.equal(await written(job({ ...shown, format: "tsv", asShown: true })), await written(job({ format: "tsv", asShown: true })));
+});

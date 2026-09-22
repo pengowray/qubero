@@ -61,12 +61,19 @@ export function writtenTurned(job: Pick<ExportJob, "format" | "asShown">): boole
   return job.asShown && job.format !== "json";
 }
 
+/** The lead a file is written with. A file of the table is its values: where
+ *  each row is stored is a fact about this file's bytes, shown on request and
+ *  there to copy, not a column of the data being saved. */
+function saved(lead: Lead): Lead {
+  return lead.addresses ? { ...lead, addresses: false } : lead;
+}
+
 /** How many rows and columns the file will have, heading row not counted. For
  *  JSON the rows are objects and the columns their keys. */
 export function exportSize(job: ExportJob): { readonly rows: number; readonly columns: number } {
   const fields = job.fields === undefined ? job.headings.length : job.fields.to - job.fields.from;
   const records = job.records.to - job.records.from;
-  const about = leadKinds(job.lead).length;
+  const about = leadKinds(saved(job.lead)).length;
   if (writtenTurned(job)) return { rows: about - 1 + fields, columns: 1 + job.count };
   return { rows: records, columns: about + fields };
 }
@@ -80,23 +87,24 @@ export function exportSize(job: ExportJob): { readonly rows: number; readonly co
  */
 export async function* exportText(job: ExportJob, row: (i: number) => Promise<TableRow>): AsyncGenerator<ExportPiece> {
   const width = job.headings.length;
+  const lead = saved(job.lead);
   if (writtenTurned(job)) {
     // Turned, every line has a cell from every record, so they are all read
     // before the first line can be written. Only a table short enough to be
     // drawn turned is ever asked for this way.
     const records: TableRow[] = [];
     for (let i = 0; i < job.count; i++) records.push(await row(i));
-    const lines = turnedLines(job.headings, records, job.lead, job.fields ?? { from: 0, to: width });
+    const lines = turnedLines(job.headings, records, lead, job.fields ?? { from: 0, to: width });
     yield { text: lines.map((line) => lineOf(job.format, line)).join(""), done: lines.length - 1 };
     return;
   }
-  const head = headerCells(job.headings, job.lead, job.fields);
+  const head = headerCells(job.headings, lead, job.fields);
   const keys = uniqueKeys(head);
   let text = job.format === "json" ? "[\n" : lineOf(job.format, head);
   for (let i = job.records.from; i < job.records.to; i++) {
     const record = await row(i);
-    if (job.format === "json") text += `  ${jsonObject(keys, recordParts(i, record, width, job.lead, job.fields))}${i + 1 < job.records.to ? "," : ""}\n`;
-    else text += lineOf(job.format, recordCells(i, record, width, job.lead, job.fields));
+    if (job.format === "json") text += `  ${jsonObject(keys, recordParts(i, record, width, lead, job.fields))}${i + 1 < job.records.to ? "," : ""}\n`;
+    else text += lineOf(job.format, recordCells(i, record, width, lead, job.fields));
     const done = i + 1 - job.records.from;
     if (done % PIECE === 0) {
       yield { text, done };
