@@ -117,9 +117,14 @@ impl SchemaBuilder for Checkpoint {
             let ty = T::structure(EMPTY_NAME, Vec::new()).doc(NO_PICKLE);
             return Ok(Built { ty, from: None, members_from: Vec::new() });
         };
-        let held = T::at(E::lit(pickle.at), T::sized(E::lit(pickle.len), T::pickle()));
-        let ty = T::structure("TorchCheckpoint", vec![(PICKLE_FIELD, held)])
-            .field_named_from(PICKLE_FIELD, E::elem_within(&["records"], E::lit(index_of(pickle) as i128), &["body", "name"]));
+        // Where the pickle is, said rather than counted: the entry of the
+        // archive whose name the record that holds it writes. The offset is
+        // the same number `entries` worked out, and saying it this way is
+        // what puts the archive's records in the field's depends-on rows and
+        // in the diagram. See [`Expr::EntryOf`](crate::template::Expr::EntryOf).
+        let named = E::elem_within(&["records"], E::lit(index_of(pickle) as i128), &["body", "name"]);
+        let held = T::at_space(E::entry_of(&["records"], named.clone()), T::sized(E::lit(pickle.len), T::pickle()));
+        let ty = T::structure("TorchCheckpoint", vec![(PICKLE_FIELD, held)]).field_named_from(PICKLE_FIELD, named);
         Ok(Built { ty, from: None, members_from: vec![Some(pickle.record.clone())] })
     }
 

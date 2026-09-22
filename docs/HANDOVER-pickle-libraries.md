@@ -193,7 +193,9 @@ scikit-learn breadth sweep are `familiar/sklearn.rs`, which holds
 | `familiar/cursor.rs`, `memo.rs` | bytes and frames; the slots a file names things in | 454, 334 |
 | `familiar/numpy.rs`, `dtype.rs`, `builtins.rs`, `object.rs` | the productions each form adds | 455, 353, 116, 385 |
 | `familiar/torch.rs` | a tensor, and the persistent id that says where its numbers are | 261 |
-| `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 400 |
+| `familiar/stdlib.rs` | the standard library's calls, and what each argument has to be | 506 |
+| `familiar/exceptions.rs` | the builtin exception hierarchy, in the three module spellings the protocols write it in, and what an exception's arguments may be | 139 |
+| `eval/entryof.rs` | where the data of an archive entry begins, found by the entry's name: `Expr::EntryOf` | 115 |
 | `eval/pickleparts.rs` | what a node of the tree is made of, a kind to an arm | 655 |
 | `eval/picklenames.rs` | every word a row goes by, and the bounds the reading works under | 114 |
 | `eval/pickletree.rs` | placing and naming those, and the table shapes | 556 |
@@ -1217,3 +1219,23 @@ form to `stdlib-values-*`, and the ten new samples.
 byte stood in front of a protocol 0 number line, so `K`, `M`, `J` and `\x8a`
 all read there as `I` did. It now takes `I` and `L` and nothing else. The
 fuzzing in `pickle_real` found it as soon as a protocol 0 file matched a form.
+
+## The archive entry as an expression: landed on 2026-09-23
+
+`Expr::EntryOf { records, name }` says where the data of an archive entry
+begins, found by the entry's name. The whole of it is in
+`DESIGN-pickle-containers.md` under "The archive entry as an expression": what
+it is, the two readings behind it, the one place it is used, why a tensor's
+`numbers` cannot use it yet, and what zarr-in-ZIP would do with it.
+
+The code: the variant and `E::entry_of` in `template.rs`, the evaluation in
+`eval/entryof.rs`, the text form in `template_text.rs`, and the arms in
+`machinery.rs`, `eval/diagram.rs` and `eval/origin.rs`. `eval/relate.rs` needs
+none: the expression lands on no field, so it is written out as the text form
+rather than substituted with a field's value, which is what that file already
+does for everything that is not a field.
+
+`formats/torchzip.rs` uses it for the checkpoint's own pickle. The offset is
+the same number it was; what changed is that the field now says where the
+number came from, so the inspector's depends-on rows name `records` and the
+name the entry was found by instead of naming nothing at all.

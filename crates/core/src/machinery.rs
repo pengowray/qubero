@@ -252,6 +252,14 @@ fn expr_refs(e: &Expr, out: &mut Vec<Arc<str>>) {
                 out.push(Arc::from(first.as_str()));
             }
         }
+        // The records of an archive, named the way a path into a sibling is,
+        // and the expression that says which entry, which may name more.
+        Expr::EntryOf { records, name } => {
+            if let Some(first) = records.first() {
+                out.push(Arc::from(first.as_str()));
+            }
+            expr_refs(name, out);
+        }
         // The same, and the index is arithmetic that may name more.
         Expr::ElemWithin { path, index, .. } => {
             if let Some(first) = path.first() {

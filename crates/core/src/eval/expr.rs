@@ -347,6 +347,16 @@ impl Evaluator {
                     None => 0,
                 }
             }
+            // The archive entry a name points at, which is the one thing a
+            // format whose fields are in one entry and whose numbers are in
+            // another has to be able to say. The walk is cold and in
+            // [`entryof`](super::entryof), because this evaluator's recursion
+            // is tight and a walk of records is not a frame to carry through
+            // every expression in every template.
+            Expr::EntryOf { records, name } => {
+                let (records, name) = (records.clone(), name.clone());
+                self.entry_of(doc, at, &records, &name, here)?
+            }
             // Asked of the record that placed the gathered element this sits
             // in, from the frame that record's offset was worked out in.
             Expr::Placer(e) => {

@@ -21,6 +21,7 @@ mod cells;
 mod census;
 mod check;
 mod deduced;
+mod entryof;
 mod diagram;
 mod explain;
 mod gather;

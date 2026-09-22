@@ -1361,6 +1361,7 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         | Expr::Elem { .. }
         | Expr::ElemWithin { .. }
         | Expr::Tagged(..)
+        | Expr::EntryOf { .. }
         | Expr::Placer(..)
         | Expr::Product { .. }
         | Expr::ProductOf(..)
@@ -1440,6 +1441,10 @@ fn leaf_text(e: &Expr, probes: bool) -> Option<String> {
             let field = if t.field.is_empty() { String::new() } else { format!(".{}", t.field.join(".")) };
             format!("{array}[{} = {}]{field}", t.key.join("."), tag_text(&t.tag, probes)?)
         }
+        // The archive entry a name points at, written the way a search over a
+        // list is, with `data of` in front to say it is where the entry's
+        // bytes begin rather than anything the entry holds.
+        Expr::EntryOf { records, name } => format!("data of {}[name = {}]", records.join("."), spelled(name, probes)?),
         // A question for another record, so it says whose: the names inside
         // are that record's fields, and written bare they would read as fields
         // beside this one. A name or a path reads as a path into the
@@ -1543,6 +1548,27 @@ mod tests {
         for e in [worth, grib, scale] {
             assert_eq!(readable(&e), Some(expr(&e)));
         }
+    }
+
+    /// The archive entry a name points at: the records it is looked for
+    /// among, and the expression that says which one. Written the way a search
+    /// over a list is, with `data of` in front, so a reader can tell it from
+    /// anything the entry holds.
+    #[test]
+    fn an_archive_entry_reads_as_the_records_and_the_name() {
+        let held = E::entry_of(&["records"], E::field("key"));
+        assert_eq!(expr(&held), "data of records[name = key]");
+        // The name may be a path into an earlier field, and the whole is a
+        // leaf, so arithmetic over it takes the brackets it needs.
+        let deep = E::entry_of(&["archive", "records"], E::within(&["storage", "key"]));
+        assert_eq!(expr(&deep), "data of archive.records[name = storage.key]");
+        assert_eq!(expr(&deep.clone().add(E::lit(8))), "data of archive.records[name = storage.key] + 8");
+        assert_eq!(expr(&E::lit(2).mul(deep.clone())), "2 * data of archive.records[name = storage.key]");
+        // The panel and the IR text are one writer here as well.
+        assert_eq!(readable(&deep), Some(expr(&deep)));
+        // And it reads as a place to be at, which is what it is for.
+        let run = Ty::at_space(deep, Ty::u8());
+        assert_eq!(inline(&run).as_deref(), Some("at(data of archive.records[name = storage.key] from stream) u8be"));
     }
 
     #[test]

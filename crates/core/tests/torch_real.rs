@@ -757,3 +757,32 @@ fn every_legacy_dtype_and_every_legacy_view_reads() {
         assert_eq!(numbers(&said), numbers(&want), "{name}");
     }
 }
+
+/// The pickle is placed by the archive entry it is, said as an expression
+/// rather than counted in Rust, so the rows saying where it came from name the
+/// archive's records.
+///
+/// `Expr::EntryOf` is the expression: the entry of `records` whose name the
+/// record holding it writes. Before it the offset was a literal the schema
+/// builder had worked out, and a literal says nothing about where it came
+/// from, so the field depended on nothing at all.
+#[test]
+fn the_pickle_is_placed_by_the_archive_entry_it_is() {
+    let Some(dir) = qubero_samples::dir("torch") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let (doc, mut ev) = open(&dir, "module-state-dict-zip.pt");
+    let mut here = under(&doc, &mut ev, &[], "checkpoint");
+    here.push(0);
+    let data = under(&doc, &mut ev, &here, "data");
+    // The field is where the entry's data is, which is past the local header
+    // of the record that names it.
+    let node = ev.node(&doc, &data).unwrap();
+    assert!(node.offset_bits > 0, "the pickle is at the front of the file");
+    // And it says so: the rows behind it name the records it was found among
+    // and the name it was found by.
+    let said: Vec<String> = ev.origins(&doc, &data).unwrap().into_iter().map(|o| o.label).collect();
+    assert!(said.iter().any(|l| l == "records"), "no records row among {said:?}");
+    assert!(said.iter().any(|l| l.contains("name")), "nothing naming the entry among {said:?}");
+}

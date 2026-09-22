@@ -10,6 +10,10 @@
 /// The forms, each a named grammar over the same envelope. They differ in
 /// which value productions they allow, and every one of those is enumerated.
 pub(super) const BASIC: &str = "basic-p4-p5-v5";
+/// At v7, and at v2 in the three ranges below, the NumPy form reads a record
+/// array, whose dtype is the class `numpy.record` where every other dtype is
+/// the letters it is spelled by, and a masked array of a structured dtype,
+/// whose mask is one boolean a column a row. See [`numpy`](super::numpy).
 pub(super) const NUMPY: &str = "numpy-array-p4-p5-v7";
 pub(super) const BUILTINS: &str = "builtins-values-p4-p5-v3";
 /// The library forms. Each is the plain object production over one package,

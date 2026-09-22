@@ -694,6 +694,13 @@ fn names_in(e: &Expr, out: &mut Vec<String>) {
             }
             names_in(index, out);
         }
+        // The records of an archive, and what says which entry of them.
+        Expr::EntryOf { records, name } => {
+            if let Some(first) = records.first() {
+                out.push(first.clone());
+            }
+            names_in(name, out);
+        }
         Expr::Tagged(t) => {
             if let Some(array) = &t.array {
                 names_in(array, out);

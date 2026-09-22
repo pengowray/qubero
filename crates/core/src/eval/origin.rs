@@ -737,6 +737,21 @@ impl Evaluator {
                 }
                 out.push(o);
             }
+            // The name that said which entry of an archive, and the records
+            // the entry was looked for among. A torch tensor's numbers come
+            // from a key the pickle holds and from the records that hold the
+            // entry of that name, and a reader asking why the run is where it
+            // is wants both rows.
+            Expr::EntryOf { records, name } => {
+                self.from_expr(doc, at, &name.clone(), role, out)?;
+                if let Some(first) = records.first() {
+                    if let Some(p) = self.find_field(at, first) {
+                        let said = records.join(".");
+                        let o = self.origin(doc, out.values, role, said, p);
+                        out.push(o);
+                    }
+                }
+            }
             // The element that says what it is, rather than one at a known
             // place: the answer came from wherever in the list the tag was,
             // and that is the element to point at.

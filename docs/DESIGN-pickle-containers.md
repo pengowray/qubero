@@ -560,18 +560,11 @@ see "What each era wrote".
    and legacy files alike.
 4. **A tensor's numbers as a field rather than a table.** See below.
 
-**What a proper IR answer would need**, now that the shape of it is known. The
-gap is a field in one ZIP entry placed by another entry's contents: the
-tensor's numbers are at `data/<key>`, and `<key>` is a string the pickle
-holds. `Ty::At` places a field at an expression, so the missing piece is an
-expression that resolves an archive entry by name -- something like
-`E::entry_of(&["records"], E::field("key"))`, evaluated by walking the same
-central directory `pickletorch.rs` walks, and a `Ty::Strided` that lays a
-typed run out by a size and a stride rather than contiguously. With those two
-a tensor would be an ordinary field: hex view, selection, byte addresses per
-cell, and the reading counted once. Without the second, a non-contiguous view
-would still need computed cells. zarr-in-zip wants the first of them too,
-which is the argument for doing it rather than widening `pickletorch.rs`.
+**The expression landed on 2026-09-23**, and the tensor's numbers still do
+not use it. Both halves are below, under "The archive entry as an expression".
+What is still missing for a tensor is a `Ty::Strided` that lays a typed run
+out by a size and a stride rather than contiguously; without it a
+non-contiguous view would still need computed cells.
 
 ### Cells that say where their bytes are: landed on 2026-09-19
 
@@ -687,13 +680,9 @@ would leave the numbers counted nowhere.
 
 **What is still open.**
 
-- **The lookup is still Rust.** `pickletorch.rs` walks the central directory
-  for `data/<key>`; the IR still cannot say "the data of the entry named X",
-  which is `E::entry_of` in the paragraph above. The `numbers` field reports
-  no expression that placed it, so the inspector's depends-on graph does not
-  show the archive's directory. Closing it means the expression, its text
-  form in `template_text.rs`, its diagram and graph arms, and a `Ty` for the
-  run; zarr-in-ZIP wants the same expression.
+- **The lookup is still Rust, for the tensor.** The expression exists now and
+  the pickle is placed by it; a tensor's `numbers` cannot be, and the reason
+  is under "The archive entry as an expression" below.
 - **The hex view does not lead back to a tensor.** Clicking a byte of
   `data/0` lands on the ZIP record's `data` field: `placed::Index` is walked
   from the template's types and a `Ty::Pickle` node's synthesised children
@@ -833,3 +822,71 @@ which keeps the generator's own file names because each pickle in it names its
 5. ~~The legacy torch file.~~ Done on 2026-09-19.
 6. ~~Older versions from containers.~~ Done on 2026-09-19. The samples are in
    the collection.
+
+## The archive entry as an expression: landed on 2026-09-23
+
+`Expr::EntryOf { records, name }` is where the data of an archive entry
+begins, in bytes from the front of the space the field asking is read in.
+`records` is a path down into an earlier field, the way `Expr::Within`'s is,
+and lands on the archive's records; `name` is an expression that lands on a
+field holding the entry's name. Its text form is
+`data of records[name = key]`, written the way a search over a list is, with
+`data of` in front to say it is where the entry's bytes begin rather than
+anything the entry holds. The evaluation is `Evaluator::entry_of` in
+`eval/entryof.rs`, in a file and behind an `#[inline(never)]` of its own,
+because the expression evaluator's recursion is tight and a walk of records is
+not a frame to carry through every expression in every template.
+
+**Both readings of an archive answer it, and both are needed.** A local file
+record says where its own data begins: its header's end, past the name and the
+extra field it declares. Those records are what the template placed, so
+`Evaluator::record_named` walks them first. An archive written as a stream
+leaves both sizes out of the local header and writes them in a descriptor
+after the data, so a walk from the front cannot always reach the record
+wanted; `torch.save` writes every entry that way. `Evaluator::directory_named`
+then asks `Evaluator::archive`, which reads the central directory at the end
+through the evaluator, so bytes that have not arrived say `Pending` rather
+than answering out of a run of noughts.
+
+**Where it is used.** `formats/torchzip.rs` places the checkpoint's pickle
+with it: `T::at_space(E::entry_of(&["records"], <the record's name field>))`
+where the offset used to be a literal the schema builder had worked out. A
+literal says nothing about where it came from, so the field's depends-on rows
+were empty; now they name the archive's records and the name the entry was
+found by. `torch_real::the_pickle_is_placed_by_the_archive_entry_it_is` is the
+test.
+
+**Where it cannot yet be used: a tensor's numbers.** The blocker is not the
+expression. It is that the name the expression would look the entry up by is
+not in any field an expression can name.
+
+- A tensor's `numbers` row is a synthesised child of a `Ty::Pickle` node, made
+  by `Evaluator::place_pickle_child` in `eval/pickletree.rs`. That hands back
+  a `Place` (`eval/mod.rs`), which carries a `Ty` and a numeric `offset`; the
+  `Ty` may be a `Ty::At`, so the *placement* could be an expression.
+- What it cannot be is the *name*. The storage key is a run of bytes inside
+  the pickle, kept by the recogniser as an `at`/`len` pair on `Tensor::key`
+  and read by `Evaluator::run_text`. Every expression that lands on a field
+  goes through `Evaluator::find_field` in `eval/expr.rs`, which climbs the
+  memo and matches names against `StructDef::fields`. A pickle node's children
+  are not fields of any `StructDef`, so `find_field` never finds them and
+  `Expr::Ref`, `Expr::Within` and `Expr::Elem` cannot name the key.
+- `Expr::Deduced` is the one expression that answers something no field holds,
+  and it does not reach here either: `Deduce` in `template.rs` is three fixed
+  questions answered once for the whole document by `formats::pickle::machine`,
+  with no way to ask one of a particular tensor.
+
+So closing it needs one of two things, and both are larger than this
+expression: a way for a synthesised pickle child to be a named field an
+expression can reach, or a `Deduce` that takes which node is asking.
+
+**zarr-in-ZIP would use the same expression.** `zarrzip` is the plain ZIP
+template today: the records and nothing else. A chunk of a Zarr array is an
+entry named by its key, `0.0.0` for the first chunk of a three-dimensional
+array, and the array's `.zarray` entry says the dtype, the shape and the chunk
+shape. Placing a chunk would be
+`T::at_space(E::entry_of(&["records"], <the key>), <the typed run>)`, with the
+same two readings behind it. It would hit the same wall as the tensor only if
+the key had to come out of a parsed JSON node; a key a schema builder writes
+into the type it builds, the way `torchzip.rs` writes the pickle's, reaches an
+ordinary field and works today.

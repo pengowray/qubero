@@ -245,6 +245,36 @@ pub enum Expr {
     /// declared as reading the header's own bytes over again, and naming it
     /// means the list, not the nothing standing in its place.
     ElemWithin { path: Arc<[String]>, index: Box<Expr>, field: Arc<[String]> },
+    /// Where the data of the archive entry named `name` begins, in bytes,
+    /// counted from the front of the space the field asking is read in.
+    ///
+    /// `records` is a path down into an earlier field, the way
+    /// [`Expr::Within`]'s is, and it lands on the list of the archive's
+    /// records. `name` is an expression that lands on a field holding the
+    /// entry's name, the way [`Expr::StartOf`]'s inner expression lands on a
+    /// field.
+    ///
+    /// What a format whose fields are in one entry and whose numbers are in
+    /// another needs. A torch checkpoint is a ZIP: the pickle is `data.pkl`
+    /// and a tensor's numbers are in `data/<key>`, where `<key>` is a string
+    /// the pickle holds. No other expression reaches those bytes: the entry is
+    /// found by its name rather than by where it sits, and the name is not
+    /// written anywhere near the record that holds it.
+    ///
+    /// **Two places hold the answer and both are read.** The local record of
+    /// an entry says where its data begins, which is its own header's end, and
+    /// the placed records are walked for it first. An archive written as a
+    /// stream leaves the sizes out of the local header and puts them in a
+    /// descriptor after the data, so a walk from the front cannot always reach
+    /// the record wanted; torch writes every entry that way. The central
+    /// directory at the end of the archive has them all, and is read when the
+    /// walk did not find the name. Bytes that have not arrived say `Pending`
+    /// rather than answering out of a run of noughts.
+    ///
+    /// In bytes and counted from the front of the space, as [`Expr::SpacePos`]
+    /// is, so it pairs with [`Anchor::Space`] and can be handed to
+    /// [`Ty::at_space`].
+    EntryOf { records: Arc<[String]>, name: Box<Expr> },
     /// The value at `field` in the first element of the earlier list `array`
     /// whose `key` holds `tag`. `Elem` reaches an element by where it is,
     /// which is no use when what an element is, is written in it: a ZIP local
@@ -806,6 +836,11 @@ impl Expr {
             index: Box::new(index),
             field: field.iter().map(|s| s.to_string()).collect(),
         }
+    }
+    /// Where the data of the archive entry named by `name` begins, in the
+    /// list of records at `records`. See [`Expr::EntryOf`].
+    pub fn entry_of(records: &[&str], name: Expr) -> Expr {
+        Expr::EntryOf { records: records.iter().map(|s| s.to_string()).collect(), name: Box::new(name) }
     }
     /// Element `index` of a list reached by a path down into an earlier field,
     /// and `field` inside that element. See [`Expr::ElemWithin`].

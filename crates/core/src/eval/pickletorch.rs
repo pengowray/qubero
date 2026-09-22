@@ -313,7 +313,7 @@ impl Evaluator {
     /// from the front has no way on to the next record. The directory has
     /// them, and the local header of each entry has the name and extra
     /// lengths that say where its data begins.
-    fn archive<S: Source>(&mut self, doc: &Document<S>, space: u32) -> R<Arc<Vec<Held>>> {
+    pub(super) fn archive<S: Source>(&mut self, doc: &Document<S>, space: u32) -> R<Arc<Vec<Held>>> {
         if let Some(held) = self.memo.archive(space) {
             return Ok(held.clone());
         }
