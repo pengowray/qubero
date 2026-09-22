@@ -10,7 +10,7 @@
 /// The forms, each a named grammar over the same envelope. They differ in
 /// which value productions they allow, and every one of those is enumerated.
 pub(super) const BASIC: &str = "basic-p4-p5-v5";
-pub(super) const NUMPY: &str = "numpy-array-p4-p5-v6";
+pub(super) const NUMPY: &str = "numpy-array-p4-p5-v7";
 pub(super) const BUILTINS: &str = "builtins-values-p4-p5-v3";
 /// The library forms. Each is the plain object production over one package,
 /// with the calls that library writes enumerated beside it, so a file is read
@@ -30,7 +30,7 @@ pub(super) const PANDAS: &str = "pandas-frame-p4-p5-v1";
 /// there is no framing. A reader comparing form identifiers is comparing
 /// grammars, so the two are named apart.
 pub(super) const BASIC23: &str = "basic-p2-p3-v1";
-pub(super) const NUMPY23: &str = "numpy-array-p2-p3-v1";
+pub(super) const NUMPY23: &str = "numpy-array-p2-p3-v2";
 pub(super) const BUILTINS23: &str = "builtins-values-p2-p3-v1";
 pub(super) const SKLEARN23: &str = "sklearn-estimator-p2-p3-v1";
 pub(super) const SCIPY23: &str = "scipy-sparse-p2-p3-v1";
@@ -45,7 +45,7 @@ pub(super) const PANDAS23: &str = "pandas-frame-p2-p3-v1";
 /// opcode rather than four, writes a `long` as a line of digits, and builds an
 /// object through `copy_reg._reconstructor` rather than NEWOBJ.
 pub(super) const BASIC1: &str = "basic-p1-v1";
-pub(super) const NUMPY1: &str = "numpy-array-p1-v1";
+pub(super) const NUMPY1: &str = "numpy-array-p1-v2";
 pub(super) const BUILTINS1: &str = "builtins-values-p1-v1";
 pub(super) const SKLEARN1: &str = "sklearn-estimator-p1-v1";
 pub(super) const SCIPY1: &str = "scipy-sparse-p1-v1";
@@ -58,7 +58,7 @@ pub(super) const PANDAS1: &str = "pandas-frame-p1-v1";
 /// escaped, and a container is filled one entry at a time with no batching in
 /// it at all.
 pub(super) const BASIC0: &str = "basic-p0-v1";
-pub(super) const NUMPY0: &str = "numpy-array-p0-v1";
+pub(super) const NUMPY0: &str = "numpy-array-p0-v2";
 pub(super) const BUILTINS0: &str = "builtins-values-p0-v1";
 pub(super) const SKLEARN0: &str = "sklearn-estimator-p0-v1";
 pub(super) const SCIPY0: &str = "scipy-sparse-p0-v1";

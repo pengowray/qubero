@@ -62,7 +62,7 @@ everywhere. All 44 basic files at protocol 4 and 5 match `basic-p4-p5-v5`.
 **numpy varies in one word.** Two byte strings per object and protocol: numpy
 1.x spells the module `numpy.core.multiarray`, numpy 2.x spells it
 `numpy._core.multiarray`. All 34 numpy array and scalar files at protocol 4 and
-5 match `numpy-array-p4-p5-v6`.
+5 match `numpy-array-p4-p5-v7`.
 
 **scikit-learn varies in its data, not in its instructions.** An estimator is
 `STACK_GLOBAL` of its class, `EMPTY_TUPLE`, `NEWOBJ`, then a dict of its
@@ -118,11 +118,11 @@ and `crates/core/src/eval/pickleframe.rs` for a frame read as a table.
 | `pandas-frame-p4-p5-v1` | frames and series from pandas 1.1 to 3.0 | 49 of 49 matrix files, and all three `pickle/proto5-pandas-*` |
 
 Every file in `pickle-matrix/` written at protocol 4 or 5 now matches: 168 of
-168. `numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v6`: it reads a
+168. `numpy-numeric-array-p4-p5-v5` became `numpy-array-p4-p5-v7`: it reads a
 structured dtype now, so "numeric" was no longer true.
 
 Each family has three forms now, named for the protocols each reads. At
-protocols 2 and 3: `basic-p2-p3-v1`, `numpy-array-p2-p3-v1`, `builtins-values-p2-p3-v1`,
+protocols 2 and 3: `basic-p2-p3-v1`, `numpy-array-p2-p3-v2`, `builtins-values-p2-p3-v1`,
 `sklearn-estimator-p2-p3-v1`, `scipy-sparse-p2-p3-v1` and
 `pandas-frame-p2-p3-v1`. All 218 files in `pickle-matrix/` written at protocol
 2 or 3 match, and so do `pickle/proto2-memo-over-256.pickle` and
@@ -1018,8 +1018,10 @@ list, which is what `joblib/v1.6-numpy-matrix.joblib` needed.
 `_reconstruct(numpy.memmap, (0,), b'b')` with the numbers in the pickle and
 nothing about the file it was mapped from. Measured, not read off the note.
 
-`numpy.rec.recarray` is left, and the reason is in the design document: its
-dtype is a class where every other dtype is letters.
+`numpy.recarray` landed on 2026-09-23, with the dtype production its class
+needs: see "NumPy's own array classes" in the design document. The class is
+`numpy.recarray` under NumPy 1 and `numpy.rec.recarray` under NumPy 2, and the
+dtype beside it is `numpy.dtype(numpy.record, ...)` under `numpy` in both.
 
 **A masked array is a production of its own**, `Cursor::mareconstructed` in
 `numpy.rs`, tried where `reconstructed` is tried, so every form that reads
@@ -1087,7 +1089,7 @@ whole change.
 
 **Exactly one verdict moved**, and the previous agent's reason for leaving it
 turned out not to hold: `pickle/proto4-numpy-object-array.pickle` was the
-opcode listing and is `numpy-array-p4-p5-v6`. The `mixed-array-of-tuples`
+opcode listing and is `numpy-array-p4-p5-v7`. The `mixed-array-of-tuples`
 files did not move, because each of them holds a date beside the array and is
 two families whichever way the flag goes.
 
@@ -1155,3 +1157,63 @@ other. Both are re-exported by `familiar/mod.rs`, so nothing outside changed.
 `eval/pickleparts.rs` (755 lines, now 655). Two different kinds of thing to
 get right: these are strings a reader sees, and that is a walk over the tree.
 `pickleparts` re-exports them, so an arm still reads as the name it uses.
+
+## Exceptions, structseq, record arrays: landed on 2026-09-23
+
+Four things, in `pickle/` and in the matrix, with the verdict diff from
+`pickle_forms` over `pickle-matrix/`, `pickle/`, `joblib/` and `torch/` at the
+end of each.
+
+**An exception is a class name and a message.** `familiar/exceptions.rs` holds
+the whole builtin exception hierarchy, sixty-nine names, and the forty-seven
+Python 2 had plus `StandardError` and `WindowsError` for the `exceptions`
+module `fix_imports` writes below protocol 3. `Cursor::reduced` in `object.rs`
+takes the REDUCE before it reaches the calls table, because the list is a
+hundred and twenty names across three module spellings and the argument shape
+is the same for all of them: a tuple of whatever the exception was raised
+with, and the BUILD after it that every other call's result already takes.
+`builtins` is still not a package any class may be named from; the names are
+enumerated one by one.
+
+The six `proto*-everything.pickle` files read whole because of it, at every
+protocol from 0 to 5, and they were the last files in `pickle/` held back by a
+class. `pickle/proto4-exceptions.pickle` is new.
+
+**`time.struct_time` and `os.stat_result`** are two rows in `STDLIB_CALLS`:
+the run of whole numbers the class reads as a sequence, nine and ten long, and
+the dictionary of the fields past the end of that run. `time` and `os` are not
+in `STDLIB_MODULES` and must not be, so `stdlib::OWN_CLASSES` is what says
+such a call is the standard library's own and `Cursor::stdlib_used` counts it
+towards the family. `pickle/proto4-structseq.pickle` is new.
+`urllib.parse.ParseResult` is not read: see the design document.
+
+**A record array** is `numpy.recarray` under NumPy 1 and `numpy.rec.recarray`
+under NumPy 2, both in `numpy::ARRAY_CLASSES`, and its dtype is the one dtype
+written as a class: `numpy.dtype(numpy.record, ...)`, under `numpy` in both
+releases. `Cursor::dtype_construction` reads the class where it reads the
+letters, and the width the letters would have said comes out of the state
+alone. A `recarray` whose dtype is not a record is a non-match.
+
+**A masked array of a structured dtype** is read now: its mask is one boolean
+a column a row, which `numpy::mask_dtype` builds from the data's dtype the way
+`make_mask_descr` does. The table is the named columns of the record, one row
+per record, and `Evaluator::masked_record_cells` in `picklecells.rs` reads a
+cell and the mask over it by two different sums, since the two runs have
+different widths. `Evaluator::at_bytes` is `element_at` with the offset handed
+in rather than worked out from an element number, which is what a column at an
+offset no multiple of its own width needs.
+
+Eight new files in `pickle/`, written by `tools/make_numpy_subclass_samples.py`
+under both interpreters: a record array and a masked record, each at protocol
+4 and protocol 2, under NumPy 1.26 and NumPy 2.5.
+
+**The form names that changed**, because the grammars behind them did:
+`stdlib-values-*` v1 to v2 at all four protocol ranges, `mixed-values-*` v1 to
+v2, `numpy-array-p4-p5` v6 to v7 and `numpy-array-p2-p3`, `-p1` and `-p0` v1 to
+v2. No verdict moved except the six `everything` files, which went from no
+form to `stdlib-values-*`, and the ten new samples.
+
+**One looseness fixed on the way.** `lines::number_line` read whatever opcode
+byte stood in front of a protocol 0 number line, so `K`, `M`, `J` and `\x8a`
+all read there as `I` did. It now takes `I` and `L` and nothing else. The
+fuzzing in `pickle_real` found it as soon as a protocol 0 file matched a form.

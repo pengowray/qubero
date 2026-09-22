@@ -224,7 +224,7 @@ fn every_joblib_sample_reads_as_the_form_it_was_dumped_under() {
         // What joblib 0.9 wrote for an array of objects: no wrapper at all,
         // because there are no numbers to write beside the pickle, so it is
         // an ordinary NumPy pickle and reads as one.
-        ("v0.9-array-of-objects.joblib", Some("numpy-array-p2-p3-v1"), "picklefpf"),
+        ("v0.9-array-of-objects.joblib", Some("numpy-array-p2-p3-v2"), "picklefpf"),
         // And what it wrote for a compressed file, which is joblib's own
         // container rather than the compressor's: `ZF`, the unpacked length
         // as text, and a zlib stream holding the whole pickle.

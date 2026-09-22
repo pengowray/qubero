@@ -94,7 +94,7 @@ fn a_column_of_names_is_an_array_of_objects() {
     // On its own an array of objects is what `pickle.dumps` writes for one,
     // which is NumPy's own writing and the NumPy form's to read.
     let bytes = framed(&cat(&[&object_array(&["id", "score"]), b"."]));
-    assert_eq!(recognise(&bytes).unwrap().form, "numpy-array-p4-p5-v6");
+    assert_eq!(recognise(&bytes).unwrap().form, "numpy-array-p4-p5-v7");
     let bytes = framed(&frame(&names_index(&["id", "score"])));
     let found = recognise(&bytes).unwrap();
     assert_eq!(found.form, "pandas-frame-p4-p5-v1");

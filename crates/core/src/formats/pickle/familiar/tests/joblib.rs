@@ -161,7 +161,7 @@ fn only_the_wrapper_joblib_writes_is_named() {
 #[test]
 fn a_pickle_with_no_wrapper_in_it_is_not_a_joblib_file() {
     let found = recognise(MATRIX).unwrap();
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
 }
 
 /// An array of objects, `joblib.dump(numpy.array(["a", None, 3],

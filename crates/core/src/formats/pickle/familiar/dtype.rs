@@ -23,6 +23,10 @@ const MAX_COLUMNS: usize = 256;
 /// The units a datetime may count in, which are NumPy's own and are the whole
 /// of what its numbers mean.
 const UNITS: &[&str] = &["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns", "ps", "fs", "as"];
+/// What stands for the letters of a dtype the file spelled by naming
+/// `numpy.record` instead. `V` is the letter a record goes by, and the width
+/// that would follow it is in the state rather than here.
+const RECORD_KIND: &str = "V";
 
 /// How wide one value of a fixed-width text dtype is, how NumPy aligns it and
 /// the flags it is built with, or nothing when the letters are not text.
@@ -98,11 +102,34 @@ impl Cursor<'_> {
         }
         self.global(&["numpy"], "dtype", "dtype module", "dtype class")?;
         self.open_tuple()?;
-        let (kind_at, kind_len) = self.text_run()?;
-        let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?;
+        // The letters a dtype is spelled by, or, for the dtype of a record
+        // array, the class `numpy.record` itself. A `recarray` is the one
+        // array whose dtype is `numpy.dtype(numpy.record, ...)` where every
+        // other dtype is letters. numpy 1.26 and 2.5 both write the class
+        // under `numpy`, which is what `record.__module__` says whichever
+        // release made it; the class moved from `numpy` to `numpy.rec`
+        // between the two and the class it holds did not.
+        let here = self.save();
+        let by_class = records && self.global(&["numpy"], "record", "record module", "record class").is_some();
+        if !by_class {
+            self.restore(here);
+        }
         // `V` and a width is a record; everything else is one number a value,
-        // and only the spellings the reader has a type for.
-        let record = records && kind.strip_prefix('V').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        // and only the spellings the reader has a type for. The class form has
+        // no letters to read at all, so it stands in as the `V` with no width:
+        // the width the letters would have said is the one the state writes.
+        let kind = match by_class {
+            true => RECORD_KIND.to_string(),
+            false => {
+                let (kind_at, kind_len) = self.text_run()?;
+                let kind = std::str::from_utf8(self.bytes.get(kind_at..kind_at + kind_len)?).ok()?.to_string();
+                self.says("dtype", kind_at, kind_len);
+                self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
+                kind
+            }
+        };
+        let kind = kind.as_str();
+        let record = by_class || (records && kind.strip_prefix('V').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())));
         // `O8` is one pickled object a value, which only a form that reads an
         // array of them allows. `M8` is a count of a unit of time, and the
         // unit is in the state rather than in the letters.
@@ -113,8 +140,6 @@ impl Cursor<'_> {
             return None;
         }
         let kind = kind.to_string();
-        self.says("dtype", kind_at, kind_len);
-        self.memoize(Bound::Text { at: kind_at, len: kind_len })?;
         // The two flags every dtype is built with, and then the call that
         // makes it out of them and the letters.
         self.flag(false)?;
@@ -143,7 +168,13 @@ impl Cursor<'_> {
             return Some(dtype);
         }
         let dtype = match record {
-            true => self.record_state(&kind)?,
+            // A record spelled by its letters says its width there as well as
+            // in its state, and the two have to agree. One spelled by the
+            // class says it once.
+            true => self.record_state(match by_class {
+                true => None,
+                false => Some(kind.strip_prefix('V')?.parse().ok()?),
+            })?,
             false => {
                 // The flags NumPy builds the dtype with. A dtype of objects
                 // needs the interpreter for everything it does and says so;
@@ -236,7 +267,7 @@ impl Cursor<'_> {
     /// dictionary keyed by those same names, which the file names out of the
     /// memo rather than spelling twice. So the names are read once and the
     /// dictionary is checked against them.
-    fn record_state(&mut self, kind: &str) -> Option<Dtype> {
+    fn record_state(&mut self, declared: Option<u64>) -> Option<Dtype> {
         let names = self.column_names()?;
         let mut columns = self.columns(&names)?;
         let width = self.count()?;
@@ -245,7 +276,7 @@ impl Cursor<'_> {
         // `V64` says the same thing in the letter code.
         self.count()?;
         self.count()?;
-        if kind.strip_prefix('V')?.parse::<u64>().ok()? != width {
+        if declared.is_some_and(|said| said != width) {
             return None;
         }
         // Every column has to fit inside a record, and they are written in the

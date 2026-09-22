@@ -143,6 +143,14 @@ fn an_array_is_read_as_the_numbers_it_holds() {
             assert!(typed.is_empty(), "{name}: an object array read as {typed:?}");
             continue;
         }
+        // A record is not one element type, so the symbolic decoder leaves
+        // its run as the bytes it is, the way it leaves an object array's.
+        // A record array and a masked array of a structured dtype are read
+        // as the columns they hold by a form, and here by nothing.
+        if rest.contains("recarray") || rest.contains("masked-record") {
+            assert!(typed.is_empty(), "{name}: a record read as {typed:?}");
+            continue;
+        }
         assert!(!typed.is_empty(), "{name}: no array was read as one");
 
         if rest.starts_with("array") {
@@ -613,13 +621,13 @@ fn the_forms_match_these_samples_and_no_others() {
         ("awa2-pose-elephant.pickle", Some("basic-p4-p5-v5")),
         // A dictionary whose big value is written between two frames.
         ("proto4-unframed-payload.pickle", Some("basic-p4-p5-v5")),
-        ("proto4-numpy-array.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-array.pickle", Some("numpy-array-p4-p5-v7")),
         // Several arrays in one dictionary, the later ones naming numpy's
         // globals, dtype class, byte order or whole dtype out of the memo.
-        ("proto4-numpy-byte-order.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto4-numpy-dtypes.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto4-numpy-shapes.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto4-numpy-shared-dtype.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-byte-order.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto4-numpy-dtypes.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto4-numpy-shapes.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto4-numpy-shared-dtype.pickle", Some("numpy-array-p4-p5-v7")),
         ("proto4-builtins.pickle", Some("builtins-values-p4-p5-v3")),
         // The files written to say what a form takes and what it does not.
         // Every `familiar-` one is plain data written the ordinary way, and
@@ -644,7 +652,7 @@ fn the_forms_match_these_samples_and_no_others() {
         // An array whose numbers are too large to frame, so the frame
         // boundary lands inside the run of instructions that rebuilds it
         // rather than between two values of the file.
-        ("familiar-numpy-large-p5.pickle", Some("numpy-array-p4-p5-v6")),
+        ("familiar-numpy-large-p5.pickle", Some("numpy-array-p4-p5-v7")),
         // One list in two places, and one holding itself. Both are a name
         // pointing at a container, which the basic form reads as a reference
         // saying what it names and where the file wrote it.
@@ -684,7 +692,7 @@ fn the_forms_match_these_samples_and_no_others() {
         ("proto2-memo-over-256.pickle", Some("basic-p2-p3-v1")),
         ("proto2-torch-state-dict.pickle", Some("torch-tensors-p2-p3-v1")),
         ("proto3-everything.pickle", Some("stdlib-values-p2-p3-v2")),
-        ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto3-numpy-1-module-names.pickle", Some("numpy-array-p2-p3-v2")),
         ("proto4-collections.pickle", None),
         // Packed dates, times and spans, each a call of its class with the
         // run of bytes `_getstate` packed it into.
@@ -705,7 +713,7 @@ fn the_forms_match_these_samples_and_no_others() {
         // An array of objects, which is what `pickle.dumps` writes for one and
         // NumPy's own writing: the values are pickled after the array as the
         // list it is handed, and they are read against the same stack.
-        ("proto4-numpy-object-array.pickle", Some("numpy-array-p4-p5-v6")),
+        ("proto4-numpy-object-array.pickle", Some("numpy-array-p4-p5-v7")),
         ("proto4-persistent-id.pickle", None),
         // Three sparse matrices and a pipeline of two estimators: an object of
         // a class named from a whitelisted module, made with no arguments and
@@ -830,10 +838,10 @@ fn the_forms_match_these_samples_and_no_others() {
         // an ndarray reaches and names itself in it. A matrix is an array
         // held to two dimensions; a memmap is an array a reader may keep in
         // a file, and what it is pickled with is the numbers themselves.
-        ("proto4-numpy-matrix.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-matrix.pickle", Some("numpy-array-p2-p3-v1")),
-        ("proto4-numpy-memmap.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-memmap.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-matrix.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-matrix.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-memmap.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-memmap.pickle", Some("numpy-array-p2-p3-v2")),
         // `cv_results_` is a dictionary of `numpy.ma.MaskedArray`, which is
         // an array, a mask of which of its entries count and the value a
         // masked entry stands for, rebuilt by `numpy.ma.core._mareconstruct`.
@@ -843,14 +851,27 @@ fn the_forms_match_these_samples_and_no_others() {
         // nothing hidden, whose mask `__getstate__` writes out in full
         // anyway, and one with a fill value the array was given rather than
         // NumPy's default for its dtype.
-        ("proto4-numpy-masked-array.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-masked-array.pickle", Some("numpy-array-p2-p3-v1")),
-        ("proto4-numpy-masked-2d.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-masked-2d.pickle", Some("numpy-array-p2-p3-v1")),
-        ("proto4-numpy-masked-unmasked.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-masked-unmasked.pickle", Some("numpy-array-p2-p3-v1")),
-        ("proto4-numpy-masked-fill-value.pickle", Some("numpy-array-p4-p5-v6")),
-        ("proto2-numpy-masked-fill-value.pickle", Some("numpy-array-p2-p3-v1")),
+        ("proto4-numpy-masked-array.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-masked-array.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-masked-2d.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-masked-2d.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-masked-unmasked.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-masked-unmasked.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-masked-fill-value.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-masked-fill-value.pickle", Some("numpy-array-p2-p3-v2")),
+        // A record array, whose dtype is the one dtype written as a class
+        // rather than as letters, and a masked array of the same two columns,
+        // whose mask is one boolean per column per row. The class the
+        // reconstructor is handed moved between NumPy 1 and 2, so each is
+        // written by both releases and named for the one that wrote it.
+        ("proto4-numpy-1-recarray.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-1-recarray.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-2-recarray.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-2-recarray.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-1-masked-record.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-1-masked-record.pickle", Some("numpy-array-p2-p3-v2")),
+        ("proto4-numpy-2-masked-record.pickle", Some("numpy-array-p4-p5-v7")),
+        ("proto2-numpy-2-masked-record.pickle", Some("numpy-array-p2-p3-v2")),
     ];
     let mut seen = Vec::new();
     for path in pickles(&dir) {
@@ -883,7 +904,7 @@ fn the_forms_match_these_samples_and_no_others() {
 const FAMILIES: &[(&str, [Option<&str>; 4])] = &[
     ("basic", [Some("basic-p4-p5-v5"), Some("basic-p2-p3-v1"), Some("basic-p1-v1"), Some("basic-p0-v1")]),
     // An array and a scalar, which are two productions of one form.
-    ("numpy", [Some("numpy-array-p4-p5-v6"), Some("numpy-array-p2-p3-v1"), Some("numpy-array-p1-v1"), Some("numpy-array-p0-v1")]),
+    ("numpy", [Some("numpy-array-p4-p5-v7"), Some("numpy-array-p2-p3-v2"), Some("numpy-array-p1-v2"), Some("numpy-array-p0-v2")]),
     ("dataframe", [Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1"), Some("pandas-frame-p1-v1"), Some("pandas-frame-p0-v1")]),
     ("series", [Some("pandas-frame-p4-p5-v1"), Some("pandas-frame-p2-p3-v1"), Some("pandas-frame-p1-v1"), Some("pandas-frame-p0-v1")]),
     ("sklearn", [

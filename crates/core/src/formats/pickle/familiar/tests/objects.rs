@@ -211,7 +211,7 @@ fn a_record_array_reads_the_columns_its_dtype_names() {
     let bytes = framed(&cat(&[&w.out, b"."]));
     let found = recognise(&bytes).unwrap();
     // A record array belongs to the NumPy form like any other array.
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
     let Kind::Array { dtype, dimensions, .. } = &found.value.kind else { panic!("array expected") };
     assert_eq!(dimensions, &[2]);
     assert_eq!(

@@ -100,6 +100,10 @@ pub enum Shape {
     /// `numpy.memmap`, which is an array a reader may keep in a file rather
     /// than in memory. What it was pickled with is the numbers themselves.
     MemMap,
+    /// `numpy.recarray`, which is a structured array whose columns are also
+    /// attributes. Everything else about it is an array's, and its dtype is
+    /// the one dtype written as a class rather than as letters.
+    RecArray,
     /// `numpy.ma.MaskedArray`, which is an array, a mask of which of its
     /// entries count, and the value a masked entry reads as.
     MaskedArray,
@@ -179,6 +183,7 @@ impl Shape {
             // NumPy's own names for its own array classes.
             Shape::Matrix => "matrix",
             Shape::MemMap => "memmap",
+            Shape::RecArray => "recarray",
             Shape::MaskedArray => "masked array",
             Shape::Call => "call",
             Shape::Slice => "slice",

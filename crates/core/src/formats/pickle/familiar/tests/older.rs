@@ -317,7 +317,7 @@ fn an_array_written_by_python_2_holds_its_numbers_as_they_are() {
     ]);
     let bytes = older(2, &body);
     let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
-    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+    assert_eq!(found.form, "numpy-array-p2-p3-v2");
     let Kind::Array { at, len, storage, dimensions, .. } = &found.value.kind else { panic!("array expected") };
     // The run in the file is the numbers, so the opcode listing may read it as
     // the values it holds rather than opening it as anything.

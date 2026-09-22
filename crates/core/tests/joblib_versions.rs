@@ -131,7 +131,7 @@ fn a_joblib_0_9_compressed_file_is_its_own_container() {
     let held = space.bytes().to_vec();
     assert_eq!(held.len(), 0x226);
     let found = formats::pickle::familiar::recognise(&held).expect("a form reads what came out");
-    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+    assert_eq!(found.form, "numpy-array-p2-p3-v2");
 }
 
 /// An array of objects has no numbers to write beside the pickle, so joblib
@@ -145,7 +145,7 @@ fn a_joblib_0_9_object_array_has_no_wrapper() {
     };
     let bytes = std::fs::read(dir.join("v0.9-array-of-objects.joblib")).unwrap();
     let found = formats::pickle::familiar::recognise(&bytes).expect("no form");
-    assert_eq!(found.form, "numpy-array-p2-p3-v1");
+    assert_eq!(found.form, "numpy-array-p2-p3-v2");
     let window = &bytes[..bytes.len().min(0x9000)];
     assert_eq!(formats::sniff(window, bytes.len() as u64), Some("picklefpf"));
 }

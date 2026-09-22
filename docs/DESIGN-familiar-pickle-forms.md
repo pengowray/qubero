@@ -103,7 +103,7 @@ section says what its neighbour does differently.
     name for one still being filled is ordinary rather than forward. A name
     may stand where a dictionary key belongs only when what it names hashes,
     which is decided where the thing was built.
-- `numpy-array-p4-p5-v6`: the basic productions plus an array or a
+- `numpy-array-p4-p5-v7`: the basic productions plus an array or a
   scalar, anywhere a value may stand, with at least one of them present.
   Matches exact `_reconstruct` and `scalar` sequences for
   `numpy._core.multiarray` and `numpy.core.multiarray`, and, at protocol 5
@@ -434,7 +434,7 @@ Protocol 3 is what `pickle.dump` wrote by default from Python 3.0 to 3.7, and
 protocol 2 is what Python 2 wrote whenever it was asked for the highest
 protocol it had and what Python 3 wrote for Python 2 to read. Between them they
 are most of the pickles in the world older than 2020, so there is a form for
-each family at those protocols: `basic-p2-p3-v1`, `numpy-array-p2-p3-v1`,
+each family at those protocols: `basic-p2-p3-v1`, `numpy-array-p2-p3-v2`,
 `builtins-values-p2-p3-v1`, `sklearn-estimator-p2-p3-v1`,
 `scipy-sparse-p2-p3-v1` and `pandas-frame-p2-p3-v1`.
 
@@ -521,7 +521,7 @@ corpus.
 
 Protocol 1 is what Python 2 wrote when it was asked for a binary pickle before
 protocol 2 existed, and what `cPickle.dump(obj, f, 1)` wrote for years after.
-There is a form for each family at it: `basic-p1-v1`, `numpy-array-p1-v1`,
+There is a form for each family at it: `basic-p1-v1`, `numpy-array-p1-v2`,
 `builtins-values-p1-v1`, `sklearn-estimator-p1-v1`, `scipy-sparse-p1-v1` and
 `pandas-frame-p1-v1`.
 
@@ -559,7 +559,7 @@ Everything else is the protocol 2 production, batching and all: `APPENDS` and
 
 Protocol 0 is the text protocol: what Python wrote by default until Python 3.0
 and what `pickle.dumps(obj)` gave anyone who never named one. There is a form
-for each family at it: `basic-p0-v1`, `numpy-array-p0-v1`,
+for each family at it: `basic-p0-v1`, `numpy-array-p0-v2`,
 `builtins-values-p0-v1`, `sklearn-estimator-p0-v1`, `scipy-sparse-p0-v1` and
 `pandas-frame-p0-v1`. The reading is the same bounded byte cursor and the same
 stack; what changes is that every value is an opcode and a line.
@@ -627,25 +627,36 @@ stack; what changes is that every value is an opcode and a line.
 ### NumPy's own array classes
 
 `_reconstruct` is handed `self.__class__`, so the class written in it is the
-array's own and a class anyone defined can reach that argument. Three of
+array's own and a class anyone defined can reach that argument. Four of
 NumPy's are read and nothing else is, each by its whole dotted path:
 `numpy.ndarray`, which is nearly every array; `numpy.matrix`, which is an
-array held to two dimensions; and `numpy.memmap`, which is an array a reader
+array held to two dimensions; `numpy.memmap`, which is an array a reader
 may keep in a file and which `__reduce__` pickles with its numbers like any
-other. None of the three changes how the numbers are read, so all three are
-the same array with a different word on the node: a matrix says `matrix` where
-an ndarray says `array`, and the dtype, the shape, the order and the table are
-what they were. The joblib wrapper's `subclass` key reads the same list.
+other; and `numpy.recarray`, spelled `numpy.rec.recarray` from NumPy 2, which
+is a structured array whose columns are attributes as well as columns. None of
+the four changes how the numbers are read, so all four are the same array with
+a different word on the node: a matrix says `matrix` where an ndarray says
+`array`, and the dtype, the shape, the order and the table are what they were.
+The joblib wrapper's `subclass` key reads the same list.
 
 A class from outside NumPy is a non-match. What such a class does to an array
 when it is rebuilt is that class's business, and a reader shown the numbers
 under its name would be shown something the file does not say.
 
-`numpy.rec.recarray` is not on the list. Its dtype is
-`numpy.dtype(numpy.record, False, True)`, a class where every other dtype is
-letters, so it wants a dtype production of its own; the class also moved from
-`numpy` to `numpy.rec` between NumPy 1 and 2. No file in the collection holds
-one.
+**A record array's dtype is the one dtype written as a class.** Every other
+dtype is `numpy.dtype('<f8', False, True)` with the letters it is spelled by;
+a record array's is `numpy.dtype(numpy.record, False, True)`, the class
+itself. Both NumPy 1.26 and 2.5 write that class under `numpy`, which is what
+`record.__module__` says whichever release made it, even though the array
+class beside it moved from `numpy` to `numpy.rec` between the two. The state
+the BUILD hands the dtype is an ordinary structured dtype's, so the column
+names, types and offsets are read exactly as they are for the record array
+scikit-learn writes its tree of nodes as; what the letters would have said,
+the width, is in that state alone and is read from there. A `recarray` whose
+dtype is not a record is a non-match: `numpy.rec.array` builds the dtype out
+of the columns it is given, and an array of plain numbers viewed as the class
+has not been measured. The table is the structured array's table, columns by
+name.
 
 ### A masked array is two arrays and a fill value
 
@@ -661,8 +672,10 @@ and numbers, and the two after them are the mask and the fill.
 The node is typed `masked array` and holds four rows: the run of instructions
 that rebuilt it, `data`, `mask` and `fill value`. `data` and `mask` are each
 an array in their own right, with the state's shape and order and with the
-state's dtype on one and `|b1` on the other, which is what `make_mask_descr`
-gives a plain dtype. So each has its own run, its own address and its own
+state's dtype on one and the mask's own dtype on the other, which is what
+`make_mask_descr` makes of the state's: `|b1` for a plain dtype, and for a
+structured one a record of the same column names with one boolean apiece and
+nothing between them. So each has its own run, its own address and its own
 table, and at protocols 0 to 2 each opens its numbers as a space of its own
 the way every other array does.
 
@@ -682,9 +695,14 @@ Three things are worth knowing about what NumPy writes:
 - **The fill value is `None` or an array of no dimensions.** `None` is what an
   array that kept NumPy's default for its dtype writes, and the pickle does
   not say what that default came to.
-- **A structured dtype is refused.** `make_mask_descr` gives such an array a
-  mask of one boolean per column rather than one per entry, and no file in the
-  collection holds one.
+- **A structured dtype masks a column of a row.** `make_mask_descr` gives such
+  an array a mask of one boolean per column rather than one per entry, so the
+  two runs are different widths: a record of an `i4` and an `f8` is sixteen
+  bytes with its second column eight in, and its mask is two bytes with its
+  second column one in. The node's table is then the named columns of the
+  record, one row per record, and a cell is blank where the mask hides that
+  column of that row. An array of pickled objects is still refused: there is
+  no run of bytes for a mask to be laid over.
 
 ### What stays a non-match, and why
 
@@ -895,7 +913,7 @@ reading it under the form for what NumPy writes is the honest place for it:
 the file is an array of objects rather than a mixture of families, and the
 mixed form is for a file that holds two. One verdict moved and no other:
 `pickle/proto4-numpy-object-array.pickle` was the opcode listing and is
-`numpy-array-p4-p5-v6`. The `mixed-array-of-tuples` files did not move, and the
+`numpy-array-p4-p5-v7`. The `mixed-array-of-tuples` files did not move, and the
 reason is that each of them holds a date beside the array, so it really is two
 families; a file of nothing but an array of objects was the only kind that had
 nowhere to go.
@@ -1111,7 +1129,7 @@ not in `WEAK_TEMPLATES`: parsing to the end is thin evidence and yields to
 file(1), but a reviewed grammar that accounted for every opcode and operand in
 the file is stronger than any rule keyed on its first bytes.
 
-Of the sibling corpus, a hundred and three files match today. The twelve `familiar-` files
+Of the sibling corpus, a hundred and eleven files match today. The twelve `familiar-` files
 and the three `unfamiliar-` ones were written for this: the first half is plain
 data written the ordinary way and the second half is pickles Python loads and a
 form must still refuse, so a form that grew without anyone saying so fails on
@@ -1131,12 +1149,12 @@ one half or the other.
 | `familiar-bytearray-p4.pickle` | `builtins-values-p4-p5-v3`: the same object as a call to the class |
 | `familiar-pure-python-batches.pickle` | `basic-p4-p5-v5`: the pickler in `pickle.py` ending a list of 1,001 its own way |
 | `proto4-builtins.pickle` | `builtins-values-p4-p5-v3` |
-| `proto4-numpy-array.pickle` | `numpy-array-p4-p5-v6` |
-| `proto4-numpy-byte-order.pickle` | `numpy-array-p4-p5-v6` |
-| `proto4-numpy-dtypes.pickle` | `numpy-array-p4-p5-v6` |
-| `proto4-numpy-shapes.pickle` | `numpy-array-p4-p5-v6`, including a scalar |
-| `proto4-numpy-shared-dtype.pickle` | `numpy-array-p4-p5-v6` |
-| `familiar-numpy-large-p5.pickle` | `numpy-array-p4-p5-v6`: numbers too large to frame, so the boundary lands inside the call |
+| `proto4-numpy-array.pickle` | `numpy-array-p4-p5-v7` |
+| `proto4-numpy-byte-order.pickle` | `numpy-array-p4-p5-v7` |
+| `proto4-numpy-dtypes.pickle` | `numpy-array-p4-p5-v7` |
+| `proto4-numpy-shapes.pickle` | `numpy-array-p4-p5-v7`, including a scalar |
+| `proto4-numpy-shared-dtype.pickle` | `numpy-array-p4-p5-v7` |
+| `familiar-numpy-large-p5.pickle` | `numpy-array-p4-p5-v7`: numbers too large to frame, so the boundary lands inside the call |
 | `familiar-shared-list.pickle` | `basic-p4-p5-v5`: one list under two keys, named the second time |
 | `familiar-recursive-list.pickle` | `basic-p4-p5-v5`: a list holding itself |
 | `familiar-huge-integer.pickle` | `basic-p4-p5-v5`: two to the two hundredth, which needs twenty-six bytes |
@@ -1147,13 +1165,15 @@ one half or the other.
 | `proto*-everything.pickle` | `stdlib-values-*`: the dates, the exact numbers and the `ValueError`, at every protocol from 0 to 5 |
 | `proto4-exceptions.pickle` | `stdlib-values-p4-p5-v2`: six exceptions, one of them a group |
 | `proto4-structseq.pickle` | `stdlib-values-p4-p5-v2`: a `time.struct_time` and an `os.stat_result` |
+| `proto*-numpy-1-recarray.pickle`, `proto*-numpy-2-recarray.pickle` | `numpy-array-*`: a record array, whose dtype is a class |
+| `proto*-numpy-1-masked-record.pickle`, `proto*-numpy-2-masked-record.pickle` | `numpy-array-*`: a masked array of a structured dtype |
 | `proto4-collections.pickle` | NEWOBJ of a namedtuple class the writing file defined, under `__main__`, which is exactly what the safety line refuses and must stay refused; its OrderedDict, defaultdict, Counter and deque are read |
 | `proto4-newobj.pickle` | NEWOBJ and NEWOBJ_EX of arbitrary classes |
 | `proto0-persistent-id.pickle`, `handmade-*` | persistent ids, and the opcodes CPython reads and never writes |
 | `proto2-memo-over-256.pickle` | `basic-p2-p3-v1` |
 | `proto*-persistent-id`, `proto2-extension-registry`, `proto5-out-of-band` | persistent ids, the extension registry and external buffers, all out of scope |
-| `proto3-numpy-1-module-names.pickle` | `numpy-array-p2-p3-v1` |
-| `proto4-numpy-object-array.pickle` | `numpy-array-p4-p5-v6`: an object dtype, whose values are pickled after the array |
+| `proto3-numpy-1-module-names.pickle` | `numpy-array-p2-p3-v2` |
+| `proto4-numpy-object-array.pickle` | `numpy-array-p4-p5-v7`: an object dtype, whose values are pickled after the array |
 | `proto4-scipy-coo-matrix`, `proto4-scipy-csc-matrix`, `proto4-scipy-csr-matrix` | `scipy-sparse-p4-p5-v1` |
 | `proto4-sklearn-pipeline`, `proto4-sklearn-random-forest` | `sklearn-estimator-p4-p5-v1` |
 | `proto5-pandas-dataframe`, `proto5-pandas-series`, `proto5-pandas-index-types` | `pandas-frame-p4-p5-v1` |

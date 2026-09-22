@@ -13,9 +13,14 @@ use super::pickleframe::*;
 use super::pickleparts::{spot, Part};
 use super::picklesummary::iso_time;
 use super::*;
-use crate::formats::pickle::familiar::{Dtype, Kind, Match, Names, Value as Captured};
+use crate::formats::pickle::familiar::{Column, Dtype, Kind, Match, Names, Value as Captured};
 use crate::formats::pickle::shapes;
 use crate::template::{Cells, Endian, TableShape};
+
+/// How one entry of a mask is spelled, which is one byte saying whether the
+/// cell beside it counts. The same for a plain dtype and for a column of a
+/// structured one: `make_mask_descr` writes `?` either way.
+const MASK_ELEMENT: &str = "|b1";
 
 /// One cell of a computed table: what it says, and where the bytes it was read
 /// from are.
@@ -208,6 +213,12 @@ impl Evaluator {
             Some(Values::Numbers(held)) => Some(held),
             _ => None,
         };
+        // A structured dtype makes a row out of the named columns of one
+        // record rather than out of the run's own elements, and its mask hides
+        // a column of a row rather than an entry.
+        if let Dtype::Record { columns, width } = numbers.dtype {
+            return self.masked_record_cells(doc, root, r, base, &numbers, hides.as_ref(), columns, *width, rows, from, to);
+        }
         let mut out = Vec::new();
         for row in from..to.min(rows) {
             let mut cells = Vec::new();
@@ -229,6 +240,75 @@ impl Evaluator {
             out.push(cells);
         }
         Ok(out)
+    }
+
+    /// The rows of a masked array whose dtype is a record: one cell per named
+    /// column, blank where the mask hides that column of that row.
+    ///
+    /// The numbers and the mask are two runs of records over the same rows,
+    /// and the two have different widths: `make_mask_descr` packs one boolean
+    /// a column with no padding, so a mask cell is at `row * columns + column`
+    /// where a value cell is at `row * width + column.at`.
+    #[allow(clippy::too_many_arguments)]
+    fn masked_record_cells<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        r: &Resolved,
+        base: u64,
+        numbers: &Numbers,
+        hides: Option<&Numbers>,
+        columns: &[Column],
+        width: u64,
+        rows: u64,
+        from: u64,
+        to: u64,
+    ) -> R<Vec<Vec<FrameCell>>> {
+        let mut out = Vec::new();
+        for row in from..to.min(rows) {
+            let mut cells = Vec::new();
+            for (at, column) in columns.iter().enumerate() {
+                let Some(into) = row.checked_mul(width).and_then(|start| start.checked_add(column.at)) else {
+                    cells.push(FrameCell::nowhere());
+                    continue;
+                };
+                let Some((ty, held)) = shapes::element(&column.dtype) else {
+                    cells.push(FrameCell::nowhere());
+                    continue;
+                };
+                let (read, where_it_is) = self.at_bytes(doc, root, r, base, numbers, into, &ty, held)?;
+                let hidden = match hides {
+                    Some(mask) => self.mask_record_at(doc, root, r, base, mask, row, at as u64, columns.len() as u64)?,
+                    None => false,
+                };
+                cells.push(match hidden {
+                    true => FrameCell::masked(where_it_is),
+                    false => FrameCell::at(read, where_it_is),
+                });
+            }
+            out.push(cells);
+        }
+        Ok(out)
+    }
+
+    /// Whether the mask hides column `column` of row `row`, which is one byte
+    /// of a mask laid out one boolean a column.
+    #[allow(clippy::too_many_arguments)]
+    fn mask_record_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        r: &Resolved,
+        base: u64,
+        mask: &Numbers,
+        row: u64,
+        column: u64,
+        columns: u64,
+    ) -> R<bool> {
+        let Some(into) = row.checked_mul(columns).and_then(|start| start.checked_add(column)) else { return Ok(false) };
+        let Some((ty, width)) = shapes::element(MASK_ELEMENT) else { return Ok(false) };
+        let (read, _) = self.at_bytes(doc, root, r, base, mask, into, &ty, width)?;
+        Ok(matches!(read, Some(Value::UInt(n)) if n != 0) || matches!(read, Some(Value::Int(n)) if n != 0))
     }
 
     /// Whether the mask hides entry `elem`, which is one byte of the mask's
@@ -461,10 +541,33 @@ impl Evaluator {
         ty: &Ty,
         width: u64,
     ) -> R<(Option<Value>, CellAt)> {
+        let Some(into) = elem.checked_mul(width) else { return Ok((None, CellAt::Nowhere)) };
+        self.at_bytes(doc, root, r, base, n, into, ty, width)
+    }
+
+    /// The same, `into` bytes into the run rather than at element `elem`.
+    ///
+    /// A column of a structured run is not at a multiple of its own width: a
+    /// record of an `i4` and an `f8` puts the second column four bytes in and
+    /// the next record's first column twelve. So the offset is worked out by
+    /// the caller and handed over, and reading one value is the same work
+    /// either way.
+    #[allow(clippy::too_many_arguments)]
+    fn at_bytes<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        root: &[usize],
+        r: &Resolved,
+        base: u64,
+        n: &Numbers,
+        into: u64,
+        ty: &Ty,
+        width: u64,
+    ) -> R<(Option<Value>, CellAt)> {
         if let Some(spelled) = &n.spelled {
-            return self.space_value(doc, root, spelled, elem, ty, width);
+            return self.space_value(doc, root, spelled, into, ty, width);
         }
-        let Some(at) = (n.at as u64).checked_add(elem.checked_mul(width).unwrap_or(u64::MAX)) else { return Ok((None, CellAt::Nowhere)) };
+        let Some(at) = (n.at as u64).checked_add(into) else { return Ok((None, CellAt::Nowhere)) };
         let offset = base + at * 8;
         let size = width * 8;
         let one = Resolved { offset, cursor: offset, limit: offset + size, size: Some(size), ..r.clone() };
@@ -488,7 +591,7 @@ impl Evaluator {
     /// file, and is numbered the way every other address in the space is: the
     /// space's own id, counted from its own start.
     #[allow(clippy::too_many_arguments)]
-    fn space_value<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: &[usize], elem: u64, ty: &Ty, width: u64) -> R<(Option<Value>, CellAt)> {
+    fn space_value<S: Source>(&mut self, doc: &Document<S>, root: &[usize], at: &[usize], into: u64, ty: &Ty, width: u64) -> R<(Option<Value>, CellAt)> {
         let path = [root, at].concat();
         self.resolve(doc, &path)?;
         let super::space::Opened::Space(id) = self.open_space_at(doc, &path)? else {
@@ -496,7 +599,7 @@ impl Evaluator {
         };
         let Some(held) = self.spaces.buf(id).cloned() else { return fail("this array's numbers are no longer open") };
         let size = width * 8;
-        let Some(offset) = elem.checked_mul(size) else { return Ok((None, CellAt::Nowhere)) };
+        let Some(offset) = into.checked_mul(8) else { return Ok((None, CellAt::Nowhere)) };
         if offset.checked_add(size).is_none_or(|end| end > held.len() as u64 * 8) {
             return Ok((None, CellAt::Nowhere));
         }

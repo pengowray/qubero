@@ -312,11 +312,27 @@ impl Writing {
     /// The same construction for a record of named columns: the names, the
     /// dictionary of types and offsets, and the width, alignment and flags.
     fn record_dtype(&mut self, width: u64, columns: &[(&str, &str, &str, u64)]) -> &mut Self {
+        self.record_dtype_spelt(width, columns, false)
+    }
+    /// The same, with `by_class` saying the dtype names `numpy.record` where
+    /// every other dtype writes the letters it is spelled by, which is what a
+    /// `recarray` writes.
+    fn record_dtype_spelt(&mut self, width: u64, columns: &[(&str, &str, &str, u64)], by_class: bool) -> &mut Self {
         self.word("numpy");
         self.word("dtype");
         self.raw(b"\x93");
         self.mark();
-        self.word(&format!("V{width}"));
+        match by_class {
+            true => {
+                self.word("numpy");
+                self.word("record");
+                self.raw(b"\x93");
+                self.mark();
+            }
+            false => {
+                self.word(&format!("V{width}"));
+            }
+        }
         self.raw(b"\x89\x88\x87");
         self.mark();
         self.raw(b"R");
@@ -355,12 +371,27 @@ impl Writing {
     /// An array of records: the reconstructor, one dimension, the dtype, C
     /// order and the bytes.
     fn record_array(&mut self, rows: u64, width: u64, columns: &[(&str, &str, &str, u64)], data: &[u8]) -> &mut Self {
+        self.record_array_of("numpy", "ndarray", rows, width, columns, data, false)
+    }
+    /// The same, for an array of a class of NumPy's own: a `recarray` names
+    /// `numpy.rec.recarray` and writes its dtype as the class `numpy.record`.
+    #[allow(clippy::too_many_arguments)]
+    fn record_array_of(
+        &mut self,
+        module: &str,
+        name: &str,
+        rows: u64,
+        width: u64,
+        columns: &[(&str, &str, &str, u64)],
+        data: &[u8],
+        by_class: bool,
+    ) -> &mut Self {
         self.word("numpy._core.multiarray");
         self.word("_reconstruct");
         self.raw(b"\x93");
         self.mark();
-        self.word("numpy");
-        self.word("ndarray");
+        self.word(module);
+        self.word(name);
         self.raw(b"\x93");
         self.mark();
         self.raw(b"K\0\x85");
@@ -375,7 +406,7 @@ impl Writing {
         self.count(rows);
         self.raw(b"\x85");
         self.mark();
-        self.record_dtype(width, columns);
+        self.record_dtype_spelt(width, columns, by_class);
         self.raw(b"\x89C");
         self.raw(&[data.len() as u8]);
         self.raw(data);

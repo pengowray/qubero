@@ -5,7 +5,7 @@
 use super::cursor::Cursor;
 use super::forms::{Args, Reduce, Via};
 use super::memo::Bound;
-use super::{Dtype, Kind, Shape, Storage, Value, MAX_DIMENSIONS, NO_OPCODE};
+use super::{Column, Dtype, Kind, Shape, Storage, Value, MAX_DIMENSIONS, NO_OPCODE};
 use crate::formats::pickle::known::Payload;
 
 /// The array classes the reconstructor may be handed, each with the module it
@@ -28,10 +28,36 @@ use crate::formats::pickle::known::Payload;
 /// makes it, and for a plain dtype it comes to this.
 const MASK_DTYPE: &str = "|b1";
 
+/// The dtype of the mask over an array of this dtype, which is what
+/// `make_mask_descr` in `numpy/ma/core.py` makes: one boolean an entry for a
+/// plain dtype, and for a structured one a record of the same column names
+/// with one boolean apiece, packed with no padding between them.
+///
+/// So a masked array of two columns and two rows carries four bytes of mask,
+/// and which of them hides a cell is decided by the column the cell is in as
+/// well as by the row.
+fn mask_dtype(dtype: &Dtype) -> Dtype {
+    match dtype {
+        Dtype::Record { columns, .. } => Dtype::Record {
+            columns: columns
+                .iter()
+                .enumerate()
+                .map(|(i, column)| Column { name: column.name.clone(), dtype: MASK_DTYPE.to_string(), at: i as u64 })
+                .collect(),
+            width: columns.len() as u64,
+        },
+        _ => Dtype::Plain(MASK_DTYPE.to_string()),
+    }
+}
+
 pub(super) const ARRAY_CLASSES: &[(&str, &str, Shape)] = &[
     ("numpy", "ndarray", Shape::Array),
     ("numpy", "matrix", Shape::Matrix),
     ("numpy", "memmap", Shape::MemMap),
+    // The class moved between NumPy 1 and 2: 1.26 writes `numpy.recarray`
+    // and 2.5 writes `numpy.rec.recarray`, and both are the same class.
+    ("numpy", "recarray", Shape::RecArray),
+    ("numpy.rec", "recarray", Shape::RecArray),
 ];
 
 /// The NumPy globals a form may name and never calls, by their whole dotted
@@ -434,6 +460,13 @@ impl Cursor<'_> {
         self.number(1)?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
+        // A record array holds a record: `numpy.rec.array` builds the dtype
+        // out of the columns it was given and there is no other way into the
+        // class that has been measured. One of plain numbers is a view
+        // somebody took of an ordinary array, and no file holds one.
+        if class == Shape::RecArray && !matches!(dtype, Dtype::Record { .. }) {
+            return None;
+        }
         let fortran_order = self.read_flag()?;
         let call_ends = self.at;
         // An array of objects has no buffer. Its values are pickled after it,
@@ -479,11 +512,10 @@ impl Cursor<'_> {
     /// default for its dtype.
     ///
     /// The shape, the storage order and the numbers come out as the data
-    /// array, and the same shape and order with a boolean dtype come out as
-    /// the mask array, so both open as ordinary arrays with tables of their
-    /// own. A structured dtype is refused: `make_mask_descr` gives such an
-    /// array a mask of one boolean per column rather than per entry, and no
-    /// file in the collection holds one.
+    /// array, and the same shape and order with the mask's own dtype come out
+    /// as the mask array, so both open as ordinary arrays with tables of their
+    /// own. For a structured dtype that mask dtype is a structured one too:
+    /// see [`mask_dtype`].
     fn mareconstructed(&mut self, start: usize) -> Option<Value> {
         self.global(&["numpy.ma.core"], "_mareconstruct", "module", "callable")?;
         self.atoms(&[b"("])?;
@@ -506,7 +538,10 @@ impl Cursor<'_> {
         self.number(1)?;
         let dimensions = self.dimensions()?;
         let dtype = self.dtype()?;
-        if matches!(dtype, Dtype::Record { .. } | Dtype::Objects) {
+        // An array of pickled objects has no run of bytes for a mask to be
+        // laid over, and `__getstate__` writes its values rather than its
+        // numbers, which is a shape this has not read.
+        if matches!(dtype, Dtype::Objects) {
             return None;
         }
         let fortran_order = self.read_flag()?;
@@ -515,7 +550,7 @@ impl Cursor<'_> {
         // this one rather than the one a reader of the tree finds first.
         self.finish_call("masked array reconstruct call", start, self.at);
         let data = self.masked_run(&dtype, &dimensions, fortran_order)?;
-        let mask = self.masked_run(&Dtype::Plain(MASK_DTYPE.to_string()), &dimensions, fortran_order)?;
+        let mask = self.masked_run(&mask_dtype(&dtype), &dimensions, fortran_order)?;
         // What a masked entry stands for: nothing where the array kept
         // NumPy's default, and otherwise one number of the array's own kind,
         // which NumPy writes as an array of no dimensions.

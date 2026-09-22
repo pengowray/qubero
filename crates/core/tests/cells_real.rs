@@ -541,3 +541,52 @@ fn a_checkpoint_summary_points_at_the_name_and_at_the_numbers() {
     assert_eq!(f32_at(&held[44..]), 11.0);
 }
 
+
+/// A masked array of a structured dtype: a row is the named columns of one
+/// record, and the mask hides a column of a row rather than an entry of a run.
+///
+/// The two runs have different widths. A record of an `i4` and an `f8` is
+/// sixteen bytes with the second column eight in; its mask is two bytes, one
+/// boolean a column with nothing between them, which is what `make_mask_descr`
+/// builds. So a cell and the mask over it are found by two different sums.
+#[test]
+fn a_masked_record_s_hidden_cells_are_the_column_of_the_row() {
+    let Some(dir) = qubero_samples::dir("pickle") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    // `[(1, --), (3, 4.5)]`: the second column of the first row is hidden.
+    let want: &[&[Option<f64>]] = &[&[Some(1.0), None], &[Some(3.0), Some(4.5)]];
+    for era in ["numpy-1", "numpy-2"] {
+        for protocol in ["proto4", "proto2"] {
+            let where_ = format!("{protocol}-{era}-masked-record");
+            let bytes = std::fs::read(dir.join(format!("{where_}.pickle"))).unwrap_or_else(|e| panic!("{where_}: {e}"));
+            let doc = Document::new(MemSource(bytes.clone()));
+            let mut ev = Evaluator::new(formats::builtin("picklefpf").unwrap());
+            let shape = ev.table_shape(&doc, &[1]).unwrap().unwrap_or_else(|| panic!("{where_}: no table"));
+            let names: Vec<String> = shape.names.iter().map(|n| n.to_string()).collect();
+            assert_eq!(names, ["a", "b"], "{where_}: the columns are the dtype's");
+            let held = ev.pickle_cells(&doc, &[1], 0, 3).unwrap();
+            assert_eq!(held.len(), want.len(), "{where_}: rows");
+            for (i, (row, said)) in held.iter().zip(want.iter()).enumerate() {
+                assert_eq!(row.len(), said.len(), "{where_} row {i}: columns");
+                for (j, (cell, number)) in row.iter().zip(said.iter()).enumerate() {
+                    // The `a` column is four bytes and the `b` column eight,
+                    // so a cell says the width of the column it is in.
+                    let (_, _, size) = placed(cell);
+                    assert_eq!(size, if j == 0 { 32 } else { 64 }, "{where_} row {i} column {j}");
+                    match number {
+                        Some(number) => {
+                            assert!(!cell.masked, "{where_} row {i} column {j}: not masked");
+                            assert_eq!(text_of(cell), number.to_string(), "{where_} row {i} column {j}");
+                        }
+                        None => {
+                            assert!(cell.masked, "{where_} row {i} column {j}: masked");
+                            assert_eq!(cell.value, None, "{where_} row {i} column {j}: a masked cell shows nothing");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

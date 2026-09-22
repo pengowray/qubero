@@ -206,8 +206,19 @@ impl Evaluator {
         // one cell: see [`Evaluator::masked_cells`].
         if let (_, Part::Value(v)) = &here {
             if let Some((data, _)) = super::picklecells::masked_of(v) {
-                let Kind::Array { dimensions, fortran_order, .. } = &data.kind else { return None };
+                let Kind::Array { dimensions, fortran_order, dtype, .. } = &data.kind else { return None };
                 let Some((rows, columns)) = super::picklecells::masked_shape(dimensions, *fortran_order) else { return None };
+                // A record makes a row out of its named columns, so the names
+                // are the dtype's and a row is one record however many
+                // dimensions the array has.
+                if let Dtype::Record { columns, .. } = dtype {
+                    return Some(crate::template::TableShape {
+                        names: columns.iter().map(|c| c.name.as_str().into()).collect(),
+                        row_word: Some(ROW_WORD.into()),
+                        cells: Some(Cells::Computed { rows: count_of(dimensions) }),
+                        ..Default::default()
+                    });
+                }
                 return Some(crate::template::TableShape {
                     // Several numbers to a row is a row. One to a row is a
                     // value, which is what the table calls it when it is

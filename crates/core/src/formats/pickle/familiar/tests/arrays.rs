@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn captures_numpy_payload_and_rejects_changed_structure() {
     let found = recognise(MATRIX).unwrap();
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
     let Kind::Dict(entries) = &found.value.kind else {
         panic!("dict expected")
     };
@@ -213,7 +213,7 @@ fn an_array_at_protocol_5_is_rebuilt_around_its_buffer() {
     let numbers: Vec<u8> = (0u8..12).flat_map(|n| [n, 0]).collect();
     let whole = proto5(&cat(&[&frombuffer(&mutable(&numbers), "i2", b'<', b"K\x03K\x04\x86\x94", "C"), b"."]));
     let found = recognise(&whole).unwrap();
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
     let Kind::Array { dtype, dimensions, len, fortran_order, .. } = &found.value.kind else { panic!("array") };
     assert_eq!((spelling(dtype), dimensions.as_slice(), *len, *fortran_order), ("<i2", &[3, 4][..], 24, false));
 
@@ -256,7 +256,7 @@ fn a_later_array_may_name_what_an_earlier_one_wrote() {
     // The whole finished dtype, out of the slot its REDUCE filed it in.
     let shared = two_arrays(&get(17));
     let found = recognise(&framed(&shared)).unwrap();
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
     let Kind::Dict(entries) = &found.value.kind else { panic!("dict") };
     let dtypes: Vec<&str> = entries
         .iter()
@@ -471,9 +471,9 @@ fn numpy_s_own_array_classes_are_read_and_anyone_else_s_is_not() {
         // `array`, and everything else about it is an array's.
         assert_eq!(named_row(&dump(&whole), "data").ty, shape.name(), "{name}");
     }
-    // A NumPy array class that needs a dtype production of its own, one of
-    // NumPy's classes that is not an array at all, and a name close enough to
-    // be a typo.
+    // A record array, which holds a record and not the plain numbers this
+    // body writes; one of NumPy's classes that is not an array at all; and a
+    // name close enough to be a typo.
     for name in ["recarray", "dtype", "ndarray_"] {
         assert!(recognise(&named(name)).is_none(), "{name} was read as an array");
     }
@@ -518,7 +518,7 @@ fn a_masked_array_is_the_numbers_the_mask_and_the_fill_value() {
     let numbers = &[0u8; 32];
     let whole = masked(numbers, b"\x00\x01\x00\x01", b"N");
     let found = recognise(&whole).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&whole)));
-    assert_eq!(found.form, "numpy-array-p4-p5-v6");
+    assert_eq!(found.form, "numpy-array-p4-p5-v7");
     let Kind::Masked { data, mask, fill } = &found.value.kind else { panic!("a masked array expected") };
     let run = |v: &Value| match &v.kind {
         Kind::Array { at, len, dtype, dimensions, .. } => (*at, *len, spelling(dtype).to_string(), dimensions.clone()),
@@ -546,4 +546,102 @@ fn a_masked_array_is_the_numbers_the_mask_and_the_fill_value() {
     // the shape the state declared.
     assert!(recognise(&masked(numbers, b"\x00\x01\x00", b"N")).is_none(), "a mask short of one byte an entry");
     assert!(recognise(&masked(&[0; 24], b"\x00\x01\x00\x01", b"N")).is_none(), "numbers short of the shape");
+}
+
+/// A `numpy.recarray`, whose dtype is the one dtype NumPy writes as a class:
+/// `numpy.dtype(numpy.record, ...)` where every other dtype writes the letters
+/// it is spelled by. The width the letters would have said is in the state.
+#[test]
+fn a_record_array_names_its_dtype_by_the_class_rather_than_by_letters() {
+    const COLUMNS: &[(&str, &str, &str, u64)] = &[("a", "i4", "<", 0), ("b", "f8", "<", 8)];
+    // The class moved between NumPy 1 and 2 and the class it holds did not.
+    for (module, name) in [("numpy", "recarray"), ("numpy.rec", "recarray")] {
+        let mut w = Writing::default();
+        w.record_array_of(module, name, 2, 16, COLUMNS, &[0; 32], true);
+        let bytes = framed(&cat(&[&w.out, b"."]));
+        let found = recognise(&bytes).unwrap_or_else(|| panic!("{module}.{name}: read as far as {:#x}", furthest(&bytes)));
+        assert_eq!(found.form, "numpy-array-p4-p5-v7");
+        let Kind::Array { dtype, dimensions, class, .. } = &found.value.kind else { panic!("array expected") };
+        assert_eq!((*class, dimensions.as_slice()), (Shape::RecArray, &[2][..]));
+        assert_eq!(
+            dtype,
+            &Dtype::Record {
+                width: 16,
+                columns: vec![
+                    Column { name: "a".into(), dtype: "<i4".into(), at: 0 },
+                    Column { name: "b".into(), dtype: "<f8".into(), at: 8 },
+                ],
+            }
+        );
+        let seen = dump(&bytes);
+        tiles(&seen);
+        assert_eq!(named_row(&seen, "data").ty, "recarray");
+    }
+    // The class is named where the letters would be and nowhere else: an
+    // ordinary array's dtype is letters, and a class no form wrote down is a
+    // non-match however respectable its module looks.
+    let mut w = Writing::default();
+    w.record_array_of("numpy", "ndarray", 2, 16, COLUMNS, &[0; 32], false);
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_some());
+    let mut w = Writing::default();
+    w.record_array_of("numpy", "matrix", 2, 16, COLUMNS, &[0; 32], true);
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_some(), "a matrix may write the class too");
+    let mut w = Writing::default();
+    w.record_array_of("numpy", "bogusarray", 2, 16, COLUMNS, &[0; 32], true);
+    assert!(recognise(&framed(&cat(&[&w.out, b"."]))).is_none(), "a class no form named was read");
+}
+
+/// A masked array of a structured dtype, whose mask is one boolean per column
+/// per row rather than one per entry. That is what `make_mask_descr` builds,
+/// and it makes the mask a narrower run than the numbers it covers.
+#[test]
+fn a_masked_record_s_mask_is_one_boolean_a_column() {
+    // Two rows of an `i4` and an `f8`, which is sixteen bytes a row, with a
+    // mask of two bytes a row.
+    let whole = |mask: &[u8]| {
+        framed(&cat(&[
+            &word("numpy.ma.core"),
+            &word("_mareconstruct"),
+            b"\x93\x94(",
+            &word("numpy.ma"),
+            &word("MaskedArray"),
+            b"\x93\x94",
+            &word("numpy"),
+            &word("ndarray"),
+            b"\x93\x94",
+            b"K\x00\x85\x94",
+            &word("b"),
+            b"t\x94R\x94",
+            b"(K\x01K\x02\x85\x94",
+            &{
+                let mut w = Writing::default();
+                // The slots the dtype files run on from the ones the call
+                // above took, which is what the words before it counted.
+                w.slots = 14;
+                w.record_dtype(16, &[("a", "i4", "<", 0), ("b", "f8", "<", 8)]);
+                w.out
+            },
+            b"\x89",
+            &blob(&[0; 32]),
+            &blob(mask),
+            b"Nt\x94b.",
+        ]))
+    };
+    let bytes = whole(b"\x00\x01\x00\x00");
+    let found = recognise(&bytes).unwrap_or_else(|| panic!("read as far as {:#x}", furthest(&bytes)));
+    let Kind::Masked { data, mask, .. } = &found.value.kind else { panic!("a masked array expected") };
+    assert!(matches!(&data.kind, Kind::Array { dtype: Dtype::Record { width: 16, .. }, .. }));
+    let Kind::Array { dtype: Dtype::Record { columns, width }, .. } = &mask.kind else { panic!("a record mask expected") };
+    assert_eq!(*width, 2);
+    assert_eq!(
+        columns,
+        &vec![
+            Column { name: "a".into(), dtype: "|b1".into(), at: 0 },
+            Column { name: "b".into(), dtype: "|b1".into(), at: 1 },
+        ]
+    );
+    // One byte an entry is what a mask over plain numbers is, and it is the
+    // wrong length here.
+    assert!(recognise(&whole(b"\x00\x01")).is_none(), "a mask of one byte a row");
+    assert!(recognise(&whole(b"\x00\x01\x00\x00\x00")).is_none(), "a mask longer than its columns");
 }
