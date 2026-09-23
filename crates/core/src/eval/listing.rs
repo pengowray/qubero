@@ -515,6 +515,18 @@ impl Evaluator {
     /// The index of placed stretches is of the file, so a tab does without it
     /// and a bit its own fields do not cover is its root.
     pub(super) fn locate_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
+        self.locate_down(doc, root, bit, false)
+    }
+
+    /// The same, stopping at a run of numbers or instructions, or a packed
+    /// stream, rather than going on to the one element or block holding the
+    /// bit. Which instruction covers a byte takes decoding every one before
+    /// it, and which run it is in takes nothing. See [`Evaluator::read_as_under`].
+    pub(super) fn locate_run_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
+        self.locate_down(doc, root, bit, true)
+    }
+
+    fn locate_down<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64, runs: bool) -> R<Vec<usize>> {
         self.resolve(doc, root)?;
         let size = self.size_of(doc, root)?;
         let top = self.memo[root].clone();
@@ -522,7 +534,7 @@ impl Evaluator {
             return fail("past the end of the file");
         }
         let inside = top.offset <= bit && bit < top.offset + size;
-        let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit)? } else { (root.to_vec(), false) };
+        let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit, runs)? } else { (root.to_vec(), false) };
         if !root.is_empty() {
             return Ok(found);
         }
@@ -553,7 +565,7 @@ impl Evaluator {
             if width >= widest {
                 break;
             }
-            let (deeper, settled) = self.walk_down_to(doc, placed, bit)?;
+            let (deeper, settled) = self.walk_down_to(doc, placed, bit, runs)?;
             if settled {
                 return Ok(deeper);
             }
@@ -571,7 +583,10 @@ impl Evaluator {
     /// Walk down from `path` to the deepest field covering `bit`, and say
     /// whether the walk ended on a field, rather than in a structure or a
     /// list none of whose children cover the bit.
-    fn walk_down_to<S: Source>(&mut self, doc: &Document<S>, mut path: Vec<usize>, bit: u64) -> R<(Vec<usize>, bool)> {
+    ///
+    /// With `runs`, a run of numbers or instructions, or a packed stream, is
+    /// where the walk ends.
+    fn walk_down_to<S: Source>(&mut self, doc: &Document<S>, mut path: Vec<usize>, bit: u64, runs: bool) -> R<(Vec<usize>, bool)> {
         loop {
             // The cursor stops at a decoded stream's *contents*: those are at
             // offsets of the decoded bytes, and no bit of the file is any one
@@ -581,6 +596,9 @@ impl Evaluator {
             // literal. For a codec whose trace has no blocks the run is still
             // the answer, whole.
             self.resolve(doc, &path)?;
+            if runs && self.not_text(&path).is_some() {
+                return Ok((path, true));
+            }
             if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
                 let blocks = self.child_count(doc, &path)? >= 2;
                 if blocks {

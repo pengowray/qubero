@@ -47,6 +47,7 @@ mod placed;
 mod problem;
 mod expr;
 mod read;
+mod readas;
 mod relate;
 mod schema;
 mod shape;
@@ -79,6 +80,7 @@ pub use table::TableShapeInfo;
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
 pub use listing::{magic_reading, Span, SpanPart};
+pub use readas::{NotText, ReadAs};
 pub use relate::write_expr;
 pub use schema::Descriptions;
 
