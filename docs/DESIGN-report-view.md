@@ -656,7 +656,9 @@ Every bit of the file in one row, keyed by part, group and role, as
 - **Group**: the variant of the nearest list element. First the value that
   picked the case, read as a name (`meta`, `local file`, `IDAT`); then the
   case's type where it is a record (`TableLeaf`); then, for a case that is not
-  a record, the element's own name as the listing labels it (`.rodata`). A run
+  a record, the element's own name as the listing labels it (`.rodata`). An
+  element whose field points at a choice is grouped by that choice, so a
+  font's table directory entries group as `glyf`, `head` and the rest. A run
   of plain values stays in its list's group, so a WAV's samples are the `data`
   chunk's.
 - **Role**: `content`, `machinery` (a field whose value another field's
@@ -665,7 +667,11 @@ Every bit of the file in one row, keyed by part, group and role, as
 
 A gap has taken out of it every field an offset placed over it, except one it
 is inside of, so SQLite's cells come out of the free space of their pages and
-nothing is counted twice. Gaps and padding are read for zero bytes, up to
+nothing is counted twice by the ledger itself. `counted_bits` is more than the
+file only where the template reads one stretch twice without marking either
+reading, which the kind totals count twice too: the HDF5 template reads a
+local heap's data segment as bytes and the link names inside it as well.
+Gaps and padding are read for zero bytes, up to
 1 MiB for one stretch and 4 MiB in all; the rest is `unscanned_bits`, which
 the web joins with the overview's byte classes. Whether a unit is reachable
 from the root is not in the ledger yet (see
