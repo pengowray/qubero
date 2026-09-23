@@ -342,7 +342,7 @@ that point at something. The IR reads them as plain integers, so no view can
 follow them and no template can say what a thing is from what points at it.
 This one gap causes the largest misreadings in the reports:
 
-- SQLite types a page by its first byte, so four free pages that still start with the leaf type byte read as live table pages, and 12 rows appear where the database has 8. The template's own comment says the fix: what points at a page decides its type. The IR has no way to say it.
+- SQLite typed a page by its first byte, so four free pages that still start with the leaf type byte read as live table pages, and 12 rows appeared where the database has 8. The freelist half is fixed: the template reads the freelist from the header before the pages, and a page it names is free whatever its first byte says. Overflow pages are still typed by elimination, because a page cannot ask whether a cell on a later page points at it. That needs a reference type and a list typed by what reaches its elements; `sqlite.rs` says so at the top.
 - ELF has 2,265 jump-table entries, 402 command table entries, and the entry point, all as numbers, because no address maps to a file offset.
 - JPEG components name their quantization and Huffman tables by ID, and the tables sit in separate segments.
 - The ZIP central directory's `local_header_offset` points at nothing, so Qubero cannot say that the directory and the local headers describe the same 11 entries, or notice if they disagree.
