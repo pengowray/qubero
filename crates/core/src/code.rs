@@ -339,6 +339,37 @@ mod tests {
         assert_eq!(decode(Isa::Riscv32, &[0x02, 0x00]).len, 2);
     }
 
+    /// On x86-64 an instruction is 32 bits wide unless REX.W makes it 64. A
+    /// REX prefix without W only reaches the upper eight registers. yaxpeax-x86
+    /// 2.2.0 wrote bswap, bt with an immediate, and `66 0f 6e` 64 bits wide
+    /// either way, and `objdump` disagreed with it on 338 instructions in
+    /// BusyBox; the fix is in `crates/vendor/yaxpeax-x86`, marked "Qubero:".
+    /// The bytes are BusyBox's own, from `qubero-samples/elf/busybox-x86_64`,
+    /// at the addresses given.
+    #[test]
+    fn an_x86_64_instruction_is_32_bits_wide_unless_rex_w_says_64() {
+        let text = |bytes: &[u8]| decode(Isa::X86_64, bytes).text;
+        assert_eq!(text(&[0x41, 0x0f, 0xc8]), "bswap r8d"); // 0x4011aa
+        assert_eq!(text(&[0x0f, 0xca]), "bswap edx"); // 0x4011ad
+        assert_eq!(text(&[0x48, 0x0f, 0xc8]), "bswap rax"); // 0x433b44
+        assert_eq!(text(&[0x0f, 0xba, 0xe0, 0x0b]), "bt eax, 0xb"); // 0x404cee
+        assert_eq!(text(&[0x41, 0x0f, 0xba, 0xe0, 0x08]), "bt r8d, 0x8"); // 0x486835
+        assert_eq!(text(&[0x0f, 0xba, 0x23, 0x08]), "bt dword [rbx], 0x8"); // 0x48ebef
+        assert_eq!(text(&[0x48, 0x0f, 0xba, 0xe0, 0x23]), "bt rax, 0x23"); // 0x451bde
+        assert_eq!(text(&[0x48, 0x0f, 0xba, 0xf6, 0x3f]), "btr rsi, 0x3f"); // 0x4c185e
+        assert_eq!(text(&[0x66, 0x0f, 0x6e, 0xe8]), "movd xmm5, eax"); // 0x42c154
+        assert_eq!(text(&[0x66, 0x48, 0x0f, 0x6e, 0xc0]), "movq xmm0, rax"); // 0x401f67
+        // Not in BusyBox: the same movd reading from memory.
+        assert_eq!(text(&[0x66, 0x0f, 0x6e, 0x07]), "movd xmm0, dword [rdi]");
+        // push and pop share bswap's decoding, and they are 64 bits wide
+        // without REX.W.
+        assert_eq!(text(&[0x50]), "push rax"); // 0x400120
+        assert_eq!(text(&[0x41, 0x57]), "push r15"); // 0x400dc0
+        assert_eq!(text(&[0x5d]), "pop rbp"); // 0x40024e
+        // The 32-bit decoder was right all along.
+        assert_eq!(decode(Isa::X86_32, &[0x0f, 0xc8]).text, "bswap eax");
+    }
+
     #[test]
     fn bytes_that_are_not_an_instruction_step_by_the_smallest_one() {
         let bad = decode(Isa::X86_64, &[0x06]);

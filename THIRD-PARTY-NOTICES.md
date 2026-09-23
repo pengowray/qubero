@@ -103,6 +103,17 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+## yaxpeax-x86
+
+Upstream: http://git.iximeow.net/yaxpeax-x86/
+
+`yaxpeax-x86` 2.2.0 is built from a copy in `crates/vendor/yaxpeax-x86` with
+three changes, marked "Qubero:" in `src/long_mode/mod.rs`. Each corrects the
+operand size of an x86-64 instruction that is 32 bits wide unless a REX.W
+prefix makes it 64: `bswap`, `bt`, `bts`, `btr` and `btc` with an immediate,
+and `movd` (`66 0f 6e`). The 0BSD terms are the same; the licence text is
+under yaxpeax-x86 in the licence texts below.
+
 ## GPL-licensed build tools
 
 `magic-embed` compiles the rule database at build time and depends on
