@@ -652,12 +652,36 @@ export type StringHit = {
   /** Every reading of the bytes in front that comes to this string's length.
    *  More than one is usually the same number written at several widths. */
   readonly prefix: readonly StringPrefix[];
+  /** The run the string lies inside, where the template reads it as numbers
+   *  or instructions, or as a packed stream. Null for any other string, and
+   *  for every string of a file with no template. */
+  readonly inside: StringInside | null;
+};
+
+/** Which of a template's readings a string lies inside, of the readings that
+ *  printable bytes turn up in by chance. */
+export type StringInsideKind = "numbers" | "code" | "packed";
+
+export type StringInside = {
+  readonly kind: StringInsideKind;
+  /** The run, or the stream: what opens a packed one in a tab of its own. */
+  readonly path: readonly number[];
+  /** The run's name, as the listing gives it: `samples`, `[2] .text`. */
+  readonly name: string;
+  /** One element's type, such as `i16 le` or `x86-64`, or the codec's name. */
+  readonly what: string;
+  /** The run's first byte and length in bytes. */
+  readonly at: number;
+  readonly len: number;
 };
 
 export type StringScan = {
   readonly hits: readonly StringHit[];
   readonly missing: readonly number[];
   readonly next: number;
+  /** True when the template ran out of time before it could place the first
+   *  string, so nothing came back. Ask again. */
+  readonly busy?: boolean;
 };
 
 /** Where the lines in a stretch of the file start, and how they ended. The

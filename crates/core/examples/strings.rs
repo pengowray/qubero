@@ -13,10 +13,15 @@
 //! ```
 //!
 //! `--min N` sets the shortest run reported. `--enc` takes a comma-separated
-//! list out of `ascii`, `utf16le` and `utf16be`.
+//! list out of `ascii`, `utf16le` and `utf16be`. `--inside` reads each file
+//! with the template that sniffs it and says which strings fall inside a run
+//! of numbers or instructions, or a packed stream, the way the view marks them.
 
 use std::path::{Path, PathBuf};
 
+use qubero_core::document::Document;
+use qubero_core::eval::{Evaluator, ReadAs, Tab};
+use qubero_core::formats;
 use qubero_core::source::MemSource;
 use qubero_core::stringscan::{scan, Enc, Hit, Opts};
 
@@ -25,11 +30,13 @@ fn main() {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut opts = Opts::default();
     let mut mode = Mode::Summary;
+    let mut inside = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--list" => mode = Mode::List,
             "--odd" => mode = Mode::Odd,
             "--stats" => mode = Mode::Stats,
+            "--inside" => inside = true,
             "--min" => opts.min_chars = args.next().and_then(|n| n.parse().ok()).unwrap_or(4),
             "--enc" => {
                 let want = args.next().unwrap_or_default();
@@ -52,7 +59,7 @@ fn main() {
     files.sort();
     let mut totals = Totals::default();
     for file in &files {
-        report(file, opts, mode, &mut totals);
+        report(file, opts, mode, inside, &mut totals);
     }
     if files.len() > 1 {
         println!();
@@ -117,9 +124,10 @@ fn gather(path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn report(path: &Path, opts: Opts, mode: Mode, totals: &mut Totals) {
+fn report(path: &Path, opts: Opts, mode: Mode, inside: bool, totals: &mut Totals) {
     let Ok(bytes) = std::fs::read(path) else { return };
     let size = bytes.len();
+    let template = if inside { formats::sniff(&bytes[..size.min(formats::SNIFF_WINDOW)], size as u64) } else { None };
     let src = MemSource(bytes);
     let start = std::time::Instant::now();
     let mut hits: Vec<Hit> = Vec::new();
@@ -134,6 +142,26 @@ fn report(path: &Path, opts: Opts, mode: Mode, totals: &mut Totals) {
         from = step.next;
     }
     let took = start.elapsed();
+    let read_as: Vec<Option<ReadAs>> = match template {
+        Some(name) => {
+            let doc = Document::new(MemSource(src.0.clone()));
+            let mut ev = Evaluator::new(formats::template(name).unwrap());
+            let mut tab = Tab::new(&mut ev, &doc, Vec::new());
+            let found: Vec<Option<ReadAs>> =
+                hits.iter().map(|h| tab.read_as(h.at * 8, (h.at + h.len) * 8).ok().flatten()).collect();
+            let count = |k: &str| found.iter().flatten().filter(|r| r.kind.name() == k).count();
+            println!(
+                "{}  template {name}: inside numbers {}, code {}, packed {}  {:?}",
+                path.display(),
+                count("numbers"),
+                count("code"),
+                count("packed"),
+                start.elapsed() - took
+            );
+            found
+        }
+        None => vec![None; hits.len()],
+    };
     let mut mine = Totals::default();
     for h in &hits {
         mine.all += 1;
@@ -169,8 +197,11 @@ fn report(path: &Path, opts: Opts, mode: Mode, totals: &mut Totals) {
     match mode {
         Mode::Summary => {}
         Mode::List => {
-            for h in &hits {
-                println!("{}", one(h));
+            for (h, r) in hits.iter().zip(&read_as) {
+                match r {
+                    Some(r) => println!("{}  [in {}: {} {}]", one(h), r.name, r.what, r.kind.name()),
+                    None => println!("{}", one(h)),
+                }
             }
         }
         Mode::Odd => {

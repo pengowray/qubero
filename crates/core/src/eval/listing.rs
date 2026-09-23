@@ -515,6 +515,18 @@ impl Evaluator {
     /// The index of placed stretches is of the file, so a tab does without it
     /// and a bit its own fields do not cover is its root.
     pub(super) fn locate_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
+        self.locate_down(doc, root, bit, false)
+    }
+
+    /// The same, stopping at a run of numbers or instructions, or a packed
+    /// stream, rather than going on to the one element or block holding the
+    /// bit. Which instruction covers a byte takes decoding every one before
+    /// it, and which run it is in takes nothing. See [`Evaluator::read_as_under`].
+    pub(super) fn locate_run_under<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64) -> R<Vec<usize>> {
+        self.locate_down(doc, root, bit, true)
+    }
+
+    fn locate_down<S: Source>(&mut self, doc: &Document<S>, root: &[usize], bit: u64, runs: bool) -> R<Vec<usize>> {
         self.resolve(doc, root)?;
         let size = self.size_of(doc, root)?;
         let top = self.memo[root].clone();
@@ -522,7 +534,7 @@ impl Evaluator {
             return fail("past the end of the file");
         }
         let inside = top.offset <= bit && bit < top.offset + size;
-        let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit)? } else { (root.to_vec(), false) };
+        let (found, settled) = if inside { self.walk_down_to(doc, root.to_vec(), bit, runs)? } else { (root.to_vec(), false) };
         if !root.is_empty() {
             return Ok(found);
         }
@@ -553,7 +565,7 @@ impl Evaluator {
             if width >= widest {
                 break;
             }
-            let (deeper, settled) = self.walk_down_to(doc, placed, bit)?;
+            let (deeper, settled) = self.walk_down_to(doc, placed, bit, runs)?;
             if settled {
                 return Ok(deeper);
             }
@@ -571,7 +583,10 @@ impl Evaluator {
     /// Walk down from `path` to the deepest field covering `bit`, and say
     /// whether the walk ended on a field, rather than in a structure or a
     /// list none of whose children cover the bit.
-    fn walk_down_to<S: Source>(&mut self, doc: &Document<S>, mut path: Vec<usize>, bit: u64) -> R<(Vec<usize>, bool)> {
+    ///
+    /// With `runs`, a run of numbers or instructions, or a packed stream, is
+    /// where the walk ends.
+    fn walk_down_to<S: Source>(&mut self, doc: &Document<S>, mut path: Vec<usize>, bit: u64, runs: bool) -> R<(Vec<usize>, bool)> {
         loop {
             // The cursor stops at a decoded stream's *contents*: those are at
             // offsets of the decoded bytes, and no bit of the file is any one
@@ -581,6 +596,9 @@ impl Evaluator {
             // literal. For a codec whose trace has no blocks the run is still
             // the answer, whole.
             self.resolve(doc, &path)?;
+            if runs && self.not_text(&path).is_some() {
+                return Ok((path, true));
+            }
             if matches!(self.memo[&path].ty, Ty::Decoded { .. }) {
                 let blocks = self.child_count(doc, &path)? >= 2;
                 if blocks {
@@ -1396,82 +1414,109 @@ impl Evaluator {
         let scattered = matches!(r.ty, Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
             || self.has_pointing_field(&r.ty)
             || self.has_low_bit_first_field(&r.ty);
+        // A field that is a second reading of its bytes is asked only when no
+        // other field covers the bit. A SQLite freelist is read from the
+        // header before the pages, and the trunk it reaches is also a page of
+        // the run declared after it: the page is where those bytes belong. And
+        // a second reading may be a list the length of the file, which a bit
+        // that some page holds then never has to ask.
+        let later: Vec<usize> = match r.ty.base() {
+            Ty::Struct(s) => s.fields.iter().enumerate().filter(|(_, f)| f.aside).map(|(i, _)| i).collect(),
+            _ => Vec::new(),
+        };
         let mut p = path.to_vec();
-        for i in 0..n as usize {
-            p.push(i);
-            // A chain covers no bytes where it is declared, so asking how long
-            // it is says nothing about whether the bit is inside it: what
-            // covers bytes is the elements the walk found, wherever they are.
-            // Asking the chain itself is the same halving `child_at` does for
-            // any list of scattered children.
-            // A gather with no region of its own is the same. One a `Sized`
-            // made a region covers its bytes, and is asked the ordinary way.
-            let chain = match self.resolve(doc, &p) {
-                Ok(()) => {
-                    let r = &self.memo[&p];
-                    matches!(r.ty, Ty::Chain { .. }) || (matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_none())
-                }
-                Err(e) if scattered && !e.interrupted() => {
-                    p.pop();
-                    continue;
-                }
-                Err(e) => {
-                    p.pop();
-                    return Err(e);
-                }
-            };
-            if chain {
-                let inside = match self.child_count(doc, &p) {
-                    Ok(count) => self.child_at(doc, &p, count, bit),
-                    Err(e) => Err(e),
-                };
-                p.pop();
-                match inside {
-                    Ok(Some(_)) => return Ok(Some(i)),
-                    Err(e) if e.interrupted() => return Err(e),
-                    _ => continue,
-                }
+        for i in (0..n as usize).filter(|i| !later.contains(i)) {
+            match self.child_covers(doc, &mut p, i, bit, scattered)? {
+                Cover::Yes => return Ok(Some(i)),
+                Cover::Past => break,
+                Cover::No => {}
             }
-            let mut elsewhere = false;
-            let placed = match self.resolve(doc, &p) {
-                Ok(()) => match self.memo[&p].ty {
-                    // The field covers nothing where it is declared; what it
-                    // points at is what the cursor can be inside of.
-                    Ty::At { .. } => {
-                        elsewhere = true;
-                        p.push(0);
-                        let inner = match self.resolve(doc, &p) {
-                            Ok(()) => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
-                            Err(e) => Err(e),
-                        };
-                        p.pop();
-                        inner
-                    }
-                    _ => self.size_of(doc, &p).map(|size| (self.memo[&p].offset, size)),
-                },
-                Err(e) => Err(e),
-            };
-            p.pop();
-            let (off, size) = match placed {
-                Ok(v) => v,
-                Err(e) if scattered && !e.interrupted() => continue,
-                Err(e) => return Err(e),
-            };
-            // A child placed somewhere else says nothing about where the
-            // children declared after it are. `scattered` sees an `At` only
-            // when it is the declared field, and a template that follows an
-            // offset only when it is set writes a switch round it: a COFF
-            // object's symbol table is one, placed past the section data that
-            // is declared after it, and stopping there left every section's
-            // bytes reading as a gap.
-            if bit < off && !scattered && !elsewhere {
-                return Ok(None);
-            }
-            if bit >= off && bit < off + size {
+        }
+        for i in later {
+            if (i as u64) < n && matches!(self.child_covers(doc, &mut p, i, bit, scattered)?, Cover::Yes) {
                 return Ok(Some(i));
             }
         }
         Ok(None)
+    }
+
+    /// Whether child `i` of the node at `p` covers `bit`, for [`Self::child_at`]
+    /// looking at the children one at a time. `p` is the node's path and is
+    /// left as it was found.
+    ///
+    /// `Past` is a child that starts after the bit, in a node whose children
+    /// are in the order they sit in, so none of the rest can cover it either.
+    fn child_covers<S: Source>(&mut self, doc: &Document<S>, p: &mut Vec<usize>, i: usize, bit: u64, scattered: bool) -> R<Cover> {
+        p.push(i);
+        // A chain covers no bytes where it is declared, so asking how long
+        // it is says nothing about whether the bit is inside it: what
+        // covers bytes is the elements the walk found, wherever they are.
+        // Asking the chain itself is the same halving `child_at` does for
+        // any list of scattered children.
+        // A gather with no region of its own is the same. One a `Sized`
+        // made a region covers its bytes, and is asked the ordinary way.
+        let chain = match self.resolve(doc, p) {
+            Ok(()) => {
+                let r = &self.memo[p.as_slice()];
+                matches!(r.ty, Ty::Chain { .. }) || (matches!(r.ty, Ty::Gather { .. }) && r.declared_size.is_none())
+            }
+            Err(e) if scattered && !e.interrupted() => {
+                p.pop();
+                return Ok(Cover::No);
+            }
+            Err(e) => {
+                p.pop();
+                return Err(e);
+            }
+        };
+        if chain {
+            let inside = match self.child_count(doc, p) {
+                Ok(count) => self.child_at(doc, p, count, bit),
+                Err(e) => Err(e),
+            };
+            p.pop();
+            return match inside {
+                Ok(Some(_)) => Ok(Cover::Yes),
+                Err(e) if e.interrupted() => Err(e),
+                _ => Ok(Cover::No),
+            };
+        }
+        let mut elsewhere = false;
+        let placed = match self.resolve(doc, p) {
+            Ok(()) => match self.memo[p.as_slice()].ty {
+                // The field covers nothing where it is declared; what it
+                // points at is what the cursor can be inside of.
+                Ty::At { .. } => {
+                    elsewhere = true;
+                    p.push(0);
+                    let inner = match self.resolve(doc, p) {
+                        Ok(()) => self.size_of(doc, p).map(|size| (self.memo[p.as_slice()].offset, size)),
+                        Err(e) => Err(e),
+                    };
+                    p.pop();
+                    inner
+                }
+                _ => self.size_of(doc, p).map(|size| (self.memo[p.as_slice()].offset, size)),
+            },
+            Err(e) => Err(e),
+        };
+        p.pop();
+        let (off, size) = match placed {
+            Ok(v) => v,
+            Err(e) if scattered && !e.interrupted() => return Ok(Cover::No),
+            Err(e) => return Err(e),
+        };
+        // A child placed somewhere else says nothing about where the
+        // children declared after it are. `scattered` sees an `At` only
+        // when it is the declared field, and a template that follows an
+        // offset only when it is set writes a switch round it: a COFF
+        // object's symbol table is one, placed past the section data that
+        // is declared after it, and stopping there left every section's
+        // bytes reading as a gap.
+        if bit < off && !scattered && !elsewhere {
+            return Ok(Cover::Past);
+        }
+        Ok(if bit >= off && bit < off + size { Cover::Yes } else { Cover::No })
     }
 
     /// Whether a structure has a field whose contents are somewhere else in
@@ -1569,4 +1614,12 @@ impl Evaluator {
         let end = self.memo[&p].offset + self.size_of(doc, &p)?;
         Ok((end <= bit).then_some(end))
     }
+}
+
+/// What [`Evaluator::child_covers`] found out about one child.
+enum Cover {
+    Yes,
+    No,
+    /// Starts after the bit, among children in the order they sit in.
+    Past,
 }

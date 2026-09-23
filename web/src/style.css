@@ -2907,6 +2907,17 @@ qubero-spinner svg {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Inside what the template reads as numbers, code or packed data, where
+   printable bytes turn up by chance. Dimmed rather than marked, like a weak
+   length prefix: in an executable these are half the list. */
+.sv-row.is-inside .sv-text {
+  opacity: 0.55;
+}
+/* The name of the field a string is inside, in code type so that `samples`
+   reads as a name rather than a word. */
+.sv-field {
+  font-family: var(--mono);
+}
 /* The zero that ends the string, drawn as its control picture. Attached to the
    text rather than spaced off it: it is where the string stops. */
 .sv-nul {
@@ -2962,12 +2973,14 @@ qubero-spinner svg {
 .sv-note.is-weak {
   opacity: 0.55;
 }
-.sv-prefix {
+.sv-prefix,
+.sv-open {
   cursor: pointer;
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
-.sv-prefix:hover {
+.sv-prefix:hover,
+.sv-open:hover {
   color: var(--fg);
 }
 /* Far right, so a length prefix has the number it claims to be to sit beside. */

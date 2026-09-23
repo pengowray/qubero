@@ -5720,3 +5720,44 @@ fn a_name_that_is_a_path_is_read_from_where_the_path_lands() {
     // `body.name`, and a group has no field called `name`.
     assert_eq!(ev.node(&d, &[1]).unwrap().name, "deep");
 }
+
+#[test]
+fn read_as_names_the_run_of_numbers_or_code_a_stretch_is_inside() {
+    use crate::code::Isa;
+    use crate::template::Until;
+    // A name, a run of samples, some x86-64 code, and a stored stream.
+    let mut b = b"NAME".to_vec();
+    b.extend([0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]);
+    // push r15; push r14; push r13; push r12; ret
+    b.extend([0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0xc3]);
+    let t = Template::new(
+        "t",
+        T::structure(
+            "Root",
+            vec![
+                ("name", T::utf8(E::lit(4))),
+                ("samples", T::array(Ty::Int { bits: 16, endian: Little }, E::lit(4))),
+                ("code", T::sized(E::lit(9), T::repeat(T::insn(Isa::X86_64), Until::End))),
+            ],
+        ),
+    );
+    let d = doc(&b);
+    let mut ev = Evaluator::new(t);
+
+    let text = ev.read_as_under(&d, &[], 0, 4 * 8).unwrap();
+    assert_eq!(text, None);
+
+    let samples = ev.read_as_under(&d, &[], 5 * 8, 11 * 8).unwrap().unwrap();
+    assert_eq!(samples.kind, NotText::Numbers);
+    assert_eq!((samples.name.as_str(), samples.what.as_str()), ("samples", "i16 le"));
+    assert_eq!((samples.offset_bits, samples.size_bits), (4 * 8, 8 * 8));
+
+    let code = ev.read_as_under(&d, &[], 12 * 8, 20 * 8).unwrap().unwrap();
+    assert_eq!(code.kind, NotText::Code);
+    assert_eq!((code.name.as_str(), code.what.as_str()), ("code", "x86-64"));
+
+    // From the last sample into the code is inside neither.
+    assert_eq!(ev.read_as_under(&d, &[], 10 * 8, 14 * 8).unwrap(), None);
+    // Nor is the name and the first sample together.
+    assert_eq!(ev.read_as_under(&d, &[], 2 * 8, 6 * 8).unwrap(), None);
+}

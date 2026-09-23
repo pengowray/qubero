@@ -17,7 +17,7 @@
 // arithmetic, and it is what makes a list of two hundred thousand strings
 // scroll like a list of twenty.
 
-import type { Doc, StringEncoding, StringHit, StringScanOpts } from "./doc.ts";
+import type { Doc, StringEncoding, StringHit, StringInsideKind, StringScanOpts } from "./doc.ts";
 import { formatOffset } from "./format.ts";
 import { STRINGSVIEW as SV } from "./strings.ts";
 
@@ -54,6 +54,7 @@ export const MIN_CHARS_DEFAULT = 4;
 
 export const MIN_CHARS_KEY = "qubero.strings.min";
 export const ENCODINGS_KEY = "qubero.strings.encodings";
+export const HIDE_INSIDE_KEY = "qubero.strings.hideInside";
 
 /** The readings on offer, in the order the toggles appear. */
 export const ENCODINGS: readonly StringEncoding[] = ["ascii", "utf16le", "utf16be"];
@@ -82,6 +83,12 @@ export class StringsView {
    *  them" is a list nobody needs. */
   private shown: number[] | null = null;
   private filterText = "";
+  /** How many of the strings found lie inside a run the template reads as
+   *  numbers, code or packed data, by which. */
+  private inside: Record<StringInsideKind, number> = { numbers: 0, code: 0, packed: 0 };
+  /** True when those strings are left out of the list. They are still
+   *  counted, and the status line says how many. */
+  private hideInside = false;
 
   /** Where the next scan call carries on from. */
   private next = 0;
@@ -116,6 +123,9 @@ export class StringsView {
    *  address on screen is one a reader will want to look at. Its own bytes,
    *  so the panel reads the number out the way it reads out the string. */
   onPickPrefix: (at: number, len: number) => void = () => {};
+  /** A string inside packed data was asked about. Its text is in what the data
+   *  unpacks to, which has a strings view of its own once it is open. */
+  onOpenUnpacked: (path: readonly number[]) => void = () => {};
 
   constructor(doc: Doc) {
     this.doc = doc;
@@ -170,6 +180,21 @@ export class StringsView {
     this.restart();
   }
 
+  /** Leave out the strings inside runs the template reads as numbers, code
+   *  or packed data. Only the list changes: they are still found and counted. */
+  setHideInside(hide: boolean): void {
+    if (hide === this.hideInside) return;
+    this.hideInside = hide;
+    this.refilter();
+    this.paintAgain();
+    this.tellStatus();
+  }
+
+  /** The marks depend on the template, so a new one means looking again. */
+  templateChanged(): void {
+    this.restart();
+  }
+
   /** Show only the strings holding this text. The scan is not affected: the
    *  filter is over what has been found, and what has not been found yet
    *  arrives filtered as it comes. */
@@ -195,6 +220,7 @@ export class StringsView {
     this.busy = false;
     this.hits = [];
     this.shown = null;
+    this.inside = { numbers: 0, code: 0, packed: 0 };
     this.next = 0;
     this.done = false;
     this.at = -1;
@@ -254,7 +280,9 @@ export class StringsView {
         if (mine !== this.generation) return;
         // No answer and no progress: the chunks it wanted did not come, so
         // there is nothing to do but stop and let the next change wake it.
-        if (scan.next === this.next && scan.hits.length === 0) {
+        // A template that ran out of time has made progress of its own, and
+        // is asked again.
+        if (scan.next === this.next && scan.hits.length === 0 && scan.busy !== true) {
           this.done = true;
           break;
         }
@@ -275,26 +303,41 @@ export class StringsView {
     const room = MAX_HITS - this.hits.length;
     const take = hits.length <= room ? hits : hits.slice(0, room);
     const first = this.hits.length;
-    for (const h of take) this.hits.push(h);
+    for (const h of take) {
+      this.hits.push(h);
+      if (h.inside !== null) this.inside[h.inside.kind] += 1;
+    }
     if (this.shown !== null) {
-      const needle = this.filterText.toLowerCase();
+      const keep = this.keeps();
       take.forEach((h, i) => {
-        if (h.text.toLowerCase().includes(needle)) this.shown?.push(first + i);
+        if (keep(h)) this.shown?.push(first + i);
       });
     }
   }
 
+  /** Which strings the list shows, given the filter and the hiding. */
+  private keeps(): (h: StringHit) => boolean {
+    const needle = this.filterText.toLowerCase();
+    const hide = this.hideInside;
+    return (h) => (!hide || h.inside === null) && (needle === "" || h.text.toLowerCase().includes(needle));
+  }
+
   private refilter(): void {
-    if (this.filterText === "") {
+    if (this.filterText === "" && !this.hideInside) {
       this.shown = null;
       return;
     }
-    const needle = this.filterText.toLowerCase();
+    const keep = this.keeps();
     const out: number[] = [];
     this.hits.forEach((h, i) => {
-      if (h.text.toLowerCase().includes(needle)) out.push(i);
+      if (keep(h)) out.push(i);
     });
     this.shown = out;
+  }
+
+  /** Strings inside runs the template reads as numbers, code or packed data. */
+  private get insideCount(): number {
+    return this.inside.numbers + this.inside.code + this.inside.packed;
   }
 
   // ---- drawing ----------------------------------------------------------
@@ -351,6 +394,9 @@ export class StringsView {
    *  the ones with something in the margin. */
   private drawRow(hit: StringHit, index: number, on: boolean): HTMLElement {
     const row = el("div", on ? "sv-row is-on" : "sv-row");
+    // Dimmed rather than marked: in an executable these are half the list,
+    // and this view's rule is that the common case gets quieter, never louder.
+    if (hit.inside !== null) row.classList.add("is-inside");
     const at = el("span", "sv-at", formatOffset(hit.at * 8));
     at.title = SV.offsetTitle;
     row.append(at);
@@ -368,6 +414,21 @@ export class StringsView {
     }
 
     const notes = el("span", "sv-notes");
+    // First, because it says what the rest of the row is worth: a length in
+    // front of a string that is really four bytes of a sample is a sample too.
+    if (hit.inside !== null) {
+      const said = SV.inside(hit.inside.what);
+      // Packed data opens as a document of its own, whose strings are the text
+      // this string is a scrap of, so that note is a button. The others say
+      // where the string is and nothing more.
+      const packed = hit.inside.kind === "packed";
+      const n = packed ? el("button", "sv-note sv-open") : el("span", "sv-note");
+      if (n instanceof HTMLButtonElement) n.type = "button";
+      if (packed) n.dataset["unpacked"] = hit.inside.path.join(".");
+      n.append(said.before, el("span", "sv-field", hit.inside.name), said.after);
+      n.title = SV.insideTitle(hit.inside.kind, hit.inside.name, hit.inside.what, hit.inside.at, hit.inside.len);
+      notes.append(n);
+    }
     const first = hit.prefix[0];
     if (first !== undefined) {
       // Only the readings that come to the same number are folded into one
@@ -438,8 +499,16 @@ export class StringsView {
       this.progress.hidden = true;
       return;
     }
-    const count =
-      this.filterText === "" ? SV.statusFound(this.hits.length) : SV.statusFiltered(this.rows, this.hits.length);
+    const hidden = this.hideInside ? this.insideCount : 0;
+    const listed = this.hits.length - hidden;
+    let count =
+      this.filterText === "" ? SV.statusFound(listed) : SV.statusFiltered(this.rows, listed);
+    if (hidden > 0) {
+      if (this.filterText === "") count = SV.statusShown(listed);
+      count += ` \u00b7 ${SV.statusHidden(hidden, this.inside)}`;
+    } else if (this.insideCount > 0 && this.filterText === "") {
+      count += ` ${SV.statusInside(this.inside)}`;
+    }
     const where = capped
       ? SV.statusCapped(scanned, total)
       : this.done
@@ -509,6 +578,11 @@ export class StringsView {
     if (!(target instanceof Element)) return;
     // The number in front of a string names an address of its own, so
     // clicking it goes there rather than to the text it counts.
+    const unpacked = target.closest<HTMLElement>(".sv-open")?.dataset["unpacked"];
+    if (unpacked !== undefined) {
+      this.onOpenUnpacked(unpacked === "" ? [] : unpacked.split(".").map(Number));
+      return;
+    }
     const button = target.closest<HTMLElement>(".sv-prefix");
     const prefix = button?.dataset["prefix"];
     if (prefix !== undefined) {

@@ -16,7 +16,7 @@ import { parseSize, syntheticFile } from "./synthetic.ts";
 import { ListingReport } from "./listingreport.ts";
 import { ListPane } from "./listpane.ts";
 import { TextView } from "./textview.ts";
-import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY } from "./stringsview.ts";
+import { StringsView, ENCODINGS, MIN_CHARS_DEFAULT, MIN_CHARS_KEY, ENCODINGS_KEY, HIDE_INSIDE_KEY } from "./stringsview.ts";
 import { Crystal } from "./crystal.ts";
 import { OverviewPanel } from "./overviewpanel.ts";
 import { Tabs, type Page, type Tab } from "./tabs.ts";
@@ -728,6 +728,7 @@ function buildDocument(tab: Tab): Page {
   };
   structure.onOpenUnpacked = openUnpacked;
   inspector.onOpenUnpacked = openUnpacked;
+  strings.onOpenUnpacked = openUnpacked;
   /** Open one list as a table of its own, or bring the table already open on
    *  it to the front. The rows are read where they are asked for, so a second
    *  ask for the same list is the same tab rather than the same work twice. */
@@ -1320,6 +1321,22 @@ function buildDocument(tab: Tab): Page {
     return box;
   });
   strings.setReading(ENCODINGS.filter((e) => wanted.has(e)));
+  // Whether to leave out the strings a template reads as numbers, code or
+  // packed data. Off until asked: text inside what a template calls samples
+  // can be the template reading the wrong bytes, and hiding it would hide that.
+  const hideInside = el("input", { type: "checkbox" });
+  hideInside.checked = storedText(HIDE_INSIDE_KEY) === "1";
+  strings.setHideInside(hideInside.checked);
+  hideInside.addEventListener("change", () => {
+    strings.setHideInside(hideInside.checked);
+    rememberChoice(HIDE_INSIDE_KEY, hideInside.checked ? "1" : "0");
+  });
+  const hideInsideBox = el(
+    "label",
+    { className: "tb-check", title: STRINGSVIEW.hideInsideTitle },
+    hideInside,
+    el("span", { textContent: STRINGSVIEW.hideInsideToggle }),
+  );
   const filter = el("input", { className: "tb-filter", type: "search" });
   filter.placeholder = STRINGSVIEW.filterPlaceholder;
   filter.title = STRINGSVIEW.filterTitle;
@@ -1386,7 +1403,7 @@ function buildDocument(tab: Tab): Page {
   /** Controls that only mean anything over the text. */
   const textOnly = [encoding, wrapping, reading, endings];
   /** Controls that only mean anything over the strings list. */
-  const stringsOnly = [minBox, readingBox, filter];
+  const stringsOnly = [minBox, readingBox, hideInsideBox, filter];
   /** True while the listing is showing, which is also while the hex grid's
    *  editing state is not the user's to act on. */
   let listingShowing = false;
@@ -1808,6 +1825,8 @@ function buildDocument(tab: Tab): Page {
     for (const c of hexOnly) c.hidden = which !== "hex";
     for (const c of textOnly) c.hidden = !textOn;
     for (const c of stringsOnly) c.hidden = !stringsOn;
+    // Only a template says which bytes are numbers or code.
+    hideInsideBox.hidden = !stringsOn || doc.template === null;
     for (const [btn, on] of [
       [hexBtn, which === "hex"],
       [listBtn, listingOn],
@@ -1941,6 +1960,7 @@ function buildDocument(tab: Tab): Page {
     endings,
     minBox,
     readingBox,
+    hideInsideBox,
     filter,
     saveMsg,
     el("span", { className: "tb-spacer" }),
@@ -2027,6 +2047,8 @@ function buildDocument(tab: Tab): Page {
       // stops at the limit again until the reader asks.
       keepCounting = false;
       syncColumn();
+      strings.templateChanged();
+      hideInsideBox.hidden = strings.el.hidden || doc.template === null;
       // The diagram is a picture of the template and of nothing else, so a new
       // template is the one thing that changes it. Only while it is showing:
       // laying it out behind a hidden view costs a layout nobody is looking at.

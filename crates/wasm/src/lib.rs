@@ -3706,8 +3706,9 @@ impl Editor {
     /// Name of the built-in template matching these leading bytes, or "".
     /// `file_len` is the length of the whole file, which a format whose
     /// header is a table of offsets weighs its pointers against. `name` is
-    /// the file's name, asked only when the bytes fit two bundled formats
-    /// that share a magic, as `.shp` and `.shx` do.
+    /// the file's name, which picks between two bundled formats that share a
+    /// magic, as `.shp` and `.shx` do, and claims a format with no signature,
+    /// as `.tga` or `.bson`, when the bytes agree with it.
     pub fn sniff_template(&self, head: &[u8], file_len: f64, name: &str) -> String {
         formats::sniff_named(head, file_len as u64, name).unwrap_or("").to_string()
     }
@@ -5566,6 +5567,10 @@ impl Editor {
     /// the usual tri-state: strings, or the chunks it needs before it can
     /// answer. `next` is where the caller carries on from, which is not the
     /// end of the last string when the scan stopped for want of hits.
+    ///
+    /// Where a template reads the space, each string also says whether it lies
+    /// inside a run the template reads as numbers or instructions, or a packed
+    /// stream. See `strings_inside`.
     pub fn strings_scan(&mut self, space: u32, from: f64, want: u32, min_chars: u32, encodings: &str) -> String {
         self.open_again(space);
         use qubero_core::stringscan;
@@ -5577,14 +5582,17 @@ impl Editor {
             utf16le: pick("utf16le"),
             utf16be: pick("utf16be"),
         };
-        let s = stringscan::scan(&sh.doc, from as u64, want as usize, opts);
+        let mut s = stringscan::scan(&sh.doc, from as u64, want as usize, opts);
+        let (inside, busy) = self.strings_inside(space, &mut s);
         serde_json::to_string(&StringsScanDto {
             next: s.next as f64,
             missing: s.missing.iter().map(|m| m.chunk as f64).collect(),
+            busy,
             hits: s
                 .hits
                 .iter()
-                .map(|h| StringHitDto {
+                .zip(inside)
+                .map(|(h, inside)| StringHitDto {
                     at: h.at as f64,
                     len: h.len as f64,
                     enc: h.enc.name().to_string(),
@@ -5594,6 +5602,7 @@ impl Editor {
                     lone_surrogates: h.lone_surrogates,
                     terminator: h.term.map_or(0, |t| t.bytes()) as u32,
                     cut: h.cut,
+                    inside,
                     prefix: h
                         .prefix
                         .iter()
@@ -5611,6 +5620,59 @@ impl Editor {
                 .collect(),
         })
         .unwrap_or_default()
+    }
+
+    /// Which of the strings a scan found lie inside a run the template reads as
+    /// numbers or instructions, or a packed stream, one answer per string.
+    /// Nothing for any of them when the space has no template.
+    ///
+    /// A template that has to read more of the file before it can say, or that
+    /// runs out of the time one call is allowed, answers for the strings in
+    /// front of the one it stopped at, and the rest are left for the next call:
+    /// the scan is cut there, the way a scan that found more strings than were
+    /// asked for is. Where it stopped at the first, the scan gives nothing
+    /// back, with the chunks to fetch or with `busy` set, and is asked again.
+    fn strings_inside(&mut self, space: u32, s: &mut qubero_core::stringscan::Scan) -> (Vec<Option<StringInsideDto>>, bool) {
+        if !s.missing.is_empty() || s.hits.is_empty() {
+            return (Vec::new(), false);
+        }
+        let Ok(mut tab) = self.tab(space) else { return (vec![None; s.hits.len()], false) };
+        tab.ev.begin_slice();
+        let mut out: Vec<Option<StringInsideDto>> = Vec::with_capacity(s.hits.len());
+        for h in &s.hits {
+            match tab.read_as(h.at * 8, (h.at + h.len) * 8) {
+                Ok(found) => out.push(found.map(|r| StringInsideDto {
+                    kind: r.kind.name().to_string(),
+                    path: r.path,
+                    name: r.name,
+                    what: r.what,
+                    at: (r.offset_bits / 8) as f64,
+                    len: r.size_bits.div_ceil(8) as f64,
+                })),
+                Err(e) if e.interrupted() => {
+                    let busy = matches!(e, EvalError::Busy { .. });
+                    match out.len() {
+                        0 => {
+                            s.next = s.hits.first().map_or(s.next, |h| h.at);
+                            s.hits.clear();
+                            s.missing = match e {
+                                EvalError::Pending(m) => m,
+                                _ => Vec::new(),
+                            };
+                        }
+                        n => {
+                            s.hits.truncate(n);
+                            s.next = s.hits.last().map_or(s.next, |h| h.at + h.len);
+                        }
+                    }
+                    return (out, busy && s.hits.is_empty());
+                }
+                // A template that cannot read these bytes says nothing about
+                // them either way.
+                Err(_) => out.push(None),
+            }
+        }
+        (out, false)
     }
 
     /// What a selected run of bytes says, read every way text can be read.
@@ -5787,6 +5849,25 @@ struct StringsScanDto {
     hits: Vec<StringHitDto>,
     missing: Vec<f64>,
     next: f64,
+    /// True when the template ran out of time before it could say anything
+    /// about the first string, so nothing came back and the caller asks again.
+    busy: bool,
+}
+
+/// The run a string lies inside, where the template reads it as numbers or
+/// instructions, or as a packed stream.
+#[derive(Serialize, Clone)]
+struct StringInsideDto {
+    /// `numbers`, `code` or `packed`.
+    kind: String,
+    /// The run, or the stream: what opens a packed one in a tab of its own.
+    path: Vec<usize>,
+    /// The run's name, as the listing gives it.
+    name: String,
+    /// What one element is, such as `i16 le` or `x86-64`, or the codec.
+    what: String,
+    at: f64,
+    len: f64,
 }
 
 #[derive(Serialize)]
@@ -5802,6 +5883,7 @@ struct StringHitDto {
     terminator: u32,
     cut: bool,
     prefix: Vec<StringPrefixDto>,
+    inside: Option<StringInsideDto>,
 }
 
 #[derive(Serialize)]

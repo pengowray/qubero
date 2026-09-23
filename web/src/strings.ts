@@ -4,7 +4,7 @@
 import { ADDRESS_MARK, formatBytes, formatOffset } from "./format.ts";
 // Type only, and erased: `doc.ts` imports this file at run time, and the
 // clause tables below are keyed by the words the core sends in `Shape`.
-import type { FieldTime, Shape } from "./doc.ts";
+import type { FieldTime, Shape, StringInsideKind } from "./doc.ts";
 
 /** What a stretch of bytes no field covers is called. `Unmapped` makes it
  * clear that the bytes still exist; only the selected template has no
@@ -3461,6 +3461,11 @@ export const STRINGSVIEW = {
     utf16be:
       "UTF-16, big-endian, searched for at every byte offset. A match is found only when the bytes around it mark it as a string: a null terminator after it, or a length prefix of more than 2 bytes in front. Not found: unterminated text with no length prefix, and text that is only CJK or kana, since those code units are also pairs of ASCII letters. Read those in the Text view with UTF-16 BE chosen.",
   } as Readonly<Record<string, string>>,
+  /** Only offered when a template is reading the file, since it is the
+   *  template that says which bytes are numbers or code. */
+  hideInsideToggle: "Hide strings inside numeric data, machine code or compressed data",
+  hideInsideTitle:
+    "Hide strings that lie inside fields the template reads as numeric data, machine code or compressed data. Printable bytes appear in such fields by chance. The status line still counts them.",
   /** "Filter" alone, beside the app's Find, would be taken for it. */
   filterPlaceholder: "Filter strings",
   filterLabel: "Filter strings by text",
@@ -3547,6 +3552,27 @@ export const STRINGSVIEW = {
     return lines.join("\n");
   },
 
+  /** A string inside a run the template reads as numbers, code or packed
+   *  data: which field, then what one element of it is. The field name is set
+   *  in code type by the view, so `in samples` does not read as English. */
+  inside: (what: string): { readonly before: string; readonly after: string } => ({
+    before: "in ",
+    after: ` (${what})`,
+  }),
+  /** Field names are quoted here, since a tooltip has no code type: `Inside
+   *  data, which the template reads as compressed data` says data twice. */
+  insideTitle: (kind: StringInsideKind, name: string, what: string, at: number, len: number): string => {
+    const where = `${what}, ${formatBytes(len)} at ${formatOffset(at * 8)}`;
+    switch (kind) {
+      case "numbers":
+        return `Inside "${name}", which the template reads as numeric data (${where}). Numeric data often contains printable bytes by chance. If this is real text, the template may be reading the wrong bytes.`;
+      case "code":
+        return `Inside "${name}", which the template reads as machine code (${where}). Machine code often contains printable bytes by chance.`;
+      case "packed":
+        return `Inside "${name}", which the template reads as compressed data (${where}). Compressed data often contains printable bytes by chance. Click to open the unpacked data in a tab of its own, which has its own Strings view.`;
+    }
+  },
+
   /** A UTF-16 surrogate with no partner. The real term on the row; the name
    *  for the encoding that allows it goes in the tooltip, where there is room
    *  to say what it is. */
@@ -3582,6 +3608,14 @@ export const STRINGSVIEW = {
   statusFound: (n: number): string => (n === 0 ? "No strings yet" : countText(n, "string")),
   statusFiltered: (shown: number, n: number): string =>
     `${shown.toLocaleString()} of ${countText(n, "string")} match`,
+  /** The strings inside numbers, code and packed data, after the count of all
+   *  of them. Said by kind, because "in code" and "in numbers" send a reader
+   *  to different conclusions. */
+  statusInside: (counts: Readonly<Record<StringInsideKind, number>>): string => `(${insideKinds(counts, true)})`,
+  /** The count when some are hidden, so it does not read as every string. */
+  statusShown: (n: number): string => (n === 0 ? "No strings shown" : `${countText(n, "string")} shown`),
+  statusHidden: (hidden: number, counts: Readonly<Record<StringInsideKind, number>>): string =>
+    `${hidden.toLocaleString()} hidden (${insideKinds(counts, false)})`,
   statusScanning: (scanned: number, total: number): string =>
     `first ${formatBytes(scanned)} of ${formatBytes(total)} scanned…`,
   statusWhole: "whole file scanned",
@@ -3596,6 +3630,22 @@ export const STRINGSVIEW = {
   scanProgressLabel: (scanned: number, total: number): string =>
     `Scanned ${formatBytes(scanned)} of ${formatBytes(total)}`,
 };
+
+/** "27 in numeric data, 4 in machine code", leaving out the kinds with none.
+ *  Without the "in" after "hidden", which would read as hidden in the code,
+ *  and without the count there when there is one kind, since it is the count
+ *  already in front. */
+function insideKinds(counts: Readonly<Record<StringInsideKind, number>>, inside: boolean): string {
+  const words: Record<StringInsideKind, string> = {
+    numbers: "numeric data",
+    code: "machine code",
+    packed: "compressed data",
+  };
+  const kinds = (["numbers", "code", "packed"] as const).filter((k) => counts[k] > 0);
+  // "8,727 hidden (machine code)": one kind needs no second count.
+  if (!inside && kinds.length === 1 && kinds[0] !== undefined) return words[kinds[0]];
+  return kinds.map((k) => `${counts[k].toLocaleString()} ${inside ? "in " : ""}${words[k]}`).join(", ");
+}
 
 /** One reading of the bytes in front of a string, as the view hands it over. */
 export type PrefixReading = {
