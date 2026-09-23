@@ -87,6 +87,14 @@ fn report(file: &str, named: Option<String>, slice: Option<u64>) {
     println!("-- profile of the file");
     print_profile(&walk.profile());
 
+    // The kind totals over the same file, which the ledger's walk follows:
+    // covered bits past the file's length are a stretch the template reads
+    // twice, and show in the ledger too.
+    let mut kinds_ev = Evaluator::new(formats::template(&name).expect("the same template"));
+    let mut kinds = qubero_core::eval::KindWalk::new(len);
+    if let Ok(k) = kinds_ev.kind_totals_step(&doc, &mut kinds) {
+        println!("-- kind totals: {} covered, {} unmapped, {} reached", k.covered_bits, k.unmapped_bits, k.reached_bits);
+    }
     let l = walk.ledger();
     println!("-- ledger: {} of {} bits counted, done {}", l.counted_bits, l.file_bits, l.done);
     for r in &l.rows {

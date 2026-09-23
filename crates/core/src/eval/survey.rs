@@ -494,6 +494,31 @@ fn choice_in<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
     None
 }
 
+/// The same, and through an address too: a record whose field points at a
+/// choice made by its tag, as a font's table directory entry points at the
+/// table its tag names, is that kind of record.
+fn choice_placed<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
+    let mut ty = ty;
+    for _ in 0..16 {
+        ty = match ty {
+            Ty::At { inner, .. } => inner,
+            other => return choice_in(t, other).or_else(|| match other {
+                Ty::Named(n) => t.types.get(&**n).and_then(|inner| matches!(inner, Ty::At { .. }).then_some(inner)).and_then(|inner| choice_placed_once(t, inner)),
+                _ => None,
+            }),
+        };
+    }
+    None
+}
+
+/// One step of [`choice_placed`] through a named address.
+fn choice_placed_once<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
+    match ty {
+        Ty::At { inner, .. } => choice_in(t, inner),
+        _ => None,
+    }
+}
+
 /// The structures whose fields are top-level parts, from the root down: see
 /// `Follow::part_chain`. Empty for a root that is not a structure, whose
 /// parts are not its children but the root itself.
@@ -533,7 +558,7 @@ fn part_chain<S: Source>(ev: &mut Evaluator, doc: &Document<S>, root: &[usize]) 
 /// Whether a field is a choice between records, rather than between ways of
 /// writing one value.
 fn picks_shape(t: &Template, ty: &Ty) -> bool {
-    let cases: Vec<&Ty> = match choice_in(t, ty) {
+    let cases: Vec<&Ty> = match choice_placed(t, ty) {
         Some(Ty::Switch { cases, default, .. }) => cases.iter().map(|(_, c)| c).chain(std::iter::once(&**default)).collect(),
         Some(Ty::Match { cases, default, .. }) => cases.iter().map(|(_, c)| c).chain(std::iter::once(&**default)).collect(),
         _ => return false,
@@ -687,6 +712,7 @@ impl<S: Source> Watch<S> for Follow {
                 let pr = &ev.memo[up];
                 let declared = match &pr.ty {
                     Ty::Struct(s) => s.fields.get(idx).map(|f| &f.ty),
+                    Ty::At { inner, .. } => Some(&**inner),
                     other => element_of(other),
                 };
                 declared.filter(|d| choice_in(&t, d).is_some()).map(|d| {
@@ -1065,7 +1091,7 @@ impl Follow {
 /// element itself when the element is the choice.
 #[allow(clippy::too_many_arguments)]
 fn variant<S: Source>(ev: &mut Evaluator, doc: &Document<S>, t: &Template, path: &[usize], r: &Resolved, decl: &Ty, at: &[usize], taken: &Ty) -> R<(String, &'static str)> {
-    let on = match choice_in(t, decl) {
+    let on = match choice_placed(t, decl) {
         Some(Ty::Switch { on: Expr::Ref(name), .. }) | Some(Ty::Match { on: Expr::Ref(name), .. }) => Some(name.clone()),
         _ => None,
     };
