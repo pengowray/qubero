@@ -45,6 +45,7 @@ pub(crate) use pickletorch::element_ty;
 mod pickletree;
 mod placed;
 mod problem;
+mod profile;
 mod expr;
 mod read;
 mod relate;
@@ -60,6 +61,7 @@ mod time;
 mod traced;
 mod valid;
 mod walk;
+mod watch;
 
 #[cfg(test)]
 mod tests;
@@ -78,6 +80,7 @@ pub use valid::ValidVerdict;
 pub use table::TableShapeInfo;
 pub use time::{leap_seconds, Moment, TimeInfo, TimeNote, FIRST_SECOND, LAST_SECOND};
 pub use kinds::{KindTotal, KindTotals, KindWalk};
+pub use profile::{template_profile, ChoiceUse, Profile, ProfileFacts, ProfileRow};
 pub use listing::{magic_reading, Span, SpanPart};
 pub use relate::write_expr;
 pub use schema::Descriptions;
