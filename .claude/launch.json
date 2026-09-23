@@ -44,6 +44,16 @@
       "cwd": "web",
       "port": 17275,
       "autoPort": true
+    },
+    {
+      "name": "reports",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "python3 -m http.server ${PORT:-17290} --bind 127.0.0.1 -d ../qubero2-extras/reports"
+      ],
+      "port": 17290,
+      "autoPort": true
     }
   ]
 }
