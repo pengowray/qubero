@@ -84,3 +84,7 @@ optional = true
 version = "0.3.1"
 features = []
 default-features = false
+
+# Qubero: upstream builds with these warnings; a path dependency shows them.
+[lints.rust]
+dead_code = "allow"

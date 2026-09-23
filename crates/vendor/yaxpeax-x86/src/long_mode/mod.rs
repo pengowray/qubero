@@ -5855,7 +5855,11 @@ fn read_operands<
         match z_operand_code.category() {
             0 => {
                 // these are Zv_R
-                let bank = bank_from_prefixes_64(SizeCode::vq, instruction.prefixes);
+                // Qubero: push and pop are 64-bit unless 66 makes them 16-bit,
+                // but bswap is sized like most instructions: 32-bit unless
+                // REX.W makes it 64. `41 0f c8` is `bswap r8d`, not `bswap r8`.
+                let size = if instruction.opcode == Opcode::BSWAP { SizeCode::vqp } else { SizeCode::vq };
+                let bank = bank_from_prefixes_64(size, instruction.prefixes);
                 instruction.regs[0] =
                     RegSpec::from_parts(reg, instruction.prefixes.rex_unchecked().b(), bank);
                 instruction.mem_size = 8;
@@ -7925,11 +7929,18 @@ fn read_operands<
             }
         },
         OperandCase::G_xmm_Eq => {
+            // Qubero: this is `66 0f 6e`, which is movd and reads 32 bits
+            // unless REX.W makes it movq, the mirror of `Edq_G_xmm` above.
+            // `66 0f 6e e8` is `movd xmm5, eax`.
             instruction.regs[0].bank = RegisterBank::X;
+            let quad = instruction.prefixes.rex_unchecked().w();
+            if !quad {
+                instruction.opcode = Opcode::MOVD;
+            }
             if mem_oper == OperandSpec::RegMMM {
-                instruction.regs[1].bank = RegisterBank::Q;
+                instruction.regs[1].bank = if quad { RegisterBank::Q } else { RegisterBank::D };
             } else {
-                instruction.mem_size = 8;
+                instruction.mem_size = if quad { 8 } else { 4 };
             }
         },
         OperandCase::G_mm_E_xmm => {
@@ -8896,7 +8907,9 @@ fn read_operands<
             }
         }
         OperandCase::ModRM_0x0fba => {
-            let bank = bank_from_prefixes_64(SizeCode::vq, instruction.prefixes);
+            // Qubero: bt, bts, btr and btc with an immediate are 32-bit unless
+            // REX.W makes them 64. `0f ba e0 0b` is `bt eax, 0xb`.
+            let bank = bank_from_prefixes_64(SizeCode::vqp, instruction.prefixes);
             let modrm = read_modrm(words)?;
             let r = (modrm >> 3) & 7;
             const TBL: [Opcode; 8] = [
