@@ -30,6 +30,7 @@ pub(crate) fn decoded_object() -> T {
     T::structure_named("DecodedObject", "", "object", vec![("object", T::bytes(E::Remaining))])
 }
 
+pub mod about;
 mod adios;
 mod aiff;
 mod ar;
