@@ -455,8 +455,8 @@ are Qubero's. Each is described in the notes file named.
 | Where | What | Notes |
 |---|---|---|
 | `sqlite` template | Free pages that keep the leaf type byte read as live leaves: 9 leaves and 12 rows, where the database has 5 and 8. All 63 other pages are `bytes[]` because overflow pages are typed only when the freelist is empty | `sqlite-overflow-freelist.notes.md` |
-| `wav` template | Reads samples from `0x2c` in a D500X recording, so a 980-byte metadata block plays as sound and the last 490 samples become a gap. The RIFF size that overshoots the file by 8 is capped silently | `wav-pipistrelle.notes.md` |
-| x86 disassembler | 338 instructions print the 64-bit register where the instruction works on 32 bits (95 `bswap`, 242 `bt`, 1 `movd`) | `elf-busybox-x86_64.notes.md` |
+| `wav` template | Reads samples from `0x2c` in a D500X recording, so a 980-byte metadata block plays as sound and the last 490 samples become a gap. The RIFF size that overshoots the file by 8 is capped silently. Fixed on 2026-09-24: the block is read as `d500x_metadata` before the samples, the `data` chunk is read as the block plus its size, and a RIFF size past the end of the file is marked invalid | `wav-pipistrelle.notes.md` |
+| x86 disassembler | 338 instructions print the 64-bit register where the instruction works on 32 bits (95 `bswap`, 242 `bt`, 1 `movd`). Fixed on 2026-09-24 in the copy of `yaxpeax-x86` in `crates/vendor` | `elf-busybox-x86_64.notes.md` |
 | Strings view | UTF-16 read one byte off where big-endian text starts at an odd offset, and the Mac Roman text before it is dropped | `ttf-unknown.notes.md` |
 | Strings view | 8,727 hits inside ELF `.text` that are instruction bytes, 11 inside the bat call, and 70 of 71 in the JPEG file | ELF, WAV, and JPEG notes |
 | `ksy:ttf` | Unicode range bits named from the wrong end (upstream `.ksy`). `glyf` fails on `.max`. No signature, so it is never sniffed. `ksy_bundled.rs` still lists `ttf` as having no sample | `ttf-unknown.notes.md` |

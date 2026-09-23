@@ -59,7 +59,7 @@ fn main() {
         }
     }
 
-    let total = agree + wrong + missing;
+    let total = agree + operands + wrong + missing;
     println!("{path}  as {}", isa.name());
     println!(
         "  {total} instructions: {agree} read, {missing} unread, {wrong} read as something else, \
