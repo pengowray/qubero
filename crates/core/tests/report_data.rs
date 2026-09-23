@@ -83,8 +83,10 @@ fn a_sqlite_file_groups_its_pages_and_finds_the_free_space_in_them() {
     let l = w.ledger();
     assert!(l.done);
     assert_eq!(l.counted_bits, l.file_bits, "every byte once, cells placed over free space included");
-    // 63 pages the template reads as bytes: overflow and free pages alike.
-    assert_eq!(bits(&l, "bytes[]", "content"), 63 * 512 * 8);
+    // Pages group by what the template reads them as: leaf, interior,
+    // overflow and free. 26 free pages are leaves of the freelist, whole.
+    assert_eq!(bits(&l, "FreelistLeaf", "content"), 26 * 512 * 8);
+    assert!(bits(&l, "Overflow", "content") > 0);
     // The free space in the B-tree pages is a gap, nearly all of it zero.
     let leaf = l.rows.iter().find(|r| r.group == "TableLeaf" && r.role == "gap").expect("gaps in leaf pages");
     assert_eq!(leaf.unscanned_bits, 0);
