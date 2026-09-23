@@ -157,6 +157,9 @@ struct Frame {
     /// so what they leave over is the region less what they came to. None for
     /// every other node.
     tiled: Option<u64>,
+    /// Whether this run has been counted to its end after an element would
+    /// not read. See [`Evaluator::stretched`].
+    counted: bool,
 }
 
 /// What opening a composite turned out to say about it, before the walk has
@@ -196,6 +199,7 @@ impl Opening {
             guarded: self.guarded,
             uniform: self.uniform,
             tiled: region(r).then_some(0),
+            counted: false,
         }
     }
 }
@@ -483,6 +487,15 @@ impl Evaluator {
             // about the same bytes. Fields it had put aside are still reached:
             // those are placed by an offset and do not depend on this one.
             Err(e) => {
+                // A run whose room a length gave may be stretched to take in
+                // an element that overran it, which is what a bat recorder's
+                // GUANO chunk past the RIFF size needs (see `stretch_to` in
+                // `walk.rs`). Counting the run is what stretches it, and the
+                // listing counts every run it shows; this walk does not, so it
+                // counts one now, once, and tries the element again.
+                if self.stretched(doc, walk, top)? {
+                    return Ok(());
+                }
                 let why = match &e {
                     EvalError::Failed(why) => why.as_str(),
                     _ => "",
@@ -623,6 +636,40 @@ impl Evaluator {
         walk.stack.push(opening.frame(&r, scale, r.offset + size, already));
         watch.open(self, &path, &r, scale);
         Ok(())
+    }
+
+    /// Whether counting the run on top made room for the element that would
+    /// not read, and if it did, the frames around it moved out to the run's
+    /// new end. Only a run whose length only walking settles, since a run of
+    /// a known count is never stretched; and only once per run.
+    fn stretched<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk, top: usize) -> R<bool> {
+        let f = &walk.stack[top];
+        if f.count != u64::MAX || f.counted {
+            return Ok(false);
+        }
+        let path = f.path.clone();
+        let before = self.memo.get(&path).map(|r| r.limit);
+        match self.child_count(doc, &path) {
+            Err(e) if e.interrupted() => return Err(e),
+            _ => {}
+        }
+        walk.stack[top].counted = true;
+        let Some(r) = self.memo.get(&path) else { return Ok(false) };
+        let after = r.limit;
+        if before.is_none_or(|b| after <= b) || self.list(&path).stretched.is_empty() {
+            return Ok(false);
+        }
+        // The run ends further on, and so does everything it is in. A frame
+        // laid out in order had already moved its cursor past the run's old
+        // end, and would call the stretch a gap as well.
+        for (k, f) in walk.stack.iter_mut().enumerate() {
+            f.end = f.end.max(after);
+            if k < top && f.sequential {
+                f.cursor = f.cursor.max(after);
+            }
+        }
+        walk.reach(after);
+        Ok(true)
     }
 
     /// Step the frame past the child just dealt with, whichever queue it came

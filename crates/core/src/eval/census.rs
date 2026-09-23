@@ -551,7 +551,7 @@ impl Evaluator {
     /// switch with a size round it, and a node of it resolves to the case it
     /// took. Asked only of the declaration as written, every case row of that
     /// switch read as taken by no chunk at all and was drawn faded.
-    fn case_taken(&self, declared: &Ty, resolved: &Ty) -> Option<usize> {
+    pub(super) fn case_taken(&self, declared: &Ty, resolved: &Ty) -> Option<usize> {
         let mut declared = declared;
         for _ in 0..16 {
             declared = match declared {
