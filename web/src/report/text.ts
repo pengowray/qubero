@@ -73,7 +73,8 @@ export const RV = {
   // ----- 3. the facts table -----
   factSize: "Size",
   factParts: "Parts",
-  factRecords: "Records",
+  /** The template's lists and how many elements each holds. */
+  factLists: "Lists",
   factPicture: "Picture",
   factFindings: "Findings",
   factDescribed: "Described by the template",
@@ -136,6 +137,12 @@ export const RV = {
   mapZoomForFields: "Too many fields to draw at this size. Zoom in to see them.",
   /** A stretch no field covers, as the listing names it. */
   gapName: "unmapped",
+  /** A stretch holding more parts than the report lists, which it did not
+   *  look into. */
+  unexaminedName: "not listed",
+  unexaminedBody: "Holds more parts than the report lists. The listing shows every field.",
+  /** An element named like an element of another list, with its list. */
+  inList: (name: string, list: string): string => `${name} (${list})`,
   mapByte: (at: string, hex: string, cls: string): string => `Byte at ${at}: ${hex}, ${cls}`,
   classZero: "zero",
   classText: "text",
@@ -150,7 +157,8 @@ export const RV = {
   ledgerShare: "Share of file",
   ledgerWhat: "What it is",
   ledgerCaptionLead: (largest: string, share: string): string => `Largest part: ${largest}, ${share} of the file.`,
-  ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map.",
+  ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map, and click it to zoom the map to them.",
+  ledgerRowTitle: "Click to zoom the map to this part",
   ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these were not listed.`,
   /** Under the byte counts of a file no template reads. */
   classLedgerCaption: (readTo: string, done: boolean): string =>
@@ -207,7 +215,7 @@ export const RV = {
     to - from === 1 ? `Byte ${from.toLocaleString()} of the output` : `Bytes ${from.toLocaleString()} to ${(to - 1).toLocaleString()} of the output`,
 
   // ----- 11. terms -----
-  termsHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} described by the template`,
+  termsHeading: (n: number): string => `What the template says about ${counted(n, "field")}`,
 
   // ----- 12. every byte -----
   everyHeading: (n: number): string => `All ${n.toLocaleString()} bytes, part by part`,
@@ -224,6 +232,14 @@ export const RV = {
   noTemplateLead: "No template reads this file, so the report shows its bytes only.",
   reading: "Reading the file…",
 };
+
+/** A long reading cut to `max` characters, at a space where there is one. */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${space > max * 0.6 ? cut.slice(0, space) : cut}…`;
+}
 
 /** A string with its first letter capitalised. */
 export function sentenceCase(s: string): string {

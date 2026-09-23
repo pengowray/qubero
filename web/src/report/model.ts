@@ -24,6 +24,7 @@ import { sectionColor, UNMAPPED_COLOR } from "../fieldstyle.ts";
 import { childWord, REPORT } from "../strings.ts";
 import { gapsOf, readingOrder, runPosition, runsOf, stripIndex, variantText, type Extent } from "./partrules.ts";
 import { WAIT } from "./section.ts";
+import { RV } from "./text.ts";
 
 /** Children of one node looked at, at most. Past this the rest of the node is
  *  one stretch the report says it did not list. */
@@ -43,6 +44,8 @@ const VARIANT_PROBES = 3;
 /** Children of a part asked what placed them, for a part placed field by field
  *  (a directory's targets). */
 const PLACED_PROBES = 16;
+/** Parts of one group asked what placed them. */
+const PLACERS_ASKED = 4;
 
 /** One part of the file, before grouping. */
 export type Unit = {
@@ -62,8 +65,15 @@ export type Unit = {
   readonly list: TemplateNode | null;
   /** What decided this element's type, when something did. */
   readonly variant: string | null;
-  /** True for bytes no field covers. */
+  /** True for bytes no part covers: bytes no field covers, or, with
+   *  `unexamined`, bytes the report stopped looking into. */
   readonly gap: boolean;
+  /** True for a stretch that holds fields the report did not list, because it
+   *  had already listed as many parts as it lists. Not a finding. */
+  readonly unexamined?: boolean;
+  /** The part this is a piece of, when other parts lie inside it and it was
+   *  cut round them. Pieces of one part are one group. */
+  readonly groupKey?: string;
 };
 
 /** Parts that are the same kind of thing, drawn as one section: the four
@@ -82,6 +92,7 @@ export type Group = {
   /** Its place in file order, which is the order of the map and the ledger. */
   readonly index: number;
   readonly gap: boolean;
+  readonly unexamined: boolean;
 };
 
 /** A list the parts met, for the facts table. */
@@ -130,6 +141,16 @@ export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
   const lists: ListFact[] = [];
   const unlisted = unitsOf(doc, container, fileBits, 0, units, lists);
   if (unlisted === WAIT) return WAIT;
+  // What sits in the stretches between those parts, placed there by an
+  // address from somewhere else in the tree.
+  let unexamined: Extent[] = [];
+  if (unlisted === 0) {
+    const placed = placedUnits(doc, units, fileBits);
+    if (placed === WAIT) return WAIT;
+    units.push(...placed.units);
+    unexamined = placed.unexamined;
+  }
+  yieldBackground(units);
   // Which case each element took, so like elements can be read as one part.
   for (let i = 0; i < units.length; i++) {
     const u = units[i];
@@ -139,9 +160,10 @@ export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
     if (v !== null) units[i] = { ...u, variant: v };
   }
   // Bytes no part covers, from the front of the file to the end of it.
-  const covered: Extent[] = units.map((u) => ({ offsetBits: u.offsetBits, sizeBits: u.sizeBits }));
+  const covered: Extent[] = [...units.map((u) => ({ offsetBits: u.offsetBits, sizeBits: u.sizeBits })), ...unexamined];
   const listedTo = unlisted > 0 ? Math.max(...covered.map((c) => c.offsetBits + c.sizeBits), 0) : fileBits;
   for (const g of gapsOf(covered, 0, listedTo)) units.push(gapUnit(g));
+  for (const e of unexamined) units.push(gapUnit(e, true));
   units.sort((a, b) => a.offsetBits - b.offsetBits);
   const groups = groupUnits(units);
   const order = readingOrder(
@@ -229,6 +251,154 @@ function unitsOf(doc: Doc, node: TemplateNode, fileBits: number, depth: number, 
   return unlisted;
 }
 
+/** Parts found in the stretches between the others, at most, and questions
+ *  asked of the core to find them. */
+const PLACED_MAX = 64;
+const PLACED_ASKS = 48;
+/** How long looking for them may take, and how many stretches are asked only
+ *  whether they hold anything once that is spent. */
+const PLACED_MS = 250;
+const PROBES_MAX = 16;
+/** Fields asked for at once when looking along a stretch. */
+const PLACED_SPANS = 64;
+
+/**
+ * Parts placed by an address from deep in the tree, found where they are.
+ *
+ * A structure placed by a pointer can hang from any depth of the template: an
+ * HDF5 file's objects hang off addresses in its superblock, a TIFF file's
+ * strips off tags in its directories. The parts read from the top of the tree
+ * leave those as stretches between them, and calling the stretches unmapped
+ * would be false. So each stretch is asked what fields it holds (`spans` is
+ * windowed by offset, so this costs a screenful per question), and the
+ * outermost node over each field that lies inside the stretch becomes a part.
+ * What `spans` itself calls a gap stays a gap.
+ */
+function placedUnits(doc: Doc, units: readonly Unit[], fileBits: number): { units: Unit[]; unexamined: Extent[] } | typeof WAIT {
+  const out: Unit[] = [];
+  const unexamined: Extent[] = [];
+  const known = new Set(units.map((u) => pathKey(u.path)));
+  const nodes = new Map<string, TemplateNode>();
+  let asks = 0;
+  // Each question walks the tree to the window, a few milliseconds on a small
+  // file, so the questions are bounded by time as well as by count.
+  const until = performance.now() + PLACED_MS;
+  const spent = (): boolean => asks >= PLACED_ASKS || out.length >= PLACED_MAX || performance.now() > until;
+  let probes = 0;
+  const covered = (): Extent[] => [...units, ...out].map((u) => ({ offsetBits: u.offsetBits, sizeBits: u.sizeBits }));
+  for (const gap of gapsOf(covered(), 0, fileBits)) {
+    const end = gap.offsetBits + gap.sizeBits;
+    let at = gap.offsetBits;
+    // Out of questions with fields still ahead: the rest of the stretch is
+    // not called unmapped, because nobody looked. One short question says
+    // whether there is anything in it at all, while there are questions left
+    // for that.
+    if (spent()) {
+      if (probes >= PROBES_MAX) {
+        unexamined.push(gap);
+        continue;
+      }
+      probes++;
+      const probe = ok(doc.spans(at, end, 8));
+      if (probe === WAIT) return WAIT;
+      if (probe !== null && probe.some((s) => !s.gap)) unexamined.push(gap);
+      continue;
+    }
+    while (at < end) {
+      if (spent()) {
+        unexamined.push({ offsetBits: at, sizeBits: end - at });
+        break;
+      }
+      asks++;
+      const spans = ok(doc.spans(at, end, PLACED_SPANS));
+      if (spans === WAIT) return WAIT;
+      if (spans === null || spans.length === 0) break;
+      let next = at;
+      let found: Unit | null | typeof WAIT = null;
+      for (const s of spans) {
+        const sEnd = s.offset_bits + s.size_bits;
+        if (sEnd <= at) continue;
+        if (s.gap || s.path.length === 0) {
+          next = Math.max(next, sEnd);
+          continue;
+        }
+        found = placedRoot(doc, s.path, at, s.offset_bits, known, nodes);
+        if (found !== null) break;
+        next = Math.max(next, sEnd);
+      }
+      if (found === WAIT) return WAIT;
+      if (found !== null) {
+        out.push(found);
+        known.add(pathKey(found.path));
+        next = Math.max(next, found.offsetBits + found.sizeBits);
+      }
+      if (next <= at) break;
+      at = next;
+    }
+  }
+  return { units: out, unexamined };
+}
+
+/**
+ * A run of plain bytes that other parts lie inside gives way to them.
+ *
+ * A template can read the same bytes twice: a TIFF file's `body` is every
+ * byte after the header, and its directories, placed by offsets, are inside
+ * it. Counting both would add up to more than the file. The directories are
+ * the reading that says something, so the plain bytes keep only what is left
+ * over, as pieces that still go by their own name.
+ */
+function yieldBackground(units: Unit[]): void {
+  const plain = (u: Unit): boolean =>
+    !u.gap && (u.node !== null ? !u.node.composite : u.fields.length === 1 && u.fields.every((f) => !f.composite));
+  for (let i = units.length - 1; i >= 0; i--) {
+    const u = units[i];
+    if (u === undefined || !plain(u)) continue;
+    const end = u.offsetBits + u.sizeBits;
+    const inside = units.filter((v) => v !== u && !plain(v) && v.offsetBits < end && v.offsetBits + v.sizeBits > u.offsetBits);
+    if (inside.length === 0) continue;
+    const pieces = gapsOf(inside, u.offsetBits, end).map((e, j) => ({ ...u, key: `${u.key}#${j}`, groupKey: u.key, ...e }));
+    units.splice(i, 1, ...pieces);
+  }
+}
+
+/** The outermost node on a field's path that starts inside the stretch and
+ *  holds the field's first bit, `at`: the structure a pointer placed there,
+ *  as a part. Null when that is a part already, or nothing on the path does.
+ *  An ancestor that starts in the stretch but further on is some other
+ *  structure the path passes through, placed by a pointer of its own. */
+function placedRoot(
+  doc: Doc,
+  path: readonly number[],
+  from: number,
+  at: number,
+  known: ReadonlySet<string>,
+  nodes: Map<string, TemplateNode>,
+): Unit | null | typeof WAIT {
+  let parent: TemplateNode | null = null;
+  for (let k = 1; k <= path.length; k++) {
+    const key = pathKey(path.slice(0, k));
+    let n = nodes.get(key) ?? null;
+    if (n === null) {
+      const r = ok(doc.templateNode(path.slice(0, k)));
+      if (r === WAIT) return WAIT;
+      if (r === null) return null;
+      n = r;
+      nodes.set(key, n);
+    }
+    if (n.space === 0 && n.size_bits > 0 && n.offset_bits >= from && n.offset_bits <= at && n.offset_bits + n.size_bits > at) {
+      if (known.has(key)) return null;
+      // Placed structures of one type and name go together, as the elements
+      // of a list that took one case do: an HDF5 file's dozens of `object`
+      // headers are one part of the report, not dozens.
+      const unit = parent?.list === true ? elementUnit(n, parent) : nodeUnit(n);
+      return { ...unit, groupKey: `placed:${n.type}:${unit.label}` };
+    }
+    parent = n;
+  }
+  return null;
+}
+
 /** Children a node placed by an offset stand at no bytes of their own where
  *  the template reads the offset, and their one child is the table the offset
  *  points at: an ELF header's `program_headers` is written as nothing at 0x40
@@ -275,18 +445,19 @@ function elementUnit(n: TemplateNode, list: TemplateNode): Unit {
   };
 }
 
-function gapUnit(g: Extent): Unit {
+function gapUnit(g: Extent, unexamined = false): Unit {
   return {
-    key: `gap:${g.offsetBits}`,
+    key: `${unexamined ? "unexamined" : "gap"}:${g.offsetBits}`,
     path: [],
     node: null,
     fields: [],
-    label: REPORT.gap,
+    label: unexamined ? RV.unexaminedName : REPORT.gap,
     named: false,
     ...g,
     list: null,
     variant: null,
     gap: true,
+    unexamined,
   };
 }
 
@@ -342,7 +513,9 @@ function groupUnits(units: readonly Unit[]): Group[] {
     const lk = list === null ? "" : pathKey(list.path);
     if (list !== null && !uniqueLists.has(lk)) uniqueLists.set(lk, unique(lk));
     const key =
-      list === null || uniqueLists.get(lk) === true
+      u.groupKey !== undefined
+        ? u.groupKey
+        : list === null || uniqueLists.get(lk) === true
         ? u.key
         : u.variant !== null
           ? `v:${pathKey(list.path)}:${u.variant}`
@@ -355,6 +528,17 @@ function groupUnits(units: readonly Unit[]): Group[] {
     }
     g.push(u);
   }
+  // A name that elements of two lists share (a PE file's `.text` section
+  // header and `.text` section data) says which list it is from.
+  const listsByLabel = new Map<string, Set<string>>();
+  for (const u of units) {
+    if (u.list === null) continue;
+    const s = listsByLabel.get(u.label) ?? new Set<string>();
+    s.add(pathKey(u.list.path));
+    listsByLabel.set(u.label, s);
+  }
+  const labelOf = (u: Unit): string =>
+    u.list !== null && (listsByLabel.get(u.label)?.size ?? 0) > 1 ? RV.inList(u.label, u.list.name) : u.label;
   let hue = 0;
   return order.map((key, index) => {
     const us = byKey.get(key) ?? [];
@@ -366,7 +550,7 @@ function groupUnits(units: readonly Unit[]): Group[] {
       key,
       // Several elements that took one case go by the case; several with
       // nothing to tell them apart go by the list they are in.
-      label: many ? (first.variant ?? (sameLabel ? first.label : (first.list?.name ?? first.label))) : first.label,
+      label: many ? (first.variant ?? (sameLabel ? labelOf(first) : (first.list?.name ?? first.label))) : labelOf(first),
       named: many ? first.variant === null && (!sameLabel || first.named) : first.named,
       units: us,
       sizeBits: us.reduce((s, u) => s + u.sizeBits, 0),
@@ -375,6 +559,7 @@ function groupUnits(units: readonly Unit[]): Group[] {
       unitWord: first.list !== null ? childWord(first.list) : "part",
       index,
       gap,
+      unexamined: first.unexamined === true,
     };
   });
 }
@@ -408,7 +593,9 @@ function placements(doc: Doc, groups: readonly Group[]): number[][] {
   };
   const listsAsked = new Set<string>();
   groups.forEach((g, gi) => {
-    for (const u of g.units) {
+    // The parts of one group are alike, so the first few say what places
+    // them all.
+    for (const u of g.units.slice(0, PLACERS_ASKED)) {
       if (u.node === null) continue;
       // What sizes or counts a list sizes every element of it: a RIFF size
       // over the chunks, a count over the records.

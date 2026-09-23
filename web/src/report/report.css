@@ -354,6 +354,9 @@
 .rv-ledgertable tbody tr:hover td {
   background: var(--accent-soft);
 }
+.rv-zoomrow {
+  cursor: zoom-in;
+}
 .rv-share {
   white-space: nowrap;
 }

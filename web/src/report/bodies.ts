@@ -10,10 +10,12 @@ import type { ReportData } from "./data.ts";
 import { byteRef, dumpRows, pointAt } from "./refs.ts";
 import type { ReportHost } from "./section.ts";
 import { stripIndex } from "./partrules.ts";
-import { bitsText, RV } from "./text.ts";
+import { bitsText, clip, RV } from "./text.ts";
 
 /** Bytes shown inline in a row. */
 const INLINE_BYTES = 8;
+/** Characters of a record's reading shown in its row; the rest is on hover. */
+const READS_CHARS = 160;
 
 /** The first bytes of a stretch as hex, `ff d8 ff e0 …`, or dots while they
  *  are still being read. Empty for a stretch that does not start on a byte. */
@@ -115,8 +117,13 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
     }
     const reads = document.createElement("td");
     reads.className = "rv-reads";
-    // Bytes read as bytes say nothing the next column does not.
-    if (n.kind !== "bytes" && n.kind !== "unread") reads.append(n.line ?? n.value);
+    // Bytes read as bytes say nothing the next column does not, and a
+    // structure with no one-line reading has only its count of fields.
+    if (n.line !== null) {
+      reads.append(clip(n.line, READS_CHARS));
+      if (n.line.length > READS_CHARS) reads.title = n.line;
+    }
+    else if (n.kind !== "bytes" && n.kind !== "unread" && !n.composite) reads.append(n.value);
     if (n.problems_within[0] > 0) reads.classList.add("has-invalid");
     if (!named) tr.append(cell("td", String(index), "rv-num"));
     tr.append(atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));

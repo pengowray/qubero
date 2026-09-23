@@ -39,7 +39,7 @@ export const briefSection: Section = {
     size.tr.hidden = false;
     if (ctx.doc.template === null) return table;
     const parts = row(RV.factParts);
-    const records = row(RV.factRecords);
+    const records = row(RV.factLists);
     const picture = row(RV.factPicture);
     // The table's own facts, read from the fields its shape names, go between
     // the parts and the findings, so the tbody is placed now and filled later.

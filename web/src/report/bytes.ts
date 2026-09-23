@@ -10,12 +10,14 @@ import { formatOffset, percentText } from "../format.ts";
 import type { Group, PartsModel } from "./model.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
-import { bitsText, bytesText, counted, RV } from "./text.ts";
+import { bitsText, bytesText, clip, counted, RV } from "./text.ts";
 import { stripLegend, ZoomMap, type MapPart } from "./zoommap.ts";
 import { byteClassColor } from "../fieldstyle.ts";
 
 /** Ledger rows before the rest are counted. */
 const LEDGER_ROWS = 60;
+/** Characters of a part's reading shown in its row; the rest is on hover. */
+const WHAT_CHARS = 120;
 
 export const bytesSection: Section = {
   id: "bytes",
@@ -123,10 +125,27 @@ function ledger(model: PartsModel, map: ZoomMap): HTMLElement {
     share.append(b, ` ${percentText(g.sizeBits, model.fileBits)}`);
     const what = document.createElement("td");
     what.className = "rv-what";
-    what.textContent = whatItIs(g);
+    const says = whatItIs(g);
+    what.textContent = clip(says, WHAT_CHARS);
+    if (says.length > WHAT_CHARS) what.title = says;
     tr.append(name, at, bytes, share, what);
     tr.addEventListener("pointerenter", () => map.highlight(g.units));
     tr.addEventListener("pointerleave", () => map.highlight([]));
+    // A click anywhere on the row but its address zooms the map to the part:
+    // the ranges the ledger names are the presets the map offers.
+    tr.addEventListener("click", (e) => {
+      if ((e.target as Element).closest("[data-rv-start]") !== null) return;
+      const first = g.units[0];
+      const last = g.units[g.units.length - 1];
+      if (first === undefined || last === undefined) return;
+      const from = first.offsetBits / 8;
+      const to = (last.offsetBits + last.sizeBits) / 8;
+      const pad = Math.max(4, (to - from) * 0.15);
+      map.show(Math.max(0, from - pad), to + pad);
+      map.el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    tr.title = RV.ledgerRowTitle;
+    tr.classList.add("rv-zoomrow");
     body.append(tr);
   }
   t.append(body);
@@ -136,7 +155,7 @@ function ledger(model: PartsModel, map: ZoomMap): HTMLElement {
   const top = [...model.groups].sort((a, b) => b.sizeBits - a.sizeBits)[0];
   if (top !== undefined) {
     const lead = document.createElement("b");
-    lead.textContent = RV.ledgerCaptionLead(top.gap ? RV.gapName : top.label, percentText(top.sizeBits, model.fileBits));
+    lead.textContent = RV.ledgerCaptionLead(top.label, percentText(top.sizeBits, model.fileBits));
     cap.append(lead, " ");
   }
   cap.append(RV.ledgerCaption);
@@ -155,7 +174,7 @@ function target(g: Group): { path?: readonly number[]; startBit: number; endBit:
 /** One line on what a part is: the template's description, or what its fields
  *  read as, or for bytes no field covers, that. */
 function whatItIs(g: Group): string {
-  if (g.gap) return RV.gapBody;
+  if (g.gap) return g.unexamined ? RV.unexaminedBody : RV.gapBody;
   const u = g.units[0];
   const n = u?.node ?? null;
   if (n?.doc !== undefined) return firstSentence(n.doc);

@@ -87,7 +87,7 @@ function collect(doc: Doc, data: ReportData): Findings | typeof WAIT {
   // nothing about the rest, so the rest is not a finding.
   const gapsCount = !signatureOnly(doc);
   for (const g of parts?.groups ?? []) {
-    if (!g.gap || !gapsCount) continue;
+    if (!g.gap || g.unexamined || !gapsCount) continue;
     for (const u of g.units) {
       const verdict = checkGap(doc, u.offsetBits, u.sizeBits);
       if (verdict === "unread") return WAIT;
@@ -156,9 +156,10 @@ function alike(items: readonly Finding[]): Finding[][] {
   const rows: Finding[][] = [];
   const byKey = new Map<string, Finding[]>();
   for (const f of items) {
-    // Bytes no field covers are each their own finding: where they are is
-    // what is being reported.
-    const key = f.name === null ? `@${f.target.startBit}` : `${f.kind}\u0000${f.name}\u0000${f.text}\u0000${f.value ?? ""}`;
+    // Bytes no field covers go together when they are the same size and say
+    // the same thing: a PDF's newline between each two objects is one byte
+    // nothing describes, ten times over.
+    const key = `${f.kind}\u0000${f.name ?? ""}\u0000${f.text}\u0000${f.value ?? ""}`;
     let row = byKey.get(key);
     if (row === undefined) {
       row = [];
