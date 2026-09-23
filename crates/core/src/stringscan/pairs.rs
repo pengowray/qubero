@@ -26,6 +26,30 @@ use super::text::*;
 /// same reason and there is nothing to choose it by. Then the reading the file
 /// vouched for wins, then the longer one, then the one on an even address.
 ///
+/// Big-endian text that starts on a zero something else may own is settled
+/// by whether that something is text on its own account, and that is asked
+/// before the lengths, which a stray character at either end can tip:
+///
+/// * The second zero of a little-endian string's terminator, where that string
+///   was kept. The later reading starts after the terminator, as the next
+///   string in the list. A minidump's `…Default 00 00 C 00 : 00` came out as
+///   big-endian `C:\src\crashpad\0`, one character longer for the stray
+///   after it.
+/// * The zero after eight-bit text. `…lar 00 51 00 75 00` is eight-bit text
+///   then big-endian "Qu", or a C string, its terminator, then little-endian
+///   "Qu", and the bytes are the same either way. What decides is whether the
+///   eight-bit text is a C string: one that starts after a zero is, like the
+///   one before it, and the zero after it is its terminator. One that starts
+///   after anything else is text packed end to end, and the zero is the first
+///   byte of the next string. The first is a list of names in a PE file; the
+///   second is a TrueType `name` table, Mac Roman names followed by the same
+///   names in UTF-16 BE.
+///
+/// The pairs are settled in the order they sit in the file, so a string in a
+/// list is judged by the strings before it as they were settled, and not as
+/// they were found. A list of big-endian strings has a shifted little-endian
+/// reading of each, terminators and all, and those must not count.
+///
 /// Whichever survives is vouched for by anything either reading found, since a
 /// terminator or a length belongs to the text rather than to one way of
 /// reading it. A .NET `#US` string is a length, its characters, then a flag
@@ -40,42 +64,106 @@ pub(super) fn shifted_readings(buf: &[u8], base: u64, runs: &[Run], vouch: &[boo
             at.entry(r.start).or_default().push(i);
         }
     }
+    // Where each eight-bit run ends, and whether a zero is in front of it.
+    let narrow: HashMap<usize, bool> = runs
+        .iter()
+        .filter(|r| !r.enc.wide())
+        .map(|r| (r.end, r.start.checked_sub(1).is_some_and(|k| buf[k] == 0)))
+        .collect();
+    // The second byte of each little-endian terminator, and whose it is.
+    let terminated: HashMap<usize, usize> = runs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.enc == Enc::Utf16Le && terminator(buf, r.end, r.enc).is_some())
+        .map(|(k, r)| (r.end + 1, k))
+        .collect();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     for i in 0..runs.len() {
         if !runs[i].enc.wide() {
             continue;
         }
         let Some(js) = at.get(&(runs[i].start + 1)) else { continue };
-        for &j in js {
-            if runs[j].enc == runs[i].enc {
-                continue;
-            }
-            let keep = if ascii_text(buf[runs[i].start]) {
-                i
-            } else if table[i] != table[j] {
-                // Counted the way the rest of the file counts its strings
-                // beats counted once by a number that happens to fit. A
-                // Windows string table packs its strings behind a `u16` and
-                // leaves its empty slots zero, and those zeroes with the next
-                // string's length read as a `u32` or a `u64` in front of the
-                // shifted run, which is wide enough to speak for it.
-                if table[i] { i } else { j }
-            } else if vouch[i] != vouch[j] {
-                if vouch[i] { i } else { j }
-            } else if runs[i].chars != runs[j].chars {
-                if runs[i].chars > runs[j].chars { i } else { j }
-            } else if (base + runs[i].start as u64) % 2 == 0 {
-                // UTF-16 in a file is nearly always laid on two-byte
-                // boundaries. The two starts are a byte apart, so exactly one
-                // of them is even.
-                i
-            } else {
-                j
-            };
-            let (keep, drop) = if keep == i { (i, j) } else { (j, i) };
-            ok[keep] = vouch[i] || vouch[j];
-            ok[drop] = false;
-        }
+        pairs.extend(js.iter().filter(|&&j| runs[j].enc != runs[i].enc).map(|&j| (i, j)));
     }
+    pairs.sort_by_key(|&(i, _)| runs[i].start);
+    for (i, j) in pairs {
+        let s = runs[i].start;
+        // Whether the zero a big-endian reading starts on belongs to text in
+        // front of it, and so whether the little-endian one a byte later is
+        // the string. None where nothing claims it.
+        let owned = match runs[i].enc {
+            Enc::Utf16Be if buf[s] == 0 => match terminated.get(&s) {
+                Some(&k) if ok[k] => Some(true),
+                _ => narrow.get(&s).copied(),
+            },
+            _ => None,
+        };
+        let keep = if ascii_text(buf[s]) {
+            i
+        } else if table[i] != table[j] {
+            // Counted the way the rest of the file counts its strings
+            // beats counted once by a number that happens to fit. A
+            // Windows string table packs its strings behind a `u16` and
+            // leaves its empty slots zero, and those zeroes with the next
+            // string's length read as a `u32` or a `u64` in front of the
+            // shifted run, which is wide enough to speak for it.
+            if table[i] { i } else { j }
+        } else if vouch[i] != vouch[j] {
+            if vouch[i] { i } else { j }
+        } else if let Some(owned) = owned {
+            if owned { j } else { i }
+        } else if runs[i].chars != runs[j].chars {
+            if runs[i].chars > runs[j].chars { i } else { j }
+        } else if (base + s as u64) % 2 == 0 {
+            // UTF-16 in a file is nearly always laid on two-byte
+            // boundaries. The two starts are a byte apart, so exactly one
+            // of them is even.
+            i
+        } else {
+            j
+        };
+        let (keep, drop) = if keep == i { (i, j) } else { (j, i) };
+        ok[keep] = vouch[i] || vouch[j];
+        ok[drop] = false;
+    }
+}
+/// Takes the first character off a little-endian run whose first byte is the
+/// last letter of an eight-bit run, where that run is long enough without it.
+///
+/// Little-endian text straight after eight-bit text reads as starting one
+/// character early: the last letter of the eight-bit text and the zero after
+/// it are a perfectly good wide character. So is the same stretch read
+/// big-endian from the zero, and the two readings are what
+/// [`shifted_readings`] chooses between. Left with the letter, the
+/// little-endian one is always the longer, and it wins on that: a TrueType
+/// `name` table, which is Mac Roman names followed by the same names in UTF-16
+/// BE, came out as one little-endian run starting with the last letter of the
+/// Mac Roman block, and the Mac Roman block, which then overlapped it, was
+/// dropped whole. A PE file's `BCryptGetProperty` followed by its wide
+/// `HashDigestLength` came out as `yHashDigestLength`.
+///
+/// The letter is the eight-bit run's because that run is text on its own
+/// account. A few printable bytes that only make a run with the letter are
+/// not, and the letter stays with the wide text.
+pub(super) fn leave_narrow_runs_whole(buf: &[u8], min: usize, runs: &mut Vec<Run>) {
+    // The eight-bit runs come out of their walk in order and never overlap, so
+    // the one holding a byte is found by bisection.
+    let narrow: Vec<(usize, usize)> =
+        runs.iter().filter(|r| !r.enc.wide() && r.chars as usize > min).map(|r| (r.start, r.end)).collect();
+    let inside = |k: usize| {
+        let n = narrow.partition_point(|&(_, end)| end <= k);
+        narrow.get(n).is_some_and(|&(start, _)| start < k)
+    };
+    runs.retain_mut(|r| {
+        if r.enc != Enc::Utf16Le || !ascii_text(buf[r.start]) || !inside(r.start) {
+            return true;
+        }
+        r.start += 2;
+        r.chars -= 1;
+        r.units -= 1;
+        r.chars as usize >= min
+            && unit_at(buf, r.start, false).and_then(|u| char::from_u32(u as u32)).is_some_and(starter)
+    });
 }
 /// Whether anything around a wide run says it was written as a string.
 ///

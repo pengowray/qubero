@@ -51,6 +51,7 @@ mod profile;
 mod expr;
 mod extent;
 mod read;
+mod readas;
 mod relate;
 mod schema;
 mod shape;
@@ -90,6 +91,7 @@ pub use extent::{ExtentAudit, ExtentCheck};
 pub use directory::{Directories, Directory, DirectoryEntry, DirectoryTarget};
 pub use survey::ReportWalk;
 pub use listing::{magic_reading, Span, SpanPart};
+pub use readas::{NotText, ReadAs};
 pub use relate::write_expr;
 pub use schema::Descriptions;
 

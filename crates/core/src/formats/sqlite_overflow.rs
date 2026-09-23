@@ -282,7 +282,7 @@ mod tests {
 
     const PAGE: usize = 512;
     /// Where the pages are in the tree, and where a page's cells are.
-    const PAGES: usize = 24;
+    const PAGES: usize = 26;
     const CELLS: usize = 6;
 
     /// How much of a row of `total` bytes stays on a 512-byte table leaf.

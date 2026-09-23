@@ -62,13 +62,19 @@ pub(super) struct TagIndex {
     pub(super) full: bool,
 }
 
-/// How many labels one list may have indexed. Far past any header: the largest
-/// FITS header anyone writes is a few hundred cards, and a global heap
-/// collection holds a few thousand objects. A list longer than this is one
-/// where the walk is the cost whatever is remembered about it, and remembering
-/// a million labels to save a comparison each is the memory this was meant to
-/// save.
-const TAG_INDEX_CAP: usize = 100_000;
+/// How many labels may be indexed, across every list. Far past any header: the
+/// largest FITS header anyone writes is a few hundred cards, and a global heap
+/// collection holds a few thousand objects.
+///
+/// Set by the list that is searched once for every element of another one,
+/// which is where the index earns its memory: the walk is paid once and each
+/// search after it is a lookup. A SQLite page looks its own number up among
+/// the free pages, and a database can have hundreds of thousands of those.
+/// Past the cap, a search that misses walks the whole list, so every page
+/// would cost a walk of the freelist. A label is a few dozen bytes here, so a
+/// million of them is tens of megabytes, which is less than the nodes of the
+/// list they were read from.
+const TAG_INDEX_CAP: usize = 1 << 20;
 
 #[derive(Default)]
 pub(super) struct Memo {

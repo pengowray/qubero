@@ -37,7 +37,7 @@ impl Source for FileSource {
 
 /// Field indices into the root struct, and into a b-tree page.
 const PAGE_SIZE: usize = 1;
-const PAGES: usize = 24;
+const PAGES: usize = 26;
 const BODY: usize = 1;
 
 fn main() {

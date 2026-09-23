@@ -18,8 +18,9 @@ use super::*;
 ///
 /// A format that needs more than a prefix is not here: those are the functions
 /// below, which `sniff` asks first. Several formats in the tree are in neither,
-/// because nothing marks the front of the file at all: a TGA, a Degas screen
-/// and a CBOR document are templates to pick rather than templates to guess at.
+/// because nothing marks the front of the file at all: a Degas screen and a
+/// CBOR document are templates to pick rather than templates to guess at, and
+/// a TGA is claimed only when its name says so (see [`BY_EXTENSION`]).
 const MAGIC: &[(&[u8], &str)] = &[
     (b"SQLite format 3\0", "sqlite"),
     (b"\x89PNG\r\n\x1a\n", "png"),
@@ -464,15 +465,18 @@ pub fn sniff(head: &[u8], len: u64) -> Option<&'static str> {
 ///
 /// The name is asked first for the formats in [`BY_EXTENSION`], which have no
 /// signature at all, so the bytes alone would hand them to whichever format
-/// their first two happen to look like.
+/// their first two happen to look like. It is asked last for the bundled
+/// Kaitai formats in [`KAITAI_BY_EXTENSION`], so that a builtin's answer still
+/// wins over theirs.
 pub fn sniff_named(head: &[u8], len: u64, name: &str) -> Option<&'static str> {
     let ext = extension_of(name);
-    BY_EXTENSION
-        .iter()
-        .find(|(e, _, fits)| e.eq_ignore_ascii_case(ext) && fits(head, len))
-        .map(|(_, template, _)| *template)
+    let by_name = |table: &[(&str, &'static str, fn(&[u8], u64) -> bool)]| {
+        table.iter().find(|(e, _, fits)| e.eq_ignore_ascii_case(ext) && fits(head, len)).map(|(_, template, _)| *template)
+    };
+    by_name(BY_EXTENSION)
         .or_else(|| sniff(head, len))
         .or_else(|| crate::ksy::bundled::sniff_named(head, ext))
+        .or_else(|| by_name(KAITAI_BY_EXTENSION))
 }
 
 /// Formats with nothing to recognise them by but their name: an extension, the
@@ -480,7 +484,96 @@ pub fn sniff_named(head: &[u8], len: u64, name: &str) -> Option<&'static str> {
 /// believed. The test is what keeps this from being a lookup of extensions: a
 /// `.exp` is also what a linker calls its export file, and that one is a COFF
 /// object which fails it.
-const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", is_melco_exp)];
+const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", is_melco_exp), ("tga", "tga", is_tga)];
+
+/// The same for bundled Kaitai formats that have no magic at offset 0. By the
+/// rule in `docs/HANDOVER-kaitai.md` the bytes alone never offer one of these,
+/// and that still holds: here the file's name has to say it first, and the
+/// bytes then have to agree with the name on something the header can check
+/// against itself or against the file's length.
+const KAITAI_BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
+    ("bson", "ksy:bson", is_bson),
+    ("icc", "ksy:icc_4", is_icc_4),
+    ("icm", "ksy:icc_4", is_icc_4),
+    ("ttf", "ksy:ttf", is_ttf),
+];
+
+/// A Targa image, which has an eighteen-byte header and nothing that marks it:
+/// see `formats::tga`. Every field has to hold a value the format defines, the
+/// colour map fields have to agree with whether there is a colour map, and the
+/// header, id and colour map have to fit in the file. An image stored without
+/// run-length encoding has to fit too, since its size is the width times the
+/// height times the bytes a pixel takes.
+fn is_tga(head: &[u8], len: u64) -> bool {
+    let Some(h) = head.get(..18) else { return false };
+    let u16_at = |at: usize| u16::from_le_bytes([h[at], h[at + 1]]) as u64;
+    let (id, map_type, image_type) = (h[0] as u64, h[1], h[2]);
+    let (map_length, map_depth) = (u16_at(5), h[7]);
+    let (width, height, depth, descriptor) = (u16_at(12), u16_at(14), h[16], h[17]);
+    let indexed = matches!(image_type, 1 | 9);
+    let map_agrees = match map_type {
+        0 => !indexed && map_length == 0 && map_depth == 0,
+        1 => map_length > 0 && matches!(map_depth, 15 | 16 | 24 | 32),
+        _ => false,
+    };
+    // Bits 6 and 7 of the descriptor were an interleaving that TGA 2.0 says
+    // must be zero, and the alpha bits cannot outnumber the pixel's.
+    if !map_agrees
+        || !matches!(image_type, 1 | 2 | 3 | 9 | 10 | 11)
+        || !matches!(depth, 8 | 15 | 16 | 24 | 32)
+        || width == 0
+        || height == 0
+        || descriptor & 0xc0 != 0
+        || (descriptor & 0x0f) > depth
+    {
+        return false;
+    }
+    let before_image = 18 + id + map_length * (map_depth as u64).div_ceil(8);
+    match image_type {
+        1..=3 => before_image + width * height * (depth as u64).div_ceil(8) <= len,
+        _ => before_image < len,
+    }
+}
+
+/// A BSON document, which opens with its own length and ends with a nought.
+/// The length has to be the file's, and the byte after it has to be an
+/// element type BSON defines, or the nought of an empty document.
+fn is_bson(head: &[u8], len: u64) -> bool {
+    let Some(size) = head.get(..4) else { return false };
+    let size = u32::from_le_bytes(size.try_into().expect("four bytes")) as u64;
+    let first_type_is_known = matches!(head.get(4), Some(0x00..=0x13 | 0x7f | 0xff));
+    let ends_in_nought = head.len() as u64 != len || head.last() == Some(&0);
+    size == len && len >= 5 && first_type_is_known && ends_in_nought
+}
+
+/// An ICC colour profile of version 4, which is what `icc_4` reads. The four
+/// letters `acsp` are 36 bytes in rather than at the front, and the profile's
+/// length is the first thing in it.
+fn is_icc_4(head: &[u8], len: u64) -> bool {
+    let Some(size) = head.get(..4) else { return false };
+    u32::from_be_bytes(size.try_into().expect("four bytes")) as u64 == len
+        && head.get(8) == Some(&4)
+        && head.get(36..40) == Some(b"acsp")
+}
+
+/// A TrueType font: the version a TrueType outline font opens with, and a
+/// table directory whose every entry has a tag of four printable characters
+/// and points inside the file.
+fn is_ttf(head: &[u8], len: u64) -> bool {
+    if !matches!(head.get(..4), Some(b"\x00\x01\x00\x00" | b"true")) {
+        return false;
+    }
+    let Some(count) = head.get(4..6) else { return false };
+    let count = u16::from_be_bytes([count[0], count[1]]) as usize;
+    if count == 0 || 12 + 16 * count as u64 > len {
+        return false;
+    }
+    head.get(12..).unwrap_or_default().chunks_exact(16).take(count).all(|entry| {
+        let offset = u32::from_be_bytes(entry[8..12].try_into().expect("four bytes")) as u64;
+        let length = u32::from_be_bytes(entry[12..16].try_into().expect("four bytes")) as u64;
+        entry[..4].iter().all(|b| (0x20..0x7f).contains(b)) && offset + length <= len
+    })
+}
 
 /// A Melco embroidery design, which is a stream of steps and nothing else: see
 /// `formats::exp`. Every step in the window has to be one the format has, so
@@ -727,11 +820,13 @@ fn assimp_format(head: &[u8], len: u64) -> Option<&'static str> {
     }
 }
 
-/// Matroska is EBML with a `DocType` of `matroska`; the EBML signature alone
-/// would also claim WebM and unrelated EBML documents.
+/// Matroska is EBML with a `DocType` of `matroska`, or of `webm`, which is
+/// Matroska restricted to a few codecs and reads the same way. The EBML
+/// signature alone would also claim unrelated EBML documents.
 fn is_mkv(head: &[u8]) -> bool {
+    let front = &head[..256.min(head.len())];
     head.starts_with(b"\x1a\x45\xdf\xa3")
-        && head[..256.min(head.len())].windows(8).any(|w| w == b"matroska")
+        && (front.windows(8).any(|w| w == b"matroska") || front.windows(4).any(|w| w == b"webm"))
 }
 
 /// ECMA-119 records its first descriptor at sector 16. The identifier is five
@@ -2110,8 +2205,9 @@ mod tests {
     fn media_containers_and_retro_objects_are_recognised() {
         let mkv = b"\x1a\x45\xdf\xa3\x8b\x42\x82\x88matroska";
         assert_eq!(sniff(mkv, mkv.len() as u64), Some("mkv"));
-        // EBML by itself, and WebM in particular, is not Matroska.
-        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x84webm", 9), None);
+        // WebM is Matroska with fewer codecs, and EBML by itself is neither.
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x87\x42\x82\x84webm", 12), Some("mkv"));
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x88\x42\x82\x85other", 13), None);
 
         let mut iso = vec![0; 16 * 2048 + 7];
         iso[16 * 2048] = 1;
@@ -2233,6 +2329,56 @@ mod tests {
         // A step cut off by the end of the file is not a design.
         assert_ne!(sniff_named(&design[..8], 8, "cut.exp"), Some("exp"));
         assert_ne!(sniff_named(&[0x80, 0x04, 0x00], 3, "cut.exp"), Some("exp"));
+    }
+
+    /// A Targa has no signature either. Its name claims it only when the
+    /// header's fields are ones the format defines and the image fits.
+    #[test]
+    fn a_targa_is_recognised_by_its_name_and_its_header() {
+        // Two by two, 24-bit, uncompressed: eighteen bytes and twelve more.
+        let mut tga = vec![0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 24, 0];
+        tga.extend_from_slice(&[0x80; 12]);
+        assert_eq!(sniff_named(&tga, tga.len() as u64, "tile.TGA"), Some("tga"));
+        assert_ne!(sniff_named(&tga, tga.len() as u64, "tile.bin"), Some("tga"));
+        // An image one byte short of its pixels is not one.
+        assert_ne!(sniff_named(&tga[..29], 29, "tile.tga"), Some("tga"));
+        // A PNG called .tga fails at the colour map type and stays a PNG.
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x01\0\0\0\x01\x08\x02\0\0\0";
+        assert_eq!(sniff_named(png, png.len() as u64, "tile.tga"), Some("png"));
+    }
+
+    /// The bundled Kaitai formats with no magic at offset 0 are claimed by
+    /// name too, each only when the bytes agree with it, and only after every
+    /// other answer: a builtin still wins.
+    #[test]
+    fn bundled_formats_without_a_magic_are_recognised_by_their_names() {
+        // `{"a": 1}` as BSON: its length, one int32 element, and the nought.
+        let bson = b"\x0c\0\0\0\x10a\0\x01\0\0\0\0";
+        assert_eq!(sniff_named(bson, bson.len() as u64, "doc.bson"), Some("ksy:bson"));
+        assert_eq!(sniff_named(bson, bson.len() as u64 + 1, "doc.bson"), None);
+        assert_eq!(sniff_named(bson, bson.len() as u64, "doc.bin"), None);
+
+        let mut icc = vec![0; 132];
+        icc[..4].copy_from_slice(&132u32.to_be_bytes());
+        icc[8] = 4;
+        icc[36..40].copy_from_slice(b"acsp");
+        assert_eq!(sniff_named(&icc, 132, "srgb.icc"), Some("ksy:icc_4"));
+        assert_eq!(sniff_named(&icc, 132, "srgb.ICM"), Some("ksy:icc_4"));
+        // Version 2 has the same header, and `icc_4` is not written for it.
+        icc[8] = 2;
+        assert_eq!(sniff_named(&icc, 132, "srgb.icc"), None);
+
+        // One table, `head`, 54 bytes at 28.
+        let mut ttf = b"\0\x01\0\0\0\x01\0\x10\0\0\0\0head\0\0\0\0\0\0\0\x1c\0\0\0\x36".to_vec();
+        ttf.resize(82, 0);
+        assert_eq!(sniff_named(&ttf, 82, "face.ttf"), Some("ksy:ttf"));
+        // A table that runs past the end of the file.
+        assert_eq!(sniff_named(&ttf[..81], 81, "face.ttf"), None);
+
+        // Every name these give has a template behind it.
+        for (_, name, _) in KAITAI_BY_EXTENSION.iter().chain(BY_EXTENSION) {
+            assert!(super::template(name).is_some(), "no template named {name}");
+        }
     }
 
     #[test]
