@@ -6,8 +6,9 @@ than decorate. It sits one level of abstraction above the listing. Every claim
 in it links down to the bytes it rests on.
 
 This document is the design. It is based on eight reports on real sample
-files, each written individually on 2026-09-23 for this design rather than generated, with the goal of finding what a program can
-generate without an LLM. The reports, their notes, the brief the agents
+files, each written individually on 2026-09-23 for this design rather than
+generated, with the goal of finding what a program can generate without an
+LLM. The reports, their notes, the brief the agents
 followed, and the shared page kit are in `qubero2-extras/reports/`, outside
 this repository, like the 2026-08-29 view mockups:
 
