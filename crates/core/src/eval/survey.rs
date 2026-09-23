@@ -53,7 +53,7 @@ impl ReportWalk {
     pub fn under(file_bits: u64, root: Vec<usize>) -> ReportWalk {
         ReportWalk {
             kinds: KindWalk::under(file_bits, root.clone()),
-            follow: Follow::new(root.clone(), file_bits),
+            follow: Follow::new(file_bits),
             file_bits,
             root,
             done: false,
@@ -256,14 +256,18 @@ struct Fields {
 
 /// Everything the report keeps while it follows the walk.
 struct Follow {
-    root: Vec<usize>,
     space: u32,
     started: bool,
     stack: Vec<Ctx>,
     pending: Option<Ready>,
     /// The root's part and group, for a root with no frame of its own.
     root_part: (u32, u32),
-    root_struct: bool,
+    /// The structures whose fields are the file's top-level parts: the root,
+    /// and the one field of it that holds nearly all of the file, when there
+    /// is one, and so on down. An ELF file is seven bytes of identification
+    /// and one header structure holding everything else, and the parts a
+    /// reader means are that header's fields: its tables and its sections.
+    part_chain: Vec<Vec<usize>>,
     /// Counts nodes in the order the walk meets them, for `Ctx::open`.
     seq: u64,
     unpacked: u64,
@@ -276,17 +280,16 @@ struct Follow {
 }
 
 impl Follow {
-    fn new(root: Vec<usize>, file_bits: u64) -> Follow {
+    fn new(file_bits: u64) -> Follow {
         let mut audit = Audit::default();
         audit.space_bits = file_bits;
         Follow {
-            root,
             space: 0,
             started: false,
             stack: Vec::new(),
             pending: None,
             root_part: (0, 0),
-            root_struct: false,
+            part_chain: Vec::new(),
             seq: 0,
             unpacked: 0,
             books: Books::default(),
@@ -474,6 +477,42 @@ fn choice_in<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
     None
 }
 
+/// The structures whose fields are top-level parts, from the root down: see
+/// `Follow::part_chain`. Empty for a root that is not a structure, whose
+/// parts are not its children but the root itself.
+fn part_chain<S: Source>(ev: &mut Evaluator, doc: &Document<S>, root: &[usize]) -> R<Vec<Vec<usize>>> {
+    let mut chain = Vec::new();
+    let mut at = root.to_vec();
+    for _ in 0..8 {
+        let fields = match ev.memo[&at].ty.base() {
+            Ty::Struct(s) if !s.overlap => s.fields.len(),
+            _ => break,
+        };
+        chain.push(at.clone());
+        let whole = ev.size_of(doc, &at)?;
+        let mut big = None;
+        for k in 0..fields {
+            let mut c = at.clone();
+            c.push(k);
+            let size = match ev.resolve(doc, &c).and_then(|()| ev.size_of(doc, &c)) {
+                Ok(size) => size,
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => break,
+            };
+            // Nine tenths, and a structure: a list of records is the part,
+            // not a heading over a part per record.
+            if size.saturating_mul(10) >= whole.saturating_mul(9) && matches!(ev.memo[&c].ty.base(), Ty::Struct(s) if !s.overlap) {
+                big = Some(c);
+            }
+        }
+        match big {
+            Some(c) => at = c,
+            None => break,
+        }
+    }
+    Ok(chain)
+}
+
 /// Whether a field is a choice between records, rather than between ways of
 /// writing one value.
 fn picks_shape(t: &Template, ty: &Ty) -> bool {
@@ -518,13 +557,13 @@ impl<S: Source> Watch<S> for Follow {
         let (part, group, machinery) = match &parent {
             None => {
                 self.space = r.space;
-                self.root_struct = matches!(r.ty.base(), Ty::Struct(s) if !s.overlap);
+                self.part_chain = part_chain(ev, doc, path)?;
                 let part = self.books.part(path, &r.name.text());
                 let group = self.books.group("", "none");
                 (part, group, r.machinery)
             }
             Some((ppath, ppart, pgroup, pmachinery, _)) => {
-                let part = if *ppath == self.root && self.root_struct { self.books.part(path, &r.name.text()) } else { *ppart };
+                let part = if self.part_chain.contains(ppath) { self.books.part(path, &r.name.text()) } else { *ppart };
                 (part, *pgroup, *pmachinery)
             }
         };
@@ -658,12 +697,7 @@ impl<S: Source> Watch<S> for Follow {
                     // The field that picks a shape for the record, rather than
                     // one that picks how a number is written: a MIDI event's
                     // message, not its status byte.
-                    Ty::Struct(s) => match s
-                        .fields
-                        .iter()
-                        .position(|f| picks_shape(&t, &f.ty))
-                        .or_else(|| s.fields.iter().position(|f| choice_in(&t, &f.ty).is_some()))
-                    {
+                    Ty::Struct(s) => match s.fields.iter().position(|f| picks_shape(&t, &f.ty)) {
                         Some(k) => Elements::Field(k, s.fields[k].ty.clone()),
                         None => Elements::Fixed(self.books.group(&s.name, "type")),
                     },
@@ -695,6 +729,11 @@ impl<S: Source> Watch<S> for Follow {
     }
 
     fn closing(&mut self, ev: &mut Evaluator, doc: &Document<S>, f: &Closing) -> R<()> {
+        // Where the root's own fields end, asked again now that they are all
+        // read: a run stretched on the way moves it.
+        if self.stack.len() == 1 {
+            self.audit.root_end_bits = ev.memo[f.path].offset + ev.size_of(doc, f.path)?;
+        }
         // A run the walk stretched to take in an element past its room: its
         // length said less than it holds.
         if let (Some(c), Some(r)) = (self.stack.last_mut().and_then(|p| p.check.as_mut()), ev.memo.get(f.path)) {
@@ -926,11 +965,11 @@ impl Follow {
 ///
 /// First, the value that picked it, where that is a field whose value has a
 /// name: a MIDI event's status (`note on ch1`), a ZIP record's signature
-/// (`local file`), a chunk's four letters (`IDAT`). Then the case's own type,
-/// where the choice was made some other way: a SQLite page's `TableLeaf`.
-/// Where it fell to its default, which is usually "the bytes", the element's
-/// own name says more than the type does: an ELF section of plain bytes is
-/// `.rodata`.
+/// (`local file`), a chunk's four letters (`IDAT`). Then the case's own type
+/// where that is a record: a SQLite page's `TableLeaf`. Where the case is not
+/// a record, which is usually "the bytes" a switch falls back to, the
+/// element's own name says more than the type does: an ELF section of plain
+/// bytes is `.rodata`.
 ///
 /// `path` is the element, `at` the field that made the choice, which is the
 /// element itself when the element is the choice.
@@ -951,15 +990,16 @@ fn variant<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize], r: 
             return Ok((name, "key"));
         }
     }
-    let cases = switch_cases(&t, decl).unwrap_or(0);
-    let case = ev.case_taken(decl, taken);
-    if case.is_some_and(|c| c < cases) {
+    // A record is named by its type. Anything else, the bytes a switch falls
+    // back to or a run of values, is named better by the element itself,
+    // where the listing has a name for it.
+    if matches!(taken.base(), Ty::Struct(_)) {
         return Ok((taken.display_name(), "case"));
     }
     let label = ev.label(doc, path, r)?;
     Ok(match without_index(&label) {
-        Some(name) => (name.to_string(), "default"),
-        None => (taken.display_name(), "default"),
+        Some(name) => (name.to_string(), "name"),
+        None => (taken.display_name(), "case"),
     })
 }
 

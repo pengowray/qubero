@@ -46,10 +46,10 @@ pub struct LedgerRow {
     pub group: String,
     /// Where the group's name came from: `key` (the value that picked the
     /// case, read as a name: an enum's name, a chunk's four letters), `case`
-    /// (the type of the case a switch took), `default` (the switch fell to its
-    /// default and the element's own name is used), `type` (a list whose
-    /// elements are all one type), `none`, and `other` for every group past
-    /// the first [`GROUP_CAP`].
+    /// (the type of the case a switch took), `name` (the case is not a record,
+    /// so the element's own name, as the listing labels it: an ELF section's
+    /// `.rodata`), `type` (a list whose elements are all one type), `none`,
+    /// and `other` for every group past the first [`GROUP_CAP`].
     pub group_from: &'static str,
     /// `content`, `machinery`, `padding`, `framing` or `gap`.
     pub role: &'static str,

@@ -101,6 +101,10 @@ pub struct ExtentAudit {
 /// How many checks that are not `fits` are kept.
 pub const KEEP: usize = 500;
 
+/// How many elements of a list that would not read are looked at for the one
+/// that did not fit.
+const LIST_LOOK: usize = 64;
+
 /// How a declaration gets its length from a field, and in what unit.
 #[derive(Debug, Clone)]
 pub(super) struct Measure {
@@ -313,7 +317,7 @@ impl Evaluator {
         // A field declared as a choice is measured by the case it took: a
         // SQLite cell whose payload spilled is not the size its length says,
         // and was never meant to be.
-        let decl = self.case_declared(&decl, &r.ty);
+        let Some(decl) = self.case_declared(&decl, &r.ty) else { return Ok(None) };
         let Some(m) = find_measure(&self.template, &decl, Some(&name), 0) else { return Ok(None) };
         let stated = match self.eval_expr_at(doc, path, &unclamped(&m.expr), Some((r.cursor, pr_limit))) {
             Ok(v) => u64::try_from(v).ok(),
@@ -373,11 +377,18 @@ impl Evaluator {
             Ok(_) => return Ok(None),
             Err(_) => {}
         }
-        // Placed, and something inside it will not read. Only a structure is
-        // looked into: its fields are a handful, where a list's elements may
-        // be a walk to the end of the file.
+        // Placed, and something inside it will not read. A structure's fields
+        // are looked into, and the first few elements of a list: a run whose
+        // first element will not read fails as a whole, and that element is
+        // where the length that did not fit is.
         let fields = match self.memo[child].ty.base() {
             Ty::Struct(s) if !s.overlap && depth < 8 => s.fields.len(),
+            Ty::Repeat { .. } if depth < 8 => LIST_LOOK,
+            Ty::Array { .. } if depth < 8 => match self.child_count(doc, child) {
+                Ok(n) => (n as usize).min(LIST_LOOK),
+                Err(e) if e.interrupted() => return Err(e),
+                Err(_) => return self.failed_length(doc, parent, idx, at, why),
+            },
             _ => return self.failed_length(doc, parent, idx, at, why),
         };
         let mut from = self.memo[child].offset;
@@ -415,6 +426,9 @@ impl Evaluator {
                 Err(_) => return Ok(None),
             },
         };
+        // A choice is settled the way the reader settled it, where it can be:
+        // the case the value picks is the one whose length did not fit.
+        let decl = self.pick_case(doc, &child, decl, (at, pr.limit))?;
         let m = match &by {
             Some((_, name)) => find_measure(&self.template, &decl, Some(name), 0),
             None => find_measure(&self.template, &decl, None, 0),
@@ -502,16 +516,17 @@ impl Evaluator {
     }
 
     /// The case of a choice a node took, as declared, where its declaration
-    /// is a choice; the declaration itself otherwise, and where the case
-    /// cannot be told.
-    fn case_declared(&self, decl: &Ty, resolved: &Ty) -> Ty {
+    /// is a choice; the declaration itself otherwise. None where it is a
+    /// choice and which case was taken cannot be told: measuring by some other
+    /// case would compare the part with a length it was never read by.
+    fn case_declared(&self, decl: &Ty, resolved: &Ty) -> Option<Ty> {
         let t = &self.template;
         let mut ty = decl;
         for _ in 0..16 {
             ty = match ty {
                 Ty::Named(n) => match t.types.get(&**n) {
                     Some(inner) => inner,
-                    None => return decl.clone(),
+                    None => return Some(decl.clone()),
                 },
                 Ty::When { inner, .. } | Ty::Origin { inner } => inner,
                 Ty::Switch { .. } | Ty::Match { .. } => {
@@ -520,15 +535,41 @@ impl Evaluator {
                         Ty::Match { cases, default, .. } => cases.iter().map(|(_, c)| c).chain(std::iter::once(&**default)).collect(),
                         _ => unreachable!(),
                     };
-                    return match self.case_taken(ty, resolved).and_then(|i| cases.get(i)) {
-                        Some(c) => (*c).clone(),
-                        None => decl.clone(),
-                    };
+                    return self.case_taken(ty, resolved).and_then(|i| cases.get(i)).map(|c| (*c).clone());
                 }
-                _ => return decl.clone(),
+                _ => return Some(decl.clone()),
             };
         }
-        decl.clone()
+        Some(decl.clone())
+    }
+
+    /// The case a switch at `path` takes, worked out where the node would
+    /// have been placed, looking through names and conditions. The declaration
+    /// as it is where the value cannot be worked out.
+    fn pick_case<S: Source>(&mut self, doc: &Document<S>, path: &[usize], decl: Ty, here: (u64, u64)) -> R<Ty> {
+        let mut ty = decl;
+        for _ in 0..16 {
+            ty = match ty {
+                Ty::Named(n) => match self.template.types.get(&*n) {
+                    Some(inner) => inner.clone(),
+                    None => return Ok(Ty::Named(n)),
+                },
+                Ty::When { inner, .. } | Ty::Origin { inner } => *inner,
+                Ty::Switch { on, cases, default } => {
+                    let v = match self.eval_expr_at(doc, path, &on, Some(here)) {
+                        Ok(v) => v,
+                        Err(e) if e.interrupted() => return Err(e),
+                        Err(_) => return Ok(Ty::Switch { on, cases, default }),
+                    };
+                    match cases.iter().find(|(k, _)| *k == v) {
+                        Some((_, c)) => c.clone(),
+                        None => (*default).clone(),
+                    }
+                }
+                other => return Ok(other),
+            };
+        }
+        Ok(ty)
     }
 
     /// The name field `i` of the structure at `parent` is declared with.
