@@ -534,7 +534,7 @@ impl Evaluator {
         // twice, and a total that counts one stretch twice can say more of the
         // file is text than the file is long. See `Field::aside`.
         if self.aside(&path) {
-            watch.aside(self, doc, &path, &r)?;
+            watch.passed_over(self, doc, &path, &r)?;
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());
@@ -543,6 +543,7 @@ impl Evaluator {
         // described. See `already`.
         let already = walk.stack[top].already;
         if already.1 > already.0 && r.offset >= already.0 && r.offset + size <= already.1 {
+            watch.passed_over(self, doc, &path, &r)?;
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());

@@ -53,8 +53,10 @@ pub(super) trait Watch<S: Source> {
     }
 
     /// The node at `path` is a second reading of bytes counted somewhere
-    /// else, and the walk is about to pass it over. May be interrupted.
-    fn aside(&mut self, _ev: &mut Evaluator, _doc: &Document<S>, _path: &[usize], _r: &Resolved) -> R<()> {
+    /// else, marked so or landing inside what the fields laid out in order
+    /// already cover, and the walk is about to pass it over without going in.
+    /// May be interrupted.
+    fn passed_over(&mut self, _ev: &mut Evaluator, _doc: &Document<S>, _path: &[usize], _r: &Resolved) -> R<()> {
         Ok(())
     }
 

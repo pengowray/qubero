@@ -171,6 +171,19 @@ impl Evaluator {
     }
 }
 
+/// What a node's parent is, as far as placing the node goes.
+enum Up {
+    /// Laid out in order: `follows`, `overlap`, `element`, `other`.
+    Plain(&'static str),
+    /// An address, with what it counts from and how it is worked out.
+    At(crate::template::Anchor, Expr),
+    /// A list of offsets, a chain or a gather, and whether its offsets are
+    /// worked out from the end of the file.
+    Pointers(bool),
+    Chain(bool),
+    Gather(bool),
+}
+
 /// How the elements of a list get their group.
 #[derive(Debug, Clone)]
 enum Elements {
@@ -277,6 +290,9 @@ struct Follow {
     build: Build,
     fields: FxHashMap<usize, std::rc::Rc<Fields>>,
     keys: FxHashMap<usize, (Ty, String, u64)>,
+    /// The template, copied once when the walk starts rather than once a
+    /// node: the walk is thrown away whenever the template changes.
+    template: std::rc::Rc<Template>,
 }
 
 impl Follow {
@@ -298,6 +314,7 @@ impl Follow {
             build: Build::default(),
             fields: FxHashMap::default(),
             keys: FxHashMap::default(),
+            template: std::rc::Rc::new(Template::new("", Ty::u8())),
         }
     }
 
@@ -558,6 +575,7 @@ impl<S: Source> Watch<S> for Follow {
             None => {
                 self.space = r.space;
                 self.part_chain = part_chain(ev, doc, path)?;
+                self.template = std::rc::Rc::new(ev.template().clone());
                 let part = self.books.part(path, &r.name.text());
                 let group = self.books.group("", "none");
                 (part, group, r.machinery)
@@ -572,13 +590,32 @@ impl<S: Source> Watch<S> for Follow {
         out.machinery = machinery || r.machinery;
         out.inherit = out.machinery;
         let mut own = false;
-        let t = ev.template().clone();
+        let t = self.template.clone();
         if let Some((&idx, up)) = path.split_last().filter(|_| parent.is_some()) {
-            let pr = ev.memo[up].clone();
+            // What the node's parent is, taken without copying its type: a
+            // list's type holds its element's, and this is asked once a node.
+            let (up_offset, up_struct, up_kind) = {
+                let pr = &ev.memo[up];
+                let up_struct = match pr.ty.base() {
+                    Ty::Struct(s) => Some(s.clone()),
+                    _ => None,
+                };
+                let kind = match &pr.ty {
+                    Ty::Struct(s) if s.overlap => Up::Plain("overlap"),
+                    Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => Up::Plain("follows"),
+                    Ty::Array { .. } | Ty::Repeat { .. } => Up::Plain("element"),
+                    Ty::At { anchor, at, .. } => Up::At(*anchor, at.clone()),
+                    Ty::PointerList { adjust, .. } => Up::Pointers(from_end(adjust)),
+                    Ty::Chain { first, adjust, .. } => Up::Chain(from_end(first) || from_end(adjust)),
+                    Ty::Gather { offset, adjust, .. } => Up::Gather(from_end(offset) || from_end(adjust)),
+                    _ => Up::Plain("other"),
+                };
+                (pr.offset, up_struct, kind)
+            };
             // Whether this field is machinery, and whether a sibling gives its
             // length, from the declaration of the structure it is in.
             let mut measured_by = None;
-            if let Ty::Struct(s) = pr.ty.base() {
+            if let Some(s) = &up_struct {
                 let f = self.fields_of(s);
                 own = f.machinery.get(idx).copied().unwrap_or(false);
                 out.machinery |= own;
@@ -594,7 +631,7 @@ impl<S: Source> Watch<S> for Follow {
                     Elements::Inherit => out.group,
                     Elements::Fixed(g) => g,
                     Elements::Choice(decl) => {
-                        let (name, from) = variant(ev, doc, path, r, &decl, path, &r.ty)?;
+                        let (name, from) = variant(ev, doc, &t, path, r, &decl, path, &r.ty)?;
                         self.books.group(&name, from)
                     }
                     Elements::Field(k, decl) => {
@@ -603,7 +640,7 @@ impl<S: Source> Watch<S> for Follow {
                         let (name, from) = match ev.resolve(doc, &child) {
                             Ok(()) => {
                                 let ty = ev.memo[&child].ty.clone();
-                                variant(ev, doc, path, r, &decl, &child, &ty)?
+                                variant(ev, doc, &t, path, r, &decl, &child, &ty)?
                             }
                             Err(e) if e.interrupted() => return Err(e),
                             Err(_) => (r.ty.display_name(), "type"),
@@ -614,20 +651,18 @@ impl<S: Source> Watch<S> for Follow {
             }
             // How it was placed, and for a field an offset placed, whether the
             // offset points forward or back.
-            let (kind, by_offset, pointer, end) = match &pr.ty {
-                Ty::Struct(s) if s.overlap => ("overlap", false, None, false),
-                Ty::Struct(_) | Ty::Json(..) | Ty::Pickle(..) => ("follows", false, None, false),
-                Ty::Array { .. } | Ty::Repeat { .. } => ("element", false, None, false),
-                Ty::At { anchor, at, .. } => (at_kind(*anchor, at), true, Some(pr.offset), from_end(at)),
-                Ty::PointerList { adjust, .. } => ("pointer-list", true, pointer_from(ev, doc, path)?, from_end(adjust)),
-                Ty::Chain { first, adjust, .. } => {
+            let (kind, by_offset, pointer, end) = match up_kind {
+                Up::Plain(kind) => (kind, false, None, false),
+                Up::At(anchor, at) => (at_kind(anchor, &at), true, Some(up_offset), from_end(&at)),
+                Up::Pointers(end) => ("pointer-list", true, pointer_from(ev, doc, path)?, end),
+                Up::Chain(end) => {
                     let before = match idx.checked_sub(1) {
                         Some(i) => ev.list(up).chain_starts.get(i).copied(),
-                        None => Some(pr.offset),
+                        None => Some(up_offset),
                     };
-                    ("chain", true, before, from_end(first) || from_end(adjust))
+                    ("chain", true, before, end)
                 }
-                Ty::Gather { offset, adjust, .. } => {
+                Up::Gather(end) => {
                     let record = ev.list(up).gather.as_ref().and_then(|g| g.records.get(idx).cloned());
                     let at = match record {
                         Some(rec) => match ev.resolve(doc, &rec) {
@@ -637,9 +672,8 @@ impl<S: Source> Watch<S> for Follow {
                         },
                         None => None,
                     };
-                    ("gather", true, at, from_end(offset) || from_end(adjust))
+                    ("gather", true, at, end)
                 }
-                _ => ("other", false, None, false),
             };
             if !matches!(r.ty, Ty::At { .. }) {
                 out.placement = Some(kind);
@@ -648,16 +682,23 @@ impl<S: Source> Watch<S> for Follow {
             out.forward = pointer.map(|p| r.offset >= p);
             out.from_end = end;
             // The switch this field was declared as, and the case it took.
-            let decl = match &pr.ty {
-                Ty::Struct(s) => s.fields.get(idx).map(|f| f.ty.clone()),
-                other => element_of(other).cloned(),
-            };
-            if let Some(decl) = decl.filter(|d| choice_in(&t, d).is_some()) {
-                if let Some((key, cases)) = self.choice_key(&t, &decl) {
+            // Copied only where it is one.
+            let decl = {
+                let pr = &ev.memo[up];
+                let declared = match &pr.ty {
+                    Ty::Struct(s) => s.fields.get(idx).map(|f| &f.ty),
+                    other => element_of(other),
+                };
+                declared.filter(|d| choice_in(&t, d).is_some()).map(|d| {
                     let name = match &pr.ty {
                         Ty::Struct(s) => s.fields.get(idx).map(|f| f.name.to_string()).unwrap_or_default(),
                         _ => pr.name.text(),
                     };
+                    (d.clone(), name)
+                })
+            };
+            if let Some((decl, name)) = decl {
+                if let Some((key, cases)) = self.choice_key(&t, &decl) {
                     out.choice = Some((key, name, cases, ev.case_taken(&decl, &r.ty)));
                 }
             }
@@ -671,9 +712,13 @@ impl<S: Source> Watch<S> for Follow {
                 }
             }
         }
-        // How long it is.
+        // How long it is. Padding is sized by an alignment, which the shape
+        // of its expression alone would call a length read from a field.
         if !out.absent {
-            out.sizing = sizing_kind(ev.shape(doc, path)?.sized);
+            out.sizing = match r.ty.base() {
+                Ty::Bytes(e) if super::profile::padding_align(e).is_some() => Some("alignment"),
+                _ => sizing_kind(ev.shape(doc, path)?.sized),
+            };
         }
         // A stream: what it came to, when it is open or small enough to open.
         if matches!(r.ty, Ty::Decoded { .. }) {
@@ -719,21 +764,39 @@ impl<S: Source> Watch<S> for Follow {
 
     /// A second reading is counted nowhere in the ledger, but an address that
     /// is one still says which way the file points: a ZIP's central directory
-    /// points back at every local header.
-    fn aside(&mut self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<()> {
-        let Ty::At { anchor, at, .. } = &r.ty else { return Ok(()) };
-        let (kind, end) = (at_kind(*anchor, at), from_end(at));
-        let mut child = path.to_vec();
-        child.push(0);
-        let target = match ev.resolve(doc, &child) {
-            Ok(()) => ev.memo[&child].offset,
-            Err(e) if e.interrupted() => return Err(e),
-            Err(_) => return Ok(()),
+    /// points back at every local header, and a TIFF's header points on at its
+    /// directory, which a run of bytes the template also declares covers.
+    ///
+    /// Only the address: the fields inside what it places are not walked, and
+    /// the profile counts none of them.
+    fn passed_over(&mut self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<()> {
+        // The address itself, marked a second reading: where it points is
+        // its child, not yet placed.
+        let (anchor, at, from, target) = match &r.ty {
+            Ty::At { anchor, at, .. } => {
+                let mut child = path.to_vec();
+                child.push(0);
+                let target = match ev.resolve(doc, &child) {
+                    Ok(()) => ev.memo[&child].offset,
+                    Err(e) if e.interrupted() => return Err(e),
+                    Err(_) => return Ok(()),
+                };
+                (*anchor, at.clone(), r.offset, target)
+            }
+            // What an address placed inside a stretch already counted: the
+            // address is its parent.
+            _ => {
+                let Some((_, up)) = path.split_last() else { return Ok(()) };
+                let Some(pr) = ev.memo.get(up) else { return Ok(()) };
+                let Ty::At { anchor, at, .. } = &pr.ty else { return Ok(()) };
+                (*anchor, at.clone(), pr.offset, r.offset)
+            }
         };
+        let (kind, end) = (at_kind(anchor, &at), from_end(&at));
         self.counts.add(Key::of("placement", kind), 1, 0);
         let f = &mut self.counts.facts;
         f.placed += 1;
-        if target >= r.offset {
+        if target >= from {
             f.forward += 1;
         } else {
             f.backward += 1;
@@ -1001,9 +1064,8 @@ impl Follow {
 /// `path` is the element, `at` the field that made the choice, which is the
 /// element itself when the element is the choice.
 #[allow(clippy::too_many_arguments)]
-fn variant<S: Source>(ev: &mut Evaluator, doc: &Document<S>, path: &[usize], r: &Resolved, decl: &Ty, at: &[usize], taken: &Ty) -> R<(String, &'static str)> {
-    let t = ev.template().clone();
-    let on = match choice_in(&t, decl) {
+fn variant<S: Source>(ev: &mut Evaluator, doc: &Document<S>, t: &Template, path: &[usize], r: &Resolved, decl: &Ty, at: &[usize], taken: &Ty) -> R<(String, &'static str)> {
+    let on = match choice_in(t, decl) {
         Some(Ty::Switch { on: Expr::Ref(name), .. }) | Some(Ty::Match { on: Expr::Ref(name), .. }) => Some(name.clone()),
         _ => None,
     };

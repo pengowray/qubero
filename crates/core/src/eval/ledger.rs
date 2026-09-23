@@ -46,10 +46,13 @@ pub struct LedgerRow {
     pub group: String,
     /// Where the group's name came from: `key` (the value that picked the
     /// case, read as a name: an enum's name, a chunk's four letters), `case`
-    /// (the type of the case a switch took), `name` (the case is not a record,
-    /// so the element's own name, as the listing labels it: an ELF section's
-    /// `.rodata`), `type` (a list whose elements are all one type), `none`,
-    /// and `other` for every group past the first [`GROUP_CAP`].
+    /// (the type of the case a switch took: a record's name, or the type
+    /// written out where the case is not a record and the element has no name
+    /// of its own, as a SQLite page the template reads as `bytes[]`), `name`
+    /// (the case is not a record, so the element's own name, as the listing
+    /// labels it: an ELF section's `.rodata`), `type` (a list whose elements
+    /// are all one type), `none`, and `other` for every group past the first
+    /// [`GROUP_CAP`].
     pub group_from: &'static str,
     /// `content`, `machinery`, `padding`, `framing` or `gap`.
     pub role: &'static str,
@@ -139,16 +142,23 @@ pub(super) struct Tally {
 }
 
 /// How much gap and padding the ledger reads to split it into zero and
-/// nonzero bytes. A template that describes a header and nothing else leaves
-/// the whole file a gap, and reading a few gigabytes to say how much of it is
-/// zero is a question for the overview's byte classes, which read in the
-/// background already. Past this the bits are counted as not looked at.
-const SCAN_CAP: u64 = 256 * 1024 * 1024 * 8;
+/// nonzero bytes, in all and in one stretch. A template that describes a
+/// header and nothing else leaves the whole file a gap, and in the web app
+/// reading it means fetching it: gigabytes to say how much of a gap is zero,
+/// which is a question the overview's byte classes answer already, in the
+/// background and at their own pace. Past either cap the bits are counted as
+/// not looked at, and a view joins them with the byte classes.
+const SCAN_CAP: u64 = 4 * 1024 * 1024 * 8;
+const SCAN_ONE: u64 = 1024 * 1024 * 8;
 
 /// How many groups the ledger keeps apart. A variant is a name the file
 /// chose, and a file that names every record differently would make a ledger
 /// as long as the file.
 pub const GROUP_CAP: usize = 256;
+
+/// How far back among the placed fields a gap looks for one that starts
+/// before it and reaches into it.
+const LOOK_BACK: usize = 100_000;
 
 /// How much one step of the scan reads at a time.
 const SCAN_CHUNK: u64 = 64 * 1024 * 8;
@@ -232,6 +242,15 @@ impl Tally {
         self.settled = true;
         let mut placed = std::mem::take(&mut self.placed);
         placed.sort_by_key(|p| (p.from, p.to));
+        // The furthest any field placed so far in that order reaches, so the
+        // ones that start before a gap and reach into it are found by going
+        // back only as far as that could still be true.
+        let mut reach = Vec::with_capacity(placed.len());
+        let mut furthest = 0;
+        for p in &placed {
+            furthest = furthest.max(p.to);
+            reach.push(furthest);
+        }
         let stretches = std::mem::take(&mut self.stretches);
         let mut kept = Vec::with_capacity(stretches.len());
         for s in stretches {
@@ -240,12 +259,18 @@ impl Tally {
                 continue;
             };
             // What was placed over this gap: everything that starts inside
-            // it, and a few before it that may reach into it. A field whose
-            // own structure the gap is in is not taken out, since the gap is
-            // bytes that field left.
+            // it, and whatever started before it and reaches into it. A field
+            // whose own structure the gap is in is not taken out, since the
+            // gap is bytes that field left.
             let lo = placed.partition_point(|p| p.from < s.from);
             let hi = placed.partition_point(|p| p.from < s.to);
-            let mut over: Vec<(u64, u64)> = placed[lo.saturating_sub(64)..hi]
+            // Bounded, for the file where one early field reaches over nearly
+            // all of it and every gap would otherwise look back to the start.
+            let mut first = lo;
+            while first > 0 && reach[first - 1] > s.from && lo - first < LOOK_BACK {
+                first -= 1;
+            }
+            let mut over: Vec<(u64, u64)> = placed[first..hi]
                 .iter()
                 .filter(|p| p.to > s.from && p.from < s.to && !(p.open <= frame && frame <= p.close))
                 .map(|p| (p.from.max(s.from), p.to.min(s.to)))
@@ -294,7 +319,7 @@ impl Tally {
         while let Some(s) = self.stretches.get(self.scan_at.0) {
             let s = s.clone();
             let at = s.from.max(self.scan_at.1);
-            if at >= s.to || self.scanned >= SCAN_CAP {
+            if at >= s.to || self.scanned >= SCAN_CAP || s.to - s.from > SCAN_ONE {
                 self.scan_at = (self.scan_at.0 + 1, 0);
                 continue;
             }

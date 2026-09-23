@@ -581,3 +581,137 @@ are Qubero's. Each is described in the notes file named.
 | `zip` template and `relate.rs` | Central directory offsets are plain numbers. `relations()` shows ZIP64 placeholder arithmetic for an archive with no ZIP64. `origins()` on an entry's data does not name `data_size` as its length | `docx-word16-table.notes.md` |
 | Strings view | Does not look inside decoded spaces, so it finds none of the DOCX document's text, and it reads a name length and an extra length as one number | `docx-word16-table.notes.md` |
 | Sample collection | `sources.tsv` has no row for `jpeg/libjpeg-turbo-testorig-baseline.jpg` (it is IJG libjpeg 6b's `testorig.jpg`) or for the four `pngsuite-*` PNG files | JPEG and PNG notes |
+
+## Report data from the core
+
+Six functions on `Editor` in `crates/wasm/src/lib.rs` give the generic report
+what the core did not compute before. Each returns facts, not words: keys such
+as `past-file` and `length-field` are part of the interface, and the web writes
+the sentences.
+
+| Function | Report section | Comes from |
+|---|---|---|
+| `format_about(template)` | 2, what the format is | `formats/about.rs` |
+| `template_profile(space)` | 10, counted over the template | `eval/profile.rs` |
+| `format_profile_step(space)` | 3 and 10, counted over the file | `eval/survey.rs`, `eval/profile.rs` |
+| `byte_ledger_step(space)` | 6 and 12 | `eval/survey.rs`, `eval/ledger.rs` |
+| `extent_audit_step(space)` | 4, claimed against actual | `eval/survey.rs`, `eval/extent.rs` |
+| `directories_step(space)` | 7, what each directory points to | `eval/directory.rs` |
+
+The four `_step` functions share one walk, kept on the sheet like the kind
+totals' walk and thrown away on any edit. Asking any of them carries all four
+on by one go, in the usual reply shape: `done` on the answer says when to stop
+asking, and bytes the walk waits on come back as `wanted`.
+
+**One walk, not four.** The walk is the kind totals' own (`kinds.rs`), which
+accounts for every byte once: it defers what an offset placed, passes over
+second readings, and counts a run of same-shaped elements once and
+multiplies. `eval/watch.rs` lets the report follow it. The profile, the ledger
+and the audit are three counts taken on the way, so a large file is walked
+once. After the walk, two stages read more, a step at a time: the gaps are
+read for their zero bytes, and the directories are found.
+
+The kind walk changed in one way for every caller. When an element of a run
+whose length only walking settles would not read, it counts the run once,
+which is what lets `stretch_to` make room for an element that overran a
+declared size, and tries the element again. The listing and the Diagram view
+already counted every run, so the GUANO chunk past a short RIFF size was read
+there and left a gap in the kind totals. Now all three agree.
+
+### The format profile
+
+A table of rows, each a `category`, a `kind` within it, and how many `fields`
+and `bits` it covers. The categories are the ones in section 10: numbers (by
+kind, `width` and byte `order`), text (by length rule and encoding),
+variable-length numbers, bit fields, enums, flags, magic numbers, computed
+fields, opaque runs (bytes, machine code, JSON, entropy-coded symbols),
+padding (by alignment), checksums (by algorithm), codecs (with what the
+opened streams unpacked to), `placement` (how each field was found) and
+`sizing` (how its length was settled). A field counts in every category it
+belongs to: an enum is also the number under it. `choices` lists every switch
+with its case count, and for the file how many cases it took, which is what
+"the template allows 12 kinds of chunk and this file uses 4" needs.
+
+`facts` holds the numbers for the reading-and-writing sentences: fields placed
+from the end of the file, fields placed by an offset and how many of those
+point forward or back from the field holding the offset, lengths before and
+after what they size, and `every_field_follows`. The template can only say
+`every_field_follows` is false when it places something from the end; where it
+places anything by an offset, the answer depends on the file and is null.
+`lengths_after` is always 0 for a template, since a length the IR can name is
+always a field declared before.
+
+A stream's unpacked size is known only once it is open. The file profile opens
+streams of up to 1 MiB, 4 MiB in all, and counts one the listing or a tab has
+already opened whatever its size.
+
+### The byte ledger
+
+Every bit of the file in one row, keyed by part, group and role, as
+[Where the bytes go](#where-the-bytes-go) describes:
+
+- **Part**: a field of the root, or the root itself when it is a list. Where
+  one field of the root holds nine tenths of the file, as ELF's header does,
+  that field's fields are parts too.
+- **Group**: the variant of the nearest list element. First the value that
+  picked the case, read as a name (`meta`, `local file`, `IDAT`); then the
+  case's type where it is a record (`TableLeaf`); then, for a case that is not
+  a record, the element's own name as the listing labels it (`.rodata`). A run
+  of plain values stays in its list's group, so a WAV's samples are the `data`
+  chunk's.
+- **Role**: `content`, `machinery` (a field whose value another field's
+  length, count, type or place reads, not one whose size alone it reads),
+  `padding`, `framing` and `gap`.
+
+A gap has taken out of it every field an offset placed over it, except one it
+is inside of, so SQLite's cells come out of the free space of their pages and
+nothing is counted twice. Gaps and padding are read for zero bytes, up to
+1 MiB for one stretch and 4 MiB in all; the rest is `unscanned_bits`, which
+the web joins with the overview's byte classes. Whether a unit is reachable
+from the root is not in the ledger yet (see
+[References](#references-are-values-that-point)).
+
+### The extent audit
+
+For every field another field's length or count depends on, four numbers:
+what the length field holds, what the template's length expression comes to
+without its cap at the room left (`stated`), what the part was read as
+(`read`), and how far the part's own fields reached, including fields an
+offset placed inside it (`content_bits`), against the room its parent had
+and the length of the file. The verdicts are `fits`, `short`, `stretched`,
+`past-parent`, `past-file` and `unreadable`. A part that would not read is
+looked into until the field that did not fit is found, and a run that
+stopped at an element it could not read (`repeat_trouble`) is looked into the
+same way. `adjusted` says the template's length reads more than the length
+field, as the WAV template does for a D500X block, so the field's own value
+is not the part's length.
+
+On the report's files: the pipistrelle WAV's RIFF size runs 8 bytes past the
+file, the GUANO sample's RIFF size is stretched by 40, MAT's
+`malformed1.mat` has an element 658,840 bytes long in a file of 2,208, and
+every length in the SQLite file fits, a spilled payload included.
+
+### What each directory points to
+
+Every list whose elements place something elsewhere, found three ways with
+nothing format-specific: an address inside each element (from the index
+`placed.rs` keeps for the cursor), a list of offsets and the table beside it,
+and a gather and its records. Each directory lists its first 256 entries that
+place something, each with its own extent and what it places. ELF's section
+headers come out pointing at their names and their sections, TIFF's IFD
+entries at the values too large to sit in them, and SQLite's cell pointers at
+their cells.
+
+ZIP's central directory needed one template change: each entry now has a
+`local_header` field, an address at `local_header_offset` marked a second
+reading, which reads the local header the entry describes. That is what joins
+the eleven entries of the DOCX sample to their local headers, and a signature
+missing there is now a finding.
+
+### Limits
+
+A template that declares a run of bytes over what an address places, as TIFF
+declares `body` over everything after its header, hides the directory's fields
+from the ledger and the file profile: the kind walk counts the bytes once, in
+the run, and does not go into the address. The profile still counts the
+address and which way it points, and the directories still find the entries.
