@@ -5,8 +5,8 @@ put together, and what is unusual about it, with figures that explain rather
 than decorate. It sits one level of abstraction above the listing. Every claim
 in it links down to the bytes it rests on.
 
-This document is the design. It is based on eight reports written by hand on
-2026-09-23 from real sample files, with the goal of finding what a program can
+This document is the design. It is based on eight reports on real sample
+files, each written individually on 2026-09-23 for this design rather than generated, with the goal of finding what a program can
 generate without an LLM. The reports, their notes, the brief the agents
 followed, and the shared page kit are in `qubero2-extras/reports/`, outside
 this repository, like the 2026-08-29 view mockups:
@@ -225,7 +225,7 @@ produces: a literal is a narrow band that widens at the top, and a copy is a
 band that widens at the bottom, with an arc to the bytes it repeats. Both come
 from `Trace` and `Space::map_out`. What is missing is traces for codecs other
 than deflate, and codecs whose settings come from other fields (see
-[Codecs](#known-values-and-parameterised-codecs)).
+[Codecs](#known-values-and-parameterized-codecs)).
 
 ### Logical against physical
 
@@ -394,7 +394,7 @@ which reads each pixel at a computed offset the way `Ty::Gather` reads records.
 It gives every pixel a path, which the content figure, the pixel walkthrough,
 and hover all need.
 
-### Known values and parameterised codecs
+### Known values and parameterized codecs
 
 The known-values registry is described earlier. For codecs, `Packing` already
 carries parameters as expressions (`Lzma1`, `Rar5`), so a JPEG baseline codec
