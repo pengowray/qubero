@@ -7,10 +7,12 @@ edition = "2024"
 version = "0.1.0"
 license = "MIT"
 
-# A copy of the crate with one fix in src/parser.rs (search for "Qubero:").
-# Take the fix out once it is upstream.
+# Copies of crates with fixes of ours, each marked "Qubero:" in the source:
+# pure-magic in src/parser.rs, yaxpeax-x86 in src/long_mode/mod.rs.
+# Take a fix out once it is upstream.
 [patch.crates-io]
 pure-magic = { path = "crates/vendor/pure-magic" }
+yaxpeax-x86 = { path = "crates/vendor/yaxpeax-x86" }
 
 [profile.release]
 opt-level = 3

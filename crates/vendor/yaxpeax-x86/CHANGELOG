@@ -1,0 +1,679 @@
+## 2.2.0
+
+* add DisplayStyle::Masm to long mode, protected mode, and real mode instruction formatting.
+  this "masm-style" formatting is derived from the output format of
+  dumpbin.exe, and (on Windows) is tested to round-trip through masm.exe or
+  ml64.exe as appropriate. caveats apply; see the documentation on DisplayStyle for details.
+
+* add a new `DisplayRules` trait to override elements of instruction formatting, as well as
+  `Instruction::display_rules` as an analogue to `Instruction::display_style` as a simple helper
+  to wrap an instruction and display rules together for formatting.
+
+  yaxpeax-x86 (finally) supports printing instructions at absolute addresses
+  through new `AbsoluteAddressFormatter`s in all modes. the interactions
+  between `DisplayStyle` and specific `DisplayRules` implementations are
+  somewhat subtle and better documented on those types. a test implementation
+  of `DisplayRules` is used to symbolicate addresses, for example, but such an
+  implementation is (probably!) not suitable for general-purpose use.
+
+  `DisplayRules` should not add any additional overhead to instruction
+  formatting beyond net-new logic in provided formatting. existing formatting
+  is a short-hand for `DefaultRules` (`Instruction::display_with` as well as
+  plain `impl Display for Instruction`). if formatting throughput regresses in
+  some use case, that is a bug! please report it!
+
+* `Instruction::invalid()` returns instructions with opcode `Opcode::Invalid`, rather than nop.
+  decoding an instruction with `opcode == Invalid` was already possible through attempting
+  to decode invalid opcodes into a `&mut Instruction`; `invalid()` returning a no-operand
+  nop dates back to initial versions of the library attempting to never return instructions
+  that did not reflect a decoded x86 instruction.
+  it has long passed its time. thank you for the patch, @Grond66!
+* fix vpbroadcast* with a SIMD register source being able to claim ymm as a source. the source
+  register according to manuals and every assembler is xmm-size, if a register. semantically this
+  has little effect: the broadcasted value is the low lane of the source register in these cases.
+* fix vpbroadcast* with a memory source reporting incorrect memory sizes. the memory address being
+  broadcast indicates the size, which is one byte/word/dword/qword. it is unrelated to the
+  broadcasted-to vector length.
+* fix incorrect index-vector-register size choice for vgatherdpd. the index register is xmm, not
+  depends-on-L xmm/ymm.
+* fix SEAM and {rd,wr}{fs,gs}base instructions being decoded in 32-bit and 16-bit modes.
+* the pextr*/pinsr*/insertps/extrps immediate is now an unsigned 8-bit immediate, rather than signed.
+  these instructions consume 8 bit of immediate as several fields compressed into 8 bits, rather
+  than as a numeric value, so sign extension is not useful.  further, extending the immediate makes
+  it more difficult to round-trip disassembly through other assemblers.
+* fix vmread/vmwrite reporting 8-byte accesses outside long mode; they are 4-byte accesses in
+  protected and real modes.
+* fix lfs/lgs/lss loading into dword registers when operating with a short (16-bit segment/offset) pointer.
+  in these cases, the offset is loaded into a 16-bit register, not 32-bit. the upper 32 bits are unchanged.
+* fix 32/16-bit unprefixed lfs/lgs/lss reporting too-small memory read.  in both modes
+  these instructions could be decoded as reading only an offset, rather than an offset (into the
+  destination register) and segment (into ss)
+
+testing instruction round-tripping through `masm` found a few bugs, which are also fixed in this release:
+
+* fix vpbroadcast* with a SIMD register source being able to claim ymm as a source. the source
+  register according to manuals and every assembler is xmm-size, if a register. semantically this
+  has little effect: the broadcasted value is the low lane of the source register in these cases.
+* fix vpbroadcast* with a memory source reporting incorrect memory sizes. the memory address being
+  broadcast indicates the size, which is one byte/word/dword/qword. it is unrelated to the
+  broadcasted-to vector length.
+* fix incorrect index-vector-register size choice for vgatherdpd. the index register is xmm, not
+  depends-on-L xmm/ymm.
+* fix SEAM and {rd,wr}{fs,gs}base instructions being decoded in 32-bit and 16-bit modes.
+* the pextr*/pinsr*/insertps/extrps immediate is now an unsigned 8-bit immediate, rather than signed.
+  these instructions consume 8 bit of immediate as several fields compressed into 8 bits, rather
+  than as a numeric value, so sign extension is not useful.  further, extending the immediate makes
+  it more difficult to round-trip disassembly through other assemblers.
+* fix vmread/vmwrite reporting 8-byte accesses outside long mode; they are 4-byte accesses in
+  protected and real modes.
+* fix lfs/lgs/lss loading into dword registers when operating with a short (16-bit segment/offset) pointer.
+  in these cases, the offset is loaded into a 16-bit register, not 32-bit. the upper 32 bits are unchanged.
+* fix 32/16-bit unprefixed lss reporting too-small memory read.  in both modes
+  lss could be decoded as reading only an offset, rather than an offset (into the
+  destination register) and segment (into ss)
+
+## 2.1.1
+
+* fix jrcxz/jecxz/jcxz having "two operands". accessing the "second" operand
+  through `Instruction::operand` is a guaranteed panic.
+* fix the mnemonics for some prefetch instructions: prefetcht{0,1,2} were missing the second "t".
+  the Opcode variants are still spelled incorrectly and will continue to be until a future 3.0.
+* renamed the round-to-nearest AVX512 rounding mode from "rne-sae" to "rn-sae".
+  "rne-sae" is the XED spelling, taken from the original Knights Landing form of
+  AVX-512. everything else (including assemblers like nasm, masm, gas, ..) since
+  standardized on "rn-sae", the spelling for the rounding mode in subsequent
+  versions of the SDM and now APM.
+* fix several instructions having incorrectly-large register or memory access sizes.
+  `roundss` and `roundsd` were overly-large, as were `pmovsxbd`, `pmovzxwq`,
+  `pmovsxwq`, and `cvtss2sd`. additionally, `lfs`, `lgs`, and `lss` in 64-bit
+  mode have 32-bit operand forms (yielding 32 + 16 == 48 bits of memory
+  accessed).
+* fix many vex instructions having their modrm/mmm registers extended by an
+  incorrect VEX prefix bit. most errors were REX.X being used to extend the mmm-field
+  register, but hardware uses REX.B for this purpose.
+
+## 2.1.0
+
+### additions
+
+* x86-64, x86-32, and x86-16 instructions now have associated behavior information
+  (operand read/write, exceptions, privilege levels) accessible via `Instruction::behavior()`.
+  the new `behavior` modules include examples and further discussion of the new APIs.
+* `InstDecoder` for all execution modes now has many more feature flags.
+  * `InstDecoder::default` still constructs a decoder that decodes all supported instructions.
+  * more ISA extensions can be individually selected for decoding support, though note
+    not all feature flags are fully implemented. in such cases, instructions will be decoded
+    even when their corresponding extension is not selected.
+* added uarch-specific decoders for Zen 2, Zen 3, Zen 4, and Zen 5
+* RegSpec register helpers to construct RegSpec from register numbers are now const fn
+  (RegSpec::xmm, RegSpec::q, RegSpec::d, RegSpec::st, etc)
+* new crate feature flag, `unstable`, for library features that may see
+  breaking changes across semver-compatible releases.
+* Prefixes::operand_size and Prefixes::address_size are now public, reporting
+  if a 66 or 67 prefix is active for the decoded instruction. be aware that in
+  64-bit mode operand-size overrides interact in subtle ways with REX
+  prefixes and in particular REX.W takes precedence over operand-size in
+  practice.. most of the time. these are intended to be informative; if
+  application logic depends on them it is likely a yaxpeax-x86 bug.
+* Prefixes::segment is now public and reports the instruction's selected data segment.
+
+### fixes
+
+the behavior additions mentioned above have been tested by running x86
+instructions (64-, 32-, and 16-bit) under asmlinator: https://crates.io/crates/asmlinator
+
+this made obvious many cases where yaxpeax-x86 allowed instructions that
+hardware disallowed, was too permissive about VEX/EVEX bits (treating W as WIG
+when SDM/APM define it as fixed 0 or 1), some cases of swapped operands, and
+several cases of unreported memory access sizes. so, there is a relatively
+large set of fixes and refinements to instruction rejection, all in the
+direction of being closer to actual hardware decoding logic. in most cases,
+this also brings yaxpeax-x86 more in-line with Intel XED, Zydis, etc.
+
+many changes along the way that reject previously erroneously-accepted
+instructions, as well as fixing issues related to operand reporting in the face
+of operand/address size prefixes. these are grouped together for library users
+that may have considered yaxpeax-x86 decoding alongside external information
+like raw instruction bytes.
+
+* fix pextr{b,w,d,q} and extractps first and second operands being backwards.
+* removed 3DNow support from AMD uarch-specific decoders after K10
+* reject so many invalid AVX512 encodings (instructions which do not support broadcast,
+  or rounding, or require W=0/W=1, etc).
+* jrcxz/jecxz/jcxz are overridden based on address-size prefix to select their
+  mode-appropriate alternate forms: jecxz/jcxz/jecxz.
+  - thank you Stephen for the report!
+* 32-bit: pusha/popa default to pushad/popad to reflect the default operand
+    size. an operand-size prefix now correctly overrides to pusha/popa.
+* 16-bit: an operand-size prefix now correctly overrides to pushad/popad.
+  - likewise, thank you Stephen for spotting these issues!
+* for uarch-specific decoding, there is now a feature bit for Intel Key Locker. this corrects an
+  issue where Key Locker instructions would decode under AMD-specific decoders.
+* reject 0f0d prefetch/nop with a register operand, which was incorrectly decoded before.
+* fix incorrect operand order for VEX-encoded vmovupd opcode 0x11.
+* reject a few VEX-encoded instructions that are specific about allowed W-bits.
+  vcvtph2ps, vbroadcastf128, vmaskmovps, vmaskmovpd, vpermd,
+  vpbroadcast{b,w,d,q}, vinserti128, vextracti128, vblendv*, among others.
+* vpbroadcastb and vpbroadcastw should respect the L bit to select xmm/ymm vector width, but
+  always decoded as ymm.
+* correct swapped operand order of 0xD6-opcode movq. in 32/16-bit, fix this opcode being decoded as vmovd.
+* some instructions (such as invept, invvpid) were accepted by uarch-specific
+  deocders when they should not have been.
+* reject `arpl` in 16-bit decoding.
+* disallow 66-prefixed `sha1rnds4`.
+* mov seg-to-reg has more careful destination GPR selection.
+  * 64-bit: use 32-bit GPRs for the destination rather than 16-bit.
+    - this is more accurate to the semantic of the instruction, which is why other disassemblers
+      report it this way; for register destinations specifically the segment selector is
+      zero-extended to 64 bits for storage. writing to "eax" in this way implies the 32->64 bit
+      zero-extend, whereas writing to "ax" does not imply any zero-extension. mov reg-to-seg
+      is unchanged and uses a 16-bit form for source GPR.
+  * 32-bit, 16-bit: use 32-bit or 16-bit GPRs as requested by mode and operand size prefixes.
+
+#### implicit memory sizes
+
+many instructions had implicit memory accesses but no reported memory access size.
+
+* push-immediate, pushf, popf, pusha, popa, enter, leave, and xlat now all report a correct memory
+  access size, fixing the prior behavior of reporting no memory access size at all
+* table load/store instructions (lgdt, lidt, lldt, sgdt, sidt, sldt) have correct (mode-dependent)
+  memory access sizes, rather than incorrectly varying on operand-size overrides.
+* maskmovq and maskmovdqu now have their implicit memory access size reported correctly.
+* vmaskmovqdu now reports a memory access size for the implied write to ds:[rdi/edi/di].
+* monitor now reports a 1-byte memory access size. the monitored range in practice depends on CPUID.
+
+## 2.0.0
+
+* upgrade to `yaxpeax-arch 0.3.1`, which brings with it a deprecation of the
+  `Colorize` and `ShowContextual` traits.
+* because common use of yaxpeax-x86 involves using both this crate and
+  `yaxpeax-arch`, moving to a newer major version of `yaxpeax-arch` is a major
+  version bump of `yaxpeax-x86` as well. so, 2.0.0!
+
+changes:
+
+* `Operand` variants have had their naming made more consistent.
+  - many variants starting with "Reg" actually describe a memory access. they
+    now begin with "Mem" instead.
+  - several variants mentioned "Scale" in their name, but not "Index", even
+    though they use an index register. they now do.
+  - several variants mentioned their constituent parts out of order. for
+    example, "RegIndexBaseScaleDisp", even though the parts were specified as
+    base, then index, then scale, then displacement. these names have been
+    adjusted to reflect the order of their fields, which is roughly the order
+    those fields are shown when printed.
+  - `DisplacementU*` operands have always been access to memory at the absolute
+    address they specify. their names are now `AbsoluteU*`
+* `Operand`, across the board, now uses struct-style enum variants, rather than tuple-style.
+* the two changes together mean an operand that was
+  `RegIndexBaseScaleDisp(reg, reg, u8, i32)`
+  is now
+  `MemBaseIndexScaleDisp { base, index, scale, disp }`
+  and similar for other variants.
+* two operand kinds, and their masked variants, were never actually constructed, and have been deleted.
+  - long ago yaxpeax-x86 returned different Operand variants when an index
+    register was used with scale 1, to hint that no scaling actually occurred.
+    this was eventually changed to return a scaling Operand variant with
+    scale==1, but the old variants remained.
+  - RegIndexBase has been removed
+  - RegIndexBaseDisp has been removed
+* `Prefixes::selects_cs()` has been moved to `Prefixes::cs()`, and the old
+  useless functions are no more. `inst.prefixes().cs()` is finally a reasonable
+  way to determine if an instruction reads or writes through the cs prefix.
+
+fixes:
+
+* fix 32-bit call/jmp not respecting 66 prefix if set - such cases use 16-bit
+  operands, but decoded as if they used 32-bit operands.
+
+## 1.2.2
+
+* fix `hreset` reporting two operands, with a second operand of `Nothing`.
+  this is not exactly a *bug*, there is in fact no second operand and libraries
+  probably ought to handle `Nothing` identically to having no operand reported
+  at all. but `yaxpeax-x86` intends to not report superfluous operands.
+
+## 1.2.1
+
+* fix incorrect register numbers used in `RegSpec::r12()` and `RegSpec::r13()`
+  and smaller-size variants (thank you @tokatoka!)
+* fix synonyms of registers from `rex.w` on byte-size operands with register
+  number <4
+* adjust misleading docs on `register_class::B` and `register_class::RB`: being
+  in register class `B` does not imply that there was no `rex.w` on the
+  instruction - `rex.w` may have been present but the register number may have
+  been <4 such that `B` was an appropriate register class anyway.
+* fix missing memory access size text for 128-bit keylocker instructions (would
+  have text like "aesdec128kl xmm0, BUG [rcx]" rather than "..., m384b [rcx]".
+  instructions are otherwise decoded correctly.)
+* fix incorrect register selection for `vpmovm2*` with `rex.b` set (would select
+  registers "k8" through "k15", but should be masked down to "k0".."k7".)
+* fix incorrect register selection for `vpbroadcastm{b2q,w2d}` with `rex.b`
+  set. basically the same bug as `vpmovm2*`; would select registers "k8".."k15",
+  but should have been masked to "k0".."k7".
+* fix incorrect register selection for `vpmov*2m` with `rex.r` set. similar to
+  above, except 64-bit only: in 32- and 16-bit modes, this case was and continues
+  to be a `bound` instruction. in 64-bit mode, this would disassemble as a
+  `vpmov*2m` with nonsense `k8..k15` selected. to real hardware, this bit
+  sequence is an invalid instruction, and so it is now invalid to yaxpeax-x86
+  as well.
+* fix incorrect `RegisterBank` names in `long_mode`. in a previous
+  reorganization register bank numbers were changed and the names were updated to
+  match for `protected_mode` and `real_mode`, but `long_mode` was overlooked.
+
+## 1.2.0
+* fix incorrect old yaxpeax-arch version selection for ffi crates
+* address incorrect behavior of `Prefixes::cs()`
+  * this "getter" would in fact set the selected segment to `cs`. it has never
+    actually returned a `bool`, like other selector-checking methods on
+    `Prefixes`.
+* add `Opcode::is_jcc`, `Opcode::is_setcc`, and `Opcode::is_cmovcc` helpers
+  * discovered that `jna` and `jnb` are named what they are, instead of
+    `jbe`/`jae` like their `setcc` an `cmovcc` counterparts. sorry. these will
+    become `jbe` and `jae` in 2.x.
+* fix incorrect decode of a0/a1/a2/a3 mov register when rex.b is set
+  (rex.b would select register 8, but the register is unconditionally A)
+* fix incorrect handling of some variants of gather instructions,
+  vpgatherdq, vpgatherqq, vgatherdps, vgatherdpd, vgatherqps, vgatherqpd.
+  errors were any of:
+  * reporting qword loads when loads are dword-wide
+  * reporting dword loads when loads are qword-wide
+  * reporting ymm register sizes when sizes are actually xmm
+  * reporting xmm register sizes when sizes are actually ymm
+  * reporting index register as ymm when it is actually xmm
+* extended support for some newer instructions (pconfig, movdir64b) from just
+  64-bit to all decode modes
+* fix cvttsd2si/cvtsd2si reporting xmm registers as destinations in 64-bit mode
+* fix inconsistently-reported memory access size of vcvt{,t}{sd,si} across
+  encodings and bitness
+  * in some cases, instructions loading a single-precision float reported 8-byte loads
+  * in some cases, instructions loading a double-precision float reported 4-byte loads
+* fix register sizes for lar/lsl
+  * 16 bits are read from the source register, but x86 docs state that the
+    source register is written as 16-bit, 32-bit, or 64-bit, as prefixes dictate.
+    memory is always written as `word [addr]`, which was correct before and
+    remains the case.
+
+## 1.1.5
+* fix several typos across crate docs - thank you Bruce! (aka github user waywardmonkeys)
+* optimizations (mostly code motion) for hot codepaths
+  - large `match`-based decode tables have been outlined to 256-entry arrays.
+    this makes for slicely nicer inlining in `read_with_annotations`.
+  - vex/evex decoding in 64-bit decoding now shares more code. this seems to
+    aid code cache friendliness when prefixes must be read.
+  - added a fast path for operand reading for the more-likely cases of
+    [64-bit]: {0x66,rex}{<opcode>,0x0f-<opcode>}
+    [32-bit]: {0x66}{<opcode>,0x0f-<opcode>}
+    [16-bit]: {0x66}{<opcode>,0x0f-<opcode>}
+
+    in particular, this avoids checking for instruction length overflows and
+    some bounds checks when we aren't handling a pessimal case of many-prefixed
+    instructions. if an instruction has multiple prefixes, decoders fall back
+    to normal read-in-a-loop-until-length-limit-reached decoding.
+* `Makefile` at the crate root now exercises `yaxpeax-x86` builds and tests under:
+  - default features (fmt, std)
+  - no-std + fmt
+  - no-std and no-fmt
+* fix several issues prohibiting builds of the crate with no-std +fmt
+  configurations; the required Display impl for field annotation would simply not
+  compile in no-fmt builds. it is now a minimal implementation to comply with the
+  goals of `no-fmt`: "avoid as much extra code and data for formatting
+  instructions as possible". two dozen bytes for a likely-DCE'd codepath should
+  be ok.
+* adjust test structure so that exhaustive tests can be `#[ignored]` and
+  explicitly run anyway for completeness. this means the ignored at&t tests now
+  are both ignored and appear to succeed when run.
+* support `9a` encoding of `callf` with absolute segment/address operand
+  - this encoding is only present in 32-bit and 16-bit modes
+
+## 1.1.4
+* fix reachable unreachable under `DisplayStyle::C` in 64-, 32-, and 16-bit modes
+* add fuzz target to cover `DisplayStyle::C` formatter for 64-, 32-, and 16-bit modes
+
+## 1.1.3
+* fix reachable unsoundness via `RegSpec` helper functions
+  - helpers should only permit creating valid `RegSpec` structs, but three
+    helpers would permit out-of-range register numbers; `mask` registers in 16-
+    and 32-bit modes, and `rex byte` registers in 64-bit modes.
+  - when displaying an invalid `RegSpec`, for some out-of-range mask registers,
+    the displayed register name could be chosen as arbitrary const data
+    interpreted as a pointer/length pair
+* fix incorrect (non-present!) memory size for f30f1e-style `nop`.
+  - this would decode without error, but produce an instruction with memory
+    operand and memory size of `0`. if formatted, yaxpeax-x86 panics.
+* add in-tree `cargo fuzz` targets for decoding and displaying instructions.
+  neither of these operations should ever panic.
+* fix incorrect disassembler used in x86-16 doc comments
+
+and thank you to @5225225 (https://github.com/5225225) for the bug reports
+handled in 1.1.2 and 1.1.3, as well as the nudge to start using `cargo fuzz`.
+
+## 1.1.2
+* fix panic when evex instructions with compressed displacements are decoded in
+  debug builds
+
+## 1.1.1
+* support `endbr64` and `endbr32`
+  - these are interpretations of `nop` (`0f1e` wide nop), so the only issue
+  with for users <1.1.1 will be `yaxpeax-86` decoding `nop` instead.
+* export `InstructionDisplayer`
+  this fixes an issue where crate docs would have dead links for the return
+  value of public APIs. it also allows callers to write name of what
+  `display_with` returns in their code, which hopefully isn't too useful but
+  shouldn't be impossible.
+
+## 1.1.0
+
+* implement `AnnotatingDecoder` from `yaxpeax-arch=0.2.6` and later.
+  this is a relatively involved addition. for rustc reasons, there are several
+  additional `inline(always)` attributes applied to keep non-annotating decoder
+  calls yielding the same generated code (and performance) as before.
+
+  annotations are produced for much but not all of 16-, 32-, and 64-bit x86,
+  describing prefixes, opcodes, operand encoding, and for more common
+  instructions, operand encoding as well. descriptions provided are described
+  by the `FieldDescription` struct in all architectures. `id` generally matches
+  some kind of parse order for the instruction, typically the order that
+  `yaxpeax-x86` considers bit fields in decoding an instruction. prefixes will
+  have lower id than opcodes, opcodes will have lower id than operands,
+  immediates will have the highest id due to being last values read in an
+  instruction.
+
+  between prefixes, opcodes, and operands, "Boundary" field descriptions are
+  reported as a hint to library clients that a logical grouping of descriptions
+  has ended.
+
+* `pub const fn` builders for all general-purpose registers, segment registers, and ip/flags registers.
+  - this corrects a spotty and inconsistent set of builders filled in on-demand.
+* `DisplayStyle::Intel` now shows relative offsets as `$+0xXX`, rather than `0xXX`.
+  - this corrects an ambiguity with instructions like `jz 0x1234`, where `jz`
+    on x86 is _only_ relative branches, but the displayed syntax is ambiguous
+    about being a relative or absolute address.
+  - `DisplayStyle::Intel` is how `impl Display for Instruction` works, so
+    typical `Display` use is also fixed.
+* `push`, `pop`, `call`, and `ret` now report `mem_size` in all cases.
+  - earlier, these instructions only reported a `mem_size` if their operand was a memory access.
+  - for `call`, in 32- and 16-bit modes the reported memory size may describe
+    the *read*, not the corresponding write of pushing `{e}ip` to the stack.
+    documentation has been added to `mem_size` more specifically describing
+    this circumstance.
+* correct `rex.b` incorrectly applying to the `*ax` register - `4f91` is `xchg rax, r9`, not `xchg r8, r9`.
+* correct `nop` incorrectly ignoring `rex.b` - `4190` is `xchg rax, r8`, not `nop`.
+* `DisplayStyle::C` now has rules to nicely display `jCC`, `jmp`, `call`, `loop*`, and `j*cxz` instructions.
+
+## 1.0.4
+
+in 64-, 32-, and 16-bit modes:
+  * fix incorrect decoding of `scas`; memory access is through `*di` not `*si`.
+  * fix incorrect segment register for `scas` memory operand; `es` segment is always used.
+  * fix incorrect decoding of some 67-prefixed string instructions: `movs`, `scas`, `lods`, `stos`, `cmps`.
+    - a 67-prefix selects an alternate addressing mode. in 64-bit mode, this
+      selects 32-bit registers for addressing, 32-bit selects 16-bit registers,
+      and 16-bit selects 32-bit registers. the decoder had ignored the 67 prefix
+      on these instructions.
+
+in 32- and 16-bit modes:
+  * fix incorrect decoding of 16-bit memory accesses with modrm where mod=00 and mmm=110.
+    - the memory access from this modrm is a disp16 memory access, which the
+      decoder reports. the decoder would then not read the subsequent 16-bit
+      displacement. this would typically result in a `Displacement(0)` operand,
+      and incorrect following instructions.
+
+## 1.0.3
+
+* fix a few broken doc links, added example of yaxpeax-x86 usage through yaxpeax-arch traits
+
+## 1.0.2
+* remove a stale line from README
+
+## 1.0.1
+* fix a broken docs link in README
+
+## 1.0.0
+* `avx512` support
+* `avx2` support
+* `avx` support
+* real-mode (x86_16) support
+* ffi-friendly packaging of decoders for 16-bit, 32-bit, and multi-arch uses
+* added `Instruction::mem_size()` to query the size of an instruction's memory access
+* `xacquire`/`xrelease` support
+* `AMD` `sev_snp` support
+* `pconfig`/Total Memory Encryption support
+* `Intel` `keylocker` support
+* removed `MOVSX_b`, `MOVSX_w`, `MOVZX_b`, and `MOVZX_w` - these differentiations are now described by `mem_size` and the `MOVSX`/`MOVZX` opcodes generally
+* `PartialEq` impl for `Instruction` and all contained structures
+* expose more details of an instruction's prefixes, and which prefixes are actually present on the instruction
+
+## 0.2.2
+* fix rendering error in `ShowContextual` impl with `&[Option<String>]` overrides
+  - would in some circumstances incorrectly print stale data if an `Instruction` was reused for decoding.
+    no impact on logical correctness, but certainly made for awkward disassembly in some cases.
+
+## 0.2.1
+* update `yaxpeax-arch` dep to 0.0.5
+  - no external-facing changes for this, but `yaxpeax-arch 0.0.5` uses `crossterm` for cross-platform terminal coloring
+* clean up a few warnings that made it into 0.2.0?
+
+## 0.2.0
+### features!
+* fuzz against mishegos and fix many bugs that made obvious
+  - duplicate and redundant f2, f3, and 66 prefixes on 0f-type opcodes are now
+    handled "right", assuming xed as a source of truth. almost all of these cases
+    are undefined by the intel and AMD manuals, but it seems unlikely that
+    capstone is correct with respect to cpu interpretation while xed is
+    incorrect.
+* public `enum`s are now `#[non_exhaustive]`. these are `Operand`, `Opcode`, and `DecodeError`.
+  - `Operand` is not expected to vary, but might.
+  - `Opcode` will grow new variants for every extension.
+  - `DecodeError` will probably not change, but no guarantees.
+* add a notion of display styles for instructions, see `Instruction::display_with`. currently there are two styles:
+  - `DisplayStyle::Intel` produces intel-like syntax for instructions
+  - `DisplayStyle::C` produces C pseudocode-ish syntax for instructions
+    - as an example, `xor eax, [rax]` is rendered as `eax ^= [rax]`.
+  - `DisplayStyle::Att` is one potential future style, but not yet implemented
+* `fmt`-related code and the `display` module are now optional on the `fmt` feature
+  - this is to support minimal builds for decoders in non-formatting circumstances. `yaxpeax-x86` long mode is still 65kb there.
+* improved packaging of ffi-friendly bindings in `ffi/`
+  - architectures have standalone libraries for each of `long_mode`, `protected_mode`, and `real_mode` (last still to be implemented)
+  - improved `ffi/` build instructions to describe how to build minimal-size `.so` and `.a` archives for linking
+* `ffi/multiarch` is intended to be a single package for all architectures, but currently does not fulfil this role
+
+### decode fixes
+* segment prefixes (`cs`, `ds`, `ss`, `es`) are now properly ignored in long mode
+* `lock xchg` now decodes correctly (operands were in reversed order and so memory "destinations" were treated as memory sources)
+* some missing sse instructions are now supported (`blendps`, `blendpd`, `pclmulqdq`)
+* some missing avx instructions are now supported (`vorpd`, `vorps`, `vandpd`, `vandps`, `vandnpd`, `vandnps`, `vpmaxuw`)
+* prefetch instructions with register operand are interpreted as `nop`, not `#UD`
+* `mov` to control or debug registers that are statically known to `#UD` now produce `DecodeError::InvalidOperand`
+* `salc` is now rejected. it was accepted on a whim, and i am fickle.
+  - realistically, this should be behind a decoder flag and accepted by
+    default, but this makes fuzzing somewhat easier and isn't an instruction
+    you'd expect to see in a modern x86 binary. see the summary at the end of
+    this section for some thoughts on decoder flags...
+
+### new ISA extension support!
+* 3dnow is 3d-supported-now
+* `sse4a` is now supported
+* `gfni` extensions are now supported
+* `ptwrite` extensions are now supported
+* `cet` (`c`ontrol-flow `e`nforcement `t`echnology) extensions are now supported
+* `invpcid` extensions are now supported
+* `tdx` extensions are now supported
+* `waitpkg` extensions are now supported
+* `uintr` extensions are now supported
+* `tsxldtrk` extensions are now supported
+* `ud0`, `ud1`, and `ud2` are now supported - `ud2e` which was never real, is actually `ud1`
+* `movdir` extensions are now supported
+* `key locker` extensions are now supported
+* `enqcmd` extensions are now supported
+
+### architecture support
+* all above changes apply both to `long_mode` and `protected_mode`.
+  `protected_mode` may accept some 64bit-only instructions incorrectly. beware.
+
+### thoughts?
+folks, i'm out of feature bits in `InstDecoder`. there are too dang many x86
+extensions. in the happy case, rustc knows that the provided decoder always
+compares equal to `InstDecoder::default()` so it can be made an arbitrarily
+large byte array. but i continue to be in awe of how much they put in the
+computer. as things stand, new extensions are not categorized into
+`InstDecoder` flags, but since there is a way to implement additional bits
+without causing overhead in the happy path, this feature will probably continue
+being supported in the future.
+
+### unsafe
+there are still a handful of `unsafe {}` uses in `yaxpeax-x86` for performance
+reasons. i tried removing arms in matches by making the last meaningful arm,
+often something like:
+```
+8 => { /* handle 8-byte operand */ }
+```
+into a general catchall arm and deleting the `unreachable_unchecked`, like:
+```
+_ => { /* handle 8-byte operand */ }
+```
+but this also caused a ~5% regression in performance. this makes sense, since
+`unreachable_unchecked` is stronger in saying that other values (`3`, `5`, `6`,
+`7`, ...) will _not_ occur, but `_` doesn't disallow them and likely produces
+jump tables for no good reason. maybe this can be solved some other way, one
+day...
+
+## 0.1.5
+* fix several issues around 0f01* opcode decoding;
+  - AMD-only `monitorx`, `mwaitx`, `clzero`, and `rdpru` are now supported
+  - `swapgs` is invalid in non-64-bit modes
+  - `rdpkru` and `wrpkru` were incorrectly decoded when modrm bits were not `11`
+* small performance tweaks. read_imm_signed is now inline(always) and some
+  pre-decode initialization is a bit better-packed
+* `xchg {r,e,}ax, reg` was not supported! it's supported now.
+
+## 0.1.4
+* [long mode only]: fix decoding of rex-prefixed modrm+sib operands selecting index 0b100 and base 0b101
+  - for memory operands with a base, index, and displacement either
+    the wrong base would be selected (register number ignored, so only
+    `*ax` or `r8*` would be reported), or yaxpeax-x86 would report a
+    base register is present when it is not (`RegIndexBaseScaleDisp`
+    when the operand is actually `RegScaleDisp`)
+
+thank you to Evan Johnson for catching and reporting this bug!
+
+## 0.1.3
+* fix 0x80-opcode instructions not having an opcode
+  - this meant that for example `lock xorb [rax], 0` would decode as invalid
+
+## 0.1.2
+* expose constructors for `RegSpec` in both `long_mode` and `protected_mode`
+* expose a const `RegSpec::RIP`
+  - most useful for matching `Operand::RegDisp(RegSpec::RIP, disp)` in patterns, really
+
+## 0.1.1
+* add `long_mode::register_class` and `protected_mode::register_class` where
+  `RegisterClass` constants for each register class are defined.
+  - without these, the only way to distinguish register classes would be string compares. bad. sorry!
+
+## 0.1.0
+* port `long_mode` improvements to `protected_mode` decoder
+  - real mode will wait until another day
+* support undocumented instruction `salc`
+* fix segment registers being numbered wrong
+  - this is relevant only for mov to/from segments
+* support x86_32 `push <segment>``/`pop <segment>`
+* support x86_32 `pusha`/`popa`
+* support x86_32 BCD instructions
+  - for `aam`/`aad`, the undocumented `amx` and `adx` forms are used in all cases, including when the base is 10
+* begin some proper documentation for public items
+
+/!\ BREAKING CHANGES /!\
+* `RegisterBank` is no longer public. `RegisterClass` should be a suitable
+  replacement, accessible via `reg.class()`, with the register class name
+  available by `reg.class().name`, and size available by `reg.class().width()`.
+  `reg.width()` still works, and just forwards to `reg.class().width()`.
+* the field `opcode` of `Instruction` is no longer public. it can now be accessed by `inst.opcode()`.
+
+## 0.0.15
+
+* the `x87` instruction set is now fully supported
+  - textual disassembly differs slightly from other decoders in that
+    yaxpeax-x86 does not prefer using `st` in place of `st(0)`
+* do not decode `into` in 64-bit mode
+* support `vmread`, `vmwrite`
+* support `iret`/`iretd`/`iretq`
+* support `enter`
+* support `cmc` and `int1`
+* support `loopz`, `loopnz`, `jecxz`
+* support `maskmovq`, `movnti`, and `movntq`
+  - this brings full support to non-vex-coded x86 instructions
+* reject excessively-long instructions
+* reject reg-reg encodings where instructions forbid those operands
+* correctly handle `mov [0xoffset], ax` and `mov ax, [0xoffset]`
+  - offset had been read with incorrect size
+* `vpsrlw`, `vpermq`, `vpminsq`, `vpsrlq`, `vextractf128`, `vinserti128`
+* reorganize likely decoding paths for a smidge more speed
+
+## 0.0.14
+
+* `netburst` supported `cmpxchg16b` from its first x86_64 incarnation. since no
+uarch in `long_mode` had declared `cmpxchg16b` support, no uarch-specific Intel
+decoder supported `cmpxchg16b`.
+
+## 0.0.13
+
+* the Intel microarchitecture is named `Penryn`, not `Peryn`.
+
+## 0.0.12
+
+* fix improper decode of `sib` memory operand when `rex.x` is set and index is `0b100`
+  - functionally: instructions which should have had a memory operand like
+    `[rax + r12 + disp]` were missing `r12`
+* add instruction set extensions: `SHA`, `BMI1`, `BMI2`, `XSAVE`, `RDRAND`,
+  `RDSEED`, `CMPXCHG{8,16}B` `ADX`, `SVM`, `MOVBE`, `PREFETCHW`, `TSX`, and
+  `F16C`
+* add `RDFSBASE`, `RDGSBASE`, `WRFSBASE`, `WRGSBASE`
+* builders for per-uarch x86_64 instruction decoders, see `yaxpeax_x86::long_mode::uarch::{intel, amd}`
+* builders for per-uarch x86_32 instruction decoders, see `yaxpeax_x86::protected_mode::uarch::{intel, amd}`
+
+## 0.0.11
+
+* fix mis-named 'cbd' instruction, which should be 'cwd'
+* add `Operand::width` to query the width of an x86 access
+  - this is wrong for many memory operands, which require deeper changes
+* bump `yaxpeax-arch` to 0.0.4, which yields a breaking change in `Self::Unit` of `LengthedInstruction
+* `Prefixes::rep` is now public, allowing users to query if a decoded instruction has a rep prefix
+
+## 0.0.10
+
+same as 0.0.9, but with a warning fixed.
+
+## 0.0.9
+
+added `protected_mode` for 32-bit instruction decoding. BCD instructions not yet supported.
+
+## 0.0.8
+
+same as 0.0.7, but with a readme in the crates.io page.
+
+## 0.0.7
+
+`sse` and `sse2` support are mostly complete.
+`jmp reg` erroneously decoded to 32-bit registers without `rex.w`.
+`callf` could erroneously decode as having a register operand.
+more comprehensive, if yet insufficiently tested, avx decoding.
+support `vmclear` and `vmxon`, vmx still incomplete.
+
+## 0.0.6
+
+addressing modes using a sib byte with displacement != 0 were wrongly reported as having no displacement.
+
+## 0.0.5
+
+history basically starts here.
+
+* impl Ord and PartialOrd on RegSpec and RegisterBank
+* `RegSpec::name` to get `&'static str` labels for registers
+* support `in` and `out` instructions
+
+## 0.0.4 - 0.0.2
+
+seriously stop, just don't use these versions
+
+just bumps to use newer `yaxpeax-arch` since this is all wildly unstable
