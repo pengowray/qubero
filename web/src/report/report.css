@@ -1,0 +1,586 @@
+/* ---- report view ---- */
+/* One reading of the whole file, as a page: a column of prose at a readable
+   measure, with figures and tables allowed wider. The prototypes in
+   qubero2-extras/reports/kit set the look; the colours are the app's own
+   variables from style.css, so the report is the same page in the light and
+   dark themes as every other view. `rv-` throughout, since `.report` and
+   `rp-` are the listing's.
+
+   Its own file, loaded with the view, because the view itself is loaded only
+   when it is first opened. */
+.reportview {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg);
+  /* The two kinds of deflate step in the ribbon: a literal, and a copy of
+     earlier bytes. Chosen apart from the section hues so a stream's figure is
+     not read as parts of the file. */
+  --rv-literal: #5b82cf;
+  --rv-match: #c47f22;
+}
+@media (prefers-color-scheme: dark) {
+  .reportview {
+    --rv-literal: #6f93e8;
+    --rv-match: #cf9440;
+  }
+}
+.reportview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rv-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 20px 120px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.rv-page p,
+.rv-page h1,
+.rv-page h2,
+.rv-page h3,
+.rv-page figcaption,
+.rv-page dl {
+  max-width: 76ch;
+}
+.rv-page code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+.rv-title h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.rv-meta {
+  margin: 0;
+  color: var(--muted);
+}
+.rv-meta a {
+  color: var(--accent);
+}
+.rv-about {
+  font-size: 16px;
+  margin: 14px 0 0;
+}
+.rv-rule {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+.rv-section h2 {
+  font-size: 20px;
+  line-height: 1.3;
+  margin: 44px 0 8px;
+}
+.rv-section h3 {
+  font-size: 16px;
+  line-height: 1.35;
+  margin: 26px 0 6px;
+}
+.rv-note,
+.rv-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+.rv-hint {
+  margin-top: 4px;
+}
+.rv-muted {
+  color: var(--muted);
+}
+.rv-figure {
+  margin: 16px 0;
+}
+.rv-figure figcaption {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 6px;
+}
+.rv-figure figcaption b {
+  color: var(--fg);
+}
+.rv-button {
+  min-height: 0;
+  padding: 2px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rv-button:hover {
+  border-color: var(--accent);
+}
+
+/* A reference to bytes of the file. Written as its address, in the address
+   colour, underlined so it reads as something to point at. */
+.rv-at {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  color: var(--addr);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rv-at:hover,
+.rv-at:focus-visible {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  outline: none;
+}
+[data-rv-start]:not(.rv-at) {
+  cursor: pointer;
+}
+
+/* The facts table under the title. */
+.rv-facts {
+  border-collapse: collapse;
+  margin: 18px 0 0;
+  font-size: 14px;
+}
+.rv-facts th,
+.rv-facts td {
+  text-align: left;
+  vertical-align: baseline;
+  padding: 4px 18px 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rv-facts th {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* The findings, most severe first. */
+.rv-findlist {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.rv-find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rv-find .problem-glyph {
+  margin-right: 0;
+}
+.rv-find-invalid .rv-find-why,
+.rv-find-refused .rv-find-why {
+  color: var(--warn);
+}
+.rv-find-value code {
+  overflow-wrap: anywhere;
+}
+
+/* Tables: records, fields, a table's first rows, the ledger. */
+.rv-tablewrap {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.rv-table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.rv-table th,
+.rv-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 4px 14px 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rv-table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rv-table .rv-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rv-table .rv-hex {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rv-table .rv-val {
+  color: var(--field-color, var(--fg));
+  max-width: 44ch;
+  overflow-wrap: anywhere;
+}
+.rv-table .rv-reads {
+  max-width: 56ch;
+  overflow-wrap: anywhere;
+}
+.rv-table .rv-reads.has-invalid {
+  color: var(--warn);
+}
+.rv-table .rv-addr {
+  white-space: nowrap;
+}
+.rv-hasdoc {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.rv-grouprow td {
+  padding-top: 10px;
+  font-weight: 600;
+}
+.rv-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: -1px;
+}
+.rv-swatch.is-unread {
+  border: 1px dashed var(--muted);
+  background: transparent;
+}
+
+/* The map. */
+.rv-map {
+  position: relative;
+  user-select: none;
+}
+.rv-map-svg {
+  display: block;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.rv-map-svg:active {
+  cursor: grabbing;
+}
+.rv-map-part {
+  opacity: 0.9;
+}
+.rv-map-partlabel {
+  font: 12px var(--sans);
+  fill: #fff;
+  paint-order: stroke;
+  stroke: rgb(0 0 0 / 35%);
+  stroke-width: 2px;
+  pointer-events: none;
+}
+.rv-map-field {
+  fill: var(--field-color, var(--muted));
+  opacity: 0.35;
+}
+.rv-map-field.is-gap {
+  fill: var(--muted);
+  opacity: 0.15;
+}
+.rv-map-fieldlabel {
+  font: 11px var(--sans);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.rv-map-hint {
+  font: 11px var(--sans);
+  fill: var(--muted);
+}
+.rv-map-byte {
+  opacity: 0.45;
+}
+.rv-map-hex {
+  font: 11px var(--mono);
+  fill: var(--fg);
+  pointer-events: none;
+}
+.rv-map-unread {
+  fill: none;
+  stroke: var(--line);
+  stroke-dasharray: 2 2;
+}
+.rv-map-lit {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2px;
+  pointer-events: none;
+}
+.rv-map-axis {
+  stroke: var(--line);
+}
+.rv-map-tick {
+  font: 11px var(--mono);
+  fill: var(--muted);
+}
+.rv-map-range {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+.rv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* The ledger. */
+.rv-ledgerbar {
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  gap: 1px;
+}
+.rv-ledgerbar span {
+  min-width: 1px;
+}
+.rv-ledgerbar span.is-gap {
+  opacity: 0.5;
+}
+.rv-ledgertable tr.is-gap td {
+  color: var(--muted);
+}
+.rv-ledgertable tbody tr:hover td {
+  background: var(--accent-soft);
+}
+.rv-share {
+  white-space: nowrap;
+}
+.rv-sharebar {
+  display: inline-block;
+  height: 9px;
+  border-radius: 0 2px 2px 0;
+  vertical-align: -1px;
+}
+.rv-what {
+  color: var(--muted);
+  max-width: 48ch;
+}
+
+/* One part. */
+.rv-parthead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 2px;
+}
+.rv-parthead .rv-swatch {
+  width: 12px;
+  height: 12px;
+}
+.rv-parthead:hover code,
+.rv-parthead:hover span:not(.rv-swatch) {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+}
+.rv-where {
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv-posbar {
+  position: relative;
+  height: 6px;
+  margin: 6px 0 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  max-width: 520px;
+}
+.rv-posbar-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  border-radius: 1px;
+}
+.rv-doc {
+  margin: 4px 0 8px;
+}
+.rv-strip {
+  margin: 8px 0;
+}
+
+/* Hex rows: in a hover, and as the body of a part with no structure. */
+.rv-dump {
+  font: 12px/1.55 var(--mono);
+  white-space: pre;
+  overflow-x: auto;
+}
+.rv-dump-off {
+  color: var(--addr);
+}
+.rv-dump-out {
+  color: var(--muted);
+  opacity: 0.55;
+}
+.rv-dump-in.rv-dump-zero {
+  color: var(--muted);
+}
+.rv-dump-asc {
+  color: var(--muted);
+}
+.rv-dump-more {
+  color: var(--muted);
+}
+
+/* The content. */
+.rv-picture img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.rv-inline-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  font-size: 14px;
+  margin: 6px 0;
+}
+.rv-inline-facts dt {
+  color: var(--muted);
+}
+.rv-inline-facts dd {
+  margin: 0;
+}
+.rv-text {
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 22em;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+/* Compressed streams: the stages to scale, and the ribbon. */
+.rv-stream {
+  margin-top: 18px;
+}
+.rv-stage {
+  display: grid;
+  grid-template-columns: 8em minmax(0, 1fr) 9em;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  margin: 3px 0;
+}
+.rv-stage-name {
+  color: var(--muted);
+}
+.rv-stage-track {
+  display: block;
+}
+.rv-stage-bar {
+  display: block;
+  height: 12px;
+  border-radius: 2px;
+}
+.rv-stage-bar.is-packed {
+  background: var(--rv-match);
+}
+.rv-stage-bar.is-unpacked {
+  background: var(--rv-literal);
+}
+.rv-stage-size {
+  font-variant-numeric: tabular-nums;
+}
+.rv-ribbon {
+  display: block;
+  min-width: 620px;
+}
+.rv-ribbonfig {
+  overflow-x: auto;
+}
+.rv-rb-band {
+  opacity: 0.22;
+  transition: opacity 0.12s;
+}
+.rv-rb-box {
+  opacity: 0.9;
+}
+.rv-ribbon.is-lit .rv-rb-band {
+  opacity: 0.07;
+}
+.rv-ribbon.is-lit .rv-rb-box {
+  opacity: 0.35;
+}
+.rv-ribbon .rv-rb-band.is-on {
+  opacity: 0.55;
+}
+.rv-ribbon .rv-rb-box.is-on {
+  opacity: 1;
+  stroke: var(--fg);
+  stroke-width: 1px;
+}
+.rv-rb-label {
+  font: 11px var(--mono);
+  fill: #fff;
+  pointer-events: none;
+}
+.rv-rb-caption {
+  font: 12px var(--sans);
+  fill: var(--muted);
+}
+
+/* The terms. */
+.rv-glossary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 18px;
+}
+.rv-glossary dd {
+  margin: 0;
+}
+
+/* The one hover box: bytes behind a reference, a part of the map, a band. */
+.rv-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(480px, calc(100vw - 24px));
+  pointer-events: none;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  padding: 8px 10px;
+  font: 13px/1.45 var(--sans);
+}
+.rv-tip[hidden] {
+  display: none;
+}
+.rv-tip-where {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rv-tip-note {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.rv-tip .rv-dump {
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+@media (max-width: 640px) {
+  .rv-page {
+    padding: 16px 16px 80px;
+  }
+  .rv-title h1 {
+    font-size: 21px;
+  }
+  .rv-stage {
+    grid-template-columns: 6em minmax(0, 1fr) 7em;
+  }
+}
