@@ -58,7 +58,7 @@ export const RV = {
   identifiedByTemplate: (label: string): string => `Identified by the ${label} template`,
   identifiedByKaitai: (label: string): string => `Read with the Kaitai Struct description ${label}`,
   identifiedByImhex: (label: string): string => `Read with the ImHex pattern ${label}`,
-  identifiedByRule: (ruleFile: string): string => `Identified by a file(1) rule in ${ruleFile}`,
+  identifiedByRule: (ruleFile: string): string => `Identified by a file(1) rule (rule file: ${ruleFile})`,
   identifiedBySignature: "Identified by its signature bytes",
   notIdentified: "Format not identified",
   /** The link to the format's article, for a reader who wants more than the
@@ -156,7 +156,9 @@ export const RV = {
   ledgerBytes: "Bytes",
   ledgerShare: "Share of file",
   ledgerWhat: "What it is",
-  ledgerCaptionLead: (largest: string, share: string): string => `Largest part: ${largest}, ${share} of the file.`,
+  /** Brackets round the share, since a part's name can have a comma of its
+   *  own: `sos, start of scan`. */
+  ledgerCaptionLead: (largest: string, share: string): string => `Largest part: ${largest} (${share} of the file).`,
   ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map, and click it to zoom the map to them.",
   ledgerRowTitle: "Click to zoom the map to this part",
   ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these were not listed.`,

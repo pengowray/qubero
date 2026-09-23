@@ -68,6 +68,9 @@ export class ZoomMap {
   private drag: { x: number; lo: number; hi: number; moved: boolean } | null = null;
   /** True once the byte scan has finished and the window's fields are in. */
   private settled = false;
+  /** True once the map has been drawn on the page, so a map not on the page
+   *  yet is not taken for one that has left it. */
+  private drawnOnce = false;
 
   constructor(
     private readonly ctx: ReportCtx,
@@ -83,6 +86,17 @@ export class ZoomMap {
     this.el.append(this.svg, this.range);
     this.wire();
     new ResizeObserver(() => this.redraw()).observe(this.el);
+    // A window zoomed into after the map first settled can be one whose bytes
+    // or fields have not arrived. Their arrival is a change to the document,
+    // and the map draws again for it until it has what it asked for. A map
+    // that has left the page stops listening.
+    const stop = ctx.doc.onChange(() => {
+      if (!this.el.isConnected && this.drawnOnce) {
+        stop();
+        return;
+      }
+      if (!this.settled) this.redraw();
+    });
   }
 
   /** Called while the report is live: draws again with whatever the byte scan
@@ -195,6 +209,7 @@ export class ZoomMap {
     this.svg.replaceChildren(...out);
     this.range.textContent = RV.mapRange(formatOffset(Math.floor(lo) * 8), formatOffset(Math.max(0, Math.ceil(hi) - 1) * 8));
     this.settled = stripDone && (spans.spans !== null || spans.truncated || this.ctx.doc.template === null);
+    if (this.el.isConnected) this.drawnOnce = true;
   }
 
   /** The window's fields, asked once per window. */

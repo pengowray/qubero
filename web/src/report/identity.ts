@@ -30,12 +30,19 @@ export type About = {
  * The binding is taken to answer either the entry as JSON, `{name, wikipedia,
  * text}`, or the sentences alone, and "" or `null` for a template with none.
  */
-export function formatAbout(template: string): About | null {
-  const fn = (wasm as unknown as Record<string, unknown>)["format_about"];
-  if (typeof fn !== "function") return null;
+export function formatAbout(doc: Doc, template: string): About | null {
+  // A free function of the module, or failing that a method of the editor,
+  // which is how most of the core is reached (see `Doc.tableShape`). The
+  // editor is the document's own and private to it, so it is looked up
+  // rather than named.
+  const free = (wasm as unknown as Record<string, unknown>)["format_about"];
+  const editor = (doc as unknown as { editor?: Record<string, unknown> }).editor;
+  const method = editor?.["format_about"];
   let raw: unknown;
   try {
-    raw = (fn as (t: string) => unknown)(template);
+    if (typeof free === "function") raw = (free as (t: string) => unknown)(template);
+    else if (typeof method === "function") raw = (method as (t: string) => unknown).call(editor, template);
+    else return null;
   } catch {
     return null;
   }
@@ -98,7 +105,7 @@ export function formatIdentity(doc: Doc, data: ReportData): FormatIdentity | typ
   const sigs = data.later("signatures", () => doc.signatureMatches());
   if (rule === WAIT || sigs === WAIT) return WAIT;
   const template = doc.template;
-  const about = template === null ? null : formatAbout(template);
+  const about = template === null ? null : formatAbout(doc, template);
   // The signature list names a file only when nothing better has: for a JPEG
   // read by its template it can put "DualPhoto JPEG bitmap" first, which is
   // a true match and the wrong article.
