@@ -717,6 +717,33 @@ impl<S: Source> Watch<S> for Follow {
         Ok(())
     }
 
+    /// A second reading is counted nowhere in the ledger, but an address that
+    /// is one still says which way the file points: a ZIP's central directory
+    /// points back at every local header.
+    fn aside(&mut self, ev: &mut Evaluator, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<()> {
+        let Ty::At { anchor, at, .. } = &r.ty else { return Ok(()) };
+        let (kind, end) = (at_kind(*anchor, at), from_end(at));
+        let mut child = path.to_vec();
+        child.push(0);
+        let target = match ev.resolve(doc, &child) {
+            Ok(()) => ev.memo[&child].offset,
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => return Ok(()),
+        };
+        self.counts.add(Key::of("placement", kind), 1, 0);
+        let f = &mut self.counts.facts;
+        f.placed += 1;
+        if target >= r.offset {
+            f.forward += 1;
+        } else {
+            f.backward += 1;
+        }
+        if end {
+            f.from_end += 1;
+        }
+        Ok(())
+    }
+
     fn failed(&mut self, ev: &mut Evaluator, doc: &Document<S>, parent: &[usize], idx: u64, at: u64, why: &str) -> R<()> {
         let check = ev.diagnose(doc, parent, idx as usize, at, why, 0)?;
         if let Some(c) = check {

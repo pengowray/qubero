@@ -11,7 +11,7 @@
 //! The walk's one rule is that everything that can want bytes or run out of the
 //! allowance is asked before anything is written down, so that a go which
 //! stops part way redoes one child and counts nothing twice. The hooks keep to
-//! it: the three that return `R` are asked before the walk writes anything
+//! it: the ones that return `R` are asked before the walk writes anything
 //! about the node they name and may be asked again for the same node on the
 //! next go, so they must only work things out, never add them up. The rest are
 //! told after the fact and cannot fail.
@@ -49,6 +49,12 @@ pub(super) trait Watch<S: Source> {
     /// about to end that frame's run there. `at` is where the child would have
     /// started. May be interrupted, before the frame gives up on the child.
     fn failed(&mut self, _ev: &mut Evaluator, _doc: &Document<S>, _parent: &[usize], _idx: u64, _at: u64, _why: &str) -> R<()> {
+        Ok(())
+    }
+
+    /// The node at `path` is a second reading of bytes counted somewhere
+    /// else, and the walk is about to pass it over. May be interrupted.
+    fn aside(&mut self, _ev: &mut Evaluator, _doc: &Document<S>, _path: &[usize], _r: &Resolved) -> R<()> {
         Ok(())
     }
 

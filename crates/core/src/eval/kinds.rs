@@ -534,6 +534,7 @@ impl Evaluator {
         // twice, and a total that counts one stretch twice can say more of the
         // file is text than the file is long. See `Field::aside`.
         if self.aside(&path) {
+            watch.aside(self, doc, &path, &r)?;
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());
