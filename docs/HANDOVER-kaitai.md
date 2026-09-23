@@ -57,6 +57,13 @@ else is opened by choosing it. Two formats with the same magic both stay out
 of sniffing; `bundled::sniff_named` then offers one of them when the file's
 extension is its `meta/file-extension` (`.shp` against `.shx`).
 
+Since 2026-09-24 the name can also claim a file for a format with no leading
+magic, but only through a hand-written check: `KAITAI_BY_EXTENSION` in
+`formats/recognise.rs` pairs an extension with a test the bytes have to pass
+(BSON's length, ICC's `acsp` and length, a TrueType table directory that fits
+the file). It is asked after everything else, so a builtin still wins, and a
+format goes in only once its template reads a real sample.
+
 ### The diagram is laid out in layers, not by force
 fCoSe (the Graph view) is force-directed and wrong for a structure diagram.
 The diagram uses `@dagrejs/dagre` (MIT, ~100 KB minified, no ports) for node

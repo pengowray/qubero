@@ -1,6 +1,7 @@
 //! Targa: an eighteen-byte header, an optional id and colour map, and then
-//! the pixels. Nothing marks the front of the file, which is why this is a
-//! template to pick rather than one to guess.
+//! the pixels. Nothing marks the front of the file, which is why the bytes
+//! alone never pick this: a file named `.tga` is claimed when its header
+//! holds values the format defines, and anything else has to be chosen.
 //!
 //! Later files end with a footer naming the format outright, eighteen bytes
 //! at the very end reading `TRUEVISION-XFILE`. That is the only signature the

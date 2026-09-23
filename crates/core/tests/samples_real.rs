@@ -23,10 +23,67 @@ use qubero_core::source::MemSource;
 /// starts reading does fail it, and so does one that is no longer in the
 /// collection, so this list cannot go stale.
 const KNOWN_FAILURES: &[&str] = &[
-    // A Lotus 1-2-3 release 3 worksheet. No template matches it, because
-    // nothing has been written for any Lotus worksheet yet. It stays in the
-    // collection as the sample to write one against.
+    // Lotus 1-2-3 worksheets, release 2 and release 3. No template matches
+    // them, because nothing has been written for any Lotus worksheet yet.
+    // They stay in the collection as the samples to write one against.
+    "wk1/sheetjs-lotus-wk1.wk1",
     "wk3/sheetjs-lotus-wk3.wk3",
+    // Word and PowerPoint files in the compound file container. Nothing reads
+    // either program's streams, and the container has no template of its own
+    // to fall back on: `thumbsdb` and `xls` read it, but only for the one
+    // stream each of them is for.
+    "doc/libreoffice7-table.doc",
+    "doc/word16-table.doc",
+    "dot/word16-binary-template.dot",
+    "pot/powerpoint16-binary-template.pot",
+    "pps/powerpoint16-binary-show.pps",
+    "ppt/libreoffice7-one-slide.ppt",
+    "ppt/powerpoint16-one-slide.ppt",
+    // Excel 2.x, 3.0 and 4.0 worksheets. The `xls` template reads BIFF5 and
+    // BIFF8 records only, and these earlier versions number their BOF record
+    // differently, so chosen by hand it shows each file as one run of bytes.
+    "xls/sheetjs-biff2-single-sheet.xls",
+    "xls/sheetjs-biff3-single-sheet.xls",
+    "xls/sheetjs-biff4-single-sheet.xls",
+    // A bundled Kaitai template exists for each of these, and does not read
+    // the sample even when chosen by hand, so naming it by extension would
+    // only swap "no template" for an error. `ksy:dicom` stops at the root,
+    // because the converter leaves `p_is_transfer_syntax_change_explicit`
+    // unresolved. `ksy:openpgp_message` has no case for an old-format packet
+    // of indeterminate length, which is what gpg writes for compressed data.
+    // Once either reads, it belongs in `KAITAI_BY_EXTENSION` in
+    // `formats/recognise.rs`: DICOM has `DICM` 128 bytes in to check.
+    "dicom/synthetic-secondary-capture-gray8.dcm",
+    "openpgp/gpg-literal-store.gpg",
+    // `ksy:msgpack` reads this when chosen by hand. It is not sniffed because
+    // MessagePack has no magic, the `.ksy` names no extension, and the only
+    // evidence the bytes have is that the whole file parses as one value.
+    "msgpack/observation-map.msgpack",
+    // Packet captures. The Kaitai `pcap` was left out of the bundle, because
+    // it picks the byte order of the whole file from the magic and the IR has
+    // no form for that. Nothing has been written for pcapng.
+    "pcap/ethernet-ipv4-udp.pcap",
+    "pcapng/ethernet-ipv4-udp.pcapng",
+    // Formats that open with a magic, for which no template exists yet. The
+    // WebP is a RIFF, and `ksy:riff` would read the outer chunk and nothing
+    // inside it.
+    "dds/magick-dxt5-rgba.dds",
+    "exr/magick-rgb-half.exr",
+    "flac/ffmpeg-sine-mono-16k.flac",
+    "font/qubero-fixture.woff",
+    "font/qubero-fixture.woff2",
+    "hdr/magick-rgbe.hdr",
+    "jxl/magick-rgba-8x8.jxl",
+    "nrrd/volume-int16-gzip.nrrd",
+    "nrrd/volume-int16-raw.nrrd",
+    "wavpack/ffmpeg-lossless-mono.wv",
+    "webp/pillow-rgba-lossless.webp",
+    // Text formats. No template reads a file of lines or of XML elements.
+    "dif/libreoffice7-dif.dif",
+    "fods/libreoffice7-flat-xml.fods",
+    "slk/libreoffice7-sylk.slk",
+    "xml/sheetjs-spreadsheetml2003.xml",
+    "xml/word16-wordprocessingml2003.xml",
 ];
 
 /// Extensions of files that sit among the samples and say something about
@@ -104,8 +161,9 @@ fn attempt(path: &Path) -> (Option<&'static str>, Result<(), String>) {
     };
     let head = &bytes[..bytes.len().min(0x9000)];
     // A `.COM` file has no header to say what it is, so the extension is
-    // what says it. Everything else the file itself announces, and the
-    // name only breaks a tie the bytes cannot, as between `.shp` and `.shx`.
+    // what says it. Everything else the file itself announces. The name
+    // breaks a tie the bytes cannot, as between `.shp` and `.shx`, and claims
+    // a format with no signature, as `.tga` is, only when the bytes agree.
     let name = match path.extension().is_some_and(|e| e.eq_ignore_ascii_case("com")) {
         true => "com",
         false => match formats::sniff_named(head, bytes.len() as u64, &path.to_string_lossy()) {
