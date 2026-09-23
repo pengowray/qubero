@@ -313,7 +313,10 @@ pub(super) fn chain(buf: &[u8], base: u64, run: Run, opts: Opts) -> Vec<(usize, 
             let ok = loop {
                 let Some((pat, value)) = read_prefix(buf, at, kind) else { break false };
                 let Some(span) = span_of(buf, at, run.end, run.enc, value, c) else { break false };
-                if span == 0 || span % unit != 0 || at + span > run.end {
+                // Compared as a remainder, since a length read from eight bytes
+                // can be most of the way to the top of a usize, and adding it
+                // to `at` wraps.
+                if span == 0 || span % unit != 0 || span > run.end - at {
                     break false;
                 }
                 if at + span == run.end && pieces.is_empty() {
