@@ -133,10 +133,10 @@ function ledger(model: PartsModel, map: ZoomMap): HTMLElement {
   wrap.append(t);
   box.append(wrap);
   const cap = document.createElement("figcaption");
-  const top = [...model.groups].filter((g) => !g.gap).sort((a, b) => b.sizeBits - a.sizeBits)[0];
+  const top = [...model.groups].sort((a, b) => b.sizeBits - a.sizeBits)[0];
   if (top !== undefined) {
     const lead = document.createElement("b");
-    lead.textContent = RV.ledgerCaptionLead(top.label, percentText(top.sizeBits, model.fileBits));
+    lead.textContent = RV.ledgerCaptionLead(top.gap ? RV.gapName : top.label, percentText(top.sizeBits, model.fileBits));
     cap.append(lead, " ");
   }
   cap.append(RV.ledgerCaption);

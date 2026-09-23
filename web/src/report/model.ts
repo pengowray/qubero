@@ -30,6 +30,14 @@ import { WAIT } from "./section.ts";
 const KIDS_MAX = 256;
 /** A list of this many structures or fewer is read as its elements. */
 const EXPAND_MAX = 256;
+/** A list whose elements are not all structures is read as its elements only
+ *  when it is this short and some of them are structures or runs at least
+ *  this long. */
+const EXPAND_MIXED_MAX = 64;
+const MIXED_MIN_BITS = 64 * 8;
+/** A list this short whose elements all have names of their own is read one
+ *  element to a part. */
+const UNIQUE_MAX = 32;
 /** Composite children of an element asked which field decided their type. */
 const VARIANT_PROBES = 3;
 /** Children of a part asked what placed them, for a part placed field by field
@@ -117,64 +125,11 @@ export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
   const rootR = ok(doc.templateNode([]));
   if (rootR === WAIT) return WAIT;
   if (rootR === null) return null;
-  let container: TemplateNode = rootR;
-  // A root that is one wrapper around the whole file is that wrapper.
-  for (let depth = 0; depth < 4 && container.composite && !container.list; depth++) {
-    const kids = ok(doc.templateChildren(container.path, 0, Math.min(container.child_count, 8)));
-    if (kids === WAIT) return WAIT;
-    if (kids === null) break;
-    const real = kids.filter((k) => k.size_bits > 0 && !k.absent);
-    const only = real[0];
-    if (real.length !== 1 || only === undefined || !only.composite || only.size_bits < container.size_bits * 0.9) break;
-    if (container.child_count > 8) break;
-    container = only;
-  }
+  const container: TemplateNode = rootR;
   const units: Unit[] = [];
   const lists: ListFact[] = [];
-  let unlisted = 0;
-  const kidsR = ok(doc.templateChildren(container.path, 0, Math.min(container.child_count, KIDS_MAX)));
-  if (kidsR === WAIT) return WAIT;
-  const kids = (kidsR ?? []).filter((k) => !k.absent && k.size_bits > 0 && k.space === 0);
-  unlisted = Math.max(0, container.child_count - KIDS_MAX);
-  if (container.list) {
-    lists.push({ node: container, count: container.child_count, word: childWord(container) });
-    for (const k of kids) units.push(elementUnit(k, container));
-  } else {
-    for (const run of runsOf(kids, (k) => !k.composite || k.inline)) {
-      const first = run[0];
-      if (first === undefined) continue;
-      if (run.length > 1 || !first.composite || first.inline) {
-        const last = run[run.length - 1] ?? first;
-        const ext = { offsetBits: first.offset_bits, sizeBits: last.offset_bits + last.size_bits - first.offset_bits };
-        units.push({
-          key: `run:${pathKey(first.path)}`,
-          path: container.path,
-          node: null,
-          fields: run,
-          label: REPORT.unnamedPart(runPosition(ext, fileBits)),
-          named: false,
-          ...ext,
-          list: null,
-          variant: null,
-          gap: false,
-        });
-        continue;
-      }
-      if (first.list) {
-        lists.push({ node: first, count: first.child_count, word: childWord(first) });
-        if (first.child_count > 0 && first.child_count <= EXPAND_MAX) {
-          const els = ok(doc.templateChildren(first.path, 0, first.child_count));
-          if (els === WAIT) return WAIT;
-          const real = (els ?? []).filter((e) => !e.absent && e.size_bits > 0 && e.space === 0);
-          if (real.length > 0 && real.every((e) => e.composite)) {
-            for (const e of real) units.push(elementUnit(e, first));
-            continue;
-          }
-        }
-      }
-      units.push(nodeUnit(first));
-    }
-  }
+  const unlisted = unitsOf(doc, container, fileBits, 0, units, lists);
+  if (unlisted === WAIT) return WAIT;
   // Which case each element took, so like elements can be read as one part.
   for (let i = 0; i < units.length; i++) {
     const u = units[i];
@@ -194,6 +149,103 @@ export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
     placements(doc, groups),
   ).map((i) => groups[i]).filter((g): g is Group => g !== undefined);
   return { fileBits, groups, order, lists, unlisted, container };
+}
+
+/** How deep a structure that fills its parent is opened for the parts inside
+ *  it: an ELF file is its identification and one `header` structure holding
+ *  everything else, and the parts worth reading are inside that. */
+const OPEN_DEPTH = 3;
+/** The share of its parent a structure has to fill to be opened. */
+const OPEN_SHARE = 0.9;
+
+/**
+ * The parts of one node, added to `units`: its runs of plain fields, its
+ * structures, and the elements of its short lists of structures. A structure
+ * that fills most of the node is opened in turn rather than being one part
+ * that is nearly all of the file. Answers how many children were past
+ * `KIDS_MAX` and not looked at.
+ */
+function unitsOf(doc: Doc, node: TemplateNode, fileBits: number, depth: number, units: Unit[], lists: ListFact[]): number | typeof WAIT {
+  const kidsR = ok(doc.templateChildren(node.path, 0, Math.min(node.child_count, KIDS_MAX)));
+  if (kidsR === WAIT) return WAIT;
+  const placed = spliceTargets(doc, kidsR ?? []);
+  if (placed === WAIT) return WAIT;
+  const kids = placed.filter((k) => !k.absent && k.size_bits > 0 && k.space === 0);
+  let unlisted = Math.max(0, node.child_count - KIDS_MAX);
+  if (node.list) {
+    lists.push({ node, count: node.child_count, word: childWord(node) });
+    for (const k of kids) units.push(elementUnit(k, node));
+    return unlisted;
+  }
+  const adjacent = (a: TemplateNode, b: TemplateNode): boolean => a.offset_bits + a.size_bits === b.offset_bits;
+  for (const run of runsOf(kids, (k) => !k.composite || k.inline, adjacent)) {
+    const first = run[0];
+    if (first === undefined) continue;
+    if (run.length > 1 || !first.composite || first.inline) {
+      const last = run[run.length - 1] ?? first;
+      const ext = { offsetBits: first.offset_bits, sizeBits: last.offset_bits + last.size_bits - first.offset_bits };
+      units.push({
+        key: `run:${pathKey(first.path)}`,
+        path: node.path,
+        node: null,
+        fields: run,
+        // Fields at the top of the file are named by where they sit, as the
+        // listing names them; fields of a structure that was opened are that
+        // structure's, and go by its name.
+        // One field on its own, placed away from its neighbours, is that field.
+        label: run.length === 1 ? first.name : depth === 0 ? REPORT.unnamedPart(runPosition(ext, fileBits)) : node.name,
+        named: run.length === 1 || depth > 0,
+        ...ext,
+        list: null,
+        variant: null,
+        gap: false,
+      });
+      continue;
+    }
+    if (first.list) {
+      if (first.child_count > 0 && first.child_count <= EXPAND_MAX) {
+        const els = ok(doc.templateChildren(first.path, 0, first.child_count));
+        if (els === WAIT) return WAIT;
+        const real = (els ?? []).filter((e) => !e.absent && e.size_bits > 0 && e.space === 0);
+        // A list of structures is its elements. So is a short list of mixed
+        // ones, such as an ELF file's sections, some code and some bytes; a
+        // list of numbers is one part, the numbers.
+        const mixed = first.child_count <= EXPAND_MIXED_MAX && real.some((e) => e.composite || e.size_bits >= MIXED_MIN_BITS);
+        if (real.length > 0 && (real.every((e) => e.composite) || mixed)) {
+          lists.push({ node: first, count: first.child_count, word: childWord(first) });
+          for (const e of real) units.push(elementUnit(e, first));
+          continue;
+        }
+      }
+      lists.push({ node: first, count: first.child_count, word: childWord(first) });
+    } else if (depth < OPEN_DEPTH && !first.decoded && first.child_count > 0 && first.size_bits >= node.size_bits * OPEN_SHARE) {
+      const inner = unitsOf(doc, first, fileBits, depth + 1, units, lists);
+      if (inner === WAIT) return WAIT;
+      unlisted += inner;
+      continue;
+    }
+    units.push(nodeUnit(first));
+  }
+  return unlisted;
+}
+
+/** Children a node placed by an offset stand at no bytes of their own where
+ *  the template reads the offset, and their one child is the table the offset
+ *  points at: an ELF header's `program_headers` is written as nothing at 0x40
+ *  and holds the program header table wherever the offset says. The table is
+ *  the part, so it takes the pointer's place in the list. */
+function spliceTargets(doc: Doc, kids: readonly TemplateNode[]): TemplateNode[] | typeof WAIT {
+  const out: TemplateNode[] = [];
+  for (const k of kids) {
+    if (k.size_bits > 0 || !k.composite || k.list || k.child_count === 0 || k.child_count > 4 || k.absent) {
+      out.push(k);
+      continue;
+    }
+    const inner = ok(doc.templateChildren(k.path, 0, k.child_count));
+    if (inner === WAIT) return WAIT;
+    for (const t of inner ?? []) if (t.size_bits > 0) out.push(t);
+  }
+  return out;
 }
 
 function nodeUnit(n: TemplateNode): Unit {
@@ -261,10 +313,40 @@ function variantOf(doc: Doc, n: TemplateNode): string | null | typeof WAIT {
  *  a group of one. Colours follow file order, one hue per group, from the same
  *  palette the listing's sections use. */
 function groupUnits(units: readonly Unit[]): Group[] {
+  // How many elements of each list share a name: an element with a name of
+  // its own (an ELF section's `.text`) is a part of its own, and elements
+  // named alike with nothing to tell their case apart go together by type.
+  const names = new Map<string, number>();
+  const sizes = new Map<string, number>();
+  for (const u of units) {
+    if (u.list === null) continue;
+    const l = pathKey(u.list.path);
+    names.set(`${l}:${u.label}`, (names.get(`${l}:${u.label}`) ?? 0) + 1);
+    sizes.set(l, (sizes.get(l) ?? 0) + 1);
+  }
+  // A short list whose every element has a name of its own (an ELF file's
+  // sections, a WAV file's chunks) is read element by element, even where
+  // several took the same case: `.text` and `.rodata` are both `progbits`,
+  // and a report that called them one part would say less than their names.
+  const unique = (l: string): boolean => {
+    const n = sizes.get(l) ?? 0;
+    if (n > UNIQUE_MAX) return false;
+    for (const u of units) if (u.list !== null && pathKey(u.list.path) === l && (u.named || (names.get(`${l}:${u.label}`) ?? 0) > 1)) return false;
+    return true;
+  };
+  const uniqueLists = new Map<string, boolean>();
   const byKey = new Map<string, Unit[]>();
   const order: string[] = [];
   for (const u of units) {
-    const key = u.list !== null && u.variant !== null ? `v:${pathKey(u.list.path)}:${u.variant}` : u.key;
+    const list = u.list;
+    const lk = list === null ? "" : pathKey(list.path);
+    if (list !== null && !uniqueLists.has(lk)) uniqueLists.set(lk, unique(lk));
+    const key =
+      list === null || uniqueLists.get(lk) === true
+        ? u.key
+        : u.variant !== null
+          ? `v:${pathKey(list.path)}:${u.variant}`
+          : `t:${pathKey(list.path)}:${u.node?.type ?? ""}`;
     let g = byKey.get(key);
     if (g === undefined) {
       g = [];
@@ -279,10 +361,13 @@ function groupUnits(units: readonly Unit[]): Group[] {
     const first = us[0] as Unit;
     const gap = first.gap;
     const many = us.length > 1;
+    const sameLabel = us.every((u) => u.label === first.label);
     return {
       key,
-      label: many ? (first.variant ?? first.label) : first.label,
-      named: many ? false : first.named,
+      // Several elements that took one case go by the case; several with
+      // nothing to tell them apart go by the list they are in.
+      label: many ? (first.variant ?? (sameLabel ? first.label : (first.list?.name ?? first.label))) : first.label,
+      named: many ? first.variant === null && (!sameLabel || first.named) : first.named,
       units: us,
       sizeBits: us.reduce((s, u) => s + u.sizeBits, 0),
       offsetBits: first.offsetBits,

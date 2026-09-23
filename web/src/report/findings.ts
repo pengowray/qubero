@@ -10,6 +10,7 @@ import { formatOffset } from "../format.ts";
 import { checkGap } from "../gapcheck.ts";
 import type { Doc } from "../doc.ts";
 import type { ReportData } from "./data.ts";
+import { signatureOnly } from "./identity.ts";
 import { byteRef } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section, type Target } from "./section.ts";
 import { bitsText, RV } from "./text.ts";
@@ -82,8 +83,11 @@ function collect(doc: Doc, data: ReportData): Findings | typeof WAIT {
     });
     counts.refused++;
   }
+  // A template built from a file(1) rule describes the signature and claims
+  // nothing about the rest, so the rest is not a finding.
+  const gapsCount = !signatureOnly(doc);
   for (const g of parts?.groups ?? []) {
-    if (!g.gap) continue;
+    if (!g.gap || !gapsCount) continue;
     for (const u of g.units) {
       const verdict = checkGap(doc, u.offsetBits, u.sizeBits);
       if (verdict === "unread") return WAIT;

@@ -32,7 +32,7 @@ export const contentSection: Section = {
   id: "content",
   render(ctx: ReportCtx): Rendered {
     if (cardKind(ctx.doc.template) !== null) return picture(ctx);
-    if (ctx.doc.template === null) return null;
+    if (ctx.doc.template === null) return plainText(ctx);
     const walk = ctx.data.memo("walk", () => walkTemplate(ctx.doc));
     if (walk === WAIT) return WAIT;
     for (const node of walk.tables) {
@@ -93,6 +93,37 @@ export const contentSection: Section = {
     return null;
   },
 };
+
+/** How much of a file with no template is read to decide whether it is text,
+ *  and the share of those bytes that must be. */
+const TEXT_SNIFF = 4096;
+const TEXT_SHARE = 0.95;
+
+/** A file no template reads that is text: its first lines, as UTF-8. The
+ *  Text view reads it in full, in whatever encoding it turns out to be. */
+function plainText(ctx: ReportCtx): Rendered {
+  const n = Math.min(ctx.doc.lengthBytes, TEXT_SNIFF);
+  if (n === 0) return null;
+  const r = ctx.doc.read(0, n);
+  if (!r.complete) return WAIT;
+  let text = 0;
+  for (const b of r.bytes) if ((b >= 0x20 && b !== 0x7f) || b === 9 || b === 10 || b === 13) text++;
+  if (text / n < TEXT_SHARE) return null;
+  const sec = section(0, ctx.doc.lengthBits);
+  const h = document.createElement("h2");
+  h.textContent = RV.plainTextHeading(ctx.doc.lengthBytes);
+  const pre = document.createElement("pre");
+  pre.className = "rv-text";
+  pre.textContent = new TextDecoder("utf-8").decode(r.bytes).slice(0, TEXT_CHARS);
+  sec.append(h, pre);
+  if (ctx.doc.lengthBytes > n || pre.textContent.length >= TEXT_CHARS) {
+    const p = document.createElement("p");
+    p.className = "rv-note";
+    p.textContent = RV.plainTextCut(pre.textContent.length);
+    sec.append(p);
+  }
+  return sec;
+}
 
 /** `The text of <code>name</code>: 4,886 bytes`, with the name in code font. */
 function headingWithName(name: string, bytes: number): (Node | string)[] {

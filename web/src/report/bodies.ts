@@ -105,7 +105,8 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
     const index = n.path[n.path.length - 1] ?? 0;
     const reads = document.createElement("td");
     reads.className = "rv-reads";
-    reads.append(n.line ?? n.value);
+    // Bytes read as bytes say nothing the next column does not.
+    if (n.kind !== "bytes" && n.kind !== "unread") reads.append(n.line ?? n.value);
     if (n.problems_within[0] > 0) reads.classList.add("has-invalid");
     tr.append(cell("td", String(index), "rv-num"), atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));
     body.append(tr);

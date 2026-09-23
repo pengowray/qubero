@@ -14,8 +14,11 @@ export function stripIndex(name: string): string {
 
 /** The value a switch was decided by, as `origins` gives it, without the
  *  number in brackets an enum adds: `local file (0x4034b50)` is `local file`. */
-export function variantText(value: string): string {
-  return value.replace(/\s*\((?:0x[0-9a-f]+|\d+)\)$/i, "").trim();
+export function variantText(value: string): string | null {
+  const text = value.replace(/\s*\((?:0x[0-9a-f]+|\d+)\)$/i, "").trim();
+  // A bare number decided the case without naming it, and a group called
+  // `1130461` says nothing its list's own name would not.
+  return text === "" || /^[-+]?(?:0x[0-9a-f]+|[\d.,\s]+)$/i.test(text) ? null : text;
 }
 
 /**
@@ -23,12 +26,15 @@ export function variantText(value: string): string {
  * run of three header fields is one part, "Header", the way the listing makes
  * it one heading; a structure or a list is a part of its own.
  */
-export function runsOf<T>(kids: readonly T[], plain: (k: T) => boolean): (readonly T[])[] {
+export function runsOf<T>(kids: readonly T[], plain: (k: T) => boolean, joins: (prev: T, next: T) => boolean = () => true): (readonly T[])[] {
   const out: T[][] = [];
   let run: T[] | null = null;
   for (const k of kids) {
     if (plain(k)) {
-      if (run === null) {
+      // A field placed somewhere else in the file is not part of the run
+      // beside it in the template, however near it is written there.
+      const prev = run?.[run.length - 1];
+      if (run === null || prev === undefined || !joins(prev, k)) {
         run = [];
         out.push(run);
       }

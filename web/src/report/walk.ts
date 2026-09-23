@@ -65,7 +65,13 @@ export function walkTemplate(doc: Doc): WalkResult | typeof WAIT {
     const want = n.list ? Math.min(n.child_count, PER_LIST) : Math.min(n.child_count, NODES - seen);
     if (want < n.child_count) partial = true;
     const kids = ok(doc.templateChildren(n.path, 0, want));
-    if (kids === WAIT) return WAIT;
+    // A subtree whose bytes have not arrived is passed over rather than
+    // waited for: in a large file those are the bytes a walk of the start has
+    // no business pulling in, and the walk says it is partial.
+    if (kids === WAIT) {
+      partial = true;
+      continue;
+    }
     if (kids === null) continue;
     seen += kids.length;
     // Pushed backwards, so they come off the stack in file order.
@@ -118,7 +124,11 @@ export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
       }
       const to = Math.min(n.child_count, from + 256);
       const kids = ok(doc.templateChildren(n.path, from, to));
-      if (kids === WAIT) throw WAIT;
+      // Not arrived: counted by the root already, and not walked to here.
+      if (kids === WAIT) {
+        more = true;
+        return true;
+      }
       if (kids === null) return true;
       spent += kids.length;
       for (const k of kids) {
@@ -129,11 +139,6 @@ export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
     }
     return true;
   };
-  try {
-    visit(root);
-  } catch (e) {
-    if (e === WAIT) return WAIT;
-    throw e;
-  }
+  visit(root);
   return { nodes, invalid, undefined: undef, more };
 }

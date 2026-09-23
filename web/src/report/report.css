@@ -403,6 +403,11 @@
 .rv-doc {
   margin: 4px 0 8px;
 }
+.rv-sublead {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
 .rv-strip {
   margin: 8px 0;
 }

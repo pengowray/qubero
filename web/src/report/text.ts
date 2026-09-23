@@ -122,6 +122,8 @@ export const RV = {
   openTable: "Open as a table",
   textHeading: (name: string, bytes: number): string => `The text of ${name}: ${bytesText(bytes)}`,
   textCut: (shown: number, total: number): string => `The first ${shown.toLocaleString()} of ${total.toLocaleString()} characters.`,
+  plainTextHeading: (bytes: number): string => `The file as text: ${bytesText(bytes)}`,
+  plainTextCut: (shown: number): string => `The first ${shown.toLocaleString()} characters, read as UTF-8. The Text view shows all of it.`,
 
   // ----- 6. where the bytes go -----
   bytesHeading: (n: number): string => `Where the ${n.toLocaleString()} bytes go`,
@@ -147,7 +149,7 @@ export const RV = {
   ledgerBytes: "Bytes",
   ledgerShare: "Share of file",
   ledgerWhat: "What it is",
-  ledgerCaptionLead: (largest: string, share: string): string => `${sentenceCase(largest)} takes ${share} of the file.`,
+  ledgerCaptionLead: (largest: string, share: string): string => `Largest part: ${largest}, ${share} of the file.`,
   ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map.",
   ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these were not listed.`,
   /** Under the byte counts of a file no template reads. */

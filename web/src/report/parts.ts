@@ -10,6 +10,7 @@
 
 import type { TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
+import { childWord } from "../strings.ts";
 import { tablePlan } from "../tableplan.ts";
 import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./bodies.ts";
 import { ok, type Group, type PartsModel, type Unit } from "./model.ts";
@@ -23,6 +24,8 @@ const SECTIONS_MAX = 40;
 /** Rows of a record table, and fields of a field table, before the count. */
 const ROWS = 16;
 const FIELDS = 40;
+/** Parts of one group shown one by one, each in full. */
+const EACH_MAX = 4;
 
 export const partsSection: Section = {
   id: "parts",
@@ -60,7 +63,11 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   name.textContent = g.label;
   const size = bitsText(g.sizeBits);
   const share = shareOfFile(g.sizeBits, model.fileBits);
-  const rest = g.units.length > 1 ? `: ${counted(g.units.length, g.unitWord)}, ${size}, ${share}` : `: ${size}, ${share}`;
+  // A list says how many it holds as well as how big it is: `pages: 73 pages,
+  // 37,376 bytes`.
+  const only = g.units.length === 1 ? g.units[0]?.node : undefined;
+  const count = g.units.length > 1 ? counted(g.units.length, g.unitWord) : only?.list === true ? counted(only.child_count, childWord(only)) : null;
+  const rest = count !== null ? `: ${count}, ${size}, ${share}` : `: ${size}, ${share}`;
   h.append(name, rest);
   const first = g.units[0] as Unit;
   pointAt(h, { ...(first.node !== null ? { path: first.path } : {}), startBit: first.offsetBits, endBit: first.offsetBits + first.sizeBits }, g.label);
@@ -98,63 +105,113 @@ function partSection(ctx: ReportCtx, model: PartsModel, g: Group): HTMLElement |
   return sec;
 }
 
-/** The body that fits the part: see the file comment. */
+/** The body that fits the part: see the file comment. A few parts of one kind
+ *  (a MIDI file's three tracks) are each shown in full under a heading of
+ *  their own; more than that are one row each of a record table. */
 function bodyOf(ctx: ReportCtx, g: Group): HTMLElement | null | typeof WAIT {
   const doc = ctx.doc;
+  if (g.units.length > 1 && g.units.length <= EACH_MAX) {
+    const box = document.createElement("div");
+    for (const u of g.units) {
+      const h = document.createElement("h3");
+      const name = document.createElement(u.named ? "code" : "span");
+      name.textContent = u.label;
+      h.append(name, `, `, byteRef({ ...(u.node !== null ? { path: u.path } : {}), startBit: u.offsetBits, endBit: u.offsetBits + u.sizeBits }, u.label), `, ${bitsText(u.sizeBits)}`);
+      const body = unitBody(ctx, u);
+      if (body === WAIT) return WAIT;
+      box.append(h);
+      if (body !== null) box.append(body);
+    }
+    return box;
+  }
   if (g.units.length > 1) {
     const nodes = g.units.map((u) => u.node).filter((n): n is TemplateNode => n !== null);
     const box = document.createElement("div");
     box.append(recordTable(doc, nodes.slice(0, ROWS), Math.max(0, nodes.length - ROWS), g.unitWord));
     return box;
   }
-  const u = g.units[0] as Unit;
+  return unitBody(ctx, g.units[0] as Unit);
+}
+
+/** The body of one part. */
+function unitBody(ctx: ReportCtx, u: Unit): HTMLElement | null | typeof WAIT {
+  const doc = ctx.doc;
   if (u.node === null) return u.fields.length > 0 ? fieldTable(doc, ctx.data, u.fields.slice(0, FIELDS), Math.max(0, u.fields.length - FIELDS)) : null;
   const n = u.node;
-  if (n.list) {
-    const plan = tablePlan(doc, n);
-    if (plan !== null && plan.columns.length > 0) {
-      const t = planTable(plan, ROWS);
-      if (!t.complete) return WAIT;
-      const box = document.createElement("div");
-      box.append(t.el);
-      if (plan.count > ROWS) box.append(moreWithListing(ctx, n, plan.count - ROWS, plan.rowWord));
-      return box;
-    }
-    const kids = ok(doc.templateChildren(n.path, 0, Math.min(n.child_count, ROWS)));
-    if (kids === WAIT) return WAIT;
-    const box = document.createElement("div");
-    box.append(recordTable(doc, kids ?? [], 0, "item"));
-    if (n.child_count > ROWS) box.append(moreWithListing(ctx, n, n.child_count - ROWS, n.unit ?? "item"));
-    return box;
-  }
+  if (n.list) return listBody(ctx, n);
   if (n.composite && n.child_count > 0) {
     const kids = ok(doc.templateChildren(n.path, 0, Math.min(n.child_count, FIELDS)));
     if (kids === WAIT) return WAIT;
     const shown = (kids ?? []).filter((k) => !k.absent && k.size_bits > 0);
     const opened = openBody(ctx, n, shown);
     if (opened === WAIT) return WAIT;
-    return fieldTable(doc, ctx.data, opened, Math.max(0, n.child_count - FIELDS));
+    const box = document.createElement("div");
+    box.append(fieldTable(doc, ctx.data, opened.fields, Math.max(0, n.child_count - FIELDS)));
+    if (opened.list !== null) {
+      const list = listBody(ctx, opened.list);
+      if (list === WAIT) return WAIT;
+      const cap = document.createElement("p");
+      cap.className = "rv-sublead";
+      const code = document.createElement("code");
+      code.textContent = opened.list.name;
+      cap.append(code, `: ${counted(opened.list.child_count, childWord(opened.list))}`);
+      box.append(cap, list);
+    }
+    return box;
   }
   const strip = hexStrip(doc, n.offset_bits, n.size_bits);
   return strip.complete ? strip.el : WAIT;
+}
+
+/** A list: the first rows of its table when it reads as one, or else one row
+ *  a record. */
+function listBody(ctx: ReportCtx, n: TemplateNode): HTMLElement | typeof WAIT {
+  const doc = ctx.doc;
+  const plan = tablePlan(doc, n);
+  if (plan !== null && plan.columns.length > 0) {
+    const t = planTable(plan, ROWS);
+    if (!t.complete) return WAIT;
+    const box = document.createElement("div");
+    box.append(t.el);
+    if (plan.count > ROWS) box.append(moreWithListing(ctx, n, plan.count - ROWS, plan.rowWord));
+    return box;
+  }
+  const kids = ok(doc.templateChildren(n.path, 0, Math.min(n.child_count, ROWS)));
+  if (kids === WAIT) return WAIT;
+  const box = document.createElement("div");
+  box.append(recordTable(doc, kids ?? [], 0, childWord(n)));
+  if (n.child_count > ROWS) box.append(moreWithListing(ctx, n, n.child_count - ROWS, childWord(n)));
+  return box;
 }
 
 /**
  * A structure of a few fields whose bulk is one structure inside it (a JPEG
  * segment is a marker and a `body`) shows that structure's fields in its
  * place, named `body.width`, so the table says what the segment holds rather
- * than that it has a body.
+ * than that it has a body. Where the bulk is a list (a MIDI track's events),
+ * the list is lifted out to be shown as its records under the fields.
  */
-function openBody(ctx: ReportCtx, n: TemplateNode, kids: readonly TemplateNode[]): readonly TemplateNode[] | typeof WAIT {
-  if (kids.length > 4) return kids;
-  const i = kids.findIndex((k) => k.composite && !k.list && !k.decoded && !k.inline && k.size_bits * 2 >= n.size_bits && k.child_count > 0 && k.child_count <= FIELDS);
+function openBody(
+  ctx: ReportCtx,
+  n: TemplateNode,
+  kids: readonly TemplateNode[],
+): { readonly fields: readonly TemplateNode[]; readonly list: TemplateNode | null } | typeof WAIT {
+  if (kids.length > 4) return { fields: kids, list: null };
+  const bulk = (k: TemplateNode): boolean => k.composite && !k.decoded && !k.inline && k.size_bits * 2 >= n.size_bits && k.child_count > 0;
+  const i = kids.findIndex(bulk);
   const body = kids[i];
-  if (body === undefined) return kids;
+  if (body === undefined) return { fields: kids, list: null };
+  if (body.list) return { fields: kids.filter((_, j) => j !== i), list: body };
+  if (body.child_count > FIELDS) return { fields: kids, list: null };
   const inner = ok(ctx.doc.templateChildren(body.path, 0, body.child_count));
   if (inner === WAIT) return WAIT;
-  if (inner === null) return kids;
-  const named = inner.filter((k) => !k.absent && k.size_bits > 0).map((k) => ({ ...k, name: `${body.name}.${k.name}` }));
-  return [...kids.slice(0, i), ...named, ...kids.slice(i + 1)];
+  if (inner === null) return { fields: kids, list: null };
+  const real = inner.filter((k) => !k.absent && k.size_bits > 0);
+  // The body's own bulk may be a list in turn: a chunk's body holding the
+  // samples, a track's body holding its events.
+  const innerList = real.find((k) => k.list && k.size_bits * 2 >= n.size_bits && k.child_count > 0) ?? null;
+  const named = real.filter((k) => k !== innerList).map((k) => ({ ...k, name: `${body.name}.${k.name}` }));
+  return { fields: [...kids.slice(0, i), ...named, ...kids.slice(i + 1)], list: innerList };
 }
 
 function moreWithListing(ctx: ReportCtx, n: TemplateNode, more: number, word: string): HTMLElement {

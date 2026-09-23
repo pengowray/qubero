@@ -70,10 +70,22 @@ export type FormatIdentity = {
   readonly rule: Identification | null;
 };
 
-/** Where the template reading the file came from. */
-function templateSource(doc: Doc, template: string): "builtin" | "kaitai" | "hexpat" | "other" {
+/** Where the template reading the file came from. `other` is a template built
+ *  from the file(1) rule that identified the file, or one converted from a
+ *  description the reader pasted. */
+export function templateSource(doc: Doc, template: string): "builtin" | "kaitai" | "hexpat" | "other" {
   const choice = doc.templateChoices.find((c) => c.name === template);
   return choice?.source ?? "other";
+}
+
+/** True when the template describes the file's signature and nothing else:
+ *  the one built from a file(1) rule. Bytes it leaves undescribed are not a
+ *  finding, since it never claimed to describe them. */
+export function signatureOnly(doc: Doc): boolean {
+  const t = doc.template;
+  // A description the reader converted is not one of the choices either, and
+  // says so by having a conversion report.
+  return t !== null && templateSource(doc, t) === "other" && doc.ksyReport() === null && doc.hexpatReport() === null;
 }
 
 /**
