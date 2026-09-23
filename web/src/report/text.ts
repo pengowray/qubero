@@ -104,7 +104,6 @@ export const RV = {
   inPlaces: (n: number): string => `in ${n.toLocaleString()} places`,
   andMore: (n: number): string => `and ${n.toLocaleString()} more`,
   moreFindings: (n: number): string => `${counted(n, "more finding")} not listed`,
-  findingsSoFar: "Counted over the fields read so far.",
 
   // ----- 5. the content -----
   pictureHeading: (w: number, h: number): string => `The picture: ${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
@@ -167,8 +166,6 @@ export const RV = {
     done ? "Every byte of the file, by what kind of byte it is." : `Counted so far, up to ${readTo}. The rest is still being read.`,
 
   // ----- 8. the parts -----
-  partHeading: (label: string, bytes: string, share: string): string => `${label}: ${bytes}, ${share}`,
-  groupHeading: (label: string, count: string, bytes: string, share: string): string => `${label}: ${count}, ${bytes}, ${share}`,
   /** Between the two addresses of a part's range, both of them links. */
   rangeTo: " to ",
   colIndex: "#",
@@ -179,7 +176,6 @@ export const RV = {
   colBytes: "First bytes",
   colField: "Field",
   colValue: "Value",
-  colType: "Type",
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   showInListing: "Show in the listing",
   allZero: (n: number): string => `All ${bytesText(n)} are zero.`,
@@ -230,9 +226,6 @@ export const RV = {
   tipLoading: "The bytes are still being read.",
   tipClick: "Click to put the cursor here. Double-click to go to the hex view.",
 
-  // ----- the whole view -----
-  noTemplateLead: "No template reads this file, so the report shows its bytes only.",
-  reading: "Reading the file…",
 };
 
 /** A long reading cut to `max` characters, at a space where there is one. */
