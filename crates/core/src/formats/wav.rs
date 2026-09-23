@@ -14,6 +14,14 @@
 //! 32-bit length, payload. Its tag numbers here were read out of files, not
 //! from a specification.
 //!
+//! A Pettersson D500X writes no metadata chunk. It puts a block of its own at
+//! the front of the `data` chunk and leaves it out of the chunk's size, which
+//! counts the samples alone. The block says how long it is in its first four
+//! bytes and names the recorder's firmware at a fixed place inside, so it is
+//! found by those two and read before the samples, with the chunk made long
+//! enough to hold both. Its layout was read out of one file, not from a
+//! specification: the manual says what the fields mean and not where they are.
+//!
 //! The rest is what studio files carry: the extensible format header, the
 //! broadcast extension `bext` (EBU Tech 3285), `smpl` and `inst` for samplers,
 //! `plst`, the labels in an `adtl` list, XML chunks, and an ID3 tag, which is
@@ -88,11 +96,22 @@ pub fn wav() -> Template {
                     ),
                 ),
             ],
+        )
+        // RF64 writes 0xffffffff here and keeps the real size in its ds64
+        // chunk, which is a size the format defines rather than one that
+        // overshoots.
+        .field_valid(
+            "size",
+            Valid::Max(E::cond(
+                E::field("magic").equal_to(E::lit(cc("RF64"))),
+                E::lit(0xffff_ffff_i128),
+                riff_size_room(),
+            )),
         ),
     )
-    .with_type("Chunk", chunk(chunk_body_endian(Some(sample_table(Little)), Little), Little))
+    .with_type("Chunk", chunk(chunk_body_endian(Some(data_body()), Little), Little, Some(d500x_block_outside_size())))
     .with_type("ListItem", list_item(Little))
-    .with_type("ChunkBE", chunk(chunk_body_endian(Some(sample_table(Big)), Big), Big))
+    .with_type("ChunkBE", chunk(chunk_body_endian(Some(sample_table(Big)), Big), Big, None))
     .with_type("ListItemBE", list_item(Big))
 }
 
@@ -108,9 +127,10 @@ pub(super) fn riff(name: &str, body: T) -> Template {
                 ("form", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
                 ("chunks", T::sized(chunk_room(), T::repeat(T::Named("Chunk".into()), Until::End))),
             ],
-        ),
+        )
+        .field_valid("size", Valid::Max(riff_size_room())),
     )
-    .with_type("Chunk", chunk(body, Little))
+    .with_type("Chunk", chunk(body, Little, None))
     .with_type("ListItem", list_item(Little))
 }
 
@@ -128,28 +148,108 @@ fn chunk_room() -> E {
     E::field("size").at_least(E::lit(4)).sub(E::lit(4)).or(E::Remaining).at_most(E::Remaining)
 }
 
-fn chunk(body: T, endian: Endian) -> T {
-    // RF64 writes 0xffffffff in a data chunk's 32-bit size slot and puts the
-    // real length in the preceding ds64 chunk. Adding one before `or` keeps a
-    // genuine zero-length RIFF chunk distinct from the expression language's
-    // "missing" zero.
-    let body_size = || {
-        E::field("size")
-            .less_than(E::lit(0xffff_ffff_i128))
-            .mul(E::field("size").add(E::lit(1)))
-            .or(E::sibling(&["body", "data_size"]).add(E::lit(1)))
-            .sub(E::lit(1))
-    };
+/// The most the RIFF size can be: everything after its own eight bytes.
+///
+/// A bound and not an equality, because the RIFF may end before the file
+/// does. Bytes a writer left after it are outside it, as [`chunk_room`] says,
+/// and a size that stops short of them is right. A size that runs past the
+/// end of the file is wrong however the chunks are read, and [`chunk_room`]
+/// caps it for reading, so this is what says it was capped. A size that
+/// stops short of a chunk that is there, which `stretch_to` in the walk makes
+/// room for, is wrong too, and this does not see it.
+fn riff_size_room() -> E {
+    E::SpaceSize.sub(E::lit(8))
+}
+
+/// Where a D500X writes its firmware version, counted from the front of its
+/// metadata block: `D500X V2.2.6 140516, 17:19:14`.
+const D500X_FIRMWARE_AT: i128 = 0xc4;
+
+/// How long a D500X block has to be to hold the fields at fixed places in it,
+/// which is everything before its lines of text.
+const D500X_FIXED: i128 = 0x1d4;
+
+/// Whether a D500X metadata block starts here, at the front of a `data`
+/// chunk's body: `D500X` where the firmware version goes, and a length in the
+/// first four bytes long enough to hold the fixed fields, short enough to fit,
+/// and even, since an odd one would put every 16-bit sample after it a byte
+/// out. Each part is asked only when the one before it held, so a short data
+/// chunk is never looked past the end of.
+fn d500x_block_here() -> E {
+    let length = || E::peek(32, Little);
+    E::lit(D500X_FIXED)
+        .less_or_equal(E::Remaining)
+        .both(E::peek_at(E::lit(D500X_FIRMWARE_AT * 8), 40, Big).equal_to(E::lit(cc("D500X"))))
+        .both(E::lit(D500X_FIXED).less_or_equal(length()))
+        .both(length().less_or_equal(E::Remaining))
+        .both(length().modulo(E::lit(2)).equal_to(E::lit(0)))
+}
+
+/// How much a D500X block adds to its chunk's body, asked where the body
+/// starts: the block's length when there is one that the chunk's size leaves
+/// out, and nothing otherwise.
+///
+/// The recorder counts the samples in the size and not the block before them,
+/// so the chunk is read that much longer than it says. A file whose size was
+/// put right afterwards counts both, and adding the block again would run past
+/// the end of the file; so the block is added only when the two together fit,
+/// and a size that already covers it is left as it is.
+///
+/// That test cannot tell a corrected size from the recorder's own when
+/// another chunk follows `data`, since there is room for both either way. A
+/// corrected file with, say, a GUANO chunk added after the samples would have
+/// the block counted twice and the next chunk's header read as samples. No
+/// such file has been seen.
+fn d500x_block_outside_size() -> E {
+    let length = || E::peek(32, Little);
+    E::cond(
+        E::field("id")
+            .equal_to(E::lit(cc("data")))
+            .both(d500x_block_here())
+            .both(chunk_body_size().add(length()).less_or_equal(E::Remaining)),
+        length(),
+        E::lit(0),
+    )
+}
+
+/// How long a chunk's body is by its size slot.
+///
+/// RF64 writes 0xffffffff in a data chunk's 32-bit size slot and puts the
+/// real length in the preceding ds64 chunk. Adding one before `or` keeps a
+/// genuine zero-length RIFF chunk distinct from the expression language's
+/// "missing" zero.
+fn chunk_body_size() -> E {
+    E::field("size")
+        .less_than(E::lit(0xffff_ffff_i128))
+        .mul(E::field("size").add(E::lit(1)))
+        .or(E::sibling(&["body", "data_size"]).add(E::lit(1)))
+        .sub(E::lit(1))
+}
+
+/// A chunk: id, size, body, and the pad byte after an odd-sized body.
+/// `outside_size` is what the body holds beyond what the size counts, asked
+/// where the body starts; see [`d500x_block_outside_size`].
+fn chunk(body: T, endian: Endian, outside_size: Option<E>) -> T {
+    let body_size = chunk_body_size;
     // A chunk body is padded to an even length. The pad byte is not counted in
     // the size, so it is a field of its own: size - (size / 2) * 2.
     // A chunk of an odd length is padded to an even one, and the last chunk in
     // a file often is not: the writer had nothing to follow it with. So the
     // pad byte is there when the length is odd and there is a byte left to be
     // it, which is what the guard multiplies by.
+    //
+    // What the body holds outside its size is left out here. It is asked
+    // where the body starts and would be asked in the wrong place here, and
+    // the one thing it can be, a D500X block, is even, so the pad is the same
+    // either way.
     let pad = || {
         body_size()
             .sub(body_size().div(E::lit(2)).mul(E::lit(2)))
             .mul(E::lit(0).less_than(E::Remaining))
+    };
+    let whole_body = match outside_size {
+        Some(more) => body_size().add(more),
+        None => body_size(),
     };
     T::structure_named(
         "Chunk",
@@ -158,7 +258,7 @@ fn chunk(body: T, endian: Endian) -> T {
         vec![
             ("id", T::text(StrLen::Fixed(E::lit(4)), Encoding::Ascii)),
             ("size", T::u32(endian)),
-            ("body", T::sized(body_size(), body)),
+            ("body", T::sized(whole_body, body)),
             ("pad", T::bytes(pad())),
         ],
     )
@@ -226,6 +326,12 @@ fn samples(endian: Endian) -> T {
 /// is wrapped, and `Samples.samples` is a field the shape can hang on. See
 /// [`crate::template::TableShape`].
 fn sample_table(endian: Endian) -> T {
+    as_sample_table(T::structure("Samples", vec![("samples", samples(endian))]))
+}
+
+/// The shape and the constraint on a structure's `samples` field, whatever
+/// else the structure holds.
+fn as_sample_table(holder: T) -> T {
     let shape = TableShape {
         // Interleaved: one row is one sample of each channel.
         columns: Some(E::sibling(&["body", "channels"])),
@@ -248,9 +354,68 @@ fn sample_table(endian: Endian) -> T {
     // the value out rather than Qubero having no name for it. Declared on the
     // run, the constraint is about its elements; the integer branches of the
     // switch hold no float and it says nothing about them.
-    T::structure("Samples", vec![("samples", samples(endian))])
-        .field_table("samples", shape)
-        .field_valid("samples", Valid::Finite)
+    holder.field_table("samples", shape).field_valid("samples", Valid::Finite)
+}
+
+/// A little-endian `data` chunk's body: the samples, after a D500X metadata
+/// block when the recorder wrote one there. Either way `body.samples` is the
+/// run of samples; only its index in the body differs.
+fn data_body() -> T {
+    let with_block = as_sample_table(T::structure(
+        "D500XData",
+        vec![
+            ("d500x_metadata", T::sized(E::peek(32, Little), d500x_metadata())),
+            ("samples", samples(Little)),
+        ],
+    ))
+    .field_doc(
+        "d500x_metadata",
+        "Metadata from a Pettersson D500X bat recorder. It sits at the start of the data chunk, \
+         but the chunk size does not include it: the size counts only the samples after it.",
+    );
+    T::switch(d500x_block_here(), vec![(1, with_block)], sample_table(Little))
+}
+
+/// What a D500X writes before its samples. Text fields at fixed places,
+/// eight bytes of settings, then the same facts and a few more as lines of
+/// text, with zeros between and after. The places are the ones firmware 2.2.6
+/// used; the lines run to the first zero byte, and the zeros after them to
+/// the end of the block, so a block of another length still ends where its
+/// length says.
+fn d500x_metadata() -> T {
+    let text = |n: i128| T::text(StrLen::Padded { size: E::lit(n), pad: 0 }, Encoding::Ascii);
+    let line = T::text(StrLen::Terminated { end: b'\n', or_end: true }, Encoding::Latin1);
+    T::structure(
+        "D500XMetadata",
+        vec![
+            ("length", T::u32(Little)),
+            ("unused_after_length", T::bytes(E::lit(0xa4 - 4))),
+            ("file_name", text(16)),
+            ("file_time", text(16)),
+            ("firmware", text(48)),
+            ("profile_line_1", text(24)),
+            ("profile_line_2", text(24)),
+            ("settings", T::array(T::u8(), E::lit(8))),
+            ("profile_name", text(D500X_FIXED - 0x12c)),
+            ("text_lines", T::sized(E::to_bytes(&[0]), T::repeat(line, Until::End))),
+            ("unused_after_text", T::bytes(E::Remaining)),
+        ],
+    )
+    .field_doc("length", "Length of this block in bytes, including these 4.")
+    .field_doc("file_time", "Recording date and time, as YYMMDD hh:mm:ss.")
+    .field_doc("firmware", "Recorder model and firmware version, then the firmware's build date (YYMMDD) and time.")
+    .field_doc("profile_line_1", "Sample rate in kHz (f), pre-trigger (PRE), and recording length in seconds (LEN).")
+    .field_doc("profile_line_2", "High-pass filter (HP), automatic recording (A), and trigger sensitivity (TS).")
+    .field_doc(
+        "settings",
+        "Not documented. In the one file examined, these match the profile settings as positions \
+         in the recorder's option lists, for example 2 for 500 kHz.",
+    )
+    .field_doc(
+        "text_lines",
+        "Lines of text, each ending in CR LF. LAT and LON are the position entered for the \
+         recorder's sunrise and sunset timer, not where it recorded.",
+    )
 }
 
 /// What is inside a chunk, by its id. `data` is left as bytes unless a format
@@ -675,6 +840,8 @@ mod tests {
         assert_eq!(ev.node(&d, &[3, 2, 2]).unwrap().size_bits, 32);
         assert_eq!(ev.node(&d, &[3, 2, 2, 0, 0]).unwrap().value, Value::Int(1));
         assert_eq!(ev.node(&d, &[3, 2, 2, 0, 1]).unwrap().value, Value::Int(-2));
+        // The size slot holds what RF64 says it should.
+        assert!(ev.valid_of(&d, &[1]).unwrap().unwrap().ok);
     }
 
     pub(super) fn sample() -> Vec<u8> {
@@ -1139,5 +1306,136 @@ mod tests {
             assert_eq!(ev.node(&d, &[]).unwrap().size_bits, len * 8, "size {size}");
             assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2, "size {size}");
         }
+    }
+
+    /// A RIFF size larger than the file is capped for reading, and said to be
+    /// wrong. One that stops short of bytes after the RIFF is right, and so is
+    /// RF64's 0xffffffff.
+    #[test]
+    fn a_riff_size_past_the_end_of_the_file_is_invalid() {
+        let valid = |bytes: Vec<u8>| {
+            let d = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(wav());
+            let v = ev.valid_of(&d, &[1]).unwrap().expect("a verdict on the RIFF size");
+            (v.ok, v.text)
+        };
+        let len = wave(&[], None).len();
+        assert_eq!(
+            valid(wave(&[], Some(len as u32))),
+            (false, format!("Out of range: must be at most {}", len - 8))
+        );
+        assert!(!valid(wave(&[], Some(u32::MAX))).0);
+        assert!(valid(wave(&[], None)).0);
+        assert!(valid(wave(&[0, 0, 0, 0], None)).0);
+        assert!(valid(wave(&[], Some(0))).0);
+    }
+
+    /// Text in a fixed field of a D500X block, at `at` bytes into the block.
+    fn put(block: &mut [u8], at: usize, s: &[u8]) {
+        block[at..at + s.len()].copy_from_slice(s);
+    }
+
+    /// A 980-byte D500X metadata block laid out as firmware 2.2.6 writes it.
+    fn d500x_block() -> Vec<u8> {
+        let mut b = vec![0u8; 980];
+        put(&mut b, 0, &980u32.to_le_bytes());
+        put(&mut b, 0xa4, b"M01671.WAV");
+        put(&mut b, 0xb4, b"220608 01:28:08");
+        put(&mut b, 0xc4, b"D500X V2.2.6 140516, 17:19:14");
+        put(&mut b, 0xf4, b"f=500 PRE=OFF LEN=0.3");
+        put(&mut b, 0x10c, b"HP=Y A=Y TS=0");
+        put(&mut b, 0x124, &[2, 0, 0, 1, 1, 0, 0, 0]);
+        put(&mut b, 0x12c, b"PROFILE0");
+        put(&mut b, 0x1d4, b"File Name:      M01671.WAV\r\nS/N:            01059\r\n");
+        b
+    }
+
+    /// What a D500X writes: a 44-byte header, its block, then the samples,
+    /// with a `data` size that counts the samples alone and a RIFF size that
+    /// counts the whole file. With `fixed`, both sizes as they should be.
+    fn d500x_file(samples: &[i16], fixed: bool) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&500_000u32.to_le_bytes());
+        fmt.extend_from_slice(&1_000_000u32.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&16u16.to_le_bytes());
+        let block = d500x_block();
+        let audio: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut body = b"WAVE".to_vec();
+        body.extend(chunk_bytes(b"fmt ", &fmt));
+        body.extend_from_slice(b"data");
+        let data_size = audio.len() + if fixed { block.len() } else { 0 };
+        body.extend_from_slice(&(data_size as u32).to_le_bytes());
+        body.extend(block);
+        body.extend(audio);
+        let mut out = b"RIFF".to_vec();
+        let riff_size = body.len() + if fixed { 0 } else { 8 };
+        out.extend_from_slice(&(riff_size as u32).to_le_bytes());
+        out.extend(body);
+        out
+    }
+
+    /// The block is read as metadata before the samples, and the chunk as
+    /// long as the two together, so the first sample is the first one after
+    /// the block and the last is the last two bytes of the file.
+    #[test]
+    fn a_d500x_block_is_read_before_the_samples_it_is_left_out_of_the_size_of() {
+        let samples = [-3i16, 7, 1000, -1000, 5, 42];
+        for fixed in [false, true] {
+            let bytes = d500x_file(&samples, fixed);
+            let len = bytes.len() as u64;
+            let d = Document::new(MemSource(bytes));
+            let mut ev = Evaluator::new(wav());
+            assert_eq!(ev.node(&d, &[]).unwrap().size_bits, len * 8, "fixed {fixed}");
+            assert_eq!(ev.node(&d, &[3]).unwrap().child_count, 2, "fixed {fixed}");
+            let data = ev.node(&d, &[3, 1]).unwrap();
+            assert_eq!(data.size_bits, (8 + 980 + 12) * 8, "fixed {fixed}");
+            assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().type_name, "D500XData");
+
+            let block = ev.node(&d, &[3, 1, 2, 0]).unwrap();
+            assert_eq!(block.type_name, "D500XMetadata");
+            assert_eq!(block.size_bits, 980 * 8);
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 0]).unwrap().value, Value::UInt(980));
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 2]).unwrap().value, Value::Str("M01671.WAV".into()));
+            assert_eq!(
+                ev.node(&d, &[3, 1, 2, 0, 4]).unwrap().value,
+                Value::Str("D500X V2.2.6 140516, 17:19:14".into())
+            );
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 5]).unwrap().value, Value::Str("f=500 PRE=OFF LEN=0.3".into()));
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 7, 0]).unwrap().value, Value::UInt(2));
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 8]).unwrap().value, Value::Str("PROFILE0".into()));
+            assert_eq!(ev.node(&d, &[3, 1, 2, 0, 9]).unwrap().child_count, 2);
+            assert_eq!(
+                ev.node(&d, &[3, 1, 2, 0, 9, 1]).unwrap().value,
+                Value::Str("S/N:            01059\r".into())
+            );
+
+            let run = ev.node(&d, &[3, 1, 2, 1]).unwrap();
+            assert!(run.table, "fixed {fixed}: the samples should read as a table");
+            assert_eq!(run.child_count, samples.len() as u64);
+            for (i, want) in samples.iter().enumerate() {
+                assert_eq!(ev.node(&d, &[3, 1, 2, 1, i]).unwrap().value, Value::Int(i128::from(*want)));
+            }
+            let shape = ev.table_shape(&d, &[3, 1, 2, 1]).unwrap().expect("a shape");
+            assert_eq!((shape.columns, shape.rate), (Some(1), Some(500_000)));
+
+            let riff_size = ev.valid_of(&d, &[1]).unwrap().unwrap();
+            assert_eq!(riff_size.ok, fixed, "{}", riff_size.text);
+        }
+    }
+
+    /// Only a block that names the recorder where the firmware goes is taken
+    /// for one: the same bytes with another name are samples like the rest.
+    #[test]
+    fn a_block_that_does_not_name_the_d500x_is_samples() {
+        let mut bytes = d500x_file(&[1, 2], false);
+        let at = bytes.windows(5).position(|w| w == b"D500X").unwrap();
+        bytes[at + 4] = b'Y';
+        let d = Document::new(MemSource(bytes));
+        let mut ev = Evaluator::new(wav());
+        assert_eq!(ev.node(&d, &[3, 1, 2]).unwrap().type_name, "Samples");
+        assert_eq!(ev.node(&d, &[3, 1, 2, 0, 0]).unwrap().value, Value::Int(980));
     }
 }

@@ -3,6 +3,7 @@ template wav
 root RIFF {
   magic: text[4] ascii
   size: switch magic {'RIFX' => u32be, _ => u32le}
+      valid max magic == 'RF64' ? 4294967295 : size of space - 8
   form: text[4] ascii
   chunks: sized(min(max(size, 4) - 4 or else remaining, remaining)) switch magic {
     'RIFX' => repeat(until end) ChunkBE
@@ -13,8 +14,11 @@ root RIFF {
 type Chunk (named by id, contents body) {
   id: text[4] ascii
   size: u32le
-  body: sized(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1) switch
-      id {
+  body: sized(((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 + (id
+      == 'data' and (468 <= remaining and peek(u40be at 1568 bits) == 'D500X' and 468 <=
+      peek(u32le) and peek(u32le) <= remaining and peek(u32le) % 2 == 0) and
+      ((size < 4294967295) * (size + 1) or else earlier(body.data_size) + 1) - 1 + peek(u32le)
+      <= remaining ? peek(u32le) : 0)) switch id {
     'fmt ' => Format {
       format: u16le enum FormatTag {
         0x01 = pcm, 0x03 = ieee float, 0x06 = a-law, 0x07 = mu-law, 0x5741 = w4v,
@@ -830,43 +834,110 @@ type Chunk (named by id, contents body) {
         }
       }
     }
-    'data' => Samples {
-      samples: switch earlier(body.format) {
-        0xfffe => switch earlier(body.extra.sub_format.format) {
-          1 => switch earlier(body.bits_per_sample) {
-            8 => u8be[remaining / 1]
-            16 => i16le[remaining / 2]
-            24 => i24le[remaining / 3]
-            32 => i32le[remaining / 4]
-            _ => bytes[remaining]
-          }
-          3 => switch earlier(body.bits_per_sample) {
-            32 => f32le[remaining / 4]
-            64 => f64le[remaining / 8]
-            _ => bytes[remaining]
-          }
-          _ => bytes[remaining]
+    'data' => switch 468 <= remaining and peek(u40be at 1568 bits) == 'D500X' and 468 <=
+        peek(u32le) and peek(u32le) <= remaining and peek(u32le) % 2 == 0 {
+      1 => D500XData {
+        // Metadata from a Pettersson D500X bat recorder. It sits at the start of the data
+            chunk, but the chunk size does not include it: the size counts only the samples
+            after it.
+        d500x_metadata: sized(peek(u32le)) D500XMetadata {
+          // Length of this block in bytes, including these 4.
+          length: u32le
+          unused_after_length: bytes[160]
+          file_name: text[16] padded with 0x00 ascii
+          // Recording date and time, as YYMMDD hh:mm:ss.
+          file_time: text[16] padded with 0x00 ascii
+          // Recorder model and firmware version, then the firmware's build date (YYMMDD) and
+              time.
+          firmware: text[48] padded with 0x00 ascii
+          // Sample rate in kHz (f), pre-trigger (PRE), and recording length in seconds (LEN).
+          profile_line_1: text[24] padded with 0x00 ascii
+          // High-pass filter (HP), automatic recording (A), and trigger sensitivity (TS).
+          profile_line_2: text[24] padded with 0x00 ascii
+          // Not documented. In the one file examined, these match the profile settings as
+              positions in the recorder's option lists, for example 2 for 500 kHz.
+          settings: u8be[8]
+          profile_name: text[168] padded with 0x00 ascii
+          // Lines of text, each ending in CR LF. LAT and LON are the position entered for the
+              recorder's sunrise and sunset timer, not where it recorded.
+          text_lines: sized(find(00)) repeat(until end) text until 0x0a or end latin1
+          unused_after_text: bytes[remaining]
         }
-        _ => switch earlier(body.format) {
-          1 => switch earlier(body.bits_per_sample) {
-            8 => u8be[remaining / 1]
-            16 => i16le[remaining / 2]
-            24 => i24le[remaining / 3]
-            32 => i32le[remaining / 4]
+        samples: switch earlier(body.format) {
+          0xfffe => switch earlier(body.extra.sub_format.format) {
+            1 => switch earlier(body.bits_per_sample) {
+              8 => u8be[remaining / 1]
+              16 => i16le[remaining / 2]
+              24 => i24le[remaining / 3]
+              32 => i32le[remaining / 4]
+              _ => bytes[remaining]
+            }
+            3 => switch earlier(body.bits_per_sample) {
+              32 => f32le[remaining / 4]
+              64 => f64le[remaining / 8]
+              _ => bytes[remaining]
+            }
             _ => bytes[remaining]
           }
-          3 => switch earlier(body.bits_per_sample) {
-            32 => f32le[remaining / 4]
-            64 => f64le[remaining / 8]
+          _ => switch earlier(body.format) {
+            1 => switch earlier(body.bits_per_sample) {
+              8 => u8be[remaining / 1]
+              16 => i16le[remaining / 2]
+              24 => i24le[remaining / 3]
+              32 => i32le[remaining / 4]
+              _ => bytes[remaining]
+            }
+            3 => switch earlier(body.bits_per_sample) {
+              32 => f32le[remaining / 4]
+              64 => f64le[remaining / 8]
+              _ => bytes[remaining]
+            }
             _ => bytes[remaining]
           }
-          _ => bytes[remaining]
-        }
-      }  valid finite
-          table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
-              column word channel, named [left, right], describes
-              [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
-              earlier(body.bits_per_sample)]
+        }  valid finite
+            table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+                column word channel, named [left, right], describes
+                [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+                earlier(body.bits_per_sample)]
+      }
+      _ => Samples {
+        samples: switch earlier(body.format) {
+          0xfffe => switch earlier(body.extra.sub_format.format) {
+            1 => switch earlier(body.bits_per_sample) {
+              8 => u8be[remaining / 1]
+              16 => i16le[remaining / 2]
+              24 => i24le[remaining / 3]
+              32 => i32le[remaining / 4]
+              _ => bytes[remaining]
+            }
+            3 => switch earlier(body.bits_per_sample) {
+              32 => f32le[remaining / 4]
+              64 => f64le[remaining / 8]
+              _ => bytes[remaining]
+            }
+            _ => bytes[remaining]
+          }
+          _ => switch earlier(body.format) {
+            1 => switch earlier(body.bits_per_sample) {
+              8 => u8be[remaining / 1]
+              16 => i16le[remaining / 2]
+              24 => i24le[remaining / 3]
+              32 => i32le[remaining / 4]
+              _ => bytes[remaining]
+            }
+            3 => switch earlier(body.bits_per_sample) {
+              32 => f32le[remaining / 4]
+              64 => f64le[remaining / 8]
+              _ => bytes[remaining]
+            }
+            _ => bytes[remaining]
+          }
+        }  valid finite
+            table columns earlier(body.channels), rate earlier(body.sample_rate), rows sample,
+                column word channel, named [left, right], describes
+                [earlier(body.format), earlier(body.channels), earlier(body.sample_rate),
+                earlier(body.bits_per_sample)]
+      }
     }
     _ => bytes[remaining]
   }

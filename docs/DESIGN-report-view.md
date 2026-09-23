@@ -90,6 +90,116 @@ findings leads. The fallback without an LLM is the facts table with no
 sentence above it, and the findings sorted by severity and then by how many
 bytes they concern.
 
+## The generic report
+
+This is the report a program writes for any file, from the order above and the
+blocks below, with no judgment and no LLM. Every section except the title is
+left out when there is nothing to put in it. Headings are generated, and each
+states a fact with its number ("Where the 5,770 bytes go", "`pages`: 74 pages of
+512 bytes, 100% of the file"), so the report never reads like a checklist of
+fixed section names.
+
+1. **Title.** The file name, then one line: the size, the format's name linked
+   to its Wikipedia article, and what identified it (the template, a `file(1)`
+   rule, or a signature).
+2. **What the format is.** One or two plain sentences on what the format stores
+   and how, for a reader who has never met it: "JPEG stores photographs and
+   other images with smooth color. It compresses them lossily: it keeps less
+   detail in color than in brightness, and less detail at high spatial
+   frequencies, then packs what is left with Huffman coding." The sentences live
+   in one table in the core, keyed by template name, written plainly with the
+   Wikipedia article's lead as a starting point and the article linked beside
+   them. A format with no sentence gets its `file(1)` description instead, or
+   nothing.
+3. **This file in brief.** The facts table: size, the top-level parts, record
+   counts, the content's own facts (picture size, sample rate and count, row
+   count), and how many findings there are. Under it, one line of
+   **landmarks** from the format profile (see section 10), naming only what
+   helps a reader find their way around the bytes: "Big-endian. Numbers are
+   16 and 32 bits. Every part starts with its length. A directory at the end
+   points back to each entry."
+4. **Findings**, when there are any: what `check.rs`, `valid.rs`, and the extent
+   audit report, most severe first. Each finding has a byte link, and a
+   mismatch has its stated and actual values side by side.
+5. **The content**, when the template has a content role: the picture, the
+   samples, the rows, or the decoded text. The heading says what it is and how
+   much: "The picture: 227 × 149 pixels".
+6. **Where the bytes go.** The whole-file map with semantic zoom, and the
+   ledger of top-level parts with their shares.
+7. **What each directory points to**, for every list whose elements place
+   something elsewhere in the file (`Ty::At` and pointer lists): the elements
+   in stored order joined to what they place, in file order, with the ribbon
+   figure (see [Figures](#figures-to-build-once)). ZIP's central directory,
+   the TTF table directory, ELF's section headers, and TIFF's IFD entries all
+   get it without anything format-specific.
+8. **The parts**, in reverse dependency order: parts that others place or count
+   before the headers and directories that place them. Each part gets its
+   heading (name, size, share of the file), its `Field.doc`, a small bar
+   showing where it lies in the file, and one of three bodies: a record table
+   for a list of records, a field table with values and bytes for a short
+   structure, or a hex strip with its byte-class verdict for opaque data. Long
+   lists show their first records and a count, with a link to the rest in the
+   listing.
+9. **Decoded streams**, for every decoded space: the stages drawn to scale, and,
+   for a traced codec, the ribbon from codes in the compressed stream to the
+   bytes they produce.
+10. **How the format is built.** The format profile in full. It says how the
+    format writes its values and finds its parts, counted over the template and
+    over this file, so it can say "the template allows 12 kinds of chunk and
+    this file uses 4":
+    - **Numbers:** byte order, and each integer width, signedness, and float
+      type, with how many fields and bytes use each.
+    - **Text:** fixed width, padded, zero-terminated, or preceded by its length,
+      and the encodings.
+    - **Variable-length numbers** (LEB128, VLQ, SQLite and EBML varints),
+      **bit-packed fields**, **enums**, **flags**, and **magic numbers**.
+    - **How parts are found:** by the length in front of them, by a count, by
+      a terminator, by reading to the end of the parent, or by a pointer. For
+      pointers, what they count from (the file start, the parent, the end of the
+      file) and whether they point forward or back.
+    - **Integrity:** checksums, and what each covers.
+    - **Compression:** the codecs used.
+    - **Reading and writing:** whether a reader can go from the start to the end
+      without seeking, whether it has to start at the end (a trailer or a
+      directory at the end), and what a writer has to know in advance. A length
+      in front of its data means the writer knows each part's size before
+      writing it, or goes back to fill it in. A directory at the end lets a
+      writer write the data first and the directory last.
+11. **Terms used in this report.** The glossary: `Field.doc` for the fields named
+    in the report, and the template's own glossary once it has one.
+12. **Every byte, by part.** The full ledger, grouped by the rule in
+    [Where the bytes go](#where-the-bytes-go).
+
+Two things keep the reader oriented as they scroll. The contents rail follows
+the report the way it follows the listing: it marks the part the section on
+screen is about, and the map lights that part. And every part section repeats
+where it is, with its offset range and the small position bar, so a reader who
+arrives from a link does not have to scroll back up to find out where they are.
+
+## Figures to build once
+
+Each figure takes plain data, so the report, the listing, and the inspector
+can all draw it.
+
+- **The ribbon.** Two rows of boxes, each in its own order, joined by bands.
+  Each element has an extent on the top row and an extent on the bottom row,
+  and a band joins the two, so the band can be narrow at one end and wide at
+  the other. The TTF report's "Directory, in directory order" figure is this
+  shape, and the owner asked for it to be reused. Uses: a directory in stored
+  order against its targets in file order. Deflate codes in the stream
+  against the bytes they produce. The bits of a Huffman code in the order the
+  stream stores them (low bit first) against the order the code is read (high
+  bit first), which the inspector draws beside `codebits.ts` for the code under
+  the cursor. JPEG coefficients in zigzag order against the 8 × 8 block. Adam7
+  passes against the pixel grid.
+- **The map with semantic zoom.** One row per depth of the outline over a byte
+  range, and a byte-class strip, redrawn at each wheel step: parts, then fields,
+  then bytes.
+- **Stages to scale.** One bar per stage of a decoded chain, each as wide as its
+  size, with each part's share marked across.
+- **The ledger bar.** A stacked bar of the ledger groups, with a table under it.
+- **The position bar.** A thin bar the width of the file, with one range marked.
+
 ## Blocks that recur
 
 Each row is a block that more than one report used.
@@ -429,23 +539,28 @@ lines of JavaScript and CSS. It is a sketch for the real components, not code to
 
 ## Order of work
 
-1. **Blocks from data the core already has.** The facts table without
-   aggregates, the byte ledger with the grouping rule, the whole-file map with
-   semantic zoom, record tables from listing rows, glosses from `Field.doc`,
-   findings from `check.rs` and `valid.rs`, the extent audit, and the chain
-   from compressed bits to content for deflate streams. This is a report for
-   every file with a template, in the order described earlier, with no IR
-   change.
-2. **Readings that disagree.** Join the strings view and byte classes against
+1. **The generic report, from data the core already has.** The sections in
+   [The generic report](#the-generic-report) with no IR change: the facts table
+   without aggregates, the byte ledger with the grouping rule, the whole-file
+   map with semantic zoom, the directory ribbons from `Ty::At` placements,
+   record and field tables from listing rows, glosses from `Field.doc`, findings
+   from `check.rs` and `valid.rs`, the extent audit, the chain from compressed
+   bits to content for deflate streams, and the format profile, which is a walk
+   over the template and a count over the file. The format sentences and
+   Wikipedia links are one table in the core.
+2. **JPEG and PNG in depth.** The owner's next priority after the generic
+   report: the JPEG baseline codec trace and the PNG scanline packing with
+   `Ty::Raster`, so both formats reach the depth of their hand-written reports.
+3. **Readings that disagree.** Join the strings view and byte classes against
    template spans. It also fixes the strings view's false hits.
-3. **Prose and summaries in the IR.** Remarks, the glossary, record summary
+4. **Prose and summaries in the IR.** Remarks, the glossary, record summary
    text, and summary facts with aggregates.
-4. **Content roles and their figures.** Samples, events in time, outlines.
-5. **References and mapped address spaces.** The logical-against-physical
+5. **Content roles and their figures.** Samples, events in time, outlines.
+6. **References and mapped address spaces.** The logical-against-physical
    block, liveness in the ledger, and links from every pointer.
-6. **Evidence analyses** for files with no template.
-7. **Codec traces and pixel placement**: JPEG baseline, headerless bzip2, PNG
-   scanlines with parameters, and `Ty::Raster`.
+7. **Evidence analyses** for files with no template.
+8. **Other codec traces**: headerless bzip2, and whatever else the reports
+   need.
 
 ## Bugs the reports found
 
@@ -455,8 +570,8 @@ are Qubero's. Each is described in the notes file named.
 | Where | What | Notes |
 |---|---|---|
 | `sqlite` template | Free pages that keep the leaf type byte read as live leaves: 9 leaves and 12 rows, where the database has 5 and 8. All 63 other pages are `bytes[]` because overflow pages are typed only when the freelist is empty | `sqlite-overflow-freelist.notes.md` |
-| `wav` template | Reads samples from `0x2c` in a D500X recording, so a 980-byte metadata block plays as sound and the last 490 samples become a gap. The RIFF size that overshoots the file by 8 is capped silently | `wav-pipistrelle.notes.md` |
-| x86 disassembler | 338 instructions print the 64-bit register where the instruction works on 32 bits (95 `bswap`, 242 `bt`, 1 `movd`) | `elf-busybox-x86_64.notes.md` |
+| `wav` template | Reads samples from `0x2c` in a D500X recording, so a 980-byte metadata block plays as sound and the last 490 samples become a gap. The RIFF size that overshoots the file by 8 is capped silently. Fixed on 2026-09-24: the block is read as `d500x_metadata` before the samples, the `data` chunk is read as the block plus its size, and a RIFF size past the end of the file is marked invalid | `wav-pipistrelle.notes.md` |
+| x86 disassembler | 338 instructions print the 64-bit register where the instruction works on 32 bits (95 `bswap`, 242 `bt`, 1 `movd`). Fixed on 2026-09-24 in the copy of `yaxpeax-x86` in `crates/vendor` | `elf-busybox-x86_64.notes.md` |
 | Strings view | UTF-16 read one byte off where big-endian text starts at an odd offset, and the Mac Roman text before it is dropped | `ttf-unknown.notes.md` |
 | Strings view | 8,727 hits inside ELF `.text` that are instruction bytes, 11 inside the bat call, and 70 of 71 in the JPEG file | ELF, WAV, and JPEG notes |
 | `ksy:ttf` | Unicode range bits named from the wrong end (upstream `.ksy`). `glyf` fails on `.max`. No signature, so it is never sniffed. `ksy_bundled.rs` still lists `ttf` as having no sample | `ttf-unknown.notes.md` |
