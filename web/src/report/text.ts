@@ -162,6 +162,7 @@ export const RV = {
   /** Between the two addresses of a part's range, both of them links. */
   rangeTo: " to ",
   colIndex: "#",
+  colName: "Name",
   colAt: "At",
   colSize: "Size",
   colReads: "Reads as",

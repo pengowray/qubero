@@ -265,12 +265,15 @@
 .rv-map-part {
   opacity: 0.9;
 }
+/* The ground's own colour round the letters, so a name reads on the light
+   hues in the light theme and on the dark ones in the dark theme alike. */
 .rv-map-partlabel {
   font: 12px var(--sans);
-  fill: #fff;
+  fill: var(--fg);
   paint-order: stroke;
-  stroke: rgb(0 0 0 / 35%);
-  stroke-width: 2px;
+  stroke: color-mix(in srgb, var(--bg) 75%, transparent);
+  stroke-width: 3px;
+  stroke-linejoin: round;
   pointer-events: none;
 }
 .rv-map-field {
@@ -490,11 +493,10 @@
   height: 12px;
   border-radius: 2px;
 }
-.rv-stage-bar.is-packed {
-  background: var(--rv-match);
-}
-.rv-stage-bar.is-unpacked {
-  background: var(--rv-literal);
+/* One colour for every stage: the bars differ in length, which is the point,
+   and the literal and copy colours belong to the ribbon under them. */
+.rv-stage-bar {
+  background: color-mix(in srgb, var(--fg) 45%, transparent);
 }
 .rv-stage-size {
   font-variant-numeric: tabular-nums;

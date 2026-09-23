@@ -99,8 +99,11 @@ export function formatIdentity(doc: Doc, data: ReportData): FormatIdentity | typ
   if (rule === WAIT || sigs === WAIT) return WAIT;
   const template = doc.template;
   const about = template === null ? null : formatAbout(template);
-  const named = sigs === null ? null : namingMatch(sigs.matches);
-  const wp = about?.wikipedia ?? named?.format.wp ?? named?.format.parent?.wp ?? null;
+  // The signature list names a file only when nothing better has: for a JPEG
+  // read by its template it can put "DualPhoto JPEG bitmap" first, which is
+  // a true match and the wrong article.
+  const named = sigs === null || (template !== null && !signatureOnly(doc)) ? null : namingMatch(sigs.matches);
+  const wp = about?.wikipedia ?? named?.format.wp ?? null;
   let how: string = RV.notIdentified;
   let name: string | null = about !== null && about.name !== "" ? about.name : null;
   if (template !== null) {

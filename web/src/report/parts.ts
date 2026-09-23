@@ -197,7 +197,10 @@ function openBody(
   kids: readonly TemplateNode[],
 ): { readonly fields: readonly TemplateNode[]; readonly list: TemplateNode | null } | typeof WAIT {
   if (kids.length > 4) return { fields: kids, list: null };
-  const bulk = (k: TemplateNode): boolean => k.composite && !k.decoded && !k.inline && k.size_bits * 2 >= n.size_bits && k.child_count > 0;
+  // A structure the listing draws on one row (`inline`) is opened here all the
+  // same: the report is about how the bytes are laid out, and the one-row
+  // reading is still there in the ledger and the tables.
+  const bulk = (k: TemplateNode): boolean => k.composite && !k.decoded && k.size_bits * 2 >= n.size_bits && k.child_count > 0;
   const i = kids.findIndex(bulk);
   const body = kids[i];
   if (body === undefined) return { fields: kids, list: null };

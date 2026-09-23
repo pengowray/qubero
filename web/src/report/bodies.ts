@@ -9,6 +9,7 @@ import type { TablePlan } from "../tableplan.ts";
 import type { ReportData } from "./data.ts";
 import { byteRef, dumpRows, pointAt } from "./refs.ts";
 import type { ReportHost } from "./section.ts";
+import { stripIndex } from "./partrules.ts";
 import { bitsText, RV } from "./text.ts";
 
 /** Bytes shown inline in a row. */
@@ -98,17 +99,27 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
   wrap.className = "rv-tablewrap";
   const t = document.createElement("table");
   t.className = "rv-table rv-records";
-  t.append(head(RV.colIndex, RV.colAt, RV.colSize, RV.colReads, RV.colBytes));
+  // The records' own names, where the format gives them and they tell the
+  // records apart: a ZIP entry's file name, an ELF section's.
+  const names = rows.map((n) => stripIndex(n.name));
+  const named = names.some((s) => s !== "") && new Set(names).size > 1;
+  t.append(named ? head(RV.colIndex, RV.colName, RV.colAt, RV.colSize, RV.colReads, RV.colBytes) : head(RV.colIndex, RV.colAt, RV.colSize, RV.colReads, RV.colBytes));
   const body = document.createElement("tbody");
-  for (const n of rows) {
+  for (const [i, n] of rows.entries()) {
     const tr = document.createElement("tr");
     const index = n.path[n.path.length - 1] ?? 0;
+    if (named) {
+      const code = document.createElement("code");
+      code.textContent = names[i] ?? "";
+      tr.append(cell("td", String(index), "rv-num"), cell("td", code, "rv-name"));
+    }
     const reads = document.createElement("td");
     reads.className = "rv-reads";
     // Bytes read as bytes say nothing the next column does not.
     if (n.kind !== "bytes" && n.kind !== "unread") reads.append(n.line ?? n.value);
     if (n.problems_within[0] > 0) reads.classList.add("has-invalid");
-    tr.append(cell("td", String(index), "rv-num"), atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));
+    if (!named) tr.append(cell("td", String(index), "rv-num"));
+    tr.append(atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));
     body.append(tr);
   }
   t.append(body);
