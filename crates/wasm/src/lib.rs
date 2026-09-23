@@ -3706,8 +3706,9 @@ impl Editor {
     /// Name of the built-in template matching these leading bytes, or "".
     /// `file_len` is the length of the whole file, which a format whose
     /// header is a table of offsets weighs its pointers against. `name` is
-    /// the file's name, asked only when the bytes fit two bundled formats
-    /// that share a magic, as `.shp` and `.shx` do.
+    /// the file's name, which picks between two bundled formats that share a
+    /// magic, as `.shp` and `.shx` do, and claims a format with no signature,
+    /// as `.tga` or `.bson`, when the bytes agree with it.
     pub fn sniff_template(&self, head: &[u8], file_len: f64, name: &str) -> String {
         formats::sniff_named(head, file_len as u64, name).unwrap_or("").to_string()
     }
