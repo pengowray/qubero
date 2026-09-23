@@ -557,3 +557,81 @@ fn an_unreadable_chunk_is_asked_for_rather_than_guessed_at() {
     assert_eq!(s.next, 0);
     assert_eq!(s.missing.len(), 1);
 }
+
+#[test]
+fn big_endian_text_straight_after_eight_bit_text_leaves_it_whole() {
+    // A TrueType `name` table: the Mac Roman names, then the Windows names in
+    // UTF-16 BE, with nothing between. Read little-endian from a byte early,
+    // the wide text takes the last letter of the Mac Roman names for its
+    // first; read little-endian from a byte late, it takes the zero in front
+    // for the Mac Roman names' terminator.
+    let mut b = vec![0x00, 0x2a, 0x00, 0xed];
+    b.extend(b"Qubero FixtureRegular");
+    b.extend(utf16be("Qubero FixtureRegular"));
+    b.extend([0x00, 0x00, 0x00, 0x02]);
+    let hits = all(b);
+    assert_eq!(hits.iter().map(|h| (h.at, h.enc)).collect::<Vec<_>>(), [(4, Enc::Ascii), (25, Enc::Utf16Be)]);
+    assert_eq!(hits[0].text, "Qubero FixtureRegular");
+    assert_eq!(hits[1].text, "Qubero FixtureRegular");
+    // The zero after the Mac Roman names is the first byte of the next one.
+    assert_eq!(hits[0].term, None);
+}
+
+#[test]
+fn little_endian_text_after_a_c_string_keeps_to_its_own_bytes() {
+    // The same bytes as a TrueType `name` table, but in a list of C strings,
+    // where the zero is the terminator of the one in front.
+    let mut b = vec![0x00];
+    b.extend(b"BCryptGetProperty\0");
+    b.extend(utf16le("HashDigestLength"));
+    b.extend([0x00, 0x00]);
+    b.extend(b"BCryptCreateHash\0");
+    let hits = all(b);
+    assert_eq!(
+        hits.iter().map(|h| (h.at, h.enc, h.text.as_str())).collect::<Vec<_>>(),
+        [(1, Enc::Ascii, "BCryptGetProperty"), (19, Enc::Utf16Le, "HashDigestLength"), (53, Enc::Ascii, "BCryptCreateHash")]
+    );
+    assert_eq!(hits[0].term, Some(Term::Nul));
+}
+
+#[test]
+fn little_endian_text_after_a_few_printable_bytes_keeps_its_first_letter() {
+    // Three printable bytes are not a string, so the letter they would need
+    // to make one stays with the wide text it starts.
+    let mut b = vec![0x00, b'x', b'y', b'z'];
+    b.extend(utf16le("Hello there"));
+    b.extend([0x00, 0x00]);
+    let hits = all(b);
+    assert_eq!(hits.iter().map(|h| (h.at, h.enc)).collect::<Vec<_>>(), [(4, Enc::Utf16Le)]);
+    assert_eq!(hits[0].text, "Hello there");
+}
+
+#[test]
+fn a_little_endian_string_after_a_terminated_one_is_read_little_endian() {
+    // From a minidump. The second string has no terminator and runs into a
+    // byte that reads as one more character big-endian, so the big-endian
+    // reading starting on the terminator's second zero is the longer one.
+    let mut b = vec![0x00, 0x00];
+    b.extend(utf16le("WinSta0\\Default"));
+    b.extend([0x00, 0x00]);
+    b.extend(utf16le("C:\\src\\crashpad\\"));
+    b.extend([0x30, 0x75, 0xa6, 0x02, 0x00, 0x00]);
+    let hits = all(b);
+    assert_eq!(
+        hits.iter().map(|h| (h.at, h.enc, h.text.as_str())).collect::<Vec<_>>(),
+        [(2, Enc::Utf16Le, "WinSta0\\Default"), (34, Enc::Utf16Le, "C:\\src\\crashpad\\")]
+    );
+    assert_eq!(hits[0].term, Some(Term::NulNul));
+}
+
+#[test]
+fn eight_bytes_of_ff_in_front_of_a_string_are_not_a_length() {
+    // All ones is -1, and read as a 64-bit length it is most of the way to the
+    // top of a usize, where adding the string's offset to it wraps. A CDF
+    // file fills its unused offsets this way.
+    let mut b = vec![0xff; 8];
+    b.extend(b"TITLE\0");
+    let hits = all(b);
+    assert_eq!(hits.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(), ["TITLE"]);
+    assert!(hits[0].prefix.is_empty());
+}

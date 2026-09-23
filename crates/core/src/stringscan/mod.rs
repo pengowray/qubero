@@ -282,6 +282,7 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     if opts.utf16be {
         wide_runs(buf, head, min, Enc::Utf16Be, &mut runs, &mut tables);
     }
+    leave_narrow_runs_whole(buf, min, &mut runs);
     // What counts each run, and which of them are part of a table of counted
     // strings. Both answers are wanted twice over: they decide whether a wide
     // run is reported at all, and whether a number exactly one code unit wide
@@ -329,13 +330,17 @@ fn window(buf: &[u8], base: u64, from: u64, stop: u64, more: bool, opts: Opts, o
     }
     taken.sort_by_key(|(r, _)| r.start);
     for (run, weak) in taken {
-        emit(buf, base, run, more, weak, opts, out);
+        emit(buf, base, run, more, weak, opts, &claimed, out);
     }
 }
 /// Split a run where a chain of counted strings tiles it, and read out each
 /// piece. Most runs are one piece.
-fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out: &mut Vec<Hit>) {
+fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, claimed: &[bool], out: &mut Vec<Hit>) {
     let cap = MAX_BYTES as usize;
+    // A zero that is the first byte of the next string belongs to that string.
+    // UTF-16 BE straight after eight-bit text starts with one, and it does not
+    // end the text in front of it.
+    let term = |end: usize| terminator(buf, end, run.enc).filter(|t| !claimed[end..end + t.bytes() as usize].contains(&true));
     // A run that fills the buffer was stopped by the read and not by its own
     // end, so its last piece carries on in the next window just as a cut one
     // does. Saying otherwise would put a string on screen that starts in the
@@ -355,7 +360,7 @@ fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out
             hit.cut = end < run.end || unfinished;
             // Only the last piece can have one: a cut falls inside the text,
             // where the next byte is text and not a zero.
-            hit.term = terminator(buf, end, run.enc);
+            hit.term = term(end);
             if at == run.start {
                 hit.prefix = prefix_readings(buf, base, at, hit.len, units, chars, run.enc, None);
             }
@@ -375,7 +380,7 @@ fn emit(buf: &[u8], base: u64, run: Run, more: bool, weak: bool, opts: Opts, out
         return;
     }
     let mut hit = read_hit(buf, base, run.start, run.end, run.enc, run.chars, run.units, run.lone);
-    hit.term = terminator(buf, run.end, run.enc);
+    hit.term = term(run.end);
     hit.prefix = prefix_readings(buf, base, run.start, hit.len, run.units, run.chars, run.enc, hit.term);
     // A number exactly as wide as one character is the run's own boundary read
     // a second time unless a neighbour is counted the same way. It is still
