@@ -7,7 +7,7 @@
 // further.
 
 import type { Doc, KindTotals, OverviewState } from "../doc.ts";
-import { buildParts, type PartsModel } from "./model.ts";
+import { buildParts, partsBudget, type Budget, type PartsModel } from "./model.ts";
 import { WAIT } from "./section.ts";
 
 /** The byte-class scan's bucket count, the one the rail's map asks for. The
@@ -27,6 +27,9 @@ export class ReportData {
    *  named them. Section 11 lists them. */
   readonly terms = new Map<string, string>();
   private readonly finished = new Set<string>();
+  /** What is left of the time the parts may spend looking for structures
+   *  placed by addresses, over every try at reading them. */
+  private readonly partsTime: Budget = partsBudget();
   private scanState: OverviewState | null = null;
   private kindState: KindTotals | null = null;
 
@@ -66,7 +69,7 @@ export class ReportData {
   }
 
   parts(): PartsModel | null | typeof WAIT {
-    return this.memo("parts", () => buildParts(this.doc));
+    return this.memo("parts", () => buildParts(this.doc, this.partsTime));
   }
 
   /** Note that a section has drawn, for a section that has to come after it

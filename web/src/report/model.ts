@@ -130,7 +130,7 @@ export function ok<T>(r: TemplateReply<T>): T | typeof WAIT | null {
 
 /** The parts of the file, or `WAIT` while the bytes they need are read. Null
  *  for a file with no template. */
-export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
+export function buildParts(doc: Doc, budget: Budget = { ms: PLACED_MS }): PartsModel | typeof WAIT | null {
   if (doc.template === null) return null;
   const fileBits = doc.lengthBits;
   const rootR = ok(doc.templateNode([]));
@@ -145,7 +145,7 @@ export function buildParts(doc: Doc): PartsModel | typeof WAIT | null {
   // address from somewhere else in the tree.
   let unexamined: Extent[] = [];
   if (unlisted === 0) {
-    const placed = placedUnits(doc, units, fileBits);
+    const placed = placedUnits(doc, units, fileBits, budget);
     if (placed === WAIT) return WAIT;
     units.push(...placed.units);
     unexamined = placed.unexamined;
@@ -251,6 +251,14 @@ function unitsOf(doc: Doc, node: TemplateNode, fileBits: number, depth: number, 
   return unlisted;
 }
 
+/** Time left for looking for placed parts, kept by the caller across tries. */
+export type Budget = { ms: number };
+
+/** The whole allowance, for a caller starting on a file. */
+export function partsBudget(): Budget {
+  return { ms: PLACED_MS };
+}
+
 /** Parts found in the stretches between the others, at most, and questions
  *  asked of the core to find them. */
 const PLACED_MAX = 64;
@@ -274,17 +282,28 @@ const PLACED_SPANS = 64;
  * outermost node over each field that lies inside the stretch becomes a part.
  * What `spans` itself calls a gap stays a gap.
  */
-function placedUnits(doc: Doc, units: readonly Unit[], fileBits: number): { units: Unit[]; unexamined: Extent[] } | typeof WAIT {
+function placedUnits(doc: Doc, units: readonly Unit[], fileBits: number, budget: Budget): { units: Unit[]; unexamined: Extent[] } | typeof WAIT {
+  // The time is the budget's, which the caller keeps between tries: a try
+  // that stops to wait for bytes starts again from the top next time, and is
+  // not given the whole allowance again.
+  const started = performance.now();
+  try {
+    return lookAlong(doc, units, fileBits, started + budget.ms);
+  } finally {
+    budget.ms = Math.max(0, budget.ms - (performance.now() - started));
+  }
+}
+
+function lookAlong(doc: Doc, units: readonly Unit[], fileBits: number, until: number): { units: Unit[]; unexamined: Extent[] } | typeof WAIT {
   const out: Unit[] = [];
   const unexamined: Extent[] = [];
   const known = new Set(units.map((u) => pathKey(u.path)));
   const nodes = new Map<string, TemplateNode>();
   let asks = 0;
+  let probes = 0;
   // Each question walks the tree to the window, a few milliseconds on a small
   // file, so the questions are bounded by time as well as by count.
-  const until = performance.now() + PLACED_MS;
   const spent = (): boolean => asks >= PLACED_ASKS || out.length >= PLACED_MAX || performance.now() > until;
-  let probes = 0;
   const covered = (): Extent[] => [...units, ...out].map((u) => ({ offsetBits: u.offsetBits, sizeBits: u.sizeBits }));
   for (const gap of gapsOf(covered(), 0, fileBits)) {
     const end = gap.offsetBits + gap.sizeBits;
