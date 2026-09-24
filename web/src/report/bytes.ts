@@ -6,13 +6,18 @@
 // scan's own: how much of the file is zero, text, and anything else, counted
 // as the scan gets on.
 
+import type { Doc } from "../doc.ts";
 import { formatOffset, percentText } from "../format.ts";
-import type { Group, PartsModel } from "./model.ts";
+import { byteClassColor, sectionColor, UNMAPPED_COLOR } from "../fieldstyle.ts";
+import { REPORT } from "../strings.ts";
+import type { Ledger } from "./coredata.ts";
+import { isGapLine, ledgerLines, type LedgerLine } from "./ledger.ts";
+import { groupAt, type Group, type PartsModel } from "./model.ts";
+import { runPosition } from "./partrules.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { bitsText, bytesText, clip, counted, RV } from "./text.ts";
 import { stripLegend, ZoomMap, type MapPart } from "./zoommap.ts";
-import { byteClassColor } from "../fieldstyle.ts";
 
 /** Ledger rows before the rest are counted. */
 const LEDGER_ROWS = 60;
@@ -56,11 +61,177 @@ export const bytesSection: Section = {
     fig.append(map.el, stripLegend(), hint, cap);
     sec.append(fig);
     ctx.live(() => map.update());
-    if (model !== null) sec.append(ledger(model, map));
-    else sec.append(classLedger(ctx));
+    if (model === null) {
+      sec.append(classLedger(ctx));
+      return sec;
+    }
+    // The core's ledger once it has answered, drawn again as the walk gets on;
+    // the parts' own ledger where the core has no ledger to give.
+    const box = document.createElement("div");
+    sec.append(box);
+    let drawn: Ledger | null = null;
+    const draw = (): boolean => {
+      const core = ctx.data.core();
+      if (core === null || core.failed !== null) {
+        box.replaceChildren(ledger(model, map));
+        return true;
+      }
+      const l = core.ledger;
+      if (l === null) return false;
+      if (l !== drawn) {
+        drawn = l;
+        box.replaceChildren(coreLedger(ctx, l, model, map));
+      }
+      return l.done;
+    };
+    if (!draw()) ctx.live(draw);
     return sec;
   },
 };
+
+/** A colour for each ledger line: the colour its first bytes have on the
+ *  map, so a row and the part of the map it is about look alike. */
+export function lineColor(model: PartsModel, l: LedgerLine, i: number): string {
+  if (isGapLine(l)) return UNMAPPED_COLOR;
+  return groupAt(model, l.firstOffsetBits)?.color ?? sectionColor(i);
+}
+
+/** What a ledger line is called: its group within its part, the fields of a
+ *  structure taken together, or bytes no field describes. */
+export function lineLabel(doc: Doc, l: LedgerLine, fileBits: number): (Node | string)[] {
+  if (isGapLine(l)) return [RV.ledgerGapLabel];
+  if (l.key === "padding") return [RV.ledgerPaddingLabel];
+  const code = (s: string): HTMLElement => {
+    const c = document.createElement("code");
+    c.textContent = s;
+    return c;
+  };
+  if (l.part === null) {
+    const parent = l.parentPath;
+    if (parent === null || parent.length === 0) {
+      return [REPORT.unnamedPart(runPosition({ offsetBits: l.firstOffsetBits, sizeBits: l.bits }, fileBits))];
+    }
+    const n = doc.templateNode(parent);
+    const name = n.status === "ok" ? n.node.name : "";
+    return [RV.fieldsOf, code(name)];
+  }
+  if (l.group === "") return [code(l.part)];
+  const inPart = document.createElement("span");
+  inPart.className = "rv-muted";
+  inPart.append(` ${RV.inPart} `, code(l.part));
+  return [l.group, inPart];
+}
+
+/** Light a line's first field on the map, and zoom there on a click. */
+function linkRow(ctx: ReportCtx, tr: HTMLTableRowElement, l: LedgerLine, map: ZoomMap): void {
+  const first = (): { offsetBits: number; sizeBits: number } => {
+    const n = l.firstPath.length > 0 ? ctx.doc.templateNode(l.firstPath) : null;
+    const size = n !== null && n.status === "ok" ? n.node.size_bits : 8;
+    return { offsetBits: l.firstOffsetBits, sizeBits: Math.max(8, size) };
+  };
+  tr.addEventListener("pointerenter", () => map.highlight([first()]));
+  tr.addEventListener("pointerleave", () => map.highlight([]));
+  tr.addEventListener("click", (e) => {
+    if ((e.target as Element).closest("[data-rv-start], a, button") !== null) return;
+    const f = first();
+    const from = f.offsetBits / 8;
+    const pad = Math.max(16, (f.sizeBits / 8) * 0.5);
+    map.show(Math.max(0, from - pad), from + f.sizeBits / 8 + pad);
+    map.el.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+  tr.title = RV.ledgerRowTitle;
+  tr.classList.add("rv-zoomrow");
+}
+
+/** The core's ledger as a stacked bar and a table, one row per part and
+ *  group, in file order. */
+function coreLedger(ctx: ReportCtx, ledger: Ledger, model: PartsModel, map: ZoomMap): HTMLElement {
+  const lines = ledgerLines(ledger.rows);
+  const fileBits = ledger.file_bits;
+  const box = document.createElement("figure");
+  box.className = "rv-figure rv-ledger";
+  const bar = document.createElement("div");
+  bar.className = "rv-ledgerbar";
+  bar.setAttribute("aria-hidden", "true");
+  lines.forEach((l, i) => {
+    const seg = document.createElement("span");
+    seg.style.flexGrow = String(l.bits);
+    seg.style.background = lineColor(model, l, i);
+    if (isGapLine(l)) seg.className = "is-gap";
+    bar.append(seg);
+  });
+  if (ledger.reached_bits < fileBits) {
+    const rest = document.createElement("span");
+    rest.style.flexGrow = String(fileBits - ledger.reached_bits);
+    rest.className = "is-unread";
+    bar.append(rest);
+  }
+  box.append(bar);
+  const wrap = document.createElement("div");
+  wrap.className = "rv-tablewrap";
+  const t = document.createElement("table");
+  t.className = "rv-table rv-ledgertable rv-stack";
+  t.append(tableHead([RV.ledgerPart, ""], [RV.ledgerStart, "rv-num"], [RV.ledgerBytes, "rv-num"], [RV.ledgerShare, ""]));
+  const body = document.createElement("tbody");
+  const largest = Math.max(1, ...lines.map((l) => l.bits));
+  lines.slice(0, LEDGER_ROWS).forEach((l, i) => {
+    const tr = document.createElement("tr");
+    if (isGapLine(l)) tr.className = "is-gap";
+    const name = document.createElement("td");
+    name.className = "rv-cell-name";
+    const sw = document.createElement("span");
+    sw.className = "rv-swatch";
+    sw.style.background = lineColor(model, l, i);
+    name.append(sw, ...lineLabel(ctx.doc, l, fileBits));
+    const at = document.createElement("td");
+    at.className = "rv-num";
+    at.dataset.label = RV.ledgerStart;
+    at.append(byteRef({ ...(l.firstPath.length > 0 ? { path: l.firstPath } : {}), startBit: l.firstOffsetBits, endBit: l.firstOffsetBits + 8 }));
+    const bytes = document.createElement("td");
+    bytes.className = "rv-num";
+    bytes.dataset.label = RV.ledgerBytes;
+    bytes.textContent = bitsText(l.bits).replace(/ bytes?$/, "");
+    const share = document.createElement("td");
+    share.className = "rv-share";
+    share.dataset.label = RV.ledgerShare;
+    const b = document.createElement("span");
+    b.className = "rv-sharebar";
+    b.style.width = `${Math.max(1, (l.bits / largest) * 80)}px`;
+    b.style.background = lineColor(model, l, i);
+    share.append(b, ` ${percentText(l.bits, fileBits)}`);
+    tr.append(name, at, bytes, share);
+    linkRow(ctx, tr, l, map);
+    body.append(tr);
+  });
+  t.append(body);
+  wrap.append(t);
+  box.append(wrap);
+  const cap = document.createElement("figcaption");
+  const top = [...lines].sort((a, b) => b.bits - a.bits)[0];
+  if (top !== undefined) {
+    const lead = document.createElement("b");
+    lead.append(RV.largestLead, ...lineLabel(ctx.doc, top, fileBits), ` (${percentText(top.bits, fileBits)} ${RV.ofTheFile}).`);
+    cap.append(lead, " ");
+  }
+  cap.append(RV.coreLedgerCaption);
+  if (!ledger.done) cap.append(` ${RV.ledgerSoFar(formatOffset(ledger.reached_bits))}`);
+  if (lines.length > LEDGER_ROWS) cap.append(` ${RV.ledgerUnlisted(lines.length - LEDGER_ROWS)}`);
+  box.append(cap);
+  return box;
+}
+
+function tableHead(...cols: readonly (readonly [string, string])[]): HTMLTableSectionElement {
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const [text, cls] of cols) {
+    const th = document.createElement("th");
+    th.textContent = text;
+    if (cls !== "") th.className = cls;
+    hr.append(th);
+  }
+  thead.append(hr);
+  return thead;
+}
 
 /** The parts as a stacked bar and a table, in file order. */
 function ledger(model: PartsModel, map: ZoomMap): HTMLElement {

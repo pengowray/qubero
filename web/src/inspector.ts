@@ -7,6 +7,10 @@
 
 import { ADDRESS_MARK, formatAddress, formatBytes, formatOffset, offsetDigits } from "./doc.ts";
 import { bitCells, byteRuns } from "./codebits.ts";
+import { bitOrderFigure, type BitPart } from "./bitorder.ts";
+
+/** The names of a code's two kinds of part in the bit-order figure. */
+const BIT_ORDER = { huffman: "Huffman code", extra: "Extra bits" } as const;
 import { address } from "./dom.ts";
 import { collapseIcon, copyIcon, editIcon, expandIcon } from "./icons.ts";
 import type { BitRange } from "./hexview.ts";
@@ -227,6 +231,10 @@ export class Inspector {
   /** The code the box was last built for: its offset, its digits and where its
    *  two parts meet. See `fillBits`. */
   private bitsFor = "";
+  /** The code's bits as stored against the order they are read, as a ribbon
+   *  under the digits (`bitorder.ts`), and the code it was drawn for. */
+  private readonly bitOrder: HTMLElement;
+  private bitOrderFor = "";
   private readonly note: HTMLElement;
   /** The type and size of what the box is showing, under the box: the reader's
    *  first question about a value is what it is. */
@@ -475,6 +483,9 @@ export class Inspector {
     this.bits.setAttribute("role", "group");
     this.bits.hidden = true;
     this.bits.append(this.bitLabels, this.bitRow);
+    this.bitOrder = document.createElement("div");
+    this.bitOrder.className = "insp-bitorder";
+    this.bitOrder.hidden = true;
 
     this.note = document.createElement("div");
     this.note.className = "insp-note";
@@ -566,7 +577,7 @@ export class Inspector {
       this.markHover(t instanceof HTMLElement ? t.closest<HTMLElement>("[data-path]") : null);
     });
     this.decoded.addEventListener("mouseleave", () => this.markHover(null));
-    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
+    this.fieldRow.append(subhead("Value"), this.field, this.area, this.bits, this.bitOrder, this.shape, this.problemLine, this.docLine, this.note, this.kids, this.decoded, this.semantics, this.openAs, this.origins, this.types);
     this.struct.append(this.crumbs, this.fieldRow);
 
     // How to lift an unaligned run of bits out of the bytes around it. Only
@@ -2666,6 +2677,7 @@ export class Inspector {
     // refused, so the input was never going to take typing for one.
     this.area.hidden = !long;
     this.bits.hidden = !isCode;
+    this.bitOrder.hidden = !isCode;
     this.field.hidden = long || isCode;
     if (long) this.fillArea(shown, n, inside);
     else if (isCode) this.fillBits(n, code);
@@ -2788,6 +2800,7 @@ export class Inspector {
         this.bitLabels.replaceChildren();
       } else this.bitLabelRow(text, split);
     }
+    this.fillBitOrder(n, code, key);
     this.bits.setAttribute("aria-label", `${n.name}, ${n.type}`);
     // The bytes those bits came out of, named in order. The addresses are
     // written in the space the field is in, the same as the address at the top
@@ -2797,6 +2810,34 @@ export class Inspector {
     );
     this.note.title = DECODED.bitsFromTitle;
     this.note.hidden = text.length === 0;
+  }
+
+  /**
+   * The code's bits as the bytes store them against the order the code is read
+   * in, drawn under the digits: see `bitorder.ts`. Drawn again only for a new
+   * code, and tried again while the bytes it reads have not arrived.
+   */
+  private fillBitOrder(n: TemplateNode, code: CodeAt | null, key: string): void {
+    if (key === this.bitOrderFor) return;
+    const step = code?.step;
+    if (step === undefined) {
+      this.bitOrderFor = key;
+      this.bitOrder.replaceChildren();
+      return;
+    }
+    const parts: BitPart[] = [];
+    const add = (c: { readonly code_bits: number; readonly extra_bits: number }): void => {
+      parts.push({ bits: c.code_bits, lowFirst: false, label: BIT_ORDER.huffman });
+      if (c.extra_bits > 0) parts.push({ bits: c.extra_bits, lowFirst: true, label: BIT_ORDER.extra });
+    };
+    add(step.symbol);
+    if (step.distance !== undefined) add(step.distance);
+    const fig = bitOrderFigure(this.doc, n.offset_bits, n.edit_text, parts);
+    // A figure that could not be drawn because its bytes are still coming is
+    // tried again on the next draw; one that cannot be drawn at all is not.
+    const sum = parts.reduce((t, p) => t + p.bits, 0);
+    if (fig !== null || sum !== n.edit_text.length) this.bitOrderFor = key;
+    this.bitOrder.replaceChildren(...(fig === null ? [] : [fig]));
   }
 
   /**

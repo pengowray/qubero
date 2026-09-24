@@ -13,6 +13,7 @@ import { formatOffset } from "../format.ts";
 import { childWord } from "../strings.ts";
 import { tablePlan } from "../tableplan.ts";
 import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./bodies.ts";
+import { formatCard } from "./cards.ts";
 import { ok, type Group, type PartsModel, type Unit } from "./model.ts";
 import { positionBar } from "./posbar.ts";
 import { byteRef, pointAt } from "./refs.ts";
@@ -67,8 +68,15 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   // 37,376 bytes`.
   const only = g.units.length === 1 ? g.units[0]?.node : undefined;
   const count = g.units.length > 1 ? counted(g.units.length, g.unitWord) : only?.list === true ? counted(only.child_count, childWord(only)) : null;
-  const rest = count !== null ? `: ${count}, ${size}, ${share}` : `: ${size}, ${share}`;
-  h.append(name, rest);
+  // The colon stays with the name, and the facts wrap as one piece, so a
+  // narrow column never starts a line with the colon.
+  const lead = document.createElement("span");
+  lead.className = "rv-partname";
+  lead.append(name, ":");
+  const facts = document.createElement("span");
+  facts.className = "rv-partfacts";
+  facts.textContent = count !== null ? `${count}, ${size}, ${share}` : `${size}, ${share}`;
+  h.append(lead, " ", facts);
   const first = g.units[0] as Unit;
   pointAt(h, { ...(first.node !== null ? { path: first.path } : {}), startBit: first.offsetBits, endBit: first.offsetBits + first.sizeBits }, g.label);
   return h;
@@ -146,6 +154,9 @@ function unitBody(ctx: ReportCtx, u: Unit): HTMLElement | null | typeof WAIT {
     const opened = openBody(ctx, n, shown);
     if (opened === WAIT) return WAIT;
     const box = document.createElement("div");
+    // The listing's card for the node, where it draws one, above its fields.
+    const card = formatCard(doc, n);
+    if (card !== null) box.append(card);
     box.append(fieldTable(doc, ctx.data, opened.fields, Math.max(0, n.child_count - FIELDS)));
     if (opened.list !== null) {
       const list = listBody(ctx, opened.list);

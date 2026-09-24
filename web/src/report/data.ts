@@ -6,7 +6,8 @@
 // kept, so the next time a section asks, the core is asked again and gets
 // further.
 
-import type { Doc, KindTotals, OverviewState } from "../doc.ts";
+import type { Doc, OverviewState } from "../doc.ts";
+import type { Directories, ExtentAudit, Ledger, Profile, ReportStep } from "./coredata.ts";
 import { buildParts, partsBudget, type Budget, type PartsModel } from "./model.ts";
 import { WAIT } from "./section.ts";
 
@@ -17,7 +18,7 @@ import { WAIT } from "./section.ts";
 export const SCAN_BUCKETS = 1024;
 /** How long one go at a stepped walk may take before the page gets the turn
  *  back. */
-const STEP_MS = 8;
+const STEP_MS = 12;
 
 export class ReportData {
   private readonly memos = new Map<string, unknown>();
@@ -31,7 +32,12 @@ export class ReportData {
    *  placed by addresses, over every try at reading them. */
   private readonly partsTime: Budget = partsBudget();
   private scanState: OverviewState | null = null;
-  private kindState: KindTotals | null = null;
+  private scanStepped = -1;
+  private pass = 0;
+  private readonly coreState: CoreReport = { profile: null, ledger: null, audit: null, dirs: null, template: undefined, failed: null };
+  private coreStepped = -1;
+  private coreSnapshot = 0;
+  private coreMissing = false;
 
   constructor(
     readonly doc: Doc,
@@ -92,7 +98,8 @@ export class ReportData {
   /** The byte-class scan so far, taking one more step of it. Null until the
    *  first step has answered. */
   scan(): OverviewState | null {
-    if (this.scanState?.done === true) return this.scanState;
+    if (this.scanState?.done === true || this.scanStepped === this.pass) return this.scanState;
+    this.scanStepped = this.pass;
     const until = performance.now() + STEP_MS;
     let r = this.doc.overviewStep(SCAN_BUCKETS);
     while (r.status === "ok" && !r.node.done && performance.now() < until) r = this.doc.overviewStep(SCAN_BUCKETS);
@@ -100,15 +107,84 @@ export class ReportData {
     return this.scanState;
   }
 
-  /** The totals of the file's bits by kind of field so far, taking one more
-   *  step of the walk. */
-  kinds(): KindTotals | null {
-    if (this.kindState?.done === true) return this.kindState;
-    if (this.doc.template === null) return null;
-    const until = performance.now() + STEP_MS;
-    let r = this.doc.kindTotalsStep();
-    while (r.status === "ok" && !r.node.done && performance.now() < until) r = this.doc.kindTotalsStep();
-    if (r.status === "ok") this.kindState = r.node;
-    return this.kindState;
+  /** True while the core's walk has been started and not finished, so the
+   *  view keeps giving it goes. */
+  coreRunning(): boolean {
+    const c = this.coreState;
+    return this.coreStepped >= 0 && !this.coreMissing && c.failed === null && c.dirs?.done !== true;
+  }
+
+  /** A new pass of the view: each stepped walk may take one more go. Several
+   *  sections ask for the same walk in a pass, and only the first ask steps
+   *  it. */
+  tick(): void {
+    this.pass += 1;
+  }
+
+  /**
+   * The core's four views of the file for the report, taking one more go of
+   * the walk they share: the format profile, the byte ledger, the extent
+   * audit and the directories, and the template's own profile beside them.
+   * Each is null until the walk has answered it once, and each says `done`
+   * when it is final. Null as a whole where there is no template, or where
+   * the `src/pkg` in use has no such calls.
+   */
+  core(): CoreReport | null {
+    if (this.doc.template === null || this.coreMissing) return null;
+    const c = this.coreState;
+    if (c.dirs?.done !== true && this.coreStepped !== this.pass) {
+      this.coreStepped = this.pass;
+      // The directories are found last, once the walk and the reading of the
+      // gaps are over, so theirs is the `done` that says everything is.
+      const until = performance.now() + STEP_MS;
+      for (;;) {
+        const r = this.doc.reportStep<Directories>("directories_step");
+        if (r === null) {
+          this.coreMissing = true;
+          return null;
+        }
+        if (r.status === "error") {
+          c.failed = r.message;
+          break;
+        }
+        if (r.status !== "ok") break;
+        c.dirs = r.node;
+        if (r.node.done || performance.now() > until) break;
+      }
+      // What the other three have come to so far, now and then while the walk
+      // runs and once more when it is over.
+      const now = performance.now();
+      if (c.dirs?.done === true || now - this.coreSnapshot > SNAPSHOT_MS) {
+        this.coreSnapshot = now;
+        const take = <T>(call: ReportStep): T | null => {
+          const r = this.doc.reportStep<T>(call);
+          return r !== null && r.status === "ok" ? r.node : null;
+        };
+        c.profile = take<Profile>("format_profile_step") ?? c.profile;
+        c.ledger = take<Ledger>("byte_ledger_step") ?? c.ledger;
+        c.audit = take<ExtentAudit>("extent_audit_step") ?? c.audit;
+      }
+    }
+    if (c.template === undefined) {
+      const r = this.doc.templateProfile();
+      c.template = r !== null && r.status === "ok" ? r.node : null;
+    }
+    return c;
   }
 }
+
+/** What the core has answered so far for the report. */
+export type CoreReport = {
+  profile: Profile | null;
+  ledger: Ledger | null;
+  audit: ExtentAudit | null;
+  dirs: Directories | null;
+  /** The template's profile, counted over its declarations; undefined until
+   *  asked. */
+  template: Profile | null | undefined;
+  /** The core's reason, when the walk could not be taken. */
+  failed: string | null;
+};
+
+/** How often the partial answers are taken while the walk runs. */
+const SNAPSHOT_MS = 600;

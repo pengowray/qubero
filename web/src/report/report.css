@@ -14,6 +14,9 @@
   min-width: 0;
   overflow: auto;
   background: var(--bg);
+  /* The report is a column of the app, as narrow as the rail and the panel
+     leave it, so its narrow layouts ask the column and not the window. */
+  container: rv-page / inline-size;
   /* The two kinds of deflate step in the ribbon: a literal, and a copy of
      earlier bytes. Chosen apart from the section hues so a stream's figure is
      not read as parts of the file. */
@@ -345,6 +348,11 @@
 .rv-ledgerbar span {
   min-width: 1px;
 }
+.rv-ledgerbar span.is-unread {
+  background: transparent;
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
+}
 .rv-ledgerbar span.is-gap {
   opacity: 0.5;
 }
@@ -371,21 +379,31 @@
   max-width: 48ch;
 }
 
-/* One part. */
-.rv-parthead {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0 2px;
-}
+/* One part. The name and its colon wrap as one piece, and the facts after
+   them as another, so a narrow column never starts a line with the colon. */
 .rv-parthead .rv-swatch {
   width: 12px;
   height: 12px;
 }
-.rv-parthead:hover code,
-.rv-parthead:hover span:not(.rv-swatch) {
+.rv-partname {
+  overflow-wrap: anywhere;
+}
+.rv-partfacts {
+  display: inline-block;
+}
+.rv-parthead:hover .rv-partname {
   text-decoration: underline;
   text-decoration-color: var(--accent);
+}
+.rv-sublead {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* A format card from the listing, as a part's body. */
+.rv-card .rp-item {
+  position: static;
+  padding-inline: 0;
 }
 .rv-where {
   font-size: 13px;
@@ -408,11 +426,6 @@
 }
 .rv-doc {
   margin: 4px 0 8px;
-}
-.rv-sublead {
-  margin: 12px 0 0;
-  font-size: 13px;
-  color: var(--muted);
 }
 .rv-strip {
   margin: 8px 0;
@@ -504,42 +517,11 @@
 .rv-stage-size {
   font-variant-numeric: tabular-nums;
 }
-.rv-ribbon {
-  display: block;
-  min-width: 620px;
-}
 .rv-ribbonfig {
   overflow-x: auto;
 }
-.rv-rb-band {
-  opacity: 0.22;
-  transition: opacity 0.12s;
-}
-.rv-rb-box {
-  opacity: 0.9;
-}
-.rv-ribbon.is-lit .rv-rb-band {
-  opacity: 0.07;
-}
-.rv-ribbon.is-lit .rv-rb-box {
-  opacity: 0.35;
-}
-.rv-ribbon .rv-rb-band.is-on {
-  opacity: 0.55;
-}
-.rv-ribbon .rv-rb-box.is-on {
-  opacity: 1;
-  stroke: var(--fg);
-  stroke-width: 1px;
-}
-.rv-rb-label {
-  font: 11px var(--mono);
-  fill: #fff;
-  pointer-events: none;
-}
-.rv-rb-caption {
-  font: 12px var(--sans);
-  fill: var(--muted);
+.rv-ribbonfig .rv-ribbon {
+  min-width: 620px;
 }
 
 /* The terms. */
@@ -583,6 +565,114 @@
   font-size: 11.5px;
 }
 
+/* The landmarks under the facts table. */
+.rv-landmarks {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Values the template has no name for: one quiet line that opens. */
+.rv-quiet {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.rv-quiet summary {
+  cursor: pointer;
+}
+.rv-find-root {
+  color: var(--warn);
+}
+
+/* A length that does not match its part. */
+.rv-extent {
+  flex-basis: 100%;
+  margin: 4px 0 2px 1.2em;
+}
+.rv-extent-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 1px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+.rv-extent-facts dt {
+  color: var(--muted);
+}
+.rv-extent-facts dd {
+  margin: 0;
+}
+.rv-extentbox {
+  margin: 8px 0 4px;
+  max-width: 640px;
+}
+.rv-extentfig {
+  display: block;
+  width: 100%;
+}
+.rv-ef-label,
+.rv-ef-end,
+.rv-ef-marklabel {
+  font: 11px var(--sans);
+  fill: var(--muted);
+}
+.rv-ef-end {
+  font-family: var(--mono);
+  fill: var(--fg);
+}
+.rv-ef-bar.is-stated {
+  fill: var(--warn);
+  opacity: 0.55;
+}
+.rv-ef-bar.is-read {
+  fill: var(--accent);
+  opacity: 0.6;
+}
+.rv-ef-mark {
+  stroke: var(--fg);
+  stroke-width: 1.5px;
+}
+.rv-ef-mark.is-room {
+  stroke-dasharray: 3 2;
+}
+.rv-ef-cut {
+  fill: none;
+  stroke: var(--muted);
+}
+
+/* The format profile. */
+.rv-readwrite {
+  margin: 4px 0 10px;
+}
+.rv-table tr.is-unused td {
+  color: var(--muted);
+}
+
+/* Rows under a line of the full ledger. */
+.rv-sub {
+  padding-left: 18px;
+  display: inline-block;
+}
+
+/* The streams table, and the row whose figures are drawn under it. */
+.rv-streamrow {
+  cursor: pointer;
+}
+.rv-streamrow.is-on td {
+  background: var(--accent-soft);
+}
+.rv-ratiobar {
+  display: inline-block;
+  height: 8px;
+  border-radius: 0 2px 2px 0;
+  background: color-mix(in srgb, var(--fg) 45%, transparent);
+  vertical-align: 0;
+}
+.rv-ratio {
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .rv-page {
     padding: 16px 16px 80px;
@@ -592,5 +682,81 @@
   }
   .rv-stage {
     grid-template-columns: 6em minmax(0, 1fr) 7em;
+  }
+}
+
+/* A narrow column: each row of a table is two lines. The first holds what the
+   row is (a field's name and value, a part's name); the second holds the
+   numbers, each after its column's name, since the headings are gone. Data
+   tables whose columns are the data (the first rows of a table) keep their
+   columns and scroll sideways instead. */
+@container rv-page (max-width: 600px) {
+  .rv-page {
+    padding: 16px 12px 80px;
+  }
+  .rv-stack thead {
+    display: none;
+  }
+  .rv-stack,
+  .rv-stack tbody {
+    display: block;
+  }
+  .rv-stack tr {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 12px;
+    row-gap: 1px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .rv-stack td {
+    display: block;
+    border: 0;
+    padding: 0;
+    max-width: none;
+    text-align: left;
+  }
+  .rv-stack td.rv-num {
+    text-align: left;
+  }
+  .rv-stack td[data-label]:not(:empty)::before {
+    content: attr(data-label) " ";
+    color: var(--muted);
+    font: 11px var(--sans);
+  }
+  .rv-stack td.rv-cell-name,
+  .rv-stack td[colspan] {
+    flex: 1 0 100%;
+    overflow-wrap: anywhere;
+  }
+  /* A field's value stays on the line with its name. */
+  .rv-stack.rv-fields td.rv-cell-name {
+    flex: 0 1 auto;
+    max-width: 38%;
+  }
+  .rv-stack.rv-fields td.rv-val {
+    flex: 1 1 62%;
+    min-width: 0;
+  }
+  /* A record's reading is its first line. */
+  .rv-stack.rv-records td.rv-reads {
+    order: -1;
+    flex: 1 0 100%;
+  }
+  .rv-stack.rv-records td.rv-reads:empty {
+    display: none;
+  }
+  .rv-stack .rv-hex {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rv-parthead {
+    font-size: 18px;
+  }
+  .rv-stage {
+    grid-template-columns: 6em minmax(0, 1fr) 7em;
+  }
+  .rv-extent {
+    margin-left: 0;
   }
 }

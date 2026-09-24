@@ -347,7 +347,7 @@ const ZARR_SCAN = 20_000;
 const ZARR_METADATA_FILES = 400;
 const ZARR_METADATA_BYTES = 256 * 1024;
 
-type ZipEntry = {
+export type ZipEntry = {
   readonly path: readonly number[];
   /** The archive entry's name, with forward slashes and no leading one. */
   readonly name: string;
@@ -464,9 +464,14 @@ function omeLevels(ome: Record<string, unknown> | null): number {
 }
 
 /** Every local file entry in the archive, with what its header says about it.
- * Names stop at `ZARR_SCAN`, which is what makes a store of a million chunks
- * open at all. */
-function zipEntries(doc: Doc): TemplateReply<{ readonly entries: ZipEntry[]; readonly total: number; readonly partial: boolean }> {
+ * Names stop at `limit`, `ZARR_SCAN` unless asked otherwise, which is what
+ * makes a store of a million chunks open at all. With `stop`, the records are
+ * not counted past the limit either, and `total` is the entries read. */
+export function zipEntries(
+  doc: Doc,
+  limit = ZARR_SCAN,
+  stop = false,
+): TemplateReply<{ readonly entries: ZipEntry[]; readonly total: number; readonly partial: boolean }> {
   const recordsReply = doc.templateNode([0]);
   if (recordsReply.status !== "ok") return recordsReply;
   const entries: ZipEntry[] = [];
@@ -476,11 +481,13 @@ function zipEntries(doc: Doc): TemplateReply<{ readonly entries: ZipEntry[]; rea
     const signature = doc.templateNode([0, i, 0]);
     if (signature.status !== "ok") return signature;
     if (!signature.node.value.startsWith("local file")) continue;
-    total += 1;
-    if (entries.length >= ZARR_SCAN) {
+    if (entries.length >= limit) {
       partial = true;
+      if (stop) break;
+      total += 1;
       continue;
     }
+    total += 1;
     const body = [0, i, 1];
     const nameNode = doc.templateNode([...body, 10]);
     if (nameNode.status !== "ok") return nameNode;

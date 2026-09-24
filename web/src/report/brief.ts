@@ -1,34 +1,40 @@
-// Section 3: the file in brief, as a table of facts. Each fact is a number
-// with its comparison where it has one.
+// Section 3: the file in brief, as a table of facts, and under it one line of
+// landmarks from the format profile: byte order, number widths, how parts are
+// found. Each fact is a number with its comparison where it has one.
 //
 // The rows fill in as their answers arrive, each in a fixed place, so the
 // table does not reorder under the reader: the size at once, the parts once
 // the template has placed them, the picture's size once it is decoded, and how
-// much of the file the template describes as the walk over it gets on.
+// much of the file the template describes once the core's ledger has counted.
 
 import { cardState } from "../contentcard.ts";
 import { tablePlan } from "../tableplan.ts";
+import { childWord } from "../strings.ts";
 import { findingCounts, findingsOf } from "./findings.ts";
+import { landmarks } from "./profiletext.ts";
 import { WAIT, type ReportCtx, type Section } from "./section.ts";
-import { fileSizeText, listText, pluralOf, RV, sentenceCase } from "./text.ts";
+import { counted, fileSizeText, listText, pluralOf, RV, sentenceCase } from "./text.ts";
 import { walkTemplate } from "./walk.ts";
 
-/** Groups named in the parts row before the rest are counted. */
-const PARTS_NAMED = 8;
+/** Lists given a row each before the rest are left to the ledger. */
+const LISTS_SHOWN = 4;
 
 export const briefSection: Section = {
   id: "brief",
   render(ctx: ReportCtx): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "rv-brief";
     const table = document.createElement("table");
     table.className = "rv-facts";
     const body = document.createElement("tbody");
     table.append(body);
-    const row = (key: string, into: HTMLTableSectionElement = body): { tr: HTMLTableRowElement; td: HTMLTableCellElement } => {
+    box.append(table);
+    const row = (key: string | Node, into: HTMLTableSectionElement = body): { tr: HTMLTableRowElement; td: HTMLTableCellElement } => {
       const tr = document.createElement("tr");
       tr.hidden = true;
       const th = document.createElement("th");
       th.scope = "row";
-      th.textContent = key;
+      th.append(key);
       const td = document.createElement("td");
       tr.append(th, td);
       into.append(tr);
@@ -37,17 +43,21 @@ export const briefSection: Section = {
     const size = row(RV.factSize);
     size.td.textContent = fileSizeText(ctx.doc.lengthBytes);
     size.tr.hidden = false;
-    if (ctx.doc.template === null) return table;
+    if (ctx.doc.template === null) return box;
     const parts = row(RV.factParts);
-    const records = row(RV.factLists);
-    const picture = row(RV.factPicture);
-    // The table's own facts, read from the fields its shape names, go between
-    // the parts and the findings, so the tbody is placed now and filled later.
+    // The lists, the table's own facts, and the findings each go in a tbody
+    // placed now and filled later, so the rows keep their order.
+    const lists = document.createElement("tbody");
     const facts = document.createElement("tbody");
     const tail = document.createElement("tbody");
-    table.append(facts, tail);
+    table.append(lists, facts, tail);
+    const picture = row(RV.factPicture, tail);
     const findings = row(RV.factFindings, tail);
     const described = row(RV.factDescribed, tail);
+    const marks = document.createElement("p");
+    marks.className = "rv-landmarks";
+    marks.hidden = true;
+    box.append(marks);
     const done = new Set<string>();
     ctx.live(() => {
       if (!done.has("parts")) {
@@ -57,20 +67,15 @@ export const briefSection: Section = {
           const groups = (m?.groups ?? []).filter((g) => !g.gap);
           const total = groups.reduce((n, g) => n + g.units.length, 0) + (m?.unlisted ?? 0);
           if (total > 0) {
-            const named = groups.slice(0, PARTS_NAMED).map((g) => RV.groupCount(g.units.length, g.label));
-            parts.td.textContent = RV.partsSummary(total, named, groups.length - named.length + (m?.unlisted ?? 0));
+            parts.td.textContent = RV.partsCount(total, groups.length);
             parts.tr.hidden = false;
           }
-          const lists = (m?.lists ?? []).filter((l) => l.count > 0);
-          if (lists.length > 0) {
-            records.td.replaceChildren(
-              ...lists.flatMap((l, i) => {
-                const code = document.createElement("code");
-                code.textContent = l.node.name;
-                return [...(i > 0 ? [" · "] : []), code, `: ${l.count.toLocaleString()}`];
-              }),
-            );
-            records.tr.hidden = false;
+          for (const l of (m?.lists ?? []).filter((x) => x.count > 0).slice(0, LISTS_SHOWN)) {
+            const name = document.createElement("code");
+            name.textContent = l.node.name;
+            const r = row(name, lists);
+            r.td.textContent = counted(l.count, childWord(l.node));
+            r.tr.hidden = false;
           }
         }
       }
@@ -91,46 +96,49 @@ export const briefSection: Section = {
           const plan = first === undefined ? null : tablePlan(ctx.doc, first);
           if (plan !== null) {
             for (const f of plan.facts) {
-              const r = document.createElement("tr");
-              const th = document.createElement("th");
-              th.scope = "row";
-              th.textContent = f.label;
-              const td = document.createElement("td");
-              td.textContent = f.value;
-              r.append(th, td);
-              facts.append(r);
+              const r = row(f.label, facts);
+              r.td.textContent = f.value;
+              r.tr.hidden = false;
             }
-            const r = document.createElement("tr");
-            const th = document.createElement("th");
-            th.scope = "row";
-            th.textContent = sentenceCase(pluralOf(plan.rowWord));
-            const td = document.createElement("td");
-            td.textContent = plan.count.toLocaleString();
-            r.append(th, td);
-            facts.append(r);
+            const r = row(sentenceCase(pluralOf(plan.rowWord)), facts);
+            r.td.textContent = plan.count.toLocaleString();
+            r.tr.hidden = false;
           }
         }
       }
       if (!done.has("findings")) {
         const f = findingsOf(ctx.doc, ctx.data);
         if (f !== WAIT) {
-          done.add("findings");
+          if (f.complete) done.add("findings");
           const counts = findingCounts(f);
           findings.td.textContent = counts.length === 0 ? RV.noFindings : listText(counts);
           findings.tr.hidden = false;
         }
       }
+      const core = ctx.data.core();
       if (!done.has("described")) {
-        const k = ctx.data.kinds();
-        if (k !== null) {
-          const total = ctx.doc.lengthBytes;
-          described.td.textContent = RV.described(Math.floor(k.covered_bits / 8), total, k.done);
+        const ledger = core?.ledger ?? null;
+        if (core === null) done.add("described");
+        else if (ledger !== null) {
+          const gaps = ledger.rows.filter((r) => r.role === "gap").reduce((n, r) => n + r.bits, 0);
+          const covered = Math.max(0, Math.min(ledger.reached_bits, ledger.file_bits) - gaps);
+          described.td.textContent = RV.described(Math.floor(covered / 8), Math.ceil(ledger.file_bits / 8), ledger.done);
           described.tr.hidden = false;
-          if (k.done) done.add("described");
+          if (ledger.done) done.add("described");
         }
       }
-      return done.size >= 5;
+      if (!done.has("landmarks")) {
+        const profile = core?.profile ?? null;
+        if (core === null) done.add("landmarks");
+        else if (profile !== null && profile.done) {
+          done.add("landmarks");
+          const said = landmarks(profile);
+          marks.textContent = said.join(" ");
+          marks.hidden = said.length === 0;
+        }
+      }
+      return done.size >= 6;
     });
-    return table;
+    return box;
   },
 };

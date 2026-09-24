@@ -162,6 +162,7 @@ export class ReportView {
   private pass(): void {
     if (!this.shown) return;
     this.checkFile();
+    this.data.tick();
     const until = performance.now() + PASS_MS;
     const ctx = this.ctx();
     let owed = false;
@@ -181,7 +182,9 @@ export class ReportView {
       this.data.markDrawn(slot.section.id);
     }
     this.lives = this.lives.filter((update) => !update());
-    if (owed) this.schedule();
+    // The core's walk answers `ok` between goes and nothing else wakes the
+    // view for it, so while it runs the view takes one go a frame.
+    if (owed || this.data.coreRunning()) this.schedule();
     clearTimeout(this.liveTimer);
     if (this.lives.length > 0 || this.slots.some((s) => s.state === "wait")) {
       this.liveTimer = window.setTimeout(() => this.schedule(), LIVE_MS * (this.lives.length > 0 ? 1 : 10));

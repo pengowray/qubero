@@ -7098,3 +7098,79 @@ table.rec td.is-invalid {
 .ov-showfirst:hover {
   text-decoration: underline;
 }
+
+/* ---- the ribbon ---- */
+/* Two rows of boxes joined by bands: a directory against what it points to,
+   deflate codes against the bytes they write, a code's bits as stored against
+   the order they are read. Drawn by `report/ribbon.ts` in the report and in
+   the panel at the cursor, so its look lives here with the app's. */
+.rv-ribbon {
+  display: block;
+}
+.rv-rb-band {
+  opacity: 0.22;
+  transition: opacity 0.12s;
+}
+.rv-rb-box {
+  opacity: 0.9;
+}
+.rv-ribbon.is-lit .rv-rb-band {
+  opacity: 0.07;
+}
+.rv-ribbon.is-lit .rv-rb-box {
+  opacity: 0.35;
+}
+.rv-ribbon .rv-rb-band.is-on {
+  opacity: 0.55;
+}
+.rv-ribbon .rv-rb-box.is-on {
+  opacity: 1;
+  stroke: var(--fg);
+  stroke-width: 1px;
+}
+.rv-rb-label {
+  font: 11px var(--mono);
+  fill: #fff;
+  pointer-events: none;
+}
+.rv-rb-caption {
+  font: 12px var(--sans);
+  fill: var(--muted);
+}
+
+.rv-rb-box.is-dim {
+  opacity: 0.25;
+}
+.rv-rb-label.is-dim {
+  fill: var(--fg);
+}
+
+/* A deflate code's bits as stored against as read, under the digits in the
+   panel at the cursor (`bitorder.ts`). Small, and there without a click. */
+.insp-bitorder {
+  margin: 6px 0 2px;
+}
+.bit-order {
+  margin: 0;
+}
+.bit-order-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.bit-order-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.bit-order figcaption {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  max-width: 44ch;
+}

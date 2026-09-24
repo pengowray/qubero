@@ -14,6 +14,7 @@
 import { cardKind, cardState, watchCard } from "../contentcard.ts";
 import { formatBytes } from "../format.ts";
 import { tablePlan } from "../tableplan.ts";
+import { archiveContent } from "./archive.ts";
 import { planTable } from "./bodies.ts";
 import { ok } from "./model.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
@@ -69,6 +70,10 @@ export const contentSection: Section = {
       sec.append(foot);
       return sec;
     }
+    // A container's content is what it holds: an archive's files, an HDF5
+    // file's objects.
+    const archive = archiveContent(ctx.doc);
+    if (archive !== null) return archive;
     const text = walk.texts[0];
     if (text !== undefined) {
       const r = ok(ctx.doc.fieldText(text.path));

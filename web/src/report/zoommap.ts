@@ -20,6 +20,7 @@ import { ok } from "./model.ts";
 import type { Extent } from "./partrules.ts";
 import { WAIT, type ReportCtx } from "./section.ts";
 import { hideTip, tipAt } from "./tip.ts";
+import { wheelZoom } from "./wheel.ts";
 import { bitsText, RV, shareOfFile } from "./text.ts";
 
 export type MapPart = {
@@ -322,10 +323,9 @@ export class ZoomMap {
 
   private wire(): void {
     const el = this.svg;
-    el.addEventListener(
-      "wheel",
+    wheelZoom(
+      el,
       (e) => {
-        e.preventDefault();
         const r = el.getBoundingClientRect();
         const f = Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width)));
         const at = this.lo + f * (this.hi - this.lo);
@@ -337,7 +337,7 @@ export class ZoomMap {
         hideTip();
         this.redraw();
       },
-      { passive: false },
+      () => this.lo <= 0 && this.hi >= this.size,
     );
     el.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;

@@ -107,7 +107,10 @@ export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
   const nodes: TemplateNode[] = [];
   let spent = 0;
   let more = false;
-  const visit = (n: TemplateNode): boolean => {
+  // The root's own fields are looked at whatever the counts say: a value
+  // checked at the end of the structure it sits in (a RIFF size against the
+  // file) is not always in its parent's count.
+  const visit = (n: TemplateNode, always = false): boolean => {
     if (n.problem !== undefined) {
       if (nodes.length >= PROBLEMS) {
         more = true;
@@ -115,7 +118,7 @@ export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
       }
       nodes.push(n);
     }
-    if (n.problems_within[0] + n.problems_within[1] === 0 || !n.composite) return true;
+    if ((!always && n.problems_within[0] + n.problems_within[1] === 0) || !n.composite) return true;
     let from = 0;
     while (from < n.child_count) {
       if (spent > PROBLEM_NODES) {
@@ -136,9 +139,12 @@ export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
         if (!visit(k)) return false;
       }
       from = to;
+      if (always && n.problems_within[0] + n.problems_within[1] === 0) break;
     }
     return true;
   };
-  visit(root);
-  return { nodes, invalid, undefined: undef, more };
+  visit(root, true);
+  // What was found counts even where the counts above missed it.
+  const found = (tier: string): number => nodes.filter((n) => n.problem?.tier === tier).length;
+  return { nodes, invalid: Math.max(invalid, found("invalid")), undefined: Math.max(undef, found("undefined")), more };
 }

@@ -5,6 +5,7 @@ import init, { Editor, dump_scan, dump_bytes, glyph_column, text_encode } from "
 import { ADDRESS_MARK, formatBytes, formatOffset, offsetDigits } from "./format.ts";
 import type { GlyphSet } from "./hexcell.ts";
 import type { ArchiveSums } from "./sumjob.ts";
+import type { Profile, ReportStep } from "./report/coredata.ts";
 export { ADDRESS_MARK, byteText, formatBytes, formatOffset, offsetDigits, percentText } from "./format.ts";
 import { JOINED, UNPACKED } from "./strings.ts";
 import { extensionOf, loadSignatures, matchFormats, type SigMatch } from "./signatures.ts";
@@ -2854,6 +2855,39 @@ export class Doc {
     const call = (this.editor as { table_shape?: (space: number, path: Uint32Array) => string }).table_shape;
     if (call === undefined) return { status: "ok", node: null };
     return this.handleReply<TableShape | null>(call.call(this.editor, this.space, Uint32Array.from(path)));
+  }
+
+  /**
+   * One go of the report's walk, answered with one of its four views: the
+   * file's format profile, the byte ledger, the extent audit or the
+   * directories. The four share the walk, so asking any carries all of them
+   * on; `done` on the answer says when to stop. See "Report data from the
+   * core" in docs/DESIGN-report-view.md.
+   *
+   * Null where the `src/pkg` in use was built before the report's calls, the
+   * same allowance `tableShape` makes: the report then does without.
+   */
+  reportStep<T>(call: ReportStep): TemplateReply<T> | null {
+    const fn = (this.editor as unknown as Record<string, unknown>)[call];
+    if (typeof fn !== "function") return null;
+    return this.handleReply<T>((fn as (space: number) => string).call(this.editor, this.space));
+  }
+
+  /** How the template reading this document writes its values and finds its
+   *  parts, counted over its declarations. Null where the call is missing. */
+  templateProfile(): TemplateReply<Profile> | null {
+    const fn = (this.editor as unknown as Record<string, unknown>)["template_profile"];
+    if (typeof fn !== "function") return null;
+    return this.handleReply<Profile>((fn as (space: number) => string).call(this.editor, this.space));
+  }
+
+  /** The core's plain sentences about a format, as JSON, or null for a
+   *  template with none and where the call is missing. */
+  formatAbout(template: string): string | null {
+    const fn = (this.editor as unknown as Record<string, unknown>)["format_about"];
+    if (typeof fn !== "function") return null;
+    const out = (fn as (t: string) => string).call(this.editor, template);
+    return out === "" || out === "null" ? null : out;
   }
 
   /**

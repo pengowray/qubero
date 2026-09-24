@@ -5,8 +5,7 @@
 // file(1) rules and the signature list, which take a moment the first time a
 // file is opened, and is filled in when they answer.
 
-import { wikipediaUrl } from "../signatures.ts";
-import { formatIdentity } from "./identity.ts";
+import { formatIdentity, wikipediaLink } from "./identity.ts";
 import { WAIT, type ReportCtx, type Section } from "./section.ts";
 import { fileSizeText, RV } from "./text.ts";
 
@@ -33,7 +32,7 @@ export const titleSection: Section = {
         parts.push(" · ");
         if (id.wikipedia !== null) {
           const a = document.createElement("a");
-          a.href = wikipediaUrl(id.wikipedia.replace(/#.*$/, "")) + (id.wikipedia.includes("#") ? `#${encodeURIComponent(id.wikipedia.split("#")[1]?.replace(/ /g, "_") ?? "")}` : "");
+          a.href = wikipediaLink(id.wikipedia);
           a.target = "_blank";
           a.rel = "noopener";
           a.textContent = id.name;

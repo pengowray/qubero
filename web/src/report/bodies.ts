@@ -27,9 +27,12 @@ export function firstBytes(doc: Doc, offsetBits: number, sizeBits: number, space
   return sizeBits / 8 > n ? `${hex} …` : hex;
 }
 
-function cell(tag: "td" | "th", text: string | Node, cls?: string): HTMLTableCellElement {
+/** A cell, with the column's name on it for the narrow layout, where each
+ *  row is two lines and the headings are gone (see `report.css`). */
+function cell(tag: "td" | "th", text: string | Node, cls?: string, label?: string): HTMLTableCellElement {
   const c = document.createElement(tag);
   if (cls !== undefined) c.className = cls;
+  if (label !== undefined) c.dataset.label = label;
   c.append(text);
   return c;
 }
@@ -62,8 +65,8 @@ function valueCell(n: TemplateNode): HTMLTableCellElement {
 /** A field's address, as a reference, or its offset in a stream when it is
  *  not a place in the file. */
 function atCell(n: TemplateNode): HTMLTableCellElement {
-  if (n.space !== 0) return cell("td", `+${formatOffset(n.offset_bits).slice(1)}`, "rv-addr");
-  return cell("td", byteRef({ path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits }, n.name), "rv-addr");
+  if (n.space !== 0) return cell("td", `+${formatOffset(n.offset_bits).slice(1)}`, "rv-addr", RV.colAt);
+  return cell("td", byteRef({ path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits }, n.name), "rv-addr", RV.colAt);
 }
 
 /** A structure's fields, one row each: name, value, address, size, bytes. */
@@ -71,7 +74,7 @@ export function fieldTable(doc: Doc, data: ReportData, fields: readonly Template
   const wrap = document.createElement("div");
   wrap.className = "rv-tablewrap";
   const t = document.createElement("table");
-  t.className = "rv-table rv-fields";
+  t.className = "rv-table rv-fields rv-stack";
   t.append(head(RV.colField, RV.colValue, RV.colAt, RV.colSize, RV.colBytes));
   const body = document.createElement("tbody");
   for (const n of fields) {
@@ -85,7 +88,13 @@ export function fieldTable(doc: Doc, data: ReportData, fields: readonly Template
       // the description is of the field.
       data.term(n.name.replace(/^.*\./, ""), n.doc);
     }
-    tr.append(cell("td", name), valueCell(n), atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));
+    tr.append(
+      cell("td", name, "rv-cell-name"),
+      valueCell(n),
+      atCell(n),
+      cell("td", bitsText(n.size_bits), "rv-num", RV.colSize),
+      cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex", RV.colBytes),
+    );
     body.append(tr);
   }
   t.append(body);
@@ -100,7 +109,7 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
   const wrap = document.createElement("div");
   wrap.className = "rv-tablewrap";
   const t = document.createElement("table");
-  t.className = "rv-table rv-records";
+  t.className = "rv-table rv-records rv-stack";
   // The records' own names, where the format gives them and they tell the
   // records apart: a ZIP entry's file name, an ELF section's.
   const names = rows.map((n) => stripIndex(n.name));
@@ -113,7 +122,7 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
     if (named) {
       const code = document.createElement("code");
       code.textContent = names[i] ?? "";
-      tr.append(cell("td", String(index), "rv-num"), cell("td", code, "rv-name"));
+      tr.append(cell("td", String(index), "rv-num", RV.colIndex), cell("td", code, "rv-name rv-cell-name"));
     }
     const reads = document.createElement("td");
     reads.className = "rv-reads";
@@ -125,8 +134,8 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
     }
     else if (n.kind !== "bytes" && n.kind !== "unread" && !n.composite) reads.append(n.value);
     if (n.problems_within[0] > 0) reads.classList.add("has-invalid");
-    if (!named) tr.append(cell("td", String(index), "rv-num"));
-    tr.append(atCell(n), cell("td", bitsText(n.size_bits), "rv-num"), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex"));
+    if (!named) tr.append(cell("td", String(index), "rv-num", RV.colIndex));
+    tr.append(atCell(n), cell("td", bitsText(n.size_bits), "rv-num", RV.colSize), reads, cell("td", firstBytes(doc, n.offset_bits, n.size_bits, n.space), "rv-hex", RV.colBytes));
     body.append(tr);
   }
   t.append(body);

@@ -4,7 +4,6 @@
 
 import type { Doc, Identification } from "../doc.ts";
 import { templateLabel } from "../filetype.ts";
-import * as wasm from "../pkg/qubero_wasm.js";
 import { namingMatch } from "../signatures.ts";
 import type { ReportData } from "./data.ts";
 import { WAIT } from "./section.ts";
@@ -20,40 +19,18 @@ export type About = {
 };
 
 /**
- * The core's sentences for a template, or null.
- *
- * Asked through a look-up that admits the binding may not be there: it was
- * added after this view, and a `src/pkg` built before it answers everything
- * else the report asks. Without it the report says what file(1) says instead,
- * which is the rule for a format the core has no sentences for.
- *
- * The binding is taken to answer either the entry as JSON, `{name, wikipedia,
- * text}`, or the sentences alone, and "" or `null` for a template with none.
+ * The core's sentences for a template, or null: `format_about` answers the
+ * entry as JSON, `{name, wikipedia, text}`, and `null` for a template with
+ * none, which is every bundled Kaitai and ImHex format.
  */
 export function formatAbout(doc: Doc, template: string): About | null {
-  // A free function of the module, or failing that a method of the editor,
-  // which is how most of the core is reached (see `Doc.tableShape`). The
-  // editor is the document's own and private to it, so it is looked up
-  // rather than named.
-  const free = (wasm as unknown as Record<string, unknown>)["format_about"];
-  const editor = (doc as unknown as { editor?: Record<string, unknown> }).editor;
-  const method = editor?.["format_about"];
   let raw: unknown;
   try {
-    if (typeof free === "function") raw = (free as (t: string) => unknown)(template);
-    else if (typeof method === "function") raw = (method as (t: string) => unknown).call(editor, template);
-    else return null;
+    const json = doc.formatAbout(template);
+    if (json === null) return null;
+    raw = JSON.parse(json) as unknown;
   } catch {
     return null;
-  }
-  if (raw === undefined || raw === null || raw === "" || raw === "null") return null;
-  if (typeof raw === "string") {
-    const text = raw;
-    try {
-      raw = JSON.parse(text) as unknown;
-    } catch {
-      return { name: "", wikipedia: null, text };
-    }
   }
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -64,6 +41,14 @@ export function formatAbout(doc: Doc, template: string): About | null {
     wikipedia: typeof r["wikipedia"] === "string" && r["wikipedia"] !== "" ? r["wikipedia"] : null,
     text,
   };
+}
+
+/** A Wikipedia article's address: spaces as underscores, and a `#section`
+ *  kept as the fragment. */
+export function wikipediaLink(title: string): string {
+  const [page = "", section] = title.split("#", 2);
+  const enc = (s: string): string => encodeURIComponent(s.replace(/ /g, "_")).replace(/%2F/g, "/");
+  return `https://en.wikipedia.org/wiki/${enc(page)}${section === undefined ? "" : `#${enc(section)}`}`;
 }
 
 export type FormatIdentity = {
@@ -119,11 +104,11 @@ export function formatIdentity(doc: Doc, data: ReportData): FormatIdentity | typ
     if (source === "builtin") how = RV.identifiedByTemplate(label);
     else if (source === "kaitai") how = RV.identifiedByKaitai(label);
     else if (source === "hexpat") how = RV.identifiedByImhex(label);
-    else if (rule !== null && rule.source !== "") how = RV.identifiedByRule(rule.source);
+    else if (rule !== null) how = RV.identifiedByRule;
     else how = RV.identifiedByTemplate(label);
     name ??= source === "builtin" || source === "kaitai" || source === "hexpat" ? label : null;
   } else if (rule !== null) {
-    how = rule.source !== "" ? RV.identifiedByRule(rule.source) : RV.identifiedBySignature;
+    how = RV.identifiedByRule;
   } else if (named !== null) {
     how = RV.identifiedBySignature;
   }

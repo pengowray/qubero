@@ -27,6 +27,9 @@ export type RibbonBox = {
   readonly label?: string;
   /** A CSS colour. The row's default when absent. */
   readonly color?: string;
+  /** Drawn faintly: a box that is there for its place, not its own sake,
+   *  such as the bits of a byte a code does not use. */
+  readonly dim?: boolean;
 };
 
 export type RibbonRow = {
@@ -59,12 +62,18 @@ export type RibbonOptions = {
   readonly onHover?: (band: number | null, e: PointerEvent) => void;
   /** A band or a box was clicked. */
   readonly onPick?: (band: number, e: MouseEvent) => void;
+  /** Heights of a box and of the space the bands cross, and how wide one
+   *  character of a box's label is, in the figure's own units. */
+  readonly box?: number;
+  readonly gap?: number;
+  readonly charWidth?: number;
 };
 
-/** Heights of the figure's parts, in px. */
+/** Heights of the figure's parts, in px, unless the caller says. */
 const CAPTION = 16;
-const BOX = 22;
-const GAP = 90;
+const DEFAULT_BOX = 22;
+const DEFAULT_GAP = 90;
+const CHAR = 7;
 /** A box never draws thinner than this, so a one-bit code can still be seen
  *  and pointed at. */
 const MIN_BOX = 1.5;
@@ -109,6 +118,9 @@ export function boxSpans(row: RibbonRow, width: number): { x: number; w: number 
 /** Draw the figure. The caller adds it to the page. */
 export function ribbon(data: RibbonData, opts: RibbonOptions = {}): SVGSVGElement {
   const W = opts.width ?? 960;
+  const BOX = opts.box ?? DEFAULT_BOX;
+  const GAP = opts.gap ?? DEFAULT_GAP;
+  const CHAR_W = opts.charWidth ?? CHAR;
   const yTopBox = CAPTION;
   const yTopEdge = yTopBox + BOX;
   const yBottomBox = yTopEdge + GAP;
@@ -133,11 +145,19 @@ export function ribbon(data: RibbonData, opts: RibbonOptions = {}): SVGSVGElemen
     r.boxes.forEach((box, i) => {
       const s = spans[i];
       if (s === undefined) return;
-      const rect = svgEl("rect", { x: String(s.x), y: String(y), width: String(Math.max(MIN_BOX, s.w - (s.w > 4 ? 1 : 0))), height: String(BOX), rx: "2", class: "rv-rb-box", fill: box.color ?? "var(--muted)" });
+      const rect = svgEl("rect", {
+        x: String(s.x),
+        y: String(y),
+        width: String(Math.max(MIN_BOX, s.w - (s.w > 4 ? 1 : 0))),
+        height: String(BOX),
+        rx: "2",
+        class: `rv-rb-box${box.dim === true ? " is-dim" : ""}`,
+        fill: box.color ?? "var(--muted)",
+      });
       rect.dataset[which] = String(i);
       g.append(rect);
-      if (box.label !== undefined && s.w >= box.label.length * 7 + 6) {
-        const text = svgEl("text", { x: String(s.x + s.w / 2), y: String(y + 15), class: "rv-rb-label", "text-anchor": "middle" });
+      if (box.label !== undefined && s.w >= box.label.length * CHAR_W + 2) {
+        const text = svgEl("text", { x: String(s.x + s.w / 2), y: String(y + BOX / 2 + 4), class: `rv-rb-label${box.dim === true ? " is-dim" : ""}`, "text-anchor": "middle" });
         text.textContent = box.label;
         g.append(text);
       }

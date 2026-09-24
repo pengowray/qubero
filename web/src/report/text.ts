@@ -6,6 +6,7 @@
 // `problem.rs` have it for the rest of the app.
 
 import { formatBytes, percentText } from "../format.ts";
+import type { ExtentCheck } from "./coredata.ts";
 
 /** `1 byte`, `5,770 bytes`. */
 export function bytesText(n: number): string {
@@ -58,7 +59,7 @@ export const RV = {
   identifiedByTemplate: (label: string): string => `Identified by the ${label} template`,
   identifiedByKaitai: (label: string): string => `Read with the Kaitai Struct description ${label}`,
   identifiedByImhex: (label: string): string => `Read with the ImHex pattern ${label}`,
-  identifiedByRule: (ruleFile: string): string => `Identified by a file(1) rule (rule file: ${ruleFile})`,
+  identifiedByRule: "Identified by a file(1) rule",
   identifiedBySignature: "Identified by its signature bytes",
   notIdentified: "Format not identified",
   /** The link to the format's article, for a reader who wants more than the
@@ -73,17 +74,14 @@ export const RV = {
   // ----- 3. the facts table -----
   factSize: "Size",
   factParts: "Parts",
-  /** The template's lists and how many elements each holds. */
-  factLists: "Lists",
   factPicture: "Picture",
   factFindings: "Findings",
   factDescribed: "Described by the template",
   pictureSize: (w: number, h: number): string => `${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
-  /** The parts, named. A dot between them rather than a comma, since the
-   *  names the core gives a variant have commas of their own: `app0, jfif`. */
-  partsSummary: (total: number, shown: readonly string[], more: number): string =>
-    `${total.toLocaleString()}: ${shown.join(" · ")}${more > 0 ? ` · and ${more.toLocaleString()} more` : ""}`,
-  groupCount: (n: number, label: string): string => (n === 1 ? label : `${n.toLocaleString()} × ${label}`),
+  /** How many parts, and of how many kinds where that is fewer: the ledger
+   *  below names them. */
+  partsCount: (parts: number, kinds: number): string =>
+    kinds < parts ? `${counted(parts, "part")} of ${counted(kinds, "kind")}` : counted(parts, "part"),
   noFindings: "None found",
   described: (covered: number, total: number, done: boolean): string =>
     `${bytesText(covered)} of ${bytesText(total)} (${percentText(covered, total)})${done ? "" : " so far"}`,
@@ -94,6 +92,56 @@ export const RV = {
   findingUndefined: (n: number): string => counted(n, "undefined value"),
   findingRefused: (n: number): string => counted(n, "stream that did not unpack"),
   findingGap: (n: number): string => counted(n, "unmapped range"),
+  findingExtent: (n: number): string => counted(n, "length that does not match its part"),
+  /** The quiet line the values without a name open from. */
+  undefinedLine: (n: number): string => (n === 1 ? "1 value the template has no name for" : `${n.toLocaleString()} values the template has no name for`),
+  rootFailed: (why: string): string => `The file would not read: ${why}`,
+  /** What is wrong with a length, after the part's name and address. */
+  extentVerdict: (c: ExtentCheck): string => {
+    const len = c.role === "length";
+    const stated = c.stated ?? 0;
+    const read = c.read ?? 0;
+    switch (c.verdict) {
+      case "past-file":
+        return len
+          ? `Its length field says it ends ${bitsText(Math.max(0, c.offset_bits + stated - c.space_bits))} past the end of the file`
+          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} fit before the end of the file`;
+      case "past-parent":
+        return len
+          ? `Its length field says it ends ${bitsText(Math.max(0, stated - c.room_bits))} past the end of its parent`
+          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} fit in its parent`;
+      case "stretched":
+        return len
+          ? `It runs ${bitsText(Math.max(0, read - stated))} past the length its length field gives`
+          : `It holds ${counted(read, "element")}, more than the ${stated.toLocaleString()} its count gives`;
+      case "short":
+        if (!len) return `Its count says ${counted(stated, "element")}, and ${read.toLocaleString()} were read`;
+        return c.content_bits === null
+          ? "Its fields stop before the length its length field gives"
+          : `Its fields stop ${bitsText(Math.max(0, stated - c.content_bits))} before the length its length field gives`;
+      case "unreadable":
+        return c.why === "" ? "It would not read" : `It would not read: ${c.why}`;
+      default:
+        return c.verdict;
+    }
+  },
+  extentLengthField: "Length field",
+  extentStated: "Stated length",
+  extentRead: "Read as",
+  extentContent: "Its fields reach",
+  extentRoom: "Room in its parent",
+  extentStatedCount: "Stated count",
+  extentReadCount: "Elements read",
+  extentUnknown: "not worked out",
+  elements: (n: number): string => counted(n, "element"),
+  at: "at",
+  extentAdjusted: "The template adds bytes the length field leaves out, so the field's own value is not the part's length.",
+  extentParentEnds: "End of its parent",
+  extentFileEnds: "End of the file",
+  extentFigureLabel: "Where the length field says the part ends, and where it does end",
+  extentCaption: (start: string): string => `The part starts at ${start}. Each bar ends where its label says. The lines mark the end of its parent and the end of the file.`,
+  extentCaptionCut: (start: string): string =>
+    `Drawn near the ends, all at one scale. The part starts further left, at ${start}. The lines mark the end of its parent and the end of the file.`,
   gapNonzero: (bytes: number): string => `${bytesText(bytes)} that no field describes`,
   gapZeros: (bytes: number): string => `${bytesText(bytes)} of zeros that no field describes`,
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
@@ -123,6 +171,19 @@ export const RV = {
   textHeading: (name: string, bytes: number): string => `The text of ${name}: ${bytesText(bytes)}`,
   textCut: (shown: number, total: number): string => `The first ${shown.toLocaleString()} of ${total.toLocaleString()} characters.`,
   plainTextHeading: (bytes: number): string => `The file as text: ${bytesText(bytes)}`,
+  /** A container's entries, from its outline's own title and count. */
+  outlineHeading: (title: string, summary: string): string => `${title}: ${summary}`,
+  zipHeading: (n: number, unpacked: number, packed: number): string =>
+    `${sentenceCase(counted(n, "file"))} in the archive: ${bytesText(unpacked)}, stored in ${bytesText(packed)}`,
+  zipHeadingFirst: (n: number): string => `The first ${counted(n, "file")} in the archive`,
+  zipMore: "The archive holds more files than these. The rail's Logical tab lists all of them.",
+  moreEntries: (n: number): string => `${counted(n, "more entry")} not listed. The rail's Logical tab lists all of them.`,
+  entryName: "Name",
+  entrySize: "Size",
+  entryPacked: "In the archive",
+  entryMethod: "Method",
+  entryRatio: "Ratio",
+  entryWhat: "What it is",
   plainTextCut: (shown: number): string => `The first ${shown.toLocaleString()} characters, read as UTF-8. The Text view shows all of it.`,
 
   // ----- 6. where the bytes go -----
@@ -161,6 +222,17 @@ export const RV = {
   ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map, and click it to zoom the map to them.",
   ledgerRowTitle: "Click to zoom the map to this part",
   ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these were not listed.`,
+  ledgerGapLabel: "Bytes no field describes",
+  ledgerPaddingLabel: "Padding",
+  /** Before a structure's name, for its plain fields taken together. */
+  fieldsOf: "Fields of ",
+  /** Between a group and the part it is in: `local file in records`. */
+  inPart: "in",
+  largestLead: "Largest: ",
+  ofTheFile: "of the file",
+  coreLedgerCaption:
+    "Each row is a part of the file, or one kind of element in a list, in the order its first bytes come. Hover a row to mark its first bytes on the map, and click it to zoom the map there.",
+  ledgerSoFar: (at: string): string => `Counted so far, up to ${at}. The rest is still being read.`,
   /** Under the byte counts of a file no template reads. */
   classLedgerCaption: (readTo: string, done: boolean): string =>
     done ? "Every byte of the file, by what kind of byte it is." : `Counted so far, up to ${readTo}. The rest is still being read.`,
@@ -190,6 +262,14 @@ export const RV = {
       : `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)} unpack to ${bytesText(unpacked)}`,
   streamHeading: (name: string, packed: number, codec: string, unpacked: number | null): string =>
     unpacked === null ? `${name}: ${bytesText(packed)} of ${codec}` : `${name}: ${bytesText(packed)} of ${codec} unpack to ${bytesText(unpacked)}`,
+  streamName: "Stream",
+  streamPacked: "In the file",
+  streamUnpacked: "Unpacked",
+  /** Over the ratio column, whose cells say `3.8×`: unpacked over packed. */
+  streamRatio: "Ratio",
+  streamRowTitle: "Click to draw this stream below",
+  streamNotUnpacked: "not unpacked here",
+  ratio: (r: number): string => `${r.toFixed(r < 10 ? 1 : 0)}×`,
   stageCompressed: "In the file",
   stageUnpacked: "Unpacked",
   stagesCaption: (ratio: string): string => `Each bar is drawn to scale. The unpacked bytes are ${ratio} the size of the compressed ones.`,
@@ -212,6 +292,46 @@ export const RV = {
   stepBytes: (from: number, to: number): string =>
     to - from === 1 ? `Byte ${from.toLocaleString()} of the output` : `Bytes ${from.toLocaleString()} to ${(to - 1).toLocaleString()} of the output`,
 
+  // ----- 7. what each directory points to -----
+  directoriesHeading: (n: number): string =>
+    n === 1 ? "1 list points to other parts of the file" : `${n.toLocaleString()} lists point to other parts of the file`,
+  /** After the list's name. */
+  directorySummary: (placing: number, elements: number, targets: number): string =>
+    placing < elements
+      ? `: ${placing.toLocaleString()} of its ${counted(elements, "entry")} point to ${counted(targets, "place")} in the file`
+      : `: ${counted(elements, "entry")} point to ${counted(targets, "place")} in the file`,
+  dirTop: (name: string): string => `${name}, in stored order`,
+  dirBottom: (size: string): string => `The file, ${size}, in file order`,
+  dirInOrder: "The places come in the same order as the entries.",
+  dirOutOfOrder: "The places do not come in the order of the entries.",
+  dirCaption: "Each entry along the top is joined to the place it points to along the bottom. Hover a band for its numbers, and click one to put the cursor on the place.",
+  dirFirstEntries: (shown: number, total: number): string => `The first ${shown.toLocaleString()} of ${total.toLocaleString()} entries are drawn.`,
+  dirEntryAt: (at: string, size: string): string => `Entry at ${at}, ${size}`,
+  dirPointsTo: (name: string, at: string, size: string): string => `Points to ${name} at ${at}, ${size}`,
+  dirVia: (via: string): string =>
+    via === "address" ? "By an offset in the entry" : via === "offsets" ? "By a list of offsets beside the list" : via === "descriptors" ? "By a descriptor" : via,
+  moreDirectories: (n: number): string => `${counted(n, "more list")} not shown.`,
+  dirUnexamined: (n: number): string => `${counted(n, "more place")} past the limit ${n === 1 ? "was" : "were"} not looked at.`,
+
+  // ----- 10. the format profile -----
+  profileHeading: (used: number, declared: number): string =>
+    `This file uses ${used.toLocaleString()} of the ${counted(declared, "kind")} of value its template declares`,
+  profileHeadingFile: (used: number): string => `This file holds ${counted(used, "kind")} of value`,
+  profileKind: "Kind",
+  profileFields: "Fields in this file",
+  profileBytes: "Bytes",
+  profileDeclared: "Declared in the template",
+  notInFile: "none",
+  unpackedTo: (streams: number, size: string): string => `${counted(streams, "stream")} opened, unpacked to ${size}`,
+  profileCaption:
+    "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows; a row with none in this file is a kind the file does not use.",
+  profileCaptionFile: "A field counts once in each group it belongs to: a named value is also the number under it.",
+  choicesHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} that could take more forms than this file uses`,
+  choiceField: "Field",
+  choiceAllows: "Forms the template allows",
+  choiceUses: "Forms this file uses",
+  choiceFields: "Times in this file",
+
   // ----- 11. terms -----
   termsHeading: (n: number): string => `What the template says about ${counted(n, "field")}`,
 
@@ -219,6 +339,32 @@ export const RV = {
   everyHeading: (n: number): string => `All ${n.toLocaleString()} bytes, part by part`,
   everyCaption: "Every part and every field one level inside it, in file order, with its share of the file.",
   everyCut: (n: number): string => `${counted(n, "more row")} not shown. The listing has every field.`,
+  coreEveryCaption: "Every byte of the file, part by part in the order its first bytes come, and under each part what its bytes are where that is more than content.",
+  /** What a share of a part's bytes is, by the role the core gives it. */
+  role: (role: string, aligns: readonly number[]): string => {
+    switch (role) {
+      case "content":
+        return "Content";
+      case "machinery":
+        return "Lengths, counts, IDs, and offsets";
+      case "padding":
+        return aligns.length === 0 ? "Padding" : `Padding to a multiple of ${listText(aligns.map(String))} bytes`;
+      case "framing":
+        return "Brackets and separators";
+      case "gap":
+        return "Bytes no field describes";
+      default:
+        return role;
+    }
+  },
+  /** How much of a gap or of padding is zero: `12 bytes zero, 3 other`. */
+  zeroSplit: (zeroBits: number, otherBits: number, unscannedBits: number): string => {
+    const parts: string[] = [];
+    if (zeroBits > 0) parts.push(`${bitsText(zeroBits)} zero`);
+    if (otherBits > 0) parts.push(`${bitsText(otherBits)} not zero`);
+    if (unscannedBits > 0) parts.push(`${bitsText(unscannedBits)} not read`);
+    return listText(parts);
+  },
 
   // ----- byte references and the map's hover -----
   tipRange: (from: string, to: string, size: string): string => `${from} to ${to}, ${size}`,

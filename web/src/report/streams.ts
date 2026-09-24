@@ -12,9 +12,9 @@
 // same unpacking the listing's button does.
 
 import type { Doc, MapStep, TemplateNode } from "../doc.ts";
-import { byteText, formatBytes } from "../format.ts";
+import { byteText, formatBytes, formatOffset } from "../format.ts";
 import { ok } from "./model.ts";
-import { pointAt } from "./refs.ts";
+import { byteRef, pointAt } from "./refs.ts";
 import { ribbon, type RibbonData } from "./ribbon.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { stripIndex } from "./partrules.ts";
@@ -22,11 +22,13 @@ import { hideTip, tipAt } from "./tip.ts";
 import { bytesText, RV } from "./text.ts";
 import { walkTemplate } from "./walk.ts";
 
-/** Streams unpacked by the report on its own, and the largest it unpacks. */
-const OPEN_MAX = 8;
+/** Streams unpacked by the report on its own, the largest it unpacks, and
+ *  how much it unpacks in all. */
+const OPEN_MAX = 32;
 const OPEN_BYTES = 4 * 1024 * 1024;
-/** Streams given a section of their own. */
-const SHOWN = 12;
+const OPEN_TOTAL = 16 * 1024 * 1024;
+/** Streams listed in the table. */
+const ROWS_MAX = 200;
 /** Codes drawn in a ribbon, codes read to choose which, and literals shown
  *  before the first copy. */
 const STEPS = 48;
@@ -45,35 +47,118 @@ export const streamsSection: Section = {
     if (streams.length === 0) return null;
     const opened: Opened[] = [];
     let unpackedTotal = 0;
+    let openedBytes = 0;
     let allOpened = true;
-    for (const node of streams) {
+    for (const node of streams.slice(0, ROWS_MAX)) {
       const label = streamLabel(ctx.doc, node);
       if (label === WAIT) return WAIT;
       let space: Doc | null = null;
-      if (opened.filter((o) => o.space !== null).length < OPEN_MAX && node.size_bits / 8 <= OPEN_BYTES) {
+      const bytes = node.size_bits / 8;
+      if (opened.filter((o) => o.space !== null).length < OPEN_MAX && bytes <= OPEN_BYTES && openedBytes + bytes <= OPEN_TOTAL) {
         const r = ctx.doc.openSpace(node.path);
         space = r !== null && !("refused" in r) ? r : null;
+        if (space !== null) openedBytes += bytes;
       }
       if (space === null) allOpened = false;
       else unpackedTotal += space.lengthBytes;
       opened.push({ node, label, space });
     }
+    if (streams.length > ROWS_MAX) allOpened = false;
     const packed = streams.reduce((n, s) => n + s.size_bits / 8, 0);
     const sec = document.createElement("section");
     sec.className = "rv-section rv-streams";
     const h = document.createElement("h2");
     h.textContent = RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null);
     sec.append(h);
-    for (const o of opened.slice(0, SHOWN)) sec.append(streamBlock(ctx, o));
-    if (opened.length > SHOWN) {
+    // One table of every stream, then the figures for one of them: the
+    // largest to start with, and whichever row is clicked after that.
+    const figure = document.createElement("div");
+    const pick = (o: Opened, row: HTMLTableRowElement | null): void => {
+      for (const r of sec.querySelectorAll(".rv-streamrow.is-on")) r.classList.remove("is-on");
+      row?.classList.add("is-on");
+      figure.replaceChildren(streamBlock(ctx, o));
+    };
+    const table = streamTable(opened, pick);
+    sec.append(table.el);
+    if (streams.length > ROWS_MAX) {
       const p = document.createElement("p");
       p.className = "rv-note";
-      p.textContent = RV.moreStreams(opened.length - SHOWN);
+      p.textContent = RV.moreStreams(streams.length - ROWS_MAX);
       sec.append(p);
     }
+    sec.append(figure);
+    const largest = [...opened].filter((o) => o.space !== null).sort((a, b) => b.node.size_bits - a.node.size_bits)[0] ?? opened[0];
+    if (largest !== undefined) pick(largest, table.rows.get(largest) ?? null);
     return sec;
   },
 };
+
+/** Every stream in one table: its name, how many bytes it takes in the file
+ *  and unpacks to, and the ratio as a bar. A click on a row draws that
+ *  stream's figures under the table. */
+function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTableRowElement) => void): { el: HTMLElement; rows: Map<Opened, HTMLTableRowElement> } {
+  const wrap = document.createElement("div");
+  wrap.className = "rv-tablewrap";
+  const t = document.createElement("table");
+  t.className = "rv-table rv-streamtable rv-stack";
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const [text, cls] of [
+    [RV.streamName, ""],
+    [RV.streamPacked, "rv-num"],
+    [RV.streamUnpacked, "rv-num"],
+    [RV.streamRatio, ""],
+  ] as const) {
+    const th = document.createElement("th");
+    th.textContent = text;
+    if (cls !== "") th.className = cls;
+    hr.append(th);
+  }
+  thead.append(hr);
+  t.append(thead);
+  const body = document.createElement("tbody");
+  const rows = new Map<Opened, HTMLTableRowElement>();
+  const ratios = opened.map((o) => (o.space === null || o.node.size_bits === 0 ? 0 : (o.space.lengthBytes * 8) / o.node.size_bits));
+  const most = Math.max(1, ...ratios);
+  opened.forEach((o, i) => {
+    const tr = document.createElement("tr");
+    tr.className = "rv-streamrow";
+    tr.title = RV.streamRowTitle;
+    const name = document.createElement("td");
+    name.className = "rv-cell-name";
+    const code = document.createElement("code");
+    code.textContent = o.label;
+    name.append(code, " ", byteRef({ path: o.node.path, startBit: o.node.offset_bits, endBit: o.node.offset_bits + o.node.size_bits }, o.label, formatOffset(o.node.offset_bits)));
+    const cell = (text: Node | string, cls: string, label: string): HTMLTableCellElement => {
+      const td = document.createElement("td");
+      td.className = cls;
+      td.dataset.label = label;
+      td.append(text);
+      return td;
+    };
+    const ratio = ratios[i] ?? 0;
+    const bar = document.createElement("span");
+    bar.className = "rv-ratiobar";
+    bar.style.width = `${Math.max(1, (ratio / most) * 60)}px`;
+    const ratioCell = cell(o.space === null ? RV.streamNotUnpacked : "", "rv-ratio", RV.streamRatio);
+    if (o.space !== null) ratioCell.append(bar, ` ${RV.ratio(ratio)}`);
+    tr.append(
+      name,
+      cell(bytesText(o.node.size_bits / 8), "rv-num", RV.streamPacked),
+      cell(o.space === null ? "" : bytesText(o.space.lengthBytes), "rv-num", RV.streamUnpacked),
+      ratioCell,
+    );
+    tr.addEventListener("click", (e) => {
+      if ((e.target as Element).closest("[data-rv-start]") !== null) return;
+      pick(o, tr);
+    });
+    rows.set(o, tr);
+    body.append(tr);
+  });
+  t.append(body);
+  wrap.append(t);
+  return { el: wrap, rows };
+}
 
 /** What to call a stream: the element of a list it is inside, by the name the
  *  listing gives it (`word/document.xml`), and its own field name after. */
