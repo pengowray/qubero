@@ -3203,7 +3203,10 @@ impl Packing {
             Packing::Fixed(c) => c.as_str(),
             Packing::Lzma1 { .. } => "lzma",
             Packing::Rar5 { .. } => "rar5",
-            Packing::JpegScan { .. } => crate::codec::Codec::JpegBaseline.as_str(),
+            // What the run is, whichever kind of scan it turns out to be: a
+            // progressive one is refused by name, and calling it baseline in
+            // the type column beside that would say two things at once.
+            Packing::JpegScan { .. } => "jpeg scan",
         }
     }
     /// Whether the bytes come out as they went in, so a reader can be sent to
