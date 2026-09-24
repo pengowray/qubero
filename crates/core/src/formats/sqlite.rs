@@ -293,28 +293,27 @@ fn btree_body(name: &str, interior: bool, page_type: i128, adjust: E, usable: E,
     T::structure(name, fields).machinery(&["page_type", "first_freeblock", "cell_content_start", "fragmented_free_bytes"])
 }
 
-/// The page size in bytes, for a field outside the page run. A page size of 1
-/// means 65536, which the two-byte field cannot hold.
+/// The page size in bytes, as the header field that works it out.
 fn page_bytes() -> E {
-    E::cond(E::field("page_size").equal_to(E::lit(1)), E::lit(65536), E::field("page_size"))
+    E::field("page_bytes")
 }
 
 /// Where page `n` starts, in bytes from the start of the file. Pages count
 /// from 1, so page 0 comes out before the file starts, which a chain takes as
 /// its end and a gather passes over.
-fn page_offset(n: E, size: E) -> E {
-    n.sub(E::lit(1)).mul(size)
+fn page_offset(n: E) -> E {
+    n.sub(E::lit(1)).mul(page_bytes())
 }
 
 /// A freelist trunk page: the next trunk, then the numbers of free pages it
-/// holds. The rest of the page is unused and may still hold whatever the page
-/// held before it was freed.
+/// holds. SQLite does not use the rest of the page, which still holds whatever
+/// was there before the page was freed, unless `secure_delete` cleared it.
 ///
 /// `next_trunk_offset` is `next_trunk` as a byte offset. A chain follows a
 /// link written as an offset, and SQLite writes a page number, so the
 /// conversion is a field of its own for the chain to follow. Zero for the
 /// last trunk, which is how a chain ends.
-fn freelist_trunk(size: E) -> T {
+fn freelist_trunk() -> T {
     let next = || E::field("next_trunk");
     // A record of one number rather than the number, because a gather reads
     // its offsets from records, and `free_pages` gathers these.
@@ -325,10 +324,10 @@ fn freelist_trunk(size: E) -> T {
             ("next_trunk", T::u32(Big)),
             ("leaf_count", T::u32(Big)),
             ("leaves", T::array(entry, E::field("leaf_count"))),
-            ("unused", T::bytes(E::Remaining)),
+            ("stale", T::bytes(E::Remaining)),
             (
                 "next_trunk_offset",
-                T::computed(E::cond(next().equal_to(E::lit(0)), E::lit(0), page_offset(next(), size))),
+                T::computed(E::cond(next().equal_to(E::lit(0)), E::lit(0), page_offset(next()))),
             ),
         ],
     )
@@ -336,10 +335,10 @@ fn freelist_trunk(size: E) -> T {
 }
 
 /// A page on the freelist that is not a trunk. SQLite never reads one, and
-/// does not clear it when it frees it, so what is here is whatever the page
-/// held last.
+/// does not clear it when it frees it unless `secure_delete` is on, so what is
+/// here is whatever the page held last.
 fn freelist_leaf() -> T {
-    T::structure("FreelistLeaf", vec![("unused", T::bytes(E::Remaining))])
+    T::structure("FreelistLeaf", vec![("stale", T::bytes(E::Remaining))])
 }
 
 /// Whether page `n` is on the freelist, and as what: 1 for a trunk, 2 for a
@@ -366,8 +365,8 @@ fn freelist_role(n: impl Fn() -> E) -> E {
 /// of that true, every page left over is the continuation of a payload too big
 /// for its own page, and reads as the next page in that chain and the bytes it
 /// carries. Anywhere else the honest answer is the bytes.
-fn other_page(n: E, size: E) -> T {
-    let lock_byte_page = E::lit(1 << 30).div(size).add(E::lit(1));
+fn other_page(n: E) -> T {
+    let lock_byte_page = E::lit(1 << 30).div(page_bytes()).add(E::lit(1));
     let freelist_whole = E::len_of("freelist")
         .add(E::len_of("free_pages"))
         .equal_to(E::field("freelist_page_count"));
@@ -398,7 +397,7 @@ fn other_page(n: E, size: E) -> T {
 /// one. Reading it first and switching on it afterwards would have every other
 /// page in the file open with a field the format never wrote, and show the
 /// byte a page number happens to start with as a page type nobody defined.
-fn page(adjust: E, usable: E, size: E, number: Option<E>, rec: T) -> T {
+fn page(adjust: E, usable: E, number: Option<E>, rec: T) -> T {
     let body =
         |name, interior, ty| btree_body(name, interior, ty, adjust.clone(), usable.clone(), rec.clone());
     let by_type_byte = |other: T| {
@@ -416,8 +415,8 @@ fn page(adjust: E, usable: E, size: E, number: Option<E>, rec: T) -> T {
     let Some(n) = number else { return by_type_byte(T::bytes(E::Remaining)) };
     T::switch(
         freelist_role(|| n.clone()),
-        vec![(1, freelist_trunk(size.clone())), (2, freelist_leaf())],
-        by_type_byte(other_page(n.clone(), size)),
+        vec![(1, freelist_trunk()), (2, freelist_leaf())],
+        by_type_byte(other_page(n.clone())),
     )
 }
 
@@ -433,21 +432,13 @@ pub fn self_db() -> Template {
 }
 
 fn database(name: &str, root: &str, application_id: T) -> Template {
-    // A page size of 1 means 65536: the field is two bytes and cannot hold it.
-    // The two page fields say it with a switch, which is older than the
-    // conditional expression the freelist uses (see `page_bytes`).
     // What of a page a payload may use: the page less whatever the header
     // holds back at the end of every one of them.
-    let usable = |size: &E| size.clone().sub(E::field("reserved_space"));
-    let first = |size: E| {
-        let page = page(E::lit(-100), usable(&size), size.clone(), None, schema_record());
-        T::sized(size.clone().sub(E::lit(100)), page)
-    };
+    let usable = || page_bytes().sub(E::field("reserved_space"));
+    let page1 = T::sized(page_bytes().sub(E::lit(100)), page(E::lit(-100), usable(), None, schema_record()));
     // Page `i` of the run is page `i + 2` of the file.
-    let rest = |size: E| {
-        let page = page(E::lit(0), usable(&size), size.clone(), Some(E::idx().add(E::lit(2))), record());
-        T::repeat(T::sized(size.clone(), page), Until::End)
-    };
+    let each = page(E::lit(0), usable(), Some(E::idx().add(E::lit(2))), record());
+    let pages = T::repeat(T::sized(page_bytes(), each), Until::End);
     Template::new(
         name,
         T::structure(
@@ -455,6 +446,17 @@ fn database(name: &str, root: &str, application_id: T) -> Template {
             vec![
                 ("magic", T::magic(b"SQLite format 3\0")),
                 ("page_size", T::u16(Big)),
+                // A page size of 65536 does not fit the two bytes above, so it
+                // is written as 1. This is the size in bytes either way, and
+                // what everything below is sized by.
+                (
+                    "page_bytes",
+                    T::computed(E::cond(
+                        E::field("page_size").equal_to(E::lit(1)),
+                        E::lit(65536),
+                        E::field("page_size"),
+                    )),
+                ),
                 ("write_version", T::enumeration("WriteVersion", T::u8(), WRITE_VERSION)),
                 ("read_version", T::enumeration("ReadVersion", T::u8(), WRITE_VERSION)),
                 ("reserved_space", T::u8()),
@@ -478,10 +480,7 @@ fn database(name: &str, root: &str, application_id: T) -> Template {
                 ("reserved", T::bytes(E::lit(20))),
                 ("version_valid_for", T::u32(Big)),
                 ("sqlite_version", T::u32(Big)),
-                (
-                    "page1",
-                    T::switch(E::field("page_size"), vec![(1, first(E::lit(65536)))], first(E::field("page_size"))),
-                ),
+                ("page1", page1),
                 // The freelist, read from the header's pointer to its first
                 // trunk before any page is typed, so that a page it names is
                 // free whatever its first byte says. The trunks are also pages
@@ -489,10 +488,10 @@ fn database(name: &str, root: &str, application_id: T) -> Template {
                 (
                     "freelist",
                     T::chain(
-                        page_offset(E::field("first_freelist_page"), page_bytes()),
+                        page_offset(E::field("first_freelist_page")),
                         &["next_trunk_offset"],
                         Anchor::Space,
-                        T::sized(page_bytes(), freelist_trunk(page_bytes())),
+                        T::sized(page_bytes(), freelist_trunk()),
                     ),
                 ),
                 // Every free page that is not a trunk, from all the trunks as
@@ -503,17 +502,14 @@ fn database(name: &str, root: &str, application_id: T) -> Template {
                     "free_pages",
                     T::gather(
                         vec![Step::field("freelist"), Step::each(), Step::field("leaves"), Step::each()],
-                        page_offset(E::field("page"), page_bytes()),
+                        page_offset(E::field("page")),
                         Anchor::Space,
                         E::lit(0),
                         T::computed(E::placer(E::field("page"))),
                     )
                     .skipping_zero(),
                 ),
-                (
-                    "pages",
-                    T::switch(E::field("page_size"), vec![(1, rest(E::lit(65536)))], rest(E::field("page_size"))),
-                ),
+                ("pages", pages),
             ],
         )
         // Both freelist fields read pages the run below also reads, and the
@@ -535,10 +531,10 @@ mod tests {
     // Field indices into the root: the page size, the text encoding, page 1,
     // and the pages after it.
     const PAGE_SIZE: usize = 1;
-    const TEXT_ENCODING: usize = 16;
-    const APPLICATION_ID: usize = 19;
-    const PAGE1: usize = 23;
-    const PAGES: usize = 26;
+    const TEXT_ENCODING: usize = 17;
+    const APPLICATION_ID: usize = 20;
+    const PAGE1: usize = 24;
+    const PAGES: usize = 27;
     // Field indices inside a b-tree leaf page. A page is its own struct: the
     // type byte is peeked to choose which one, and read again inside it.
     const CELL_COUNT: usize = 2;

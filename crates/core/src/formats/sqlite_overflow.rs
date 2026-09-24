@@ -240,8 +240,7 @@ pub fn payload<S: Source>(ev: &mut Evaluator, doc: &Document<S>, cell: &[usize])
 /// How big a page is. The field is two bytes and the largest page is 65536,
 /// which does not fit in two bytes, so a one means the large size.
 fn page_size<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<u64> {
-    match int_field(ev, doc, &[], "page_size")? {
-        1 => Ok(65536),
+    match int_field(ev, doc, &[], "page_bytes")? {
         n if n >= 512 => Ok(n as u64),
         n => Err(EvalError::Failed(format!("a page size of {n}"))),
     }
@@ -249,8 +248,8 @@ fn page_size<S: Source>(ev: &mut Evaluator, doc: &Document<S>) -> R<u64> {
 
 /// The four-byte number at `at`, which is how a page says which page follows
 /// it. Read from the file rather than through a field, because an overflow
-/// page's own bytes are described by the template only when the file's
-/// header proves that every leftover page is one of these.
+/// page's own bytes are described by the template only when every other kind
+/// of page has been ruled out, which a damaged file can prevent.
 fn be32<S: Source>(doc: &Document<S>, at: u64) -> u32 {
     let mut bytes = [0u8; 4];
     doc.read_bytes(at, &mut bytes);
@@ -282,7 +281,7 @@ mod tests {
 
     const PAGE: usize = 512;
     /// Where the pages are in the tree, and where a page's cells are.
-    const PAGES: usize = 26;
+    const PAGES: usize = 27;
     const CELLS: usize = 6;
 
     /// How much of a row of `total` bytes stays on a 512-byte table leaf.
