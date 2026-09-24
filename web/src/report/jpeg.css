@@ -1,0 +1,144 @@
+/* ---- report view: a JPEG scan (report/jpeg.ts) ---- */
+/* The picture and the map of bits per MCU side by side, at one scale, and one
+   block traced from its codes to its samples. Colours are the app's own
+   variables, and the map's blues are the report's sequential ramp. */
+
+.rv-jpeg-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  align-items: flex-start;
+}
+.rv-jpeg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.rv-jpeg-panellabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-jpeg-frame {
+  overflow: hidden;
+  max-width: 100%;
+}
+.rv-jpeg-frame img {
+  display: block;
+}
+.rv-jpeg-map {
+  display: block;
+  max-width: 100%;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+.rv-jpeg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.rv-jpeg-legenditem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rv-jpeg-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 25%, transparent);
+}
+
+.rv-jpeg-table .rv-num,
+.rv-table th.rv-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One block. */
+.rv-jpeg-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+.rv-jpeg-pick .rv-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rv-jpeg-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rv-jpeg-box {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.rv-jpeg-box:hover {
+  border-color: var(--accent);
+}
+.rv-jpeg-box.is-eob,
+.rv-jpeg-box.is-zrl {
+  border-style: dashed;
+}
+.rv-jpeg-bits {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rv-jpeg-code {
+  color: var(--fg);
+  font-weight: 600;
+}
+.rv-jpeg-value {
+  color: var(--muted);
+}
+
+.rv-jpeg-gridbox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rv-jpeg-gridlabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-jpeg-zigzag {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 34px));
+  gap: 1px;
+  margin-bottom: 14px;
+}
+.rv-jpeg-grids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+}
+.rv-jpeg-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 34px);
+  gap: 1px;
+}
+.rv-jpeg-cell {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 22px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.rv-jpeg-cell.is-zero {
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+}

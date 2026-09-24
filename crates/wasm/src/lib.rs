@@ -3232,6 +3232,165 @@ fn reply<T: Serialize>(r: Result<T, EvalError>) -> String {
     reply_with(r, 0.0, Vec::new())
 }
 
+/// A JPEG scan's costs, as `jpeg_scan` hands them over. See
+/// [`qubero_core::eval::JpegScanMap`].
+#[derive(Serialize)]
+struct JpegScanDto {
+    run_offset_bits: f64,
+    run_bits: f64,
+    width: u16,
+    height: u16,
+    mcus_across: u32,
+    mcus_down: u32,
+    restart_interval: u16,
+    channels: Vec<JpegChannelDto>,
+    scan: Vec<u8>,
+    mcu_bits: Vec<u32>,
+    /// One entry per 8×8 block, in coding order, in each of these five.
+    block_channel: Vec<u8>,
+    block_x: Vec<u16>,
+    block_y: Vec<u16>,
+    block_bits: Vec<u32>,
+    block_codes: Vec<u16>,
+    totals: JpegTotalsDto,
+    coarse: bool,
+}
+
+#[derive(Serialize)]
+struct JpegChannelDto {
+    name: String,
+    id: u8,
+    h: u8,
+    v: u8,
+    blocks_across: u32,
+    blocks_down: u32,
+    quant_id: u8,
+    /// The 64 steps in rows, or null when no segment before the scan
+    /// defined the table.
+    quant: Option<Vec<u16>>,
+}
+
+#[derive(Serialize)]
+struct JpegTotalsDto {
+    dc_code: f64,
+    dc_value: f64,
+    ac_code: f64,
+    ac_value: f64,
+    eob: f64,
+    zrl: f64,
+    padding: f64,
+    stuffed: f64,
+    markers: f64,
+    unnamed: f64,
+}
+
+fn jpeg_scan_dto(m: qubero_core::eval::JpegScanMap) -> JpegScanDto {
+    let t = m.totals;
+    JpegScanDto {
+        run_offset_bits: m.run_offset_bits as f64,
+        run_bits: m.run_bits as f64,
+        width: m.width,
+        height: m.height,
+        mcus_across: m.mcus_across,
+        mcus_down: m.mcus_down,
+        restart_interval: m.restart_interval,
+        channels: m
+            .channels
+            .into_iter()
+            .map(|c| JpegChannelDto {
+                name: c.name,
+                id: c.id,
+                h: c.h,
+                v: c.v,
+                blocks_across: c.blocks_across,
+                blocks_down: c.blocks_down,
+                quant_id: c.quant_id,
+                quant: c.quant,
+            })
+            .collect(),
+        scan: m.scan,
+        mcu_bits: m.mcu_bits,
+        block_channel: m.blocks.iter().map(|b| b.channel).collect(),
+        block_x: m.blocks.iter().map(|b| b.x).collect(),
+        block_y: m.blocks.iter().map(|b| b.y).collect(),
+        block_bits: m.blocks.iter().map(|b| b.bits).collect(),
+        block_codes: m.blocks.iter().map(|b| b.codes).collect(),
+        totals: JpegTotalsDto {
+            dc_code: t.dc_code as f64,
+            dc_value: t.dc_value as f64,
+            ac_code: t.ac_code as f64,
+            ac_value: t.ac_value as f64,
+            eob: t.eob as f64,
+            zrl: t.zrl as f64,
+            padding: t.padding as f64,
+            stuffed: t.stuffed as f64,
+            markers: t.markers as f64,
+            unnamed: t.unnamed as f64,
+        },
+        coarse: m.coarse,
+    }
+}
+
+/// One JPEG block, as `jpeg_block` hands it over. See
+/// [`qubero_core::eval::JpegBlockTrace`].
+#[derive(Serialize)]
+struct JpegBlockDto {
+    index: u32,
+    mcu: u32,
+    channel: u8,
+    x: u16,
+    y: u16,
+    path: Vec<u32>,
+    mcu_path: Vec<u32>,
+    codes: Vec<JpegCodeDto>,
+    coefficients: Vec<i16>,
+}
+
+#[derive(Serialize)]
+struct JpegCodeDto {
+    kind: &'static str,
+    start_bit: f64,
+    end_bit: f64,
+    code_bits: u8,
+    value_bits: u8,
+    bits: String,
+    stuffed: bool,
+    run: u8,
+    k: u8,
+    value: i16,
+    dc: i16,
+}
+
+fn jpeg_block_dto(b: qubero_core::eval::JpegBlockTrace) -> JpegBlockDto {
+    JpegBlockDto {
+        index: b.index as u32,
+        mcu: b.mcu as u32,
+        channel: b.channel,
+        x: b.x,
+        y: b.y,
+        path: b.path.iter().map(|&i| i as u32).collect(),
+        mcu_path: b.mcu_path.iter().map(|&i| i as u32).collect(),
+        codes: b
+            .codes
+            .into_iter()
+            .map(|c| JpegCodeDto {
+                kind: c.kind,
+                start_bit: c.start_bit as f64,
+                end_bit: c.end_bit as f64,
+                code_bits: c.code_bits,
+                value_bits: c.value_bits,
+                bits: c.bits,
+                stuffed: c.stuffed,
+                run: c.run,
+                k: c.k,
+                value: c.value,
+                dc: c.dc,
+            })
+            .collect(),
+        coefficients: b.coefficients,
+    }
+}
+
 /// The chunks a reading waits on, as a byte read reports chunks not loaded.
 /// Nothing for any other error: the read then answers from what is there.
 fn chunks_of(err: EvalError) -> Vec<f64> {
@@ -4929,6 +5088,35 @@ impl Editor {
         };
         tab.ev.begin_slice();
         let r = tab.children(&p, from as u64, to as u64).map(|v| v.into_iter().map(dto).collect::<Vec<NodeDto>>());
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
+    }
+
+    /// Where the bits of the JPEG scan at `path` went, for the report's map of
+    /// the picture: {status:"ok",node:{..}}, or a null node for a field that
+    /// is not a JPEG scan or a scan that did not decode. Same envelope as
+    /// `template_node`. The blocks come as parallel arrays, in coding order,
+    /// since a photograph has hundreds of thousands of them.
+    pub fn jpeg_scan(&mut self, space: u32, path: &[u32]) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        let r = tab.jpeg_scan(&p).map(|m| m.map(jpeg_scan_dto));
+        reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
+    }
+
+    /// Block `index` of the JPEG scan at `path`, in coding order, with every
+    /// code the decoder read for it and the 64 coefficients in rows:
+    /// {status:"ok",node:{..}}, or a null node. Its `path` and `mcu_path` are
+    /// the tab's, for going to the block in the listing.
+    pub fn jpeg_block(&mut self, space: u32, path: &[u32], index: u32) -> String {
+        let p: Vec<usize> = path.iter().map(|&x| x as usize).collect();
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        let r = tab.jpeg_block(&p, index as usize).map(|b| b.map(jpeg_block_dto));
         reply_with(r, (tab.ev.reached_bits() / 8) as f64, wanted(tab.ev))
     }
 

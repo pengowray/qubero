@@ -2054,6 +2054,97 @@ export type MapStep = {
 };
 
 /**
+ * Where a JPEG scan's bits went, read off its trace in one pass. The blocks
+ * are parallel arrays in coding order, since a photograph has hundreds of
+ * thousands of them. Bit positions count in the space the scan is read in.
+ * See `Editor.jpeg_scan`.
+ */
+export type JpegScan = {
+  readonly run_offset_bits: number;
+  readonly run_bits: number;
+  readonly width: number;
+  readonly height: number;
+  readonly mcus_across: number;
+  readonly mcus_down: number;
+  /** MCUs between restart markers; 0 is none. */
+  readonly restart_interval: number;
+  readonly channels: readonly JpegChannel[];
+  /** The channels the scan carries, by place in `channels`, in coding order. */
+  readonly scan: readonly number[];
+  /** Bits per MCU, in coding order, with an interval's padding and restart
+   *  marker counted in the MCU before them. */
+  readonly mcu_bits: readonly number[];
+  readonly block_channel: readonly number[];
+  readonly block_x: readonly number[];
+  readonly block_y: readonly number[];
+  readonly block_bits: readonly number[];
+  /** Codes per block; 0 for a block past the trace's limit on steps. */
+  readonly block_codes: readonly number[];
+  readonly totals: {
+    readonly dc_code: number;
+    readonly dc_value: number;
+    readonly ac_code: number;
+    readonly ac_value: number;
+    readonly eob: number;
+    readonly zrl: number;
+    readonly padding: number;
+    readonly stuffed: number;
+    readonly markers: number;
+    readonly unnamed: number;
+  };
+  readonly coarse: boolean;
+};
+
+export type JpegChannel = {
+  /** The colour model's letter: Y, Cb, Cr, C, M, K, R, G, B, or
+   *  `component <id>`. */
+  readonly name: string;
+  readonly id: number;
+  readonly h: number;
+  readonly v: number;
+  readonly blocks_across: number;
+  readonly blocks_down: number;
+  readonly quant_id: number;
+  /** The 64 quantization steps in rows, or null when no segment before the
+   *  scan defined the table. */
+  readonly quant: readonly number[] | null;
+};
+
+/** One JPEG block in full. See `Editor.jpeg_block`. */
+export type JpegBlock = {
+  readonly index: number;
+  readonly mcu: number;
+  readonly channel: number;
+  readonly x: number;
+  readonly y: number;
+  /** The block's node and its MCU's, in the listing. */
+  readonly path: readonly number[];
+  readonly mcu_path: readonly number[];
+  readonly codes: readonly JpegCode[];
+  /** The 64 coefficients, in rows. */
+  readonly coefficients: readonly number[];
+};
+
+export type JpegCode = {
+  readonly kind: "dc" | "ac" | "zrl" | "eob" | "opaque";
+  readonly start_bit: number;
+  readonly end_bit: number;
+  readonly code_bits: number;
+  readonly value_bits: number;
+  /** The code and value bits, without a stuffed zero byte inside them. */
+  readonly bits: string;
+  readonly stuffed: boolean;
+  readonly run: number;
+  /** Zigzag position: the coefficient's for an AC, the first zero's for a
+   *  ZRL or an EOB. */
+  readonly k: number;
+  /** The AC coefficient, or the DC difference. */
+  readonly value: number;
+  /** The DC coefficient the difference came to. */
+  readonly dc: number;
+};
+
+/**
  * One Huffman-coded number of a deflate step: which symbol the code stood for,
  * how wide the code was, the bits that followed it outright, and what the two
  * came to.
@@ -2886,6 +2977,19 @@ export class Doc {
    * `path` is a span's own `path` when its `count` is above zero, or a block
    * of a decoded stream's trace.
    */
+  /** Where the bits of the JPEG scan at `path` went: per MCU and per 8×8
+   *  block, and by kind of code. Null for a field that is not a JPEG scan or
+   *  one that did not decode. */
+  jpegScan(path: readonly number[]): TemplateReply<JpegScan | null> {
+    return this.handleReply<JpegScan | null>(this.editor.jpeg_scan(this.space, Uint32Array.from(path)));
+  }
+
+  /** Block `index` of the JPEG scan at `path`, in coding order: every code the
+   *  decoder read for it and the 64 coefficients in rows. */
+  jpegBlock(path: readonly number[], index: number): TemplateReply<JpegBlock | null> {
+    return this.handleReply<JpegBlock | null>(this.editor.jpeg_block(this.space, Uint32Array.from(path), index));
+  }
+
   runCells(path: readonly number[], fromBit: number, toBit: number, max: number): TemplateReply<Cell[]> {
     return this.handleReply<Cell[]>(this.editor.run_cells(this.space, Uint32Array.from(path), fromBit, toBit, max));
   }

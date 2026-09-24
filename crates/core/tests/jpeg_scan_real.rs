@@ -398,6 +398,59 @@ fn the_listing_goes_from_mcus_to_blocks_to_codes() {
     }
 }
 
+/// What the report's figures are drawn from: the costs of every MCU and block
+/// read off the trace in one pass, and one block in full.
+#[test]
+fn a_scans_costs_and_one_block_come_off_the_trace() {
+    let Some(bytes) = read("jpeg/libjpeg-turbo-testorig-baseline.jpg") else {
+        eprintln!("{}", qubero_samples::missing());
+        return;
+    };
+    let d = Document::new(MemSource(bytes.clone()));
+    let mut ev = Evaluator::new(jpeg());
+    let path = scans(&d, &mut ev).remove(0);
+    let run = ev.node(&d, &path).unwrap();
+    let map = ev.jpeg_scan(&d, &path).unwrap().expect("a JPEG scan");
+    assert_eq!((map.mcus_across, map.mcus_down), (15, 10));
+    assert_eq!(map.run_offset_bits, run.offset_bits);
+    assert_eq!(map.run_bits, run.size_bits);
+    assert_eq!(map.mcu_bits.iter().map(|&b| b as u64).sum::<u64>(), run.size_bits, "the MCUs cover the run");
+    assert_eq!(map.blocks.len(), 900);
+    let names: Vec<&str> = map.channels.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Y", "Cb", "Cr"]);
+    // The totals are the reference's, and add up to the run.
+    let t = map.totals;
+    assert_eq!(t.dc_code + t.ac_code + t.eob + t.zrl, 26677);
+    assert_eq!(t.dc_value + t.ac_value, 14413);
+    assert_eq!((t.padding, t.stuffed, t.markers, t.unnamed), (6, 64, 0, 0));
+    assert_eq!(t.dc_code + t.dc_value + t.ac_code + t.ac_value + t.eob + t.zrl + t.padding + t.stuffed + t.markers + t.unnamed, run.size_bits);
+    // IJG quality 75 halves Annex K's first luminance step, 16, to 8, and
+    // the chrominance one, 17, to 9.
+    assert_eq!(map.channels[0].quant.as_ref().map(|q| q[0]), Some(8));
+    assert_eq!(map.channels[1].quant.as_ref().map(|q| q[0]), Some(9));
+
+    // One block in full: its codes' bits end to end are the block's bits,
+    // and its coefficients are the ones in the decoded space.
+    let block = ev.jpeg_block(&d, &path, 102).unwrap().expect("a block");
+    let cost = map.blocks[102];
+    assert_eq!((block.channel, block.x, block.y), (cost.channel, cost.x, cost.y));
+    assert_eq!(block.codes.len(), cost.codes as usize);
+    assert_eq!(block.codes.first().map(|c| c.kind), Some("dc"));
+    let mut at = block.codes[0].start_bit;
+    for c in &block.codes {
+        assert_eq!(c.start_bit, at);
+        assert_eq!(c.bits.len(), (c.code_bits + c.value_bits) as usize, "{c:?}");
+        at = c.end_bit;
+    }
+    assert_eq!((at - block.codes[0].start_bit) as u32, cost.bits);
+    assert_eq!(block.coefficients.len(), 64);
+    assert_eq!(block.coefficients[0], block.codes[0].dc);
+    let node = ev.node(&d, &block.path).unwrap();
+    assert_eq!(node.name, format!("Y block {}, {}", block.x, block.y));
+    assert_eq!(node.offset_bits, block.codes[0].start_bit);
+    assert_eq!(ev.node(&d, &block.mcu_path).unwrap().name, format!("MCU {}, {}", block.mcu % 15, block.mcu / 15));
+}
+
 /// A code that straddles a stuffed zero is as wide as the bits it covers, and
 /// its value leaves the zero out.
 #[test]
