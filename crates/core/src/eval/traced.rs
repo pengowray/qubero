@@ -178,8 +178,11 @@ pub(super) fn unit_name(trace: &Trace, unit: &Unit) -> String {
 /// difference is a Huffman code saying how many bits the difference takes and
 /// then those bits, with nothing between them that a template could name.
 /// `stuffed` is how many of the bytes the decoder read past lie inside the
-/// step, which the width counts and the bits shown leave out.
-pub(super) fn unit_step_ty(step: &Step, stuffed: usize) -> (String, T) {
+/// step, which the width counts and the bits shown leave out. `tail` says the
+/// step is an MCU's own rather than one of its blocks', which is where the
+/// bytes after the last MCU are; inside a block, a step the trace did not name
+/// is that block's codes, once there were too many to name.
+pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, T) {
     let bits = step.in_bits.end - step.in_bits.start;
     let name = symbol_name(step);
     let with = |what: &str| match stuffed {
@@ -198,7 +201,7 @@ pub(super) fn unit_step_ty(step: &Step, stuffed: usize) -> (String, T) {
         None => match step.kind {
             StepKind::Header(StepField::Restart, _) => ("restart marker".to_string(), head_field(step).1),
             // The run after the last MCU holds nothing a decoder reads.
-            StepKind::Opaque => ("bytes after the last MCU".to_string(), symbol_ty(step, BlockKind::Opaque).1),
+            StepKind::Opaque if tail => ("bytes after the last MCU".to_string(), symbol_ty(step, BlockKind::Opaque).1),
             _ => symbol_ty(step, BlockKind::Opaque),
         },
     }

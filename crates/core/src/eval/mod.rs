@@ -2861,7 +2861,7 @@ impl Evaluator {
                     }
                     Some(traced::UnitsChild::Step(k)) => {
                         let step = trace.step(k as usize).expect("in range");
-                        let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()));
+                        let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()), true);
                         place(name, ty, step.in_bits.start)
                     }
                     None => fail("no such field"),
@@ -2874,7 +2874,7 @@ impl Evaluator {
                     return fail("no such code");
                 }
                 let step = trace.step(k).expect("in range");
-                let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()));
+                let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()), false);
                 place(name, ty, step.in_bits.start)
             }
             TracedPart::Block(i) => {

@@ -187,7 +187,15 @@ fn every_baseline_jpeg_inside_another_sample_decodes_to_the_reference_coefficien
 /// 64 MiB a stream may come to, and more codes than a trace names one by one.
 /// The coefficients are still all the reference's, and the trace still tiles
 /// and still accounts for every bit.
+///
+/// Left out of the ordinary run, since a debug build takes a minute and a
+/// half over it:
+///
+/// ```text
+/// cargo test -p qubero-core --test jpeg_scan_real -- --ignored
+/// ```
 #[test]
+#[ignore]
 fn a_four_k_photograph_decodes_whole() {
     const WALLPAPER: &str = "/usr/share/backgrounds/cosmic/webb-inspired-wallpaper-system76.jpg";
     let Ok(bytes) = std::fs::read(WALLPAPER) else {
@@ -207,7 +215,16 @@ fn a_four_k_photograph_decodes_whole() {
     assert_eq!(trace.in_bits(), run.size_bits);
     assert_eq!(trace.units().len(), 388_800);
     assert_eq!(trace.stuffed().len(), 10_820);
-    eprintln!("{WALLPAPER}: {} steps, named one by one: {}", trace.len(), !trace.coarse());
+    assert!(trace.coarse(), "{} steps, and every code still named", trace.len());
+    eprintln!("{WALLPAPER}: {} steps", trace.len());
+    // Past the limit a block is one step, and the listing says its codes
+    // were not named rather than calling them something else.
+    let last = trace.blocks().len() - 1;
+    let block = ev.node(&d, &[path.as_slice(), &[1, last, 0]].concat()).unwrap();
+    assert_eq!(block.child_count, 1);
+    let codes = ev.node(&d, &[path.as_slice(), &[1, last, 0, 0]].concat()).unwrap();
+    assert_eq!(codes.name, "unnamed codes");
+    assert_eq!(codes.size_bits, block.size_bits);
 }
 
 /// Every scan of one file against what the reference says of it.
