@@ -360,6 +360,9 @@ pub fn kind_of(template: &Template, ty: &Ty) -> String {
         // Across the file too, each child from a descriptor of its own that
         // may be anywhere in it.
         Ty::Gather { .. } => "descriptors".to_string(),
+        // Placed by arithmetic rather than one after another, and a picture
+        // rather than a list of records, which is what a legend wants to say.
+        Ty::Raster { .. } => "raster".to_string(),
         Ty::At { .. } => "at".to_string(),
         Ty::Decoded { .. } => "stream".to_string(),
         // A stream too, joined rather than unpacked from one run.
@@ -461,7 +464,7 @@ pub fn value_kind(template: &Template, ty: &Ty) -> &'static str {
         | Ty::At { .. }
         | Ty::Decoded { .. }
         | Ty::Traced { .. } => "composite",
-        Ty::Stitched { .. } => "composite",
+        Ty::Stitched { .. } | Ty::Raster { .. } => "composite",
         // A resolved node has taken a case already; reached only from a
         // declared type, where nothing yet says which shape it will be.
         Ty::Switch { .. } | Ty::Match { .. } | Ty::Schema { .. } => "bytes",

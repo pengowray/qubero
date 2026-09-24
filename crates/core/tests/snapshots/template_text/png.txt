@@ -21,8 +21,458 @@ root PNG {
         keyword: text until 0x00 latin1
         text: text[length - sizeof(keyword)] latin1
       }
+      'IDAT' => IDAT (contents image_data) {
+        image_data: bytes[remaining]
+      }
+      'PLTE' => PLTE (contents entries) {
+        entries: PaletteEntry (unit entry, inline) {
+          red: u8be
+          green: u8be
+          blue: u8be
+        }[remaining / 3]
+      }
+      'tRNS' => switch earlier[type = 'IHDR'].data.color_type {
+        0 => tRNSGrey {
+          grey: u16be
+        }
+        2 => tRNSRgb {
+          red: u16be
+          green: u16be
+          blue: u16be
+        }
+        3 => tRNSPalette (contents alpha) {
+          alpha: u8be[remaining]
+        }
+        _ => bytes[remaining]
+      }
+      'gAMA' => gAMA {
+        gamma: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+      }
+      'cHRM' => cHRM {
+        white_x: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        white_y: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        red_x: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        red_y: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        green_x: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        green_y: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        blue_x: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+        blue_y: Scaled (inline, payload stored) {
+          stored: u32be
+          worth: computed real stored / 100000.0
+        }
+      }
+      'sRGB' => sRGB {
+        rendering_intent: u8be enum RenderingIntent {
+          0 = perceptual, 1 = relative colorimetric, 2 = saturation, 3 = absolute colorimetric
+        }
+      }
+      'iCCP' => iCCP {
+        profile_name: text until 0x00 latin1
+        compression_method: u8be enum CompressionMethod {0 = deflate}
+        profile: ZlibStream {
+          cinfo: u4be
+          cm: u4be enum ZlibMethod {8 = deflate}
+          flevel: u2be enum ZlibLevel {0 = fastest, 1 = fast, 2 = default, 3 = best compression}
+          fdict: u1be
+          fcheck: u5be
+          dictid: switch fdict * (3 < remaining) {1 => u32be, _ => bytes[0]}
+          compressed: sized(remaining - 4) decoded(deflate) DecodedObject (contents object) {
+            object: bytes[remaining]
+          }
+          adler32: u32be  check adler32 over unpacked compressed
+        }
+      }
+      'sBIT' => switch earlier[type = 'IHDR'].data.color_type {
+        0 => sBITGrey {
+          grey: u8be
+        }
+        2 => sBITRgb {
+          red: u8be
+          green: u8be
+          blue: u8be
+        }
+        3 => sBITPalette {
+          red: u8be
+          green: u8be
+          blue: u8be
+        }
+        4 => sBITGreyAlpha {
+          grey: u8be
+          alpha: u8be
+        }
+        6 => sBITRgba {
+          red: u8be
+          green: u8be
+          blue: u8be
+          alpha: u8be
+        }
+        _ => bytes[remaining]
+      }
+      'bKGD' => switch earlier[type = 'IHDR'].data.color_type {
+        0 => bKGDGrey {
+          grey: u16be
+        }
+        2 => bKGDRgb {
+          red: u16be
+          green: u16be
+          blue: u16be
+        }
+        3 => bKGDPalette {
+          palette_index: u8be
+        }
+        4 => bKGDGrey {
+          grey: u16be
+        }
+        6 => bKGDRgb {
+          red: u16be
+          green: u16be
+          blue: u16be
+        }
+        _ => bytes[remaining]
+      }
+      'pHYs' => pHYs {
+        pixels_per_unit_x: u32be
+        pixels_per_unit_y: u32be
+        unit: u8be enum PhysUnit {0 = unknown, 1 = metre}
+      }
+      'tIME' => tIME {
+        year: u16be
+        month: u8be
+        day: u8be
+        hour: u8be
+        minute: u8be
+        second: u8be
+      }
+      'hIST' => hIST (contents frequencies) {
+        frequencies: u16be[remaining / 2]
+      }
+      'sPLT' => sPLT {
+        palette_name: text until 0x00 latin1
+        sample_depth: u8be
+        entries: SuggestedEntry (unit entry, inline) {
+          red: switch sample_depth {16 => u16be, _ => u8be}
+          green: switch sample_depth {16 => u16be, _ => u8be}
+          blue: switch sample_depth {16 => u16be, _ => u8be}
+          alpha: switch sample_depth {16 => u16be, _ => u8be}
+          frequency: u16be
+        }[remaining / (sample_depth == 16 ? 10 : 6)]
+      }
+      'zTXt' => zTXt {
+        keyword: text until 0x00 latin1
+        compression_method: u8be enum CompressionMethod {0 = deflate}
+        text: ZlibStream {
+          cinfo: u4be
+          cm: u4be enum ZlibMethod {8 = deflate}
+          flevel: u2be enum ZlibLevel {0 = fastest, 1 = fast, 2 = default, 3 = best compression}
+          fdict: u1be
+          fcheck: u5be
+          dictid: switch fdict * (3 < remaining) {1 => u32be, _ => bytes[0]}
+          compressed: sized(remaining - 4) decoded(deflate) Text (contents text) {
+            text: text[remaining] latin1
+          }
+          adler32: u32be  check adler32 over unpacked compressed
+        }
+      }
+      'iTXt' => iTXt {
+        keyword: text until 0x00 latin1
+        compression_flag: u8be enum CompressionFlag {0 = uncompressed, 1 = compressed}
+        compression_method: u8be enum CompressionMethod {0 = deflate}
+        language_tag: text until 0x00 ascii
+        translated_keyword: text until 0x00 utf8
+        text: switch compression_flag {
+          1 => ZlibStream {
+            cinfo: u4be
+            cm: u4be enum ZlibMethod {8 = deflate}
+            flevel: u2be enum ZlibLevel {
+              0 = fastest, 1 = fast, 2 = default, 3 = best compression
+            }
+            fdict: u1be
+            fcheck: u5be
+            dictid: switch fdict * (3 < remaining) {1 => u32be, _ => bytes[0]}
+            compressed: sized(remaining - 4) decoded(deflate) Text (contents text) {
+              text: text[remaining] utf8
+            }
+            adler32: u32be  check adler32 over unpacked compressed
+          }
+          _ => text[remaining] utf8
+        }
+      }
+      'acTL' => acTL {
+        num_frames: u32be
+        num_plays: u32be
+      }
+      'fcTL' => fcTL {
+        sequence_number: u32be
+        width: u32be
+        height: u32be
+        x_offset: u32be
+        y_offset: u32be
+        // The frame's delay is delay_num / delay_den seconds, and a delay_den of 0 means 100.
+        delay_num: u16be
+        delay_den: u16be
+        dispose_op: u8be enum DisposeOp {0 = none, 1 = background, 2 = previous}
+        blend_op: u8be enum BlendOp {0 = source, 1 = over}
+      }
+      'fdAT' => fdAT {
+        sequence_number: u32be
+        frame_data: bytes[remaining]
+      }
       _ => bytes[length]
     }
     crc: u32be  check crc32 over sizeof(type) + length bytes at sizeof(length)
+  }
+  image: stitched(from chunks[].data.image_data) ZlibStream {
+    cinfo: u4be
+    cm: u4be enum ZlibMethod {8 = deflate}
+    flevel: u2be enum ZlibLevel {0 = fastest, 1 = fast, 2 = default, 3 = best compression}
+    fdict: u1be
+    fcheck: u5be
+    dictid: switch fdict * (3 < remaining) {1 => u32be, _ => bytes[0]}
+    compressed: sized(remaining - 4) decoded(deflate) Inflated (contents scanlines) {
+      scanlines: sized(remaining) decoded(png scanlines width chunks[type = "IHDR"].data.width
+          height chunks[type = "IHDR"].data.height depth chunks[type = "IHDR"].data.bit_depth
+          colour chunks[type = "IHDR"].data.color_type interlace
+          chunks[type = "IHDR"].data.interlace) Unfiltered (contents pixels) {
+        pixels: switch chunks[type = "IHDR"].data.interlace {
+          1 => raster(chunks[type = "IHDR"].data.width by chunks[type = "IHDR"].data.height,
+              chunks[type = "IHDR"].data.bit_depth *
+              (chunks[type = "IHDR"].data.color_type == 2 ? 3 :
+              (chunks[type = "IHDR"].data.color_type == 4 ? 2 :
+              (chunks[type = "IHDR"].data.color_type == 6 ? 4 : 1))) bits a pixel, adam7) switch
+              chunks[type = "IHDR"].data.color_type {
+            0 => GreyPixel (unit pixel) {
+              grey: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            2 => RgbPixel (unit pixel) {
+              red: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              green: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              blue: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            3 => IndexedPixel (unit pixel) {
+              index: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            4 => GreyAlphaPixel (unit pixel) {
+              grey: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              alpha: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            6 => RgbaPixel (unit pixel) {
+              red: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              green: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              blue: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              alpha: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            _ => bytes[0]
+          }
+          _ => raster(chunks[type = "IHDR"].data.width by chunks[type = "IHDR"].data.height,
+              chunks[type = "IHDR"].data.bit_depth *
+              (chunks[type = "IHDR"].data.color_type == 2 ? 3 :
+              (chunks[type = "IHDR"].data.color_type == 4 ? 2 :
+              (chunks[type = "IHDR"].data.color_type == 6 ? 4 : 1))) bits a pixel, rows) switch
+              chunks[type = "IHDR"].data.color_type {
+            0 => GreyPixel (unit pixel) {
+              grey: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            2 => RgbPixel (unit pixel) {
+              red: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              green: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              blue: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            3 => IndexedPixel (unit pixel) {
+              index: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            4 => GreyAlphaPixel (unit pixel) {
+              grey: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              alpha: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            6 => RgbaPixel (unit pixel) {
+              red: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              green: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              blue: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+              alpha: switch chunks[type = "IHDR"].data.bit_depth {
+                1 => u1be
+                2 => u2be
+                4 => u4be
+                8 => u8be
+                16 => u16be
+                _ => bytes[0]
+              }
+            }
+            _ => bytes[0]
+          }
+        }
+      }
+    }
+    adler32: u32be  check adler32 over unpacked compressed
   }
 }

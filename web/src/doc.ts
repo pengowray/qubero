@@ -2033,7 +2033,8 @@ export type MapStep = {
     | "header"
     | "table"
     | "end-of-block"
-    | "opaque";
+    | "opaque"
+    | "filtered";
   /** Which named field, for a header or a table step. */
   readonly field?: string;
   /** What that field said, or the byte a literal is. */

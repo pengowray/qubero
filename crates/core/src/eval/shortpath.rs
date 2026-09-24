@@ -73,7 +73,7 @@ impl Evaluator {
                     }
                     out = joined(&out, &field.name);
                 }
-                Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
+                Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. } => {
                     match self.member_name(doc, &path[..=k])? {
                         Some(name) => {
                             out = joined(&out, &name);

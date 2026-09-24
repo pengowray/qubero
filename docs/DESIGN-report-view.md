@@ -503,7 +503,9 @@ is not in input order and cannot be a `Trace`. The PNG notes propose
 `Ty::Raster { width, height, pixel, order }`, with the order `Rows` or `Adam7`,
 which reads each pixel at a computed offset the way `Ty::Gather` reads records.
 It gives every pixel a path, which the content figure, the pixel walkthrough,
-and hover all need.
+and hover all need. Built on 2026-09-24 as `Ty::Raster { width, height,
+bits_per_pixel, order, pixel }`: see "A picture's pixels, from the bytes to the
+grid" in DESIGN.md.
 
 ### Known values and parameterized codecs
 
@@ -518,7 +520,10 @@ unfilter, `Codec::PngUnfilter`, takes a stride fixed when the template is built,
 so the `png` template cannot use it: a PNG's stride comes from its header, and
 an interlaced image has a different stride in each pass. The PNG notes propose
 `Packing::PngScanlines { width, height, bits_per_pixel, interlace }`, which
-unfilters pass by pass and writes one trace block per scanline.
+unfilters pass by pass and writes one trace block per scanline. Built on
+2026-09-24 with the header's bit depth and colour type in place of bits per
+pixel, so the packing can refuse a combination the specification does not
+allow.
 
 ## Interaction
 
@@ -577,7 +582,7 @@ are Qubero's. Each is described in the notes file named.
 | `ksy:ttf` | Unicode range bits named from the wrong end (upstream `.ksy`). `glyf` fails on `.max`. No signature, so it is never sniffed. `ksy_bundled.rs` still lists `ttf` as having no sample | `ttf-unknown.notes.md` |
 | `codec/bzip2.rs` | Requires `BZh`, so BusyBox's headerless streams cannot be opened | `elf-busybox-x86_64.notes.md` |
 | `midi` template | Running-status events show `status : computed = Int(0)`, which reads as a value the file holds | `midi-three-tracks.notes.md` |
-| `png` template | IDAT data and gAMA are plain bytes, so none of the chain past the chunks is reachable. The `p8png` and `p64png` templates already show the decoded shape for non-interlaced images | `png-adam7-16bit.notes.md` |
+| `png` template | IDAT data and gAMA are plain bytes, so none of the chain past the chunks is reachable. The `p8png` and `p64png` templates already show the decoded shape for non-interlaced images. Fixed 2026-09-24: the IDAT data joins into a zlib stream, the scanlines unfilter, the pixels are fields, and gAMA and the other ancillary chunks are named | `png-adam7-16bit.notes.md` |
 | `zip` template and `relate.rs` | Central directory offsets are plain numbers. `relations()` shows ZIP64 placeholder arithmetic for an archive with no ZIP64. `origins()` on an entry's data does not name `data_size` as its length | `docx-word16-table.notes.md` |
 | Strings view | Does not look inside decoded spaces, so it finds none of the DOCX document's text, and it reads a name length and an extra length as one number | `docx-word16-table.notes.md` |
 | Sample collection | `sources.tsv` has no row for `jpeg/libjpeg-turbo-testorig-baseline.jpg` (it is IJG libjpeg 6b's `testorig.jpg`) or for the four `pngsuite-*` PNG files | JPEG and PNG notes |

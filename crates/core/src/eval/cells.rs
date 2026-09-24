@@ -156,8 +156,9 @@ impl Evaluator {
         let Some((base, trace)) = self.trace_for(path) else { return Ok(Vec::new()) };
         let Some(view) = super::traced::BlockView::of(trace, block) else { return Ok(Vec::new()) };
         // A stored block codes nothing; its one step is the bytes copied
-        // through, which the block's own entry already says the size of.
-        if view.block.kind == crate::codec::BlockKind::Stored || view.symbols.is_empty() {
+        // through, which the block's own entry already says the size of. A
+        // PNG scanline is the same: one filtered row, and no codes.
+        if matches!(view.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline) || view.symbols.is_empty() {
             return Ok(Vec::new());
         }
         // The trace counts bits from the front of the run and the view counts

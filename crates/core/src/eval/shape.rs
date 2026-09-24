@@ -249,7 +249,10 @@ impl Evaluator {
                 }
             }
             Ty::Stitched { .. } => Placed::Stitched,
-            Ty::Array { .. } | Ty::Repeat { .. } => Placed::Element,
+            // A pixel is at its own index too, the index being where it is in
+            // the picture; the arithmetic from one to the other is the
+            // raster's.
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::Raster { .. } => Placed::Element,
             // A member of a JSON object is placed by the parse, but it is
             // placed after the member before it, which is what the reader is
             // being told.
@@ -333,7 +336,7 @@ impl Evaluator {
             // The whole file included: a form matched all of it, opcodes and
             // operands, and that is what said where it ends.
             Ty::Pickle(..) => Sizing::Encoded,
-            Ty::Array { .. } => Sizing::Count,
+            Ty::Array { .. } | Ty::Raster { .. } => Sizing::Count,
             Ty::Repeat { until: Until::End, .. } => Sizing::Remaining,
             // A run told to stop after the element that says so: the same
             // answer as a terminated string, one element up.

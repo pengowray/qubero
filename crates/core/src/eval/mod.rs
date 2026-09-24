@@ -39,6 +39,7 @@ mod pickleframe;
 mod pickleobjects;
 mod picklenames;
 mod pickleparts;
+mod raster;
 mod picklesaid;
 mod picklesummary;
 mod picklestd;
@@ -546,6 +547,9 @@ struct ListState {
     /// walk is over and the parts become a space. Boxed for the reason
     /// `gather` is.
     stitch: Option<Box<stitch::StitchWalk>>,
+    /// For `Raster`: where its passes and rows are, worked out once from its
+    /// expressions, since every pixel placed asks.
+    raster: Option<std::sync::Arc<crate::codec::scanlines::Geometry>>,
     /// For a run whose room was stretched to take in an element that overran
     /// it: the room it had before each stretch, `(limit, declared_size)`, the
     /// first one being what the template gave it. An edit to an element that
@@ -1132,7 +1136,7 @@ impl Evaluator {
         }
         let list = matches!(
             r.ty.base(),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
         );
         // Only a structure and a pointer to one thing. The rest of what is
         // composite is a list, whose elements are a table rather than a line,
@@ -1265,7 +1269,13 @@ impl Evaluator {
             // to open. `absent` is what says so.
             Ty::When { .. } => (Value::Composite { count: 0 }, 0, false),
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
+            Ty::Array { .. }
+            | Ty::Repeat { .. }
+            | Ty::PointerList { .. }
+            | Ty::Chain { .. }
+            | Ty::Gather { .. }
+            | Ty::At { .. }
+            | Ty::Raster { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -1634,7 +1644,8 @@ impl Evaluator {
             | Ty::Repeat { elem, .. }
             | Ty::PointerList { elem, .. }
             | Ty::Chain { elem, .. }
-            | Ty::Gather { elem, .. } => elem.base(),
+            | Ty::Gather { elem, .. }
+            | Ty::Raster { pixel: elem, .. } => elem.base(),
             _ => return None,
         };
         // Through a name, and through an origin: saying where the addresses
@@ -1775,6 +1786,8 @@ impl Evaluator {
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
+            // A pixel, placed by arithmetic rather than after the one before.
+            Ty::Raster { .. } => return self.place_raster(doc, parent, &pr, idx),
             _ => return fail("not a composite"),
         };
         // What a stream holds is read over the bytes it came to, not over the
@@ -2517,6 +2530,11 @@ impl Evaluator {
     /// listing down with it would be the one refusal that is worse than the
     /// bytes. `Pending` is not one of these and is passed on, as everywhere:
     /// bytes that have not arrived are asked for again.
+    ///
+    /// Out of line, since opening a stream is on the way down through every
+    /// node that asks how many children a stream has, and the numbers worked
+    /// out here would otherwise sit in that frame at every level.
+    #[inline(never)]
     pub(super) fn codec_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<crate::codec::Codec>> {
         let Some(Ty::Decoded { codec, .. }) = self.memo.get(path).map(|r| r.ty.clone()) else { return Ok(None) };
         macro_rules! number {
@@ -2562,6 +2580,10 @@ impl Evaluator {
                     return Ok(None);
                 }
                 Some(crate::codec::Codec::Rar5 { window_bits: 17 + dict, unpacked })
+            }
+            Packing::PngScanlines(h) => {
+                let numbers = [number!(&h.width), number!(&h.height), number!(&h.bit_depth), number!(&h.color_type), number!(&h.interlace)];
+                png_scanlines(numbers)
             }
         })
     }
@@ -2739,6 +2761,14 @@ impl Evaluator {
         self.spaces.buf(space).map(|b| b.as_slice())
     }
 
+    /// What the decoder recorded while unpacking the space numbered `space`,
+    /// in the same numbering as [`Self::space_bytes`]: which bits of the run it
+    /// was unpacked from made which of its bytes. Nothing for a space that was
+    /// never opened, and for one joined from parts, which each have their own.
+    pub fn space_trace(&self, space: u32) -> Option<&crate::codec::Trace> {
+        self.spaces.trace(space)
+    }
+
     /// A space this reading has opened.
     pub fn space(&self, id: SpaceId) -> Option<&Space> {
         self.open.get(id.checked_sub(1)? as usize)?.as_deref()
@@ -2811,6 +2841,7 @@ impl Evaluator {
     /// Where a `Traced` node's child sits, which is where the decoder said it
     /// read it. Nothing is walked and nothing is measured: a step knows its
     /// own bits, so element a million of a symbol run is one lookup.
+    #[inline(never)]
     fn place_traced(
         &mut self,
         parent: &[usize],
@@ -2828,7 +2859,7 @@ impl Evaluator {
             TracedPart::Blocks => {
                 let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
                 let at = block.in_bits.start;
-                place(traced::block_name(block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+                place(traced::block_name(trace, block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
             }
             TracedPart::Block(i) => {
                 let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
@@ -2836,6 +2867,14 @@ impl Evaluator {
                 if idx < head {
                     let step = trace.step(view.head.start as usize + idx).expect("in range");
                     let (name, ty) = traced::head_field(&step);
+                    place(name, ty, step.in_bits.start)
+                } else if idx == head && view.block.kind == crate::codec::BlockKind::Scanline && view.symbols.len() == 1 {
+                    // A scanline's one payload step is its filtered row, and a
+                    // run of one row under a row of its own would be a level
+                    // with nothing to open. So the row is the block's last
+                    // field, beside the filter byte that says how to read it.
+                    let step = trace.step(view.symbols.start as usize).expect("in range");
+                    let (name, ty) = traced::symbol_ty(&step, view.block.kind);
                     place(name, ty, step.in_bits.start)
                 } else if idx == head && !view.symbols.is_empty() {
                     let at = view.symbols_at(trace);
@@ -2979,4 +3018,19 @@ impl Evaluator {
         let r = self.memo[&p].clone();
         self.read(doc, &r, r.offset, size)
     }
+}
+
+/// The codec a PNG's scanlines are unfiltered with, from the five numbers of
+/// its header: width, height, bit depth, colour type and interlace method.
+/// Nothing for a header no decoder would read. Out of line, since
+/// [`Evaluator::codec_at`] is on the way down through every stream.
+#[inline(never)]
+fn png_scanlines([w, h, depth, colour, interlace]: [i128; 5]) -> Option<crate::codec::Codec> {
+    let bits = crate::codec::scanlines::bits_per_pixel(depth, colour)?;
+    let (width, height) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    // Nought is not a size, and 2^31 and over is not a PNG's.
+    if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 || !(0..=1).contains(&interlace) {
+        return None;
+    }
+    Some(crate::codec::Codec::PngScanlines { width, height, bits_per_pixel: bits, interlace: interlace == 1 })
 }

@@ -226,7 +226,7 @@ impl Evaluator {
         loop {
             match self.memo.get(parent).map(|r| &r.ty) {
                 Some(Ty::Struct(s)) => return Ok(s.fields.get(idx).and_then(|f| f.time.clone())),
-                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. }) => {
+                Some(Ty::Array { .. } | Ty::Repeat { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::PointerList { .. } | Ty::Raster { .. }) => {
                     let Some((&up, rest)) = parent.split_last() else { return Ok(None) };
                     (idx, parent) = (up, rest);
                 }

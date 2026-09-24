@@ -36,6 +36,7 @@
 //!              | "chain(" ... ")"                   each element points at the next
 //!              | "gather(" ... ")"                  placed at offsets found by a walk
 //!              | "stitched(" ... ")"                one stream joined from runs a walk finds
+//!              | "raster(" ... ")"                  pixels placed from rows or Adam7 passes
 //! annotation  := "[" expr "]"                       a list of that many elements
 //!              | "enum" NAME "{" {int "=" NAME} "}"
 //!              | "flags" NAME "{" {"bit" int "=" NAME} "}"
@@ -468,6 +469,10 @@ fn wrapper<'a>(head: &str, ty: &'a Ty) -> Option<(String, &'a Ty)> {
             s.push(')');
             with(s, inner)
         }
+        Ty::Raster { width, height, bits_per_pixel, order, pixel } => with(
+            format!("raster({} by {}, {} bits a pixel, {})", expr(width), expr(height), expr(bits_per_pixel), order.as_str()),
+            pixel,
+        ),
         _ => None,
     }
 }
@@ -890,6 +895,14 @@ fn packing(p: &Packing) -> String {
         Packing::Rar5 { dictionary, unpacked } => {
             format!("rar5 dictionary {} unpacked {}", expr(dictionary), expr(unpacked))
         }
+        Packing::PngScanlines(h) => format!(
+            "png scanlines width {} height {} depth {} colour {} interlace {}",
+            expr(&h.width),
+            expr(&h.height),
+            expr(&h.bit_depth),
+            expr(&h.color_type),
+            expr(&h.interlace)
+        ),
     }
 }
 
@@ -905,6 +918,9 @@ fn codec(c: crate::codec::Codec) -> String {
         Codec::Lha { window_bits } => format!("lzhuf window {window_bits}"),
         Codec::Rar5 { window_bits, unpacked } => format!("rar5 window {window_bits} unpacked {unpacked}"),
         Codec::PngUnfilter { stride, bpp } => format!("png unfilter stride {stride} bpp {bpp}"),
+        Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
+            format!("png scanlines {width}x{height} bits {bits_per_pixel}{}", if interlace { " adam7" } else { "" })
+        }
         other => other.as_str().to_string(),
     }
 }
@@ -967,7 +983,7 @@ fn inline(ty: &Ty) -> Option<String> {
             let (head, inner) = wrapper("", ty)?;
             format!("{head}{}", inline(inner)?)
         }
-        Ty::Stitched { .. } => {
+        Ty::Stitched { .. } | Ty::Raster { .. } => {
             let (head, inner) = wrapper("", ty)?;
             format!("{head}{}", inline(inner)?)
         }

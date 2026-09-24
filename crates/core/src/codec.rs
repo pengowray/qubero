@@ -30,6 +30,7 @@ pub mod pixels;
 pub mod pxu;
 pub mod pytext;
 pub mod rar5;
+pub mod scanlines;
 pub mod snappy;
 pub mod xz;
 
@@ -218,6 +219,17 @@ pub enum Codec {
     /// The same text written as a protocol 0 line, so `raw-unicode-escape`'s
     /// escaping comes off before the characters do.
     EscapedLatin1Text,
+    /// Not compression: a whole PNG image's scanlines unfiltered, with the
+    /// row lengths worked out from the header rather than fixed in the
+    /// template. What [`Codec::PngUnfilter`] cannot be for an ordinary PNG,
+    /// whose rows are as long as its width, depth and colour type make them,
+    /// and for an interlaced one, which is seven images of different widths
+    /// one after the other. See [`crate::codec::scanlines`].
+    ///
+    /// `bits_per_pixel` is the depth times the samples a pixel has. What comes
+    /// out is every pass's unfiltered rows in the order they were written, so
+    /// an interlaced image comes out in pass order and not in picture order.
+    PngScanlines { width: u32, height: u32, bits_per_pixel: u8, interlace: bool },
 }
 
 impl Codec {
@@ -253,6 +265,7 @@ impl Codec {
             Codec::CdfAhuff => "cdf adaptive huffman",
             Codec::Latin1Text => "latin-1 text",
             Codec::EscapedLatin1Text => "latin-1 text, escaped",
+            Codec::PngScanlines { .. } => "png scanlines",
         }
     }
 }
@@ -381,6 +394,16 @@ pub enum StepField {
     /// LZ4 frame: the xxHash-32 after the end mark, of everything the frame
     /// came to. Its value is the checksum as written.
     ContentChecksum,
+    /// PNG: which of Adam7's seven passes a scanline belongs to, 1 to 7. A
+    /// step of no width: the file writes it nowhere, and it is where the row
+    /// falls in the stream that says it, so the step says what the decoder
+    /// worked out without claiming the run holds it, as
+    /// [`StepField::LzmaProps`] does for a 7z coder's settings.
+    Pass,
+    /// PNG: which row of its pass a scanline is, from 0, and of no width for
+    /// the same reason. In an image that is not interlaced it is the row of
+    /// the picture.
+    Row,
 }
 
 impl StepField {
@@ -414,6 +437,8 @@ impl StepField {
             StepField::FrequencyTable => "frequency_table",
             StepField::BlockChecksum => "block_checksum",
             StepField::ContentChecksum => "content_checksum",
+            StepField::Pass => "pass",
+            StepField::Row => "row",
         }
     }
 }
@@ -461,6 +486,10 @@ pub enum StepKind {
     /// the bytes that pixel completed, which is one for a cart's pixels and
     /// one or two where a pixel carries eleven bits.
     Pixel,
+    /// A row of bytes each written as its difference from a guess made from
+    /// the bytes beside and above it: a PNG scanline after its filter byte.
+    /// As many bytes out as in, and none of them is the byte it stands for.
+    Filtered,
 }
 
 impl StepKind {
@@ -476,6 +505,7 @@ impl StepKind {
             StepKind::Block => "block",
             StepKind::Opaque => "opaque",
             StepKind::Pixel => "pixel",
+            StepKind::Filtered => "filtered",
         }
     }
 }
@@ -530,6 +560,9 @@ pub enum BlockKind {
     Pixels,
     /// A block whose insides this round does not read: a zstd or xz block.
     Opaque,
+    /// One PNG scanline: which pass and row it is, its filter byte, and the
+    /// filtered row. See [`crate::codec::scanlines`].
+    Scanline,
 }
 
 impl BlockKind {
@@ -541,6 +574,7 @@ impl BlockKind {
             BlockKind::Sequences => "sequences",
             BlockKind::Pixels => "pixels",
             BlockKind::Opaque => "opaque",
+            BlockKind::Scanline => "scanline",
         }
     }
 }
@@ -950,6 +984,7 @@ const TAG_END: u8 = 9;
 const TAG_BLOCK: u8 = 10;
 const TAG_OPAQUE: u8 = 11;
 const TAG_PIXEL: u8 = 12;
+const TAG_FILTERED: u8 = 13;
 
 fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
     let (tag, a, b) = match kind {
@@ -967,6 +1002,7 @@ fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
         StepKind::Block => (TAG_BLOCK, 0, 0),
         StepKind::Opaque => (TAG_OPAQUE, 0, 0),
         StepKind::Pixel => (TAG_PIXEL, 0, 0),
+        StepKind::Filtered => (TAG_FILTERED, 0, 0),
     };
     RawStep { in_start: in_start as u32, out_start: out_start as u32, a, b, tag }
 }
@@ -989,6 +1025,7 @@ fn unpack(raw: RawStep) -> StepKind {
         TAG_END => StepKind::EndOfBlock,
         TAG_BLOCK => StepKind::Block,
         TAG_PIXEL => StepKind::Pixel,
+        TAG_FILTERED => StepKind::Filtered,
         _ => StepKind::Opaque,
     }
 }
@@ -996,7 +1033,7 @@ fn unpack(raw: RawStep) -> StepKind {
 /// The header fields in the order [`StepField`] declares them, so a packed
 /// step can be read back. Kept beside the enum on purpose: adding a field
 /// without adding it here is caught by the test below.
-const FIELDS: [StepField; 27] = [
+const FIELDS: [StepField; 29] = [
     StepField::Bfinal,
     StepField::Btype,
     StepField::Hlit,
@@ -1024,6 +1061,8 @@ const FIELDS: [StepField; 27] = [
     StepField::FrequencyTable,
     StepField::BlockChecksum,
     StepField::ContentChecksum,
+    StepField::Pass,
+    StepField::Row,
 ];
 
 /// Open a compressed run and say what the decoder did to it.
@@ -1074,6 +1113,10 @@ pub fn decode_traced(codec: Codec, data: &[u8]) -> Result<(Vec<u8>, Trace), Refu
         Codec::CdfAhuff => cdfhuff::adaptive(data)?,
         Codec::Latin1Text => pytext::latin1_text(data)?,
         Codec::EscapedLatin1Text => pytext::escaped_latin1_text(data)?,
+        Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
+            let shape = scanlines::Geometry::new(width as u64, height as u64, bits_per_pixel as u64, interlace);
+            scanlines::unfilter_image(data, &shape.ok_or(Refusal::Settings)?)?
+        }
     };
     if out.len() > CAP_BYTES {
         return Err(Refusal::TooLarge);
@@ -1136,6 +1179,7 @@ pub fn decode(codec: Codec, data: &[u8]) -> Result<Vec<u8>, Refusal> {
         | Codec::CdfAhuff
         | Codec::Latin1Text
         | Codec::EscapedLatin1Text
+        | Codec::PngScanlines { .. }
         | Codec::FastLz => {
             decode_traced(codec, data)?.0
         }
