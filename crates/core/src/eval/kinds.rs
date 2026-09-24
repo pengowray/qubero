@@ -45,6 +45,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::size::same_shape;
+use super::watch::{Closing, Watch};
 use super::*;
 
 /// One (kind, type) pair and what the file spends on it.
@@ -156,6 +157,9 @@ struct Frame {
     /// so what they leave over is the region less what they came to. None for
     /// every other node.
     tiled: Option<u64>,
+    /// Whether this run has been counted to its end after an element would
+    /// not read. See [`Evaluator::stretched`].
+    counted: bool,
 }
 
 /// What opening a composite turned out to say about it, before the walk has
@@ -195,6 +199,7 @@ impl Opening {
             guarded: self.guarded,
             uniform: self.uniform,
             tiled: region(r).then_some(0),
+            counted: false,
         }
     }
 }
@@ -384,14 +389,15 @@ impl Evaluator {
     /// the next go: a frame does not step past a child until the child is
     /// fully accounted for, so nothing is counted twice by resuming.
     pub fn kind_totals_step<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk) -> R<KindTotals> {
-        match self.kind_totals_run(doc, walk) {
+        match self.kind_totals_run(doc, walk, &mut ()) {
             Ok(()) | Err(EvalError::Busy { .. }) => Ok(walk.totals()),
             Err(e) => Err(e),
         }
     }
 
-    /// The walk itself, one child of one frame per turn.
-    fn kind_totals_run<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk) -> R<()> {
+    /// The walk itself, one child of one frame per turn, with `watch` told
+    /// what it counts. See [`super::watch`].
+    pub(super) fn kind_totals_run<S: Source, W: Watch<S>>(&mut self, doc: &Document<S>, walk: &mut KindWalk, watch: &mut W) -> R<()> {
         if walk.done {
             return Ok(());
         }
@@ -401,7 +407,7 @@ impl Evaluator {
             // and it can run out of the allowance. Marked started too early,
             // the next go would find an empty stack and call a walk that had
             // done nothing finished.
-            self.open_root(doc, walk)?;
+            self.open_root(doc, walk, watch)?;
             walk.started = true;
         }
         loop {
@@ -416,18 +422,20 @@ impl Evaluator {
             let ends = !in_order && f.taking >= f.deferred.len();
             let at = f.cursor;
             if ends {
-                self.close_frame(walk);
+                let f = walk.stack.last().expect("a frame is open");
+                watch.closing(self, doc, &closing_of(f))?;
+                self.close_frame(walk, watch);
                 continue;
             }
             // One element of the allowance per child, which is what gives the
             // page a turn part-way through a long run rather than freezing it.
             self.spend(at)?;
-            self.one_child(doc, walk, in_order)?;
+            self.one_child(doc, walk, in_order, watch)?;
         }
     }
 
     /// Place the root, and open a frame over it when it holds anything.
-    fn open_root<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk) -> R<()> {
+    fn open_root<S: Source, W: Watch<S>>(&mut self, doc: &Document<S>, walk: &mut KindWalk, watch: &mut W) -> R<()> {
         let root = walk.root.clone();
         self.resolve(doc, &root)?;
         let size = self.size_of(doc, &root)?;
@@ -436,21 +444,26 @@ impl Evaluator {
         if !descends(&r.ty) {
             // A template that is one field, with the rest of the file left
             // over. Answered here rather than given a case in the loop below.
+            watch.ready(self, doc, &root, &r)?;
             let kind = super::value_kind(&self.template, &r.ty);
             walk.add(kind, r.ty.display_name(), size, 1);
+            watch.leaf(self, &root, &r, size, 1);
             walk.gap(walk.file_bits.saturating_sub(r.offset + size));
+            watch.gap(&root, r.offset + size, walk.file_bits.max(r.offset + size), 1);
             walk.reach(walk.file_bits);
             walk.done = true;
             return Ok(());
         }
         let opening = self.opening(doc, &root, &r)?;
+        watch.ready(self, doc, &root, &r)?;
         walk.stack.push(opening.frame(&r, 1, walk.file_bits, (0, 0)));
+        watch.open(self, &root, &r, 1);
         Ok(())
     }
 
     /// Account for the next child of the frame on top, and open a frame over
     /// it when it holds anything.
-    fn one_child<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk, in_order: bool) -> R<()> {
+    fn one_child<S: Source, W: Watch<S>>(&mut self, doc: &Document<S>, walk: &mut KindWalk, in_order: bool, watch: &mut W) -> R<()> {
         let top = walk.stack.len() - 1;
         let (path, idx, scale, sequential) = {
             let f = &walk.stack[top];
@@ -473,7 +486,22 @@ impl Evaluator {
             // reads here as a gap, which is what the annotation column says
             // about the same bytes. Fields it had put aside are still reached:
             // those are placed by an offset and do not depend on this one.
-            Err(_) => {
+            Err(e) => {
+                // A run whose room a length gave may be stretched to take in
+                // an element that overran it, which is what a bat recorder's
+                // GUANO chunk past the RIFF size needs (see `stretch_to` in
+                // `walk.rs`). Counting the run is what stretches it, and the
+                // listing counts every run it shows; this walk does not, so it
+                // counts one now, once, and tries the element again.
+                if self.stretched(doc, walk, top)? {
+                    return Ok(());
+                }
+                let why = match &e {
+                    EvalError::Failed(why) => why.as_str(),
+                    _ => "",
+                };
+                let (parent, at) = (walk.stack[top].path.clone(), walk.stack[top].cursor);
+                watch.failed(self, doc, &parent, idx, at, why)?;
                 walk.stack[top].next = walk.stack[top].count;
                 return Ok(());
             }
@@ -506,6 +534,7 @@ impl Evaluator {
         // twice, and a total that counts one stretch twice can say more of the
         // file is text than the file is long. See `Field::aside`.
         if self.aside(&path) {
+            watch.passed_over(self, doc, &path, &r)?;
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());
@@ -514,6 +543,7 @@ impl Evaluator {
         // described. See `already`.
         let already = walk.stack[top].already;
         if already.1 > already.0 && r.offset >= already.0 && r.offset + size <= already.1 {
+            watch.passed_over(self, doc, &path, &r)?;
             self.note_born(walk, top, &path);
             self.step_past(walk, top, in_order);
             return Ok(());
@@ -525,6 +555,7 @@ impl Evaluator {
         // next go would skip that child and its bits would be in none of the
         // answers.
         let opening = if descends(&r.ty) { Some(self.opening(doc, &path, &r)?) } else { None };
+        watch.ready(self, doc, &path, &r)?;
         // The same thing reached again through another address. After the
         // last question that can be interrupted and before anything is written
         // down, so a go that stops short never finds its own child already
@@ -545,6 +576,7 @@ impl Evaluator {
             let cursor = walk.stack[top].cursor;
             if r.offset > cursor {
                 walk.gap((r.offset - cursor).saturating_mul(scale));
+                watch.gap(&walk.stack[top].path, cursor, r.offset, scale);
             }
             let now = cursor.max(r.offset + size);
             walk.stack[top].cursor = now;
@@ -595,6 +627,7 @@ impl Evaluator {
         let Some(opening) = opening else {
             let kind = super::value_kind(&self.template, &r.ty);
             walk.add(kind, r.ty.display_name(), size.saturating_mul(scale), scale);
+            watch.leaf(self, &path, &r, size.saturating_mul(scale), scale);
             return Ok(());
         };
         // What the run that placed this has already covered, for judging where
@@ -603,7 +636,42 @@ impl Evaluator {
         // second view rather than more bytes.
         let already = if in_order { (0, 0) } else { (walk.stack[top].offset, walk.stack[top].cursor) };
         walk.stack.push(opening.frame(&r, scale, r.offset + size, already));
+        watch.open(self, &path, &r, scale);
         Ok(())
+    }
+
+    /// Whether counting the run on top made room for the element that would
+    /// not read, and if it did, the frames around it moved out to the run's
+    /// new end. Only a run whose length only walking settles, since a run of
+    /// a known count is never stretched; and only once per run.
+    fn stretched<S: Source>(&mut self, doc: &Document<S>, walk: &mut KindWalk, top: usize) -> R<bool> {
+        let f = &walk.stack[top];
+        if f.count != u64::MAX || f.counted {
+            return Ok(false);
+        }
+        let path = f.path.clone();
+        let before = self.memo.get(&path).map(|r| r.limit);
+        match self.child_count(doc, &path) {
+            Err(e) if e.interrupted() => return Err(e),
+            _ => {}
+        }
+        walk.stack[top].counted = true;
+        let Some(r) = self.memo.get(&path) else { return Ok(false) };
+        let after = r.limit;
+        if before.is_none_or(|b| after <= b) || self.list(&path).stretched.is_empty() {
+            return Ok(false);
+        }
+        // The run ends further on, and so does everything it is in. A frame
+        // laid out in order had already moved its cursor past the run's old
+        // end, and would call the stretch a gap as well.
+        for (k, f) in walk.stack.iter_mut().enumerate() {
+            f.end = f.end.max(after);
+            if k < top && f.sequential {
+                f.cursor = f.cursor.max(after);
+            }
+        }
+        walk.reach(after);
+        Ok(true)
     }
 
     /// Step the frame past the child just dealt with, whichever queue it came
@@ -661,8 +729,9 @@ impl Evaluator {
 
     /// Close the frame on top: account for what its children left over, and
     /// give the children back.
-    fn close_frame(&mut self, walk: &mut KindWalk) {
+    fn close_frame<S: Source, W: Watch<S>>(&mut self, walk: &mut KindWalk, watch: &mut W) {
         let f = walk.stack.pop().expect("called with a frame open");
+        watch.close(self, &closing_of(&f));
         // A node whose children are wherever an offset put them tiles nothing
         // and so leaves nothing over. The stretch it was declared across is
         // the enclosing run's to account for; calling it a gap here would
@@ -745,6 +814,26 @@ impl Evaluator {
             }
         }
         Ok(super::listing::plain(settled).then_some(stride))
+    }
+}
+
+/// What a frame about to close left over, for whoever is following the walk.
+/// Worked out the way `close_frame` works it out.
+fn closing_of(f: &Frame) -> Closing<'_> {
+    let (leftover, stretch) = match f.tiled {
+        Some(tiled) => (f.end.saturating_sub(f.offset).saturating_sub(tiled), false),
+        None if f.sequential => (f.end.saturating_sub(f.cursor), true),
+        None => (0, false),
+    };
+    Closing {
+        path: &f.path,
+        offset: f.offset,
+        end: f.end,
+        cursor: f.cursor,
+        leftover,
+        stretch,
+        framed: f.framed,
+        scale: f.scale,
     }
 }
 

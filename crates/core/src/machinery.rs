@@ -434,10 +434,14 @@ mod tests {
         let owner = |name: &str| {
             got.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no field {name}")).1.clone()
         };
-        // The header's page size settles every page below it. That makes the
+        // The page size in bytes settles every page below it. That makes the
         // pages its owner; whether it is folded is the view's business, since
         // the pages are not in the same part of the listing.
-        assert_eq!(owner("page_size"), Some("page1".to_string()));
+        assert_eq!(owner("page_bytes"), Some("page1".to_string()));
+        // The field as written is read only by the one working out its size
+        // in bytes, and a value worked out from a field does not make that
+        // field machinery. It stays a row of the header.
+        assert_eq!(owner("page_size"), None);
         // Read by nothing: the file's own identity and its counters.
         assert_eq!(owner("magic"), None);
         assert_eq!(owner("change_counter"), None);

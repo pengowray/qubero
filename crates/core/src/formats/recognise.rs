@@ -489,12 +489,15 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", i
 /// The same for bundled Kaitai formats that have no magic at offset 0. By the
 /// rule in `docs/HANDOVER-kaitai.md` the bytes alone never offer one of these,
 /// and that still holds: here the file's name has to say it first, and the
-/// bytes then have to agree with the name on something the header can check
-/// against itself or against the file's length.
+/// bytes then have to agree with the name: a header that checks out against
+/// itself or against the file's length, or a file that parses whole.
 const KAITAI_BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("bson", "ksy:bson", is_bson),
     ("icc", "ksy:icc_4", is_icc_4),
     ("icm", "ksy:icc_4", is_icc_4),
+    // The `.ksy` names no extension. This is the one the MessagePack site
+    // and most tools write.
+    ("msgpack", "ksy:msgpack", is_msgpack),
     ("ttf", "ksy:ttf", is_ttf),
 ];
 
@@ -573,6 +576,67 @@ fn is_ttf(head: &[u8], len: u64) -> bool {
         let length = u32::from_be_bytes(entry[12..16].try_into().expect("four bytes")) as u64;
         entry[..4].iter().all(|b| (0x20..0x7f).contains(b)) && offset + length <= len
     })
+}
+
+/// A MessagePack file, which has no magic: what recognises one is that it
+/// parses as a single map or array. Every byte in the window has to be a
+/// type MessagePack defines, and a file the window holds whole has to end
+/// where that value ends, with nothing after it. The count of values still to
+/// read can never pass the bytes left, since every value takes at least one.
+fn is_msgpack(head: &[u8], len: u64) -> bool {
+    if !matches!(head.first(), Some(0x80..=0x9f | 0xdc..=0xdf)) {
+        return false;
+    }
+    let whole = head.len() as u64 == len;
+    let number = |at: u64, width: usize| -> Option<u64> {
+        let bytes = head.get(at as usize..at as usize + width)?;
+        Some(bytes.iter().fold(0, |n, b| n << 8 | *b as u64))
+    };
+    let (mut at, mut pending) = (0u64, 1u64);
+    while pending > 0 {
+        // A value that runs past the window is no evidence either way.
+        let Some(&kind) = head.get(at as usize).filter(|_| at < head.len() as u64) else { return !whole };
+        pending -= 1;
+        // The bytes after the type byte, and how many values follow inside.
+        let (skip, inner) = match kind {
+            0x00..=0x7f | 0xc0 | 0xc2 | 0xc3 | 0xe0..=0xff => (0, 0),
+            0x80..=0x8f => (0, 2 * (kind & 0x0f) as u64),
+            0x90..=0x9f => (0, (kind & 0x0f) as u64),
+            0xa0..=0xbf => ((kind & 0x1f) as u64, 0),
+            0xc4..=0xc6 | 0xd9..=0xdb => {
+                let width = match kind { 0xc4 | 0xd9 => 1, 0xc5 | 0xda => 2, _ => 4 };
+                let Some(n) = number(at + 1, width) else { return !whole };
+                (width as u64 + n, 0)
+            }
+            0xc7..=0xc9 => {
+                let width = [1, 2, 4][(kind - 0xc7) as usize];
+                let Some(n) = number(at + 1, width) else { return !whole };
+                (width as u64 + 1 + n, 0)
+            }
+            0xca | 0xcb => ([4, 8][(kind - 0xca) as usize], 0),
+            0xcc..=0xcf => (1 << (kind - 0xcc), 0),
+            0xd0..=0xd3 => (1 << (kind - 0xd0), 0),
+            0xd4..=0xd8 => (1 + (1 << (kind - 0xd4)), 0),
+            0xdc | 0xdd => {
+                let width = if kind == 0xdc { 2 } else { 4 };
+                let Some(n) = number(at + 1, width) else { return !whole };
+                (width as u64, n)
+            }
+            0xde | 0xdf => {
+                let width = if kind == 0xde { 2 } else { 4 };
+                let Some(n) = number(at + 1, width) else { return !whole };
+                (width as u64, 2 * n)
+            }
+            // 0xc1 is the one byte MessagePack never writes.
+            _ => return false,
+        };
+        at += 1 + skip;
+        pending += inner;
+        if at > len || pending > len - at {
+            return false;
+        }
+    }
+    !whole || at == len
 }
 
 /// A Melco embroidery design, which is a stream of steps and nothing else: see
@@ -2374,6 +2438,22 @@ mod tests {
         assert_eq!(sniff_named(&ttf, 82, "face.ttf"), Some("ksy:ttf"));
         // A table that runs past the end of the file.
         assert_eq!(sniff_named(&ttf[..81], 81, "face.ttf"), None);
+
+        // `{"a": [1, "b"], "c": nil}`: a map of two, one value an array of two.
+        let msgpack = b"\x82\xa1a\x92\x01\xa1b\xa1c\xc0";
+        assert_eq!(sniff_named(msgpack, msgpack.len() as u64, "obs.msgpack"), Some("ksy:msgpack"));
+        // A byte left over, a value cut short, and the byte nothing writes.
+        assert_eq!(sniff_named(b"\x81\xa1a\x01\x00", 5, "obs.msgpack"), None);
+        assert_eq!(sniff_named(b"\x81\xa1a\xa3xy", 6, "obs.msgpack"), None);
+        assert_eq!(sniff_named(b"\x81\xa1a\xc1", 4, "obs.msgpack"), None);
+        // A number on its own parses, and is too little to go on.
+        assert_eq!(sniff_named(b"\x2a", 1, "obs.msgpack"), None);
+        // A file longer than the window has to parse as far as it goes.
+        let mut long = b"\xdc\xff\xff".to_vec();
+        long.resize(0x9000, 0x07);
+        assert_eq!(sniff_named(&long, 0x9000 * 2, "obs.msgpack"), Some("ksy:msgpack"));
+        long[100] = 0xc1;
+        assert_eq!(sniff_named(&long, 0x9000 * 2, "obs.msgpack"), None);
 
         // Every name these give has a template behind it.
         for (_, name, _) in KAITAI_BY_EXTENSION.iter().chain(BY_EXTENSION) {

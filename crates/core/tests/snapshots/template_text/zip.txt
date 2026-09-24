@@ -153,6 +153,51 @@ root ZIP {
           }
         }
         comment: text[comment_length] encoding unknown
+        local_header: at(local_header_offset from file) LocalFileHeader (named by name) {
+          signature: magic 50 4B 03 04
+          version_needed: u16le
+          flags: u16le flags GeneralPurposeFlags {
+            bit 0 = encrypted, bit 3 = data descriptor follows, bit 6 = strong encryption,
+            bit 11 = UTF-8 names, bit 13 = directory encryption
+          }
+          compression: u16le enum CompressionMethod {
+            0 = stored, 1 = shrunk, 6 = imploded, 8 = deflate, 9 = deflate64, 12 = bzip2,
+            14 = lzma, 93 = zstandard, 95 = xz, 98 = ppmd, 99 = aes
+          }
+          modified_time: u16le
+          modified_date: u16le
+          crc32: u32le
+          compressed_size: u32le
+          uncompressed_size: u32le
+          name_length: u16le
+          extra_length: u16le
+          name: text[name_length] encoding unknown
+          extra: sized(extra_length) repeat(until end) ExtraField (named by id, contents data) {
+            id: u16le enum ExtraFieldId {
+              0x01 = ZIP64 extended info, 0x07 = AV info, 0x08 = language, 0x09 = OS/2,
+              0x0a = NTFS times, 0x0c = OpenVMS, 0x0d = UNIX,
+              0x0e = stream and fork descriptor, 0x0f = patch descriptor,
+              0x14 = PKCS#7 certificates, 0x15 = file signature, 0x16 = directory signature,
+              0x17 = strong encryption, 0x19 = certificate list, 0x65 = IBM attributes,
+              0x66 = IBM compressed attributes, 0x4690 = POSZIP, 0x5455 = extended timestamp,
+              0x5855 = Info-ZIP UNIX, 0x6375 = Unicode comment, 0x7075 = Unicode name,
+              0x7855 = Info-ZIP UNIX 2, 0x7875 = Info-ZIP UNIX 3, 0x9901 = AES encryption,
+              0xa11e = alignment padding, 0xa220 = growth hint
+            }
+            size: u16le
+            data: sized(size) switch id {
+              1 => switch 15 < remaining {
+                1 => Zip64Sizes {
+                  uncompressed_size: u64le
+                  compressed_size: u64le
+                  rest: bytes[remaining]
+                }
+                _ => bytes[remaining]
+              }
+              _ => bytes[remaining]
+            }
+          }
+        }  aside
       }
       0x06054b50 => EndOfCentralDirectory {
         disk_number: u16le

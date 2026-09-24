@@ -114,6 +114,9 @@ const WINDOW = 256;
  *  asking costs one read. */
 const SAMPLED = 4;
 
+/** The most fields one row of a guessed table is read as. */
+const ROW_FIELDS_MAX = 4096;
+
 // ----- the pure half: naming, arithmetic, and the shape of a record -----
 
 /** Which elements make row `i` when `columns` of them do. Half-open, and
@@ -432,6 +435,11 @@ class Elements {
 /** The children of one node, all of them, or null while they are being read. */
 function childrenOf(doc: Doc, node: TemplateNode): readonly TemplateNode[] | null {
   if (node.child_count === 0) return [];
+  // A node with more children than a row has cells is not a record: a GGUF
+  // file's `data` holds tensors of eight million weights each, and asking the
+  // core for all of one's children at once ran it out of memory, which took
+  // the whole document down with it.
+  if (node.child_count > ROW_FIELDS_MAX) return null;
   const reply = doc.templateChildren(node.path, 0, node.child_count);
   return reply.status === "ok" ? reply.node : null;
 }

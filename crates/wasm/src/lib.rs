@@ -4,7 +4,7 @@
 //! to avoid BigInt friction on the JS side.
 
 use qubero_core::codec::{inflate, Codec, Step as MapStep, StepKind};
-use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, SpaceId, Tab, TimeNote, NO_PARENT};
+use qubero_core::eval::{leap_seconds, CellAt, Census, CensusState, CensusWalk, Diagram, Explain, Graph, KindWalk, Moment, Origin, ReportWalk, SpaceId, Tab, TimeNote, NO_PARENT};
 use qubero_core::template::Zone;
 use qubero_core::hexdump;
 use qubero_core::hexpat::Includes as _;
@@ -90,6 +90,10 @@ struct Sheet {
     /// boxes, run a step at a time and thrown away with the walk above: its
     /// paths are through bytes and a template that may have changed.
     census: Option<CensusWalk>,
+    /// The report view's walk: the file's format profile, its byte ledger,
+    /// its extent audit and its directories, run a step at a time and thrown
+    /// away with the two walks above, for the same reason.
+    report: Option<ReportWalk>,
     /// What the last `.ksy` conversion had to say, as the JSON the panel
     /// shows. Empty for a template that did not come from a `.ksy`.
     ksy_report: String,
@@ -168,6 +172,7 @@ impl Sheet {
             focus: None,
             kinds: None,
             census: None,
+            report: None,
             ksy_report: String::new(),
             hexpat_report: String::new(),
         }
@@ -392,6 +397,202 @@ struct KindTotalsDto {
     /// Bits inside the reached region that no field covers.
     unmapped_bits: f64,
     totals: Vec<KindTotalDto>,
+}
+
+/// What a format is, in a sentence or three for a reader who has never met it.
+/// See `qubero_core::formats::about`.
+#[derive(Serialize)]
+struct AboutDto {
+    /// The format's plain name, as the text uses it.
+    name: &'static str,
+    /// The English Wikipedia article's title, with any `#section`. Null where
+    /// no article covers the format.
+    wikipedia: Option<&'static str>,
+    /// What the format stores and how. Plain text.
+    text: &'static str,
+}
+
+/// How a format writes its values and finds its parts: the template's, or the
+/// file's so far. See `qubero_core::eval::profile` for every key.
+#[derive(Serialize)]
+struct ProfileDto {
+    /// True once the whole file has been counted. Always true for a template.
+    done: bool,
+    rows: Vec<ProfileRowDto>,
+    choices: Vec<ChoiceDto>,
+    facts: ProfileFactsDto,
+}
+
+#[derive(Serialize)]
+struct ProfileRowDto {
+    /// "number" | "text" | "varint" | "bit-field" | "enum" | "flags" |
+    /// "magic" | "computed" | "opaque" | "padding" | "checksum" | "codec" |
+    /// "placement" | "sizing"
+    category: &'static str,
+    kind: String,
+    /// Bits wide for a number, 0 where the file sets it; the alignment in
+    /// bytes for padding.
+    width: f64,
+    /// "little" | "big" | "none" for a number, "" for anything else.
+    order: &'static str,
+    detail: String,
+    fields: f64,
+    /// Always 0 for a template.
+    bits: f64,
+    /// For a codec: how many of its streams were opened, and what they came to.
+    unpacked_fields: f64,
+    unpacked_bits: f64,
+}
+
+#[derive(Serialize)]
+struct ChoiceDto {
+    /// The diagram box's key for the switch.
+    key: String,
+    name: String,
+    /// How many shapes it can take, the default included.
+    cases: f64,
+    /// How many different ones the file took, and in how many fields. 0 for a
+    /// template.
+    taken: f64,
+    fields: f64,
+}
+
+#[derive(Serialize)]
+struct ProfileFactsDto {
+    from_end: f64,
+    placed: f64,
+    forward: f64,
+    backward: f64,
+    lengths_before: f64,
+    lengths_after: f64,
+    /// Null for a template that places something by an offset, where it
+    /// depends on the file.
+    every_field_follows: Option<bool>,
+}
+
+/// Where every bit of the file goes, grouped by part, by the variant of the
+/// nearest list element, and by role. See `qubero_core::eval::ledger`.
+#[derive(Serialize)]
+struct LedgerDto {
+    /// True once every bit is in a row and every gap has been read.
+    done: bool,
+    /// How far the walk has reached. Past it, nothing is in any row yet.
+    reached_bits: f64,
+    file_bits: f64,
+    counted_bits: f64,
+    /// Largest first.
+    rows: Vec<LedgerRowDto>,
+}
+
+#[derive(Serialize)]
+struct LedgerRowDto {
+    part: Vec<usize>,
+    part_name: String,
+    /// Empty where no list element is above these bits.
+    group: String,
+    /// "key" | "case" | "name" | "type" | "none" | "other"
+    group_from: &'static str,
+    /// "content" | "machinery" | "padding" | "framing" | "gap"
+    role: &'static str,
+    bits: f64,
+    count: f64,
+    /// For a gap or padding: bits in zero bytes, and bits not read. The rest
+    /// hold something.
+    zero_bits: f64,
+    unscanned_bits: f64,
+    first_path: Vec<usize>,
+    first_offset_bits: f64,
+    /// For padding, the alignment in bytes.
+    align: f64,
+}
+
+/// Every length checked against the part it sizes. See
+/// `qubero_core::eval::extent`.
+#[derive(Serialize)]
+struct ExtentAuditDto {
+    done: bool,
+    /// How many checks came to each verdict, fits included.
+    counts: Vec<VerdictCountDto>,
+    /// Every check that does not fit, in the order the walk met them, up to
+    /// 500.
+    checks: Vec<ExtentCheckDto>,
+    /// Where the root's own fields end, and how long the file is.
+    root_end_bits: f64,
+    space_bits: f64,
+    /// The reader's reason, when the root would not read at all.
+    root_failed: Option<String>,
+}
+
+#[derive(Serialize)]
+struct VerdictCountDto {
+    verdict: &'static str,
+    count: f64,
+}
+
+#[derive(Serialize)]
+struct ExtentCheckDto {
+    /// Empty path and name, null value, where no field of its own gives the
+    /// length.
+    length_path: Vec<usize>,
+    length_name: String,
+    length_value: Option<f64>,
+    length_invalid: bool,
+    part_path: Vec<usize>,
+    part_name: String,
+    /// "length": `stated` and `read` are bits. "count": they are elements.
+    role: &'static str,
+    offset_bits: f64,
+    stated: Option<f64>,
+    read: Option<f64>,
+    content_bits: Option<f64>,
+    room_bits: f64,
+    space_bits: f64,
+    adjusted: bool,
+    /// "fits" | "short" | "stretched" | "past-parent" | "past-file" |
+    /// "unreadable"
+    verdict: &'static str,
+    why: String,
+}
+
+/// Every list whose elements place something elsewhere, and what they place.
+/// See `qubero_core::eval::directory`.
+#[derive(Serialize)]
+struct DirectoriesDto {
+    done: bool,
+    /// Placements past the cap that were not looked at.
+    unexamined: f64,
+    lists: Vec<DirectoryDto>,
+}
+
+#[derive(Serialize)]
+struct DirectoryDto {
+    path: Vec<usize>,
+    name: String,
+    elements: f64,
+    placing: f64,
+    /// The first 256 elements that place something, in stored order.
+    entries: Vec<DirectoryEntryDto>,
+}
+
+#[derive(Serialize)]
+struct DirectoryEntryDto {
+    path: Vec<usize>,
+    name: String,
+    offset_bits: f64,
+    size_bits: f64,
+    targets: Vec<DirectoryTargetDto>,
+}
+
+#[derive(Serialize)]
+struct DirectoryTargetDto {
+    path: Vec<usize>,
+    name: String,
+    offset_bits: f64,
+    size_bits: f64,
+    /// "address" | "offsets" | "descriptors"
+    via: &'static str,
+    /// True when these bytes are counted where they are rather than here.
+    aside: bool,
 }
 
 /// One kind-and-type pair, and what the file spends on it.
@@ -2876,6 +3077,140 @@ fn kind_totals_dto(t: qubero_core::eval::KindTotals) -> KindTotalsDto {
     }
 }
 
+fn profile_dto(p: qubero_core::eval::Profile) -> ProfileDto {
+    let f = p.facts;
+    ProfileDto {
+        done: p.done,
+        rows: p
+            .rows
+            .into_iter()
+            .map(|r| ProfileRowDto {
+                category: r.category,
+                kind: r.kind,
+                width: f64::from(r.width),
+                order: r.order,
+                detail: r.detail,
+                fields: r.fields as f64,
+                bits: r.bits as f64,
+                unpacked_fields: r.unpacked_fields as f64,
+                unpacked_bits: r.unpacked_bits as f64,
+            })
+            .collect(),
+        choices: p
+            .choices
+            .into_iter()
+            .map(|c| ChoiceDto { key: c.key, name: c.name, cases: c.cases as f64, taken: c.taken as f64, fields: c.fields as f64 })
+            .collect(),
+        facts: ProfileFactsDto {
+            from_end: f.from_end as f64,
+            placed: f.placed as f64,
+            forward: f.forward as f64,
+            backward: f.backward as f64,
+            lengths_before: f.lengths_before as f64,
+            lengths_after: f.lengths_after as f64,
+            every_field_follows: f.every_field_follows,
+        },
+    }
+}
+
+fn ledger_dto(l: qubero_core::eval::Ledger, reached_bits: u64) -> LedgerDto {
+    LedgerDto {
+        done: l.done,
+        reached_bits: reached_bits as f64,
+        file_bits: l.file_bits as f64,
+        counted_bits: l.counted_bits as f64,
+        rows: l
+            .rows
+            .into_iter()
+            .map(|r| LedgerRowDto {
+                part: r.part,
+                part_name: r.part_name,
+                group: r.group,
+                group_from: r.group_from,
+                role: r.role,
+                bits: r.bits as f64,
+                count: r.count as f64,
+                zero_bits: r.zero_bits as f64,
+                unscanned_bits: r.unscanned_bits as f64,
+                first_path: r.first_path,
+                first_offset_bits: r.first_offset_bits as f64,
+                align: f64::from(r.align),
+            })
+            .collect(),
+    }
+}
+
+fn extent_audit_dto(a: qubero_core::eval::ExtentAudit) -> ExtentAuditDto {
+    ExtentAuditDto {
+        done: a.done,
+        counts: a.counts.into_iter().map(|(verdict, n)| VerdictCountDto { verdict, count: n as f64 }).collect(),
+        checks: a
+            .checks
+            .into_iter()
+            .map(|c| ExtentCheckDto {
+                length_path: c.length_path,
+                length_name: c.length_name,
+                length_value: c.length_value.map(|v| v as f64),
+                length_invalid: c.length_invalid,
+                part_path: c.part_path,
+                part_name: c.part_name,
+                role: c.role,
+                offset_bits: c.offset_bits as f64,
+                stated: c.stated.map(|v| v as f64),
+                read: c.read.map(|v| v as f64),
+                content_bits: c.content_bits.map(|v| v as f64),
+                room_bits: c.room_bits as f64,
+                space_bits: c.space_bits as f64,
+                adjusted: c.adjusted,
+                verdict: c.verdict,
+                why: c.why,
+            })
+            .collect(),
+        root_end_bits: a.root_end_bits as f64,
+        space_bits: a.space_bits as f64,
+        root_failed: a.root_failed,
+    }
+}
+
+fn directories_dto(d: qubero_core::eval::Directories) -> DirectoriesDto {
+    DirectoriesDto {
+        done: d.done,
+        unexamined: d.unexamined as f64,
+        lists: d
+            .lists
+            .into_iter()
+            .map(|l| DirectoryDto {
+                path: l.path,
+                name: l.name,
+                elements: l.elements as f64,
+                placing: l.placing as f64,
+                entries: l
+                    .entries
+                    .into_iter()
+                    .map(|e| DirectoryEntryDto {
+                        path: e.path,
+                        name: e.name,
+                        offset_bits: e.offset_bits as f64,
+                        size_bits: e.size_bits as f64,
+                        targets: e
+                            .targets
+                            .into_iter()
+                            .map(|t| DirectoryTargetDto {
+                                path: t.path,
+                                name: t.name,
+                                offset_bits: t.offset_bits as f64,
+                                size_bits: t.size_bits as f64,
+                                via: t.via,
+                                aside: t.aside,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 fn wanted(e: &Evaluator) -> Vec<f64> {
     e.wanted().into_iter().map(|m| m.chunk as f64).collect()
 }
@@ -3493,6 +3828,7 @@ impl Editor {
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
     }
 
     /// An edit that replaced bits in place at `bit`. What the template made of
@@ -3511,6 +3847,7 @@ impl Editor {
         sh.focus = None;
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
     }
 
     /// One step of the byte-class scan behind the overview: at most a window
@@ -3634,6 +3971,107 @@ impl Editor {
         let reached = (tab.ev.reached_bits() / 8) as f64;
         self.sm().kinds = kinds;
         reply_with(out.map(kind_totals_dto), reached, Vec::new())
+    }
+
+    /// What the format named `template` is, for the report's opening: its
+    /// plain name, its Wikipedia article and a few plain sentences. JSON:
+    /// `{name, wikipedia, text}`, with `wikipedia` null where no article
+    /// covers it, or `null` for a template with no entry, which is every
+    /// bundled Kaitai and ImHex format. Not a reply: nothing is read.
+    pub fn format_about(&self, template: &str) -> String {
+        match formats::about::about(template) {
+            Some(a) => serde_json::to_string(&AboutDto { name: a.name, wikipedia: a.wikipedia, text: a.text }).unwrap_or_else(|_| "null".into()),
+            None => "null".into(),
+        }
+    }
+
+    /// How the template in use writes its values and finds its parts, counted
+    /// over its declarations: the report's "How the format is built". JSON,
+    /// in the usual reply shape, whose node is
+    /// `{done, rows: [{category, kind, width, order, detail, fields, bits,
+    /// unpacked_fields, unpacked_bits}], choices: [{key, name, cases, taken,
+    /// fields}], facts: {from_end, placed, forward, backward, lengths_before,
+    /// lengths_after, every_field_follows}}`. `bits`, `taken`, `forward` and
+    /// `backward` are 0 here; see `format_profile_step` for the file's.
+    ///
+    /// About the format rather than the file, like `template_diagram`: the
+    /// same for every file the template opens.
+    pub fn template_profile(&mut self, space: u32) -> String {
+        if let Err(why) = self.go(space) {
+            return why;
+        }
+        let sh = self.sm();
+        match (&sh.eval, &sh.read_as) {
+            (Some(e), _) => reply(Ok(profile_dto(qubero_core::eval::template_profile(e.template())))),
+            (None, Some(t)) => reply(Ok(profile_dto(qubero_core::eval::template_profile(t)))),
+            (None, None) => reply::<ProfileDto>(Err(EvalError::Failed("no template".into()))),
+        }
+    }
+
+    /// One go of the report's walk, answered with whatever `answer` makes of
+    /// it. The walk is the sheet's own and is taken out for the call, the
+    /// way the kind walk is: see `kind_totals_step`.
+    fn report_go<T: Serialize>(&mut self, space: u32, answer: impl FnOnce(&Tab<'_, ChunkStore>, &ReportWalk) -> T) -> String {
+        if let Err(why) = self.tab(space) {
+            return why;
+        }
+        let sh = self.sm();
+        let len = sh.doc.len_bits();
+        let mut report = sh.report.take();
+        let mut tab = match self.tab(space) {
+            Ok(tab) => tab,
+            Err(why) => return why,
+        };
+        if !matches!(&report, Some(w) if w.file_bits() == len) {
+            report = Some(tab.report_walk(len));
+        }
+        let walk = report.as_mut().expect("just built");
+        tab.ev.begin_slice();
+        let out = tab.report_step(walk).map(|()| answer(&tab, walk));
+        let reached = (walk.reached_bits() / 8) as f64;
+        let wanted = wanted(tab.ev);
+        self.sm().report = report;
+        reply_with(out, reached, wanted)
+    }
+
+    /// One go of the report's walk, answered with how this file writes its
+    /// values and finds its parts: the same shape as `template_profile`,
+    /// counted over the file's fields, with `bits` and the pointer
+    /// directions filled in. `done` says when to stop asking.
+    ///
+    /// The report's four stepped answers share one walk, so asking for any of
+    /// them carries all four on. An edit throws the walk away.
+    pub fn format_profile_step(&mut self, space: u32) -> String {
+        self.report_go(space, |_, w| profile_dto(w.profile()))
+    }
+
+    /// One go of the report's walk, answered with where every bit of the
+    /// file goes: `{done, reached_bits, file_bits, counted_bits, rows:
+    /// [{part, part_name, group, group_from, role, bits, count, zero_bits,
+    /// unscanned_bits, first_path, first_offset_bits, align}]}`. `part` and
+    /// `first_path` are paths in this space.
+    pub fn byte_ledger_step(&mut self, space: u32) -> String {
+        self.report_go(space, |tab, w| ledger_dto(tab.report_ledger(w), w.reached_bits()))
+    }
+
+    /// One go of the report's walk, answered with every length checked
+    /// against the part it sizes: `{done, counts: [{verdict, count}], checks:
+    /// [{length_path, length_name, length_value, length_invalid, part_path,
+    /// part_name, role, offset_bits, stated, read, content_bits, room_bits,
+    /// space_bits, adjusted, verdict, why}], root_end_bits, space_bits,
+    /// root_failed}`.
+    pub fn extent_audit_step(&mut self, space: u32) -> String {
+        self.report_go(space, |tab, w| extent_audit_dto(tab.report_audit(w)))
+    }
+
+    /// One go of the report's walk, answered with every list whose elements
+    /// place something elsewhere and what each places: `{done, unexamined,
+    /// lists: [{path, name, elements, placing, entries: [{path, name,
+    /// offset_bits, size_bits, targets: [{path, name, offset_bits, size_bits,
+    /// via, aside}]}]}]}`. Found once the walk is over, so `lists` is empty
+    /// and `done` false until then.
+    pub fn directories_step(&mut self, space: u32) -> String {
+        self.report_go(space, |tab, w| directories_dto(tab.report_directories(w)))
     }
 
     // ----- templates -----
@@ -3779,6 +4217,7 @@ impl Editor {
         // byte-class scan beside it is about bytes and stands; this does not.
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
         sh.template = name.to_string();
         sh.ksy_report = String::new();
         sh.hexpat_report = String::new();
@@ -3864,6 +4303,7 @@ impl Editor {
         sh.ne = None;
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
         sh.template = converted.template.name.clone();
         let mut e = Evaluator::new(converted.template);
         e.set_slice(Some(WORK_SLICE));
@@ -3969,6 +4409,7 @@ impl Editor {
         sh.ne = None;
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
         sh.template = converted.template.name.clone();
         let mut e = Evaluator::new(converted.template);
         e.set_slice(Some(WORK_SLICE));
@@ -4054,6 +4495,7 @@ impl Editor {
         // leaving. See `set_template`.
         sh.kinds = None;
         sh.census = None;
+        sh.report = None;
         sh.template = String::new();
         // A signature template came from a `file(1)` rule and from no format
         // description, so the reports of the last one are about another

@@ -191,6 +191,17 @@ export function watchCard(doc: Doc, fn: (what: CardChange) => void): () => void 
   return imageCardFor(doc).watch(fn);
 }
 
+/** How far the picture of an image file has got, for a view that draws its
+ *  own frame round it (the report's facts and its heading over the picture).
+ *  Asking starts the decode, as drawing the card does. Null for a file that
+ *  is not a picture the browser can draw. */
+export function cardState(doc: Doc): ImageState | null {
+  if (cardKind(doc.template) === null) return null;
+  const card = imageCardFor(doc);
+  card.start();
+  return card.state;
+}
+
 /** The card as one element of the listing. `shown` says whether the listing
  *  is on screen, which is when the decode is worth starting. */
 export function drawCard(doc: Doc, item: Extract<Item, { kind: "card" }>, shown: boolean): HTMLElement {
