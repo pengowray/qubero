@@ -461,7 +461,8 @@ fn a_pixel_of_an_interlaced_file_leads_back_to_its_scanline_and_its_codes() {
 ///
 /// With `PNG_MADE_DIR` set, each file is written there as well, so another
 /// decoder can be asked whether they are the images this says they are.
-/// Pillow 10.2 read all thirteen to the same pixels on 2026-09-24.
+/// Pillow 10.2 read all thirteen to the same pixels on 2026-09-24, to the
+/// high byte of each sample where it hands sixteen-bit colour back at eight.
 #[test]
 fn made_images_of_every_shape_read_back_to_the_pixels_they_were_made_from() {
     let cases = [
