@@ -13,7 +13,7 @@
 // does.
 
 import type { Doc, TemplateNode } from "../doc.ts";
-import { ok } from "./model.ts";
+import { ok, rootNode } from "./model.ts";
 import { WAIT } from "./section.ts";
 
 const NODES = 4000;
@@ -47,7 +47,7 @@ export function walkTemplate(doc: Doc): WalkResult | typeof WAIT {
   let seen = 0;
   let partial = false;
   const stack: TemplateNode[] = [];
-  const root = ok(doc.templateNode([]));
+  const root = rootNode(doc);
   if (root === WAIT) return WAIT;
   if (root === null) return { streams, tables, texts, joins, partial };
   stack.push(root);
@@ -113,7 +113,7 @@ export type ProblemWalk = {
 
 /** Every value the core has marked as wrong, down to `PROBLEMS` of them. */
 export function walkProblems(doc: Doc): ProblemWalk | typeof WAIT {
-  const root = ok(doc.templateNode([]));
+  const root = rootNode(doc);
   if (root === WAIT) return WAIT;
   if (root === null) return { nodes: [], invalid: 0, undefined: 0, more: false };
   const own = root.problem;

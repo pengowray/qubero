@@ -116,6 +116,23 @@ const pathKey = (p: readonly number[]): string => p.join("/");
 
 /** A reply as the three things a section does with it: use it, wait for it,
  *  or go without. */
+/** The root's reply while it is still being worked out, kept for a moment so
+ *  that the sections asking in one pass ask once: over a large file each
+ *  question is some milliseconds of the core's time. */
+const rootWaits = new WeakMap<Doc, number>();
+const ROOT_RETRY_MS = 30;
+
+/** The template's root node, or WAIT while the core is still reading it. */
+export function rootNode(doc: Doc): TemplateNode | typeof WAIT | null {
+  const now = performance.now();
+  const waited = rootWaits.get(doc);
+  if (waited !== undefined && now - waited < ROOT_RETRY_MS) return WAIT;
+  const r = ok(doc.templateNode([]));
+  if (r === WAIT) rootWaits.set(doc, now);
+  else rootWaits.delete(doc);
+  return r;
+}
+
 export function ok<T>(r: TemplateReply<T>): T | typeof WAIT | null {
   switch (r.status) {
     case "ok":
@@ -133,7 +150,7 @@ export function ok<T>(r: TemplateReply<T>): T | typeof WAIT | null {
 export function buildParts(doc: Doc, budget: Budget = { ms: PLACED_MS }): PartsModel | typeof WAIT | null {
   if (doc.template === null) return null;
   const fileBits = doc.lengthBits;
-  const rootR = ok(doc.templateNode([]));
+  const rootR = rootNode(doc);
   if (rootR === WAIT) return WAIT;
   if (rootR === null) return null;
   const container: TemplateNode = rootR;
