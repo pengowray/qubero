@@ -444,8 +444,22 @@ fn a_pixel_of_an_interlaced_file_leads_back_to_its_scanline_and_its_codes() {
     assert_eq!(step.kind, StepKind::Filtered);
     // The scanline that step belongs to says where it is.
     let block = unfilter.blocks().iter().position(|b| b.in_bits.start <= step.in_bits.start && step.in_bits.end <= b.in_bits.end).unwrap();
-    let name = node(&mut ev, &d, &[s.blocks.as_slice(), &[block]].concat()).name;
-    assert_eq!(name, "pass 7, row 4, filter paeth");
+    let at = [s.blocks.as_slice(), &[block]].concat();
+    assert_eq!(node(&mut ev, &d, &at).name, "pass 7, row 4, filter paeth");
+    // The last field of the scanline is its filtered row, read as the bytes
+    // it is in the inflated stream, where the filter byte in front of it is.
+    let row = node(&mut ev, &d, &[at.as_slice(), &[3]].concat());
+    assert_eq!(row.name, "filtered row");
+    assert_eq!((row.offset_bits, row.size_bits), (step.in_bits.start, 256 * 8));
+    let (inflated, _) = space_of(&mut ev, &d, &s.scanlines);
+    let from = (step.in_bits.start / 8) as usize;
+    match row.value {
+        Value::Bytes { len, preview } => {
+            assert_eq!(len, 256);
+            assert_eq!(preview, inflated[from..from + preview.len()]);
+        }
+        other => panic!("a filtered row of {other:?}"),
+    }
     // And the inflated byte at the start of that row was written by a code of
     // the deflate stream, in the joined IDAT data.
     let (_, deflate) = space_of(&mut ev, &d, &s.scanlines);

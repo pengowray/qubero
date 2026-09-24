@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { adam7Passes, filterCounts, passOf, pictureRow, type Scanline } from "../src/report/pngpasses.ts";
+import { adam7Passes, filterCounts, numberOf, passOf, pictureRow, type Scanline } from "../src/report/pngpasses.ts";
 import { RV } from "../src/report/text.ts";
 
 test("a 32 by 32 picture's seven passes are the sizes the notes on its report give", () => {
@@ -29,7 +29,7 @@ test("every pixel of a tile is in the pass whose grid it is on", () => {
   }
   // Counted over the tile, each pass holds as many pixels as its shape says.
   const count = [0, 0, 0, 0, 0, 0, 0];
-  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) count[passOf(x, y) - 1]++;
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) count[passOf(x, y) - 1] = (count[passOf(x, y) - 1] ?? 0) + 1;
   assert.deepEqual(count, passes.map((p) => p.cols * p.rows));
 });
 
@@ -52,4 +52,11 @@ test("the heading and the counts say how many use which filter, most first", () 
     "This picture uses Paeth on 36 scanlines, Sub on 11, Up on 8, None on 4, and Average on 1.",
   );
   assert.equal(RV.pngFilterCounts([["None", 32]], null), "Every scanline uses None.");
+});
+
+test("an enum's number is read from the brackets its value ends with", () => {
+  assert.equal(numberOf({ kind: "enum", value: "adam7 (1)", edit_text: "adam7" }), 1);
+  assert.equal(numberOf({ kind: "enum", value: "paeth (4)", edit_text: "paeth" }), 4);
+  assert.equal(numberOf({ kind: "uint", value: "32", edit_text: "32" }), 32);
+  assert.equal(numberOf({ kind: "enum", value: "odd", edit_text: "odd" }), null);
 });

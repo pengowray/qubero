@@ -48,41 +48,41 @@ root PNG {
       'gAMA' => gAMA {
         gamma: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
       }
       'cHRM' => cHRM {
         white_x: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         white_y: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         red_x: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         red_y: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         green_x: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         green_y: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         blue_x: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
         blue_y: Scaled (inline, payload stored) {
           stored: u32be
-          value: computed real stored / 100000.0
+          worth: computed real stored / 100000.0
         }
       }
       'sRGB' => sRGB {

@@ -16,7 +16,7 @@ import { ok } from "./model.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { RV } from "./text.ts";
 import { hideTip, tipAt } from "./tip.ts";
-import { adam7Passes, FILTERS, filterCounts, passOf, pictureRow, type Scanline } from "./pngpasses.ts";
+import { adam7Passes, FILTERS, filterCounts, numberOf, passOf, pictureRow, type Scanline } from "./pngpasses.ts";
 
 /** Scanlines read for the strip. A picture taller than this is drawn up to it
  *  and says so. */
@@ -122,9 +122,7 @@ function readScanline(doc: Doc, block: TemplateNode): Scanline | null | typeof W
   if (kids === null) return null;
   const num = (name: string): number | null => {
     const k = kids.find((n) => n.name === name);
-    if (k === undefined) return null;
-    const v = Number(k.edit_text);
-    return Number.isFinite(v) ? v : null;
+    return k === undefined ? null : numberOf(k);
   };
   const filter = num("filter");
   const row = num("row");
@@ -147,12 +145,16 @@ function readHeader(doc: Doc, root: TemplateNode): Header | null | typeof WAIT {
   const fields = ok(doc.templateChildren(data.path, 0, data.child_count));
   if (fields === WAIT) return WAIT;
   if (fields === null) return null;
-  const num = (name: string): number => Number(fields.find((n) => n.name === name)?.edit_text ?? NaN);
+  const num = (name: string): number | null => {
+    const k = fields.find((n) => n.name === name);
+    return k === undefined ? null : numberOf(k);
+  };
   const width = num("width");
   const height = num("height");
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width === null || height === null) return null;
   return { width, height, interlaced: num("interlace") === 1 };
 }
+
 
 function childNamed(doc: Doc, parent: TemplateNode, name: string): TemplateNode | null | typeof WAIT {
   const kids = ok(doc.templateChildren(parent.path, 0, parent.child_count));

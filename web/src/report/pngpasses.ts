@@ -3,6 +3,8 @@
 // The core does the same arithmetic in `codec/scanlines.rs`; this is what the
 // report's figure needs of it, for a picture whose size it already has.
 
+import type { TemplateNode } from "../doc.ts";
+
 /** RFC 2083's five filter types, by the number a filter byte holds. */
 export const FILTERS = ["None", "Sub", "Up", "Average", "Paeth"] as const;
 
@@ -89,3 +91,14 @@ export function pictureRow(line: Scanline): number {
   return p === undefined ? line.row : p[1] + line.row * p[3];
 }
 
+/** The number a field holds. An enum's value reads as its name with the
+ *  number after it in brackets, `adam7 (1)`, and the number is what is
+ *  wanted. */
+export function numberOf(n: Pick<TemplateNode, "kind" | "value" | "edit_text">): number | null {
+  if (n.kind === "enum") {
+    const m = /\((0x[0-9a-f]+|-?\d+)\)$/i.exec(n.value);
+    return m?.[1] === undefined ? null : Number(m[1]);
+  }
+  const v = Number(n.edit_text);
+  return n.edit_text !== "" && Number.isFinite(v) ? v : null;
+}

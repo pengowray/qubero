@@ -253,6 +253,14 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
     if let Some(code) = code_ty(step, coding) {
         return (name, sized(bits, code));
     }
+    // A filtered row is its bytes, read where they sit in the stream the
+    // unfilter was handed: each is stored as itself, a difference from a
+    // prediction, and is what the listing should show. A record of a kind and
+    // a length would cover none of them and leave the row reading as bytes no
+    // field describes.
+    if step.kind == StepKind::Filtered {
+        return (name, sized(bits, T::bytes(E::lit(bytes as i128))));
+    }
     let kind = |k: i128| {
         T::enumeration(
             "SymbolKind",
@@ -265,7 +273,6 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
                 (4, "not named"),
                 (5, "pixel"),
                 (6, "padding"),
-                (7, "filtered row"),
             ],
         )
     };
@@ -280,7 +287,6 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
         StepKind::Header(StepField::Padding, _) => vec![("kind", kind(6))],
         StepKind::Stored => vec![("kind", kind(3)), ("length", T::computed(E::lit(bytes as i128)))],
         StepKind::Pixel => vec![("kind", kind(5)), ("length", T::computed(E::lit(bytes as i128)))],
-        StepKind::Filtered => vec![("kind", kind(7)), ("length", T::computed(E::lit(bytes as i128)))],
         _ => vec![("kind", kind(4)), ("length", T::computed(E::lit(bytes as i128)))],
     };
     (name, sized(bits, T::structure("Symbol", fields)))

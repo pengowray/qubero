@@ -399,11 +399,12 @@ fn trns() -> T {
 }
 
 /// A number the file stores as a whole number times 100,000, beside what it
-/// stands for. gAMA and cHRM write every value this way.
+/// is worth, the way GRIB's and NIfTI's scaled values read. gAMA and cHRM
+/// write every value this way.
 fn hundred_thousandths() -> T {
     T::inline_structure(
         "Scaled",
-        vec![("stored", T::u32(Big)), ("value", T::computed_real(E::field("stored").div(E::real(100_000.0))))],
+        vec![("stored", T::u32(Big)), ("worth", T::computed_real(E::field("stored").div(E::real(100_000.0))))],
     )
     .payload(&["stored"])
 }
