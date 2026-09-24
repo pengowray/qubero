@@ -1755,6 +1755,21 @@ code set is scattered over its block and cannot be one output range. `map_out`
 over the coefficients therefore lands on the step that closed the block, not
 on the code that set the coefficient.
 
+**For figures.** `Evaluator::jpeg_scan` reads a scan's costs off the trace in
+one pass, without placing a node: bits per MCU and per block, each block's
+channel and place, the bits by kind (DC and AC codes and value bits, EOB, ZRL,
+padding, stuffed bytes, markers), and each channel's quantization steps read
+where the decoder says the table in force was defined. `Evaluator::jpeg_block`
+gives one block's codes with their bits and meanings, and its coefficients.
+The wasm calls of the same names back the report view's JPEG section
+(`web/src/report/jpeg.ts`): the picture beside a map of bits per MCU, tables
+of bits by channel and by kind, and one block from its codes through zigzag
+order, rows, the quantization steps and the inverse DCT to its samples. The
+dequantizing and the IDCT are done there, from the coefficients, as a figure
+and not as a decoded space. A code in the listing names the Huffman table it
+was read with as its origin (`origin.rs`, `jpeg_table`), found from where the
+decoder says that table was defined.
+
 **Refused.** Progressive, arithmetic, lossless, hierarchical and 12-bit frames
 refuse with `Refusal::Unsupported`, whose word says which. SOF1 at 8 bits is
 read, since it differs from baseline only in allowing more tables. A scan that
