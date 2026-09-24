@@ -33,7 +33,6 @@ use qubero_core::source::MemSource;
 
 /// What the reference decoder says about one scan.
 struct Pinned {
-    file: &'static str,
     blocks: u64,
     crc: u32,
     code_bits: u64,
@@ -43,15 +42,40 @@ struct Pinned {
     markers: u64,
 }
 
-const BASELINE: &[Pinned] = &[
+const fn pin(blocks: u64, crc: u32, code_bits: u64, value_bits: u64, padding_bits: u64, stuffed: u64, markers: u64) -> Pinned {
+    Pinned { blocks, crc, code_bits, value_bits, padding_bits, stuffed, markers }
+}
+
+/// The sample collection's baseline files, and what the reference says of
+/// each one's scan.
+const BASELINE: &[(&str, &[Pinned])] = &[
     // 227 by 149, 4:2:0, the IJG's own test image, as in the hand-written report.
-    Pinned { file: "jpeg/libjpeg-turbo-testorig-baseline.jpg", blocks: 900, crc: 0x01281baf, code_bits: 26677, value_bits: 14413, padding_bits: 6, stuffed: 8, markers: 0 },
+    ("jpeg/libjpeg-turbo-testorig-baseline.jpg", &[pin(900, 0x01281baf, 26677, 14413, 6, 8, 0)]),
     // Four channels, CMYK by the Adobe segment, with a restart every MCU row.
-    Pinned { file: "jpeg/pillow-cmyk-adobe-restart.jpg", blocks: 384, crc: 0x9e970d53, code_bits: 17367, value_bits: 10614, padding_bits: 27, stuffed: 56, markers: 7 },
+    ("jpeg/pillow-cmyk-adobe-restart.jpg", &[pin(384, 0x9e970d53, 17367, 10614, 27, 56, 7)]),
     // One channel, so one block per MCU.
-    Pinned { file: "jpeg/pillow-grey-comment.jpg", blocks: 96, crc: 0xa1cc9b70, code_bits: 5280, value_bits: 3243, padding_bits: 5, stuffed: 9, markers: 0 },
+    ("jpeg/pillow-grey-comment.jpg", &[pin(96, 0xa1cc9b70, 5280, 3243, 5, 9, 0)]),
     // 4:4:4: three blocks per MCU, one of each channel.
-    Pinned { file: "jpeg/pillow-ycc444-exif.jpg", blocks: 288, crc: 0x8e5f5c6a, code_bits: 12462, value_bits: 7624, padding_bits: 2, stuffed: 26, markers: 0 },
+    ("jpeg/pillow-ycc444-exif.jpg", &[pin(288, 0x8e5f5c6a, 12462, 7624, 2, 26, 0)]),
+];
+
+/// Layouts the collection has no file of, made by `tools/jpeg_fixtures.py`
+/// and kept in `tests/fixtures/jpeg`, so these are checked on every run.
+const FIXTURES: &[(&str, &[Pinned])] = &[
+    // 4:2:2: two Y blocks side by side, then a Cb and a Cr. 45 by 29, so
+    // neither side is a whole number of MCUs.
+    ("pillow-422-45x29.jpg", &[pin(48, 0x8948ab25, 6463, 3471, 2, 3, 0)]),
+    // 4:2:0 with a restart marker after every MCU.
+    ("pillow-420-restart-45x29.jpg", &[pin(36, 0xbe151ffe, 3448, 1622, 26, 4, 5)]),
+    // The same picture as three scans of one channel each. A scan of one
+    // channel codes that channel's own blocks, 6 by 4 for Y and 3 by 2 for
+    // the others, not the MCU grid's; its restart interval counts blocks; and
+    // the chroma scans read with a table 0 that was redefined after the Y
+    // scan.
+    (
+        "three-scans-45x29.jpg",
+        &[pin(24, 0x03d454ec, 2575, 1287, 18, 2, 4), pin(6, 0x54e3ec12, 582, 203, 7, 0, 0), pin(6, 0x867cba5f, 290, 128, 6, 2, 0)],
+    ),
 ];
 
 /// The files baseline does not cover, and the word each scan is refused with.
@@ -78,70 +102,84 @@ fn scans(d: &Document<MemSource>, ev: &mut Evaluator) -> Vec<Vec<usize>> {
 
 #[test]
 fn every_baseline_scan_decodes_to_the_reference_coefficients_and_every_bit_is_accounted_for() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jpeg");
+    for &(file, pins) in FIXTURES {
+        let bytes = std::fs::read(fixtures.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        check_file(file, bytes, pins);
+    }
     if qubero_samples::root().is_none() {
         eprintln!("{}", qubero_samples::missing());
         return;
     }
-    for want in BASELINE {
-        let Some(bytes) = read(want.file) else {
-            eprintln!("skipped: no {} in the sample collection", want.file);
-            continue;
-        };
-        let d = Document::new(MemSource(bytes.clone()));
-        let mut ev = Evaluator::new(jpeg());
-        let runs = scans(&d, &mut ev);
-        assert_eq!(runs.len(), 1, "{}: one scan", want.file);
-        let path = &runs[0];
-        let run = ev.node(&d, path).unwrap();
-        assert!(run.refused.is_none(), "{}: refused {:?}", want.file, run.refused);
-        let id = ev.open_space(&d, 0, path).unwrap().unwrap_or_else(|| panic!("{}: the scan did not open", want.file));
-        let space = ev.space(id).unwrap();
-        let out = space.bytes();
-        assert_eq!(out.len() as u64, want.blocks * 128, "{}: blocks", want.file);
-        assert_eq!(crc32(out), want.crc, "{}: the coefficients differ from the reference's", want.file);
-
-        let trace = space.trace();
-        trace.check_tiles().unwrap_or_else(|e| panic!("{}: {e}", want.file));
-        assert_eq!(trace.in_bits(), run.size_bits, "{}: the trace does not cover the run", want.file);
-        assert_eq!(trace.units().len() as u64, want.blocks, "{}", want.file);
-        assert_eq!(trace.stuffed().len() as u64, want.stuffed, "{}: stuffed bytes", want.file);
-
-        // Where the bits went, step by step, and the stuffed zeros inside the
-        // steps that straddle them.
-        let (mut code, mut value, mut padding, mut markers, mut other) = (0u64, 0u64, 0u64, 0u64, 0u64);
-        for s in trace.steps() {
-            let width = s.in_bits.end - s.in_bits.start;
-            let inside = trace.stuffed_in(s.in_bits.clone()) as u64 * 8;
-            match s.kind {
-                StepKind::Dc { code: c, size, .. } | StepKind::Ac { code: c, size, .. } => {
-                    assert_eq!(width, c as u64 + size as u64 + inside, "{}: {s:?}", want.file);
-                    code += c as u64;
-                    value += size as u64;
-                }
-                StepKind::Zrl { code: c, .. } | StepKind::Eob { code: c, .. } => {
-                    assert_eq!(width, c as u64 + inside, "{}: {s:?}", want.file);
-                    code += c as u64;
-                }
-                StepKind::Header(StepField::Padding, _) => padding += width - inside,
-                StepKind::Header(StepField::Restart, _) => {
-                    assert_eq!(width, 16);
-                    markers += 1;
-                }
-                _ => other += width,
-            }
+    for &(file, pins) in BASELINE {
+        match read(file) {
+            Some(bytes) => check_file(file, bytes, pins),
+            None => eprintln!("skipped: no {file} in the sample collection"),
         }
-        assert_eq!((code, value, padding, markers, other), (want.code_bits, want.value_bits, want.padding_bits, want.markers, 0), "{}", want.file);
-        assert_eq!(code + value + padding + 16 * markers + 8 * want.stuffed, run.size_bits, "{}: the bits do not add up", want.file);
-        // Every MCU's blocks, and every block closing on the step that carries
-        // its 128 bytes.
-        let f = trace.jpeg().expect("a JPEG trace says what it settled");
-        assert_eq!(trace.blocks().len() as u64, f.mcus_across as u64 * f.mcus_down as u64, "{}", want.file);
-        for u in trace.units() {
-            let last = trace.step(u.steps.end as usize - 1).unwrap();
-            assert_eq!(last.out_bytes.end - last.out_bytes.start, 128, "{}: {u:?}", want.file);
-        }
-        eprintln!("{}: {} blocks, {} MCUs, {} steps, matches the reference", want.file, want.blocks, trace.blocks().len(), trace.len());
     }
+}
+
+/// Every scan of one file against what the reference says of it.
+fn check_file(file: &str, bytes: Vec<u8>, pins: &[Pinned]) {
+    let d = Document::new(MemSource(bytes));
+    let mut ev = Evaluator::new(jpeg());
+    let runs = scans(&d, &mut ev);
+    assert_eq!(runs.len(), pins.len(), "{file}: scans");
+    for (path, want) in runs.iter().zip(pins) {
+        check_scan(&d, &mut ev, &format!("{file} {path:?}"), path, want);
+    }
+}
+
+fn check_scan(d: &Document<MemSource>, ev: &mut Evaluator, what: &str, path: &[usize], want: &Pinned) {
+    let run = ev.node(d, path).unwrap();
+    assert!(run.refused.is_none(), "{what}: refused {:?}", run.refused);
+    let id = ev.open_space(d, 0, path).unwrap().unwrap_or_else(|| panic!("{what}: the scan did not open"));
+    let space = ev.space(id).unwrap();
+    let out = space.bytes();
+    assert_eq!(out.len() as u64, want.blocks * 128, "{what}: blocks");
+    assert_eq!(crc32(out), want.crc, "{what}: the coefficients differ from the reference's");
+
+    let trace = space.trace();
+    trace.check_tiles().unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(trace.in_bits(), run.size_bits, "{what}: the trace does not cover the run");
+    assert_eq!(trace.units().len() as u64, want.blocks, "{what}");
+    assert_eq!(trace.stuffed().len() as u64, want.stuffed, "{what}: stuffed bytes");
+
+    // Where the bits went, step by step, and the stuffed zeros inside the
+    // steps that straddle them.
+    let (mut code, mut value, mut padding, mut markers, mut other) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    for s in trace.steps() {
+        let width = s.in_bits.end - s.in_bits.start;
+        let inside = trace.stuffed_in(s.in_bits.clone()) as u64 * 8;
+        match s.kind {
+            StepKind::Dc { code: c, size, .. } | StepKind::Ac { code: c, size, .. } => {
+                assert_eq!(width, c as u64 + size as u64 + inside, "{what}: {s:?}");
+                code += c as u64;
+                value += size as u64;
+            }
+            StepKind::Zrl { code: c, .. } | StepKind::Eob { code: c, .. } => {
+                assert_eq!(width, c as u64 + inside, "{what}: {s:?}");
+                code += c as u64;
+            }
+            StepKind::Header(StepField::Padding, _) => padding += width - inside,
+            StepKind::Header(StepField::Restart, _) => {
+                assert_eq!(width, 16);
+                markers += 1;
+            }
+            _ => other += width,
+        }
+    }
+    assert_eq!((code, value, padding, markers, other), (want.code_bits, want.value_bits, want.padding_bits, want.markers, 0), "{what}");
+    assert_eq!(code + value + padding + 16 * markers + 8 * want.stuffed, run.size_bits, "{what}: the bits do not add up");
+    // Every MCU's blocks, and every block closing on the step that carries
+    // its 128 bytes.
+    let f = trace.jpeg().expect("a JPEG trace says what it settled");
+    assert_eq!(trace.blocks().len() as u64, f.mcus_across as u64 * f.mcus_down as u64, "{what}");
+    for u in trace.units() {
+        let last = trace.step(u.steps.end as usize - 1).unwrap();
+        assert_eq!(last.out_bytes.end - last.out_bytes.start, 128, "{what}: {u:?}");
+    }
+    eprintln!("{what}: {} blocks, {} MCUs, {} steps, matches the reference", want.blocks, trace.blocks().len(), trace.len());
 }
 
 #[test]

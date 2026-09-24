@@ -301,39 +301,9 @@ impl Evaluator {
                 },
                 // As wide as the decoder said it read. Not measured by adding
                 // up children: a symbol run of a million is one subtraction.
-                Ty::Traced { part } => {
-                    let part = *part;
-                    let Some((base, trace)) = self.trace_for(path) else {
-                        return fail("this stream is no longer open");
-                    };
-                    let span = match part {
-                        crate::template::TracedPart::Blocks => match (trace.blocks().first(), trace.blocks().last()) {
-                            (Some(a), Some(b)) => b.in_bits.end - a.in_bits.start,
-                            _ => 0,
-                        },
-                        crate::template::TracedPart::Block(i) => match trace.blocks().get(i as usize) {
-                            Some(b) => b.in_bits.end - b.in_bits.start,
-                            None => 0,
-                        },
-                        crate::template::TracedPart::Symbols(i) => {
-                            match super::traced::BlockView::of(trace, i) {
-                                Some(v) => v.block.in_bits.end - v.symbols_at(trace),
-                                None => 0,
-                            }
-                        }
-                        // From its first code to where its last one ends.
-                        crate::template::TracedPart::Unit(j) => match trace.units().get(j as usize) {
-                            Some(u) if !u.steps.is_empty() => {
-                                let first = trace.step(u.steps.start as usize).map_or(0, |s| s.in_bits.start);
-                                let last = trace.step(u.steps.end as usize - 1).map_or(first, |s| s.in_bits.end);
-                                last - first
-                            }
-                            _ => 0,
-                        },
-                    };
-                    let _ = base;
-                    span
-                }
+                // In a function of its own, for the frame's sake: this match is
+                // on the path the nesting limit was measured against.
+                Ty::Traced { part } => self.traced_bits(path, *part)?,
                 Ty::Leb128 { .. } | Ty::Zigzag => {
                     let (_, n) = self.read_leb(doc, &r)?;
                     n * 8
@@ -399,6 +369,61 @@ impl Evaluator {
                 // down with it.
                 other => return fail(format!("{} has no length of its own", other.display_name())),
         })
+    }
+
+    /// How many bits a node laid out from a trace covers, which is what the
+    /// decoder said it read.
+    #[cold]
+    #[inline(never)]
+    fn traced_bits(&self, path: &[usize], part: crate::template::TracedPart) -> R<u64> {
+        use crate::template::TracedPart as P;
+        let Some((_, trace)) = self.trace_for(path) else {
+            return fail("this stream is no longer open");
+        };
+        Ok(match part {
+            P::Blocks => match (trace.blocks().first(), trace.blocks().last()) {
+                (Some(a), Some(b)) => b.in_bits.end - a.in_bits.start,
+                _ => 0,
+            },
+            P::Block(i) => match trace.blocks().get(i as usize) {
+                Some(b) => b.in_bits.end - b.in_bits.start,
+                None => 0,
+            },
+            P::Symbols(i) => match super::traced::BlockView::of(trace, i) {
+                Some(v) => v.block.in_bits.end - v.symbols_at(trace),
+                None => 0,
+            },
+            // From its first code to where its last one ends.
+            P::Unit(j) => match trace.units().get(j as usize) {
+                Some(u) if !u.steps.is_empty() => {
+                    let first = trace.step(u.steps.start as usize).map_or(0, |s| s.in_bits.start);
+                    let last = trace.step(u.steps.end as usize - 1).map_or(first, |s| s.in_bits.end);
+                    last - first
+                }
+                _ => 0,
+            },
+        })
+    }
+
+    /// How many children a node laid out from a trace has.
+    #[cold]
+    #[inline(never)]
+    fn traced_count(&self, path: &[usize], part: crate::template::TracedPart) -> u64 {
+        use crate::template::TracedPart as P;
+        let Some((_, trace)) = self.trace_for(path) else { return 0 };
+        match part {
+            P::Blocks => trace.blocks().len() as u64,
+            P::Block(i) if !trace.units().is_empty() => super::traced::UnitsView::of(trace, i).map_or(0, |v| v.len() as u64),
+            P::Unit(j) => trace.units().get(j as usize).map_or(0, |u| u.steps.len() as u64),
+            P::Block(i) => match super::traced::BlockView::of(trace, i) {
+                Some(v) => v.head.len() as u64 + u64::from(!v.symbols.is_empty()),
+                None => 0,
+            },
+            P::Symbols(i) => match super::traced::BlockView::of(trace, i) {
+                Some(v) => v.symbols.len() as u64,
+                None => 0,
+            },
+        }
     }
 
     /// How many children the node at `path` has, when answering does not mean
@@ -484,25 +509,7 @@ impl Evaluator {
                 super::space::Opened::Space(_) => 1,
                 super::space::Opened::Refused(_) => 0,
             }),
-            Ty::Traced { part } => {
-                let part = *part;
-                let Some((_, trace)) = self.trace_for(path) else { return Ok(0) };
-                Ok(match part {
-                    crate::template::TracedPart::Blocks => trace.blocks().len() as u64,
-                    crate::template::TracedPart::Block(i) if !trace.units().is_empty() => {
-                        super::traced::UnitsView::of(trace, i).map_or(0, |v| v.len() as u64)
-                    }
-                    crate::template::TracedPart::Unit(j) => trace.units().get(j as usize).map_or(0, |u| u.steps.len() as u64),
-                    crate::template::TracedPart::Block(i) => match super::traced::BlockView::of(trace, i) {
-                        Some(v) => v.head.len() as u64 + u64::from(!v.symbols.is_empty()),
-                        None => 0,
-                    },
-                    crate::template::TracedPart::Symbols(i) => match super::traced::BlockView::of(trace, i) {
-                        Some(v) => v.symbols.len() as u64,
-                        None => 0,
-                    },
-                })
-            }
+            Ty::Traced { part } => Ok(self.traced_count(path, *part)),
             Ty::Json(shape, _) if shape.composite() => self.json_child_count(doc, path),
             Ty::Pickle(..) => self.pickle_child_count(doc, path),
             _ => Ok(0),

@@ -569,6 +569,10 @@ export const UNPACKED = {
     table: "Huffman table",
     "end-of-block": "end of block",
     opaque: "unpacked",
+    dc: "DC difference",
+    ac: "AC coefficient",
+    zrl: "ZRL, 16 zero coefficients",
+    eob: "EOB, the rest of the block is zero",
   } as Readonly<Record<string, string>>,
   /**
    * The named fields a deflate header and its code tables are made of, keyed by

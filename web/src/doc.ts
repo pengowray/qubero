@@ -2032,12 +2032,18 @@ export type MapStep = {
     | "header"
     | "table"
     | "end-of-block"
-    | "opaque";
+    | "opaque"
+    | "dc"
+    | "ac"
+    | "zrl"
+    | "eob";
   /** Which named field, for a header or a table step. */
   readonly field?: string;
-  /** What that field said, or the byte a literal is. */
+  /** What that field said, or the byte a literal is; a JPEG DC difference or
+   *  AC coefficient. */
   readonly value?: number;
-  /** A match's length; a table repeat's count; a code length. */
+  /** A match's length; a table repeat's count; a code length; a JPEG code's
+   *  zigzag position. */
   readonly len?: number;
   /** A match's distance. */
   readonly dist?: number;
