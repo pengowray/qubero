@@ -55,10 +55,6 @@ const KNOWN_FAILURES: &[&str] = &[
     // `formats/recognise.rs`: DICOM has `DICM` 128 bytes in to check.
     "dicom/synthetic-secondary-capture-gray8.dcm",
     "openpgp/gpg-literal-store.gpg",
-    // `ksy:msgpack` reads this when chosen by hand. It is not sniffed because
-    // MessagePack has no magic, the `.ksy` names no extension, and the only
-    // evidence the bytes have is that the whole file parses as one value.
-    "msgpack/observation-map.msgpack",
     // Packet captures. The Kaitai `pcap` was left out of the bundle, because
     // it picks the byte order of the whole file from the magic and the IR has
     // no form for that. Nothing has been written for pcapng.
