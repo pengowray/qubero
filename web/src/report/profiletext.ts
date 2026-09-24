@@ -71,6 +71,12 @@ const OPAQUE: Readonly<Record<string, string>> = {
   "entropy-coded": "entropy-coded bits",
 };
 
+/** Codec names as a reader knows them, where the core's name for the packing
+ *  is not one. Names not listed here are shown as the core gives them. */
+const CODEC: Readonly<Record<string, string>> = {
+  "jpeg scan": "baseline JPEG Huffman coding",
+};
+
 const CHECKSUM: Readonly<Record<string, string>> = {
   crc32: "CRC-32",
   crc16: "CRC-16",
@@ -226,7 +232,9 @@ export function landmarks(p: Profile): string[] {
   if (f.from_end > 0) out.push(`${sentence(counted(f.from_end, "field"))} ${f.from_end === 1 ? "is" : "are"} found from the end of the file.`);
   const sums = kindsOf(p.rows, "checksum", CHECKSUM);
   if (sums.length > 0) out.push(`Checked with ${listText(sums)}.`);
-  const codecs = kindsOf(p.rows, "codec", {});
+  // PNG's row filters prepare the pixels for deflate; they compress nothing, so
+  // they are not named in the sentence about compression.
+  const codecs = kindsOf(p.rows.filter((r) => r.kind !== "png scanlines"), "codec", CODEC);
   if (codecs.length > 0) out.push(`Compressed with ${listText(codecs)}.`);
   return out;
 }
