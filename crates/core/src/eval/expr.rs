@@ -483,6 +483,9 @@ impl Evaluator {
             // expression read, and this function is recursive, with how deep
             // a read may go measured against a stack of a fixed size.
             Expr::ToMarker { lead, unless } => return self.to_marker_at(doc, at, lead, unless, here),
+            // Out of line for the same reason: it reads a field's bytes. See
+            // `Expr::BytesEq`.
+            Expr::BytesEq { field, bytes } => return self.bytes_eq_at(doc, at, field, bytes, here),
             Expr::Prev(name) => self.prev_field(doc, at, name)?,
             Expr::Find { needle, last } => return self.find_at(doc, at, needle, *last, here),
             Expr::Run { chars, negate } => return self.char_run_at(doc, at, chars, *negate, here),
@@ -921,6 +924,35 @@ impl Evaluator {
         // A lead with nothing after it to tell it from an escape is not a
         // marker: nothing has said so, so the run measures to the end.
         Ok(hit.unwrap_or(total) as i128)
+    }
+
+    /// Whether the field `field` lands on holds exactly `bytes`: 1 or 0. See
+    /// [`Expr::BytesEq`].
+    ///
+    /// Measured before it is read, so a field of another length is answered
+    /// without reading any of it. A field the file did not write, and a
+    /// search that found nothing, hold none of these bytes.
+    #[cold]
+    #[inline(never)]
+    fn bytes_eq_at<S: Source>(
+        &mut self,
+        doc: &Document<S>,
+        at: &[usize],
+        field: &Expr,
+        bytes: &[u8],
+        here: Option<(u64, u64)>,
+    ) -> R<i128> {
+        let Some(p) = self.text_path(doc, at, &field.clone(), here)? else { return Ok(0) };
+        if self.value_of(doc, &p)?.absent {
+            return Ok(0);
+        }
+        let size = self.size_of(doc, &p)?;
+        if size != bytes.len() as u64 * 8 {
+            return Ok(0);
+        }
+        let r = self.memo[&p].clone();
+        let held = self.read(doc, &r, r.offset, size)?;
+        Ok(i128::from(held == bytes))
     }
 
     /// How far the run of bytes at `here` goes. See [`Expr::Run`].

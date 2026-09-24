@@ -1204,6 +1204,7 @@ fn prec(e: &Expr) -> u32 {
         Expr::Both(..) => 25,
         Expr::Not(..) => 30,
         Expr::Less(..) | Expr::Eq(..) | Expr::Ne(..) | Expr::Le(..) | Expr::Gt(..) | Expr::Ge(..) => 40,
+        Expr::BytesEq { .. } => 40,
         // The three bitwise operators in C's order among themselves, `|`
         // loosest and `&` tightest, all of them tighter than a comparison so
         // that a mask written beside one needs no brackets.
@@ -1344,6 +1345,12 @@ fn write_expr(e: &Expr, outer: u32, mask: bool, leaf: &mut dyn FnMut(&Expr) -> O
         // (a + b)` is one place and `start of a + b` reads as two things
         // added.
         Expr::StartOf(a) => format!("start of {}", write_expr(a, CALL, false, leaf)?),
+        // Written the way a `repeat until` on bytes is, `is` and the bytes,
+        // since `==` beside a run of hex would read as a comparison with a
+        // number.
+        Expr::BytesEq { field, bytes } => {
+            wrap(format!("{} is {}", write_expr(field, here, false, leaf)?, bytes_lit(bytes)))
+        }
         // The leaves: everything that names a field or reads the file rather
         // than combining two other expressions.
         Expr::Ref(..)

@@ -178,6 +178,9 @@ impl<'a> Lower<'a> {
 						"`{name}` is worked out after this field; a template reads only what comes before"
 					));
 				}
+				if self.dropped.iter().any(|n| n == name) {
+					return Err(format!("uses `{name}`, which could not be converted"));
+				}
 				let land = match self.find_member(ctx, name) {
 					Some(Member::Attr(a)) => self.class_of_attr(ctx, a),
 					Some(Member::Value(v)) => self.landing(ctx, &v.value, 1).1,
