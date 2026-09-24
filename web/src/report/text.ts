@@ -298,7 +298,7 @@ export const RV = {
   /** For a file whose only streams are joined ones. */
   joinsHeading: (n: number): string => sentenceCase(counted(n, "joined stream")),
   /** After a joined stream's name. */
-  joinLine: (size: string): string => `: ${size}, joined into one stream from pieces in several places in the file.`,
+  joinLine: (size: string): string => `: ${size}, read as one stream from the data of the parts that carry it.`,
   moreJoins: (n: number): string => `${counted(n, "more joined stream")} not shown.`,
   stepLiteral: (byte: string): string => `Literal ${byte}`,
   stepMatch: (len: number, dist: number): string => `Copy ${bytesText(len)} from ${dist.toLocaleString()} back`,
@@ -369,7 +369,7 @@ export const RV = {
     return `${of === null ? "This picture uses" : `The first ${of.toLocaleString()} scanlines use`} ${listText(parts)}.`;
   },
   pngAdam7Intro:
-    "Adam7 stores the picture as seven smaller pictures, one after another. Pass 1 holds the top-left pixel of every 8 by 8 tile, each later pass fills in pixels between those already stored, and pass 7 holds every odd-numbered row. Each pass is filtered on its own, so the first scanline of each pass has no row above it.",
+    "Adam7 stores the picture as seven smaller pictures, one after another. Pass 1 holds the top-left pixel of every 8 by 8 tile, each later pass fills in pixels between those already stored, and pass 7 holds every second row, starting from the second row of the picture. Each pass is filtered on its own, so the first scanline of each pass has no row above it.",
   pngTileLabel: "Which pass stores each pixel of an 8 by 8 tile",
   /** The pass table's columns, and whether each holds numbers. */
   pngPassColumns: [
