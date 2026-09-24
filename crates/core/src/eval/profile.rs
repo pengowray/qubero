@@ -351,6 +351,7 @@ pub(super) fn value_keys(ty: &Ty, bits: Option<u64>, out: &mut Vec<Key>) {
         | Ty::When { .. }
         | Ty::Named(_)
         | Ty::Stitched { .. }
+        | Ty::Raster { .. }
         | Ty::Schema { .. }
         | Ty::Traced { .. } => {}
     }
