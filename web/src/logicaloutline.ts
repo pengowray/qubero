@@ -1,6 +1,6 @@
 import { formatBytes, formatOffset } from "./doc.ts";
 import type { ContentObject, Doc, TemplateReply } from "./doc.ts";
-import { countText, ELF_FIELD_MISSING } from "./strings.ts";
+import { countText, TEMPLATE_FIELD_MISSING } from "./strings.ts";
 
 /** One format-independent entry in a file's semantic outline. `sourcePath`
  * connects it back to the storage template without making that template's
@@ -1068,25 +1068,35 @@ function rootOutline(
   };
 }
 
+/** The header fields the SQLite outline reads, by name: the template has
+ *  grown fields in the middle of its header before, and every index after
+ *  one moves. */
+const SQLITE_FIELDS = ["page_bytes", "text_encoding", "page1"];
+
 function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
-  const schemaReply = doc.templateNode([23, 6]);
+  const header = fieldsOf(doc, []);
+  if (header.status !== "ok") return header;
+  const format = doc.template === "self" ? "SELF" : "SQLite";
+  const missing = SQLITE_FIELDS.find((name) => !header.node.has(name));
+  if (missing !== undefined) return { status: "error", message: TEMPLATE_FIELD_MISSING(format, missing) };
+  const page1 = header.node.get("page1")?.at ?? 0;
+  const schemaReply = doc.templateNode([page1, 6]);
   if (schemaReply.status !== "ok") return schemaReply;
-  const pageSizeRaw = Number(nodeValue(doc, [1]));
-  const pageSize = pageSizeRaw === 1 ? 65_536 : pageSizeRaw;
+  const pageSize = Number(header.node.get("page_bytes")?.value);
   const pageCount = Number.isFinite(pageSize) && pageSize > 0 ? Math.ceil(doc.lengthBytes / pageSize) : 0;
-  const encoding = nodeValue(doc, [16])?.replace(/ \(\d+\)$/, "") ?? "text";
+  const encoding = header.node.get("text_encoding")?.value.replace(/ \(\d+\)$/, "") ?? "text";
   const isSelf = doc.template === "self";
   const title = isSelf ? "SELF program database" : "SQLite schema";
   const root: LogicalNode = {
     id: "/", parentId: null, label: isSelf ? "Program database" : "Database", fullName: "/",
     depth: 0, group: true, hasChildren: true, sourcePath: [], sourceBits: 0, sourceText: formatOffset(0),
     value: `${pageCount.toLocaleString()} pages · ${formatBytes(pageSize)} page size · ${encoding}`,
-    type: isSelf ? "SELF" : "SQLite", logicalBytes: null, logicalApproximate: false, title,
+    type: format, logicalBytes: null, logicalApproximate: false, title,
   };
   const groups = new Map<string, LogicalNode>();
   const entries: LogicalNode[] = [];
   for (let i = 0; i < schemaReply.node.child_count; i++) {
-    const cellPath = [23, 6, i];
+    const cellPath = [page1, 6, i];
     const cell = doc.templateNode(cellPath);
     if (cell.status !== "ok") return cell;
     const record = [...cellPath, 2];
@@ -1101,7 +1111,7 @@ function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
     const old = groups.get(groupId);
     groups.set(groupId, old === undefined ? {
       id: groupId, parentId: "/", label: pluralLabel, fullName: groupId,
-      depth: 1, group: true, hasChildren: true, sourcePath: [23, 6], sourceBits: null, sourceText: "page 1",
+      depth: 1, group: true, hasChildren: true, sourcePath: [page1, 6], sourceBits: null, sourceText: "page 1",
       value: `1 ${kind}`, type: "schema group", logicalBytes: cell.node.size_bits / 8,
       logicalApproximate: false, title: `${kind} definitions in sqlite_schema`,
     } : {
@@ -1192,7 +1202,7 @@ function elfOutline(
   const headerFields = fieldsOf(doc, header);
   if (headerFields.status !== "ok") return headerFields;
   const missing = ELF_TABLES.find((name) => !headerFields.node.has(name));
-  if (missing !== undefined) return { status: "error", message: ELF_FIELD_MISSING(missing) };
+  if (missing !== undefined) return { status: "error", message: TEMPLATE_FIELD_MISSING("ELF", missing) };
   const segmentTable = headerFields.node.get("program_headers")?.at ?? 0;
   const sectionTable = headerFields.node.get("section_headers")?.at ?? 0;
   const sectionBodies = headerFields.node.get("sections")?.at ?? 0;
