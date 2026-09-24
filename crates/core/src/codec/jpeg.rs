@@ -80,6 +80,9 @@ pub struct Component {
     pub v: u8,
     /// Which quantization table it is scaled by.
     pub quant: u8,
+    /// Where that table was defined, as bytes of the segments handed to
+    /// [`Header::read`], when it was defined before the scan.
+    pub quant_at: Option<(u32, u32)>,
     /// How many 8×8 blocks of it cover the picture, across and down, counting
     /// a block that is only partly inside it.
     pub blocks_across: u32,
@@ -93,6 +96,11 @@ pub struct ScanComponent {
     pub index: u8,
     pub dc_table: u8,
     pub ac_table: u8,
+    /// Where the definitions of those two tables in force at the scan are,
+    /// as bytes of the segments handed to [`Header::read`]: what a reader of
+    /// one code is sent to for the table that says what the code means.
+    pub dc_at: (u32, u32),
+    pub ac_at: (u32, u32),
 }
 
 /// What the channels are, worked out the way libjpeg works it out: from the
@@ -322,8 +330,13 @@ impl Header {
     pub fn read(bytes: &[u8]) -> Result<Header, Refusal> {
         let mut frame: Option<(u8, u8, u16, u16, Vec<(u8, u8, u8, u8)>)> = None;
         let mut hierarchical = false;
-        let mut dc: [Option<Huffman>; 4] = Default::default();
-        let mut ac: [Option<Huffman>; 4] = Default::default();
+        // A table that will not build is kept as the refusal it is, and only
+        // refuses the scan if the scan reads with it: a lossless frame's
+        // tables are refused by name before they are ever used.
+        let mut dc: [Option<Result<Huffman, Refusal>>; 4] = Default::default();
+        let mut ac: [Option<Result<Huffman, Refusal>>; 4] = Default::default();
+        // Where each table in force was defined, as bytes of `bytes`.
+        let (mut dc_at, mut ac_at, mut quant_at) = ([(0u32, 0u32); 4], [(0u32, 0u32); 4], [None::<(u32, u32)>; 4]);
         let mut restart = 0u16;
         let (mut jfif, mut adobe) = (false, None);
         let mut scan: Option<(Vec<(u8, u8, u8)>, [u8; 4])> = None;
@@ -368,9 +381,28 @@ impl Header {
                         if id > 3 || class > 1 || total > 256 {
                             return Err(Refusal::Failed);
                         }
-                        let table = Huffman::build(&counts, values)?;
-                        if class == 0 { dc[id as usize] = Some(table) } else { ac[id as usize] = Some(table) }
+                        let table = Huffman::build(&counts, values);
+                        let span = ((at + 4 + i) as u32, (at + 4 + i + 17 + total) as u32);
+                        if class == 0 {
+                            dc[id as usize] = Some(table);
+                            dc_at[id as usize] = span;
+                        } else {
+                            ac[id as usize] = Some(table);
+                            ac_at[id as usize] = span;
+                        }
                         i += 17 + total;
+                    }
+                }
+                0xdb => {
+                    let mut i = 0;
+                    while i < body.len() {
+                        let (precision, id) = (body[i] >> 4, body[i] & 15);
+                        let len = if precision == 0 { 65 } else { 129 };
+                        if id > 3 || i + len > body.len() {
+                            return Err(Refusal::Failed);
+                        }
+                        quant_at[id as usize] = Some(((at + 4 + i) as u32, (at + 4 + i + len) as u32));
+                        i += len;
                     }
                 }
                 0xdd => restart = u16_at(body, 0)?,
@@ -437,7 +469,8 @@ impl Header {
             .map(|&(id, h, v, quant)| {
                 let across = (width as u32 * h as u32).div_ceil(hmax);
                 let down = (height as u32 * v as u32).div_ceil(vmax);
-                Component { id, h, v, quant, blocks_across: across.div_ceil(8), blocks_down: down.div_ceil(8) }
+                let quant_at = quant_at.get(quant as usize).copied().flatten();
+                Component { id, h, v, quant, quant_at, blocks_across: across.div_ceil(8), blocks_down: down.div_ceil(8) }
             })
             .collect();
         let mut members = Vec::with_capacity(scan.len());
@@ -451,7 +484,8 @@ impl Header {
             if dc_table > 3 || ac_table > 3 || dc[dc_table as usize].is_none() || ac[ac_table as usize].is_none() {
                 return Err(Refusal::Settings);
             }
-            members.push(ScanComponent { index: index as u8, dc_table, ac_table });
+            let (dc_at, ac_at) = (dc_at[dc_table as usize], ac_at[ac_table as usize]);
+            members.push(ScanComponent { index: index as u8, dc_table, ac_table, dc_at, ac_at });
         }
         let (mcus_across, mcus_down) = match members.as_slice() {
             [one] => {
@@ -480,8 +514,8 @@ impl Header {
         if facts.blocks_per_mcu() > 10 {
             return Err(Refusal::Failed);
         }
-        let dc = facts.scan.iter().map(|s| dc[s.dc_table as usize].clone().expect("checked")).collect();
-        let ac = facts.scan.iter().map(|s| ac[s.ac_table as usize].clone().expect("checked")).collect();
+        let dc = facts.scan.iter().map(|s| dc[s.dc_table as usize].clone().expect("checked")).collect::<Result<_, _>>()?;
+        let ac = facts.scan.iter().map(|s| ac[s.ac_table as usize].clone().expect("checked")).collect::<Result<_, _>>()?;
         Ok(Header { facts, dc, ac })
     }
 }

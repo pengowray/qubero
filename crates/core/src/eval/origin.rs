@@ -517,6 +517,15 @@ impl Evaluator {
         if block == path {
             return Ok(());
         }
+        // A JPEG MCU settles nothing about its codes: the tables do, and they
+        // are segments of the file before the scan. So a code names the table
+        // it was read with, and the blocks and markers of an MCU name nothing.
+        if self.trace_for(path).is_some_and(|(_, t)| !t.units().is_empty()) {
+            if let Some(o) = self.jpeg_table(doc, path, out.values)? {
+                out.push(o);
+            }
+            return Ok(());
+        }
         let label = self.memo.get(&block).map(|r| r.name.text()).unwrap_or_default();
         let mut o = self.origin(doc, out.values, Role::Type, label, block);
         // What the block reads as is a count of its children, which says
@@ -524,6 +533,68 @@ impl Evaluator {
         o.value = String::new();
         out.push(o);
         Ok(())
+    }
+
+    /// The Huffman table a JPEG code was read with: the one the scan header
+    /// named by class and id for the code's channel, as defined in the last
+    /// segment before the scan that defined it.
+    ///
+    /// The decoder says where that definition is, as bytes of the segments it
+    /// was handed; those start where the stream's packing says, so the
+    /// definition is a stretch of the file, and the field covering the whole
+    /// of it is the table the listing shows. Nothing for a node that is not a
+    /// code of an 8×8 block, and nothing for a JPEG read inside another
+    /// stream, whose segments are not bits of the file this reading locates
+    /// in.
+    fn jpeg_table<S: Source>(&mut self, doc: &Document<S>, path: &[usize], values: bool) -> R<Option<Origin>> {
+        let Some((&idx, parent)) = path.split_last() else { return Ok(None) };
+        let Some(Ty::Traced { part: crate::template::TracedPart::Unit(j) }) = self.memo.get(parent).map(|r| r.ty.clone()) else {
+            return Ok(None);
+        };
+        let Some(k) = (0..path.len()).rev().find(|&k| matches!(self.memo.get(&path[..k]).map(|r| &r.ty), Some(Ty::Decoded { .. }))) else {
+            return Ok(None);
+        };
+        let stream = path[..k].to_vec();
+        let (space, segments) = match &self.memo[&stream] {
+            Resolved { space, ty: Ty::Decoded { codec: Packing::JpegScan { segments }, .. }, .. } => (*space, segments.clone()),
+            _ => return Ok(None),
+        };
+        if space != 0 {
+            return Ok(None);
+        }
+        let from = match self.eval_expr(doc, &stream, &segments) {
+            Ok(v) => v as u64,
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => return Ok(None),
+        };
+        let found = self.trace_for(path).and_then(|(_, t)| {
+            let unit = t.units().get(j as usize)?;
+            let step = t.step(unit.steps.start as usize + idx)?;
+            let sc = t.jpeg()?.scan.iter().find(|s| s.index == unit.channel)?;
+            Some(match step.kind {
+                crate::codec::StepKind::Dc { .. } => (format!("DC table {}", sc.dc_table), sc.dc_at),
+                crate::codec::StepKind::Ac { .. } | crate::codec::StepKind::Zrl { .. } | crate::codec::StepKind::Eob { .. } => {
+                    (format!("AC table {}", sc.ac_table), sc.ac_at)
+                }
+                _ => return None,
+            })
+        });
+        let Some((label, (start, end))) = found else { return Ok(None) };
+        let (start, end) = ((from + start as u64) * 8, (from + end as u64) * 8);
+        let mut table = self.locate(doc, start)?;
+        loop {
+            let n = self.node(doc, &table)?;
+            if n.offset_bits <= start && end <= n.offset_bits + n.size_bits {
+                break;
+            }
+            if table.pop().is_none() {
+                return Ok(None);
+            }
+        }
+        let mut o = self.origin(doc, values, Role::Type, label, table);
+        // What the table reads as is its name again; the label says it.
+        o.value = String::new();
+        Ok(Some(o))
     }
 
     /// What the type says before the file has been consulted: the field's own

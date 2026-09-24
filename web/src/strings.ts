@@ -43,6 +43,12 @@ export const DECODED_REFUSED: Readonly<Record<string, string>> = {
    * nothing, or one whose properties this cannot read, comes to.
    */
   settings: "the file doesn't say how this was packed",
+  /** JPEG scans only a baseline decoder can't read, by what kind they are. */
+  progressive: "progressive JPEG, not decoded",
+  arithmetic: "arithmetic-coded JPEG, not decoded",
+  lossless: "lossless JPEG, not decoded",
+  hierarchical: "hierarchical JPEG, not decoded",
+  "12-bit": "12-bit JPEG, not decoded",
 };
 
 /** The same, for a run whose reason is one this build does not know. */

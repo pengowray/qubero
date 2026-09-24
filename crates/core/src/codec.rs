@@ -1172,10 +1172,12 @@ const TAG_END: u8 = 9;
 const TAG_BLOCK: u8 = 10;
 const TAG_OPAQUE: u8 = 11;
 const TAG_PIXEL: u8 = 12;
-const TAG_DC: u8 = 13;
-const TAG_AC: u8 = 14;
-const TAG_ZRL: u8 = 15;
-const TAG_EOB: u8 = 16;
+// JPEG's start at 20, which leaves the numbers after 12 to kinds added beside
+// them: a tag only has to differ from every other tag.
+const TAG_DC: u8 = 20;
+const TAG_AC: u8 = 21;
+const TAG_ZRL: u8 = 22;
+const TAG_EOB: u8 = 23;
 
 fn pack(in_start: u64, out_start: u64, kind: StepKind) -> RawStep {
     let (tag, a, b) = match kind {

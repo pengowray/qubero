@@ -29,6 +29,7 @@ import sys
 import numpy as np
 from PIL import Image
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(__file__))
 import jpeg_reference as ref  # noqa: E402
 
