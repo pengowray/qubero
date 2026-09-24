@@ -1606,6 +1606,12 @@ function buildDocument(tab: Tab): Page {
    */
   const reportHost: ReportHost = {
     pick: (t) => {
+      // A field read out of a stream has no place in the file to go to: the
+      // panel follows it, as it does from the listing, and the hex view stays.
+      if (t.path !== undefined && !inFile(t.path)) {
+        inspector.setPath(t.path);
+        return;
+      }
       if (t.path !== undefined && inFile(t.path)) {
         const n = doc.templateNode(t.path);
         if (n.status === "ok") {

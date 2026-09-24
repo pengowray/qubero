@@ -31,6 +31,10 @@ export type WalkResult = {
   readonly tables: readonly TemplateNode[];
   /** Runs of text long enough to read, largest first. */
   readonly texts: readonly TemplateNode[];
+  /** Streams joined from runs elsewhere in the file, as the node that holds
+   *  the joined bytes: a PNG's IDAT data, a gzip file's members, a BAM's
+   *  blocks. */
+  readonly joins: readonly TemplateNode[];
   /** True when the walk stopped at its limit or skipped elements of a list. */
   readonly partial: boolean;
 };
@@ -39,12 +43,13 @@ export function walkTemplate(doc: Doc): WalkResult | typeof WAIT {
   const streams: TemplateNode[] = [];
   const tables: TemplateNode[] = [];
   const texts: TemplateNode[] = [];
+  const joins: TemplateNode[] = [];
   let seen = 0;
   let partial = false;
   const stack: TemplateNode[] = [];
   const root = ok(doc.templateNode([]));
   if (root === WAIT) return WAIT;
-  if (root === null) return { streams, tables, texts, partial };
+  if (root === null) return { streams, tables, texts, joins, partial };
   stack.push(root);
   while (stack.length > 0) {
     const n = stack.pop() as TemplateNode;
@@ -52,8 +57,11 @@ export function walkTemplate(doc: Doc): WalkResult | typeof WAIT {
       streams.push(n);
       continue;
     }
-    if (n.table === true) tables.push(n);
-    if (n.kind === "str" && n.value_bytes >= TEXT_MIN_BYTES) texts.push(n);
+    // Inside a joined stream only its compressed runs are looked for: its
+    // tables and text are at offsets of the joined bytes, which the sections
+    // that show them would give as offsets of the file.
+    if (n.space === 0 && n.table === true) tables.push(n);
+    if (n.space === 0 && n.kind === "str" && n.value_bytes >= TEXT_MIN_BYTES) texts.push(n);
     if (!n.composite || n.child_count === 0) continue;
     if (seen >= NODES) {
       partial = true;
@@ -77,14 +85,21 @@ export function walkTemplate(doc: Doc): WalkResult | typeof WAIT {
     // Pushed backwards, so they come off the stack in file order.
     for (let i = kids.length - 1; i >= 0; i--) {
       const k = kids[i];
-      if (k === undefined || k.absent || k.space !== n.space) continue;
+      if (k === undefined || k.absent) continue;
+      // A joined stream's bytes are a space of their own, and the walk goes
+      // into it, since what they join can be compressed as one: a PNG's IDAT
+      // data is one zlib stream. A compressed run's space it does not go into.
+      const joined = k.joined && k.space_root && k.space !== n.space;
+      if (k.space !== n.space && !joined) continue;
+      if (joined) joins.push(k);
       if (n.list && !k.composite && !k.decoded) continue;
       stack.push(k);
     }
   }
   streams.sort((a, b) => a.offset_bits - b.offset_bits);
   texts.sort((a, b) => b.value_bytes - a.value_bytes);
-  return { streams, tables, texts, partial };
+  joins.sort((a, b) => a.path.length - b.path.length);
+  return { streams, tables, texts, joins, partial };
 }
 
 export type ProblemWalk = {

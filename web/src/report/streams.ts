@@ -12,7 +12,7 @@
 // same unpacking the listing's button does.
 
 import type { Doc, MapStep, TemplateNode } from "../doc.ts";
-import { byteText, formatBytes, formatOffset } from "../format.ts";
+import { byteText, formatAddress, formatBytes, formatOffset } from "../format.ts";
 import { ok } from "./model.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { ribbon, type RibbonData } from "./ribbon.ts";
@@ -44,7 +44,7 @@ export const streamsSection: Section = {
     const walk = ctx.data.memo("walk", () => walkTemplate(ctx.doc));
     if (walk === WAIT) return WAIT;
     const streams = walk.streams.filter((s) => s.refused === null);
-    if (streams.length === 0) return null;
+    if (streams.length === 0 && walk.joins.length === 0) return null;
     const opened: Opened[] = [];
     let unpackedTotal = 0;
     let openedBytes = 0;
@@ -68,8 +68,12 @@ export const streamsSection: Section = {
     const sec = document.createElement("section");
     sec.className = "rv-section rv-streams";
     const h = document.createElement("h2");
-    h.textContent = RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null);
+    h.textContent = streams.length === 0 ? RV.joinsHeading(walk.joins.length) : RV.streamsHeading(streams.length, packed, allOpened ? unpackedTotal : null);
     sec.append(h);
+    if (streams.length === 0) {
+      sec.append(joinList(ctx, walk.joins));
+      return sec;
+    }
     // One table of every stream, then the figures for one of them: the
     // largest to start with, and whichever row is clicked after that.
     const figure = document.createElement("div");
@@ -86,6 +90,7 @@ export const streamsSection: Section = {
       p.textContent = RV.moreStreams(streams.length - ROWS_MAX);
       sec.append(p);
     }
+    if (walk.joins.length > 0) sec.append(joinList(ctx, walk.joins));
     sec.append(figure);
     const largest = [...opened].filter((o) => o.space !== null).sort((a, b) => b.node.size_bits - a.node.size_bits)[0] ?? opened[0];
     if (largest !== undefined) pick(largest, table.rows.get(largest) ?? null);
@@ -128,7 +133,7 @@ function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTable
     name.className = "rv-cell-name";
     const code = document.createElement("code");
     code.textContent = o.label;
-    name.append(code, " ", byteRef({ path: o.node.path, startBit: o.node.offset_bits, endBit: o.node.offset_bits + o.node.size_bits }, o.label, formatOffset(o.node.offset_bits)));
+    name.append(code, " ", addressOf(o.node, o.label));
     const cell = (text: Node | string, cls: string, label: string): HTMLTableCellElement => {
       const td = document.createElement("td");
       td.className = cls;
@@ -160,6 +165,48 @@ function streamTable(opened: readonly Opened[], pick: (o: Opened, row: HTMLTable
   return { el: wrap, rows };
 }
 
+/**
+ * Where a stream is: a link to its bytes for one in the file, and for one
+ * inside a joined stream its offset there, as plain text, since the joined
+ * bytes are at no one place in the file to mark or go to.
+ */
+function addressOf(n: TemplateNode, label: string): Node {
+  if (n.space === 0) return byteRef({ path: n.path, startBit: n.offset_bits, endBit: n.offset_bits + n.size_bits }, label, formatOffset(n.offset_bits));
+  const at = document.createElement("span");
+  at.className = "rv-muted";
+  at.textContent = formatAddress(n.offset_bits, n.space);
+  return at;
+}
+
+/** The streams joined from pieces in different places, one line each, with a
+ *  button to show the joined bytes in the listing. */
+function joinList(ctx: ReportCtx, joins: readonly TemplateNode[]): HTMLElement {
+  const list = document.createElement("ul");
+  list.className = "rv-joins";
+  for (const j of joins.slice(0, JOINS_MAX)) {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = j.name;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rv-button";
+    b.textContent = RV.showInListing;
+    b.addEventListener("click", () => ctx.host.showInListing(j.path));
+    li.append(code, RV.joinLine(bytesText(j.size_bits / 8)), " ", b);
+    list.append(li);
+  }
+  if (joins.length > JOINS_MAX) {
+    const li = document.createElement("li");
+    li.className = "rv-muted";
+    li.textContent = RV.moreJoins(joins.length - JOINS_MAX);
+    list.append(li);
+  }
+  return list;
+}
+
+/** Joined streams listed, at most. */
+const JOINS_MAX = 8;
+
 /** What to call a stream: the element of a list it is inside, by the name the
  *  listing gives it (`word/document.xml`), and its own field name after. */
 function streamLabel(doc: Doc, node: TemplateNode): string | typeof WAIT {
@@ -178,8 +225,10 @@ function streamLabel(doc: Doc, node: TemplateNode): string | typeof WAIT {
 function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   const box = document.createElement("div");
   box.className = "rv-stream";
-  box.dataset.rvPartStart = String(o.node.offset_bits);
-  box.dataset.rvPartEnd = String(o.node.offset_bits + o.node.size_bits);
+  if (o.node.space === 0) {
+    box.dataset.rvPartStart = String(o.node.offset_bits);
+    box.dataset.rvPartEnd = String(o.node.offset_bits + o.node.size_bits);
+  }
   const packed = o.node.size_bits / 8;
   const unpacked = o.space?.lengthBytes ?? null;
   const h = document.createElement("h3");
@@ -187,7 +236,7 @@ function streamBlock(ctx: ReportCtx, o: Opened): HTMLElement {
   name.textContent = o.label;
   const [before, after] = RV.streamHeading("\u0000", packed, o.node.type, unpacked).split("\u0000");
   h.append(before ?? "", name, after ?? "");
-  pointAt(h, { path: o.node.path, startBit: o.node.offset_bits, endBit: o.node.offset_bits + o.node.size_bits }, o.label);
+  if (o.node.space === 0) pointAt(h, { path: o.node.path, startBit: o.node.offset_bits, endBit: o.node.offset_bits + o.node.size_bits }, o.label);
   box.append(h);
   if (o.space === null) {
     const p = document.createElement("p");

@@ -37,6 +37,8 @@ export class ReportData {
   private readonly coreState: CoreReport = { profile: null, ledger: null, audit: null, dirs: null, template: undefined, failed: null };
   private coreStepped = -1;
   private coreSnapshot = 0;
+  /** Which of the three snapshots is taken next while the walk runs. */
+  private coreTurn = 0;
   private coreMissing = false;
 
   constructor(
@@ -151,18 +153,21 @@ export class ReportData {
         c.dirs = r.node;
         if (r.node.done || performance.now() > until) break;
       }
-      // What the other three have come to so far, now and then while the walk
-      // runs and once more when it is over.
+      // What the other three have come to so far: one of them now and then
+      // while the walk runs, in turn, since each answer is a copy of
+      // everything counted so far; all three once the walk is over.
+      const take = <T>(call: ReportStep): T | null => {
+        const r = this.doc.reportStep<T>(call);
+        return r !== null && r.status === "ok" ? r.node : null;
+      };
       const now = performance.now();
-      if (c.dirs?.done === true || now - this.coreSnapshot > SNAPSHOT_MS) {
+      const done = c.dirs?.done === true;
+      if (done || now - this.coreSnapshot > SNAPSHOT_MS / 3) {
         this.coreSnapshot = now;
-        const take = <T>(call: ReportStep): T | null => {
-          const r = this.doc.reportStep<T>(call);
-          return r !== null && r.status === "ok" ? r.node : null;
-        };
-        c.profile = take<Profile>("format_profile_step") ?? c.profile;
-        c.ledger = take<Ledger>("byte_ledger_step") ?? c.ledger;
-        c.audit = take<ExtentAudit>("extent_audit_step") ?? c.audit;
+        const turn = done ? -1 : this.coreTurn++ % 3;
+        if (turn === -1 || turn === 0) c.ledger = take<Ledger>("byte_ledger_step") ?? c.ledger;
+        if (turn === -1 || turn === 1) c.profile = take<Profile>("format_profile_step") ?? c.profile;
+        if (turn === -1 || turn === 2) c.audit = take<ExtentAudit>("extent_audit_step") ?? c.audit;
       }
     }
     if (c.template === undefined) {

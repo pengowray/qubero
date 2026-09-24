@@ -7,7 +7,7 @@ import type { TemplateNode } from "../doc.ts";
 import { percentText } from "../format.ts";
 import { lineColor, lineLabel } from "./bytes.ts";
 import type { Ledger } from "./coredata.ts";
-import { ledgerLines, runsOf } from "./ledger.ts";
+import { ledgerLines, fieldRows } from "./ledger.ts";
 import { ok, type PartsModel, type Unit } from "./model.ts";
 import { byteRef } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
@@ -93,7 +93,7 @@ export const everyByteSection: Section = {
         row(head, targetOf(u), 0, "rv-grouprow");
         const kids = fieldsOf(ctx, u);
         if (kids === WAIT) return WAIT;
-        for (const k of runsOf(u, kids).slice(0, PER_PART)) {
+        for (const k of fieldRows(u, kids).slice(0, PER_PART)) {
           const code = document.createElement("code");
           code.textContent = k.count > 1 ? RV.runOf(k.name, k.count) : k.name;
           row(code, { path: k.path, startBit: k.startBit, endBit: k.endBit }, 1);
@@ -181,7 +181,7 @@ function coreEveryByte(ctx: ReportCtx, ledger: Ledger, model: PartsModel): HTMLE
     const sw = document.createElement("span");
     sw.className = "rv-swatch";
     sw.style.background = lineColor(model, l, i);
-    name.append(sw, ...lineLabel(ctx.doc, l, fileBits));
+    name.append(sw, ...lineLabel(ctx.doc, l, fileBits, model));
     const at = byteRef({ ...(l.firstPath.length > 0 ? { path: l.firstPath } : {}), startBit: l.firstOffsetBits, endBit: l.firstOffsetBits + 8 });
     tr.append(cell(name, "rv-cell-name", ""), cell(at, "rv-num", RV.ledgerStart), cell(bitsText(l.bits), "rv-num", RV.ledgerBytes), cell(percentText(l.bits, fileBits), "rv-num", RV.ledgerShare));
     body.append(tr);

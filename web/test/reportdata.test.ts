@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import type { LedgerRow, Profile, ProfileRow } from "../src/report/coredata.ts";
 import { sameOrder } from "../src/report/directories.ts";
 import { extentWindow } from "../src/report/extentfigure.ts";
-import { isGapLine, ledgerLines, runsOf } from "../src/report/ledger.ts";
+import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
@@ -45,17 +45,26 @@ test("a part's groups are a line each, and their roles are summed under them", (
   assert.deepEqual(local?.roles.map((r) => r.role), ["content", "machinery"]);
 });
 
-test("a group inside another group's element is counted in that group's line", () => {
-  // A JPEG's dqt segment holds its tables, whose variant is "8-bit".
+test("a structure named by its type inside another group's element is counted in that group's line", () => {
+  // A JPEG's dht segment holds its Huffman tables.
   const lines = ledgerLines([
-    row([1], "segments", "dqt, quantisation tables", "machinery", 64, [1, 1, 0], 160),
-    row([1], "segments", "8-bit", "content", 1032, [1, 1, 1, 1, 0, 1], 200),
-    row([1], "segments", "8-bit", "machinery", 8, [1, 1, 1, 1, 0, 0], 192),
+    row([1], "segments", "dht, huffman tables", "machinery", 128, [1, 4, 0], 1416),
+    row([1], "segments", "HuffmanTable", "content", 2816, [1, 4, 1, 1, 0, 0], 1448, { group_from: "type" }),
+    row([1], "segments", "HuffmanTable", "machinery", 512, [1, 4, 1, 1, 0, 2, 0], 1456, { group_from: "type" }),
     row([1], "segments", "sof0, baseline dct", "content", 40, [1, 3, 1, 1, 0], 1300),
   ]);
-  assert.deepEqual(lines.map((l) => l.group), ["dqt, quantisation tables", "sof0, baseline dct"]);
-  assert.equal(lines[0]?.bits, 64 + 1032 + 8);
-  assert.equal(lines[0]?.roles.find((r) => r.role === "machinery")?.bits, 72);
+  assert.deepEqual(lines.map((l) => l.group), ["sof0, baseline dct", "dht, huffman tables"]);
+  assert.equal(lines[1]?.bits, 128 + 2816 + 512);
+  assert.equal(lines[1]?.roles.find((r) => r.role === "machinery")?.bits, 640);
+});
+
+test("a group named by a value inside another group's element keeps its own line", () => {
+  // A MIDI track's meta events are named by their status byte.
+  const lines = ledgerLines([
+    row([1], "file", "MTrk", "machinery", 192, [1, 0], 112),
+    row([1], "file", "meta", "content", 520, [1, 2, 0, 0], 176),
+  ]);
+  assert.deepEqual(lines.map((l) => l.group), ["MTrk", "meta"]);
 });
 
 test("the plain fields of one structure are one line, and one field alone keeps its name", () => {
@@ -154,7 +163,7 @@ test("a figure zoomed all the way out lets a zoom-out through to the page", () =
 
 test("a part's rows leave out a field as big as the part and count neighbours of one name", () => {
   const kid = (name: string, at: number, size: number) => ({ name, path: [at], offset_bits: at, size_bits: size });
-  const runs = runsOf({ offsetBits: 0, sizeBits: 400 }, [kid("body", 0, 400), kid("[0] dht", 0, 100), kid("[1] dht", 100, 100), kid("[2] dqt", 200, 200)]);
+  const runs = fieldRows({ offsetBits: 0, sizeBits: 400 }, [kid("body", 0, 400), kid("[0] dht", 0, 100), kid("[1] dht", 100, 100), kid("[2] dqt", 200, 200)]);
   assert.deepEqual(runs.map((r) => [r.name, r.count, r.startBit, r.endBit]), [["dht", 2, 0, 200], ["dqt", 1, 200, 400]]);
 });
 

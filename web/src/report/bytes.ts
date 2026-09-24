@@ -97,8 +97,10 @@ export function lineColor(model: PartsModel, l: LedgerLine, i: number): string {
 }
 
 /** What a ledger line is called: its group within its part, the fields of a
- *  structure taken together, or bytes no field describes. */
-export function lineLabel(doc: Doc, l: LedgerLine, fileBits: number): (Node | string)[] {
+ *  structure taken together, or bytes no field describes. A group of more
+ *  than one element says how many, where the parts found them: four dht
+ *  segments are `dht, huffman tables × 4`. */
+export function lineLabel(doc: Doc, l: LedgerLine, fileBits: number, model: PartsModel | null = null): (Node | string)[] {
   if (isGapLine(l)) return [RV.ledgerGapLabel];
   if (l.key === "padding") return [RV.ledgerPaddingLabel];
   const code = (s: string): HTMLElement => {
@@ -119,7 +121,9 @@ export function lineLabel(doc: Doc, l: LedgerLine, fileBits: number): (Node | st
   const inPart = document.createElement("span");
   inPart.className = "rv-muted";
   inPart.append(` ${RV.inPart} `, code(l.part));
-  return [l.group, inPart];
+  const g = model === null ? null : groupAt(model, l.firstOffsetBits);
+  const n = g !== null && g.label === l.group ? g.units.length : 1;
+  return [n > 1 ? RV.runOf(l.group, n) : l.group, inPart];
 }
 
 /** Light a line's first field on the map, and zoom there on a click. */
@@ -182,7 +186,7 @@ function coreLedger(ctx: ReportCtx, ledger: Ledger, model: PartsModel, map: Zoom
     const sw = document.createElement("span");
     sw.className = "rv-swatch";
     sw.style.background = lineColor(model, l, i);
-    name.append(sw, ...lineLabel(ctx.doc, l, fileBits));
+    name.append(sw, ...lineLabel(ctx.doc, l, fileBits, model));
     const at = document.createElement("td");
     at.className = "rv-num";
     at.dataset.label = RV.ledgerStart;
@@ -210,7 +214,7 @@ function coreLedger(ctx: ReportCtx, ledger: Ledger, model: PartsModel, map: Zoom
   const top = [...lines].sort((a, b) => b.bits - a.bits)[0];
   if (top !== undefined) {
     const lead = document.createElement("b");
-    lead.append(RV.largestLead, ...lineLabel(ctx.doc, top, fileBits), ` (${percentText(top.bits, fileBits)} ${RV.ofTheFile}).`);
+    lead.append(RV.largestLead, ...lineLabel(ctx.doc, top, fileBits, model), ` (${percentText(top.bits, fileBits)} ${RV.ofTheFile}).`);
     cap.append(lead, " ");
   }
   cap.append(RV.coreLedgerCaption);

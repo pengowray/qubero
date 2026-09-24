@@ -63,6 +63,8 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     firstOffsetBits: number;
     firstPath: readonly number[];
     partPath: readonly number[];
+    /** The group is named by the structure's type, not by a value. */
+    byType: boolean;
     roles: Map<LedgerRole, RoleAcc>;
   };
   const lines = new Map<string, Acc>();
@@ -88,6 +90,7 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
         firstOffsetBits: r.first_offset_bits,
         firstPath: r.first_path,
         partPath: r.part,
+        byType: r.group_from === "type",
         roles: new Map(),
       };
       lines.set(key, a);
@@ -105,10 +108,13 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     if (r.align > 0) role.aligns.add(r.align);
     a.roles.set(r.role, role);
   }
-  // A group inside another group's element is part of that group's line: a
-  // JPEG dqt segment's tables are what the segment holds, and the line says
-  // how much of the file the segments take. The inner group's first field
-  // lies in the element where the outer group's first field is, further in.
+  // A structure inside another group's element that is named only by its
+  // type is part of that group's line: a JPEG dht segment's Huffman tables,
+  // a ZIP local file's extra fields. The line then says how much of the file
+  // the segments take. The inner group's first field lies in the element
+  // where the outer group's first field is, further in. A group named by a
+  // value in the file stays a line of its own, since the value says
+  // something: a MIDI track's note-on events, a JPEG table's precision.
   const owners = new Map<string, Acc>();
   const nested: Acc[] = [];
   const byDepth = [...lines.values()].filter((a) => a.key.startsWith("part:")).sort((x, y) => x.firstPath.length - y.firstPath.length);
@@ -116,7 +122,7 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     const element = `${a.partPath.join("/")}|${a.firstPath.slice(0, a.partPath.length + 1).join("/")}`;
     const owner = owners.get(element);
     if (owner === undefined) owners.set(element, a);
-    else if (owner.firstPath.length < a.firstPath.length) {
+    else if (a.byType && owner.firstPath.length < a.firstPath.length) {
       mergeInto(owner, a);
       nested.push(a);
     }
@@ -169,7 +175,7 @@ export function isGapLine(l: LedgerLine): boolean {
  * is left out, and neighbours of the same name are one row with a count, so
  * four dht segments in a row are `dht × 4`.
  */
-export function runsOf(u: { offsetBits: number; sizeBits: number }, kids: readonly Pick<TemplateNode, "name" | "path" | "offset_bits" | "size_bits">[]): { name: string; path: readonly number[]; startBit: number; endBit: number; count: number }[] {
+export function fieldRows(u: { offsetBits: number; sizeBits: number }, kids: readonly Pick<TemplateNode, "name" | "path" | "offset_bits" | "size_bits">[]): { name: string; path: readonly number[]; startBit: number; endBit: number; count: number }[] {
   const out: { name: string; path: readonly number[]; startBit: number; endBit: number; count: number }[] = [];
   for (const k of kids) {
     if (k.offset_bits === u.offsetBits && k.size_bits === u.sizeBits) continue;

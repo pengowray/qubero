@@ -295,6 +295,11 @@ export const RV = {
   streamNotOpened: (limit: string): string => `Not unpacked here: the report unpacks streams up to ${limit} on its own. Open it as a tab to read it.`,
   openUnpacked: "Open unpacked",
   moreStreams: (n: number): string => `${counted(n, "more stream")} not shown.`,
+  /** For a file whose only streams are joined ones. */
+  joinsHeading: (n: number): string => sentenceCase(counted(n, "joined stream")),
+  /** After a joined stream's name. */
+  joinLine: (size: string): string => `: ${size}, joined into one stream from pieces in several places in the file.`,
+  moreJoins: (n: number): string => `${counted(n, "more joined stream")} not shown.`,
   stepLiteral: (byte: string): string => `Literal ${byte}`,
   stepMatch: (len: number, dist: number): string => `Copy ${bytesText(len)} from ${dist.toLocaleString()} back`,
   stepOther: (kind: string): string => kind,

@@ -56,7 +56,11 @@ const ZERO = 0;
 const TEXT = 2;
 const OTHER = 3;
 
-type SpanCache = { readonly key: string; readonly spans: readonly Span[] | null; readonly truncated: boolean };
+type SpanCache = { readonly key: string; readonly spans: readonly Span[] | null; readonly truncated: boolean; readonly askedAt?: number };
+/** How long a window whose fields are still being found waits before it is
+ *  asked about again. Over a large file the answer takes seconds, and asking
+ *  on every frame spends a frame's time for nothing. */
+const SPAN_RETRY_MS = 150;
 
 export class ZoomMap {
   readonly el: HTMLElement;
@@ -222,8 +226,10 @@ export class ZoomMap {
     const to = Math.ceil(hi) * 8;
     const key = `${from}:${to}`;
     if (this.spans.key === key && this.spans.spans !== null) return this.spans;
+    const now = performance.now();
+    if (this.spans.key === key && now - (this.spans.askedAt ?? 0) < SPAN_RETRY_MS) return this.spans;
     const r = ok(this.ctx.doc.spans(from, to, SPAN_MAX));
-    if (r === WAIT) this.spans = { key, spans: null, truncated: false };
+    if (r === WAIT) this.spans = { key, spans: null, truncated: false, askedAt: now };
     else if (r === null) this.spans = { key, spans: [], truncated: false };
     else this.spans = { key, spans: r, truncated: r.length >= SPAN_MAX };
     return this.spans;
