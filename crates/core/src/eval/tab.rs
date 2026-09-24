@@ -275,6 +275,51 @@ impl<'a, S: Source> Tab<'a, S> {
         self.ev.kind_totals_step(self.doc, walk)
     }
 
+    /// The report's walk over the tab's bits: its profile, ledger, extent
+    /// audit and directories, carried on a go at a time with `report_step`.
+    pub fn report_walk(&self, bits: u64) -> ReportWalk {
+        ReportWalk::under(bits, self.root.clone())
+    }
+
+    pub fn report_step(&mut self, walk: &mut ReportWalk) -> R<()> {
+        self.ev.report_step(self.doc, walk)
+    }
+
+    /// The ledger so far, its paths the tab's own.
+    pub fn report_ledger(&self, walk: &ReportWalk) -> Ledger {
+        let mut l = walk.ledger();
+        for r in &mut l.rows {
+            r.part = self.path_out(&r.part).unwrap_or_default();
+            r.first_path = self.path_out(&r.first_path).unwrap_or_default();
+        }
+        l
+    }
+
+    /// The extent audit so far, its paths the tab's own.
+    pub fn report_audit(&self, walk: &ReportWalk) -> ExtentAudit {
+        let mut a = walk.audit();
+        for c in &mut a.checks {
+            c.length_path = self.path_out(&c.length_path).unwrap_or_default();
+            c.part_path = self.path_out(&c.part_path).unwrap_or_default();
+        }
+        a
+    }
+
+    /// The directories, their paths the tab's own.
+    pub fn report_directories(&self, walk: &ReportWalk) -> Directories {
+        let mut d = walk.directories();
+        for list in &mut d.lists {
+            list.path = self.path_out(&list.path).unwrap_or_default();
+            for e in &mut list.entries {
+                e.path = self.path_out(&e.path).unwrap_or_default();
+                for t in &mut e.targets {
+                    t.path = self.path_out(&t.path).unwrap_or_default();
+                }
+            }
+        }
+        d
+    }
+
     /// The most advanced unfinished walk of a list among the tab's fields.
     pub fn extent_estimate(&self) -> Option<ExtentEstimate> {
         let mut found = self.ev.extent_estimate_under(&self.root)?;
