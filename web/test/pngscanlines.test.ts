@@ -45,7 +45,7 @@ test("the heading and the counts say how many use which filter, most first", () 
   const counts = filterCounts(lines);
   assert.deepEqual(counts, [1, 1, 0, 0, 3]);
   assert.equal(RV.pngScanlinesHeading(5, true, "Paeth", 3, true), "5 scanlines in seven passes, 3 of them filtered with Paeth");
-  assert.equal(RV.pngScanlinesHeading(32, false, "None", 32, true), "32 scanlines, all filtered with None");
+  assert.equal(RV.pngScanlinesHeading(32, false, "None", 32, true), "32 scanlines, none of them filtered");
   assert.equal(RV.pngScanlinesHeading(4000, false, "Up", 2000, false), "4,000 scanlines");
   assert.equal(
     RV.pngFilterCounts([["Paeth", 36], ["Sub", 11], ["Up", 8], ["None", 4], ["Average", 1]], null),
