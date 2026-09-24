@@ -32,13 +32,9 @@ const SCANS_SHOWN = 4;
 const PANEL_PX = 440;
 /** The largest a small picture is magnified. */
 const MAX_ZOOM = 6;
-/** Classes of the map's shading, light to dark. */
+/** Classes of the map's shading, fewest bits first. Their colours are
+ *  `--rv-seq-0` to `--rv-seq-6` in `jpeg.css`, one set for each theme. */
 const CLASSES = 7;
-/** The sequential blue ramp of the report's charts, low to high, for each
- *  theme: on a light page the low end is pale, and on a dark one it is dark,
- *  so a cheap MCU recedes into the page either way. */
-const RAMP_LIGHT = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
-const RAMP_DARK = ["#0d366b", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"];
 
 export const jpegSection: Section = {
   id: "jpeg",
@@ -139,8 +135,11 @@ function classStep(max: number): number {
   return Math.ceil(10 * p);
 }
 
-function ramp(): readonly string[] {
-  return matchMedia("(prefers-color-scheme: dark)").matches ? RAMP_DARK : RAMP_LIGHT;
+/** The classes' colours as they stand on `el` now, for painting a canvas,
+ *  which cannot take a CSS variable. */
+function ramp(el: Element): [number, number, number][] {
+  const style = getComputedStyle(el);
+  return [...Array(CLASSES).keys()].map((i) => rgb(style.getPropertyValue(`--rv-seq-${i}`).trim() || "#808080"));
 }
 
 function mapFigure(ctx: ReportCtx, map: JpegScan, g: Geometry, pick: (mcu: number) => void): HTMLElement {
@@ -217,14 +216,21 @@ function mapFigure(ctx: ReportCtx, map: JpegScan, g: Geometry, pick: (mcu: numbe
     const c = canvas.getContext("2d");
     if (c === null) return;
     const img = c.createImageData(across, down);
-    const colours = ramp().map(rgb);
+    const colours = ramp(canvas);
     for (let m = 0; m < bits.length; m++) {
       const col = colours[Math.min(CLASSES - 1, Math.floor((bits[m] ?? 0) / step))] ?? [0, 0, 0];
       img.data.set([col[0], col[1], col[2], 255], m * 4);
     }
     c.putImageData(img, 0, 0);
   };
-  paint();
+  // Painted once the section is on the page, since the colours are the
+  // page's variables and a canvas not yet in it has none; and again when the
+  // theme changes.
+  ctx.live(() => {
+    if (!canvas.isConnected) return false;
+    paint();
+    return true;
+  });
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (canvas.isConnected) paint();
   });
@@ -276,13 +282,12 @@ function rgb(hex: string): [number, number, number] {
 function legend(step: number): HTMLElement {
   const l = document.createElement("div");
   l.className = "rv-jpeg-legend";
-  const colours = ramp();
   for (let i = 0; i < CLASSES; i++) {
     const item = document.createElement("span");
     item.className = "rv-jpeg-legenditem";
     const sw = document.createElement("span");
     sw.className = "rv-jpeg-swatch";
-    sw.style.background = colours[i] ?? "";
+    sw.style.background = `var(--rv-seq-${i})`;
     const t = document.createElement("span");
     t.textContent = JPEG.legendClass(i * step, (i + 1) * step - 1);
     item.append(sw, t);

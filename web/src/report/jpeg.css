@@ -3,6 +3,31 @@
    block traced from its codes to its samples. Colours are the app's own
    variables, and the map's blues are the report's sequential ramp. */
 
+/* The map's seven classes, fewest bits first. The report's sequential blue
+   ramp, run pale to dark on a light page and dark to pale on a dark one, so a
+   cheap MCU recedes into the page either way. The canvas reads these when it
+   paints, so it and the legend cannot disagree. */
+.rv-jpeg {
+  --rv-seq-0: #cde2fb;
+  --rv-seq-1: #9ec5f4;
+  --rv-seq-2: #6da7ec;
+  --rv-seq-3: #3987e5;
+  --rv-seq-4: #256abf;
+  --rv-seq-5: #184f95;
+  --rv-seq-6: #0d366b;
+}
+@media (prefers-color-scheme: dark) {
+  .rv-jpeg {
+    --rv-seq-0: #0d366b;
+    --rv-seq-1: #184f95;
+    --rv-seq-2: #256abf;
+    --rv-seq-3: #3987e5;
+    --rv-seq-4: #6da7ec;
+    --rv-seq-5: #9ec5f4;
+    --rv-seq-6: #cde2fb;
+  }
+}
+
 .rv-jpeg-panels {
   display: flex;
   flex-wrap: wrap;
@@ -31,6 +56,8 @@
   max-width: 100%;
   image-rendering: pixelated;
   cursor: crosshair;
+  /* Where the map ends, since its palest class is close to the page. */
+  outline: 1px solid var(--line);
 }
 .rv-jpeg-legend {
   display: flex;
