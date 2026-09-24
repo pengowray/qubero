@@ -15,10 +15,15 @@ use super::*;
 use crate::codec::scanlines::Geometry;
 use crate::template::RasterOrder;
 
+// Every function here is kept out of line. Placing a child, counting and
+// measuring a node are on the path every nested field recurses through, and a
+// frame there that grew by what these hold (a geometry, the words of a
+// refusal) would lower how deep a file can nest before the stack runs out.
 impl Evaluator {
     /// The shape of the raster at `path`, from its three expressions, worked
     /// out once and kept with the list. The expressions are asked where the
     /// raster is declared, the way an array's count is.
+    #[inline(never)]
     pub(super) fn raster_geometry<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Arc<Geometry>> {
         self.resolve(doc, path)?;
         if let Some(g) = &self.list(path).raster {
@@ -44,7 +49,10 @@ impl Evaluator {
     /// Pixel `idx` of the raster at `parent`: column `idx % width` of row
     /// `idx / width`, at the bits its pass and row put it in. It may read as
     /// far as one pixel reaches and no further.
-    pub(super) fn place_raster<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], pr: &Resolved, idx: usize, pixel: &Ty) -> R<Option<Place>> {
+    #[inline(never)]
+    pub(super) fn place_raster<S: Source>(&mut self, doc: &Document<S>, parent: &[usize], pr: &Resolved, idx: usize) -> R<Option<Place>> {
+        let Ty::Raster { pixel, .. } = &pr.ty else { return fail("not a raster") };
+        let pixel = (**pixel).clone();
         let g = self.raster_geometry(doc, parent)?;
         let (x, y) = (idx as u64 % g.width, idx as u64 / g.width);
         let Some((_, bit)) = g.pixel_bit(x, y) else { return fail("no such pixel") };
@@ -53,10 +61,11 @@ impl Evaluator {
         if limit > pr.limit {
             return fail("field extends beyond its parent");
         }
-        Ok(Some(Place { name: Name::Index(idx), ty: pixel.clone(), offset, limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
+        Ok(Some(Place { name: Name::Index(idx), ty: pixel, offset, limit, space: pr.space, machinery: false, elsewhere: false, aside: false }))
     }
 
     /// How many pixels the raster at `path` has.
+    #[inline(never)]
     pub(super) fn raster_count<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         let g = self.raster_geometry(doc, path)?;
         match g.width.checked_mul(g.height) {
@@ -67,6 +76,7 @@ impl Evaluator {
 
     /// How many bits the raster at `path` covers: every row of every pass,
     /// padding included.
+    #[inline(never)]
     pub(super) fn raster_bits<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<u64> {
         let g = self.raster_geometry(doc, path)?;
         match g.unfiltered_len().checked_mul(8) {
@@ -78,6 +88,7 @@ impl Evaluator {
     /// Which pixel of the raster at `path` holds `bit`, by the same
     /// arithmetic run backwards. Nothing for the bits that pad a row out to a
     /// byte, which belong to no pixel.
+    #[inline(never)]
     pub(super) fn raster_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], bit: u64) -> R<Option<usize>> {
         let g = self.raster_geometry(doc, path)?;
         let Some(into) = bit.checked_sub(self.memo[path].offset) else { return Ok(None) };

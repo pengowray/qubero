@@ -37,6 +37,7 @@ mod pickleframe;
 mod pickleobjects;
 mod picklenames;
 mod pickleparts;
+mod raster;
 mod picklesaid;
 mod picklesummary;
 mod picklestd;
@@ -46,7 +47,6 @@ mod pickletree;
 mod placed;
 mod problem;
 mod expr;
-mod raster;
 mod read;
 mod readas;
 mod relate;
@@ -1735,10 +1735,6 @@ impl Evaluator {
         if let Ty::Stitched { inner, .. } = &pr.ty {
             return self.place_stitched(doc, parent, &pr, idx, inner);
         }
-        // A pixel, placed by arithmetic rather than after the one before.
-        if let Ty::Raster { pixel, .. } = &pr.ty {
-            return self.place_raster(doc, parent, &pr, idx, pixel);
-        }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
                 Some(f) => (Name::Field(f.name.clone()), f.ty.clone()),
@@ -1779,6 +1775,8 @@ impl Evaluator {
                 }));
             }
             Ty::Traced { part } => return self.place_traced(parent, &pr, *part, idx),
+            // A pixel, placed by arithmetic rather than after the one before.
+            Ty::Raster { .. } => return self.place_raster(doc, parent, &pr, idx),
             _ => return fail("not a composite"),
         };
         // What a stream holds is read over the bytes it came to, not over the
@@ -2521,6 +2519,11 @@ impl Evaluator {
     /// listing down with it would be the one refusal that is worse than the
     /// bytes. `Pending` is not one of these and is passed on, as everywhere:
     /// bytes that have not arrived are asked for again.
+    ///
+    /// Out of line, since opening a stream is on the way down through every
+    /// node that asks how many children a stream has, and the numbers worked
+    /// out here would otherwise sit in that frame at every level.
+    #[inline(never)]
     pub(super) fn codec_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize]) -> R<Option<crate::codec::Codec>> {
         let Some(Ty::Decoded { codec, .. }) = self.memo.get(path).map(|r| r.ty.clone()) else { return Ok(None) };
         macro_rules! number {
@@ -2567,16 +2570,9 @@ impl Evaluator {
                 }
                 Some(crate::codec::Codec::Rar5 { window_bits: 17 + dict, unpacked })
             }
-            Packing::PngScanlines { width, height, bit_depth, color_type, interlace } => {
-                let (w, h) = (number!(&width), number!(&height));
-                let (depth, colour, interlace) = (number!(&bit_depth), number!(&color_type), number!(&interlace));
-                let Some(bits) = crate::codec::scanlines::bits_per_pixel(depth, colour) else { return Ok(None) };
-                let (Ok(width), Ok(height)) = (u32::try_from(w), u32::try_from(h)) else { return Ok(None) };
-                // Nought is not a size, and 2^31 and over is not a PNG's.
-                if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 || !(0..=1).contains(&interlace) {
-                    return Ok(None);
-                }
-                Some(crate::codec::Codec::PngScanlines { width, height, bits_per_pixel: bits, interlace: interlace == 1 })
+            Packing::PngScanlines(h) => {
+                let numbers = [number!(&h.width), number!(&h.height), number!(&h.bit_depth), number!(&h.color_type), number!(&h.interlace)];
+                png_scanlines(numbers)
             }
         })
     }
@@ -2834,6 +2830,7 @@ impl Evaluator {
     /// Where a `Traced` node's child sits, which is where the decoder said it
     /// read it. Nothing is walked and nothing is measured: a step knows its
     /// own bits, so element a million of a symbol run is one lookup.
+    #[inline(never)]
     fn place_traced(
         &mut self,
         parent: &[usize],
@@ -3010,4 +3007,19 @@ impl Evaluator {
         let r = self.memo[&p].clone();
         self.read(doc, &r, r.offset, size)
     }
+}
+
+/// The codec a PNG's scanlines are unfiltered with, from the five numbers of
+/// its header: width, height, bit depth, colour type and interlace method.
+/// Nothing for a header no decoder would read. Out of line, since
+/// [`Evaluator::codec_at`] is on the way down through every stream.
+#[inline(never)]
+fn png_scanlines([w, h, depth, colour, interlace]: [i128; 5]) -> Option<crate::codec::Codec> {
+    let bits = crate::codec::scanlines::bits_per_pixel(depth, colour)?;
+    let (width, height) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    // Nought is not a size, and 2^31 and over is not a PNG's.
+    if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 || !(0..=1).contains(&interlace) {
+        return None;
+    }
+    Some(crate::codec::Codec::PngScanlines { width, height, bits_per_pixel: bits, interlace: interlace == 1 })
 }

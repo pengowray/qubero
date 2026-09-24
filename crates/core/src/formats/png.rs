@@ -1,7 +1,8 @@
 //! PNG: signature plus a chunk stream that ends at IEND.
 
 use crate::template::{
-    Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Packing, RasterOrder, Step, StrLen, Template, Ty as T, Until, Valid,
+    Check, Checksum, Covers, Encoding, Endian::*, Expr as E, Packing, PngHeader, RasterOrder, Step, StrLen, Template, Ty as T, Until,
+    Valid,
 };
 
 /// PNG colour types. 1, 5 and 7 are not defined by the spec, so a file holding
@@ -285,13 +286,13 @@ fn bits_per_pixel() -> E {
 /// predicted from its neighbours, which unfilter into the rows of pixels, pass
 /// by pass for an interlaced image.
 fn scanlines() -> T {
-    let packing = Packing::PngScanlines {
+    let packing = Packing::PngScanlines(std::sync::Arc::new(PngHeader {
         width: header("width"),
         height: header("height"),
         bit_depth: header("bit_depth"),
         color_type: header("color_type"),
         interlace: header("interlace"),
-    };
+    }));
     let raster = |order| T::raster(header("width"), header("height"), bits_per_pixel(), order, pixel());
     let pixels = T::switch(header("interlace"), vec![(1, raster(RasterOrder::Adam7))], raster(RasterOrder::Rows));
     let unfiltered = T::structure_named("Unfiltered", "", "pixels", vec![("pixels", pixels)]);

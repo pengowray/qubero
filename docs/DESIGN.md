@@ -3136,6 +3136,96 @@ part stands for the rest: a BAM stream's Length row names
 `block_size` is one field beside the stream for every block, and is named as
 it is.
 
+### A picture's pixels, from the bytes to the grid
+A PNG's `png` template read four chunks and stopped: IDAT's data was
+`bytes[4107]`, and everything between those bytes and the picture was outside
+it. What is between them is four steps, and each is a field now (2026-09-24).
+
+**The IDAT data is one stream.** `image`, after the chunks, is a `Stitched`
+over every IDAT chunk's data in order, since an encoder may cut its zlib stream
+into as many chunks as it likes and anywhere, even inside a deflate code. The
+walk is `chunks[].data.image_data`: IDAT's data is a structure whose one field
+is `image_data`, which no other chunk has, so the walk passes over every other
+chunk without a step that filters. What the join holds is the `zlib` template's
+own part, so the two header bytes and the Adler-32 are fields and the deflate
+between them is a `Decoded` with its trace. A file of one IDAT is a join of one
+part, which keeps one shape for every PNG; the cost is that its deflate codes
+are bits of the joined stream rather than of the file, and `part_of` is the
+way back.
+
+**Scanlines, with the header's own geometry.** `Codec::PngUnfilter` takes one
+row length when the template is built, which is right for a cartridge and
+wrong for every other PNG, and refuses an interlaced one whole, correctly,
+since Adam7 is seven images of different widths one after the other.
+`Packing::PngScanlines { width, height, bit_depth, color_type, interlace }`
+takes the five from the header where the `Decoded` stands, the way
+`Packing::Lzma1` takes a 7z coder's properties, and becomes
+`Codec::PngScanlines`. A depth the colour type does not allow, or a colour
+type or interlace method the specification does not define, is
+`Refusal::Settings`: no decoder was asked. The decoder, `codec/scanlines.rs`,
+works out each pass's columns, rows and row length once (`Geometry`), and
+unfilters pass by pass, each pass's first row against a row of zeroes. The
+stream has to be exactly the rows the header describes, filter bytes and all:
+fewer is an image cut off, more is bytes no decoder would show, and both are
+refused rather than read as far as they go. What comes out is the unfiltered
+rows in the order they were stored, so an interlaced image comes out pass by
+pass.
+
+The trace is one `BlockKind::Scanline` block a row. In it are the pass and the
+row within the pass, both steps of no width (`StepField::Pass` and
+`StepField::Row`, the idiom `LzmaProps` uses for a number the decoder was told
+rather than read), the filter byte, and the row as one `StepKind::Filtered`
+step, one step and not one per byte for the reason the old unfilter gave: a
+filtered byte is a function of its neighbours, and a step per byte would claim
+more than that. So every filtered byte has a path, `blocks[44]` is
+`pass 7, row 0, filter sub`, and its children say the same as fields. The
+cartridges' unfilter writes the same blocks with a row number and no pass.
+
+**Pixels where they go.** Putting the passes back is a permutation, not a
+decoding: every bit comes out as it went in, only somewhere else, and a trace
+has to run through its output in order. So it is a type.
+`Ty::Raster { width, height, bits_per_pixel, order, pixel }` is a list of
+`width × height` pixels numbered in picture order, child `i` being column
+`i % width` of row `i / width`, each placed by arithmetic at the bits `order`
+keeps it in: `RasterOrder::Rows` a row at a time, or `RasterOrder::Adam7` pass
+by pass. Every row starts on a byte, which is how PNG writes pixels narrower
+than one, and the padding bits belong to no pixel. `bits_per_pixel` is its own
+number rather than the size of `pixel`, since a PNG pixel is a switch on the
+colour type over samples as wide as the depth and the placing comes first. The
+raster covers every byte of its rows from where it is declared, so it is one
+region like any other list, and the cursor finds the pixel under a bit by the
+same arithmetic run backwards (`Geometry::pixel_at`) without placing any other.
+The geometry is worked out once per raster and kept with the list. It is the
+same `Geometry` the decoder uses, so the two cannot disagree about where a row
+is.
+
+In the template the pixel is a structure of samples, `red`, `green`, `blue`,
+`alpha`, `grey` or a palette `index`, each a `u1` to `u16` as the depth says.
+The path to a pixel is `image.compressed.scanlines.pixels[297]`, and each step
+up has a trace: the pixel's bytes to the scanline that unfiltered them, and that
+scanline's bytes to the deflate codes that wrote them.
+
+**The other chunks** are named as far as the IR reaches: PLTE's entries,
+tRNS and bKGD and sBIT laid out by the colour type (found by searching the
+chunks before them for IHDR, the idiom GWF uses for its own records), gAMA
+and cHRM as the number stored and what it is worth at a hundred-thousandth,
+sRGB's rendering intent, pHYs, tIME, hIST, sPLT, iCCP's profile and zTXt's and
+iTXt's text as zlib streams, and APNG's acTL, fcTL and fdAT.
+
+**What is still missing.** An fdAT frame's data is not joined into anything: a
+frame is every fdAT between one fcTL and the next, and no walk can say which
+fcTL came before a chunk. The Adler-32 of the joined stream has no verdict in
+the listing, because `check.rs` takes a check only of a field of the file,
+and this one is a field of the join; the tests work it out. The
+unfilter trace does not say which neighbour a byte was predicted from, which is
+what tracing one pixel all the way to its bits would need for the unfilter hop.
+A pixel is named by its index; a name of `x 13, y 9` would need an expression
+that builds text from numbers. `tests/png_real.rs` reads every PNG in the
+sample collection to its pixels and checks them against a Python reading
+(`struct`, `zlib`, its own unfilter and Adam7, and Pillow), and reads images of
+every depth and colour type the collection lacks, made by an encoder in the
+test, across several IDAT chunks.
+
 ### A type the file describes
 A ROOT `TTree` is a run of numbers in the order `TTree::Streamer` wrote them,
 and that order is not a fact about the format. It is written down in the same

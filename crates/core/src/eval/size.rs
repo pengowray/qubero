@@ -234,9 +234,6 @@ impl Evaluator {
                         }
                     }
                 }
-                // Every row of every pass, by arithmetic, and no pixel placed
-                // to find out. See [`Ty::Raster`].
-                Ty::Raster { .. } => self.raster_bits(doc, path)?,
                 // Everything else is as long as its own bytes say, and finding
                 // that out opens nothing below this node. Kept to a call of its
                 // own so that what the reading takes is off the stack while
@@ -302,6 +299,11 @@ impl Evaluator {
                         }
                     }
                 },
+                // Every row of every pass, by arithmetic, and no pixel placed
+                // to find out. Asked here rather than beside the lists, whose
+                // frame stays open the whole way down a nested file and has no
+                // room to spare. See [`Ty::Raster`].
+                Ty::Raster { .. } => self.raster_bits(doc, path)?,
                 // As wide as the decoder said it read. Not measured by adding
                 // up children: a symbol run of a million is one subtraction.
                 Ty::Traced { part } => {

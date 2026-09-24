@@ -458,6 +458,10 @@ fn a_pixel_of_an_interlaced_file_leads_back_to_its_scanline_and_its_codes() {
 /// that leave Adam7 passes empty, and zlib streams cut across several IDAT
 /// chunks, one of them after the first byte and one of them empty. Every
 /// filter type is used, and every pixel has to come back as it went in.
+///
+/// With `PNG_MADE_DIR` set, each file is written there as well, so another
+/// decoder can be asked whether they are the images this says they are.
+/// Pillow 10.2 read all thirteen to the same pixels on 2026-09-24.
 #[test]
 fn made_images_of_every_shape_read_back_to_the_pixels_they_were_made_from() {
     let cases = [
@@ -479,7 +483,15 @@ fn made_images_of_every_shape_read_back_to_the_pixels_they_were_made_from() {
     for (w, h, depth, ct, interlaced, pieces) in cases {
         let what = format!("{w}x{h} depth {depth} colour type {ct}{} in {pieces} IDAT", if interlaced { " interlaced" } else { "" });
         let mut img = Made::new(w, h, depth, ct, interlaced);
-        let d = Document::new(MemSource(img.encode(pieces)));
+        let bytes = img.encode(pieces);
+        if let Some(dir) = std::env::var_os("PNG_MADE_DIR") {
+            let name = format!("{w}x{h}-d{depth}-ct{ct}-{}-{pieces}idat.png", if interlaced { "adam7" } else { "rows" });
+            std::fs::write(std::path::Path::new(&dir).join(&name), &bytes).unwrap();
+            // Beside it, every sample it was made from, as big-endian u16s.
+            let samples: Vec<u8> = img.pixels.iter().flatten().flat_map(|v| v.to_be_bytes()).collect();
+            std::fs::write(std::path::Path::new(&dir).join(format!("{name}.samples")), samples).unwrap();
+        }
+        let d = Document::new(MemSource(bytes));
         let mut ev = Evaluator::new(formats::builtin("png").unwrap());
         let s = steps(&mut ev, &d);
         assert_eq!(node(&mut ev, &d, &s.pixels).child_count, (w * h) as u64, "{what}");

@@ -569,6 +569,7 @@ export const UNPACKED = {
     table: "Huffman table",
     "end-of-block": "end of block",
     opaque: "unpacked",
+    filtered: "filtered row",
   } as Readonly<Record<string, string>>,
   /**
    * The named fields a deflate header and its code tables are made of, keyed by
@@ -595,6 +596,8 @@ export const UNPACKED = {
     content_checksum: "content checksum",
     frequency_table: "frequency table",
     filter: "row filter",
+    pass: "Adam7 pass",
+    row: "row number",
     filter_def: "filter definition",
     footer: "footer",
     pxu_flags: "element type and compression",

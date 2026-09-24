@@ -3215,7 +3215,22 @@ pub enum Packing {
     /// method the specification does not define, leaves the run as bytes and
     /// says the settings could not be worked out: a decoder that guessed would
     /// be reading pixels out of the wrong places.
-    PngScanlines { width: Expr, height: Expr, bit_depth: Expr, color_type: Expr, interlace: Expr },
+    ///
+    /// Behind a pointer because five expressions held in place would make
+    /// every `Ty` half as large again, and a `Ty` is on the stack in every
+    /// frame a nested field recurses through.
+    PngScanlines(Arc<PngHeader>),
+}
+
+/// Where a PNG's header keeps the five numbers its scanlines are shaped by.
+/// See [`Packing::PngScanlines`].
+#[derive(Debug, Clone)]
+pub struct PngHeader {
+    pub width: Expr,
+    pub height: Expr,
+    pub bit_depth: Expr,
+    pub color_type: Expr,
+    pub interlace: Expr,
 }
 
 impl Packing {
@@ -3227,7 +3242,7 @@ impl Packing {
             Packing::Fixed(c) => c.as_str(),
             Packing::Lzma1 { .. } => "lzma",
             Packing::Rar5 { .. } => "rar5",
-            Packing::PngScanlines { .. } => "png scanlines",
+            Packing::PngScanlines(_) => "png scanlines",
         }
     }
     /// Whether the bytes come out as they went in, so a reader can be sent to

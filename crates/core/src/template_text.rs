@@ -895,13 +895,13 @@ fn packing(p: &Packing) -> String {
         Packing::Rar5 { dictionary, unpacked } => {
             format!("rar5 dictionary {} unpacked {}", expr(dictionary), expr(unpacked))
         }
-        Packing::PngScanlines { width, height, bit_depth, color_type, interlace } => format!(
+        Packing::PngScanlines(h) => format!(
             "png scanlines width {} height {} depth {} colour {} interlace {}",
-            expr(width),
-            expr(height),
-            expr(bit_depth),
-            expr(color_type),
-            expr(interlace)
+            expr(&h.width),
+            expr(&h.height),
+            expr(&h.bit_depth),
+            expr(&h.color_type),
+            expr(&h.interlace)
         ),
     }
 }
