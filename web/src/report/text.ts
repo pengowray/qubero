@@ -207,7 +207,7 @@ export const RV = {
   gapName: "unmapped",
   /** A stretch holding more parts than the report lists, which it did not
    *  look into. */
-  unexaminedName: "Not examined",
+  unexaminedName: "not examined",
   unexaminedBody: "The report stopped looking for parts here. The Listing view shows the fields in these bytes.",
   /** An element named like an element of another list, with its list. */
   inList: (name: string, list: string): string => `${name} (${list})`,
