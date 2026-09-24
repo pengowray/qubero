@@ -649,6 +649,14 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
                     add(dictionary, Role::Length, out);
                     add(unpacked, Role::Length, out);
                 }
+                // The header numbers that say how long each row is and in
+                // what order the rows come, which is what the unpacked run's
+                // length and shape are made of.
+                Packing::PngScanlines { width, height, bit_depth, color_type, interlace } => {
+                    for e in [width, height, bit_depth, color_type, interlace] {
+                        add(e, Role::Length, out);
+                    }
+                }
             }
             sources(inner, out, depth + 1);
         }

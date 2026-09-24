@@ -2552,6 +2552,17 @@ impl Evaluator {
                 }
                 Some(crate::codec::Codec::Rar5 { window_bits: 17 + dict, unpacked })
             }
+            Packing::PngScanlines { width, height, bit_depth, color_type, interlace } => {
+                let (w, h) = (number!(&width), number!(&height));
+                let (depth, colour, interlace) = (number!(&bit_depth), number!(&color_type), number!(&interlace));
+                let Some(bits) = crate::codec::scanlines::bits_per_pixel(depth, colour) else { return Ok(None) };
+                let (Ok(width), Ok(height)) = (u32::try_from(w), u32::try_from(h)) else { return Ok(None) };
+                // Nought is not a size, and 2^31 and over is not a PNG's.
+                if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 || !(0..=1).contains(&interlace) {
+                    return Ok(None);
+                }
+                Some(crate::codec::Codec::PngScanlines { width, height, bits_per_pixel: bits, interlace: interlace == 1 })
+            }
         })
     }
 
@@ -2817,7 +2828,7 @@ impl Evaluator {
             TracedPart::Blocks => {
                 let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
                 let at = block.in_bits.start;
-                place(traced::block_name(block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+                place(traced::block_name(trace, block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
             }
             TracedPart::Block(i) => {
                 let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };
@@ -2825,6 +2836,14 @@ impl Evaluator {
                 if idx < head {
                     let step = trace.step(view.head.start as usize + idx).expect("in range");
                     let (name, ty) = traced::head_field(&step);
+                    place(name, ty, step.in_bits.start)
+                } else if idx == head && view.block.kind == crate::codec::BlockKind::Scanline && view.symbols.len() == 1 {
+                    // A scanline's one payload step is its filtered row, and a
+                    // run of one row under a row of its own would be a level
+                    // with nothing to open. So the row is the block's last
+                    // field, beside the filter byte that says how to read it.
+                    let step = trace.step(view.symbols.start as usize).expect("in range");
+                    let (name, ty) = traced::symbol_ty(&step, view.block.kind);
                     place(name, ty, step.in_bits.start)
                 } else if idx == head && !view.symbols.is_empty() {
                     let at = view.symbols_at(trace);

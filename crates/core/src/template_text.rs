@@ -890,6 +890,14 @@ fn packing(p: &Packing) -> String {
         Packing::Rar5 { dictionary, unpacked } => {
             format!("rar5 dictionary {} unpacked {}", expr(dictionary), expr(unpacked))
         }
+        Packing::PngScanlines { width, height, bit_depth, color_type, interlace } => format!(
+            "png scanlines width {} height {} depth {} colour {} interlace {}",
+            expr(width),
+            expr(height),
+            expr(bit_depth),
+            expr(color_type),
+            expr(interlace)
+        ),
     }
 }
 
@@ -905,6 +913,9 @@ fn codec(c: crate::codec::Codec) -> String {
         Codec::Lha { window_bits } => format!("lzhuf window {window_bits}"),
         Codec::Rar5 { window_bits, unpacked } => format!("rar5 window {window_bits} unpacked {unpacked}"),
         Codec::PngUnfilter { stride, bpp } => format!("png unfilter stride {stride} bpp {bpp}"),
+        Codec::PngScanlines { width, height, bits_per_pixel, interlace } => {
+            format!("png scanlines {width}x{height} bits {bits_per_pixel}{}", if interlace { " adam7" } else { "" })
+        }
         other => other.as_str().to_string(),
     }
 }

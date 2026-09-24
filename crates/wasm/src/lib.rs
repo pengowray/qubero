@@ -3083,7 +3083,7 @@ fn step_dto(s: MapStep, run_offset_bits: u64) -> MapStepDto {
             dto.len = Some(len as f64);
             dto.dist = Some(dist as f64);
         }
-        StepKind::Stored | StepKind::Pixel | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque => {}
+        StepKind::Stored | StepKind::Pixel | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque | StepKind::Filtered => {}
     }
     dto
 }

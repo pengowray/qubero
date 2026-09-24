@@ -940,7 +940,7 @@ impl Evaluator {
         // no count for those, and the chip falls back to the size.
         let symbols = match (self.trace_for(path), &self.memo[path].ty) {
             (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => super::traced::BlockView::of(trace, *i)
-                .filter(|v| v.block.kind != crate::codec::BlockKind::Stored)
+                .filter(|v| !matches!(v.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline))
                 .map_or(0, |v| v.symbols.len() as u64),
             _ => 0,
         };

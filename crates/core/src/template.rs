@@ -3164,6 +3164,24 @@ pub enum Packing {
     /// no end-of-stream marker anywhere in the format, so a decoder not given
     /// this cannot tell a file that finished from one that was cut off.
     Rar5 { dictionary: Expr, unpacked: Expr },
+    /// A PNG image's scanlines, with the five numbers from its header that say
+    /// how long each row is and what order the rows come in.
+    ///
+    /// Not a codec's settings so much as the image's shape. A row is as many
+    /// bytes as the width times the bits a pixel takes, rounded up, and the
+    /// bits a pixel takes are the depth times the samples its colour type has:
+    /// three for RGB, one for a palette index. An interlaced image is seven
+    /// passes of different widths. So the same stream reads as rows of 97
+    /// bytes in one file and 4,097 in the next, and only the header says
+    /// which. [`crate::codec::Codec::PngUnfilter`] fixes one row length when
+    /// the template is built, which is right for a cartridge and for nothing
+    /// else.
+    ///
+    /// A depth the colour type does not allow, or a colour type or interlace
+    /// method the specification does not define, leaves the run as bytes and
+    /// says the settings could not be worked out: a decoder that guessed would
+    /// be reading pixels out of the wrong places.
+    PngScanlines { width: Expr, height: Expr, bit_depth: Expr, color_type: Expr, interlace: Expr },
 }
 
 impl Packing {
@@ -3175,6 +3193,7 @@ impl Packing {
             Packing::Fixed(c) => c.as_str(),
             Packing::Lzma1 { .. } => "lzma",
             Packing::Rar5 { .. } => "rar5",
+            Packing::PngScanlines { .. } => "png scanlines",
         }
     }
     /// Whether the bytes come out as they went in, so a reader can be sent to
