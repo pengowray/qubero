@@ -388,11 +388,45 @@ fn central() -> T {
             ("name", text("name_length")),
             ("extra", extras(zip64_central())),
             ("comment", text("comment_length")),
+            // The local header this entry describes, where the offset above
+            // says it is. The same bytes are the local file record in the run
+            // of records, and are counted there; this is the directory's view
+            // of them, which is what joins each entry to the file it lists
+            // and lets a signature that is not there be seen as wrong.
+            ("local_header", T::at(E::field("local_header_offset"), local_header())),
         ],
     )
     // The central directory keeps its own copy of the entry's stamp, in the
     // same packed pair. See the local header above.
     .field_times(&["modified_time", "modified_date"], Time::dos_halves("modified_date", "modified_time"))
+    .field_aside("local_header")
+}
+
+/// A local file header as the central directory points at it: the signature
+/// and the fixed fields, the name and the extra fields, and not the data. The
+/// data is the record's in the run of records; the header is what the two
+/// copies of an entry's facts are compared across.
+fn local_header() -> T {
+    T::structure_named(
+        "LocalFileHeader",
+        "name",
+        "",
+        vec![
+            ("signature", T::magic(b"PK\x03\x04")),
+            ("version_needed", T::u16(Little)),
+            ("flags", flags()),
+            ("compression", T::enumeration("CompressionMethod", T::u16(Little), METHODS)),
+            ("modified_time", T::u16(Little)),
+            ("modified_date", T::u16(Little)),
+            ("crc32", T::u32(Little)),
+            ("compressed_size", T::u32(Little)),
+            ("uncompressed_size", T::u32(Little)),
+            ("name_length", T::u16(Little)),
+            ("extra_length", T::u16(Little)),
+            ("name", text("name_length")),
+            ("extra", extras(zip64_local())),
+        ],
+    )
 }
 
 /// The record a streamed entry writes after its data, holding the numbers its

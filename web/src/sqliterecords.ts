@@ -124,8 +124,8 @@ function readDatabase(doc: Doc): Database | null {
   if (!Number.isFinite(pageSizeBytes) || pageSizeBytes <= 0) return null;
   const db: Database = {
     pageSizeBytes,
-    page1At: page1.path[page1.path.length - 1] ?? 23,
-    pagesAt: pages.path[pages.path.length - 1] ?? 26,
+    page1At: page1.path[page1.path.length - 1] ?? 24,
+    pagesAt: pages.path[pages.path.length - 1] ?? 27,
     schema: readSchema(doc, page1.path),
     owners: new Map(),
   };

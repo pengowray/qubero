@@ -4,6 +4,9 @@ import { HexView, isRightColumn, type BitRange, type RightColumn } from "./hexvi
 import type { LinkEnd, LinkPlan } from "./hexlinks.ts";
 import type { GraphView } from "./graphview.ts";
 import type { DiagramView } from "./diagramview.ts";
+import type { ReportView } from "./reportview.ts";
+import type { ReportHost } from "./report/section.ts";
+import { RV } from "./report/text.ts";
 import { COUNT_TURN_MS, countLimit } from "./diagramcounts.ts";
 import { Inspector } from "./inspector.ts";
 import { saveBlob, saveDoc, type SaveOutcome } from "./save.ts";
@@ -57,7 +60,7 @@ const formatSize = formatBytes;
  *  `ksy` and `hexpat` are the two converters, which take the same area without
  *  being a reading of the file: they are tools, opened from the template
  *  menu. */
-type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "ksy" | "hexpat";
+type View = "hex" | "listing" | "text" | "strings" | "graph" | "diagram" | "report" | "ksy" | "hexpat";
 
 /** Whether the graph view is on offer. Set by `?graph` and kept, so the URL is
  *  needed once rather than every time. Read at startup, before any page is
@@ -1359,7 +1362,8 @@ function buildDocument(tab: Tab): Page {
   // with a button in the main switch would read as a finished view.
   const graphBtn = el("button", { type: "button", textContent: GRAPH.button, className: "tb-view" });
   const diagramBtn = el("button", { type: "button", textContent: DIAGRAM.button, className: "tb-view" });
-  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn, diagramBtn);
+  const reportBtn = el("button", { type: "button", textContent: RV.button, className: "tb-view", title: RV.buttonTitle });
+  const views = el("div", { className: "tb-views" }, hexBtn, listBtn, textBtn, stringsBtn, diagramBtn, reportBtn);
   if (graphUnlocked) views.append(graphBtn);
   // The graph and everything it needs is a third of a megabyte of layout
   // engine. Fetched when the view is first asked for, so a reader who never
@@ -1383,6 +1387,9 @@ function buildDocument(tab: Tab): Page {
    *  does not throw away where the reader had panned to. Null until the first
    *  drawing. */
   let diagramFor: string | null = null;
+  /** The report, fetched and built when the view is first opened, like the
+   *  diagram: a reader who never opens it never pays for it. */
+  let report: ReportView | null = null;
   /** True once the reader has asked a count that stopped at its limit to carry
    *  on. See `AUTO_COUNT`. */
   let keepCounting = false;
@@ -1591,6 +1598,57 @@ function buildDocument(tab: Tab): Page {
     }
   };
 
+  /**
+   * What the report asks of the page. Every one of these is what another view
+   * already does: a single click on a byte reference or a part moves the
+   * cursor, so the panel at the cursor says what it is, and a double click
+   * goes to the hex view as the Diagram view's does.
+   */
+  const reportHost: ReportHost = {
+    pick: (t) => {
+      if (t.path !== undefined && inFile(t.path)) {
+        const n = doc.templateNode(t.path);
+        if (n.status === "ok") {
+          nav.recordJump(view.cursorState.bitOffset, n.node.offset_bits);
+          goToField(t.path);
+          overview.reveal(t.path);
+          return;
+        }
+      }
+      jumpToBit(t.startBit);
+      if (t.endBit - t.startBit > 8) view.selectRange(t.startBit, t.endBit, t.startBit);
+    },
+    go: (t) => {
+      setView("hex");
+      reportHost.pick(t);
+    },
+    openTable: (path) => openTable(path),
+    showInListing: (path) => {
+      setView("listing");
+      structure.reveal(path);
+    },
+    openUnpacked: (path) => openUnpacked(path),
+  };
+
+  /** Build the report the first time it is asked for, and bring it up to date
+   *  each time it is shown. */
+  const showReport = async (): Promise<void> => {
+    if (report === null) {
+      const { ReportView } = await import("./reportview.ts");
+      const r = new ReportView(doc, reportHost);
+      report = r;
+      // Only the view on screen says where the reader is, as for the hex view
+      // and the listing.
+      r.onViewport = (v) => {
+        if (!r.el.hidden) overview.setViewport(v);
+      };
+      r.el.hidden = showingView !== "report";
+      workspaceLeft.append(r.el);
+      tab.release.push(() => r.dispose());
+    }
+    if (!report.el.hidden) report.show();
+  };
+
   /** The `.ksy` converter, built the first time it is opened. It keeps its text
    *  while it is closed, so reopening comes back to what was being worked on. */
   let ksyPanel: KsyPanel | null = null;
@@ -1752,6 +1810,7 @@ function buildDocument(tab: Tab): Page {
     const stringsOn = which === "strings";
     const graphOn = which === "graph";
     const diagramOn = which === "diagram";
+    const reportOn = which === "report";
     listingShowing = listingOn;
     view.el.hidden = which !== "hex";
     structure.el.hidden = !listingOn;
@@ -1760,6 +1819,7 @@ function buildDocument(tab: Tab): Page {
     strings.el.hidden = !stringsOn;
     if (graph !== null) graph.el.hidden = !graphOn;
     if (diagram !== null) diagram.el.hidden = !diagramOn;
+    if (report !== null) report.el.hidden = !reportOn;
     if (ksyPanel !== null) ksyPanel.el.hidden = !ksyOn;
     if (hexpatPanel !== null) hexpatPanel.el.hidden = !hexpatOn;
     for (const c of hexOnly) c.hidden = which !== "hex";
@@ -1774,6 +1834,7 @@ function buildDocument(tab: Tab): Page {
       [stringsBtn, stringsOn],
       [graphBtn, graphOn],
       [diagramBtn, diagramOn],
+      [reportBtn, reportOn],
     ] as const) {
       btn.setAttribute("aria-pressed", String(on));
       btn.classList.toggle("is-on", on);
@@ -1797,6 +1858,8 @@ function buildDocument(tab: Tab): Page {
       void showGraph();
     } else if (diagramOn) {
       void showDiagram();
+    } else if (reportOn) {
+      void showReport();
     } else if (!toolOn) view.relayout();
     if (ksyOn) ksyPanel?.focus();
     else if (hexpatOn) hexpatPanel?.focus();
@@ -1811,7 +1874,9 @@ function buildDocument(tab: Tab): Page {
               ? graph.el
               : diagramOn && diagram !== null
                 ? diagram.el
-                : view.el
+                : reportOn && report !== null
+                  ? report.el
+                  : view.el
       ).focus();
     refresh();
   };
@@ -1853,6 +1918,7 @@ function buildDocument(tab: Tab): Page {
   };
   graphBtn.addEventListener("click", () => setView("graph"));
   diagramBtn.addEventListener("click", () => setView("diagram"));
+  reportBtn.addEventListener("click", () => setView("report"));
   // Picking a character in the text is the same as putting the cursor on its
   // first byte, which is what every other view is looking at.
   text.onPick = (at) => {
@@ -2035,6 +2101,7 @@ function buildDocument(tab: Tab): Page {
   // so a walk that named the same parts again redraws nothing.
   structure.onOutline = (headings) => {
     if (overview.setOutline(headings)) view.setSections(headings);
+    report?.setOutline(headings);
   };
   // Only the view on screen says where the reader is. A hidden listing still
   // walks the file and would otherwise drag the rail's mark to wherever it
@@ -2115,6 +2182,7 @@ function buildDocument(tab: Tab): Page {
         startView === "text" ||
         startView === "strings" ||
         startView === "diagram" ||
+        startView === "report" ||
         (startView === "graph" && graphUnlocked)
           ? startView
           : "hex";
@@ -2143,6 +2211,7 @@ function buildDocument(tab: Tab): Page {
         tabs,
         graph: () => graph,
         diagram: () => diagram,
+        report: () => report,
         ksy: () => ksyPanel,
         openKsy: openKsyPanel,
         hexpat: () => hexpatPanel,

@@ -176,7 +176,7 @@ impl Evaluator {
     }
 
     /// Carry the walk on for one go.
-    fn index_placements<S: Source>(&mut self, doc: &Document<S>) -> R<()> {
+    pub(super) fn index_placements<S: Source>(&mut self, doc: &Document<S>) -> R<()> {
         if self.placed.done {
             return Ok(());
         }

@@ -1102,8 +1102,8 @@ export const KAITAI_TEMPLATE = {
   sourceTitle: "Open the format description this template was converted from",
 };
 
-/** The Logical tab for an ELF, when the parsed header has no field of a name
- *  the tab reads it by. Shown after `LOGICAL_FAILED`'s "Couldn't read the
+/** The Logical tab for an ELF or a SQLite database, when the parsed header
+ *  has no field of a name the tab reads it by. Shown after `LOGICAL_FAILED`'s "Couldn't read the
  *  objects:", so it is the clause after that colon and starts with a capital
  *  as the core's messages do.
  *
@@ -1126,8 +1126,8 @@ export const KAITAI_TEMPLATE = {
  *  what the code calls it and no screen does. "Qubero's ELF template" is true
  *  of an eBPF file as well: `bpf` routes here and its header is `elf.rs`'s
  *  `body()`. */
-export const ELF_FIELD_MISSING = (name: string): string =>
-  `This is a bug in Qubero, not a problem with the file. Qubero's ELF template has no field called ${name}, which the Logical tab needs.`;
+export const TEMPLATE_FIELD_MISSING = (format: string, name: string): string =>
+  `This is a bug in Qubero, not a problem with the file. Qubero's ${format} template has no field called ${name}, which the Logical tab needs.`;
 
 /**
  * The treemap: what a box stands for, and what the five ways of dividing the
