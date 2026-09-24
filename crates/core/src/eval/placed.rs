@@ -382,6 +382,7 @@ impl Evaluator {
             Ty::Array { elem, .. } | Ty::Repeat { elem, .. } | Ty::PointerList { elem, .. } => {
                 places(elem)
             }
+            Ty::Raster { pixel, .. } => places(pixel),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } | Ty::When { inner, .. } => {
                 places(inner)
             }

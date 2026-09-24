@@ -46,6 +46,7 @@ mod pickletree;
 mod placed;
 mod problem;
 mod expr;
+mod raster;
 mod read;
 mod readas;
 mod relate;
@@ -535,6 +536,9 @@ struct ListState {
     /// walk is over and the parts become a space. Boxed for the reason
     /// `gather` is.
     stitch: Option<Box<stitch::StitchWalk>>,
+    /// For `Raster`: where its passes and rows are, worked out once from its
+    /// expressions, since every pixel placed asks.
+    raster: Option<std::sync::Arc<crate::codec::scanlines::Geometry>>,
     /// For a run whose room was stretched to take in an element that overran
     /// it: the room it had before each stretch, `(limit, declared_size)`, the
     /// first one being what the template gave it. An edit to an element that
@@ -1121,7 +1125,7 @@ impl Evaluator {
         }
         let list = matches!(
             r.ty.base(),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
         );
         // Only a structure and a pointer to one thing. The rest of what is
         // composite is a list, whose elements are a table rather than a line,
@@ -1254,7 +1258,13 @@ impl Evaluator {
             // to open. `absent` is what says so.
             Ty::When { .. } => (Value::Composite { count: 0 }, 0, false),
             Ty::Struct(s) => (Value::Composite { count: s.fields.len() as u64 }, s.fields.len() as u64, true),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => {
+            Ty::Array { .. }
+            | Ty::Repeat { .. }
+            | Ty::PointerList { .. }
+            | Ty::Chain { .. }
+            | Ty::Gather { .. }
+            | Ty::At { .. }
+            | Ty::Raster { .. } => {
                 let n = self.child_count(doc, path)?;
                 (Value::Composite { count: n }, n, true)
             }
@@ -1623,7 +1633,8 @@ impl Evaluator {
             | Ty::Repeat { elem, .. }
             | Ty::PointerList { elem, .. }
             | Ty::Chain { elem, .. }
-            | Ty::Gather { elem, .. } => elem.base(),
+            | Ty::Gather { elem, .. }
+            | Ty::Raster { pixel: elem, .. } => elem.base(),
             _ => return None,
         };
         // Through a name, and through an origin: saying where the addresses
@@ -1723,6 +1734,10 @@ impl Evaluator {
         // The one thing a stitched stream holds, in the space its parts make.
         if let Ty::Stitched { inner, .. } = &pr.ty {
             return self.place_stitched(doc, parent, &pr, idx, inner);
+        }
+        // A pixel, placed by arithmetic rather than after the one before.
+        if let Ty::Raster { pixel, .. } = &pr.ty {
+            return self.place_raster(doc, parent, &pr, idx, pixel);
         }
         let (name, ty) = match &pr.ty {
             Ty::Struct(s) => match s.fields.get(idx) {
@@ -2737,6 +2752,14 @@ impl Evaluator {
     /// opened, and for one joined from parts, which holds no whole buffer.
     pub fn space_bytes(&self, space: u32) -> Option<&[u8]> {
         self.spaces.buf(space).map(|b| b.as_slice())
+    }
+
+    /// What the decoder recorded while unpacking the space numbered `space`,
+    /// in the same numbering as [`Self::space_bytes`]: which bits of the run it
+    /// was unpacked from made which of its bytes. Nothing for a space that was
+    /// never opened, and for one joined from parts, which each have their own.
+    pub fn space_trace(&self, space: u32) -> Option<&crate::codec::Trace> {
+        self.spaces.trace(space)
     }
 
     /// A space this reading has opened.

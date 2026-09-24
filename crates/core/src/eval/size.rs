@@ -234,6 +234,9 @@ impl Evaluator {
                         }
                     }
                 }
+                // Every row of every pass, by arithmetic, and no pixel placed
+                // to find out. See [`Ty::Raster`].
+                Ty::Raster { .. } => self.raster_bits(doc, path)?,
                 // Everything else is as long as its own bytes say, and finding
                 // that out opens nothing below this node. Kept to a call of its
                 // own so that what the reading takes is off the stack while
@@ -433,6 +436,8 @@ impl Evaluator {
             // The same for a gather: as many as the walk to its records finds.
             // See [`Ty::Gather`].
             Ty::Gather { .. } => self.gather_count(doc, path),
+            // One a pixel, by arithmetic. See [`Ty::Raster`].
+            Ty::Raster { .. } => self.raster_count(doc, path),
             // As many children as the array of offsets has entries.
             Ty::PointerList { offsets, .. } => {
                 let n = self.eval_expr(doc, path, &Expr::Ref(offsets.clone()))?;

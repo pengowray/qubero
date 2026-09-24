@@ -135,6 +135,21 @@ impl Geometry {
         let (row, col) = ((y - pass.y0 as u64) / pass.dy as u64, (x - pass.x0 as u64) / pass.dx as u64);
         Some((pass, (pass.start + row * pass.stride) * 8 + col * self.bits_per_pixel))
     }
+
+    /// The column and row of the pixel whose bits include `bit` of the
+    /// unfiltered stream: [`Self::pixel_bit`] the other way round. Nothing for
+    /// a bit past the end, and for the bits that pad a row out to a byte,
+    /// which are no pixel's.
+    pub fn pixel_at(&self, bit: u64) -> Option<(u64, u64)> {
+        let byte = bit / 8;
+        let pass = self.passes.iter().find(|p| !p.is_empty() && byte >= p.start && byte < p.start + p.len())?;
+        let into = bit - pass.start * 8;
+        let (row, col) = (into / (pass.stride * 8), into % (pass.stride * 8) / self.bits_per_pixel);
+        if col >= pass.cols {
+            return None;
+        }
+        Some((pass.x0 as u64 + col * pass.dx as u64, pass.y0 as u64 + row * pass.dy as u64))
+    }
 }
 
 /// How many bits a pixel of a PNG takes: the depth times the samples its
@@ -310,6 +325,9 @@ mod tests {
                         let (_, bit) = g.pixel_bit(x, y).unwrap();
                         assert!(bit + bits <= g.unfiltered_len() * 8, "{w}x{h} at {x},{y}");
                         assert!(seen.insert(bit), "{w}x{h} {bits} bits: {x},{y} shares bit {bit}");
+                        // And every bit of it leads back to the same pixel.
+                        assert_eq!(g.pixel_at(bit), Some((x, y)));
+                        assert_eq!(g.pixel_at(bit + bits - 1), Some((x, y)));
                     }
                 }
             }

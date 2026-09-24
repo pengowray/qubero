@@ -305,6 +305,7 @@ impl Memo {
             chain_end_reach: 0,
             gather: None,
             stitch: None,
+            raster: None,
             stretched: Vec::new(),
             seq_end: 0,
         };

@@ -415,7 +415,7 @@ impl Evaluator {
         // of a short list one behind would only have the list place each of
         // them twice, since it re-reads from the first one it no longer has.
         let guarded = match &resolved {
-            Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } => true,
+            Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::At { .. } | Ty::Raster { .. } => true,
             Ty::Array { .. } => children > super::walk::GUARD_ABOVE as u64,
             _ => false,
         };
