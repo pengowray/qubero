@@ -31,6 +31,7 @@ import { directoriesSection } from "./report/directories.ts";
 import { partsSection } from "./report/parts.ts";
 import { streamsSection } from "./report/streams.ts";
 import { pngScanlinesSection } from "./report/pngscanlines.ts";
+import { jpegSection } from "./report/jpeg.ts";
 import { profileSection } from "./report/profile.ts";
 import { termsSection } from "./report/terms.ts";
 import { everyByteSection } from "./report/everybyte.ts";
@@ -47,6 +48,7 @@ const SECTIONS: readonly Section[] = [
   partsSection, // 8
   streamsSection, // 9
   pngScanlinesSection, // after 9: a PNG's passes and filters, drawn only for a PNG
+  jpegSection, // 9, for a JPEG: where its scan's bits go, and one block traced
   profileSection, // 10, a stub until the core has the format profile
   termsSection, // 11
   everyByteSection, // 12

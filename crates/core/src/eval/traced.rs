@@ -30,7 +30,9 @@
 //! it is not a range: it is written out in the order the decoder read, which
 //! the trace says. See `read::Evaluator::read_code_bits`.
 
-use crate::codec::{Block, BlockKind, Step, StepField, StepKind, TableField, Trace};
+use std::ops::Range;
+
+use crate::codec::{Block, BlockKind, Step, StepField, StepKind, TableField, Trace, Unit};
 use crate::eval::Sizing;
 use crate::template::{Expr as E, Ty as T};
 
@@ -79,7 +81,76 @@ pub(super) fn is_payload(kind: &StepKind) -> bool {
             | StepKind::EndOfBlock
             | StepKind::Opaque
             | StepKind::Filtered
+            | StepKind::Dc { .. }
+            | StepKind::Ac { .. }
+            | StepKind::Zrl { .. }
+            | StepKind::Eob { .. }
     )
+}
+
+/// The children of a block whose trace divides blocks further, which is a
+/// JPEG MCU: the steps before its first unit, its units, and the steps after
+/// its last, which are the padding and restart marker that end an interval.
+pub(super) struct UnitsView {
+    pub head: Range<u32>,
+    pub units: Range<usize>,
+    pub tail: Range<u32>,
+}
+
+/// One child of a [`UnitsView`]: a step of the block's own, or one of its
+/// units.
+pub(super) enum UnitsChild {
+    Step(u32),
+    Unit(usize),
+}
+
+impl UnitsView {
+    /// Block `i`'s children, when its trace has units at all. Nothing for a
+    /// codec whose blocks hold steps and nothing else, which is every codec
+    /// but JPEG: those keep [`BlockView`].
+    pub fn of(trace: &Trace, i: u32) -> Option<UnitsView> {
+        if trace.units().is_empty() {
+            return None;
+        }
+        let block = trace.blocks().get(i as usize)?;
+        let units = trace.units_of(i as usize);
+        let (first, last) = match (trace.units().get(units.start), units.end.checked_sub(1).and_then(|j| trace.units().get(j))) {
+            (Some(a), Some(b)) if !units.is_empty() => (a.steps.start, b.steps.end),
+            _ => (block.steps.end, block.steps.end),
+        };
+        Some(UnitsView { head: block.steps.start..first, units, tail: last..block.steps.end })
+    }
+
+    pub fn len(&self) -> usize {
+        self.head.len() + self.units.len() + self.tail.len()
+    }
+
+    pub fn child(&self, idx: usize) -> Option<UnitsChild> {
+        let (h, u) = (self.head.len(), self.units.len());
+        if idx < h {
+            Some(UnitsChild::Step(self.head.start + idx as u32))
+        } else if idx < h + u {
+            Some(UnitsChild::Unit(self.units.start + idx - h))
+        } else if idx < self.len() {
+            Some(UnitsChild::Step(self.tail.start + (idx - h - u) as u32))
+        } else {
+            None
+        }
+    }
+
+    /// Which child holds step `k`.
+    pub fn index_of_step(&self, trace: &Trace, k: u32) -> Option<usize> {
+        let (h, u) = (self.head.len(), self.units.len());
+        if self.head.contains(&k) {
+            return Some((k - self.head.start) as usize);
+        }
+        if self.tail.contains(&k) {
+            return Some(h + u + (k - self.tail.start) as usize);
+        }
+        let units = &trace.units()[self.units.clone()];
+        let j = units.partition_point(|x| x.steps.end <= k);
+        units.get(j).filter(|x| x.steps.contains(&k)).map(|_| h + j)
+    }
 }
 
 /// What one block is called in the listing: what coded its symbols, and
@@ -87,12 +158,13 @@ pub(super) fn is_payload(kind: &StepKind) -> bool {
 ///
 /// A PNG scanline is named by where it is and how it was filtered instead,
 /// since every one of them is the same kind of block and the last one is only
-/// the bottom row. See [`scanline_name`].
+/// the bottom row. See [`scanline_name`]. A JPEG MCU is called by where it is.
 pub(super) fn block_name(trace: &Trace, block: &Block) -> String {
     if block.kind == BlockKind::Scanline {
         return scanline_name(trace, block);
     }
     match (block.kind, block.last) {
+        (BlockKind::Mcu { x, y }, _) => format!("MCU {x}, {y}"),
         (k, true) => format!("{} block, last", k.as_str()),
         (k, false) => format!("{} block", k.as_str()),
     }
@@ -125,6 +197,51 @@ fn scanline_name(trace: &Trace, block: &Block) -> String {
 /// RFC 2083's five filter types, by the number a scanline's filter byte holds.
 const PNG_FILTERS: [(i128, &str); 5] = [(0, "none"), (1, "sub"), (2, "up"), (3, "average"), (4, "paeth")];
 
+/// What one of a block's units is called: which channel, and where that
+/// channel's 8×8 block is, counted in blocks across and down.
+pub(super) fn unit_name(trace: &Trace, unit: &Unit) -> String {
+    let channel = match trace.jpeg() {
+        Some(f) => f.channel_name(unit.channel as usize),
+        None => format!("component {}", unit.channel),
+    };
+    format!("{channel} block {}, {}", unit.x, unit.y)
+}
+
+/// One step of a JPEG unit or MCU: its name, and its bits.
+///
+/// A code and its value bits are one node, the way a deflate match is: a DC
+/// difference is a Huffman code saying how many bits the difference takes and
+/// then those bits, with nothing between them that a template could name.
+/// `stuffed` is how many of the bytes the decoder read past lie inside the
+/// step, which the width counts and the bits shown leave out. `tail` says the
+/// step is an MCU's own rather than one of its blocks', which is where the
+/// bytes after the last MCU are; inside a block, a step the trace did not name
+/// is that block's codes, once there were too many to name.
+pub(super) fn unit_step_ty(step: &Step, stuffed: usize, tail: bool) -> (String, T) {
+    let bits = step.in_bits.end - step.in_bits.start;
+    let name = symbol_name(step);
+    let with = |what: &str| match stuffed {
+        0 => what.to_string(),
+        _ => format!("{what}, with a stuffed 00 byte"),
+    };
+    let code = match step.kind {
+        StepKind::Dc { size: 0, .. } | StepKind::Zrl { .. } | StepKind::Eob { .. } => {
+            Some(T::code_bits(&with("Huffman code"), Sizing::Table))
+        }
+        StepKind::Dc { .. } | StepKind::Ac { .. } => Some(T::code_bits(&with("Huffman code and value bits"), Sizing::Encoded)),
+        _ => None,
+    };
+    match code {
+        Some(code) => (name, sized(bits, code)),
+        None => match step.kind {
+            StepKind::Header(StepField::Restart, _) => ("restart marker".to_string(), head_field(step).1),
+            // The run after the last MCU holds nothing a decoder reads.
+            StepKind::Opaque if tail => ("bytes after the last MCU".to_string(), symbol_ty(step, BlockKind::Opaque).1),
+            _ => symbol_ty(step, BlockKind::Opaque),
+        },
+    }
+}
+
 /// What a step of a block's machinery is called and what it reads as.
 ///
 /// Two things at once because they come from the same match: the name is the
@@ -155,6 +272,13 @@ fn header_ty(field: StepField, value: u32, bits: u64) -> T {
         ),
         // RFC 2083 section 6: how the encoder predicted this row.
         StepField::Filter => T::enumeration("PngFilter", inner, &PNG_FILTERS),
+        // T.81's own names for the eight markers, which count 0 to 7 and
+        // round again.
+        StepField::Restart => T::enumeration(
+            "RestartMarker",
+            inner,
+            &[(0, "RST0"), (1, "RST1"), (2, "RST2"), (3, "RST3"), (4, "RST4"), (5, "RST5"), (6, "RST6"), (7, "RST7")],
+        ),
         _ => inner,
     };
     sized(bits, named)
@@ -221,12 +345,23 @@ pub(super) fn symbol_name(step: &Step) -> String {
         // A whole compressed block this round does not read inside.
         StepKind::Block => "compressed block".to_string(),
         StepKind::Table(_) => "code lengths".to_string(),
+        StepKind::Header(StepField::Restart, n) => format!("restart marker RST{n}"),
         StepKind::Header(..) => "header field".to_string(),
         // A run the trace stopped naming, because there were too many of them
         // to name. See `codec::MAX_STEPS`.
         StepKind::Opaque => "unnamed codes".to_string(),
         // A PNG scanline's bytes after its filter byte, still filtered.
         StepKind::Filtered => "filtered row".to_string(),
+        // JPEG. What a DC code carries is a difference, and what a reader
+        // wants is the coefficient it came to, so the name says both. An AC
+        // code's place in the block is its zigzag position, the order the
+        // scan writes a block in; the rows it lands in are in the stream.
+        StepKind::Dc { diff, dc, .. } => format!("DC diff {diff:+} (DC {dc})"),
+        StepKind::Ac { run: 0, k, value, .. } => format!("AC {value} at zigzag position {k}"),
+        StepKind::Ac { run: 1, k, value, .. } => format!("AC {value} at zigzag position {k}, after 1 zero"),
+        StepKind::Ac { run, k, value, .. } => format!("AC {value} at zigzag position {k}, after {run} zeros"),
+        StepKind::Zrl { k, .. } => format!("ZRL, 16 zeros from zigzag position {k}"),
+        StepKind::Eob { k, .. } => format!("EOB, zigzag positions {k} to 63 are zero"),
     }
 }
 
@@ -331,6 +466,7 @@ pub(super) fn blocks_unit(kind: Option<BlockKind>) -> &'static str {
     match kind {
         Some(BlockKind::Sequences) => "sequence",
         Some(BlockKind::Scanline) => "scanline",
+        Some(BlockKind::Mcu { .. }) => "MCU",
         _ => "block",
     }
 }
@@ -372,6 +508,12 @@ pub(super) fn symbol_label(step: &Step) -> String {
         StepKind::Literal(v) => byte_label(v),
         StepKind::Match { len, dist: 1 } => format!("\u{d7}{len}"),
         StepKind::Match { len, dist } => format!("{len}\u{2190}{dist}"),
+        // A JPEG block's codes read as the coefficients they set, so a row of
+        // them reads as the block.
+        StepKind::Dc { dc, .. } => format!("DC {dc}"),
+        StepKind::Ac { value, .. } => value.to_string(),
+        StepKind::Zrl { .. } => "ZRL".to_string(),
+        StepKind::Eob { .. } => "EOB".to_string(),
         _ => symbol_name(step),
     }
 }

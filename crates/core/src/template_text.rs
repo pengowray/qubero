@@ -903,6 +903,7 @@ fn packing(p: &Packing) -> String {
             expr(&h.color_type),
             expr(&h.interlace)
         ),
+        Packing::JpegScan { segments } => format!("jpeg baseline segments {}", expr(segments)),
     }
 }
 
@@ -1030,6 +1031,7 @@ fn inline(ty: &Ty) -> Option<String> {
             TracedPart::Blocks => "traced blocks".to_string(),
             TracedPart::Block(i) => format!("traced block {i}"),
             TracedPart::Symbols(i) => format!("traced symbols {i}"),
+            TracedPart::Unit(i) => format!("traced unit {i}"),
         },
         Ty::CodeBits { name, width } => format!("codebits {name} ({})", sizing(*width)),
     };

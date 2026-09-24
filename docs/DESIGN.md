@@ -1701,6 +1701,94 @@ earlier array, which `ProductOf` already did the other way. A Huffman segment
 writes how many codes there are of each of sixteen lengths and then that many
 symbols, and never writes the total.
 
+### A JPEG scan read code by code
+The scan is 89% of a typical JPEG and used to read as one `bytes[]` field. It
+is now a `Decoded` run, `codec::Codec::JpegBaseline`, read by our own decoder
+in `codec/jpeg.rs` with a trace of every code, so every Huffman code, 8×8 block
+and MCU has a path in the listing and a bit range in the file, and the
+coefficients are a space of their own.
+
+**Settings from other segments.** Deflate carries its tables inside the
+stream; a scan carries none. `Packing::JpegScan { segments }` says where the
+image's segments start (byte 2, after SOI), and the evaluator hands the decoder
+every byte from there to the run: each earlier segment and the scan's own
+header. The decoder reads SOFn, DHT, DQT, DRI, APP0 and APP14 out of them in
+T.81's layouts, steps over earlier scans' data the way `ToMarker` does, and
+looks up the tables the scan names by class and id, the latest definition
+winning. Bytes rather than expressions, because an expression comes to one
+number and a table is up to 272 bytes, and because no expression can search
+back through the list the scan is itself an element of. The template reads the
+same bytes by the same layout to show them. `codec::decode_traced_with` is the
+entry that takes the settings; `decode_traced` handed a bare
+`Codec::JpegBaseline` refuses with `settings`, since `Codec` stays `Copy`.
+
+**What comes out.** 64 little-endian `i16` per 8×8 block in natural (row)
+order, blocks in coding order, so a 4:2:0 file gives four Y blocks, a Cb and a
+Cr per MCU. The template reads the space as a list of 8 rows of 8. Dequantizing
+and the inverse DCT are not a further stage: they need the quantization tables
+from space 0 inside a decoded space, which is the gap the IR notes call S4, and
+the samples are what the browser already shows. The web can do both from the
+coefficients and the DQT fields, as the hand-written report does.
+
+**The trace.** A trace block is one MCU (`BlockKind::Mcu { x, y }`), and a new
+level, `Trace::units`, holds its 8×8 blocks (`Unit { steps, channel, x, y }`).
+`TracedPart::Unit` lists a block's codes; an MCU lists its blocks and then the
+padding and restart marker that end an interval. Steps are `Dc { code, size,
+diff, dc }`, `Ac { code, run, size, k, value }`, `Zrl { k }`, `Eob { k }`,
+`Header(Restart, n)` and `Header(Padding)`, with `code` the Huffman code's
+length so the code bits and the value bits can be told apart. A scan of one
+channel codes that channel's own block grid, one block per MCU, and its restart
+interval counts blocks.
+
+Bit positions are the file's, stuffed bytes included. The decoder takes the
+`00` out of every `ff 00` before it reads a bit, maps positions back, and gives
+each `00` to the step that read the last bit of the `ff` before it, so a code
+can straddle one and the steps still tile the run exactly; `check_tiles` holds
+unchanged, and also checks the units and `Trace::stuffed`, the list of the
+bytes read past. A code node over a stuffed byte is as wide as the bits it
+covers and its value leaves the `00` out.
+
+A code's output is empty, and the step that finishes a block (its EOB, or the
+coefficient at zigzag position 63) carries the block's 128 bytes. The
+coefficients are written in zigzag order and laid out in rows, so what one
+code set is scattered over its block and cannot be one output range. `map_out`
+over the coefficients therefore lands on the step that closed the block, not
+on the code that set the coefficient.
+
+**For figures.** `Evaluator::jpeg_scan` reads a scan's costs off the trace in
+one pass, without placing a node: bits per MCU and per block, each block's
+channel and place, the bits by kind (DC and AC codes and value bits, EOB, ZRL,
+padding, stuffed bytes, markers), and each channel's quantization steps read
+where the decoder says the table in force was defined. `Evaluator::jpeg_block`
+gives one block's codes with their bits and meanings, and its coefficients.
+The wasm calls of the same names back the report view's JPEG section
+(`web/src/report/jpeg.ts`): the picture beside a map of bits per MCU, tables
+of bits by channel and by kind, and one block from its codes through zigzag
+order, rows, the quantization steps and the inverse DCT to its samples. The
+dequantizing and the IDCT are done there, from the coefficients, as a figure
+and not as a decoded space. A code in the listing names the Huffman table it
+was read with as its origin (`origin.rs`, `jpeg_table`), found from where the
+decoder says that table was defined.
+
+**Refused.** Progressive, arithmetic, lossless, hierarchical and 12-bit frames
+refuse with `Refusal::Unsupported`, whose word says which. SOF1 at 8 bits is
+read, since it differs from baseline only in allowing more tables. A scan that
+names a table nothing defined refuses with `settings`: an abbreviated stream
+whose tables are elsewhere, or a Motion JPEG frame relying on the tables in
+Annex K.
+
+**Checked.** `tools/jpeg_reference.py` is a second decoder written apart from
+this one, which also holds its IDCT against Pillow within one level.
+`tests/jpeg_scan_real.rs` pins its coefficients and its bit accounting (codes,
+value bits, padding, stuffed bytes and markers adding up to the run's length)
+for the four baseline files in `jpeg/`, 26 JPEGs inside other samples (12
+camera raw previews, ten Motion JPEG frames, two Photoshop thumbnails, one in a
+StuffIt archive and a PowerPoint thumbnail), and three
+fixtures from `tools/jpeg_fixtures.py` for 4:2:2, restart markers and three
+scans of one channel each. A 4K photograph comes to 50 MB of coefficients,
+under the 64 MiB cap; a 24-megapixel 4:2:0 photograph would not, and stays
+bytes.
+
 ### A file that writes its numbers as digits
 PDF is the first format here that is mostly text. The header is a line, the
 cross-reference table is lines, the trailer is a dictionary typed out in full,

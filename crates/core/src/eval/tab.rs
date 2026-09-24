@@ -196,6 +196,23 @@ impl<'a, S: Source> Tab<'a, S> {
         self.ev.run_cells(self.doc, &self.path_in(path), from_bit, to_bit, max)
     }
 
+    /// Where the bits of the JPEG scan at `path` went. See
+    /// [`Evaluator::jpeg_scan`].
+    pub fn jpeg_scan(&mut self, path: &[usize]) -> R<Option<super::JpegScanMap>> {
+        self.ev.jpeg_scan(self.doc, &self.path_in(path))
+    }
+
+    /// One block of the JPEG scan at `path`, with its paths given as the
+    /// tab's. See [`Evaluator::jpeg_block`].
+    pub fn jpeg_block(&mut self, path: &[usize], index: usize) -> R<Option<super::JpegBlockTrace>> {
+        let found = self.ev.jpeg_block(self.doc, &self.path_in(path), index)?;
+        Ok(found.map(|b| super::JpegBlockTrace {
+            path: self.path_out(&b.path).unwrap_or_default(),
+            mcu_path: self.path_out(&b.mcu_path).unwrap_or_default(),
+            ..b
+        }))
+    }
+
     /// Which fields settled the shape of the one at `path`. One outside the
     /// stream keeps its name and what it says, and loses its path: the tab has
     /// no row for it to go to.

@@ -449,6 +449,32 @@ impl Evaluator {
         Ok(code_string(&buf, start, size as usize, lsb_first))
     }
 
+    /// A code's bits as the decoder took them, in the order it read them.
+    ///
+    /// A JPEG code that straddles a stuffed zero covers it, and the zero is
+    /// not one of its bits: the decoder read past it. So the bytes the trace
+    /// says were read past come out of the string. See
+    /// [`crate::codec::Trace::stuffed`].
+    #[cold]
+    #[inline(never)]
+    fn code_bits_value<S: Source>(&self, doc: &Document<S>, at: &[usize], r: &Resolved, size: u64) -> R<Value> {
+        let (lsb_first, skipped) = match self.trace_for(at) {
+            Some((base, t)) => {
+                let from = r.offset.saturating_sub(base);
+                let inside = t.stuffed();
+                let lo = inside.partition_point(|&b| b < from);
+                let hi = inside.partition_point(|&b| b < from + size);
+                (t.lsb_first(), inside[lo..hi].iter().map(|&b| (b - from) as usize).collect::<Vec<_>>())
+            }
+            None => (false, Vec::new()),
+        };
+        let mut bits = self.read_code_bits(doc, r, size, lsb_first)?;
+        for &at in skipped.iter().rev() {
+            bits.replace_range(at..(at + 8).min(bits.len()), "");
+        }
+        Ok(Value::Str(bits))
+    }
+
     pub(super) fn primitive_value<S: Source>(&mut self, doc: &Document<S>, at: &[usize], r: &Resolved, ty: &Ty, size: u64) -> R<Value> {
         Ok(match ty {
             // A value inside JSON was read when its text was parsed.
@@ -537,10 +563,14 @@ impl Evaluator {
             // order that is belongs to the trace, so it is asked here rather
             // than written into the type: a node is placed once and a template
             // never declares one of these.
-            Ty::CodeBits { .. } => {
-                let lsb_first = self.trace_for(at).is_some_and(|(_, t)| t.lsb_first());
-                Value::Str(self.read_code_bits(doc, r, size, lsb_first)?)
-            }
+            // A JPEG code that straddles a stuffed zero covers it, and the
+            // zero is not one of its bits: the decoder read past it. So the
+            // bytes the trace says were read past come out of the string, and
+            // what is left is the code and its value bits as the decoder took
+            // them. See `codec::Trace::stuffed`.
+            // In a function of its own: this frame is on the path the nesting
+            // limit was measured against, and has no room for the buffers.
+            Ty::CodeBits { .. } => return self.code_bits_value(doc, at, r, size),
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             // Unsigned: every number 7z writes is a count, a size or an
             // offset, and the format has no negative ones.

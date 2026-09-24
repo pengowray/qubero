@@ -822,6 +822,7 @@ fn refusal(why: codec::Refusal) -> &'static str {
         codec::Refusal::Failed => "unpacking failed",
         codec::Refusal::Unaligned => "not on a byte boundary",
         codec::Refusal::Settings => "the file doesn't say how this was packed",
+        codec::Refusal::Unsupported(u) => u.message(),
     }
 }
 

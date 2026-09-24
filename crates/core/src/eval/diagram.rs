@@ -668,6 +668,7 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
                         add(e, Role::Length, out);
                     }
                 }
+                Packing::JpegScan { segments } => add(segments, Role::Position, out),
             }
             sources(inner, out, depth + 1);
         }

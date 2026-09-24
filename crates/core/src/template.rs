@@ -3220,6 +3220,34 @@ pub enum Packing {
     /// every `Ty` half as large again, and a `Ty` is on the stack in every
     /// frame a nested field recurses through.
     PngScanlines(Arc<PngHeader>),
+    /// One scan of a baseline JPEG, decoded with the segments the image wrote
+    /// before it. See [`crate::codec::Codec::JpegBaseline`].
+    ///
+    /// `segments` is where the image's segments start, as a byte of the space
+    /// the run is read in: the one after the start-of-image marker. Everything
+    /// from there to the run is handed to the decoder as the bytes it is,
+    /// which is every earlier segment and the scan's own header, and the
+    /// decoder reads its frame, its Huffman tables, its restart interval and
+    /// which tables the scan names by id out of them.
+    ///
+    /// Bytes and not expressions, for three reasons. What the decoder needs is
+    /// tables, and an expression here comes to one number: a Huffman table is
+    /// sixteen counts and up to 256 symbols, and a scan names up to eight of
+    /// them. Which table a scan means is a lookup by class and id among every
+    /// table defined before it, the latest winning, across segments of a list
+    /// the scan sits inside, and no expression reaches back through the list
+    /// it is in to search it. And the segments are already the settings,
+    /// written in T.81's own layout; the template reads the same bytes by the
+    /// same layout to show them, and the decoder reading them again is one
+    /// reading of a table in two places, not two readings that could differ.
+    /// Where a table in the listing and a table the decoder used are the
+    /// same bytes, a reader can be sent from one to the other.
+    ///
+    /// An offset rather than a name, because a JPEG's segments are a list the
+    /// scan is an element of, and a name looked up from inside that list finds
+    /// nothing declared before it. A JPEG read at the top of a file or of a
+    /// stream starts at byte 0 of its space, so the template says 2.
+    JpegScan { segments: Expr },
 }
 
 /// Where a PNG's header keeps the five numbers its scanlines are shaped by.
@@ -3243,6 +3271,10 @@ impl Packing {
             Packing::Lzma1 { .. } => "lzma",
             Packing::Rar5 { .. } => "rar5",
             Packing::PngScanlines(_) => "png scanlines",
+            // What the run is, whichever kind of scan it turns out to be: a
+            // progressive one is refused by name, and calling it baseline in
+            // the type column beside that would say two things at once.
+            Packing::JpegScan { .. } => "jpeg scan",
         }
     }
     /// Whether the bytes come out as they went in, so a reader can be sent to
@@ -3283,6 +3315,11 @@ pub enum TracedPart {
     /// a run of a hundred thousand literals is one row that opens rather than
     /// a hundred thousand rows in the way of the tables above them.
     Symbols(u32),
+    /// One of a block's own pieces, and its codes, one child each: one 8×8
+    /// block of a JPEG MCU. A block whose trace has these lists them instead
+    /// of a run of codes, with whatever steps come before the first and after
+    /// the last beside them. See [`crate::codec::Unit`].
+    Unit(u32),
 }
 
 /// The value a format writes to mean a slot nobody filled in. See
@@ -4445,6 +4482,7 @@ impl Ty {
                 // a code, so calling the run "symbols" named the meaning where
                 // the column is for the thing.
                 TracedPart::Symbols(_) => "codes".into(),
+                TracedPart::Unit(_) => "block".into(),
             },
             // Written where the node is made, because what one of these covers
             // is not always one code. See [`Ty::CodeBits`].

@@ -302,6 +302,10 @@ function traceRibbon(ctx: ReportCtx, o: Opened): HTMLElement | null {
     read.push(s);
     out = Math.max(out + 1, s.out_end);
   }
+  // A JPEG scan's codes write no bytes of their own: the step that closes an
+  // 8×8 block carries all 128 of its coefficients. The JPEG section draws
+  // that stream its own way (see `jpeg.ts`).
+  if (read.some((s) => s.kind === "eob" || s.kind === "dc" || s.kind === "ac")) return null;
   // The window starts a little before the first copy, so it shows both kinds
   // of code: most streams open with a run of literals, since there is nothing
   // earlier to copy yet.
