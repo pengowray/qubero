@@ -493,6 +493,7 @@ const BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[("exp", "exp", i
 /// against itself or against the file's length.
 const KAITAI_BY_EXTENSION: &[(&str, &str, fn(&[u8], u64) -> bool)] = &[
     ("bson", "ksy:bson", is_bson),
+    ("dcm", "ksy:dicom", is_dicom),
     ("icc", "ksy:icc_4", is_icc_4),
     ("icm", "ksy:icc_4", is_icc_4),
     ("ttf", "ksy:ttf", is_ttf),
@@ -544,6 +545,12 @@ fn is_bson(head: &[u8], len: u64) -> bool {
     let first_type_is_known = matches!(head.get(4), Some(0x00..=0x13 | 0x7f | 0xff));
     let ends_in_nought = head.len() as u64 != len || head.last() == Some(&0);
     size == len && len >= 5 && first_type_is_known && ends_in_nought
+}
+
+/// A DICOM file: 128 bytes of preamble that may hold anything, and then the
+/// four letters `DICM`.
+fn is_dicom(head: &[u8], _len: u64) -> bool {
+    head.get(128..132) == Some(b"DICM")
 }
 
 /// An ICC colour profile of version 4, which is what `icc_4` reads. The four
@@ -2379,6 +2386,20 @@ mod tests {
         for (_, name, _) in KAITAI_BY_EXTENSION.iter().chain(BY_EXTENSION) {
             assert!(super::template(name).is_some(), "no template named {name}");
         }
+    }
+
+    /// A `.dcm` is DICOM when `DICM` follows its 128-byte preamble, and not
+    /// otherwise.
+    #[test]
+    fn a_dicom_file_is_recognised_by_its_name_and_the_letters_after_its_preamble() {
+        let mut dcm = vec![0; 132];
+        dcm[128..].copy_from_slice(b"DICM");
+        assert_eq!(sniff_named(&dcm, 132, "scan.dcm"), Some("ksy:dicom"));
+        assert_eq!(sniff_named(&dcm, 132, "SCAN.DCM"), Some("ksy:dicom"));
+        assert_eq!(sniff_named(&dcm, 132, "scan.bin"), None);
+        // One byte early, and cut off before the last letter.
+        assert_eq!(sniff_named(&dcm[1..], 131, "scan.dcm"), None);
+        assert_eq!(sniff_named(&dcm[..131], 131, "scan.dcm"), None);
     }
 
     #[test]

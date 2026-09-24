@@ -250,12 +250,13 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     ("ksy:riff", "wav", "ms-adpcm-stereo-22050.wav"),
     ("ksy:shapefile_main", "shapefile", "one-station.shp"),
     ("ksy:shapefile_index", "shapefile", "one-station.shx"),
+    ("ksy:dicom", "dicom", "synthetic-secondary-capture-gray8.dcm"),
 ];
 
 /// Bundled formats worth a real file, that the collection has none of. Printed
 /// by the test so the gap is visible rather than implied by a short list.
 const NO_SAMPLE: &[&str] = &[
-    "avi", "dex", "dicom", "ds_store", "edid", "ext2", "gpt_partition_table", "icc_4",
+    "avi", "dex", "ds_store", "edid", "ext2", "gpt_partition_table", "icc_4",
     "java_class", "mbr_partition_table", "mcap", "minecraft_nbt", "openpgp_message", "pcap",
     "python_pyc_27", "regf", "ssh_public_key", "ttf", "vfat",
     "windows_minidump",
