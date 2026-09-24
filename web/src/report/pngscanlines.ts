@@ -234,9 +234,12 @@ function passesFigure(header: Header, lines: readonly Scanline[]): HTMLElement {
 function stripFigure(ctx: ReportCtx, header: Header, lines: readonly Scanline[], counts: readonly number[], total: number): HTMLElement {
   const fig = document.createElement("figure");
   fig.className = "rv-figure rv-png-strip";
+  // A key to the filters this picture uses, and none when it uses one: the
+  // heading has already named it.
   const legend = document.createElement("div");
   legend.className = "rv-legend";
   FILTERS.forEach((name, i) => {
+    if ((counts[i] ?? 0) === 0) return;
     const item = document.createElement("span");
     item.className = "rv-png-key";
     const sw = document.createElement("span");
@@ -246,7 +249,7 @@ function stripFigure(ctx: ReportCtx, header: Header, lines: readonly Scanline[],
     item.append(sw, RV.pngLegendItem(name, counts[i] ?? 0));
     legend.append(item);
   });
-  fig.append(legend);
+  if (legend.childElementCount > 1) fig.append(legend);
   const groups = new Map<number | null, Scanline[]>();
   for (const l of lines) {
     const g = groups.get(l.pass);
