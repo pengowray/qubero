@@ -721,3 +721,48 @@ declares `body` over everything after its header, hides the directory's fields
 from the ledger and the file profile: the kind walk counts the bytes once, in
 the run, and does not go into the address. The profile still counts the
 address and which way it points, and the directories still find the entries.
+
+### Reply shapes
+
+Every function but `format_about` answers in the usual reply shape, `{status,
+node, wanted}` with `status` of `ok`, `pending` or `error`, and the `node`
+below. Offsets and sizes are bits. Paths are in the space asked about.
+
+```
+format_about(template) -> {name, wikipedia, text} | null   (not a reply)
+
+template_profile(space), format_profile_step(space) -> {
+  done,
+  rows: [{category, kind, width, order, detail, fields, bits,
+          unpacked_fields, unpacked_bits}],
+  choices: [{key, name, cases, taken, fields}],
+  facts: {from_end, placed, forward, backward, lengths_before,
+          lengths_after, every_field_follows}   // every_field_follows: bool | null
+}
+
+byte_ledger_step(space) -> {
+  done, reached_bits, file_bits, counted_bits,
+  rows: [{part, part_name, group, group_from, role, bits, count, zero_bits,
+          unscanned_bits, first_path, first_offset_bits, align}]
+}
+
+extent_audit_step(space) -> {
+  done, root_end_bits, space_bits, root_failed,   // root_failed: string | null
+  counts: [{verdict, count}],
+  checks: [{length_path, length_name, length_value, length_invalid,
+            part_path, part_name, role, offset_bits, stated, read,
+            content_bits, room_bits, space_bits, adjusted, verdict, why}]
+}
+
+directories_step(space) -> {
+  done, unexamined,
+  lists: [{path, name, elements, placing,
+           entries: [{path, name, offset_bits, size_bits,
+                      targets: [{path, name, offset_bits, size_bits, via, aside}]}]}]
+}
+```
+
+For a check whose `role` is `count`, `stated` and `read` are elements, not
+bits. The caps: 500 checks that do not fit, 256 groups in the ledger (the rest
+in one group with `group_from` of `other`), 256 entries a directory, 256 lists
+of offsets and gathers, and 20,000 addresses looked at in all.
