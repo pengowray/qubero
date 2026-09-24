@@ -114,6 +114,7 @@ export function recordTable(doc: Doc, rows: readonly TemplateNode[], more: numbe
   // records apart: a ZIP entry's file name, an ELF section's.
   const names = rows.map((n) => stripIndex(n.name));
   const named = names.some((s) => s !== "") && new Set(names).size > 1;
+  if (named) t.classList.add("rv-named");
   t.append(named ? head(RV.colIndex, RV.colName, RV.colAt, RV.colSize, RV.colReads, RV.colBytes) : head(RV.colIndex, RV.colAt, RV.colSize, RV.colReads, RV.colBytes));
   const body = document.createElement("tbody");
   for (const [i, n] of rows.entries()) {

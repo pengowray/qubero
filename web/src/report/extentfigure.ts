@@ -82,7 +82,8 @@ export function extentFigure(c: ExtentCheck): HTMLElement | null {
   fig.className = "rv-figure rv-extentbox";
   fig.append(svg);
   const cap = document.createElement("figcaption");
-  cap.textContent = cut ? RV.extentCaptionCut(formatOffset(start)) : RV.extentCaption(formatOffset(start));
+  const drawn = (kind: Mark["kind"]): boolean => marks.some((m) => m.kind === kind && m.at >= lo && m.at <= hi);
+  cap.textContent = cut ? RV.extentCaptionCut(formatOffset(start), drawn("room"), drawn("file")) : RV.extentCaption(formatOffset(start), drawn("room"), drawn("file"));
   fig.append(cap);
   return fig;
 }

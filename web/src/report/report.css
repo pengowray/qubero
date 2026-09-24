@@ -405,6 +405,26 @@
   position: static;
   padding-inline: 0;
 }
+/* The card's grids have columns of a fixed width for the panel; in a narrow
+   report column they shrink to fit instead of running off the side. */
+.rv-card {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.rv-card .jc-grid {
+  grid-template-columns: repeat(8, minmax(0, 3.2em));
+  width: auto;
+  max-width: max-content;
+}
+.rv-card .jc-grid .jc-cell,
+.rv-card .jc-cell-empty {
+  padding-inline: 2px;
+}
+.rv-card .jc-bars {
+  grid-template-columns: repeat(16, minmax(0, 2.4em));
+  width: auto;
+  max-width: max-content;
+}
 .rv-where {
   font-size: 13px;
   color: var(--muted);
@@ -732,10 +752,10 @@
   /* A field's value stays on the line with its name. */
   .rv-stack.rv-fields td.rv-cell-name {
     flex: 0 1 auto;
-    max-width: 38%;
+    max-width: 55%;
   }
   .rv-stack.rv-fields td.rv-val {
-    flex: 1 1 62%;
+    flex: 1 1 45%;
     min-width: 0;
   }
   /* A record's reading is its first line. */
@@ -745,6 +765,31 @@
   }
   .rv-stack.rv-records td.rv-reads:empty {
     display: none;
+  }
+  /* Records with names of their own: the number and the name are the first
+     line, and the reading, which repeats much of the name, is two lines at
+     most under it. */
+  .rv-stack.rv-records.rv-named td {
+    order: 2;
+  }
+  .rv-stack.rv-records.rv-named td:first-child,
+  .rv-stack.rv-records.rv-named td.rv-cell-name {
+    order: 0;
+  }
+  .rv-stack.rv-records.rv-named td.rv-cell-name {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .rv-stack.rv-records.rv-named td.rv-reads {
+    order: 1;
+    flex: 1 0 100%;
+    color: var(--muted);
+    font-size: 12px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
   .rv-stack .rv-hex {
     white-space: normal;

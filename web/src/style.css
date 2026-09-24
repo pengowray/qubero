@@ -7153,6 +7153,14 @@ table.rec td.is-invalid {
 .bit-order {
   margin: 0;
 }
+.bit-order-row {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 1px 0;
+}
+.bit-order .rv-rb-band {
+  opacity: 0.55;
+}
 .bit-order-legend {
   display: flex;
   flex-wrap: wrap;

@@ -145,10 +145,11 @@ export function bitOrderFigure(doc: Doc, offsetBits: number, bits: string, parts
   // code does not fill the panel.
   const unitsWide = Math.max(topEnd, at - 0.5);
   const width = Math.min(360, Math.max(120, unitsWide * 10));
-  // The bottom row's captions sit under it; parts are named in the caption.
+  // The rows' captions are written above and below the figure, where the
+  // panel can wrap them; the figure is only as wide as its bits.
   const fig = document.createElement("figure");
   fig.className = "bit-order";
-  const svg = ribbon(data, { width, box: 14, gap: 34, charWidth: 5 });
+  const svg = ribbon(data, { width, box: 14, gap: 34, charWidth: 5, strand: 0.3, captions: false });
   svg.setAttribute("aria-label", TEXT.label);
   svg.style.width = `${width}px`;
   svg.style.maxWidth = "100%";
@@ -166,6 +167,12 @@ export function bitOrderFigure(doc: Doc, offsetBits: number, bits: string, parts
   }
   const cap = document.createElement("figcaption");
   cap.textContent = TEXT.caption;
-  fig.append(svg, legend, cap);
+  const line = (text: string): HTMLElement => {
+    const d = document.createElement("div");
+    d.className = "bit-order-row";
+    d.textContent = text;
+    return d;
+  };
+  fig.append(line(data.top.caption), svg, line(data.bottom.caption), legend, cap);
   return fig;
 }

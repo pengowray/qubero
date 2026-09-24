@@ -41,6 +41,8 @@ const STRIP_H = 10;
 const BYTE_H = 20;
 const AXIS_Y = 74;
 const HEIGHT = 92;
+/** Width of one character of an axis label, 11px monospace. */
+const TICK_CHAR = 6.7;
 /** Pixels a byte from which the strip writes each byte in hex. */
 const HEX_PPB = 14;
 /** The widest window the strip reads and classes itself. Past this it uses
@@ -299,8 +301,12 @@ export class ZoomMap {
     for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) {
       const x = X(t);
       out.push(svgEl("line", { x1: String(x), y1: String(AXIS_Y), x2: String(x), y2: String(AXIS_Y + 4), class: "rv-map-axis" }));
-      const label = svgEl("text", { x: String(Math.min(W - 40, Math.max(0, x - 14))), y: String(AXIS_Y + 15), class: "rv-map-tick" });
-      label.textContent = formatOffset(t * 8);
+      // A label that would run off the right end is drawn ending there.
+      const text = formatOffset(t * 8);
+      const left = Math.max(0, x - 14);
+      const atEnd = left + text.length * TICK_CHAR > W;
+      const label = svgEl("text", { x: String(atEnd ? W : left), y: String(AXIS_Y + 15), class: "rv-map-tick", ...(atEnd ? { "text-anchor": "end" } : {}) });
+      label.textContent = text;
       out.push(label);
     }
   }

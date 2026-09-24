@@ -72,7 +72,7 @@ function directoryBlock(ctx: ReportCtx, l: Directory, model: PartsModel | null):
   const h = document.createElement("h3");
   const code = document.createElement("code");
   code.textContent = l.name;
-  h.append(code, " ", RV.directorySummary(l.placing, l.elements, targets.length));
+  h.append(code, RV.directorySummary(l.placing, l.elements, targets.length));
   box.append(h);
   const fileBits = ctx.doc.lengthBits;
   const colour = (bit: number): string => (model === null ? "var(--accent)" : (groupAt(model, bit)?.color ?? "var(--muted)"));
@@ -95,7 +95,7 @@ function directoryBlock(ctx: ReportCtx, l: Directory, model: PartsModel | null):
       caption: RV.dirBottom(bitsText(fileBits)),
       boxes: byOffset.map(({ t }) => ({ from: t.offset_bits, to: t.offset_bits + Math.max(8, t.size_bits), label: stripIndex(t.name), color: colour(t.offset_bits) })),
     },
-    bands: byOffset.map(({ entry, t }, i) => ({ top: entry, bottom: i, ...(t.aside ? { color: "var(--muted)" } : {}) })),
+    bands: byOffset.map(({ entry, t }, i) => ({ top: entry, bottom: i, color: colour(t.offset_bits) })),
   };
   const fig = document.createElement("figure");
   fig.className = "rv-figure rv-ribbonfig";

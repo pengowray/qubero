@@ -7,7 +7,9 @@
 // grouping here is the part that can be wrong, so it has no DOM in it and the
 // tests run it.
 
+import type { TemplateNode } from "../doc.ts";
 import type { LedgerRole, LedgerRow } from "./coredata.ts";
+import { stripIndex } from "./partrules.ts";
 
 /** One line of the ledger as the report shows it: a part, or one group of the
  *  elements of a list inside a part. */
@@ -60,7 +62,8 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     bits: number;
     firstOffsetBits: number;
     firstPath: readonly number[];
-    roles: Map<LedgerRole, { bits: number; zero: number; unscanned: number; aligns: Set<number> }>;
+    partPath: readonly number[];
+    roles: Map<LedgerRole, RoleAcc>;
   };
   const lines = new Map<string, Acc>();
   for (const r of rows) {
@@ -84,6 +87,7 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
         bits: 0,
         firstOffsetBits: r.first_offset_bits,
         firstPath: r.first_path,
+        partPath: r.part,
         roles: new Map(),
       };
       lines.set(key, a);
@@ -94,13 +98,30 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
       a.firstOffsetBits = r.first_offset_bits;
       a.firstPath = r.first_path;
     }
-    const role = a.roles.get(r.role) ?? { bits: 0, zero: 0, unscanned: 0, aligns: new Set<number>() };
+    const role: RoleAcc = a.roles.get(r.role) ?? { bits: 0, zero: 0, unscanned: 0, aligns: new Set<number>() };
     role.bits += r.bits;
     role.zero += r.zero_bits;
     role.unscanned += r.unscanned_bits;
     if (r.align > 0) role.aligns.add(r.align);
     a.roles.set(r.role, role);
   }
+  // A group inside another group's element is part of that group's line: a
+  // JPEG dqt segment's tables are what the segment holds, and the line says
+  // how much of the file the segments take. The inner group's first field
+  // lies in the element where the outer group's first field is, further in.
+  const owners = new Map<string, Acc>();
+  const nested: Acc[] = [];
+  const byDepth = [...lines.values()].filter((a) => a.key.startsWith("part:")).sort((x, y) => x.firstPath.length - y.firstPath.length);
+  for (const a of byDepth) {
+    const element = `${a.partPath.join("/")}|${a.firstPath.slice(0, a.partPath.length + 1).join("/")}`;
+    const owner = owners.get(element);
+    if (owner === undefined) owners.set(element, a);
+    else if (owner.firstPath.length < a.firstPath.length) {
+      mergeInto(owner, a);
+      nested.push(a);
+    }
+  }
+  for (const a of nested) lines.delete(a.key);
   return [...lines.values()]
     .map((a) => ({
       key: a.key,
@@ -119,7 +140,47 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     .sort((x, y) => x.firstOffsetBits - y.firstOffsetBits);
 }
 
+type RoleAcc = { bits: number; zero: number; unscanned: number; aligns: Set<number> };
+type LineAcc = { bits: number; firstOffsetBits: number; firstPath: readonly number[]; roles: Map<LedgerRole, RoleAcc> };
+
+function mergeInto(owner: LineAcc, a: LineAcc): void {
+  owner.bits += a.bits;
+  if (a.firstOffsetBits < owner.firstOffsetBits) {
+    owner.firstOffsetBits = a.firstOffsetBits;
+    owner.firstPath = a.firstPath;
+  }
+  for (const [role, v] of a.roles) {
+    const o = owner.roles.get(role) ?? { bits: 0, zero: 0, unscanned: 0, aligns: new Set<number>() };
+    o.bits += v.bits;
+    o.zero += v.zero;
+    o.unscanned += v.unscanned;
+    for (const x of v.aligns) o.aligns.add(x);
+    owner.roles.set(role, o);
+  }
+}
+
 /** True for the line of bytes no field describes. */
 export function isGapLine(l: LedgerLine): boolean {
   return l.key === "gap";
+}
+
+/**
+ * A part's fields as rows: one that covers the whole part would repeat it and
+ * is left out, and neighbours of the same name are one row with a count, so
+ * four dht segments in a row are `dht × 4`.
+ */
+export function runsOf(u: { offsetBits: number; sizeBits: number }, kids: readonly Pick<TemplateNode, "name" | "path" | "offset_bits" | "size_bits">[]): { name: string; path: readonly number[]; startBit: number; endBit: number; count: number }[] {
+  const out: { name: string; path: readonly number[]; startBit: number; endBit: number; count: number }[] = [];
+  for (const k of kids) {
+    if (k.offset_bits === u.offsetBits && k.size_bits === u.sizeBits) continue;
+    const name = stripIndex(k.name) || k.name;
+    const last = out[out.length - 1];
+    if (last !== undefined && last.name === name) {
+      last.endBit = Math.max(last.endBit, k.offset_bits + k.size_bits);
+      last.count++;
+      continue;
+    }
+    out.push({ name, path: k.path, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits, count: 1 });
+  }
+  return out;
 }

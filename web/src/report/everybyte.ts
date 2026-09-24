@@ -7,7 +7,7 @@ import type { TemplateNode } from "../doc.ts";
 import { percentText } from "../format.ts";
 import { lineColor, lineLabel } from "./bytes.ts";
 import type { Ledger } from "./coredata.ts";
-import { ledgerLines } from "./ledger.ts";
+import { ledgerLines, runsOf } from "./ledger.ts";
 import { ok, type PartsModel, type Unit } from "./model.ts";
 import { byteRef } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
@@ -93,10 +93,10 @@ export const everyByteSection: Section = {
         row(head, targetOf(u), 0, "rv-grouprow");
         const kids = fieldsOf(ctx, u);
         if (kids === WAIT) return WAIT;
-        for (const k of kids.slice(0, PER_PART)) {
+        for (const k of runsOf(u, kids).slice(0, PER_PART)) {
           const code = document.createElement("code");
-          code.textContent = k.name;
-          row(code, { path: k.path, startBit: k.offset_bits, endBit: k.offset_bits + k.size_bits }, 1);
+          code.textContent = k.count > 1 ? RV.runOf(k.name, k.count) : k.name;
+          row(code, { path: k.path, startBit: k.startBit, endBit: k.endBit }, 1);
         }
         const n = u.node === null ? u.fields.length : u.node.child_count;
         if (n > PER_PART) {
@@ -185,10 +185,12 @@ function coreEveryByte(ctx: ReportCtx, ledger: Ledger, model: PartsModel): HTMLE
     const at = byteRef({ ...(l.firstPath.length > 0 ? { path: l.firstPath } : {}), startBit: l.firstOffsetBits, endBit: l.firstOffsetBits + 8 });
     tr.append(cell(name, "rv-cell-name", ""), cell(at, "rv-num", RV.ledgerStart), cell(bitsText(l.bits), "rv-num", RV.ledgerBytes), cell(percentText(l.bits, fileBits), "rv-num", RV.ledgerShare));
     body.append(tr);
-    // A line that is all content says nothing more under it.
+    // A line with one role would repeat its own bytes under it, so it says
+    // nothing more, except bytes no field describes and padding, which say
+    // how many of them are zero.
     const only = l.roles[0];
-    const plainContent = l.roles.length === 1 && only?.role === "content";
-    if (!plainContent) {
+    const oneRole = l.roles.length === 1 && only?.role !== "gap" && only?.role !== "padding";
+    if (!oneRole) {
       for (const r of l.roles) {
         if (rows >= ROWS) {
           cut++;

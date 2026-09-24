@@ -240,9 +240,11 @@ export function readingWriting(p: Profile): string[] {
   const out: string[] = [];
   if (f.every_field_follows === true) out.push("A reader can go from the start of the file to the end without going back.");
   if (f.from_end > 0) out.push(`A reader has to start at the end: ${counted(f.from_end, "field")} ${f.from_end === 1 ? "is" : "are"} found from the end of the file.`);
-  if (f.backward > 0) out.push(`A reader has to go back: ${counted(f.backward, "offset")} ${f.backward === 1 ? "points" : "point"} to earlier bytes.`);
+  if (f.backward > 0) {
+    out.push(`A reader has to go back: ${counted(f.backward, "offset")} ${f.backward === 1 ? "points" : "point"} to earlier bytes.`);
+    out.push(f.backward === 1 ? "A writer can write the part it points to first, then the offset." : "A writer can write the parts they point to first, then the offsets.");
+  }
   if (f.forward > 0) out.push(`${sentence(counted(f.forward, "offset"))} ${f.forward === 1 ? "points" : "point"} ahead, so a writer has to know where those parts go before writing them, or come back to fill the offsets in.`);
-  if (f.backward > 0) out.push(`${sentence(counted(f.backward, "offset"))} ${f.backward === 1 ? "points" : "point"} back, so a writer can write those parts first and the offsets after them.`);
   if (f.lengths_before > 0) out.push(`${sentence(counted(f.lengths_before, "length"))} ${f.lengths_before === 1 ? "comes" : "come"} before what ${f.lengths_before === 1 ? "it sizes" : "they size"}, so a writer has to know each size before writing, or come back to fill it in.`);
   if (f.lengths_after > 0) out.push(`${sentence(counted(f.lengths_after, "length"))} ${f.lengths_after === 1 ? "comes" : "come"} after what ${f.lengths_after === 1 ? "it sizes" : "they size"}.`);
   return out;

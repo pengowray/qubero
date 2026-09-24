@@ -67,6 +67,13 @@ export type RibbonOptions = {
   readonly box?: number;
   readonly gap?: number;
   readonly charWidth?: number;
+  /** How much of a box's width each end of its band takes, from 0 to 1. Less
+   *  than 1 draws each band as a strand from the middle of its box, so bands
+   *  that cross can be followed one by one. */
+  readonly strand?: number;
+  /** False to leave the rows' captions out of the figure, for a caller that
+   *  writes them beside it. */
+  readonly captions?: boolean;
 };
 
 /** Heights of the figure's parts, in px, unless the caller says. */
@@ -121,11 +128,13 @@ export function ribbon(data: RibbonData, opts: RibbonOptions = {}): SVGSVGElemen
   const BOX = opts.box ?? DEFAULT_BOX;
   const GAP = opts.gap ?? DEFAULT_GAP;
   const CHAR_W = opts.charWidth ?? CHAR;
-  const yTopBox = CAPTION;
+  const STRAND = Math.min(1, Math.max(0, opts.strand ?? 1));
+  const captions = opts.captions !== false;
+  const yTopBox = captions ? CAPTION : 2;
   const yTopEdge = yTopBox + BOX;
   const yBottomBox = yTopEdge + GAP;
   const yBottomEdge = yBottomBox + BOX;
-  const H = yBottomEdge + CAPTION + 4;
+  const H = yBottomEdge + (captions ? CAPTION + 4 : 2);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "rv-ribbon", role: "img", "aria-label": `${data.top.caption}; ${data.bottom.caption}` });
   svg.style.width = "100%";
   const top = boxSpans(data.top, W);
@@ -136,7 +145,10 @@ export function ribbon(data: RibbonData, opts: RibbonOptions = {}): SVGSVGElemen
     const b = bottom[band.bottom];
     if (t === undefined || b === undefined) return;
     const colour = band.color ?? data.top.boxes[band.top]?.color ?? "var(--accent)";
-    const p = svgEl("path", { d: bandPath(t.x, t.x + t.w, yTopEdge, b.x, b.x + b.w, yBottomBox), class: "rv-rb-band", fill: colour });
+    const narrow = (x: number, w: number): [number, number] => [x + (w * (1 - STRAND)) / 2, x + (w * (1 + STRAND)) / 2];
+    const [t0, t1] = narrow(t.x, t.w);
+    const [b0, b1] = narrow(b.x, b.w);
+    const p = svgEl("path", { d: bandPath(t0, t1, yTopEdge, b0, b1, yBottomBox), class: "rv-rb-band", fill: colour });
     p.dataset.band = String(i);
     bands.append(p);
   });
@@ -169,7 +181,9 @@ export function ribbon(data: RibbonData, opts: RibbonOptions = {}): SVGSVGElemen
     t.textContent = text;
     return t;
   };
-  svg.append(cap(data.top.caption, CAPTION - 4), bands, row(data.top, top, yTopBox, "top"), row(data.bottom, bottom, yBottomBox, "bottom"), cap(data.bottom.caption, H - 4));
+  if (captions) svg.append(cap(data.top.caption, CAPTION - 4));
+  svg.append(bands, row(data.top, top, yTopBox, "top"), row(data.bottom, bottom, yBottomBox, "bottom"));
+  if (captions) svg.append(cap(data.bottom.caption, H - 4));
 
   // Which bands meet each box, so hovering a box lights its bands too.
   const byTop = new Map<number, number[]>();

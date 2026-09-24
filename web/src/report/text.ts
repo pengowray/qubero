@@ -48,6 +48,14 @@ export function listText(items: readonly string[]): string {
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
+/** What the upright lines on the extent figure mark. */
+function extentMarks(parent: boolean, file: boolean): string {
+  if (parent && file) return "The lines mark the end of its parent and the end of the file.";
+  if (parent) return "The line marks the end of its parent.";
+  if (file) return "The line marks the end of the file.";
+  return "";
+}
+
 export const RV = {
   /** The main view's button, beside Hex, Listing, Text, Strings, and Diagram. */
   button: "Report",
@@ -127,7 +135,7 @@ export const RV = {
   },
   extentLengthField: "Length field",
   extentStated: "Stated length",
-  extentRead: "Read as",
+  extentRead: "Actual length",
   extentContent: "Its fields reach",
   extentRoom: "Room in its parent",
   extentStatedCount: "Stated count",
@@ -139,9 +147,9 @@ export const RV = {
   extentParentEnds: "End of its parent",
   extentFileEnds: "End of the file",
   extentFigureLabel: "Where the length field says the part ends, and where it does end",
-  extentCaption: (start: string): string => `The part starts at ${start}. Each bar ends where its label says. The lines mark the end of its parent and the end of the file.`,
-  extentCaptionCut: (start: string): string =>
-    `Drawn near the ends, all at one scale. The part starts further left, at ${start}. The lines mark the end of its parent and the end of the file.`,
+  extentCaption: (start: string, parent: boolean, file: boolean): string => `The part starts at ${start}. ${extentMarks(parent, file)}`.trim(),
+  extentCaptionCut: (start: string, parent: boolean, file: boolean): string =>
+    `Only the ends are drawn, at one scale. The part starts further left, at ${start}. ${extentMarks(parent, file)}`.trim(),
   gapNonzero: (bytes: number): string => `${bytesText(bytes)} that no field describes`,
   gapZeros: (bytes: number): string => `${bytesText(bytes)} of zeros that no field describes`,
   gapUnchecked: (bytes: number): string => `${bytesText(bytes)} that no field describes, not checked for zeros`,
@@ -199,8 +207,8 @@ export const RV = {
   gapName: "unmapped",
   /** A stretch holding more parts than the report lists, which it did not
    *  look into. */
-  unexaminedName: "not listed",
-  unexaminedBody: "Holds more parts than the report lists. The listing shows every field.",
+  unexaminedName: "Not examined",
+  unexaminedBody: "The report stopped looking for parts here. The Listing view shows the fields in these bytes.",
   /** An element named like an element of another list, with its list. */
   inList: (name: string, list: string): string => `${name} (${list})`,
   mapByte: (at: string, hex: string, cls: string): string => `Byte at ${at}: ${hex}, ${cls}`,
@@ -249,6 +257,8 @@ export const RV = {
   colField: "Field",
   colValue: "Value",
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
+  /** Neighbouring fields of one name, as one row. */
+  runOf: (name: string, n: number): string => `${name} × ${n}`,
   showInListing: "Show in the listing",
   allZero: (n: number): string => `All ${bytesText(n)} are zero.`,
   classesOf: (text: number, zero: number, other: number, total: number): string =>
