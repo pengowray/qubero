@@ -353,6 +353,8 @@ export const RV = {
   pngScanlinesHeading: (n: number, interlaced: boolean, filter: string, count: number, complete: boolean): string => {
     const lines = `${sentenceCase(counted(n, "scanline"))}${interlaced ? " in seven passes" : ""}`;
     if (!complete || count === 0) return lines;
+    // "filtered with None" reads as a contradiction; filter 0 stores the row as it is.
+    if (filter === "None") return count === n ? `${lines}, none of them filtered` : `${lines}, ${count.toLocaleString()} of them unfiltered`;
     return count === n ? `${lines}, all filtered with ${filter}` : `${lines}, ${count.toLocaleString()} of them filtered with ${filter}`;
   },
   pngFilterIntro:
