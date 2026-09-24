@@ -141,6 +141,7 @@ impl Evaluator {
             return Ok(Vec::new());
         }
         match &ty {
+            Ty::Traced { part: TracedPart::Unit(j) } => self.unit_cells(*j, path, from, to, max),
             Ty::Traced { part: TracedPart::Block(i) } => self.block_cells(*i, path, from, to, max),
             // A stream is one entry with a count of the fields inside it, and
             // those are not elements of a run: the blocks below it are.
@@ -154,6 +155,11 @@ impl Evaluator {
     /// window is found by halving and the rest are read off in order.
     fn block_cells(&mut self, block: u32, path: &[usize], from: u64, to: u64, max: usize) -> R<Vec<Cell>> {
         let Some((base, trace)) = self.trace_for(path) else { return Ok(Vec::new()) };
+        // A JPEG MCU holds 8×8 blocks rather than codes, and each of those is
+        // a run of its own.
+        if !trace.units().is_empty() {
+            return Ok(Vec::new());
+        }
         let Some(view) = super::traced::BlockView::of(trace, block) else { return Ok(Vec::new()) };
         // A stored block codes nothing; its one step is the bytes copied
         // through, which the block's own entry already says the size of.
@@ -182,6 +188,40 @@ impl Evaluator {
             }
             out.push(Cell {
                 index: (k - view.symbols.start) as u64,
+                offset_bits: at,
+                size_bits: size,
+                text: super::traced::symbol_name(&step),
+                label: super::traced::symbol_label(&step),
+                kind: "symbol",
+                repeat: false,
+                contiguous: true,
+                problem: None,
+                problems_within: (0, 0),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The codes of one 8×8 block of a JPEG scan, read off the trace the way
+    /// a deflate block's are.
+    fn unit_cells(&mut self, unit: u32, path: &[usize], from: u64, to: u64, max: usize) -> R<Vec<Cell>> {
+        let Some((base, trace)) = self.trace_for(path) else { return Ok(Vec::new()) };
+        let Some(u) = trace.units().get(unit as usize) else { return Ok(Vec::new()) };
+        let mut out = Vec::new();
+        for k in u.steps.clone() {
+            if out.len() >= max {
+                break;
+            }
+            let Some(step) = trace.step(k as usize) else { break };
+            let (at, size) = (base + step.in_bits.start, step.in_bits.end - step.in_bits.start);
+            if at >= to {
+                break;
+            }
+            if size == 0 || at + size <= from {
+                continue;
+            }
+            out.push(Cell {
+                index: (k - u.steps.start) as u64,
                 offset_bits: at,
                 size_bits: size,
                 text: super::traced::symbol_name(&step),

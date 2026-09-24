@@ -43,7 +43,7 @@
 //! a field nothing bounds.
 
 use super::tiff::tiff_part;
-use crate::template::{Encoding, Endian::*, Expr as E, StrLen, Template, Ty as T, Until};
+use crate::template::{Encoding, Endian::*, Expr as E, Packing, StrLen, Template, Ty as T, Until};
 
 /// Every marker worth naming, by the whole two bytes rather than the second
 /// one, since that is what is read. The names are the abbreviations the
@@ -456,8 +456,22 @@ fn scan() -> T {
                 ),
             ),
             // The compressed bits, ending at the next marker that is neither a
-            // stuffed 0xff nor a restart.
-            ("entropy", T::bytes(E::to_marker(0xff, ESCAPES))),
+            // stuffed 0xff nor a restart, and read with the tables the
+            // segments before them defined. What comes out is each 8×8
+            // block's quantized coefficients in rows, and the blocks go in
+            // the order the scan codes them: a 4:2:0 image's four Y blocks,
+            // then its Cb and its Cr, MCU by MCU. Which block of which channel
+            // each one is, is in the trace beside it. A scan this cannot
+            // read, a progressive one or one coded arithmetically, stays the
+            // bytes it is and says which it was.
+            (
+                "entropy",
+                T::decoded_as(
+                    E::to_marker(0xff, ESCAPES),
+                    Packing::JpegScan { segments: E::lit(2) },
+                    T::repeat(T::array(T::array(T::Int { bits: 16, endian: Little }, E::lit(8)), E::lit(8)), Until::End),
+                ),
+            ),
         ],
     )
     // Declared rather than left to the walk, so the two halves are divided the
@@ -600,7 +614,15 @@ mod tests {
         assert_eq!(ev.node(&d, &[1, 4, 1, 1, 1, 0, 1]).unwrap().value, Value::UInt(0));
         let entropy = ev.node(&d, &[1, 4, 1, 2]).unwrap();
         assert_eq!(entropy.size_bits, 7 * 8);
-        assert_eq!(entropy.value, Value::Bytes { len: 7, preview: vec![0xaa, 0xff, 0x00, 0xbb, 0xff, 0xd0, 0xcc] });
+        assert_eq!(covered(&d, &entropy), [0xaa, 0xff, 0x00, 0xbb, 0xff, 0xd0, 0xcc]);
+        // Its bits are not a scan these tables can read: the frame has no AC
+        // table, so the run stays bytes and says the file does not say how.
+        assert_eq!(entropy.refused.as_deref(), Some("settings"));
+    }
+
+    /// The bytes a node covers, from the file.
+    fn covered(d: &Document<MemSource>, n: &crate::eval::NodeInfo) -> Vec<u8> {
+        d.source().0[(n.offset_bits / 8) as usize..((n.offset_bits + n.size_bits) / 8) as usize].to_vec()
     }
 
     #[test]
@@ -610,7 +632,7 @@ mod tests {
         let d = Document::new(MemSource(v));
         let mut ev = Evaluator::new(jpeg());
         // The bits run to the end of the file, since nothing ends them.
-        assert_eq!(ev.node(&d, &[1, 4, 1, 2]).unwrap().value, Value::Bytes { len: 4, preview: vec![0xaa, 0xff, 0x00, 0xbb] });
+        assert_eq!(covered(&d, &ev.node(&d, &[1, 4, 1, 2]).unwrap()), [0xaa, 0xff, 0x00, 0xbb]);
         assert_eq!(ev.node(&d, &[1]).unwrap().child_count, 5);
     }
 
@@ -735,10 +757,11 @@ mod tests {
         // The first scan carries the direct current alone, the second the rest.
         assert_eq!(ev.node(&d, &[1, 1, 1, 1, 2]).unwrap().value, Value::UInt(0));
         assert_eq!(ev.node(&d, &[1, 2, 1, 1, 3]).unwrap().value, Value::UInt(63));
-        assert_eq!(ev.node(&d, &[1, 1, 1, 2]).unwrap().value, Value::Bytes { len: 3, preview: vec![1, 2, 3] });
-        assert_eq!(
-            ev.node(&d, &[1, 2, 1, 2]).unwrap().value,
-            Value::Bytes { len: 5, preview: vec![4, 5, 0xff, 0x00, 6] }
-        );
+        assert_eq!(covered(&d, &ev.node(&d, &[1, 1, 1, 2]).unwrap()), [1, 2, 3]);
+        assert_eq!(covered(&d, &ev.node(&d, &[1, 2, 1, 2]).unwrap()), [4, 5, 0xff, 0x00, 6]);
+        // Neither is decoded: a progressive scan is a different bit stream
+        // from a baseline one, and each says so.
+        assert_eq!(ev.node(&d, &[1, 1, 1, 2]).unwrap().refused.as_deref(), Some("progressive"));
+        assert_eq!(ev.node(&d, &[1, 2, 1, 2]).unwrap().refused.as_deref(), Some("progressive"));
     }
 }

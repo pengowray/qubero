@@ -230,7 +230,7 @@ impl Evaluator {
             // block starts where the last one ended too, but what the reader
             // is asking about a block is which bits the decoder claimed, and
             // a header field is at an offset the block laid out.
-            Ty::Traced { part: TracedPart::Symbols(_) } => {
+            Ty::Traced { part: TracedPart::Symbols(_) | TracedPart::Unit(_) } => {
                 if idx == 0 {
                     Placed::First
                 } else {

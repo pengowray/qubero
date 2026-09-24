@@ -537,9 +537,27 @@ impl Evaluator {
             // order that is belongs to the trace, so it is asked here rather
             // than written into the type: a node is placed once and a template
             // never declares one of these.
+            // A JPEG code that straddles a stuffed zero covers it, and the
+            // zero is not one of its bits: the decoder read past it. So the
+            // bytes the trace says were read past come out of the string, and
+            // what is left is the code and its value bits as the decoder took
+            // them. See `codec::Trace::stuffed`.
             Ty::CodeBits { .. } => {
-                let lsb_first = self.trace_for(at).is_some_and(|(_, t)| t.lsb_first());
-                Value::Str(self.read_code_bits(doc, r, size, lsb_first)?)
+                let (lsb_first, skipped) = match self.trace_for(at) {
+                    Some((base, t)) => {
+                        let from = r.offset.saturating_sub(base);
+                        let inside = t.stuffed();
+                        let lo = inside.partition_point(|&b| b < from);
+                        let hi = inside.partition_point(|&b| b < from + size);
+                        (t.lsb_first(), inside[lo..hi].iter().map(|&b| (b - from) as usize).collect::<Vec<_>>())
+                    }
+                    None => (false, Vec::new()),
+                };
+                let mut bits = self.read_code_bits(doc, r, size, lsb_first)?;
+                for &at in skipped.iter().rev() {
+                    bits.replace_range(at..(at + 8).min(bits.len()), "");
+                }
+                Value::Str(bits)
             }
             Ty::SqliteVarint => Value::Int(self.read_sqlite_varint(doc, r)?.0),
             // Unsigned: every number 7z writes is a count, a size or an

@@ -649,6 +649,7 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
                     add(dictionary, Role::Length, out);
                     add(unpacked, Role::Length, out);
                 }
+                Packing::JpegScan { segments } => add(segments, Role::Position, out),
             }
             sources(inner, out, depth + 1);
         }

@@ -321,6 +321,15 @@ impl Evaluator {
                                 None => 0,
                             }
                         }
+                        // From its first code to where its last one ends.
+                        crate::template::TracedPart::Unit(j) => match trace.units().get(j as usize) {
+                            Some(u) if !u.steps.is_empty() => {
+                                let first = trace.step(u.steps.start as usize).map_or(0, |s| s.in_bits.start);
+                                let last = trace.step(u.steps.end as usize - 1).map_or(first, |s| s.in_bits.end);
+                                last - first
+                            }
+                            _ => 0,
+                        },
                     };
                     let _ = base;
                     span
@@ -480,6 +489,10 @@ impl Evaluator {
                 let Some((_, trace)) = self.trace_for(path) else { return Ok(0) };
                 Ok(match part {
                     crate::template::TracedPart::Blocks => trace.blocks().len() as u64,
+                    crate::template::TracedPart::Block(i) if !trace.units().is_empty() => {
+                        super::traced::UnitsView::of(trace, i).map_or(0, |v| v.len() as u64)
+                    }
+                    crate::template::TracedPart::Unit(j) => trace.units().get(j as usize).map_or(0, |u| u.steps.len() as u64),
                     crate::template::TracedPart::Block(i) => match super::traced::BlockView::of(trace, i) {
                         Some(v) => v.head.len() as u64 + u64::from(!v.symbols.is_empty()),
                         None => 0,

@@ -732,12 +732,15 @@ fn too_large(len: u64) -> String {
 /// Why a stream a check is over would not unpack. The reasons are the decoders'
 /// own; nothing is added to them here beyond saying what was being attempted.
 fn refused(why: Refusal) -> String {
-    format!("Can't check this: the data it covers {}.", match why {
-        Refusal::TooLarge => "unpacks to more than the limit",
-        Refusal::Unaligned => "doesn't start on a byte",
-        Refusal::Failed => "wouldn't unpack",
-        Refusal::Settings => "doesn't say how it was packed",
-    })
+    match why {
+        Refusal::Unsupported(u) => format!("Can't check this: the data it covers is {}.", u.message()),
+        _ => format!("Can't check this: the data it covers {}.", match why {
+            Refusal::TooLarge => "unpacks to more than the limit",
+            Refusal::Unaligned => "doesn't start on a byte",
+            Refusal::Settings => "doesn't say how it was packed",
+            _ => "wouldn't unpack",
+        }),
+    }
 }
 
 #[cfg(test)]

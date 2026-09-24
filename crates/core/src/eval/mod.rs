@@ -1615,7 +1615,7 @@ impl Evaluator {
             return match part {
                 TracedPart::Blocks => Some(traced::blocks_unit(self.trace_for(path).and_then(|(_, t)| t.blocks().first().map(|b| b.kind)))),
                 TracedPart::Block(_) => None,
-                TracedPart::Symbols(_) => Some("code"),
+                TracedPart::Symbols(_) | TracedPart::Unit(_) => Some("code"),
             };
         }
         let mut elem = match ty {
@@ -2474,7 +2474,11 @@ impl Evaluator {
             return Ok(space::Opened::Refused(Refusal::TooLarge));
         }
         let packed = self.read(doc, &r, r.offset, size)?;
-        Ok(match crate::codec::decode_traced(codec, &packed) {
+        let Some(settings) = self.settings_at(doc, path, &r)? else {
+            self.spaces.refuse(path, Refusal::Settings);
+            return Ok(space::Opened::Refused(Refusal::Settings));
+        };
+        Ok(match crate::codec::decode_traced_with(codec, &packed, &settings) {
             Ok((bytes, trace)) => space::Opened::Space(self.spaces.add(path, bytes, trace)),
             Err(why) => {
                 self.spaces.refuse(path, why);
@@ -2552,7 +2556,33 @@ impl Evaluator {
                 }
                 Some(crate::codec::Codec::Rar5 { window_bits: 17 + dict, unpacked })
             }
+            // The settings are bytes, read when the run is opened. See
+            // `settings_at`.
+            Packing::JpegScan { .. } => Some(crate::codec::Codec::JpegBaseline),
         })
+    }
+
+    /// The bytes a `Decoded` node's codec takes its settings from, for a
+    /// packing whose settings are written elsewhere as bytes rather than as
+    /// numbers. Empty for every other packing.
+    ///
+    /// A JPEG scan's are every segment of the image before it: from where the
+    /// template says the segments start to where the run does, which takes in
+    /// the scan's own header. Nothing when the expression will not resolve or
+    /// points past the run, which is a run whose settings nothing says.
+    fn settings_at<S: Source>(&mut self, doc: &Document<S>, path: &[usize], r: &Resolved) -> R<Option<Vec<u8>>> {
+        let Ty::Decoded { codec: Packing::JpegScan { segments }, .. } = &r.ty else { return Ok(Some(Vec::new())) };
+        let from = match self.eval_expr(doc, path, &segments.clone()) {
+            Ok(v) => v,
+            Err(e) if e.interrupted() => return Err(e),
+            Err(_) => return Ok(None),
+        };
+        let Ok(from) = u64::try_from(from) else { return Ok(None) };
+        let (from, to) = (from * 8, r.offset);
+        if from > to || to - from > crate::codec::CAP_BYTES as u64 * 8 {
+            return Ok(None);
+        }
+        Ok(Some(self.read_in(doc, r.space, from, to - from)?))
     }
 
     /// Open the `Decoded` node at `path` of space `space` as a document of its
@@ -2818,6 +2848,34 @@ impl Evaluator {
                 let Some(block) = trace.blocks().get(idx) else { return fail("no such block") };
                 let at = block.in_bits.start;
                 place(traced::block_name(block), Ty::Traced { part: TracedPart::Block(idx as u32) }, at)
+            }
+            // A JPEG MCU: its 8×8 blocks, and the padding and restart marker
+            // after them.
+            TracedPart::Block(i) if trace.blocks().get(i as usize).is_some() && !trace.units().is_empty() => {
+                let view = traced::UnitsView::of(trace, i).expect("a trace with units");
+                match view.child(idx) {
+                    Some(traced::UnitsChild::Unit(j)) => {
+                        let unit = &trace.units()[j];
+                        let at = trace.step(unit.steps.start as usize).map_or(0, |s| s.in_bits.start);
+                        place(traced::unit_name(trace, unit), Ty::Traced { part: TracedPart::Unit(j as u32) }, at)
+                    }
+                    Some(traced::UnitsChild::Step(k)) => {
+                        let step = trace.step(k as usize).expect("in range");
+                        let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()));
+                        place(name, ty, step.in_bits.start)
+                    }
+                    None => fail("no such field"),
+                }
+            }
+            TracedPart::Unit(j) => {
+                let Some(unit) = trace.units().get(j as usize) else { return fail("no such block") };
+                let k = unit.steps.start as usize + idx;
+                if k >= unit.steps.end as usize {
+                    return fail("no such code");
+                }
+                let step = trace.step(k).expect("in range");
+                let (name, ty) = traced::unit_step_ty(&step, trace.stuffed_in(step.in_bits.clone()));
+                place(name, ty, step.in_bits.start)
             }
             TracedPart::Block(i) => {
                 let Some(view) = traced::BlockView::of(trace, i) else { return fail("no such block") };

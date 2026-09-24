@@ -890,6 +890,7 @@ fn packing(p: &Packing) -> String {
         Packing::Rar5 { dictionary, unpacked } => {
             format!("rar5 dictionary {} unpacked {}", expr(dictionary), expr(unpacked))
         }
+        Packing::JpegScan { segments } => format!("jpeg baseline segments {}", expr(segments)),
     }
 }
 
@@ -1014,6 +1015,7 @@ fn inline(ty: &Ty) -> Option<String> {
             TracedPart::Blocks => "traced blocks".to_string(),
             TracedPart::Block(i) => format!("traced block {i}"),
             TracedPart::Symbols(i) => format!("traced symbols {i}"),
+            TracedPart::Unit(i) => format!("traced unit {i}"),
         },
         Ty::CodeBits { name, width } => format!("codebits {name} ({})", sizing(*width)),
     };
