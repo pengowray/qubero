@@ -317,7 +317,7 @@ impl Evaluator {
                 self.resolve(doc, &p)?;
                 if !matches!(
                     self.memo[&p].ty,
-                    Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+                    Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
                 ) {
                     return fail(format!("{name} is not a list, so it has no count of elements"));
                 }
@@ -1611,7 +1611,7 @@ impl Evaluator {
         // saying which piece.
         if matches!(
             self.memo[path].ty,
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
         ) {
             let Ok(i) = name.parse::<usize>() else { return Ok(None) };
             let n = self.child_count(doc, path)?;
@@ -1935,7 +1935,7 @@ fn no_elem_field<T>(head: &str, i: i128, rest: &[String]) -> R<T> {
 /// Whether a type is a list of elements, the kind `Expr::Idx` counts through
 /// and an element may read the earlier elements of.
 fn is_list(ty: &Ty) -> bool {
-    matches!(ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. })
+    matches!(ty, Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. })
 }
 
 /// Which end of a container a block walk starts from.

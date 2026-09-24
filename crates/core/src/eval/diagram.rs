@@ -226,6 +226,7 @@ fn as_struct<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Arc<StructDef>> {
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_struct(t, inner),
         Ty::Stitched { inner, .. } => as_struct(t, inner),
+        Ty::Raster { pixel, .. } => as_struct(t, pixel),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -261,6 +262,7 @@ fn as_switch<'a>(t: &'a Template, ty: &'a Ty) -> Option<&'a Ty> {
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => as_switch(t, inner),
         Ty::Stitched { inner, .. } => as_switch(t, inner),
+        Ty::Raster { pixel, .. } => as_switch(t, pixel),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -282,6 +284,7 @@ fn named_target(ty: &Ty) -> Option<String> {
         }
         Ty::Nullable { inner, .. } | Ty::Decoded { inner, .. } | Ty::When { inner, .. } => named_target(inner),
         Ty::Stitched { inner, .. } => named_target(inner),
+        Ty::Raster { pixel, .. } => named_target(pixel),
         Ty::Array { elem, .. }
         | Ty::Repeat { elem, .. }
         | Ty::PointerList { elem, .. }
@@ -478,7 +481,7 @@ fn switch_key(sw: &Ty) -> String {
 /// would make every run one longer than the file.
 pub(crate) fn is_run(t: &Template, ty: &Ty) -> bool {
     match ty {
-        Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => true,
+        Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. } => true,
         Ty::Sized { inner, .. }
         | Ty::SizedBits { inner, .. }
         | Ty::Origin { inner }
@@ -635,6 +638,14 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
             add(adjust, Role::Position, out);
             sources(elem, out, depth + 1);
         }
+        // How many pixels there are, and how far apart: the three numbers
+        // every pixel's place is worked out from.
+        Ty::Raster { width, height, bits_per_pixel, pixel, .. } => {
+            add(width, Role::Count, out);
+            add(height, Role::Count, out);
+            add(bits_per_pixel, Role::Position, out);
+            sources(pixel, out, depth + 1);
+        }
         Ty::Decoded { codec, inner } => {
             match codec {
                 Packing::Fixed(_) => {}
@@ -648,6 +659,14 @@ fn sources(ty: &Ty, out: &mut Vec<Source>, depth: u32) {
                 Packing::Rar5 { dictionary, unpacked } => {
                     add(dictionary, Role::Length, out);
                     add(unpacked, Role::Length, out);
+                }
+                // The header numbers that say how long each row is and in
+                // what order the rows come, which is what the unpacked run's
+                // length and shape are made of.
+                Packing::PngScanlines(h) => {
+                    for e in [&h.width, &h.height, &h.bit_depth, &h.color_type, &h.interlace] {
+                        add(e, Role::Length, out);
+                    }
                 }
                 Packing::JpegScan { segments } => add(segments, Role::Position, out),
             }

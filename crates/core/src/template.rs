@@ -3126,6 +3126,40 @@ pub enum Ty {
     /// what the block's table says, and a different code is a different width,
     /// which moves every code after it.
     CodeBits { name: Arc<str>, width: crate::eval::Sizing },
+    /// A picture's pixels, each one a field at the bits it is stored in and
+    /// numbered by where it is in the picture: child `i` is the pixel in
+    /// column `i % width` of row `i / width`, whatever order the run keeps
+    /// them in.
+    ///
+    /// A picture stored a row at a time is an array of rows and needs none of
+    /// this. An interlaced one is not in picture order at all. Adam7 writes a
+    /// PNG as seven smaller pictures one after the other, the first holding
+    /// every eighth pixel of every eighth row and the last every odd row, so
+    /// the pixel at column 13 of row 9 is in the sixth of them, and nothing
+    /// that places children one after another reaches it. Putting the pixels
+    /// back is a permutation rather than a decoding: every bit comes out as it
+    /// went in, only somewhere else. So it is not a codec, whose trace runs
+    /// through its output in order, but a list whose children are placed by
+    /// arithmetic, the way a [`Ty::Gather`] places its records by offsets.
+    ///
+    /// `order` is how the run keeps them: [`RasterOrder::Rows`], top row first
+    /// and each row left to right, or [`RasterOrder::Adam7`], pass by pass and
+    /// each pass the same way. Every row starts on a whole byte, and in Adam7
+    /// every row of every pass does, which is how PNG writes pixels narrower
+    /// than a byte; the bits that pad a row out belong to no pixel.
+    ///
+    /// `bits_per_pixel` is how far apart the pixels are, and is its own number
+    /// rather than the size of `pixel` because the size of a type is not
+    /// always known before one is read: a PNG pixel is a switch on the colour
+    /// type over samples as wide as the bit depth, and the placing has to be
+    /// done first. A `pixel` wider than this is refused where it is read.
+    ///
+    /// The raster covers every byte its rows take from where it is declared,
+    /// padding and all, so it reads as one region like any other list. The
+    /// three expressions are worked out where it is declared. See
+    /// [`crate::codec::scanlines::Geometry`], which does the arithmetic here
+    /// and for the codec that unfilters the same rows.
+    Raster { width: Expr, height: Expr, bits_per_pixel: Expr, order: RasterOrder, pixel: Box<Ty> },
 }
 
 /// How a run was packed: the codec, and where the numbers it needs are.
@@ -3164,6 +3198,28 @@ pub enum Packing {
     /// no end-of-stream marker anywhere in the format, so a decoder not given
     /// this cannot tell a file that finished from one that was cut off.
     Rar5 { dictionary: Expr, unpacked: Expr },
+    /// A PNG image's scanlines, with the five numbers from its header that say
+    /// how long each row is and what order the rows come in.
+    ///
+    /// Not a codec's settings so much as the image's shape. A row is as many
+    /// bytes as the width times the bits a pixel takes, rounded up, and the
+    /// bits a pixel takes are the depth times the samples its colour type has:
+    /// three for RGB, one for a palette index. An interlaced image is seven
+    /// passes of different widths. So the same stream reads as rows of 97
+    /// bytes in one file and 4,097 in the next, and only the header says
+    /// which. [`crate::codec::Codec::PngUnfilter`] fixes one row length when
+    /// the template is built, which is right for a cartridge and for nothing
+    /// else.
+    ///
+    /// A depth the colour type does not allow, or a colour type or interlace
+    /// method the specification does not define, leaves the run as bytes and
+    /// says the settings could not be worked out: a decoder that guessed would
+    /// be reading pixels out of the wrong places.
+    ///
+    /// Behind a pointer because five expressions held in place would make
+    /// every `Ty` half as large again, and a `Ty` is on the stack in every
+    /// frame a nested field recurses through.
+    PngScanlines(Arc<PngHeader>),
     /// One scan of a baseline JPEG, decoded with the segments the image wrote
     /// before it. See [`crate::codec::Codec::JpegBaseline`].
     ///
@@ -3194,6 +3250,17 @@ pub enum Packing {
     JpegScan { segments: Expr },
 }
 
+/// Where a PNG's header keeps the five numbers its scanlines are shaped by.
+/// See [`Packing::PngScanlines`].
+#[derive(Debug, Clone)]
+pub struct PngHeader {
+    pub width: Expr,
+    pub height: Expr,
+    pub bit_depth: Expr,
+    pub color_type: Expr,
+    pub interlace: Expr,
+}
+
 impl Packing {
     /// What to call it, without reading a byte. The name is a fact about the
     /// packing and not about the numbers, so this answers for a run whose
@@ -3203,6 +3270,7 @@ impl Packing {
             Packing::Fixed(c) => c.as_str(),
             Packing::Lzma1 { .. } => "lzma",
             Packing::Rar5 { .. } => "rar5",
+            Packing::PngScanlines(_) => "png scanlines",
             // What the run is, whichever kind of scan it turns out to be: a
             // progressive one is refused by name, and calling it baseline in
             // the type column beside that would say two things at once.
@@ -3213,6 +3281,26 @@ impl Packing {
     /// them where they sit rather than to a stream standing in for them.
     pub fn is_stored(&self) -> bool {
         matches!(self, Packing::Fixed(crate::codec::Codec::Stored))
+    }
+}
+
+/// The order a [`Ty::Raster`] keeps its pixels in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RasterOrder {
+    /// A row at a time from the top, each row left to right and starting on
+    /// a whole byte.
+    Rows,
+    /// Adam7's seven passes, one after the other, each a smaller picture kept
+    /// a row at a time. See [`crate::codec::scanlines::ADAM7`].
+    Adam7,
+}
+
+impl RasterOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RasterOrder::Rows => "rows",
+            RasterOrder::Adam7 => "adam7",
+        }
     }
 }
 
@@ -4094,6 +4182,11 @@ impl Ty {
     pub fn schema(kind: &str, table: Vec<Step>, key: Vec<KeyPart>) -> Ty {
         Ty::Schema { kind: kind.into(), table: table.into(), key: key.into() }
     }
+    /// A picture's pixels, placed from `order` and numbered in picture order.
+    /// See [`Ty::Raster`].
+    pub fn raster(width: Expr, height: Expr, bits_per_pixel: Expr, order: RasterOrder, pixel: Ty) -> Ty {
+        Ty::Raster { width, height, bits_per_pixel, order, pixel: Box::new(pixel) }
+    }
     pub fn switch(on: Expr, cases: Vec<(i128, Ty)>, default: Ty) -> Ty {
         Ty::Switch { on, cases: cases.into(), default: Arc::new(default) }
     }
@@ -4336,6 +4429,11 @@ impl Ty {
             // the same word the panel and the formula rows use for it.
             Ty::Gather { elem, .. } => format!("descriptors \u{2192} {}", elem.display_name()),
             Ty::At { inner, .. } => format!("at \u{2192} {}", inner.display_name()),
+            // Not `pixel[]`: the pixels are numbered in picture order and may
+            // be kept in another, and which one is what a reader checking the
+            // bytes needs to know.
+            Ty::Raster { order: RasterOrder::Rows, .. } => "raster, row order".into(),
+            Ty::Raster { order: RasterOrder::Adam7, .. } => "raster, Adam7 order".into(),
             Ty::Sized { inner, .. } | Ty::SizedBits { inner, .. } | Ty::Origin { inner } => inner.display_name(),
             // A resolved field never reaches here: `eval` picks the branch the
             // file took and remembers that, so the column already shows the

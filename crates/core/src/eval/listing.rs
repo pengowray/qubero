@@ -255,7 +255,8 @@ fn holds_fields(ty: &Ty) -> bool {
         | Ty::At { .. }
         | Ty::Decoded { .. }
         | Ty::Traced { .. }
-        | Ty::Stitched { .. } => true,
+        | Ty::Stitched { .. }
+        | Ty::Raster { .. } => true,
         Ty::Json(shape, _) => shape.composite(),
         Ty::Pickle(..) => true,
         _ => false,
@@ -435,7 +436,7 @@ impl Evaluator {
         let (&idx, parent) = path.split_last()?;
         match self.memo.get(parent)?.ty.base() {
             Ty::Struct(s) => s.fields.get(idx)?.name_from.clone(),
-            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } => {
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. } => {
                 let (&list, grand) = parent.split_last()?;
                 let Ty::Struct(s) = self.memo.get(grand)?.ty.base() else { return None };
                 s.fields.get(list)?.elem_name_from.clone()
@@ -946,7 +947,7 @@ impl Evaluator {
             }
             (Some((_, trace)), Ty::Traced { part: TracedPart::Block(i) }) => (
                 super::traced::BlockView::of(trace, *i)
-                    .filter(|v| v.block.kind != crate::codec::BlockKind::Stored)
+                    .filter(|v| !matches!(v.block.kind, crate::codec::BlockKind::Stored | crate::codec::BlockKind::Scanline))
                     .map_or(0, |v| v.symbols.len() as u64),
                 "code",
             ),
@@ -1231,7 +1232,10 @@ impl Evaluator {
             out.push(if reading.is_empty() { at } else { format!("{at} · {reading}") });
             return Ok(());
         }
-        if matches!(ty.base(), Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. }) {
+        if matches!(
+            ty.base(),
+            Ty::Array { .. } | Ty::Repeat { .. } | Ty::PointerList { .. } | Ty::Chain { .. } | Ty::Gather { .. } | Ty::Raster { .. }
+        ) {
             let unit = self.unit_of(path, &ty).unwrap_or("value").to_string();
             out.push(count_text(info.child_count, &unit));
             return Ok(());
@@ -1380,6 +1384,11 @@ impl Evaluator {
         // without placing a single symbol before the one under it.
         if let Ty::Traced { part } = &r.ty {
             return Ok(self.traced_at(path, *part, bit));
+        }
+        // A raster knows which pixel holds a bit the same way it knows where
+        // a pixel is, by arithmetic, whatever order it keeps them in.
+        if let Ty::Raster { .. } = &r.ty {
+            return Ok(self.raster_at(doc, path, bit)?.filter(|&i| (i as u64) < n));
         }
         // Same-sized elements: go straight to the one that covers the bit,
         // without putting a single other element in memory.

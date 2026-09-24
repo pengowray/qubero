@@ -594,3 +594,107 @@
     grid-template-columns: 6em minmax(0, 1fr) 7em;
   }
 }
+
+/* ---- a PNG's scanlines (report/pngscanlines.ts) ---- */
+/* The five filter types, in RFC 2083's order. Every mark carries its filter's
+   letter too, so the colour is never the only thing that says which. */
+.rv-png {
+  --rv-filter-0: #2a78d6;
+  --rv-filter-1: #eb6834;
+  --rv-filter-2: #1baf7a;
+  --rv-filter-3: #eda100;
+  --rv-filter-4: #e87ba4;
+}
+@media (prefers-color-scheme: dark) {
+  .rv-png {
+    --rv-filter-0: #3987e5;
+    --rv-filter-1: #d95926;
+    --rv-filter-2: #199e70;
+    --rv-filter-3: #c98500;
+    --rv-filter-4: #d55181;
+  }
+}
+.rv-png-passbody {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+  align-items: flex-start;
+}
+.rv-png-tile {
+  display: grid;
+  grid-template-columns: repeat(8, 24px);
+  grid-auto-rows: 24px;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.rv-png-tile span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--fg);
+  /* Earlier passes darker: a pass holds fewer pixels the earlier it is. */
+  background: color-mix(in srgb, var(--accent) calc((8 - var(--pass, 7)) * 6%), var(--bg));
+}
+.rv-png-tile span[data-pass="1"] { --pass: 1; }
+.rv-png-tile span[data-pass="2"] { --pass: 2; }
+.rv-png-tile span[data-pass="3"] { --pass: 3; }
+.rv-png-tile span[data-pass="4"] { --pass: 4; }
+.rv-png-tile span[data-pass="5"] { --pass: 5; }
+.rv-png-tile span[data-pass="6"] { --pass: 6; }
+.rv-png-tile span[data-pass="7"] { --pass: 7; }
+.rv-png-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rv-png-swatch,
+.rv-png-line {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 16px;
+  height: 24px;
+  padding: 0 0 2px;
+  border: 0;
+  border-top: 7px solid var(--rv-filter-0);
+  border-radius: 2px;
+  background: var(--panel);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+}
+.rv-png [data-filter="1"] { border-top-color: var(--rv-filter-1); }
+.rv-png [data-filter="2"] { border-top-color: var(--rv-filter-2); }
+.rv-png [data-filter="3"] { border-top-color: var(--rv-filter-3); }
+.rv-png [data-filter="4"] { border-top-color: var(--rv-filter-4); }
+.rv-png-line {
+  min-height: 0;
+  cursor: pointer;
+}
+.rv-png-line:hover,
+.rv-png-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rv-png-group {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 6px 0;
+}
+.rv-png-grouplabel {
+  flex: none;
+  width: 4.5em;
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 5px;
+}
+.rv-png-cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}

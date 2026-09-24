@@ -212,6 +212,63 @@ export const RV = {
   stepBytes: (from: number, to: number): string =>
     to - from === 1 ? `Byte ${from.toLocaleString()} of the output` : `Bytes ${from.toLocaleString()} to ${(to - 1).toLocaleString()} of the output`,
 
+  // ----- after 9: a PNG's scanlines -----
+  /** `60 scanlines in seven passes, 36 of them filtered with Paeth`. A picture
+   *  with more scanlines than the report read says only how many it has. */
+  pngScanlinesHeading: (n: number, interlaced: boolean, filter: string, count: number, complete: boolean): string => {
+    const lines = `${sentenceCase(counted(n, "scanline"))}${interlaced ? " in seven passes" : ""}`;
+    if (!complete || count === 0) return lines;
+    return count === n ? `${lines}, all filtered with ${filter}` : `${lines}, ${count.toLocaleString()} of them filtered with ${filter}`;
+  },
+  pngFilterIntro:
+    "Each scanline starts with a filter byte. The filter says how the row's bytes were predicted from the bytes to their left and above them, and each byte is stored as its difference from that prediction.",
+  /** The filters used and on how many scanlines, most used first. `of` is how
+   *  many scanlines were read when that is fewer than the picture has. */
+  pngFilterCounts: (used: readonly (readonly [string, number])[], of: number | null): string => {
+    const first = used[0];
+    if (first === undefined) return "";
+    if (used.length === 1) return of === null ? `Every scanline uses ${first[0]}.` : `The first ${of.toLocaleString()} scanlines all use ${first[0]}.`;
+    const parts = used.map(([name, n], i) => (i === 0 ? `${name} on ${counted(n, "scanline")}` : `${name} on ${n.toLocaleString()}`));
+    return `${of === null ? "This picture uses" : `The first ${of.toLocaleString()} scanlines use`} ${listText(parts)}.`;
+  },
+  pngAdam7Intro:
+    "Adam7 stores the picture as seven smaller pictures, one after another. Pass 1 holds the top-left pixel of every 8 by 8 tile, each later pass fills in pixels between those already stored, and pass 7 holds every odd-numbered row. Each pass is filtered on its own, so the first scanline of each pass has no row above it.",
+  pngTileLabel: "Which pass stores each pixel of an 8 by 8 tile",
+  /** The pass table's columns, and whether each holds numbers. */
+  pngPassColumns: [
+    ["Pass", false],
+    ["Size", false],
+    ["Pixels", true],
+    ["Scanlines", true],
+    ["Bytes per scanline", true],
+  ] as readonly (readonly [string, boolean])[],
+  pngPassSize: (cols: number, rows: number): string => `${cols.toLocaleString()} × ${rows.toLocaleString()}`,
+  pngPassEmpty: "no pixels",
+  pngPassesLead: (width: number, height: number): string => `The seven passes of this ${width.toLocaleString()} × ${height.toLocaleString()} picture.`,
+  pngPassesCaption: "The tile shows which pass stores each pixel of an 8 by 8 block of the picture. A scanline's bytes include its filter byte.",
+  pngLegendItem: (filter: string, n: number): string => `${filter}, ${n.toLocaleString()}`,
+  pngPassLabel: (pass: number): string => `Pass ${pass}`,
+  pngLineTitle: (pass: number | null, row: number, filter: string): string =>
+    pass === null ? `Row ${row.toLocaleString()}, filtered with ${filter}` : `Pass ${pass}, row ${row.toLocaleString()}, filtered with ${filter}`,
+  pngLinePictureRow: (row: number): string => `Row ${row.toLocaleString()} of the picture`,
+  pngLineBytes: (n: number): string => `${bytesText(n)}, filter byte included`,
+  pngStripLead: "The filter of each scanline, in the order they are stored.",
+  pngStripCaption: "Each mark is one scanline, lettered by its filter. Hover a mark for its row and size, and click it to show it in the listing.",
+  pngStripCut: (shown: number, total: number): string => `Only the first ${shown.toLocaleString()} of ${counted(total, "scanline")} are shown.`,
+  pngScanlinesUnread: "The scanlines could not be read",
+  /** Why the IDAT data did not inflate, by the core's refusal word. */
+  pngNotInflated: (why: string): string =>
+    why === "too-large"
+      ? "The image data inflates to more than 64 MiB, which is more than this view unpacks."
+      : "The image data did not inflate: the zlib stream is damaged or cut short.",
+  /** Why the inflated bytes were not unfiltered, by the core's refusal word. */
+  pngNotUnfiltered: (why: string): string =>
+    why === "settings"
+      ? "The image header gives a bit depth and colour type that the PNG specification does not allow together, so the scanlines were not unfiltered."
+      : why === "too-large"
+        ? "The unfiltered picture would be larger than 64 MiB, which is more than this view unpacks."
+        : "The inflated bytes do not fit the image header: there are more or fewer of them than its size and bit depth need, or a filter byte is not one of the five filters.",
+
   // ----- 11. terms -----
   termsHeading: (n: number): string => `What the template says about ${counted(n, "field")}`,
 

@@ -80,6 +80,7 @@ pub(super) fn is_payload(kind: &StepKind) -> bool {
             | StepKind::Pixel
             | StepKind::EndOfBlock
             | StepKind::Opaque
+            | StepKind::Filtered
             | StepKind::Dc { .. }
             | StepKind::Ac { .. }
             | StepKind::Zrl { .. }
@@ -153,14 +154,48 @@ impl UnitsView {
 }
 
 /// What one block is called in the listing: what coded its symbols, and
-/// whether it is the last. A JPEG MCU is called by where it is.
-pub(super) fn block_name(block: &Block) -> String {
+/// whether it is the last.
+///
+/// A PNG scanline is named by where it is and how it was filtered instead,
+/// since every one of them is the same kind of block and the last one is only
+/// the bottom row. See [`scanline_name`]. A JPEG MCU is called by where it is.
+pub(super) fn block_name(trace: &Trace, block: &Block) -> String {
+    if block.kind == BlockKind::Scanline {
+        return scanline_name(trace, block);
+    }
     match (block.kind, block.last) {
         (BlockKind::Mcu { x, y }, _) => format!("MCU {x}, {y}"),
         (k, true) => format!("{} block, last", k.as_str()),
         (k, false) => format!("{} block", k.as_str()),
     }
 }
+
+/// A scanline's name: its pass when the image is interlaced, its row, and its
+/// filter, all read off the block's own steps. `pass 6, row 3, filter paeth`
+/// is row 3 of Adam7's sixth pass, which is not row 3 of the picture.
+fn scanline_name(trace: &Trace, block: &Block) -> String {
+    let (mut pass, mut row, mut filter) = (None, None, None);
+    for k in block.steps.clone() {
+        match trace.step(k as usize).map(|s| s.kind) {
+            Some(StepKind::Header(StepField::Pass, v)) => pass = Some(v),
+            Some(StepKind::Header(StepField::Row, v)) => row = Some(v),
+            Some(StepKind::Header(StepField::Filter, v)) => filter = Some(v),
+            _ => {}
+        }
+    }
+    let at = match (pass, row) {
+        (Some(p), Some(r)) => format!("pass {p}, row {r}"),
+        (None, Some(r)) => format!("row {r}"),
+        _ => "scanline".to_string(),
+    };
+    match filter.and_then(|f| PNG_FILTERS.get(f as usize)) {
+        Some((_, name)) => format!("{at}, filter {name}"),
+        None => at,
+    }
+}
+
+/// RFC 2083's five filter types, by the number a scanline's filter byte holds.
+const PNG_FILTERS: [(i128, &str); 5] = [(0, "none"), (1, "sub"), (2, "up"), (3, "average"), (4, "paeth")];
 
 /// What one of a block's units is called: which channel, and where that
 /// channel's 8×8 block is, counted in blocks across and down.
@@ -236,11 +271,7 @@ fn header_ty(field: StepField, value: u32, bits: u64) -> T {
             &[(0, "stored"), (1, "fixed Huffman"), (2, "dynamic Huffman"), (3, "reserved")],
         ),
         // RFC 2083 section 6: how the encoder predicted this row.
-        StepField::Filter => T::enumeration(
-            "PngFilter",
-            inner,
-            &[(0, "none"), (1, "sub"), (2, "up"), (3, "average"), (4, "paeth")],
-        ),
+        StepField::Filter => T::enumeration("PngFilter", inner, &PNG_FILTERS),
         // T.81's own names for the eight markers, which count 0 to 7 and
         // round again.
         StepField::Restart => T::enumeration(
@@ -319,6 +350,8 @@ pub(super) fn symbol_name(step: &Step) -> String {
         // A run the trace stopped naming, because there were too many of them
         // to name. See `codec::MAX_STEPS`.
         StepKind::Opaque => "unnamed codes".to_string(),
+        // A PNG scanline's bytes after its filter byte, still filtered.
+        StepKind::Filtered => "filtered row".to_string(),
         // JPEG. What a DC code carries is a difference, and what a reader
         // wants is the coefficient it came to, so the name says both. An AC
         // code's place in the block is its zigzag position, the order the
@@ -354,6 +387,14 @@ pub(super) fn symbol_ty(step: &Step, coding: BlockKind) -> (String, T) {
     let name = symbol_name(step);
     if let Some(code) = code_ty(step, coding) {
         return (name, sized(bits, code));
+    }
+    // A filtered row is its bytes, read where they sit in the stream the
+    // unfilter was handed: each is stored as itself, a difference from a
+    // prediction, and is what the listing should show. A record of a kind and
+    // a length would cover none of them and leave the row reading as bytes no
+    // field describes.
+    if step.kind == StepKind::Filtered {
+        return (name, sized(bits, T::bytes(E::lit(bytes as i128))));
     }
     let kind = |k: i128| {
         T::enumeration(
@@ -424,6 +465,7 @@ fn code_ty(step: &Step, coding: BlockKind) -> Option<T> {
 pub(super) fn blocks_unit(kind: Option<BlockKind>) -> &'static str {
     match kind {
         Some(BlockKind::Sequences) => "sequence",
+        Some(BlockKind::Scanline) => "scanline",
         Some(BlockKind::Mcu { .. }) => "MCU",
         _ => "block",
     }

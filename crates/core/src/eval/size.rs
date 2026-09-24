@@ -299,6 +299,11 @@ impl Evaluator {
                         }
                     }
                 },
+                // Every row of every pass, by arithmetic, and no pixel placed
+                // to find out. Asked here rather than beside the lists, whose
+                // frame stays open the whole way down a nested file and has no
+                // room to spare. See [`Ty::Raster`].
+                Ty::Raster { .. } => self.raster_bits(doc, path)?,
                 // As wide as the decoder said it read. Not measured by adding
                 // up children: a symbol run of a million is one subtraction.
                 // In a function of its own, for the frame's sake: this match is
@@ -467,6 +472,8 @@ impl Evaluator {
             // The same for a gather: as many as the walk to its records finds.
             // See [`Ty::Gather`].
             Ty::Gather { .. } => self.gather_count(doc, path),
+            // One a pixel, by arithmetic. See [`Ty::Raster`].
+            Ty::Raster { .. } => self.raster_count(doc, path),
             // As many children as the array of offsets has entries.
             Ty::PointerList { offsets, .. } => {
                 let n = self.eval_expr(doc, path, &Expr::Ref(offsets.clone()))?;

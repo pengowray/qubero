@@ -2033,6 +2033,7 @@ export type MapStep = {
     | "table"
     | "end-of-block"
     | "opaque"
+    | "filtered"
     | "dc"
     | "ac"
     | "zrl"

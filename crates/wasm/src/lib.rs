@@ -3577,7 +3577,7 @@ fn step_dto(s: MapStep, run_offset_bits: u64) -> MapStepDto {
             dto.len = Some(len as f64);
             dto.dist = Some(dist as f64);
         }
-        StepKind::Stored | StepKind::Pixel | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque => {}
+        StepKind::Stored | StepKind::Pixel | StepKind::EndOfBlock | StepKind::Block | StepKind::Opaque | StepKind::Filtered => {}
         // A JPEG code: the DC difference, or an AC coefficient's value, and
         // for the AC where it lands in zigzag order.
         StepKind::Dc { diff, .. } => dto.value = Some(diff as f64),

@@ -26,12 +26,16 @@ use crate::codec::{BlockKind, Refusal, StepField, StepKind, Trace, TraceBuilder,
 /// the rows with the filter bytes gone, so it is exactly `stride` times the
 /// number of rows.
 ///
-/// What the trace says: one block a row, and inside it two steps, the filter
-/// byte and the row. The row is one step rather than one per byte because a
-/// filtered byte is a function of its neighbours in both spaces, and a step
-/// per byte would claim a precision the filters do not have. The filter byte
-/// is recorded as a [`StepField::Filter`], which names the five filters it can
-/// hold: none, sub, up, average and paeth, numbered 0 to 4.
+/// What the trace says: one [`BlockKind::Scanline`] block a row, and inside
+/// it the row's number, a step of no width, then the filter byte and the row. The row is one [`StepKind::Filtered`] step rather than
+/// one per byte because a filtered byte is a function of its neighbours in both
+/// spaces, and a step per byte would claim a precision the filters do not have.
+/// The filter byte is recorded as a [`StepField::Filter`], which names the five
+/// filters it can hold: none, sub, up, average and paeth, numbered 0 to 4.
+///
+/// One row length for the whole run, which is what a cartridge needs and what
+/// an ordinary PNG does not have: see [`crate::codec::scanlines`] for the
+/// image whose rows the header measures, interlaced or not.
 pub fn unfilter(data: &[u8], stride: u32, bpp: u8) -> Result<(Vec<u8>, Trace), Refusal> {
     let stride = stride as usize;
     let bpp = bpp as usize;
@@ -57,53 +61,15 @@ pub fn unfilter(data: &[u8], stride: u32, bpp: u8) -> Result<(Vec<u8>, Trace), R
         }
         let out_start = (row * stride) as u64;
         b.open_block(at as u64 * 8, out_start);
+        b.push(at as u64 * 8, out_start, StepKind::Header(StepField::Row, row as u32));
         b.push(at as u64 * 8, out_start, StepKind::Header(StepField::Filter, filter as u32));
-        b.push((at + 1) as u64 * 8, out_start, StepKind::Opaque);
-        let src = &data[at + 1..at + 1 + stride];
-        for i in 0..stride {
-            // The row above, at the same column, and the pixel to the left.
-            // Both read zero where there is no such byte, which is what the
-            // spec says a decoder does at the edges.
-            let up = match row {
-                0 => 0u8,
-                _ => out[(row - 1) * stride + i],
-            };
-            let left = match i >= bpp {
-                true => out[row * stride + i - bpp],
-                false => 0,
-            };
-            let up_left = match (row, i >= bpp) {
-                (0, _) | (_, false) => 0u8,
-                _ => out[(row - 1) * stride + i - bpp],
-            };
-            let x = src[i];
-            let value = match filter {
-                0 => x,
-                1 => x.wrapping_add(left),
-                2 => x.wrapping_add(up),
-                3 => x.wrapping_add(((left as u16 + up as u16) / 2) as u8),
-                _ => x.wrapping_add(paeth(left, up, up_left)),
-            };
-            out.push(value);
-        }
-        b.close_block((at + 1 + stride) as u64 * 8, out.len() as u64, BlockKind::Opaque, row + 1 == rows);
+        b.push((at + 1) as u64 * 8, out_start, StepKind::Filtered);
+        let above = (row > 0).then(|| (row - 1) * stride);
+        crate::codec::scanlines::unfilter_row(filter, &data[at + 1..at + 1 + stride], above, bpp, &mut out);
+        b.close_block((at + 1 + stride) as u64 * 8, out.len() as u64, BlockKind::Scanline, row + 1 == rows);
     }
     b.finish_at(data.len() as u64 * 8, out.len() as u64);
     Ok((out, b.done()))
-}
-
-/// PNG's Paeth predictor: whichever of the three neighbours the linear
-/// estimate `a + b - c` comes nearest to, ties going to the left one.
-fn paeth(a: u8, b: u8, c: u8) -> u8 {
-    let p = a as i32 + b as i32 - c as i32;
-    let (pa, pb, pc) = ((p - a as i32).abs(), (p - b as i32).abs(), (p - c as i32).abs());
-    if pa <= pb && pa <= pc {
-        a
-    } else if pb <= pc {
-        b
-    } else {
-        c
-    }
 }
 
 /// Pull one byte out of the low two bits of each channel of an RGBA pixel,
