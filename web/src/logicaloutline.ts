@@ -1143,7 +1143,7 @@ function sqliteOutline(doc: Doc): TemplateReply<LogicalOutline> {
     status: "ok",
     node: {
       format: isSelf ? "self" : "sqlite", title,
-      summary: `${schemaReply.node.child_count.toLocaleString()} schema objects · ${pageCount.toLocaleString()} pages · ${formatBytes(pageSize)} page size`,
+      summary: `${countText(schemaReply.node.child_count, "schema object")} · ${countText(pageCount, "page")} · ${formatBytes(pageSize)} page size`,
       nodes, total: nodes.length, sizeLabel: "Schema extent",
     },
   };

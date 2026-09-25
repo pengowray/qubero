@@ -15,7 +15,7 @@ import { cardKind, cardState, watchCard } from "../contentcard.ts";
 import { formatBytes } from "../format.ts";
 import { tablePlan } from "../tableplan.ts";
 import { archiveContent } from "./archive.ts";
-import { planTable } from "./bodies.ts";
+import { factRows, planTable } from "./bodies.ts";
 import { ok } from "./model.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { RV } from "./text.ts";
@@ -48,9 +48,11 @@ export const contentSection: Section = {
       if (plan.facts.length > 0) {
         const dl = document.createElement("dl");
         dl.className = "rv-inline-facts";
-        for (const f of plan.facts) {
+        for (const f of factRows(plan.facts)) {
           const dt = document.createElement("dt");
-          dt.textContent = f.label;
+          const name = document.createElement("code");
+          name.textContent = f.name;
+          dt.append(name);
           const dd = document.createElement("dd");
           dd.textContent = f.value;
           dl.append(dt, dd);

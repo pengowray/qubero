@@ -35,6 +35,11 @@ export function counted(n: number, noun: string): string {
   return `${n.toLocaleString()} ${n === 1 ? noun : pluralOf(noun)}`;
 }
 
+/** The verb that agrees with a count: `1 entry points`, `4 entries point`. */
+export function agree(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
+}
+
 export function pluralOf(noun: string): string {
   if (/[^aeiou]y$/.test(noun)) return `${noun.slice(0, -1)}ies`;
   if (/(s|x|z|ch|sh)$/.test(noun)) return `${noun}es`;
@@ -113,17 +118,17 @@ export const RV = {
       case "past-file":
         return len
           ? `Its length field says it ends ${bitsText(Math.max(0, c.offset_bits + stated - c.space_bits))} past the end of the file`
-          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} fit before the end of the file`;
+          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} ${agree(read, "fits", "fit")} before the end of the file`;
       case "past-parent":
         return len
           ? `Its length field says it ends ${bitsText(Math.max(0, stated - c.room_bits))} past the end of its parent`
-          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} fit in its parent`;
+          : `Its count asks for ${counted(stated, "element")}, and ${read.toLocaleString()} ${agree(read, "fits", "fit")} in its parent`;
       case "stretched":
         return len
           ? `It runs ${bitsText(Math.max(0, read - stated))} past the length its length field gives`
           : `It holds ${counted(read, "element")}, more than the ${stated.toLocaleString()} its count gives`;
       case "short":
-        if (!len) return `Its count says ${counted(stated, "element")}, and ${read.toLocaleString()} were read`;
+        if (!len) return `Its count says ${counted(stated, "element")}, and ${read.toLocaleString()} ${agree(read, "was", "were")} read`;
         return c.content_bits === null
           ? "Its fields stop before the length its length field gives"
           : `Its fields stop ${bitsText(Math.max(0, stated - c.content_bits))} before the length its length field gives`;
@@ -211,6 +216,9 @@ export const RV = {
   unexaminedBody: "The report stopped looking for parts here. The Listing view shows the fields in these bytes.",
   /** An element named like an element of another list, with its list. */
   inList: (name: string, list: string): string => `${name} (${list})`,
+  /** Elements known only by their place in a list of several types, named by
+   *  their type and the list: `overflow in pages`. The ledger's form. */
+  kindInList: (kind: string, list: string): string => `${kind} in ${list}`,
   mapByte: (at: string, hex: string, cls: string): string => `Byte at ${at}: ${hex}, ${cls}`,
   classZero: "zero",
   classText: "text",
@@ -229,7 +237,7 @@ export const RV = {
   ledgerCaptionLead: (largest: string, share: string): string => `Largest part: ${largest} (${share} of the file).`,
   ledgerCaption: "Each row is a part of the file, in file order. Hover a row to light its bytes in the map, and click it to zoom the map to them.",
   ledgerRowTitle: "Click to zoom the map to this part",
-  ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these were not listed.`,
+  ledgerUnlisted: (n: number): string => `${counted(n, "more part")} after these ${n === 1 ? "was" : "were"} not listed.`,
   ledgerGapLabel: "Bytes no field describes",
   ledgerPaddingLabel: "Padding",
   /** Before a structure's name, for its plain fields taken together. */
@@ -256,11 +264,17 @@ export const RV = {
   colBytes: "First bytes",
   colField: "Field",
   colValue: "Value",
+  /** A compressed stream in the value column, beside its size in the file:
+   *  `jpeg scan, unpacks to 115,200 bytes`. */
+  unpacksTo: (codec: string, size: string): string => `${codec}, unpacks to ${size}`,
   moreRows: (n: number, word: string): string => `${counted(n, word)} more`,
   /** Neighbouring fields of one name, as one row. */
-  runOf: (name: string, n: number): string => `${name} × ${n}`,
+  runOf: (name: string, n: number): string => `${name} × ${n.toLocaleString()}`,
   showInListing: "Show in the listing",
-  allZero: (n: number): string => `All ${bytesText(n)} are zero.`,
+  /** Under a JPEG scan's card, with the heading of the section that decodes
+   *  it as a link in place of `heading`. */
+  scanDecodedBelow: (heading: string): string => `The report decodes this scan below, in “${heading}”.`,
+  allZero: (n: number): string => (n === 1 ? "The byte is zero." : `All ${bytesText(n)} are zero.`),
   classesOf: (text: number, zero: number, other: number, total: number): string =>
     `${percentText(text, total)} text, ${percentText(zero, total)} zero, and ${percentText(other, total)} other bytes, over the first ${bytesText(total)}.`,
   gapBody: "No field of the template describes these bytes.",
@@ -269,9 +283,11 @@ export const RV = {
   streamsHeading: (n: number, packed: number, unpacked: number | null): string =>
     unpacked === null
       ? `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)}`
-      : `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)} unpack to ${bytesText(unpacked)}`,
+      : `${sentenceCase(counted(n, "compressed stream"))}: ${bytesText(packed)} ${agree(packed, "unpacks", "unpack")} to ${bytesText(unpacked)}`,
   streamHeading: (name: string, packed: number, codec: string, unpacked: number | null): string =>
-    unpacked === null ? `${name}: ${bytesText(packed)} of ${codec}` : `${name}: ${bytesText(packed)} of ${codec} unpack to ${bytesText(unpacked)}`,
+    unpacked === null
+      ? `${name}: ${bytesText(packed)} of ${codec}`
+      : `${name}: ${bytesText(packed)} of ${codec} ${agree(packed, "unpacks", "unpack")} to ${bytesText(unpacked)}`,
   streamName: "Stream",
   streamPacked: "In the file",
   streamUnpacked: "Unpacked",
@@ -310,11 +326,16 @@ export const RV = {
   // ----- 7. what each directory points to -----
   directoriesHeading: (n: number): string =>
     n === 1 ? "1 list points to other parts of the file" : `${n.toLocaleString()} lists point to other parts of the file`,
-  /** After the list's name. */
+  /** Between the list's name and the structure it is a field of, and before
+   *  that structure's name, the kind of element it is where that says more:
+   *  `cell_pointers in table interior pages[0]`. */
+  dirIn: " in ",
+  dirKind: (kind: string): string => `${kind} `,
+  /** After the list's name, and where it is. */
   directorySummary: (placing: number, elements: number, targets: number): string =>
     placing < elements
-      ? `: ${placing.toLocaleString()} of its ${counted(elements, "entry")} point to ${counted(targets, "place")} in the file`
-      : `: ${counted(elements, "entry")} point to ${counted(targets, "place")} in the file`,
+      ? `: ${placing.toLocaleString()} of its ${counted(elements, "entry")} ${agree(placing, "points", "point")} to ${counted(targets, "place")} in the file`
+      : `: ${counted(elements, "entry")} ${agree(elements, "points", "point")} to ${counted(targets, "place")} in the file`,
   dirTop: (name: string): string => `${name}, in stored order`,
   dirBottom: (size: string): string => `The file, ${size}, in file order`,
   dirInOrder: "The places come in the same order as the entries.",
@@ -339,7 +360,17 @@ export const RV = {
   notInFile: "none",
   unpackedTo: (streams: number, size: string): string => `${counted(streams, "stream")} opened, unpacked to ${size}`,
   profileCaption:
-    "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows; a row with none in this file is a kind the file does not use.",
+    "A field counts once in each group it belongs to: a named value is also the number under it. The last column counts the template's declarations, which is what the format allows.",
+  /** Under the table, for the rows folded away: what the template declares
+   *  and this file does not use, by the table's two halves. */
+  profileUnused: (values: number, others: number): string => {
+    const parts: string[] = [];
+    if (values > 0) parts.push(counted(values, "kind") + " of value");
+    if (others > 0) parts.push(`${counted(others, "way")} to find a field or set its length`);
+    return `The template also declares ${listText(parts)} that this file does not use.`;
+  },
+  profileShowUnused: "Show them in the table",
+  profileHideUnused: "Hide them",
   profileCaptionFile: "A field counts once in each group it belongs to: a named value is also the number under it.",
   choicesHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} that could take more forms than this file uses`,
   choiceField: "Field",

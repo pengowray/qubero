@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { gapsOf, readingOrder, runPosition, runsOf, stripIndex, variantText } from "../src/report/partrules.ts";
+import { elementKind, gapsOf, readingOrder, runPosition, runsOf, stripIndex, typeWords, variantText } from "../src/report/partrules.ts";
 
 test("a list element's name loses its place in the list and keeps the rest", () => {
   assert.equal(stripIndex("[3] dqt, quantisation tables"), "dqt, quantisation tables");
@@ -17,6 +17,25 @@ test("a variant is the case's name, without the number an enum adds", () => {
   assert.equal(variantText("local file (0x4034b50)"), "local file");
   assert.equal(variantText("central directory file"), "central directory file");
   assert.equal(variantText("progbits (1)"), "progbits");
+});
+
+test("a type's CamelCase name reads as words, and any other name is kept whole", () => {
+  assert.equal(typeWords("TableInterior"), "table interior");
+  assert.equal(typeWords("Overflow"), "overflow");
+  assert.equal(typeWords("Elf64Header"), "elf64 header");
+  assert.equal(typeWords("IFDEntry"), "IFDEntry");
+  assert.equal(typeWords("MThd"), "MThd");
+  assert.equal(typeWords("u16 be[]"), "u16 be[]");
+});
+
+test("an element's kind is its type where its list holds several types", () => {
+  // A SQLite page in a list of switches, read as one of five types.
+  assert.equal(elementKind("TableLeaf", "switch[]"), "table leaf");
+  // Every JPEG segment is a Segment and every cell a Cell: the type says nothing.
+  assert.equal(elementKind("Segment", "Segment[]"), null);
+  assert.equal(elementKind("Cell", "offsets → Cell"), null);
+  // A type that does not read as words is not a kind.
+  assert.equal(elementKind("bytes[]", "switch[]"), null);
 });
 
 test("a variant that is only a number names nothing", () => {

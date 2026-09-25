@@ -5,11 +5,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { factRows } from "../src/report/bodies.ts";
 import type { LedgerRow, Profile, ProfileRow } from "../src/report/coredata.ts";
 import { sameOrder } from "../src/report/directories.ts";
 import { extentWindow } from "../src/report/extentfigure.ts";
 import { isGapLine, ledgerLines, fieldRows } from "../src/report/ledger.ts";
 import { landmarks, readingWriting, rowLabel } from "../src/report/profiletext.ts";
+import { RV } from "../src/report/text.ts";
 import { SETTLE_MS, takesWheel } from "../src/report/wheel.ts";
 
 function row(part: number[], partName: string, group: string, role: LedgerRow["role"], bits: number, first: number[], firstOffset: number, extra: Partial<LedgerRow> = {}): LedgerRow {
@@ -65,6 +67,56 @@ test("a group named by a value inside another group's element keeps its own line
     row([1], "file", "meta", "content", 520, [1, 2, 0, 0], 176),
   ]);
   assert.deepEqual(lines.map((l) => l.group), ["MTrk", "meta"]);
+});
+
+test("a group says which part it is in only where groups are in more than one part", () => {
+  // A ZIP file's records are all in one list, and "in records" says nothing.
+  const zip = ledgerLines([
+    row([0], "records", "local file", "content", 800, [0, 0, 1], 32),
+    row([0], "records", "central directory file", "content", 400, [0, 11, 1], 1000),
+  ]);
+  assert.deepEqual(zip.map((l) => l.partShown), [false, false]);
+  // A MIDI file is one list, the root, and "in file" would read as "in the file".
+  const midi = ledgerLines([row([], "file", "MThd", "machinery", 64, [0, 0], 0), row([], "file", "meta", "content", 520, [1, 2, 0, 0], 176)]);
+  assert.deepEqual(midi.map((l) => l.partShown), [false, false]);
+  // A SQLite file has groups in page1 and in pages.
+  const sqlite = ledgerLines([
+    row([24], "page1", "SchemaRecord", "content", 776, [24, 6, 0, 2], 3256, { group_from: "case" }),
+    row([27], "pages", "Overflow", "content", 800, [27, 1, 0], 8192, { group_from: "case" }),
+    row([0], "magic", "", "content", 128, [0], 0),
+  ]);
+  assert.deepEqual(sqlite.map((l) => [l.group, l.partShown, l.byType]), [
+    ["", false, false],
+    ["SchemaRecord", true, true],
+    ["Overflow", true, true],
+  ]);
+});
+
+test("a count and its verb agree", () => {
+  assert.equal(RV.directorySummary(1, 1, 1), ": 1 entry points to 1 place in the file");
+  assert.equal(RV.directorySummary(4, 4, 4), ": 4 entries point to 4 places in the file");
+  assert.equal(RV.directorySummary(1, 7, 1), ": 1 of its 7 entries points to 1 place in the file");
+  assert.equal(RV.ledgerUnlisted(1), "1 more part after these was not listed.");
+  assert.equal(landmarks(profile([], { lengths_before: 1 })).at(-1), "1 field gives the length or count of a later field.");
+});
+
+test("a table's facts go by their own field's name, and numbers get separators", () => {
+  const rows = factRows([
+    { label: "body.sample_rate", path: [1, 1, 3], value: "500000" },
+    { label: "body.format", path: [1, 1, 0], value: "pcm" },
+    // Two facts that would share a name keep the structures they came through.
+    { label: "fmt.size", path: [1, 0, 1], value: "16" },
+    { label: "data.size", path: [1, 1, 1], value: "300000" },
+  ]);
+  assert.deepEqual(rows.map((r) => r.name), ["sample_rate", "format", "fmt.size", "data.size"]);
+  assert.equal(rows[0]?.value, (500000).toLocaleString());
+  assert.equal(rows[1]?.value, "pcm");
+});
+
+test("the kinds a file does not use are counted by the table's two halves", () => {
+  assert.equal(RV.profileUnused(23, 0), "The template also declares 23 kinds of value that this file does not use.");
+  assert.equal(RV.profileUnused(21, 2), "The template also declares 21 kinds of value and 2 ways to find a field or set its length that this file does not use.");
+  assert.equal(RV.profileUnused(0, 1), "The template also declares 1 way to find a field or set its length that this file does not use.");
 });
 
 test("the plain fields of one structure are one line, and one field alone keeps its name", () => {

@@ -22,7 +22,7 @@
 import type { Doc, Origin, TemplateNode, TemplateReply } from "../doc.ts";
 import { sectionColor, UNMAPPED_COLOR } from "../fieldstyle.ts";
 import { childWord, REPORT } from "../strings.ts";
-import { gapsOf, readingOrder, runPosition, runsOf, stripIndex, variantText, type Extent } from "./partrules.ts";
+import { elementKind, gapsOf, readingOrder, runPosition, runsOf, stripIndex, variantText, type Extent } from "./partrules.ts";
 import { WAIT } from "./section.ts";
 import { RV } from "./text.ts";
 
@@ -65,6 +65,9 @@ export type Unit = {
   readonly list: TemplateNode | null;
   /** What decided this element's type, when something did. */
   readonly variant: string | null;
+  /** What kind of element this is, by its type in the template, where the
+   *  elements of its list are not all one type: `table leaf`. */
+  readonly kind?: string | null;
   /** True for bytes no part covers: bytes no field covers, or, with
    *  `unexamined`, bytes the report stopped looking into. */
   readonly gap: boolean;
@@ -89,6 +92,11 @@ export type Group = {
   readonly color: string;
   /** What one of the parts is called, for counting them: `segment`. */
   readonly unitWord: string;
+  /** For the elements of a list told apart only by their type: that type as
+   *  words, which the label starts with (`overflow in pages`), and the type as
+   *  the template writes it, which is how the core's ledger names the group. */
+  readonly kind: string | null;
+  readonly typeName: string | null;
   /** Its place in file order, which is the order of the map and the ledger. */
   readonly index: number;
   readonly gap: boolean;
@@ -478,6 +486,9 @@ function elementUnit(n: TemplateNode, list: TemplateNode): Unit {
     label: bare === "" ? `${list.name}[${index}]` : bare,
     named: bare === "",
     list,
+    // An element with a name of its own goes by it; one known only by its
+    // place goes by its type as well, where the type tells it apart.
+    kind: bare === "" ? elementKind(n.type, list.type) : null,
   };
 }
 
@@ -582,17 +593,27 @@ function groupUnits(units: readonly Unit[]): Group[] {
     const gap = first.gap;
     const many = us.length > 1;
     const sameLabel = us.every((u) => u.label === first.label);
+    // Elements known only by their place, in a list of several types, go by
+    // their type and the list: `overflow in pages`, as the ledger names them.
+    const kind = first.variant === null && first.list !== null && first.kind != null && us.every((u) => u.kind === first.kind) ? first.kind : null;
     return {
       key,
       // Several elements that took one case go by the case; several with
       // nothing to tell them apart go by the list they are in.
-      label: many ? (first.variant ?? (sameLabel ? labelOf(first) : (first.list?.name ?? first.label))) : labelOf(first),
-      named: many ? first.variant === null && (!sameLabel || first.named) : first.named,
+      label:
+        kind !== null && first.list !== null
+          ? RV.kindInList(kind, first.list.name)
+          : many
+            ? (first.variant ?? (sameLabel ? labelOf(first) : (first.list?.name ?? first.label)))
+            : labelOf(first),
+      named: kind !== null ? false : many ? first.variant === null && (!sameLabel || first.named) : first.named,
       units: us,
       sizeBits: us.reduce((s, u) => s + u.sizeBits, 0),
       offsetBits: first.offsetBits,
       color: gap ? UNMAPPED_COLOR : sectionColor(hue++),
       unitWord: first.list !== null ? childWord(first.list) : "part",
+      kind,
+      typeName: kind !== null ? (first.node?.type ?? null) : null,
       index,
       gap,
       unexamined: first.unexamined === true,

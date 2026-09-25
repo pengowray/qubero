@@ -13,7 +13,7 @@ import { REPORT } from "../strings.ts";
 import type { Ledger } from "./coredata.ts";
 import { isGapLine, ledgerLines, type LedgerLine } from "./ledger.ts";
 import { groupAt, type Group, type PartsModel } from "./model.ts";
-import { runPosition } from "./partrules.ts";
+import { runPosition, typeWords } from "./partrules.ts";
 import { byteRef, pointAt } from "./refs.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { bitsText, bytesText, clip, counted, RV } from "./text.ts";
@@ -42,7 +42,7 @@ export const bytesSection: Section = {
         mapParts.push({
           startBit: u.offsetBits,
           endBit: u.offsetBits + u.sizeBits,
-          label: g.units.length > 1 ? g.label : u.label,
+          label: g.units.length > 1 || g.kind !== null ? g.label : u.label,
           color: g.color,
           ...(u.node !== null ? { path: u.path } : {}),
         });
@@ -118,12 +118,22 @@ export function lineLabel(doc: Doc, l: LedgerLine, fileBits: number, model: Part
     return [RV.fieldsOf, code(name)];
   }
   if (l.group === "") return [code(l.part)];
+  const g = model === null ? null : groupAt(model, l.firstOffsetBits);
+  const n = g !== null && (g.label === l.group || (g.typeName !== null && g.typeName === l.group)) ? g.units.length : 1;
+  const name = l.byType ? typeWords(l.group) : l.group;
+  const text = n > 1 ? RV.runOf(name, n) : name;
+  return l.partShown ? nameInPart(text, l.part) : [text];
+}
+
+/** A name and the part or list it is in, with the part in code font:
+ *  `overflow in pages`. */
+export function nameInPart(name: string, part: string): (Node | string)[] {
   const inPart = document.createElement("span");
   inPart.className = "rv-muted";
-  inPart.append(` ${RV.inPart} `, code(l.part));
-  const g = model === null ? null : groupAt(model, l.firstOffsetBits);
-  const n = g !== null && g.label === l.group ? g.units.length : 1;
-  return [n > 1 ? RV.runOf(l.group, n) : l.group, inPart];
+  const code = document.createElement("code");
+  code.textContent = part;
+  inPart.append(` ${RV.inPart} `, code);
+  return [name, inPart];
 }
 
 /** Light a line's first field on the map, and zoom there on a click. */
@@ -283,7 +293,9 @@ function ledger(model: PartsModel, map: ZoomMap): HTMLElement {
     sw.className = "rv-swatch";
     sw.style.background = g.color;
     const label = document.createElement(g.named ? "code" : "span");
-    label.textContent = g.units.length > 1 ? `${g.label} × ${g.units.length.toLocaleString()}` : g.label;
+    const listName = g.units[0]?.list?.name;
+    if (g.kind !== null && listName !== undefined) label.append(...nameInPart(g.units.length > 1 ? RV.runOf(g.kind, g.units.length) : g.kind, listName));
+    else label.textContent = g.units.length > 1 ? RV.runOf(g.label, g.units.length) : g.label;
     name.append(sw, label);
     const at = document.createElement("td");
     at.className = "rv-num";

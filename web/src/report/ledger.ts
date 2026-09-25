@@ -21,6 +21,15 @@ export type LedgerLine = {
   readonly parentPath: readonly number[] | null;
   /** The group's name, "" where there is none. */
   readonly group: string;
+  /** True when the group is named by a type in the template rather than by a
+   *  value in the file: `TableLeaf`, which the report writes as words. */
+  readonly byType: boolean;
+  /** The part the group is in, and whether the report names it after the
+   *  group: only where the grouped lines are in more than one part. A group
+   *  in the one list the file is, or in the only list with groups, is named
+   *  by the group alone, since "in <list>" would say nothing. */
+  readonly partPath: readonly number[];
+  readonly partShown: boolean;
   /** The names of the fields taken together, for a line of plain fields. */
   readonly fields: readonly string[];
   readonly bits: number;
@@ -65,6 +74,9 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     partPath: readonly number[];
     /** The group is named by the structure's type, not by a value. */
     byType: boolean;
+    /** The group's name is a type's, whether the list's one type or the
+     *  type of the case a switch took. */
+    typeNamed: boolean;
     roles: Map<LedgerRole, RoleAcc>;
   };
   const lines = new Map<string, Acc>();
@@ -91,6 +103,7 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
         firstPath: r.first_path,
         partPath: r.part,
         byType: r.group_from === "type",
+        typeNamed: r.group_from === "type" || r.group_from === "case",
         roles: new Map(),
       };
       lines.set(key, a);
@@ -128,6 +141,10 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
     }
   }
   for (const a of nested) lines.delete(a.key);
+  // The parts that hold groups. Only where there are two or more does a
+  // group's line say which part it is in: a MIDI file's events are all in the
+  // one list the file is, and "meta in file" would read as "in the file".
+  const grouped = new Set([...lines.values()].filter((a) => a.group !== "").map((a) => a.partPath.join("/")));
   return [...lines.values()]
     .map((a) => ({
       key: a.key,
@@ -135,6 +152,9 @@ export function ledgerLines(rows: readonly LedgerRow[]): LedgerLine[] {
       part: a.part ?? (a.fields.length === 1 ? (a.fields[0] ?? null) : null),
       parentPath: a.fields.length === 1 ? null : a.parentPath,
       group: a.group,
+      byType: a.group !== "" && a.typeNamed,
+      partPath: a.partPath,
+      partShown: a.group !== "" && a.partPath.length > 0 && grouped.size > 1,
       fields: a.fields,
       bits: a.bits,
       firstOffsetBits: a.firstOffsetBits,

@@ -10,9 +10,11 @@
 
 import type { TemplateNode } from "../doc.ts";
 import { formatOffset } from "../format.ts";
+import { entropyDecoded, scanEntropy } from "../jpegcards.ts";
 import { childWord } from "../strings.ts";
 import { tablePlan } from "../tableplan.ts";
 import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./bodies.ts";
+import { nameInPart } from "./bytes.ts";
 import { formatCard } from "./cards.ts";
 import { ok, type Group, type PartsModel, type Unit } from "./model.ts";
 import { positionBar } from "./posbar.ts";
@@ -61,13 +63,23 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   sw.style.background = g.color;
   h.append(sw);
   const name = document.createElement(g.named ? "code" : "span");
-  name.textContent = g.label;
+  const listName = g.units[0]?.list?.name;
+  if (g.kind !== null && listName !== undefined) name.append(...nameInPart(g.kind, listName));
+  else name.textContent = g.label;
   const size = bitsText(g.sizeBits);
   const share = shareOfFile(g.sizeBits, model.fileBits);
   // A list says how many it holds as well as how big it is: `pages: 73 pages,
   // 37,376 bytes`.
   const only = g.units.length === 1 ? g.units[0]?.node : undefined;
-  const count = g.units.length > 1 ? counted(g.units.length, g.unitWord) : only?.list === true ? counted(only.child_count, childWord(only)) : null;
+  // A kind of element says how many there are even when there is one, so
+  // `table interior in pages` reads as one page of the list, like its
+  // neighbour `overflow in pages: 40 items`.
+  const count =
+    g.units.length > 1 || g.kind !== null
+      ? counted(g.units.length, g.unitWord)
+      : only?.list === true
+        ? counted(only.child_count, childWord(only))
+        : null;
   // The colon stays with the name, and the facts wrap as one piece, so a
   // narrow column never starts a line with the colon.
   const lead = document.createElement("span");
@@ -156,7 +168,7 @@ function unitBody(ctx: ReportCtx, u: Unit): HTMLElement | null | typeof WAIT {
     const box = document.createElement("div");
     // The listing's card for the node, where it draws one, above its fields.
     const card = formatCard(doc, n);
-    if (card !== null) box.append(card);
+    if (card !== null) box.append(card, ...decodedBelow(ctx, n));
     box.append(fieldTable(doc, ctx.data, opened.fields, Math.max(0, n.child_count - FIELDS)));
     if (opened.list !== null) {
       const list = listBody(ctx, opened.list);
@@ -226,6 +238,39 @@ function openBody(
   const innerList = real.find((k) => k.list && k.size_bits * 2 >= n.size_bits && k.child_count > 0) ?? null;
   const named = real.filter((k) => k !== innerList).map((k) => ({ ...k, name: `${body.name}.${k.name}` }));
   return { fields: [...kids.slice(0, i), ...named, ...kids.slice(i + 1)], list: innerList };
+}
+
+/**
+ * For a JPEG scan the report decodes further down, a line that says so and
+ * links to that section, so the card's "decoded" has somewhere to go. The
+ * line shows once the section is drawn, and never where it is not: a scan
+ * past the ones the section draws, or one whose trace did not come.
+ */
+function decodedBelow(ctx: ReportCtx, segment: TemplateNode): HTMLElement[] {
+  const entropy = scanEntropy(ctx.doc, segment);
+  if (entropy === null || !entropyDecoded(entropy)) return [];
+  const p = document.createElement("p");
+  p.className = "rv-note";
+  p.hidden = true;
+  const key = entropy.path.join("/");
+  ctx.live(() => {
+    if (!ctx.data.drawn("jpeg")) return false;
+    const target = p.closest(".rv-page")?.querySelector<HTMLElement>(`[data-rv-scan="${key}"]`) ?? null;
+    if (target === null) return true;
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "rv-jump";
+    a.textContent = target.textContent;
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    const [before, after] = RV.scanDecodedBelow("\u0000").split("\u0000");
+    p.replaceChildren(before ?? "", a, after ?? "");
+    p.hidden = false;
+    return true;
+  });
+  return [p];
 }
 
 function moreWithListing(ctx: ReportCtx, n: TemplateNode, more: number, word: string): HTMLElement {
