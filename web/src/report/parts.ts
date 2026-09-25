@@ -101,6 +101,7 @@ function partSection(ctx: ReportCtx, model: PartsModel, g: Group): HTMLElement |
   const last = g.units[g.units.length - 1] as Unit;
   sec.dataset.rvPartStart = String(first.offsetBits);
   sec.dataset.rvPartEnd = String(last.offsetBits + last.sizeBits);
+  sec.dataset.rvGroup = g.key;
   sec.append(heading(model, g));
   const where = document.createElement("div");
   where.className = "rv-where";

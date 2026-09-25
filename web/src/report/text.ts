@@ -91,10 +91,8 @@ export const RV = {
   factFindings: "Findings",
   factDescribed: "Described by the template",
   pictureSize: (w: number, h: number): string => `${w.toLocaleString()} × ${h.toLocaleString()} pixels`,
-  /** How many parts, and of how many kinds where that is fewer: the ledger
-   *  below names them. */
-  partsCount: (parts: number, kinds: number): string =>
-    kinds < parts ? `${counted(parts, "part")} of ${counted(kinds, "kind")}` : counted(parts, "part"),
+  /** After the parts named in the facts table, the parts past the ones named. */
+  partsMore: (n: number): string => `and ${counted(n, "other part")}`,
   noFindings: "None found",
   described: (covered: number, total: number, done: boolean): string =>
     `${bytesText(covered)} of ${bytesText(total)} (${percentText(covered, total)})${done ? "" : " so far"}`,
@@ -351,7 +349,7 @@ export const RV = {
 
   // ----- 10. the format profile -----
   profileHeading: (used: number, declared: number): string =>
-    `This file uses ${used.toLocaleString()} of the ${counted(declared, "kind")} of value its template declares`,
+    `This file uses ${used.toLocaleString()} of the ${counted(declared, "kind")} of value declared in the template`,
   profileHeadingFile: (used: number): string => `This file holds ${counted(used, "kind")} of value`,
   profileKind: "Kind",
   profileFields: "Fields in this file",

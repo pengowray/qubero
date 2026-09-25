@@ -11,6 +11,7 @@ import { cardState } from "../contentcard.ts";
 import { tablePlan } from "../tableplan.ts";
 import { childWord } from "../strings.ts";
 import { factRows } from "./bodies.ts";
+import { nameInPart } from "./bytes.ts";
 import { findingCounts, findingsOf } from "./findings.ts";
 import type { ListFact, PartsModel } from "./model.ts";
 import { landmarks } from "./profiletext.ts";
@@ -20,6 +21,8 @@ import { walkTemplate } from "./walk.ts";
 
 /** Lists given a row each before the rest are left to the ledger. */
 const LISTS_SHOWN = 4;
+/** Kinds of part named in the parts row before the rest are counted. */
+const KINDS_SHOWN = 8;
 
 export const briefSection: Section = {
   id: "brief",
@@ -66,12 +69,7 @@ export const briefSection: Section = {
         const m = ctx.data.parts();
         if (m !== WAIT) {
           done.add("parts");
-          const groups = (m?.groups ?? []).filter((g) => !g.gap);
-          const total = groups.reduce((n, g) => n + g.units.length, 0) + (m?.unlisted ?? 0);
-          if (total > 0) {
-            parts.td.textContent = RV.partsCount(total, groups.length);
-            parts.tr.hidden = false;
-          }
+          if (m !== null && partList(m, parts.td)) parts.tr.hidden = false;
           for (const l of m === null ? [] : listRows(m).slice(0, LISTS_SHOWN)) {
             const name = document.createElement("code");
             name.textContent = l.node.name;
@@ -146,6 +144,48 @@ export const briefSection: Section = {
     return box;
   },
 };
+
+/**
+ * The parts, named as their sections below name them and in the same order,
+ * each a link to its section: `sos, start of scan`, `dht, huffman tables × 4`.
+ * A contents for the parts, so the row says what the parts are rather than
+ * only how many. False when there are none.
+ */
+function partList(m: PartsModel, into: HTMLElement): boolean {
+  const groups = m.order.filter((g) => !g.gap);
+  if (groups.length === 0) return false;
+  const list = document.createElement("ul");
+  list.className = "rv-partlist";
+  for (const g of groups.slice(0, KINDS_SHOWN)) {
+    const li = document.createElement("li");
+    const sw = document.createElement("span");
+    sw.className = "rv-swatch";
+    sw.style.background = g.color;
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "rv-jump";
+    const name = document.createElement(g.named ? "code" : "span");
+    const listName = g.units[0]?.list?.name;
+    const n = g.units.length;
+    if (g.kind !== null && listName !== undefined) name.append(...nameInPart(n > 1 ? RV.runOf(g.kind, n) : g.kind, listName));
+    else name.textContent = n > 1 ? RV.runOf(g.label, n) : g.label;
+    a.append(name);
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      a.closest(".rv-page")?.querySelector<HTMLElement>(`[data-rv-group="${CSS.escape(g.key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    li.append(sw, a);
+    list.append(li);
+  }
+  const rest = groups.slice(KINDS_SHOWN).reduce((n, g) => n + g.units.length, 0) + m.unlisted;
+  if (rest > 0) {
+    const li = document.createElement("li");
+    li.textContent = RV.partsMore(rest);
+    list.append(li);
+  }
+  into.replaceChildren(list);
+  return true;
+}
 
 /**
  * The lists that get a row of their own under the count of parts. A list
