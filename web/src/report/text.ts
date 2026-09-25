@@ -273,7 +273,7 @@ export const RV = {
   showInListing: "Show in the listing",
   /** Under a JPEG scan's card, with the heading of the section that decodes
    *  it as a link in place of `heading`. */
-  scanDecodedBelow: (heading: string): string => `The report decodes this scan below, in “${heading}”.`,
+  scanDecodedBelow: (heading: string): string => `The decoded scan is below, under “${heading}”.`,
   allZero: (n: number): string => (n === 1 ? "The byte is zero." : `All ${bytesText(n)} are zero.`),
   classesOf: (text: number, zero: number, other: number, total: number): string =>
     `${percentText(text, total)} text, ${percentText(zero, total)} zero, and ${percentText(other, total)} other bytes, over the first ${bytesText(total)}.`,
@@ -369,7 +369,7 @@ export const RV = {
     if (others > 0) parts.push(`${counted(others, "way")} to find a field or set its length`);
     return `The template also declares ${listText(parts)} that this file does not use.`;
   },
-  profileShowUnused: "Show them in the table",
+  profileShowUnused: "Show them",
   profileHideUnused: "Hide them",
   profileCaptionFile: "A field counts once in each group it belongs to: a named value is also the number under it.",
   choicesHeading: (n: number): string => `${sentenceCase(counted(n, "field"))} that could take more forms than this file uses`,
