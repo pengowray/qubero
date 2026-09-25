@@ -12,6 +12,31 @@ export function stripIndex(name: string): string {
   return name.replace(/^\[\d+\]\s*/, "");
 }
 
+/** A template type's name as words, where it is written in CamelCase:
+ *  `TableInterior` is `table interior`, `Overflow` is `overflow`. Any other
+ *  name is kept as it is, so `u16 be[]`, `IFDEntry` and `MThd` stay whole. */
+export function typeWords(type: string): string {
+  if (!/^(?:[A-Z][a-z][a-z0-9]*)+$/.test(type)) return type;
+  return (type.match(/[A-Z][a-z][a-z0-9]*/g) ?? [type]).map((w) => w.toLowerCase()).join(" ");
+}
+
+/** The type every element of a list is, from the list's own type as the
+ *  listing writes it: `Segment[]` is `Segment`, `offsets → Cell` is `Cell`,
+ *  and a list of switches (`switch[]`) is `switch`, which no element is. */
+export function elementType(listType: string): string {
+  return listType.replace(/^(?:offsets|chain|descriptors) → /, "").replace(/\[\]$/, "");
+}
+
+/** What kind of element this is, where the elements of its list are not all
+ *  one type: a SQLite page read as `TableLeaf` in a list of switches is a
+ *  `table leaf`. Null where the type says nothing the list does not, and
+ *  where the type is not a name that reads as words. */
+export function elementKind(type: string, listType: string): string | null {
+  if (type === elementType(listType)) return null;
+  const words = typeWords(type);
+  return words === type ? null : words;
+}
+
 /** The value a switch was decided by, as `origins` gives it, without the
  *  number in brackets an enum adds: `local file (0x4034b50)` is `local file`. */
 export function variantText(value: string): string | null {

@@ -227,7 +227,7 @@ export function landmarks(p: Profile): string[] {
   const varints = kindsOf(p.rows, "varint", VARINT);
   if (varints.length > 0) out.push(`Variable-length numbers: ${listText(varints)}.`);
   const f = p.facts;
-  if (f.lengths_before > 0) out.push(`${sentence(counted(f.lengths_before, "field"))} give the length or count of a later field.`);
+  if (f.lengths_before > 0) out.push(`${sentence(counted(f.lengths_before, "field"))} ${f.lengths_before === 1 ? "gives" : "give"} the length or count of a later field.`);
   if (f.placed > 0) out.push(`${sentence(counted(f.placed, "field"))} ${f.placed === 1 ? "is" : "are"} found by an offset.`);
   if (f.from_end > 0) out.push(`${sentence(counted(f.from_end, "field"))} ${f.from_end === 1 ? "is" : "are"} found from the end of the file.`);
   const sums = kindsOf(p.rows, "checksum", CHECKSUM);

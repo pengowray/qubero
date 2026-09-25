@@ -13,6 +13,7 @@ import { formatOffset } from "../format.ts";
 import { childWord } from "../strings.ts";
 import { tablePlan } from "../tableplan.ts";
 import { fieldTable, hexStrip, listingButton, planTable, recordTable } from "./bodies.ts";
+import { nameInPart } from "./bytes.ts";
 import { formatCard } from "./cards.ts";
 import { ok, type Group, type PartsModel, type Unit } from "./model.ts";
 import { positionBar } from "./posbar.ts";
@@ -61,7 +62,9 @@ function heading(model: PartsModel, g: Group): HTMLElement {
   sw.style.background = g.color;
   h.append(sw);
   const name = document.createElement(g.named ? "code" : "span");
-  name.textContent = g.label;
+  const listName = g.units[0]?.list?.name;
+  if (g.kind !== null && listName !== undefined) name.append(...nameInPart(g.kind, listName));
+  else name.textContent = g.label;
   const size = bitsText(g.sizeBits);
   const share = shareOfFile(g.sizeBits, model.fileBits);
   // A list says how many it holds as well as how big it is: `pages: 73 pages,

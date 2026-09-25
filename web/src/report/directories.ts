@@ -6,10 +6,11 @@
 // format-specific: see "What each directory points to" in
 // docs/DESIGN-report-view.md.
 
+import type { Doc } from "../doc.ts";
 import { formatOffset } from "../format.ts";
 import type { Directory, DirectoryTarget } from "./coredata.ts";
-import { groupAt, type PartsModel } from "./model.ts";
-import { stripIndex } from "./partrules.ts";
+import { groupAt, ok, type PartsModel } from "./model.ts";
+import { elementKind, stripIndex } from "./partrules.ts";
 import { ribbon, type RibbonData } from "./ribbon.ts";
 import { WAIT, type ReportCtx, type Rendered, type Section } from "./section.ts";
 import { hideTip, tipAt } from "./tip.ts";
@@ -30,12 +31,19 @@ export const directoriesSection: Section = {
     if (lists.length === 0) return null;
     const model = ctx.data.parts();
     const parts = model === WAIT ? null : model;
+    const shown = lists.slice(0, LISTS_SHOWN);
+    const places: (Place | null)[] = [];
+    for (const l of shown) {
+      const p = placeOf(ctx.doc, l.path);
+      if (p === WAIT) return WAIT;
+      places.push(p);
+    }
     const sec = document.createElement("section");
     sec.className = "rv-section rv-directories";
     const h = document.createElement("h2");
     h.textContent = RV.directoriesHeading(lists.length);
     sec.append(h);
-    for (const l of lists.slice(0, LISTS_SHOWN)) sec.append(directoryBlock(ctx, l, parts));
+    shown.forEach((l, i) => sec.append(directoryBlock(ctx, l, places[i] ?? null, parts)));
     const notes: string[] = [];
     if (lists.length > LISTS_SHOWN) notes.push(RV.moreDirectories(lists.length - LISTS_SHOWN));
     if (dirs.unexamined > 0) notes.push(RV.dirUnexamined(dirs.unexamined));
@@ -49,13 +57,35 @@ export const directoriesSection: Section = {
   },
 };
 
+/** The structure a directory is a field of, named the way the parts are: by
+ *  its own name, or by its list and place, with its kind where its list holds
+ *  several. A SQLite file has a `cell_pointers` list in every B-tree page, and
+ *  this is what tells them apart. */
+type Place = { readonly name: string; readonly kind: string | null };
+
+/** Where the list at `path` is, or null for a list at the top of the file. */
+function placeOf(doc: Doc, path: readonly number[]): Place | null | typeof WAIT {
+  if (path.length < 2) return null;
+  const parentPath = path.slice(0, -1);
+  const parent = ok(doc.templateNode(parentPath));
+  if (parent === WAIT) return WAIT;
+  if (parent === null) return null;
+  const outer = ok(doc.templateNode(parentPath.slice(0, -1)));
+  if (outer === WAIT) return WAIT;
+  if (outer === null || !outer.list) return { name: parent.name, kind: null };
+  const bare = stripIndex(parent.name);
+  if (bare !== "") return { name: bare, kind: null };
+  const index = parentPath[parentPath.length - 1] ?? 0;
+  return { name: `${outer.name}[${index}]`, kind: elementKind(parent.type, outer.type) };
+}
+
 /** True when the targets come in the order of the entries that place them. */
 export function sameOrder(firsts: readonly number[]): boolean {
   for (let i = 1; i < firsts.length; i++) if ((firsts[i] ?? 0) < (firsts[i - 1] ?? 0)) return false;
   return true;
 }
 
-function directoryBlock(ctx: ReportCtx, l: Directory, model: PartsModel | null): HTMLElement {
+function directoryBlock(ctx: ReportCtx, l: Directory, place: Place | null, model: PartsModel | null): HTMLElement {
   const box = document.createElement("div");
   box.className = "rv-directory";
   const first = l.entries[0];
@@ -72,7 +102,13 @@ function directoryBlock(ctx: ReportCtx, l: Directory, model: PartsModel | null):
   const h = document.createElement("h3");
   const code = document.createElement("code");
   code.textContent = l.name;
-  h.append(code, RV.directorySummary(l.placing, l.elements, targets.length));
+  h.append(code);
+  if (place !== null) {
+    const where = document.createElement("code");
+    where.textContent = place.name;
+    h.append(RV.dirIn, place.kind === null ? "" : RV.dirKind(place.kind), where);
+  }
+  h.append(RV.directorySummary(l.placing, l.elements, targets.length));
   box.append(h);
   const fileBits = ctx.doc.lengthBits;
   const colour = (bit: number): string => (model === null ? "var(--accent)" : (groupAt(model, bit)?.color ?? "var(--muted)"));
